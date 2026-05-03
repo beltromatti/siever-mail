@@ -1,0 +1,34 @@
+# --- Dependencies ---
+node_modules/
+
+# --- Build output ---
+dist/
+out/
+release/
+*.tsbuildinfo
+
+# --- IDE / OS noise ---
+.DS_Store
+.eslintcache
+*.log*
+
+# --- Local env / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Local databases / fixtures ---
+*.sqlite
+archivio_test/
+electron-starter-003/
+
+# --- Test outputs ---
+scripts/.e2e-out/
+
+# --- SIEVER private extension (do NOT publish) ---
+# These contain company-internal customisations that must never land in the
+# public open-source repository. The host application loads them via Vite
+# aliases at build time when SIEVER_FEATURES=1 is set; without the directory
+# the alias falls back to public stubs.
+/private-siever/
+/build-siever.mjs

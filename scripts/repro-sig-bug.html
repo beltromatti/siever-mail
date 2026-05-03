@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body { margin: 0; padding: 14px 18px 18px; background: #fff; color: #1f2328;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px; line-height: 1.5; }
+</style>
+<script src="./repro-squire.js"></script>
+</head>
+<body></body>
+<script>
+// === Mirror the editor's helpers (only the bits the typing-into-empty-block
+// path touches) so we can reproduce the bug headlessly. =====================
+
+const ZERO_WIDTH_SPACE = '​'
+const ZERO_WIDTH_SPACE_PATTERN = new RegExp(ZERO_WIDTH_SPACE, 'g')
+const BASE_FONT_SIZE_PX = 14
+const MIN_FONT_SIZE_PX = 2
+const MAX_FONT_SIZE_PX = 98
+
+const INLINE_TYPING_BLOCK_TAGS = new Set(['DIV','P','LI','H1','H2','H3','H4','H5','H6','TD','TH'])
+
+function clampFontSizePx(v) { return Math.max(MIN_FONT_SIZE_PX, Math.min(MAX_FONT_SIZE_PX, v)) }
+function parseFontSizePx(v) {
+  if (!v) return null
+  const m = v.trim().toLowerCase().match(/^(\d+(?:\.\d+)?)(?:\s*(px|pt))?$/)
+  if (!m) return null
+  const n = parseFloat(m[1])
+  if (!isFinite(n)) return null
+  return (m[2] ?? 'px') === 'pt' ? n * (4/3) : n
+}
+function formatFontSizePxForCss(v) {
+  const r = Math.round(v * 100) / 100
+  return r + 'px'
+}
+
+function findClosestTypingBlock(root, node) {
+  let cur = node instanceof HTMLElement ? node : node.parentNode
+  while (cur && cur !== root) {
+    if (cur instanceof HTMLElement && INLINE_TYPING_BLOCK_TAGS.has(cur.tagName)) return cur
+    cur = cur.parentNode
+  }
+  return null
+}
+function getDeepestLastNode(n) { while (n.lastChild) n = n.lastChild; return n }
+function getDeepestFirstNode(n) { while (n.firstChild) n = n.firstChild; return n }
+function getPreviousNodeWithin(node, boundary) {
+  let cur = node
+  while (cur && cur !== boundary) {
+    if (cur.previousSibling) return getDeepestLastNode(cur.previousSibling)
+    cur = cur.parentNode
+  }
+  return null
+}
+function getNextNodeWithin(node, boundary) {
+  let cur = node
+  while (cur && cur !== boundary) {
+    if (cur.nextSibling) return getDeepestFirstNode(cur.nextSibling)
+    cur = cur.parentNode
+  }
+  return null
+}
+function getNodeBeforeRange(r, b) {
+  const sc = r.startContainer, so = r.startOffset
+  if (sc instanceof Text) return so > 0 ? sc : getPreviousNodeWithin(sc, b)
+  if (sc.childNodes.length > 0 && so > 0) return getDeepestLastNode(sc.childNodes[so - 1])
+  return getPreviousNodeWithin(sc, b)
+}
+function getNodeAfterRange(r, b) {
+  const sc = r.startContainer, so = r.startOffset
+  if (sc instanceof Text) return so < sc.data.length ? sc : getNextNodeWithin(sc, b)
+  if (sc.childNodes.length > so) return getDeepestFirstNode(sc.childNodes[so])
+  return getNextNodeWithin(sc, b)
+}
+function isUseful(n) { return Boolean(n && n.nodeName !== 'BR') }
+function pushUnique(arr, n) { if (n && !arr.includes(n)) arr.push(n) }
+function findContextualStyleAnchors(editor) {
+  const range = editor.getSelection()
+  const root = editor.getRoot()
+  const block = findClosestTypingBlock(root, range.startContainer)
+  const boundary = block ?? root
+  const anchors = []
+  if (range.startContainer !== block && range.startContainer !== root) pushUnique(anchors, range.startContainer)
+  const prev = getNodeBeforeRange(range, boundary); if (isUseful(prev)) pushUnique(anchors, prev)
+  const nxt = getNodeAfterRange(range, boundary); if (isUseful(nxt)) pushUnique(anchors, nxt)
+  pushUnique(anchors, block)
+  return anchors
+}
+function walkUpForInlineStyle(node, rootBoundary, prop) {
+  let cur = node instanceof HTMLElement ? node : node.parentNode
+  while (cur && cur !== rootBoundary) {
+    if (cur instanceof HTMLElement) {
+      const v = cur.style[prop]
+      if (v) return v
+    }
+    cur = cur.parentNode
+  }
+  return null
+}
+function* iterateSelectionLeaves(range) {
+  if (range.collapsed) return
+  const root = range.commonAncestorContainer
+  const treeRoot = (root instanceof Element || root instanceof DocumentFragment) ? root : root.parentNode
+  if (!treeRoot) return
+  const w = root.ownerDocument.createTreeWalker(treeRoot, NodeFilter.SHOW_TEXT, {
+    acceptNode(n) {
+      if (!(n instanceof Text)) return NodeFilter.FILTER_SKIP
+      if (n.data.replace(ZERO_WIDTH_SPACE_PATTERN,'').trim().length === 0) return NodeFilter.FILTER_REJECT
+      return range.intersectsNode(n) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+    }
+  })
+  let cur = w.nextNode(); while (cur) { yield cur; cur = w.nextNode() }
+}
+function readContextualStyleFromCursor(editor, prop) {
+  const root = editor.getRoot()
+  const rb = root.parentNode ?? root
+  const range = editor.getSelection()
+  if (!range.collapsed) {
+    let common, saw = false
+    for (const leaf of iterateSelectionLeaves(range)) {
+      saw = true
+      const v = walkUpForInlineStyle(leaf, rb, prop)
+      if (common === undefined) common = v
+      else if (common !== v) return null
+    }
+    return saw ? (common ?? null) : null
+  }
+  for (const a of findContextualStyleAnchors(editor)) {
+    const v = walkUpForInlineStyle(a, rb, prop)
+    if (v) return v
+  }
+  return null
+}
+
+function readActiveFontFamily(editor) {
+  const c = readContextualStyleFromCursor(editor, 'fontFamily')
+  if (c) return c
+  const fi = editor.getFontInfo(); return fi.fontFamily ?? null
+}
+function readActiveFontSizePx(editor) {
+  const view = editor.getRoot().ownerDocument.defaultView
+  if (!view) return BASE_FONT_SIZE_PX
+  const computeAt = (a) => { const e = a instanceof HTMLElement ? a : a.parentElement; return e ? parseFontSizePx(view.getComputedStyle(e).fontSize) : null }
+  const range = editor.getSelection()
+  if (!range.collapsed) {
+    let common, saw = false
+    for (const leaf of iterateSelectionLeaves(range)) {
+      saw = true
+      const v = computeAt(leaf); if (v === null) continue
+      if (common === undefined) common = v
+      else if (Math.abs(common - v) > 0.5) return BASE_FONT_SIZE_PX
+    }
+    if (saw && common !== undefined) return clampFontSizePx(common)
+    return BASE_FONT_SIZE_PX
+  }
+  for (const a of findContextualStyleAnchors(editor)) {
+    const v = computeAt(a); if (v !== null) return clampFontSizePx(v)
+  }
+  return BASE_FONT_SIZE_PX
+}
+
+function readInlineTypingFormat(editor) {
+  return {
+    fontFamily: readActiveFontFamily(editor),
+    fontSizePx: readActiveFontSizePx(editor),
+    color: readContextualStyleFromCursor(editor, 'color'),
+    highlight: readContextualStyleFromCursor(editor, 'backgroundColor'),
+    lineHeight: readContextualStyleFromCursor(editor, 'lineHeight'),
+    textAlign: readContextualStyleFromCursor(editor, 'textAlign'),
+    isBold: false, isItalic: false, isUnderline: false, isStrike: false, isSub: false, isSup: false
+  }
+}
+function hasInlineTypingFormat(f) {
+  return Boolean(f.fontFamily) || f.fontSizePx !== BASE_FONT_SIZE_PX || Boolean(f.color) || Boolean(f.highlight) || Boolean(f.lineHeight) || Boolean(f.textAlign) || f.isBold || f.isItalic || f.isUnderline || f.isStrike || f.isSub || f.isSup
+}
+function isEmptyTypingBlock(block) {
+  const t = block.textContent?.replace(ZERO_WIDTH_SPACE_PATTERN, '').trim() ?? ''
+  return !t && !block.querySelector('img, table')
+}
+function wrapNode(doc, child, tag, style) {
+  const e = doc.createElement(tag)
+  if (style) Object.assign(e.style, style)
+  e.appendChild(child)
+  return e
+}
+function wrapLeafWithTypingFormat(doc, leaf, f) {
+  let n = leaf
+  if (f.isSub) n = wrapNode(doc, n, 'sub')
+  else if (f.isSup) n = wrapNode(doc, n, 'sup')
+  if (f.isStrike) n = wrapNode(doc, n, 's')
+  if (f.isUnderline) n = wrapNode(doc, n, 'u')
+  if (f.isItalic) n = wrapNode(doc, n, 'i')
+  if (f.isBold) n = wrapNode(doc, n, 'b')
+  const s = {}
+  if (f.fontFamily) s.fontFamily = f.fontFamily
+  if (f.fontSizePx !== BASE_FONT_SIZE_PX) s.fontSize = formatFontSizePxForCss(f.fontSizePx)
+  if (f.color) s.color = f.color
+  if (f.highlight) s.backgroundColor = f.highlight
+  if (Object.keys(s).length > 0) n = wrapNode(doc, n, 'span', s)
+  return n
+}
+function applyBlockTypingFormat(block, f) {
+  if (f.lineHeight) block.style.lineHeight = f.lineHeight
+  if (f.textAlign === 'left' || f.textAlign === 'center' || f.textAlign === 'right' || f.textAlign === 'justify') block.style.textAlign = f.textAlign
+}
+function seedEmptyBlockWithFormat(editor, block, f, text) {
+  const doc = block.ownerDocument
+  const seed = doc.createTextNode(text)
+  const node = wrapLeafWithTypingFormat(doc, seed, f)
+  editor.saveUndoState(editor.getSelection())
+  applyBlockTypingFormat(block, f)
+  block.replaceChildren(node)
+  const r = doc.createRange()
+  r.setStart(seed, seed.data.length)
+  r.collapse(true)
+  editor.setSelection(r)
+}
+
+// Reproduce the OLD signature structure that real user accounts already
+// have stored in their DB — Word-style <p> with the outer dark grey colour
+// from the GitHub-clipped paragraph and a single purple <span> wrapping
+// just &nbsp;. THIS is the structure where the bug manifests because
+// clicking at the start of the line drops the caret OUTSIDE the inner span.
+const initialHtml =
+  '<p class="MsoNormal" style="color: rgb(31, 35, 40); font-family: -apple-system, &quot;system-ui&quot;, &quot;Segoe UI&quot;, Roboto, &quot;Helvetica Neue&quot;, Arial, sans-serif; font-size: 14px; background-color: rgb(255, 255, 255);"><span style="font-size: 10pt; font-family: \'Century Gothic\', sans-serif; color: rgb(112, 48, 160);">&nbsp;</span></p>' +
+  '<p class="MsoNormal" style="color: rgb(31, 35, 40); font-family: -apple-system, &quot;system-ui&quot;, &quot;Segoe UI&quot;, Roboto, &quot;Helvetica Neue&quot;, Arial, sans-serif; font-size: 14px; background-color: rgb(255, 255, 255);"><span style="font-size: 10pt; font-family: \'Century Gothic\', sans-serif; color: rgb(112, 48, 160);">&nbsp;</span></p>' +
+  '<p class="MsoNormal" style="font-family: \'Century Gothic\', sans-serif; line-height: 1.25; color: rgb(112, 48, 160);">&nbsp;</p>'
+
+function diffInlineAncestorCoverage(range, block, format) {
+  const remaining = { ...format }
+  let cur = range.startContainer instanceof HTMLElement ? range.startContainer : range.startContainer.parentNode
+  while (cur && cur !== block) {
+    if (cur instanceof HTMLElement) {
+      if (remaining.fontFamily && cur.style.fontFamily) remaining.fontFamily = null
+      if (remaining.fontSizePx !== BASE_FONT_SIZE_PX && cur.style.fontSize) remaining.fontSizePx = BASE_FONT_SIZE_PX
+      if (remaining.color && cur.style.color) remaining.color = null
+      if (remaining.highlight && cur.style.backgroundColor) remaining.highlight = null
+      const tag = cur.tagName
+      if (remaining.isBold && (tag === 'B' || tag === 'STRONG')) remaining.isBold = false
+      if (remaining.isItalic && (tag === 'I' || tag === 'EM')) remaining.isItalic = false
+      if (remaining.isUnderline && tag === 'U') remaining.isUnderline = false
+      if (remaining.isStrike && (tag === 'S' || tag === 'STRIKE' || tag === 'DEL')) remaining.isStrike = false
+      if (remaining.isSub && tag === 'SUB') remaining.isSub = false
+      if (remaining.isSup && tag === 'SUP') remaining.isSup = false
+    }
+    cur = cur.parentNode
+  }
+  return remaining
+}
+function insertFormattedTextAtCursor(editor, format, text) {
+  const range = editor.getSelection()
+  const doc = editor.getRoot().ownerDocument
+  const seed = doc.createTextNode(text)
+  const node = wrapLeafWithTypingFormat(doc, seed, format)
+  editor.saveUndoState(range)
+  range.insertNode(node)
+  const next = doc.createRange()
+  next.setStart(seed, seed.data.length)
+  next.collapse(true)
+  editor.setSelection(next)
+}
+
+function handlePreSquireBeforeInput(event) {
+  const editor = window.editor
+  if (!editor || event.defaultPrevented) return
+  if (event.inputType !== 'insertText' || event.isComposing || !event.data || event.data.length === 0) return
+  const range = editor.getSelection()
+  if (!range.collapsed) return
+  const f = readInlineTypingFormat(editor)
+  console.log('format:', JSON.stringify(f))
+  if (!hasInlineTypingFormat(f)) { console.log('no inline format → bail'); return }
+  const block = findClosestTypingBlock(editor.getRoot(), range.startContainer)
+  if (!block) { console.log('no block → bail'); return }
+  const uncovered = diffInlineAncestorCoverage(range, block, f)
+  console.log('uncovered:', JSON.stringify(uncovered))
+  if (!hasInlineTypingFormat(uncovered)) { console.log('inline ancestor already carries everything → bail'); return }
+  console.log('intercepting at caret; isEmpty=', isEmptyTypingBlock(block))
+  event.preventDefault()
+  if (isEmptyTypingBlock(block)) {
+    seedEmptyBlockWithFormat(editor, block, f, event.data)
+  } else {
+    insertFormattedTextAtCursor(editor, f, event.data)
+  }
+}
+if (location.hash !== '#bare') {
+  document.body.addEventListener('beforeinput', handlePreSquireBeforeInput, true)
+}
+
+window.editor = new Squire(document.body, {
+  blockTag: 'div',
+  blockAttributes: { style: "font-family: 'Century Gothic', Arial, sans-serif" },
+  classNames: { color: '__mte-color', fontFamily: '__mte-font-family', fontSize: '__mte-font-size', highlight: '__mte-highlight' },
+  addLinks: true,
+  sanitizeToDOMFragment: function (html) {
+    const t = document.createElement('template')
+    t.innerHTML = html
+    return t.content
+  },
+  didError: function (e) { console.warn('squire-err', e && e.message ? e.message : e) }
+})
+editor.setHTML(initialHtml)
+window.__ready__ = true
+</script>
+</html>

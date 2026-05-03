@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 2.0.0). Defaults to the tag name.'
+        required: false
+
+jobs:
+  build:
+    name: ${{ matrix.target.label }}
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - id: macos-arm64
+            label: macOS Apple Silicon
+            runner: macos-latest
+          - id: macos-x64
+            label: macOS Intel
+            runner: macos-13
+          - id: windows-x64
+            label: Windows x64
+            runner: windows-latest
+          - id: linux-x64
+            label: Linux x64
+            runner: ubuntu-latest
+          - id: linux-arm64
+            label: Linux arm64
+            runner: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          INPUT_VERSION='${{ github.event.inputs.version }}'
+          REF_NAME='${{ github.ref_name }}'
+          if [[ -n "$INPUT_VERSION" ]]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="${REF_NAME#v}"
+          fi
+          if [[ -z "$VERSION" ]]; then
+            echo "Cannot determine release version from inputs or git ref."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Set up QEMU (Linux arm64 only)
+        if: matrix.target.id == 'linux-arm64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Install dependencies
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+        run: npm ci
+
+      - name: Materialise .env from secrets
+        shell: bash
+        run: |
+          {
+            echo "GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}"
+            echo "GOOGLE_OAUTH_CLIENT_SECRET=${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}"
+          } > .env
+
+      - name: Build target ${{ matrix.target.id }}
+        env:
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+        run: node build.mjs ${{ steps.version.outputs.version }} --target=${{ matrix.target.id }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: siever-mail-${{ matrix.target.id }}
+          path: release/public/v${{ steps.version.outputs.version }}/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: siever-mail-*
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-artifacts/**
+          fail_on_unmatched_files: true

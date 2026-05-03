@@ -1,0 +1,103 @@
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "client"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Account {
+  id              String    @id
+  type            String
+  email           String    @unique
+  displayName     String    @map("display_name")
+  imapHost        String    @map("imap_host")
+  imapPort        Int       @map("imap_port")
+  imapSecure      Boolean   @map("imap_secure")
+  smtpHost        String    @map("smtp_host")
+  smtpPort        Int       @map("smtp_port")
+  smtpSecure      Boolean   @map("smtp_secure")
+  username        String
+  authType        String    @map("auth_type")
+  encryptedSecret String    @map("encrypted_secret")
+  createdAt       BigInt    @map("created_at")
+  updatedAt       BigInt    @map("updated_at")
+  folders         Folder[]
+  messages        Message[]
+
+  @@map("accounts")
+}
+
+model Folder {
+  id             String  @id
+  accountId      String  @map("account_id")
+  path           String
+  name           String
+  delimiter      String?
+  specialUse     String? @map("special_use")
+  messageCount   Int     @default(0) @map("message_count")
+  unseenCount    Int     @default(0) @map("unseen_count")
+  uidValidity    String? @map("uid_validity")
+  highestModseq  String? @map("highest_modseq")
+  lastKnownUid   Int?    @map("last_known_uid")
+  lastSyncedAt   BigInt? @map("last_synced_at")
+  updatedAt      BigInt  @map("updated_at")
+  account        Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, path])
+  @@index([accountId], map: "idx_folders_account")
+  @@map("folders")
+}
+
+model Message {
+  id              String  @id
+  accountId       String  @map("account_id")
+  folderPath      String  @map("folder_path")
+  uid             Int
+  threadId        String? @map("thread_id")
+  messageId       String? @map("message_id")
+  subject         String
+  fromJson        String  @map("from_json")
+  toJson          String  @map("to_json")
+  ccJson          String  @map("cc_json")
+  bccJson         String  @default("[]") @map("bcc_json")
+  dateIso         String  @map("date_iso")
+  preview         String
+  previewHydrated Boolean @default(false) @map("preview_hydrated")
+  flagsJson       String  @map("flags_json")
+  isRead          Boolean @map("is_read")
+  hasAttachments  Boolean @map("has_attachments")
+  size            Int
+  htmlBody        String? @map("html_body")
+  textBody        String? @map("text_body")
+  attachmentsJson String  @default("[]") @map("attachments_json")
+  updatedAt       BigInt  @map("updated_at")
+  account         Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, folderPath, uid])
+  @@index([accountId, folderPath, dateIso], map: "idx_messages_folder_date")
+  @@map("messages")
+}
+
+model Contact {
+  emailNormalized String  @id @map("email_normalized")
+  emailAddress    String  @map("email_address")
+  displayName     String? @map("display_name")
+  nameNormalized  String? @map("name_normalized")
+  usageCount      Int     @default(0) @map("usage_count")
+  lastUsedAt      BigInt  @map("last_used_at")
+  updatedAt       BigInt  @map("updated_at")
+
+  @@index([lastUsedAt], map: "idx_contacts_last_used")
+  @@index([nameNormalized], map: "idx_contacts_name_normalized")
+  @@map("contacts")
+}
+
+model AppPreference {
+  id                             Int     @id
+  unifiedInboxIncludedAccountIds String? @map("unified_inbox_included_account_ids")
+  updatedAt                      BigInt  @map("updated_at")
+
+  @@map("app_preferences")
+}

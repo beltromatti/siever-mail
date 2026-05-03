@@ -1,0 +1,202 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:is(.dark *));
+
+@font-face {
+  font-family: 'Century Gothic';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src:
+    local('Century Gothic'),
+    url('../../../../resources/centurygothic.ttf') format('truetype');
+}
+
+:root {
+  --background: 223 43% 8%;
+  --foreground: 220 33% 96%;
+  --muted: 223 26% 17%;
+  --muted-foreground: 217 14% 70%;
+  --card: 224 37% 11%;
+  --card-foreground: 220 33% 96%;
+  --border: 218 20% 23%;
+  --input: 219 22% 18%;
+  --primary: 198 93% 60%;
+  --primary-foreground: 220 40% 6%;
+  --secondary: 220 24% 20%;
+  --secondary-foreground: 220 33% 96%;
+  --accent: 206 80% 47%;
+  --accent-foreground: 220 33% 96%;
+  --destructive: 0 72% 56%;
+  --destructive-foreground: 0 0% 98%;
+  --ring: 199 100% 65%;
+  --popover: 225 37% 9%;
+  --popover-foreground: 220 33% 96%;
+  --mail-editor-surface: 42 38% 97%;
+  --mail-editor-foreground: 0 0% 6%;
+  --mail-editor-muted-foreground: 220 9% 42%;
+  --mail-editor-border: 220 16% 84%;
+  --brand-primary: 213 80% 52%;
+  --brand-primary-foreground: 0 0% 100%;
+  --brand-accent: 49 98% 56%;
+  --status-online: 142 70% 48%;
+  --status-offline: 0 72% 56%;
+  --radius: 0.88rem;
+}
+
+@theme inline {
+  --font-sans: 'Sora', 'Avenir Next', 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+  --font-display: 'Space Grotesk', 'Avenir Next', 'Segoe UI Variable Display', sans-serif;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 8px);
+
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-ring: hsl(var(--ring));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-mail-editor-surface: hsl(var(--mail-editor-surface));
+  --color-mail-editor-foreground: hsl(var(--mail-editor-foreground));
+  --color-mail-editor-muted-foreground: hsl(var(--mail-editor-muted-foreground));
+  --color-mail-editor-border: hsl(var(--mail-editor-border));
+  --color-brand-primary: hsl(var(--brand-primary));
+  --color-brand-primary-foreground: hsl(var(--brand-primary-foreground));
+  --color-brand-accent: hsl(var(--brand-accent));
+  --color-status-online: hsl(var(--status-online));
+  --color-status-offline: hsl(var(--status-offline));
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    margin: 0;
+    height: 100vh;
+    overflow: hidden;
+    background-image:
+      radial-gradient(circle at 20% 10%, hsl(var(--primary) / 0.16), transparent 22%),
+      radial-gradient(circle at 90% 90%, hsl(var(--accent) / 0.12), transparent 26%),
+      linear-gradient(140deg, hsl(228 41% 9%), hsl(220 45% 7%) 70%);
+  }
+
+  #root {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+}
+
+@layer utilities {
+  .window-drag-region {
+    -webkit-app-region: drag;
+    user-select: none;
+  }
+
+  .window-drag-edge {
+    -webkit-app-region: drag;
+    position: fixed;
+    top: 0;
+    right: 0;
+    left: 0;
+    z-index: 9999;
+    height: 20px;
+  }
+
+  .window-no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  .glass-panel {
+    background-color: hsl(var(--card) / 0.82);
+    backdrop-filter: blur(16px);
+    border: 1px solid hsl(var(--border) / 0.72);
+  }
+
+  .display-title {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .toolbar-scroll-x {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border) / 0.85) transparent;
+  }
+
+  .toolbar-scroll-x::-webkit-scrollbar {
+    height: 7px;
+  }
+
+  .toolbar-scroll-x::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .toolbar-scroll-x::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background-color: hsl(var(--border) / 0.85);
+  }
+
+  .toolbar-scroll-x::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--border) / 0.85);
+  }
+
+  .scrollbar-y {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border) / 0.88) transparent;
+  }
+
+  .scrollbar-y::-webkit-scrollbar {
+    width: 9px;
+  }
+
+  .scrollbar-y::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-y::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-color: hsl(var(--border) / 0.88);
+    background-clip: content-box;
+  }
+
+  .scrollbar-y::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.65);
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  /* Editor "shell" surrounding the iframe — toolbar background and rounded
+     edge. Per-content styles (font / blockquote / images / placeholder) live
+     inside the iframe document, not here, so marketing-email CSS can never
+     leak into the host renderer's cascade. */
+  .mail-editor-content {
+    min-height: 0;
+    background-color: hsl(var(--mail-editor-surface));
+  }
+}
