@@ -23,7 +23,7 @@ jobs:
             runner: macos-latest
           - id: macos-x64
             label: macOS Intel
-            runner: macos-13
+            runner: macos-latest
           - id: windows-x64
             label: Windows x64
             runner: windows-latest
