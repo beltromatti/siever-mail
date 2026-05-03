@@ -45,13 +45,23 @@ jobs:
           INPUT_VERSION='${{ github.event.inputs.version }}'
           REF_NAME='${{ github.ref_name }}'
           if [[ -n "$INPUT_VERSION" ]]; then
-            VERSION="$INPUT_VERSION"
+            RAW="$INPUT_VERSION"
           else
-            VERSION="${REF_NAME#v}"
+            RAW="${REF_NAME#v}"
           fi
-          if [[ -z "$VERSION" ]]; then
+          if [[ -z "$RAW" ]]; then
             echo "Cannot determine release version from inputs or git ref."
             exit 1
+          fi
+          # Normalize to a 3-part semver (e.g. "1.6" -> "1.6.0") so the upload
+          # path matches what build.mjs writes after its own normalization.
+          DOTS=$(echo "$RAW" | awk -F. '{print NF-1}')
+          if [ "$DOTS" = "0" ]; then
+            VERSION="${RAW}.0.0"
+          elif [ "$DOTS" = "1" ]; then
+            VERSION="${RAW}.0"
+          else
+            VERSION="$RAW"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 

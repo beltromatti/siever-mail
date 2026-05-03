@@ -106,6 +106,7 @@ function run(command, args, label, options = {}) {
   const result = spawnSync(command, args, {
     stdio: 'inherit',
     cwd: projectRoot,
+    shell: process.platform === 'win32',
     ...options
   })
 
