@@ -999,6 +999,34 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     const unsubscribeMessages = window.mailApi.onMessagesChanged((event) => {
+      // Folder count updates piggyback on messagesChanged. Apply them to the
+      // sidebar regardless of which folder/account the user is currently
+      // viewing — counters must stay in sync everywhere, not just on focus.
+      if (event.folder) {
+        const update = event.folder
+        setFolders((current) => {
+          let mutated = false
+          const next = current.map((folder) => {
+            if (folder.accountId !== update.accountId || folder.path !== update.folderPath) {
+              return folder
+            }
+            if (
+              folder.messageCount === update.messageCount &&
+              folder.unseenCount === update.unseenCount
+            ) {
+              return folder
+            }
+            mutated = true
+            return {
+              ...folder,
+              messageCount: update.messageCount,
+              unseenCount: update.unseenCount
+            }
+          })
+          return mutated ? next : current
+        })
+      }
+
       if (!selectedAccountId || !selectedFolderPath) {
         return
       }
