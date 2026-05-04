@@ -25,10 +25,9 @@ electron-starter-003/
 # --- Test outputs ---
 scripts/.e2e-out/
 
-# --- SIEVER private extension (do NOT publish) ---
-# These contain company-internal customisations that must never land in the
-# public open-source repository. The host application loads them via Vite
-# aliases at build time when SIEVER_FEATURES=1 is set; without the directory
-# the alias falls back to public stubs.
-/private-siever/
+# --- Custom extension drop-in (do NOT publish) ---
+# Optional folder for a private extension repo checked out alongside the host.
+# Loaded by the Vite aliases when LOAD_EXTENSION=1 is set; without the
+# directory the aliases fall back to the public stubs in src/extension/.
+/extension/
 /build-siever.mjs

@@ -115,8 +115,8 @@ full description, including the path/env var any custom build is
 expected to provide its own extension at.
 
 If you want to develop the host with a custom extension attached
-locally, drop the extension repo at `private-siever/` (the path the
-Vite aliases look at) and run:
+locally, drop the extension repo at `extension/` (the path the Vite
+aliases look at — gitignored in the host repo) and run:
 
 ```bash
 npm run dev:ext   # equivalent to LOAD_EXTENSION=1 npm run dev
