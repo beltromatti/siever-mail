@@ -72,9 +72,9 @@ export interface ExtensionDatabaseHandle {
 
 /**
  * Minimal mail-engine surface offered to extensions. Lets the extension
- * fetch a message's raw RFC 822 source (plus a parsed envelope) without
- * coupling to the host's IMAP plumbing. The host adapts the actual
- * engine implementation; extensions only depend on this contract.
+ * fetch a message's raw RFC 822 source (plus a parsed envelope) and
+ * dispose of the source message via the host's IMAP plumbing without
+ * coupling to its internals. Extensions only depend on this contract.
  */
 export interface ExtensionMailEngineHandle {
   fetchMessageRawSource(ref: MessageRef): Promise<{
@@ -82,6 +82,18 @@ export interface ExtensionMailEngineHandle {
     parsed: ParsedMail
     internalDate: string
   }>
+  /**
+   * Moves the message to the account's trash folder, optionally marking
+   * it as seen first. Used by archive/cleanup flows that consume the
+   * source message after persisting it elsewhere. Resolves with the IMAP
+   * source/destination folder names so the caller can log or surface the
+   * outcome; rejects if the engine cannot reach the account or perform
+   * the move.
+   */
+  moveMessageToTrash(
+    ref: MessageRef,
+    options?: { markAsSeenBeforeMove?: boolean }
+  ): Promise<{ sourceFolder: string; destinationFolder?: string }>
 }
 
 /* ────────────────────────── renderer ────────────────────────── */

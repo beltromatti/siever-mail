@@ -1,5 +1,10 @@
 @import 'tailwindcss';
 
+/* Extension drop-in is gitignored, which would normally hide it from
+   Tailwind's automatic source detection — explicitly opt the directory in
+   so classes only used in extension/* land in the bundle. */
+@source "../../../../extension/**/*.{ts,tsx}";
+
 @custom-variant dark (&:is(.dark *));
 
 @font-face {

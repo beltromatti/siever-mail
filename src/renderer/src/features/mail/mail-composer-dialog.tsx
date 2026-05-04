@@ -173,6 +173,18 @@ function buildInitialHtml(
       return initialHtml
     }
 
+    const normalizedSignatureForSearch = normalizedSignatureHtml.replace(/\s+/g, ' ').trim()
+    const normalizedInitialHtmlForSearch = initialHtml.replace(/\s+/g, ' ').trim()
+
+    if (
+      normalizedSignatureForSearch &&
+      normalizedInitialHtmlForSearch
+        .toLowerCase()
+        .includes(normalizedSignatureForSearch.toLowerCase())
+    ) {
+      return initialHtml
+    }
+
     return joinComposerHtmlWithSignature(initialHtml, normalizedSignatureHtml)
   }
 

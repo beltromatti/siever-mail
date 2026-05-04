@@ -204,7 +204,8 @@ export class MailService {
     }
 
     const mailEngineHandle: ExtensionMailEngineHandle = {
-      fetchMessageRawSource: (ref) => this.engine.fetchMessageRawSource(ref)
+      fetchMessageRawSource: (ref) => this.engine.fetchMessageRawSource(ref),
+      moveMessageToTrash: (ref, options) => this.engine.moveMessageToTrash(ref, options)
     }
 
     const context: ExtensionMainContext = {
