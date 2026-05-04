@@ -1,7 +1,7 @@
 /**
  * No-op host-side implementation of the extension contract. Vite resolves
  * `@app/extension/main` to this file in standard public builds; a
- * customised build (e.g. SIEVER_FEATURES=1) swaps the alias to the real
+ * customised build (e.g. LOAD_EXTENSION=1) swaps the alias to the real
  * extension's main entry.
  */
 import type { ExtensionMain } from './types'

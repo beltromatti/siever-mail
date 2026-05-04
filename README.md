@@ -114,9 +114,19 @@ code beyond those stubs. The contract lives in
 full description, including the path/env var any custom build is
 expected to provide its own extension at.
 
+If you want to develop the host with a custom extension attached
+locally, drop the extension repo at `private-siever/` (the path the
+Vite aliases look at) and run:
+
+```bash
+npm run dev:ext   # equivalent to LOAD_EXTENSION=1 npm run dev
+```
+
+`npm run dev` keeps loading the no-op stubs as before, so you can
+switch back to a clean public build at any time without changing files.
+
 The historical context: SIEVER Mail was first developed as an internal
-tool for the Italian engineering company **SIEVER S.R.L.**, which is
-why the `SIEVER_FEATURES` flag carries the company name. The
+tool for the Italian engineering company **SIEVER S.R.L.**. The
 company-specific customisations no longer live anywhere in this
 repository — they were lifted into a separate, private extension owned
 by the maintainer.

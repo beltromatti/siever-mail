@@ -5,32 +5,32 @@ import react from '@vitejs/plugin-react'
 
 const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as { version: string }
 const appVersion = process.env.SIEVER_APP_VERSION?.trim() || packageJson.version
-const sieverFeaturesRequested = process.env.SIEVER_FEATURES === '1'
-const sieverDirectoryAvailable = existsSync(resolve('private-siever'))
-const sieverFeaturesEnabled = sieverFeaturesRequested && sieverDirectoryAvailable
+const extensionRequested = process.env.LOAD_EXTENSION === '1'
+const extensionDirectoryAvailable = existsSync(resolve('private-siever'))
+const extensionEnabled = extensionRequested && extensionDirectoryAvailable
 
-if (sieverFeaturesRequested && !sieverDirectoryAvailable) {
+if (extensionRequested && !extensionDirectoryAvailable) {
   console.warn(
-    '[electron.vite.config] SIEVER_FEATURES=1 was set but private-siever/ is missing — falling back to public build.'
+    '[electron.vite.config] LOAD_EXTENSION=1 was set but private-siever/ is missing — falling back to public build.'
   )
 }
 
-const buildVariant: 'public' | 'siever' = sieverFeaturesEnabled ? 'siever' : 'public'
+const buildVariant: 'public' | 'siever' = extensionEnabled ? 'siever' : 'public'
 
 function extensionMainAliasTarget(): string {
-  return sieverFeaturesEnabled
+  return extensionEnabled
     ? resolve('private-siever/main/index.ts')
     : resolve('src/extension/main.public.ts')
 }
 
 function extensionRendererAliasTarget(): string {
-  return sieverFeaturesEnabled
+  return extensionEnabled
     ? resolve('private-siever/renderer/index.tsx')
     : resolve('src/extension/renderer.public.tsx')
 }
 
 function extensionPreloadAliasTarget(): string {
-  return sieverFeaturesEnabled
+  return extensionEnabled
     ? resolve('private-siever/preload/index.ts')
     : resolve('src/extension/preload.public.ts')
 }

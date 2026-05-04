@@ -18,7 +18,7 @@
  * The companion gitignored `build-siever.mjs` reuses the helpers exported at
  * the bottom of this file (after running `node build.mjs --help` it is also
  * loadable as a library) to produce the SIEVER-extension build by setting
- * `SIEVER_FEATURES=1` before delegating to `runBuild()`.
+ * `LOAD_EXTENSION=1` before delegating to `runBuild()`.
  */
 import { spawnSync } from 'node:child_process'
 import {
@@ -459,7 +459,7 @@ export function runBuild({
 
   const envInjections = {
     SIEVER_APP_VERSION: version,
-    SIEVER_FEATURES: variant === 'siever' ? '1' : ''
+    LOAD_EXTENSION: variant === 'siever' ? '1' : ''
   }
 
   withTransientPackageVersion(version, () => {

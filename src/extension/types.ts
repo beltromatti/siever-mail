@@ -7,7 +7,7 @@
  * public source tree under `src/extension/`. A custom build can supply
  * its own implementation through those aliases (see
  * `electron.vite.config.ts` for the resolution policy gated by
- * `SIEVER_FEATURES=1`).
+ * `LOAD_EXTENSION=1`).
  *
  * The contract is intentionally generic: any extension can add toolbar
  * actions, settings tabs and an app-level primary dialog on the

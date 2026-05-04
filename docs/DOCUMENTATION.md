@@ -179,7 +179,7 @@ Their target resolves to no-op stubs under `src/extension/` for the
 default open-source build. A custom build supplies its own
 implementation through those aliases (typically by checking out a
 private extension repository to a local path and pointing the aliases
-at it via `SIEVER_FEATURES=1`); see
+at it via `LOAD_EXTENSION=1`); see
 [`electron.vite.config.ts`](../electron.vite.config.ts) for the exact
 resolution policy. A build-time constant `__APP_BUILD_VARIANT__`
 (`'public' | 'siever'`) is also injected for diagnostic checks.
