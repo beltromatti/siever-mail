@@ -153,4 +153,4 @@ Apache License 2.0. See the [LICENSE](LICENSE) file for the full text.
 
 ---
 
-<sub>Authored and maintained by <a href="mailto:beltromatti@gmail.com">Alessandro Beltrami</a>. Issues welcome at the GitHub tracker.</sub>
+<sub>Authored and maintained by <a href="mailto:beltromatti@gmail.com">Mattia Beltrami</a>. Issues welcome at the GitHub tracker.</sub>
