@@ -330,6 +330,16 @@ export class MailService {
     return this.engine.computeUnifiedInboxSummary()
   }
 
+  async getInvertMessageListDefaultOrder(): Promise<boolean> {
+    return this.database.getInvertMessageListDefaultOrder()
+  }
+
+  async setInvertMessageListDefaultOrder(value: boolean): Promise<boolean> {
+    const normalized = Boolean(value)
+    await this.database.setInvertMessageListDefaultOrder(normalized)
+    return normalized
+  }
+
   async getUnifiedInboxPreferences(): Promise<UnifiedInboxPreferences> {
     const accounts = await this.database.getAccounts()
     const includedAccountIds = await this.resolveEffectiveUnifiedInboxAccountIds(accounts)
@@ -371,7 +381,8 @@ export class MailService {
 
     const limit = normalizeMessageListLimit(options?.limit)
     const query = options?.query?.trim()
-    const messages = await this.database.listMessages(accountId, folderPath, limit, query)
+    const sort = options?.sort
+    const messages = await this.database.listMessages(accountId, folderPath, limit, query, sort)
     const totalInQuery = await this.database.countMessages(accountId, folderPath, query)
     const folder = await this.database.getFolder(accountId, folderPath)
     const folderTotal = query ? totalInQuery : (folder?.messageCount ?? totalInQuery)
@@ -389,6 +400,7 @@ export class MailService {
   private async listAllInboxMessages(options?: ListMessagesOptions): Promise<MailMessageListPage> {
     const limit = normalizeMessageListLimit(options?.limit)
     const query = options?.query?.trim()
+    const sort = options?.sort
     const mailboxes = await this.engine.resolveUnifiedInboxMailboxes()
 
     if (mailboxes.length === 0) {
@@ -400,7 +412,7 @@ export class MailService {
       }
     }
 
-    const messages = await this.database.listMessagesInMailboxes(mailboxes, limit, query)
+    const messages = await this.database.listMessagesInMailboxes(mailboxes, limit, query, sort)
     const totalInQuery = query
       ? await this.database.countMessagesInMailboxes(mailboxes, query)
       : await this.computeUnifiedMessageCount(mailboxes)

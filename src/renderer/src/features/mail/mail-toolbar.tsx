@@ -172,7 +172,15 @@ export function MailToolbar({
             <Input
               value={search}
               onChange={(event) => onSearchChange(event.target.value)}
-              placeholder="Cerca email"
+              placeholder={'Cerca email   ·   AND implicito · OR esplicito · "frase esatta"'}
+              title={
+                'Più parole = AND implicito (tutte devono comparire).\n' +
+                'Esempio: fattura cliente\n\n' +
+                'OR esplicito tra due parole crea un\'alternativa.\n' +
+                'Esempio: fattura OR contratto\n\n' +
+                'Le virgolette cercano una frase esatta.\n' +
+                'Esempio: "scadenza pagamento"'
+              }
               className="pr-9"
             />
             <button

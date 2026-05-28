@@ -39,6 +39,14 @@ export function registerMailIpc(
 ): void {
   registerHandler(IPC_CHANNELS.bootstrap, async () => mailService.bootstrap())
 
+  registerHandler(IPC_CHANNELS.getInvertMessageListDefaultOrder, async () =>
+    mailService.getInvertMessageListDefaultOrder()
+  )
+
+  registerHandler(IPC_CHANNELS.setInvertMessageListDefaultOrder, async (value: unknown) =>
+    mailService.setInvertMessageListDefaultOrder(Boolean(value))
+  )
+
   registerHandler(IPC_CHANNELS.addGoogleAccount, async () => {
     return mailService.addGoogleAccount(getMainWindow() ?? undefined)
   })

@@ -27,7 +27,13 @@ import { MailToolbar } from '@renderer/features/mail/mail-toolbar'
 import { SettingsDialog } from '@renderer/features/settings/settings-dialog'
 import { Button } from '@renderer/components/ui/button'
 import { cn, formatAppVersion } from '@renderer/lib/utils'
-import { ALL_INBOX_FOLDER_PATH, MESSAGE_LIST_PAGE_SIZE } from '@shared/models'
+import {
+  ALL_INBOX_FOLDER_PATH,
+  DEFAULT_MESSAGE_LIST_SORT_DIRECTION,
+  DEFAULT_MESSAGE_LIST_SORT_FIELD,
+  MESSAGE_LIST_PAGE_SIZE
+} from '@shared/models'
+import { parseSearchQuery } from '@shared/search'
 import type {
   AccountConnectionStatus,
   AppCapabilities,
@@ -37,6 +43,7 @@ import type {
   MailFolder,
   MailMessageDetail,
   MailMessageListPage,
+  MailMessageListSort,
   MailMessageSummary,
   MessageRef,
   UnifiedInboxSummary,
@@ -312,6 +319,18 @@ function App(): React.JSX.Element {
   const [selectedMessage, setSelectedMessage] = useState<MailMessageDetail | null>(null)
   const [isMessageExpanded, setIsMessageExpanded] = useState(false)
   const [search, setSearch] = useState('')
+  const [messageListSort, setMessageListSort] = useState<MailMessageListSort>({
+    field: DEFAULT_MESSAGE_LIST_SORT_FIELD,
+    direction: DEFAULT_MESSAGE_LIST_SORT_DIRECTION
+  })
+  // Tracks whether the user has manually overridden the sort direction in
+  // this session. While `false`, the sort direction follows the persisted
+  // "invert default order" preference so toggling the setting takes effect
+  // immediately. Once the user picks a direction from the toolbar, we stop
+  // syncing — their explicit choice should not get overridden when the
+  // preference is later flipped from settings.
+  const messageListSortManuallyOverriddenRef = useRef(false)
+  const [invertMessageListDefaultOrder, setInvertMessageListDefaultOrder] = useState(false)
   const [loadingFolders, setLoadingFolders] = useState(false)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false)
@@ -350,6 +369,54 @@ function App(): React.JSX.Element {
   useEffect(() => {
     activeSearchQueryRef.current = search.trim()
   }, [search])
+
+  // One-shot read of the persisted "invert message list default order"
+  // preference on mount. Falls back silently on read failure (the user
+  // simply gets the default direction in that case — broken settings
+  // should never crash the app shell).
+  useEffect(() => {
+    let disposed = false
+    void window.mailApi
+      .getInvertMessageListDefaultOrder()
+      .then((value) => {
+        if (!disposed) {
+          setInvertMessageListDefaultOrder(value)
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      disposed = true
+    }
+  }, [])
+
+  // While the user hasn't overridden the sort direction in this session,
+  // keep it in sync with the preference. This is what lets a settings
+  // toggle take effect on the open window without forcing a reload.
+  useEffect(() => {
+    if (messageListSortManuallyOverriddenRef.current) {
+      return
+    }
+    const preferredDirection = invertMessageListDefaultOrder ? 'asc' : 'desc'
+    setMessageListSort((current) =>
+      current.direction === preferredDirection
+        ? current
+        : { ...current, direction: preferredDirection }
+    )
+  }, [invertMessageListDefaultOrder])
+
+  const handleMessageListSortChange = useCallback((next: MailMessageListSort): void => {
+    messageListSortManuallyOverriddenRef.current = true
+    setMessageListSort(next)
+  }, [])
+
+  const handleInvertMessageListDefaultOrderChanged = useCallback((value: boolean): void => {
+    setInvertMessageListDefaultOrder(value)
+    // The settings dialog is the only surface that flips this preference,
+    // and the user's intent there is "I want the app to behave as if I
+    // started fresh with this direction" — so clear the session override
+    // and let the effect above push the new default into the list state.
+    messageListSortManuallyOverriddenRef.current = false
+  }, [])
 
   useEffect(() => {
     let disposed = false
@@ -408,7 +475,19 @@ function App(): React.JSX.Element {
     () => accounts.find((account) => account.id === selectedAccountId) || null,
     [accounts, selectedAccountId]
   )
-  const connectionStatus = useMemo<'online' | 'offline' | null>(() => {
+  const connectionStatus = useMemo<'online' | 'connecting' | 'offline' | null>(() => {
+    // Three states drive the badge in the header:
+    //   - online: every relevant account is connected (or transparently
+    //     reconnecting after a transient drop — `reconnecting` keeps the
+    //     last-known data usable, so we don't downgrade the badge).
+    //   - connecting: at least one account is still in the initial handshake
+    //     (`connecting`) OR we haven't received any status event yet (the
+    //     map entry is missing). The first paint after bootstrap lands here
+    //     instead of "Connessione persa", which was the historical
+    //     false-alarm during startup.
+    //   - offline: every relevant account is in a terminal failure state
+    //     (`error` or `disconnected`). Only then do we tell the user the
+    //     connection is actually lost.
     if (accounts.length === 0) {
       return null
     }
@@ -429,7 +508,16 @@ function App(): React.JSX.Element {
       return status === 'connected' || status === 'reconnecting'
     })
 
-    return allOnline ? 'online' : 'offline'
+    if (allOnline) {
+      return 'online'
+    }
+
+    const anyConnecting = accountIdsToCheck.some((accountId) => {
+      const status = accountConnections[accountId]
+      return status === undefined || status === 'connecting'
+    })
+
+    return anyConnecting ? 'connecting' : 'offline'
   }, [accountConnections, accounts, selectedAccountId, selectedFolderPath])
   const refreshUnifiedInboxSummary = useCallback(async (): Promise<void> => {
     if (accounts.length === 0) {
@@ -562,7 +650,8 @@ function App(): React.JSX.Element {
       try {
         const fetchedPage = await window.mailApi.listMessages(accountId, folderPath, {
           limit: targetLimit,
-          query: options?.query
+          query: options?.query,
+          sort: options?.sort
         })
 
         if (requestId !== messageRequestIdRef.current) {
@@ -684,6 +773,7 @@ function App(): React.JSX.Element {
       options?: {
         limit?: number
         query?: string
+        sort?: MailMessageListSort
       }
     ) => {
       const targetLimit = Math.max(
@@ -694,11 +784,12 @@ function App(): React.JSX.Element {
       await loadMessages(accountId, folderPath, {
         limit: targetLimit,
         query: options?.query ?? (search.trim() || undefined),
+        sort: options?.sort ?? messageListSort,
         withPanelLoader: false,
         requestId
       })
     },
-    [loadMessages, messageLimit, search]
+    [loadMessages, messageLimit, messageListSort, search]
   )
 
   const removeAccount = useCallback(
@@ -938,10 +1029,18 @@ function App(): React.JSX.Element {
     void loadMessages(selectedAccountId, selectedFolderPath, {
       limit: messageLimit,
       query,
+      sort: messageListSort,
       withPanelLoader: true,
       requestId
     })
-  }, [loadMessages, messageLimit, search, selectedAccountId, selectedFolderPath])
+  }, [
+    loadMessages,
+    messageLimit,
+    messageListSort,
+    search,
+    selectedAccountId,
+    selectedFolderPath
+  ])
 
   useEffect(() => {
     if (!selectedMessageRef) {
@@ -984,6 +1083,23 @@ function App(): React.JSX.Element {
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [closeMultiSelectSelection, isMessageExpanded, multiSelectEnabled])
+
+  // Refs that the global message-list keyboard handler (further down)
+  // reads at event time. The handler depends on values that change on
+  // every selection — keeping them in refs avoids rebinding the listener
+  // on each render and lets us declare the refs/state early while the
+  // actual effect lives next to the action helpers it needs.
+  const messagesRef = useRef<MailMessageSummary[]>(messages)
+  const selectedMessageRefValueRef = useRef<MessageRef | null>(selectedMessageRef)
+  const toolbarActionRefsValueRef = useRef<MessageRef[]>([])
+
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+
+  useEffect(() => {
+    selectedMessageRefValueRef.current = selectedMessageRef
+  }, [selectedMessageRef])
 
   useEffect(() => {
     if (!selectedAccountId || !selectedFolderPath || selectedFolderPath === ALL_INBOX_FOLDER_PATH) {
@@ -1123,6 +1239,14 @@ function App(): React.JSX.Element {
 
   const filteredMessages = messages
   const messageListTitle = search.trim() ? 'Risultati di Ricerca' : 'Conversazioni'
+  // Pre-parse the active search query so the list rows can highlight the
+  // matched substrings. We use the SAME parser the main process uses to
+  // build the WHERE — so the user never sees a "highlighted but not
+  // returned" or "returned but not highlighted" mismatch.
+  const searchHighlightTerms = useMemo<readonly string[]>(
+    () => parseSearchQuery(search).highlightTerms,
+    [search]
+  )
   // Panel-level loader state. Two distinct reasons to show a loader card instead
   // of the message list:
   //   1. Our local DB read is in flight (loadingMessages) and we have nothing to
@@ -1183,6 +1307,7 @@ function App(): React.JSX.Element {
       await loadMessages(selectedAccountId, selectedFolderPath, {
         limit: nextLimit,
         query,
+        sort: messageListSort,
         withPanelLoader: false,
         requestId
       })
@@ -1195,6 +1320,7 @@ function App(): React.JSX.Element {
     loadingMessages,
     loadingMoreMessages,
     messageLimit,
+    messageListSort,
     search,
     selectedAccountId,
     selectedFolderPath
@@ -1258,6 +1384,23 @@ function App(): React.JSX.Element {
         isSameMessageRef(selectedRef, ref)
       )
 
+      // When the user removes the message they're currently focused on,
+      // advance the selection to the next visible message (falling back to
+      // the previous one if we just popped the tail). This keeps the
+      // focused-reading layout populated and matches the behaviour of every
+      // mainstream mail client — without this, the right pane (or focus
+      // pane) goes empty and the layout collapses back to the 3-column
+      // default because `selectedMessageRef = null` triggers
+      // `setIsMessageExpanded(false)` in the detail-load effect.
+      let nextSelectionAfterRemoval: MessageRef | null = null
+
+      if (removedWasSelected && !multiSelectEnabled) {
+        const nextNeighbor = messages[removedIndex + 1] ?? messages[removedIndex - 1] ?? null
+        if (nextNeighbor) {
+          nextSelectionAfterRemoval = summaryToMessageRef(nextNeighbor)
+        }
+      }
+
       setMessages((current) =>
         current.filter((message) => !isSameMessageRef(summaryToMessageRef(message), ref))
       )
@@ -1267,8 +1410,15 @@ function App(): React.JSX.Element {
       setTotalMessagesInFolder((current) => Math.max(0, current - 1))
 
       if (removedWasSelected) {
-        setSelectedMessageRef(null)
-        setSelectedMessage(null)
+        if (nextSelectionAfterRemoval) {
+          setSelectedMessageRef(nextSelectionAfterRemoval)
+          // Keep `selectedMessage` populated until the new detail loads —
+          // otherwise the viewer would flash to "Nessun messaggio
+          // selezionato" before the next email's body arrives.
+        } else {
+          setSelectedMessageRef(null)
+          setSelectedMessage(null)
+        }
       }
 
       return {
@@ -1279,7 +1429,7 @@ function App(): React.JSX.Element {
         removedWasMultiSelected
       }
     },
-    [messages, selectedMessageRef, selectedMessageRefs]
+    [messages, multiSelectEnabled, selectedMessageRef, selectedMessageRefs]
   )
 
   const rollbackRemovedMessage = useCallback(
@@ -1462,6 +1612,10 @@ function App(): React.JSX.Element {
     return selectedMessageRef ? [selectedMessageRef] : []
   }, [multiSelectEnabled, selectedMessageRef, selectedMessageRefs])
 
+  useEffect(() => {
+    toolbarActionRefsValueRef.current = toolbarActionRefs
+  }, [toolbarActionRefs])
+
   const toolbarActionMessages = useMemo(() => {
     const messageByKey = new Map(
       messages.map((message) => [messageRefKey(summaryToMessageRef(message)), message])
@@ -1636,6 +1790,127 @@ function App(): React.JSX.Element {
     },
     [runMessageRemovalAction, toolbarActionRefs]
   )
+
+  // Tracks whether any of the app's modal/composer dialogs is open. The
+  // global message-list keyboard handler below uses this to bail out so
+  // shortcuts (ArrowDown, Delete, Enter) don't fire into the messages
+  // pane while the user is interacting with a dialog. Radix focus-traps
+  // already keep keystrokes inside the dialog tree, but a Delete pressed
+  // while focus is on a non-input element (e.g. the dialog body) would
+  // still bubble to window without this gate.
+  const isModalSurfaceOpen =
+    composerOpen ||
+    Boolean(composerSendError) ||
+    addAccountDialogOpen ||
+    settingsOpen ||
+    extensionPrimaryDialogOpen
+
+  useEffect(() => {
+    // Only mount the global navigation handler once the workspace has
+    // messages to navigate. Avoiding the listener on the welcome gate /
+    // bootstrap loader prevents accidental hijacks before the user can
+    // even act.
+    if (messages.length === 0) {
+      return
+    }
+
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (isModalSurfaceOpen) {
+        return
+      }
+
+      // Never hijack typing surfaces. The user expects every key to land
+      // wherever their cursor is (search, composer, signature editor…).
+      const target = event.target as HTMLElement | null
+      if (target) {
+        if (target.isContentEditable) {
+          return
+        }
+        const tagName = target.tagName
+        if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
+          return
+        }
+      }
+
+      // Modifier combinations belong to OS / app-level shortcuts. The
+      // plain keys handled below are the only ones we intercept globally.
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        return
+      }
+
+      const currentMessages = messagesRef.current
+      const currentSelectedRef = selectedMessageRefValueRef.current
+
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (currentMessages.length === 0) {
+          return
+        }
+
+        const currentIndex = currentSelectedRef
+          ? currentMessages.findIndex((message) =>
+              isSameMessageRef(summaryToMessageRef(message), currentSelectedRef)
+            )
+          : -1
+
+        // No selection yet → first arrow press lands on the first row.
+        // After that, clamp at list boundaries instead of wrapping
+        // (matches Apple Mail / Outlook).
+        const nextIndex =
+          currentIndex < 0
+            ? 0
+            : event.key === 'ArrowDown'
+              ? Math.min(currentMessages.length - 1, currentIndex + 1)
+              : Math.max(0, currentIndex - 1)
+
+        const nextMessage = currentMessages[nextIndex]
+        if (!nextMessage) {
+          return
+        }
+
+        event.preventDefault()
+        const nextRef = summaryToMessageRef(nextMessage)
+        if (!currentSelectedRef || !isSameMessageRef(currentSelectedRef, nextRef)) {
+          setSelectedMessageRef(nextRef)
+        }
+        return
+      }
+
+      if (event.key === 'Enter') {
+        if (!currentSelectedRef) {
+          return
+        }
+
+        event.preventDefault()
+        handleMessageListOpen(currentSelectedRef)
+        return
+      }
+
+      // Forward-Delete on PC/Mac AND Backspace (the de-facto delete key
+      // on Mac laptops without a forward-delete) both remove the current
+      // selection. The path is identical to the toolbar's "Elimina"
+      // button so multi-select wipes its entire current selection.
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        const refsToDelete = toolbarActionRefsValueRef.current
+        if (refsToDelete.length === 0) {
+          return
+        }
+
+        event.preventDefault()
+        void runMessageRemovalAction(
+          refsToDelete,
+          async (ref) => {
+            await window.mailApi.deleteMessage(ref)
+          },
+          'Eliminazione email non riuscita.'
+        )
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [handleMessageListOpen, isModalSurfaceOpen, messages.length, runMessageRemovalAction])
 
   const downloadSelectedMessageAttachment = useCallback(
     async (attachmentId: string): Promise<void> => {
@@ -1917,19 +2192,26 @@ function App(): React.JSX.Element {
                     <span
                       className={cn(
                         'inline-block size-1.5 rounded-full',
-                        connectionStatus === 'online'
-                          ? 'bg-status-online shadow-status-online/40 shadow-[0_0_6px]'
-                          : 'bg-status-offline shadow-status-offline/40 shadow-[0_0_6px]'
+                        connectionStatus === 'online' &&
+                          'bg-status-online shadow-status-online/40 shadow-[0_0_6px]',
+                        connectionStatus === 'connecting' &&
+                          'bg-muted-foreground/70 animate-pulse',
+                        connectionStatus === 'offline' &&
+                          'bg-status-offline shadow-status-offline/40 shadow-[0_0_6px]'
                       )}
                     />
                     <span
-                      className={
-                        connectionStatus === 'online'
-                          ? 'text-muted-foreground'
-                          : 'text-status-offline'
-                      }
+                      className={cn(
+                        connectionStatus === 'online' && 'text-muted-foreground',
+                        connectionStatus === 'connecting' && 'text-muted-foreground',
+                        connectionStatus === 'offline' && 'text-status-offline'
+                      )}
                     >
-                      {connectionStatus === 'online' ? 'Sincronizzato' : 'Connessione persa'}
+                      {connectionStatus === 'online'
+                        ? 'Sincronizzato'
+                        : connectionStatus === 'connecting'
+                          ? 'Connessione in corso…'
+                          : 'Connessione persa'}
                     </span>
                   </p>
                 )}
@@ -1956,6 +2238,9 @@ function App(): React.JSX.Element {
                   canLoadMoreMessages={hasMoreMessages && messages.length >= MESSAGE_LIST_PAGE_SIZE}
                   loadingMoreMessages={loadingMoreMessages}
                   compact
+                  highlightTerms={searchHighlightTerms}
+                  sort={messageListSort}
+                  onSortChange={handleMessageListSortChange}
                   onSelectMessage={handleMessageListSelect}
                   onOpenMessage={handleMessageListOpen}
                   onLoadMoreMessages={() => void loadMoreMessages()}
@@ -2070,6 +2355,9 @@ function App(): React.JSX.Element {
                 allVisibleSelected={allVisibleMessagesSelected}
                 canLoadMoreMessages={hasMoreMessages && messages.length >= MESSAGE_LIST_PAGE_SIZE}
                 loadingMoreMessages={loadingMoreMessages}
+                highlightTerms={searchHighlightTerms}
+                sort={messageListSort}
+                onSortChange={handleMessageListSortChange}
                 onSelectMessage={handleMessageListSelect}
                 onOpenMessage={handleMessageListOpen}
                 onLoadMoreMessages={() => void loadMoreMessages()}
@@ -2187,11 +2475,13 @@ function App(): React.JSX.Element {
         removingAccountId={removingAccountId}
         clearingAccountDataId={clearingAccountDataId}
         clearingDatabaseData={clearingDatabaseData}
+        invertMessageListDefaultOrder={invertMessageListDefaultOrder}
         onRemoveAccount={(accountId) => void removeAccount(accountId)}
         onClearAccountData={(accountId) => void clearAccountData(accountId)}
         onClearDatabaseData={() => void clearAllDataKeepAccounts()}
         onAddAccount={() => setAddAccountDialogOpen(true)}
         onUnifiedInboxPreferencesChanged={handleUnifiedInboxPreferencesChanged}
+        onInvertMessageListDefaultOrderChanged={handleInvertMessageListDefaultOrderChanged}
       />
     </AppFrame>
   )

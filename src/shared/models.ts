@@ -56,9 +56,21 @@ export interface MailMessageDetail extends MailMessageSummary {
   attachments: MailAttachment[]
 }
 
+export type MessageListSortField = 'date' | 'sender' | 'subject'
+export type MessageListSortDirection = 'asc' | 'desc'
+
+export interface MailMessageListSort {
+  field: MessageListSortField
+  direction: MessageListSortDirection
+}
+
+export const DEFAULT_MESSAGE_LIST_SORT_FIELD: MessageListSortField = 'date'
+export const DEFAULT_MESSAGE_LIST_SORT_DIRECTION: MessageListSortDirection = 'desc'
+
 export interface ListMessagesOptions {
   limit?: number
   query?: string
+  sort?: MailMessageListSort
 }
 
 export const MESSAGE_LIST_PAGE_SIZE = 100

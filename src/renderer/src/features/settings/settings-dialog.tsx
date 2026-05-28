@@ -45,11 +45,15 @@ interface SettingsDialogProps {
   removingAccountId: string | null
   clearingAccountDataId: string | null
   clearingDatabaseData: boolean
+  /** Current persisted value of the "invert message list default order" preference. */
+  invertMessageListDefaultOrder: boolean
   onRemoveAccount: (accountId: string) => void
   onClearAccountData: (accountId: string) => void
   onClearDatabaseData: () => void
   onAddAccount: () => void
   onUnifiedInboxPreferencesChanged: () => void
+  /** Called after the user flips the invert-default-order toggle (post-IPC). */
+  onInvertMessageListDefaultOrderChanged: (value: boolean) => void
 }
 
 const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
@@ -148,12 +152,36 @@ export function SettingsDialog({
   removingAccountId,
   clearingAccountDataId,
   clearingDatabaseData,
+  invertMessageListDefaultOrder,
   onRemoveAccount,
   onClearAccountData,
   onClearDatabaseData,
   onAddAccount,
-  onUnifiedInboxPreferencesChanged
+  onUnifiedInboxPreferencesChanged,
+  onInvertMessageListDefaultOrderChanged
 }: SettingsDialogProps): React.JSX.Element {
+  const [invertOrderSaving, setInvertOrderSaving] = useState(false)
+  const [invertOrderError, setInvertOrderError] = useState<string | null>(null)
+
+  const handleInvertOrderToggle = async (next: boolean): Promise<void> => {
+    if (invertOrderSaving || next === invertMessageListDefaultOrder) {
+      return
+    }
+    setInvertOrderSaving(true)
+    setInvertOrderError(null)
+    try {
+      const persisted = await window.mailApi.setInvertMessageListDefaultOrder(next)
+      onInvertMessageListDefaultOrderChanged(persisted)
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error && caughtError.message.trim()
+          ? caughtError.message
+          : 'Salvataggio preferenza ordine non riuscito.'
+      setInvertOrderError(message)
+    } finally {
+      setInvertOrderSaving(false)
+    }
+  }
   const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>('accounts')
   const [dataBreakdown, setDataBreakdown] = useState<DataStorageBreakdown | null>(null)
   const [dataBreakdownLoading, setDataBreakdownLoading] = useState(false)
@@ -634,6 +662,43 @@ export function SettingsDialog({
                       Chiaro
                     </Button>
                   </div>
+                </div>
+
+                <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
+                  <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">
+                    Ordine email
+                  </p>
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    Direzione predefinita della lista email all&apos;avvio. Puoi sempre
+                    sovrascriverla temporaneamente dall&apos;ordinamento nella card conversazioni.
+                  </p>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant={invertMessageListDefaultOrder ? 'outline' : 'default'}
+                      size="sm"
+                      disabled={invertOrderSaving}
+                      onClick={() => void handleInvertOrderToggle(false)}
+                    >
+                      Più recenti in alto
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={invertMessageListDefaultOrder ? 'default' : 'outline'}
+                      size="sm"
+                      disabled={invertOrderSaving}
+                      onClick={() => void handleInvertOrderToggle(true)}
+                    >
+                      Più vecchie in alto
+                    </Button>
+                  </div>
+
+                  {invertOrderError && (
+                    <div className="text-destructive-foreground border-destructive/35 bg-destructive/10 mt-3 rounded-md border px-3 py-2 text-sm">
+                      {invertOrderError}
+                    </div>
+                  )}
                 </div>
 
                 <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">

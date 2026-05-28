@@ -1,9 +1,29 @@
-import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, CheckCheck, ListChecks, Paperclip } from 'lucide-react'
+import { type MouseEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ArrowDownNarrowWide,
+  ArrowDownWideNarrow,
+  ArrowUpDown,
+  Calendar,
+  Check,
+  CheckCheck,
+  ListChecks,
+  Paperclip,
+  Tag,
+  User
+} from 'lucide-react'
 
 import { Avatar, AvatarFallback } from '@renderer/components/ui/avatar'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@renderer/components/ui/dropdown-menu'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Spinner } from '@renderer/components/ui/spinner'
 import {
@@ -14,7 +34,15 @@ import {
 } from '@renderer/components/ui/tooltip'
 import { cn, formatAddress, formatDateLabel } from '@renderer/lib/utils'
 import { initialsFromName } from '@renderer/lib/email'
-import { MESSAGE_LIST_PAGE_SIZE, type MailMessageSummary, type MessageRef } from '@shared/models'
+import {
+  MESSAGE_LIST_PAGE_SIZE,
+  type MailMessageListSort,
+  type MailMessageSummary,
+  type MessageListSortDirection,
+  type MessageListSortField,
+  type MessageRef
+} from '@shared/models'
+import { findHighlightRanges } from '@shared/search'
 
 interface MessageListProps {
   title?: string
@@ -27,12 +55,54 @@ interface MessageListProps {
   canLoadMoreMessages: boolean
   loadingMoreMessages: boolean
   compact?: boolean
+  /**
+   * Lowercased, de-duplicated literal search terms to highlight inside
+   * each row's subject / preview / recipients. Comes straight from the
+   * shared search parser so highlights are guaranteed to line up with
+   * the DB's match decisions.
+   */
+  highlightTerms?: readonly string[]
+  /** Active sort applied to the list. */
+  sort: MailMessageListSort
+  onSortChange: (next: MailMessageListSort) => void
   onSelectMessage: (ref: MessageRef, options?: { activateMultiSelect?: boolean }) => void
   onOpenMessage: (ref: MessageRef) => void
   onLoadMoreMessages: () => void
   onToggleMultiSelect: () => void
   onSelectAllVisible: () => void
 }
+
+interface SortFieldOption {
+  field: MessageListSortField
+  label: string
+  icon: typeof Calendar
+  ascLabel: string
+  descLabel: string
+}
+
+const SORT_FIELD_OPTIONS: readonly SortFieldOption[] = [
+  {
+    field: 'date',
+    label: 'Data',
+    icon: Calendar,
+    descLabel: 'Più recenti prima',
+    ascLabel: 'Più vecchie prima'
+  },
+  {
+    field: 'sender',
+    label: 'Mittente',
+    icon: User,
+    descLabel: 'Z → A',
+    ascLabel: 'A → Z'
+  },
+  {
+    field: 'subject',
+    label: 'Oggetto',
+    icon: Tag,
+    descLabel: 'Z → A',
+    ascLabel: 'A → Z'
+  }
+]
 
 const WRAP_SAFETY_PADDING_PX = 18
 const TRUNCATION_ELLIPSIS = '...'
@@ -226,16 +296,60 @@ function truncateTextByLines(
   return `${text.slice(0, bestLength).trimEnd()}${TRUNCATION_ELLIPSIS}`
 }
 
+function renderHighlightedText(
+  text: string,
+  highlightTerms: readonly string[] | undefined
+): React.ReactNode {
+  if (!highlightTerms || highlightTerms.length === 0 || !text) {
+    return text
+  }
+
+  const ranges = findHighlightRanges(text, [...highlightTerms])
+
+  if (ranges.length === 0) {
+    return text
+  }
+
+  const segments: React.ReactNode[] = []
+  let cursor = 0
+
+  for (let index = 0; index < ranges.length; index += 1) {
+    const range = ranges[index]
+
+    if (range.start > cursor) {
+      segments.push(<Fragment key={`pre-${index}`}>{text.slice(cursor, range.start)}</Fragment>)
+    }
+
+    segments.push(
+      <mark
+        key={`match-${index}`}
+        className="bg-primary/30 text-foreground rounded-[2px] px-0.5"
+      >
+        {text.slice(range.start, range.end)}
+      </mark>
+    )
+    cursor = range.end
+  }
+
+  if (cursor < text.length) {
+    segments.push(<Fragment key="tail">{text.slice(cursor)}</Fragment>)
+  }
+
+  return segments
+}
+
 function AutoWrappedText({
   text,
   className,
   maxLines,
-  maxCharacters
+  maxCharacters,
+  highlightTerms
 }: {
   text: string
   className: string
   maxLines?: number
   maxCharacters?: number
+  highlightTerms?: readonly string[]
 }): React.JSX.Element {
   const textRef = useRef<HTMLParagraphElement | null>(null)
   const [wrappedText, setWrappedText] = useState(text)
@@ -291,9 +405,12 @@ function AutoWrappedText({
     }
   }, [maxCharacters, maxLines, text])
 
+  // Highlighting happens AFTER wrap so the canvas measurements (driven by
+  // the raw text in `setWrappedText`) stay accurate. The visual <mark>
+  // pill has no impact on the line-break decisions above.
   return (
     <p ref={textRef} className={className}>
-      {wrappedText}
+      {renderHighlightedText(wrappedText, highlightTerms)}
     </p>
   )
 }
@@ -309,12 +426,20 @@ export function MessageList({
   canLoadMoreMessages,
   loadingMoreMessages,
   compact = false,
+  highlightTerms,
+  sort,
+  onSortChange,
   onSelectMessage,
   onOpenMessage,
   onLoadMoreMessages,
   onToggleMultiSelect,
   onSelectAllVisible
 }: MessageListProps): React.JSX.Element {
+  const activeSortOption =
+    SORT_FIELD_OPTIONS.find((option) => option.field === sort.field) ?? SORT_FIELD_OPTIONS[0]
+  const activeDirectionLabel =
+    sort.direction === 'asc' ? activeSortOption.ascLabel : activeSortOption.descLabel
+  const activeSortSummary = `${activeSortOption.label} · ${activeDirectionLabel}`
   const selectedMessageRefKeys = useMemo(
     () => new Set(selectedMessageRefs.map((ref) => messageRefKey(ref))),
     [selectedMessageRefs]
@@ -338,49 +463,115 @@ export function MessageList({
           <p className="text-muted-foreground text-xs">{resultsLabel} risultati</p>
         </div>
 
-        {(showMultiSelectToggle || showSelectAll) && (
-          <TooltipProvider delayDuration={120}>
-            <div className="flex shrink-0 items-center gap-1">
-              {showSelectAll && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
+        <TooltipProvider delayDuration={120}>
+          <div className="flex shrink-0 items-center gap-1">
+            {/* Sort control: always visible (even on an empty list) so the
+                preference is obvious and discoverable. Composes with the
+                search box — the dropdown drives the same `sort` query
+                parameter that the active search results are ordered by. */}
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
                     <Button
-                      variant="ghost"
+                      variant="outline"
                       size="icon"
                       className="size-8"
-                      onClick={onSelectAllVisible}
-                      aria-label="Seleziona tutto"
+                      aria-label={`Ordinamento: ${activeSortSummary}`}
                     >
-                      <CheckCheck className="size-4" />
+                      <ArrowUpDown className="size-4" />
                     </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Seleziona tutto</TooltipContent>
-                </Tooltip>
-              )}
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{`Ordina: ${activeSortSummary}`}</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Ordina per</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={sort.field}
+                  onValueChange={(nextField) => {
+                    onSortChange({
+                      field: nextField as MessageListSortField,
+                      direction: sort.direction
+                    })
+                  }}
+                >
+                  {SORT_FIELD_OPTIONS.map((option) => {
+                    const Icon = option.icon
+                    return (
+                      <DropdownMenuRadioItem
+                        key={option.field}
+                        value={option.field}
+                        className="gap-2"
+                      >
+                        <Icon className="size-4" />
+                        {option.label}
+                      </DropdownMenuRadioItem>
+                    )
+                  })}
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Direzione</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={sort.direction}
+                  onValueChange={(nextDirection) => {
+                    onSortChange({
+                      field: sort.field,
+                      direction: nextDirection as MessageListSortDirection
+                    })
+                  }}
+                >
+                  <DropdownMenuRadioItem value="desc" className="gap-2">
+                    <ArrowDownWideNarrow className="size-4" />
+                    {activeSortOption.descLabel}
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="asc" className="gap-2">
+                    <ArrowDownNarrowWide className="size-4" />
+                    {activeSortOption.ascLabel}
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-              {showMultiSelectToggle && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant={multiSelectEnabled ? 'secondary' : 'outline'}
-                      size="icon"
-                      className="size-8"
-                      onClick={onToggleMultiSelect}
-                      aria-label={
-                        multiSelectEnabled ? 'Esci dalla multi-selezione' : 'Multi-selezione'
-                      }
-                    >
-                      <ListChecks className="size-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {multiSelectEnabled ? 'Esci dalla multi-selezione' : 'Multi-selezione'}
-                  </TooltipContent>
-                </Tooltip>
-              )}
-            </div>
-          </TooltipProvider>
-        )}
+            {showSelectAll && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8"
+                    onClick={onSelectAllVisible}
+                    aria-label="Seleziona tutto"
+                  >
+                    <CheckCheck className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Seleziona tutto</TooltipContent>
+              </Tooltip>
+            )}
+
+            {showMultiSelectToggle && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={multiSelectEnabled ? 'secondary' : 'outline'}
+                    size="icon"
+                    className="size-8"
+                    onClick={onToggleMultiSelect}
+                    aria-label={
+                      multiSelectEnabled ? 'Esci dalla multi-selezione' : 'Multi-selezione'
+                    }
+                  >
+                    <ListChecks className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {multiSelectEnabled ? 'Esci dalla multi-selezione' : 'Multi-selezione'}
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        </TooltipProvider>
       </div>
 
       <ScrollArea className="min-h-0 min-w-0 flex-1 overflow-x-hidden">
@@ -457,7 +648,7 @@ export function MessageList({
                         message.isRead ? 'font-medium' : 'font-bold'
                       )}
                     >
-                      {sender}
+                      {renderHighlightedText(sender, highlightTerms)}
                     </p>
                     <p
                       className={cn(
@@ -472,6 +663,7 @@ export function MessageList({
                     text={recipients}
                     maxLines={1}
                     maxCharacters={maxTextCharacters}
+                    highlightTerms={highlightTerms}
                     className={cn(
                       'text-muted-foreground max-w-full min-w-0 whitespace-pre-wrap',
                       compact ? 'mt-0.5 text-[10px]' : 'mt-0.5 text-xs'
@@ -482,6 +674,7 @@ export function MessageList({
                     text={message.subject}
                     maxLines={compact ? 1 : 2}
                     maxCharacters={maxTextCharacters}
+                    highlightTerms={highlightTerms}
                     className={cn(
                       'max-w-full min-w-0 whitespace-pre-wrap',
                       compact ? 'mt-0.5 text-[12px]' : 'text-sm',
@@ -492,6 +685,7 @@ export function MessageList({
                     (message.previewHydrated ? (
                       <AutoWrappedText
                         text={message.preview}
+                        highlightTerms={highlightTerms}
                         className="text-muted-foreground mt-0.5 max-w-full min-w-0 text-xs whitespace-pre-wrap"
                       />
                     ) : (

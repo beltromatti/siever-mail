@@ -28,6 +28,8 @@ import type {
 
 export const IPC_CHANNELS = {
   bootstrap: 'app:bootstrap',
+  getInvertMessageListDefaultOrder: 'app:get-invert-message-list-default-order',
+  setInvertMessageListDefaultOrder: 'app:set-invert-message-list-default-order',
   addGoogleAccount: 'account:add-google',
   addImapAccount: 'account:add-imap',
   markAccountLastViewed: 'account:mark-last-viewed',
@@ -68,6 +70,8 @@ export const IPC_CHANNELS = {
 
 export interface DesktopMailApi {
   bootstrap: () => Promise<AppBootstrap>
+  getInvertMessageListDefaultOrder: () => Promise<boolean>
+  setInvertMessageListDefaultOrder: (value: boolean) => Promise<boolean>
   addGoogleAccount: () => Promise<MailAccount>
   addImapAccount: (input: AddImapAccountInput) => Promise<MailAccount>
   markAccountLastViewed: (accountId: string) => Promise<void>

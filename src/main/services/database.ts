@@ -16,9 +16,11 @@ import type {
   MailContactSuggestion,
   MailFolder,
   MailMessageDetail,
+  MailMessageListSort,
   MailMessageSummary,
   MessageRef
 } from '@shared/models'
+import { parseSearchQuery, type SearchTermGroup } from '@shared/search'
 
 export interface StoredMailAccount extends MailAccount {
   encryptedSecret: string
@@ -119,6 +121,51 @@ function normalizeMessageSearchQuery(query?: string): string | null {
   return normalized ? normalized : null
 }
 
+/**
+ * Builds the per-term WHERE clause that matches the term against every
+ * indexable field (subject, preview, sender/recipients, body). Each call
+ * produces one OR of single-field `contains` predicates.
+ */
+function buildSingleTermWhere(term: string): Prisma.MessageWhereInput {
+  return {
+    OR: [
+      { subject: { contains: term } },
+      { preview: { contains: term } },
+      { fromJson: { contains: term } },
+      { toJson: { contains: term } },
+      { ccJson: { contains: term } },
+      { bccJson: { contains: term } },
+      { textBody: { contains: term } },
+      { htmlBody: { contains: term } }
+    ]
+  }
+}
+
+function buildGroupWhere(group: SearchTermGroup): Prisma.MessageWhereInput | null {
+  const termClauses = group.terms.map((term) => buildSingleTermWhere(term))
+
+  if (termClauses.length === 0) {
+    return null
+  }
+
+  if (termClauses.length === 1) {
+    return termClauses[0]
+  }
+
+  return { OR: termClauses }
+}
+
+/**
+ * Translates the shared search grammar into a Prisma WHERE. The grammar
+ * is parsed once (in `parseSearchQuery`) so this and the renderer
+ * highlighter always agree on what counts as a match:
+ *   • multiple groups → AND
+ *   • multiple terms inside a group → OR
+ *   • each term → contains-match across all indexable fields
+ *
+ * Returns null when the input has no usable terms — callers treat that
+ * as "no filter" and read the folder in full.
+ */
 function buildMessageSearchWhere(query?: string): Prisma.MessageWhereInput | null {
   const normalizedQuery = normalizeMessageSearchQuery(query)
 
@@ -126,17 +173,53 @@ function buildMessageSearchWhere(query?: string): Prisma.MessageWhereInput | nul
     return null
   }
 
-  return {
-    OR: [
-      { subject: { contains: normalizedQuery } },
-      { preview: { contains: normalizedQuery } },
-      { fromJson: { contains: normalizedQuery } },
-      { toJson: { contains: normalizedQuery } },
-      { ccJson: { contains: normalizedQuery } },
-      { bccJson: { contains: normalizedQuery } },
-      { textBody: { contains: normalizedQuery } },
-      { htmlBody: { contains: normalizedQuery } }
-    ]
+  const parsed = parseSearchQuery(normalizedQuery)
+  const groupClauses = parsed.groups
+    .map((group) => buildGroupWhere(group))
+    .filter((clause): clause is Prisma.MessageWhereInput => clause !== null)
+
+  if (groupClauses.length === 0) {
+    return null
+  }
+
+  if (groupClauses.length === 1) {
+    return groupClauses[0]
+  }
+
+  return { AND: groupClauses }
+}
+
+/**
+ * Translates the renderer's user-facing sort choice into the Prisma
+ * `orderBy` clause. The clause always ends with a `uid` tiebreaker so
+ * messages with identical primary keys land in a deterministic order
+ * (Prisma + SQLite would otherwise be free to reshuffle them between
+ * queries, which would visibly flicker the list during incremental
+ * sync).
+ *
+ * The fields we order on are columns that already exist on the
+ * messages table, so this is a pure index-friendly sort with no extra
+ * computation per row:
+ *   • 'date'    → `dateIso` (the indexed envelope date)
+ *   • 'subject' → `subject` (raw text, case-insensitive enough for
+ *                 SQLite's default collation)
+ *   • 'sender'  → `fromJson` (the serialized address array; sorting on
+ *                 the raw JSON groups same-sender threads together,
+ *                 which is what the user actually wants in practice)
+ */
+function buildMessageOrderBy(
+  sort?: MailMessageListSort
+): Prisma.MessageOrderByWithRelationInput[] {
+  const direction: Prisma.SortOrder = sort?.direction === 'asc' ? 'asc' : 'desc'
+
+  switch (sort?.field) {
+    case 'subject':
+      return [{ subject: direction }, { uid: direction }]
+    case 'sender':
+      return [{ fromJson: direction }, { dateIso: direction }, { uid: direction }]
+    case 'date':
+    default:
+      return [{ dateIso: direction }, { uid: direction }]
   }
 }
 
@@ -1546,7 +1629,8 @@ export class AppDatabase {
     accountId: string,
     folderPath: string,
     limit: number,
-    query?: string
+    query?: string,
+    sort?: MailMessageListSort
   ): Promise<MailMessageSummary[]> {
     await this.ready
 
@@ -1565,7 +1649,7 @@ export class AppDatabase {
 
     const rows = await this.prisma.message.findMany({
       where,
-      orderBy: [{ dateIso: 'desc' }, { uid: 'desc' }],
+      orderBy: buildMessageOrderBy(sort),
       take: normalizedLimit
     })
 
@@ -1628,7 +1712,8 @@ export class AppDatabase {
   async listMessagesInMailboxes(
     mailboxes: Array<{ accountId: string; folderPath: string }>,
     limit: number,
-    query?: string
+    query?: string,
+    sort?: MailMessageListSort
   ): Promise<MailMessageSummary[]> {
     await this.ready
 
@@ -1654,9 +1739,20 @@ export class AppDatabase {
         }
       : mailboxWhere
 
+    // The unified inbox spans multiple (accountId, folderPath) pairs, so
+    // we need extra tiebreakers between the user-picked sort field and
+    // the deterministic uid: without them, two messages from different
+    // mailboxes with the same `dateIso` (or same subject/sender) would
+    // shuffle on every refresh.
+    const orderBy = [
+      ...buildMessageOrderBy(sort),
+      { accountId: 'asc' as Prisma.SortOrder },
+      { folderPath: 'asc' as Prisma.SortOrder }
+    ]
+
     const rows = await this.prisma.message.findMany({
       where,
-      orderBy: [{ dateIso: 'desc' }, { accountId: 'asc' }, { folderPath: 'asc' }, { uid: 'desc' }],
+      orderBy,
       take: normalizedLimit
     })
 
@@ -1931,6 +2027,7 @@ export class AppDatabase {
         updated_at INTEGER NOT NULL
       )
     `)
+    await this.ensureAppPreferencesColumns()
     await this.migrateUnifiedInboxFromLegacyArchiveSettings()
 
     await this.prisma.$executeRawUnsafe(
@@ -2009,6 +2106,63 @@ export class AppDatabase {
     } catch (error) {
       logMainError('Unified inbox preference migration from legacy archive_settings failed', error)
     }
+  }
+
+  /**
+   * Migrates the `app_preferences` singleton to add any new columns
+   * introduced after the initial schema. SQLite doesn't support
+   * `ADD COLUMN IF NOT EXISTS`, so we probe the existing layout with
+   * `PRAGMA table_info` and only ALTER the table when a column is
+   * missing. Default values are baked into the ALTER so existing rows
+   * pick up the new field without a separate UPDATE pass.
+   */
+  private async ensureAppPreferencesColumns(): Promise<void> {
+    const columns = (await this.prisma.$queryRawUnsafe(
+      'PRAGMA table_info(app_preferences)'
+    )) as Array<{ name?: string }>
+    const columnNames = new Set(columns.map((column) => column.name ?? ''))
+
+    if (!columnNames.has('invert_message_list_default_order')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE app_preferences ADD COLUMN invert_message_list_default_order INTEGER NOT NULL DEFAULT 0'
+      )
+    }
+  }
+
+  async getInvertMessageListDefaultOrder(): Promise<boolean> {
+    await this.ready
+
+    const rows = (await this.prisma.$queryRaw`
+      SELECT invert_message_list_default_order AS value
+      FROM app_preferences
+      WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
+      LIMIT 1
+    `) as Array<{ value?: unknown }>
+
+    const raw = rows[0]?.value
+
+    // SQLite returns INTEGER as `bigint | number` depending on
+    // adapter quirks; normalise both to a boolean we can ship over IPC.
+    if (typeof raw === 'bigint') {
+      return raw !== 0n
+    }
+    if (typeof raw === 'number') {
+      return raw !== 0
+    }
+    return false
+  }
+
+  async setInvertMessageListDefaultOrder(value: boolean): Promise<void> {
+    await this.ready
+
+    const flag = value ? 1 : 0
+    const now = Date.now()
+    await this.prisma.$executeRaw`
+      UPDATE app_preferences
+      SET invert_message_list_default_order = ${flag},
+          updated_at = ${now}
+      WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
+    `
   }
 
   private async ensureFolderColumns(): Promise<void> {

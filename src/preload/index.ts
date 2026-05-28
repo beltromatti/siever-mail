@@ -17,6 +17,10 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 
 const desktopMailApi: DesktopMailApi = {
   bootstrap: async () => ipcRenderer.invoke(IPC_CHANNELS.bootstrap),
+  getInvertMessageListDefaultOrder: async () =>
+    ipcRenderer.invoke(IPC_CHANNELS.getInvertMessageListDefaultOrder),
+  setInvertMessageListDefaultOrder: async (value) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setInvertMessageListDefaultOrder, value),
   addGoogleAccount: async () => ipcRenderer.invoke(IPC_CHANNELS.addGoogleAccount),
   addImapAccount: async (input) => ipcRenderer.invoke(IPC_CHANNELS.addImapAccount, input),
   markAccountLastViewed: async (accountId) =>
