@@ -323,14 +323,13 @@ function App(): React.JSX.Element {
     field: DEFAULT_MESSAGE_LIST_SORT_FIELD,
     direction: DEFAULT_MESSAGE_LIST_SORT_DIRECTION
   })
-  // Tracks whether the user has manually overridden the sort direction in
-  // this session. While `false`, the sort direction follows the persisted
-  // "invert default order" preference so toggling the setting takes effect
-  // immediately. Once the user picks a direction from the toolbar, we stop
-  // syncing — their explicit choice should not get overridden when the
-  // preference is later flipped from settings.
-  const messageListSortManuallyOverriddenRef = useRef(false)
-  const [invertMessageListDefaultOrder, setInvertMessageListDefaultOrder] = useState(false)
+  // Persisted visual-reversal preference (the "more recent at the bottom,
+  // start scrolled to the bottom" mode, à la iMessage/WhatsApp). This is
+  // NOT a sort direction — it only mirrors the rendered list and resets
+  // the initial scroll to the visual bottom. The active sort (date /
+  // sender / subject + asc/desc) is independent and lives in
+  // `messageListSort` above.
+  const [invertMessageListOrder, setInvertMessageListOrder] = useState(false)
   const [loadingFolders, setLoadingFolders] = useState(false)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false)
@@ -370,17 +369,16 @@ function App(): React.JSX.Element {
     activeSearchQueryRef.current = search.trim()
   }, [search])
 
-  // One-shot read of the persisted "invert message list default order"
-  // preference on mount. Falls back silently on read failure (the user
-  // simply gets the default direction in that case — broken settings
-  // should never crash the app shell).
+  // One-shot read of the persisted visual-reversal preference on mount.
+  // Falls back silently on read failure — a broken settings table should
+  // never crash the app shell.
   useEffect(() => {
     let disposed = false
     void window.mailApi
       .getInvertMessageListDefaultOrder()
       .then((value) => {
         if (!disposed) {
-          setInvertMessageListDefaultOrder(value)
+          setInvertMessageListOrder(value)
         }
       })
       .catch(() => undefined)
@@ -389,33 +387,12 @@ function App(): React.JSX.Element {
     }
   }, [])
 
-  // While the user hasn't overridden the sort direction in this session,
-  // keep it in sync with the preference. This is what lets a settings
-  // toggle take effect on the open window without forcing a reload.
-  useEffect(() => {
-    if (messageListSortManuallyOverriddenRef.current) {
-      return
-    }
-    const preferredDirection = invertMessageListDefaultOrder ? 'asc' : 'desc'
-    setMessageListSort((current) =>
-      current.direction === preferredDirection
-        ? current
-        : { ...current, direction: preferredDirection }
-    )
-  }, [invertMessageListDefaultOrder])
-
   const handleMessageListSortChange = useCallback((next: MailMessageListSort): void => {
-    messageListSortManuallyOverriddenRef.current = true
     setMessageListSort(next)
   }, [])
 
-  const handleInvertMessageListDefaultOrderChanged = useCallback((value: boolean): void => {
-    setInvertMessageListDefaultOrder(value)
-    // The settings dialog is the only surface that flips this preference,
-    // and the user's intent there is "I want the app to behave as if I
-    // started fresh with this direction" — so clear the session override
-    // and let the effect above push the new default into the list state.
-    messageListSortManuallyOverriddenRef.current = false
+  const handleInvertMessageListOrderChanged = useCallback((value: boolean): void => {
+    setInvertMessageListOrder(value)
   }, [])
 
   useEffect(() => {
@@ -1092,6 +1069,7 @@ function App(): React.JSX.Element {
   const messagesRef = useRef<MailMessageSummary[]>(messages)
   const selectedMessageRefValueRef = useRef<MessageRef | null>(selectedMessageRef)
   const toolbarActionRefsValueRef = useRef<MessageRef[]>([])
+  const invertMessageListOrderRef = useRef(invertMessageListOrder)
 
   useEffect(() => {
     messagesRef.current = messages
@@ -1100,6 +1078,10 @@ function App(): React.JSX.Element {
   useEffect(() => {
     selectedMessageRefValueRef.current = selectedMessageRef
   }, [selectedMessageRef])
+
+  useEffect(() => {
+    invertMessageListOrderRef.current = invertMessageListOrder
+  }, [invertMessageListOrder])
 
   useEffect(() => {
     if (!selectedAccountId || !selectedFolderPath || selectedFolderPath === ALL_INBOX_FOLDER_PATH) {
@@ -1852,13 +1834,26 @@ function App(): React.JSX.Element {
             )
           : -1
 
-        // No selection yet → first arrow press lands on the first row.
-        // After that, clamp at list boundaries instead of wrapping
-        // (matches Apple Mail / Outlook).
+        // Arrows always navigate by VISUAL direction, not by array
+        // index. When the list is rendered with the visual-reversal
+        // preference on (CSS `flex-col-reverse`), the DOM order is
+        // unchanged but rows visually flip, so "visually down" maps to
+        // the previous array index instead of the next one. Without
+        // this flip the arrow keys would feel inverted under that
+        // preference.
+        const goVisuallyDown =
+          (event.key === 'ArrowDown') !== invertMessageListOrderRef.current
+
+        // No selection yet → land on the newest message (array index
+        // 0). In normal layout that's the visual top; in reversed
+        // layout it's the visual bottom, which is also where the user
+        // starts looking on first paint (the container auto-scrolls to
+        // the end), so either way the first arrow press anchors them
+        // somewhere they can see.
         const nextIndex =
           currentIndex < 0
             ? 0
-            : event.key === 'ArrowDown'
+            : goVisuallyDown
               ? Math.min(currentMessages.length - 1, currentIndex + 1)
               : Math.max(0, currentIndex - 1)
 
@@ -2241,6 +2236,7 @@ function App(): React.JSX.Element {
                   highlightTerms={searchHighlightTerms}
                   sort={messageListSort}
                   onSortChange={handleMessageListSortChange}
+                  invertVisualOrder={invertMessageListOrder}
                   onSelectMessage={handleMessageListSelect}
                   onOpenMessage={handleMessageListOpen}
                   onLoadMoreMessages={() => void loadMoreMessages()}
@@ -2358,6 +2354,7 @@ function App(): React.JSX.Element {
                 highlightTerms={searchHighlightTerms}
                 sort={messageListSort}
                 onSortChange={handleMessageListSortChange}
+                invertVisualOrder={invertMessageListOrder}
                 onSelectMessage={handleMessageListSelect}
                 onOpenMessage={handleMessageListOpen}
                 onLoadMoreMessages={() => void loadMoreMessages()}
@@ -2475,13 +2472,13 @@ function App(): React.JSX.Element {
         removingAccountId={removingAccountId}
         clearingAccountDataId={clearingAccountDataId}
         clearingDatabaseData={clearingDatabaseData}
-        invertMessageListDefaultOrder={invertMessageListDefaultOrder}
+        invertMessageListOrder={invertMessageListOrder}
         onRemoveAccount={(accountId) => void removeAccount(accountId)}
         onClearAccountData={(accountId) => void clearAccountData(accountId)}
         onClearDatabaseData={() => void clearAllDataKeepAccounts()}
         onAddAccount={() => setAddAccountDialogOpen(true)}
         onUnifiedInboxPreferencesChanged={handleUnifiedInboxPreferencesChanged}
-        onInvertMessageListDefaultOrderChanged={handleInvertMessageListDefaultOrderChanged}
+        onInvertMessageListOrderChanged={handleInvertMessageListOrderChanged}
       />
     </AppFrame>
   )

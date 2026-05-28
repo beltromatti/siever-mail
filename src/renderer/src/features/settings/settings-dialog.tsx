@@ -45,15 +45,20 @@ interface SettingsDialogProps {
   removingAccountId: string | null
   clearingAccountDataId: string | null
   clearingDatabaseData: boolean
-  /** Current persisted value of the "invert message list default order" preference. */
-  invertMessageListDefaultOrder: boolean
+  /**
+   * Current persisted value of the visual-reversal preference: when
+   * true, the message list is rendered upside-down (newest at the
+   * bottom, scroll starts anchored to the visual end). The active sort
+   * order is unaffected — this is purely a layout flip.
+   */
+  invertMessageListOrder: boolean
   onRemoveAccount: (accountId: string) => void
   onClearAccountData: (accountId: string) => void
   onClearDatabaseData: () => void
   onAddAccount: () => void
   onUnifiedInboxPreferencesChanged: () => void
-  /** Called after the user flips the invert-default-order toggle (post-IPC). */
-  onInvertMessageListDefaultOrderChanged: (value: boolean) => void
+  /** Called after the user flips the visual-reversal toggle (post-IPC). */
+  onInvertMessageListOrderChanged: (value: boolean) => void
 }
 
 const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
@@ -152,31 +157,31 @@ export function SettingsDialog({
   removingAccountId,
   clearingAccountDataId,
   clearingDatabaseData,
-  invertMessageListDefaultOrder,
+  invertMessageListOrder,
   onRemoveAccount,
   onClearAccountData,
   onClearDatabaseData,
   onAddAccount,
   onUnifiedInboxPreferencesChanged,
-  onInvertMessageListDefaultOrderChanged
+  onInvertMessageListOrderChanged
 }: SettingsDialogProps): React.JSX.Element {
   const [invertOrderSaving, setInvertOrderSaving] = useState(false)
   const [invertOrderError, setInvertOrderError] = useState<string | null>(null)
 
   const handleInvertOrderToggle = async (next: boolean): Promise<void> => {
-    if (invertOrderSaving || next === invertMessageListDefaultOrder) {
+    if (invertOrderSaving || next === invertMessageListOrder) {
       return
     }
     setInvertOrderSaving(true)
     setInvertOrderError(null)
     try {
       const persisted = await window.mailApi.setInvertMessageListDefaultOrder(next)
-      onInvertMessageListDefaultOrderChanged(persisted)
+      onInvertMessageListOrderChanged(persisted)
     } catch (caughtError) {
       const message =
         caughtError instanceof Error && caughtError.message.trim()
           ? caughtError.message
-          : 'Salvataggio preferenza ordine non riuscito.'
+          : 'Salvataggio preferenza non riuscito.'
       setInvertOrderError(message)
     } finally {
       setInvertOrderSaving(false)
@@ -666,31 +671,34 @@ export function SettingsDialog({
 
                 <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
                   <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">
-                    Ordine email
+                    Visualizzazione lista email
                   </p>
                   <p className="text-muted-foreground mt-1 text-xs">
-                    Direzione predefinita della lista email all&apos;avvio. Puoi sempre
-                    sovrascriverla temporaneamente dall&apos;ordinamento nella card conversazioni.
+                    L&apos;ordinamento (data, mittente, oggetto) resta invariato. Questa preferenza
+                    decide solo se la lista parte dall&apos;alto o dal basso: in modalità invertita
+                    le email seguono lo stesso ordine ma la posizione iniziale è scrollata fino al
+                    fondo e si scorre verso l&apos;alto per andare indietro — stile chat (iMessage,
+                    WhatsApp).
                   </p>
 
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Button
                       type="button"
-                      variant={invertMessageListDefaultOrder ? 'outline' : 'default'}
+                      variant={invertMessageListOrder ? 'outline' : 'default'}
                       size="sm"
                       disabled={invertOrderSaving}
                       onClick={() => void handleInvertOrderToggle(false)}
                     >
-                      Più recenti in alto
+                      Standard (parti dall&apos;alto)
                     </Button>
                     <Button
                       type="button"
-                      variant={invertMessageListDefaultOrder ? 'default' : 'outline'}
+                      variant={invertMessageListOrder ? 'default' : 'outline'}
                       size="sm"
                       disabled={invertOrderSaving}
                       onClick={() => void handleInvertOrderToggle(true)}
                     >
-                      Più vecchie in alto
+                      Invertita (parti dal fondo)
                     </Button>
                   </div>
 

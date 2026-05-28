@@ -65,6 +65,17 @@ interface MessageListProps {
   /** Active sort applied to the list. */
   sort: MailMessageListSort
   onSortChange: (next: MailMessageListSort) => void
+  /**
+   * When true, flip the rendered list visually (CSS `flex-col-reverse`)
+   * so the newest (= array index 0) lands at the visual bottom and the
+   * scroll container starts anchored to the end. The underlying sort
+   * order is unchanged — this is a pure presentation toggle for users
+   * who prefer the iMessage/WhatsApp-style "scroll up to see history"
+   * layout. The pagination button stays the last child in DOM order so
+   * it appears at the visual top under this mode (where "load older"
+   * naturally lives).
+   */
+  invertVisualOrder?: boolean
   onSelectMessage: (ref: MessageRef, options?: { activateMultiSelect?: boolean }) => void
   onOpenMessage: (ref: MessageRef) => void
   onLoadMoreMessages: () => void
@@ -429,6 +440,7 @@ export function MessageList({
   highlightTerms,
   sort,
   onSortChange,
+  invertVisualOrder = false,
   onSelectMessage,
   onOpenMessage,
   onLoadMoreMessages,
@@ -575,7 +587,22 @@ export function MessageList({
       </div>
 
       <ScrollArea className="min-h-0 min-w-0 flex-1 overflow-x-hidden">
-        <div className={cn('min-w-0 space-y-1.5 pr-2', compact && 'space-y-1 pr-1.5')}>
+        {/*
+          `gap` (instead of `space-y-*`) keeps the row spacing identical in
+          both flex directions. With `flex-col-reverse` Chromium also
+          anchors the initial scroll position to the visual bottom (= the
+          first DOM child), which is exactly what the inverted-list
+          preference wants — newest visible on open, scroll up reveals
+          older messages, "Carica altre" naturally lands at the visual top
+          because it's the last DOM child.
+        */}
+        <div
+          className={cn(
+            'flex min-w-0 flex-col gap-1.5 pr-2',
+            compact && 'gap-1 pr-1.5',
+            invertVisualOrder && 'flex-col-reverse'
+          )}
+        >
           {messages.map((message) => {
             const messageRef = {
               accountId: message.accountId,
