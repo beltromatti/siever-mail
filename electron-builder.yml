@@ -35,6 +35,16 @@ nsis:
   allowToChangeInstallationDirectory: false
   include: build/installer.nsh
 mac:
+  # The CI matrix builds without a Developer ID certificate, so electron-builder
+  # falls back to ad-hoc signatures. macOS Sequoia enforces library validation
+  # whenever the Hardened Runtime flag is set, and ad-hoc-signed frameworks fail
+  # that check ("non-platform but different Team IDs") even though every binary
+  # in the bundle uses the same empty identity. Disabling Hardened Runtime keeps
+  # the bundle launchable from a quarantined download. We don't lose anything in
+  # return because we don't notarize and there is no Developer ID to enforce.
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.

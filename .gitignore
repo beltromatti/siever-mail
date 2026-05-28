@@ -31,3 +31,6 @@ scripts/.e2e-out/
 # directory the aliases fall back to the public stubs in src/extension/.
 /extension/
 /build-siever.mjs
+
+# --- Local crash reports / scratch ---
+/dev/
