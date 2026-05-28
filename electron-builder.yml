@@ -3,15 +3,17 @@ productName: SIEVER Mail
 directories:
   buildResources: build
 files:
-  - '**/*'
-  - '!**/.vscode/*'
-  - '!dist/**/*'
-  - '!release/**/*'
-  - '!src/*'
-  - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # Allow-list: bundle only what is loaded at runtime. The previous deny-list
+  # ('**/*' minus a handful of paths) bloated the public app.asar to ~225 MB
+  # by sweeping in the private extension/ drop-in, archivio_test/ (personal
+  # mail), electron-starter-003/, dev/ crash reports, docs/, build*.mjs and
+  # the prisma/ source — none of which are touched at runtime, and some of
+  # which are confidential. Vite already inlines the extension code into
+  # out/main/index.js at build time, so the source folder never needs to ship.
+  - 'package.json'
+  - 'out/**/*'
+  - 'resources/**/*'
+  - 'node_modules/**/*'
   - from: node_modules/.prisma/client
     to: node_modules/.prisma/client
     filter:
