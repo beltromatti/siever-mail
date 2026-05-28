@@ -43,6 +43,8 @@ import {
 import { cn, formatAddress, formatDateLabel } from '@renderer/lib/utils'
 import { initialsFromName } from '@renderer/lib/email'
 import {
+  DEFAULT_MESSAGE_LIST_SORT_DIRECTION,
+  DEFAULT_MESSAGE_LIST_SORT_FIELD,
   MESSAGE_LIST_PAGE_SIZE,
   type MailMessageListSort,
   type MailMessageSummary,
@@ -460,6 +462,14 @@ export function MessageList({
   const activeDirectionLabel =
     sort.direction === 'asc' ? activeSortOption.ascLabel : activeSortOption.descLabel
   const activeSortSummary = `${activeSortOption.label} · ${activeDirectionLabel}`
+  // The sort dropdown only stands out when the user has moved off the
+  // app-wide default (newest emails first by date). The non-default
+  // state swaps the trigger to the primary "filled" variant so it reads
+  // as an active filter at a glance — same affordance the multi-select
+  // toggle uses while engaged.
+  const isSortAtDefault =
+    sort.field === DEFAULT_MESSAGE_LIST_SORT_FIELD &&
+    sort.direction === DEFAULT_MESSAGE_LIST_SORT_DIRECTION
 
   // Mirror the scroll position whenever the visual-reversal preference
   // flips, so the same messages stay visible after the layout swap. The
@@ -570,10 +580,11 @@ export function MessageList({
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
                     <Button
-                      variant="outline"
+                      variant={isSortAtDefault ? 'outline' : 'default'}
                       size="icon"
                       className="size-8"
                       aria-label={`Ordinamento: ${activeSortSummary}`}
+                      aria-pressed={!isSortAtDefault}
                     >
                       <ArrowUpDown className="size-4" />
                     </Button>

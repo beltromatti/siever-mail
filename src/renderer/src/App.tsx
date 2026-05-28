@@ -452,19 +452,7 @@ function App(): React.JSX.Element {
     () => accounts.find((account) => account.id === selectedAccountId) || null,
     [accounts, selectedAccountId]
   )
-  const connectionStatus = useMemo<'online' | 'connecting' | 'offline' | null>(() => {
-    // Three states drive the badge in the header:
-    //   - online: every relevant account is connected (or transparently
-    //     reconnecting after a transient drop — `reconnecting` keeps the
-    //     last-known data usable, so we don't downgrade the badge).
-    //   - connecting: at least one account is still in the initial handshake
-    //     (`connecting`) OR we haven't received any status event yet (the
-    //     map entry is missing). The first paint after bootstrap lands here
-    //     instead of "Connessione persa", which was the historical
-    //     false-alarm during startup.
-    //   - offline: every relevant account is in a terminal failure state
-    //     (`error` or `disconnected`). Only then do we tell the user the
-    //     connection is actually lost.
+  const connectionStatus = useMemo<'online' | 'offline' | null>(() => {
     if (accounts.length === 0) {
       return null
     }
@@ -485,16 +473,7 @@ function App(): React.JSX.Element {
       return status === 'connected' || status === 'reconnecting'
     })
 
-    if (allOnline) {
-      return 'online'
-    }
-
-    const anyConnecting = accountIdsToCheck.some((accountId) => {
-      const status = accountConnections[accountId]
-      return status === undefined || status === 'connecting'
-    })
-
-    return anyConnecting ? 'connecting' : 'offline'
+    return allOnline ? 'online' : 'offline'
   }, [accountConnections, accounts, selectedAccountId, selectedFolderPath])
   const refreshUnifiedInboxSummary = useCallback(async (): Promise<void> => {
     if (accounts.length === 0) {
@@ -2187,26 +2166,19 @@ function App(): React.JSX.Element {
                     <span
                       className={cn(
                         'inline-block size-1.5 rounded-full',
-                        connectionStatus === 'online' &&
-                          'bg-status-online shadow-status-online/40 shadow-[0_0_6px]',
-                        connectionStatus === 'connecting' &&
-                          'bg-muted-foreground/70 animate-pulse',
-                        connectionStatus === 'offline' &&
-                          'bg-status-offline shadow-status-offline/40 shadow-[0_0_6px]'
+                        connectionStatus === 'online'
+                          ? 'bg-status-online shadow-status-online/40 shadow-[0_0_6px]'
+                          : 'bg-status-offline shadow-status-offline/40 shadow-[0_0_6px]'
                       )}
                     />
                     <span
-                      className={cn(
-                        connectionStatus === 'online' && 'text-muted-foreground',
-                        connectionStatus === 'connecting' && 'text-muted-foreground',
-                        connectionStatus === 'offline' && 'text-status-offline'
-                      )}
+                      className={
+                        connectionStatus === 'online'
+                          ? 'text-muted-foreground'
+                          : 'text-status-offline'
+                      }
                     >
-                      {connectionStatus === 'online'
-                        ? 'Sincronizzato'
-                        : connectionStatus === 'connecting'
-                          ? 'Connessione in corso…'
-                          : 'Connessione persa'}
+                      {connectionStatus === 'online' ? 'Sincronizzato' : 'Connessione persa'}
                     </span>
                   </p>
                 )}
