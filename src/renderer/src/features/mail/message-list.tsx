@@ -1,4 +1,12 @@
-import { type MouseEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type MouseEvent,
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import {
   ArrowDownNarrowWide,
   ArrowDownWideNarrow,
@@ -452,6 +460,82 @@ export function MessageList({
   const activeDirectionLabel =
     sort.direction === 'asc' ? activeSortOption.ascLabel : activeSortOption.descLabel
   const activeSortSummary = `${activeSortOption.label} · ${activeDirectionLabel}`
+
+  // Mirror the scroll position whenever the visual-reversal preference
+  // flips, so the same messages stay visible after the layout swap. The
+  // mirror is `newScrollTop = scrollHeight - oldScrollTop - clientHeight`
+  // — that's the inverse of "distance from the top of the content", so a
+  // user scrolled near the top in normal mode ends up scrolled near the
+  // bottom in inverted mode (showing the same range of messages but from
+  // the other side of the viewport).
+  //
+  // Mechanics:
+  //   • `scrollAreaRootRef` points to the Radix ScrollArea root; we walk
+  //     down to its `[data-radix-scroll-area-viewport]` child because
+  //     that's the element that actually scrolls (Radix wraps the
+  //     content in a Viewport).
+  //   • A passive scroll listener keeps `lastScrollTopRef` in sync, so
+  //     when the layout effect fires we know exactly where the user was
+  //     *before* the className toggle. (Reading scrollTop inside the
+  //     layout effect after the className change would be too late —
+  //     Chromium may have already adjusted it for the new direction.)
+  //   • `previousInvertRef` lets us tell a real toggle apart from a
+  //     re-render that happens for other reasons (selection change,
+  //     incoming messages, search, …) — in those cases we leave scroll
+  //     untouched.
+  const scrollAreaRootRef = useRef<HTMLDivElement | null>(null)
+  const lastScrollTopRef = useRef(0)
+  const previousInvertRef = useRef(invertVisualOrder)
+
+  function findScrollAreaViewport(): HTMLElement | null {
+    const root = scrollAreaRootRef.current
+    if (!root) {
+      return null
+    }
+    return root.querySelector<HTMLElement>('[data-radix-scroll-area-viewport]')
+  }
+
+  useEffect(() => {
+    const viewport = findScrollAreaViewport()
+    if (!viewport) {
+      return
+    }
+
+    const onScroll = (): void => {
+      lastScrollTopRef.current = viewport.scrollTop
+    }
+    // Seed the ref with the initial position so the very first toggle
+    // after mount mirrors correctly even if the user never scrolled.
+    lastScrollTopRef.current = viewport.scrollTop
+    viewport.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      viewport.removeEventListener('scroll', onScroll)
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (previousInvertRef.current === invertVisualOrder) {
+      return
+    }
+    previousInvertRef.current = invertVisualOrder
+
+    const viewport = findScrollAreaViewport()
+    if (!viewport) {
+      return
+    }
+
+    const { scrollHeight, clientHeight } = viewport
+    if (scrollHeight <= clientHeight) {
+      return
+    }
+
+    const oldScrollTop = lastScrollTopRef.current
+    const maxScrollTop = scrollHeight - clientHeight
+    const mirroredScrollTop = Math.min(maxScrollTop, Math.max(0, maxScrollTop - oldScrollTop))
+
+    viewport.scrollTop = mirroredScrollTop
+    lastScrollTopRef.current = mirroredScrollTop
+  }, [invertVisualOrder])
   const selectedMessageRefKeys = useMemo(
     () => new Set(selectedMessageRefs.map((ref) => messageRefKey(ref))),
     [selectedMessageRefs]
@@ -586,7 +670,7 @@ export function MessageList({
         </TooltipProvider>
       </div>
 
-      <ScrollArea className="min-h-0 min-w-0 flex-1 overflow-x-hidden">
+      <ScrollArea ref={scrollAreaRootRef} className="min-h-0 min-w-0 flex-1 overflow-x-hidden">
         {/*
           `gap` (instead of `space-y-*`) keeps the row spacing identical in
           both flex directions. With `flex-col-reverse` Chromium also
