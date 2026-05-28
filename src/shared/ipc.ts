@@ -28,6 +28,7 @@ import type {
 
 export const IPC_CHANNELS = {
   bootstrap: 'app:bootstrap',
+  getAccountConnectionStates: 'app:get-account-connection-states',
   getInvertMessageListDefaultOrder: 'app:get-invert-message-list-default-order',
   setInvertMessageListDefaultOrder: 'app:set-invert-message-list-default-order',
   addGoogleAccount: 'account:add-google',
@@ -70,6 +71,13 @@ export const IPC_CHANNELS = {
 
 export interface DesktopMailApi {
   bootstrap: () => Promise<AppBootstrap>
+  /**
+   * One-shot snapshot of the current connection state for every account
+   * the engine knows about. Used by the renderer to seed the badge map
+   * for events that fired before `onAccountConnectionChanged` was
+   * subscribed (typically during bootstrap).
+   */
+  getAccountConnectionStates: () => Promise<AccountConnectionState[]>
   getInvertMessageListDefaultOrder: () => Promise<boolean>
   setInvertMessageListDefaultOrder: (value: boolean) => Promise<boolean>
   addGoogleAccount: () => Promise<MailAccount>

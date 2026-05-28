@@ -452,7 +452,22 @@ function App(): React.JSX.Element {
     () => accounts.find((account) => account.id === selectedAccountId) || null,
     [accounts, selectedAccountId]
   )
-  const connectionStatus = useMemo<'online' | 'offline' | null>(() => {
+  const connectionStatus = useMemo<'online' | 'connecting' | 'offline' | null>(() => {
+    // Three states drive the badge in the header:
+    //   - online: every relevant account is connected (or transparently
+    //     reconnecting after a transient drop — `reconnecting` keeps
+    //     the last-known data usable, so we don't downgrade the badge).
+    //   - connecting: at least one account is in the initial handshake
+    //     (`connecting`) OR we don't have a state for it yet (the map
+    //     entry is missing). We can land here only briefly — the
+    //     snapshot effect below seeds the map on mount with whatever
+    //     state the engine already had at bootstrap, so "undefined"
+    //     means truly never-heard-from, and the next live event upgrades
+    //     it.
+    //   - offline: at least one account is in a terminal failure state
+    //     (`error` or `disconnected`) AND no account is still
+    //     connecting. Only then do we tell the user the connection is
+    //     actually lost.
     if (accounts.length === 0) {
       return null
     }
@@ -473,7 +488,16 @@ function App(): React.JSX.Element {
       return status === 'connected' || status === 'reconnecting'
     })
 
-    return allOnline ? 'online' : 'offline'
+    if (allOnline) {
+      return 'online'
+    }
+
+    const anyConnecting = accountIdsToCheck.some((accountId) => {
+      const status = accountConnections[accountId]
+      return status === undefined || status === 'connecting'
+    })
+
+    return anyConnecting ? 'connecting' : 'offline'
   }, [accountConnections, accounts, selectedAccountId, selectedFolderPath])
   const refreshUnifiedInboxSummary = useCallback(async (): Promise<void> => {
     if (accounts.length === 0) {
@@ -1150,7 +1174,40 @@ function App(): React.JSX.Element {
       }
     })
 
+    // Seed the connection map with the engine's current view of every
+    // account. The `onAccountConnectionChanged` stream above only carries
+    // STATE TRANSITIONS, so any 'connecting' / 'connected' burst that
+    // already happened before this subscription was bound (typically the
+    // initial connection during bootstrap) would otherwise stay
+    // invisible — and the badge would sit on "Connessione persa" until
+    // a real disconnect/reconnect cycle finally fired a transition. The
+    // snapshot is requested AFTER subscribing so any event landing
+    // between the two calls is captured by the listener, not lost in
+    // the gap; the merge below is fill-only so we never clobber a more
+    // recent value the live stream already delivered.
+    let snapshotDisposed = false
+    void window.mailApi
+      .getAccountConnectionStates()
+      .then((states) => {
+        if (snapshotDisposed) {
+          return
+        }
+        setAccountConnections((current) => {
+          let mutated = false
+          const next: typeof current = { ...current }
+          for (const state of states) {
+            if (next[state.accountId] === undefined) {
+              next[state.accountId] = state.status
+              mutated = true
+            }
+          }
+          return mutated ? next : current
+        })
+      })
+      .catch(() => undefined)
+
     return () => {
+      snapshotDisposed = true
       unsubscribeMessages()
       unsubscribeFolders()
       unsubscribeUnified()
@@ -2166,19 +2223,26 @@ function App(): React.JSX.Element {
                     <span
                       className={cn(
                         'inline-block size-1.5 rounded-full',
-                        connectionStatus === 'online'
-                          ? 'bg-status-online shadow-status-online/40 shadow-[0_0_6px]'
-                          : 'bg-status-offline shadow-status-offline/40 shadow-[0_0_6px]'
+                        connectionStatus === 'online' &&
+                          'bg-status-online shadow-status-online/40 shadow-[0_0_6px]',
+                        connectionStatus === 'connecting' &&
+                          'bg-muted-foreground/70 animate-pulse',
+                        connectionStatus === 'offline' &&
+                          'bg-status-offline shadow-status-offline/40 shadow-[0_0_6px]'
                       )}
                     />
                     <span
-                      className={
-                        connectionStatus === 'online'
-                          ? 'text-muted-foreground'
-                          : 'text-status-offline'
-                      }
+                      className={cn(
+                        connectionStatus === 'online' && 'text-muted-foreground',
+                        connectionStatus === 'connecting' && 'text-muted-foreground',
+                        connectionStatus === 'offline' && 'text-status-offline'
+                      )}
                     >
-                      {connectionStatus === 'online' ? 'Sincronizzato' : 'Connessione persa'}
+                      {connectionStatus === 'online'
+                        ? 'Sincronizzato'
+                        : connectionStatus === 'connecting'
+                          ? 'Connessione in corso…'
+                          : 'Connessione persa'}
                     </span>
                   </p>
                 )}

@@ -15,6 +15,7 @@ import { z } from 'zod'
 
 import type { RuntimeConfig } from '@main/config/env'
 import type {
+  AccountConnectionState,
   ActiveMailboxContext,
   AddImapAccountInput,
   AppBootstrap,
@@ -328,6 +329,10 @@ export class MailService {
 
   async getUnifiedInboxSummary(): Promise<UnifiedInboxSummary> {
     return this.engine.computeUnifiedInboxSummary()
+  }
+
+  getAccountConnectionStates(): AccountConnectionState[] {
+    return this.engine.snapshotAccountConnectionStates()
   }
 
   async getInvertMessageListDefaultOrder(): Promise<boolean> {

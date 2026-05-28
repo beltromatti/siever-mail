@@ -39,6 +39,10 @@ export function registerMailIpc(
 ): void {
   registerHandler(IPC_CHANNELS.bootstrap, async () => mailService.bootstrap())
 
+  registerHandler(IPC_CHANNELS.getAccountConnectionStates, async () =>
+    mailService.getAccountConnectionStates()
+  )
+
   registerHandler(IPC_CHANNELS.getInvertMessageListDefaultOrder, async () =>
     mailService.getInvertMessageListDefaultOrder()
   )

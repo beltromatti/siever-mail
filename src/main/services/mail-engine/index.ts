@@ -71,6 +71,31 @@ export class MailEngine {
     return connection
   }
 
+  /**
+   * Snapshot of the current connection state for every account the
+   * engine knows about. Lets the renderer recover the truth at any
+   * point — its `onAccountConnectionChanged` subscription only sees
+   * STATE TRANSITIONS, so anything that already happened before the
+   * subscription was set up (typically the initial 'connecting' →
+   * 'connected' burst during bootstrap) would otherwise stay invisible
+   * and force the badge to fall back to "Connessione persa".
+   *
+   * Accounts that don't have an active `AccountConnection` (deleted
+   * mid-call, race with `removeAccount`, etc.) are simply omitted —
+   * the renderer treats a missing entry as "unknown" and leaves its
+   * existing value alone.
+   */
+  snapshotAccountConnectionStates(): AccountConnectionState[] {
+    const snapshot: AccountConnectionState[] = []
+    for (const [accountId, connection] of this.connections) {
+      snapshot.push({
+        accountId,
+        status: connection.getStatus()
+      })
+    }
+    return snapshot
+  }
+
   setActiveContext(context: ActiveMailboxContext | null): void {
     this.activeContext = context
     for (const [accountId, connection] of this.connections) {

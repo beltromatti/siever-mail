@@ -17,6 +17,8 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 
 const desktopMailApi: DesktopMailApi = {
   bootstrap: async () => ipcRenderer.invoke(IPC_CHANNELS.bootstrap),
+  getAccountConnectionStates: async () =>
+    ipcRenderer.invoke(IPC_CHANNELS.getAccountConnectionStates),
   getInvertMessageListDefaultOrder: async () =>
     ipcRenderer.invoke(IPC_CHANNELS.getInvertMessageListDefaultOrder),
   setInvertMessageListDefaultOrder: async (value) =>
