@@ -91,10 +91,80 @@ jobs:
             echo "GOOGLE_OAUTH_CLIENT_SECRET=${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}"
           } > .env
 
+      # ── macOS code signing setup ──────────────────────────────────────
+      # Materialises the Developer ID Application certificate from the
+      # base64-encoded .p12 secret into a brand-new keychain on the
+      # runner. build.mjs's signing detection then sees the cert exactly
+      # the same way it sees it on a local Mac, so no special-casing for
+      # CI is needed downstream — the same `developer-id` branch fires
+      # and electron-builder signs + notarizes the bundle. Skipped on
+      # non-macOS matrix targets so a missing/empty secret on a Linux
+      # release matrix still passes.
+      - name: Import Developer ID certificate into temporary keychain
+        if: startsWith(matrix.target.id, 'macos-')
+        env:
+          MAC_DEVELOPER_ID_CERT_BASE64: ${{ secrets.MAC_DEVELOPER_ID_CERT_BASE64 }}
+          MAC_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.MAC_DEVELOPER_ID_CERT_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -z "$MAC_DEVELOPER_ID_CERT_BASE64" ]; then
+            echo "Secret MAC_DEVELOPER_ID_CERT_BASE64 is empty — falling back to ad-hoc build."
+            exit 0
+          fi
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          # Random one-shot keychain password — never reused, deleted with the runner.
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          CERT_PATH="$RUNNER_TEMP/devid.p12"
+          echo -n "$MAC_DEVELOPER_ID_CERT_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" \
+            -P "$MAC_DEVELOPER_ID_CERT_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          # Allow codesign + electron-builder to use the private key without
+          # the GUI partition-list prompt.
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          # Put the new keychain ahead of the system one in the search
+          # path so `security find-identity -p codesigning` actually
+          # lists our Developer ID cert.
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          rm -f "$CERT_PATH"
+          echo "Available signing identities in the runner keychain:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Stage App Store Connect notary key
+        if: startsWith(matrix.target.id, 'macos-')
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+        shell: bash
+        run: |
+          if [ -z "$APPLE_API_KEY_BASE64" ]; then
+            echo "Secret APPLE_API_KEY_BASE64 is empty — notarization will be skipped."
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/apple"
+          KEY_PATH="$RUNNER_TEMP/apple/AuthKey.p8"
+          echo -n "$APPLE_API_KEY_BASE64" | base64 --decode > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          # Hand the path to subsequent steps via GITHUB_ENV; the
+          # build step reads APPLE_API_KEY straight from the
+          # environment (electron-builder + build.mjs both look it up
+          # automatically).
+          echo "APPLE_API_KEY=$KEY_PATH" >> "$GITHUB_ENV"
+
       - name: Build target ${{ matrix.target.id }}
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          # APPLE_API_KEY (path) is exported by the previous step via
+          # $GITHUB_ENV. The other two come from secrets directly and
+          # only ever appear in macOS matrix runs.
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: node build.mjs ${{ steps.version.outputs.version }} --target=${{ matrix.target.id }}
 
       - name: Upload artifact

@@ -37,13 +37,18 @@ nsis:
   allowToChangeInstallationDirectory: false
   include: build/installer.nsh
 mac:
-  # The CI matrix builds without a Developer ID certificate, so electron-builder
-  # falls back to ad-hoc signatures. macOS Sequoia enforces library validation
-  # whenever the Hardened Runtime flag is set, and ad-hoc-signed frameworks fail
-  # that check ("non-platform but different Team IDs") even though every binary
-  # in the bundle uses the same empty identity. Disabling Hardened Runtime keeps
-  # the bundle launchable from a quarantined download. We don't lose anything in
-  # return because we don't notarize and there is no Developer ID to enforce.
+  # The mac signing/notarization toggles default to OFF here and are
+  # turned on dynamically by build.mjs when both a Developer ID
+  # Application certificate (in the local keychain or imported via
+  # CSC_LINK in CI) AND the App Store Connect API credentials
+  # (APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER) are
+  # available. That keeps two paths working from the same config:
+  #   1. Full signed-and-notarized build (cert + ASC creds present) —
+  #      build.mjs flips hardenedRuntime + notarize to true; the DMG
+  #      opens with no Gatekeeper prompt and no quarantine warning.
+  #   2. Quick ad-hoc smoke build (no cert) — build.mjs leaves the
+  #      defaults as-is; the bundle is ad-hoc signed and launches via
+  #      right-click Open. See "ad-hoc fallback path" in build.mjs.
   hardenedRuntime: false
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist

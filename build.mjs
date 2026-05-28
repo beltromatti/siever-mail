@@ -168,6 +168,116 @@ function installNativeDependencies(platform, arch) {
   )
 }
 
+/**
+ * Inspects the host environment for the artefacts needed to produce a
+ * fully signed + notarized macOS DMG and returns a small descriptor the
+ * macOS branch of `buildLocalTarget` uses to extend the electron-builder
+ * CLI. There are three viable states:
+ *
+ *   1. Full Developer ID signing + notarization (`mode: 'developer-id'`)
+ *      — a "Developer ID Application" cert is in the login keychain AND
+ *      either the App Store Connect API key trio (APPLE_API_KEY +
+ *      APPLE_API_KEY_ID + APPLE_API_ISSUER) or the legacy Apple-ID
+ *      password trio (APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD +
+ *      APPLE_TEAM_ID) is exported. Hardened Runtime is flipped on,
+ *      notarize is flipped on, the DMG opens with no Gatekeeper prompt.
+ *
+ *   2. Developer ID signing without notarization (`mode: 'developer-id-no-notary'`)
+ *      — cert is present but no notary credentials. We still sign (and
+ *      keep Hardened Runtime) so the local user (whose Mac trusts their
+ *      own cert) can launch the bundle, but a quarantined download from
+ *      GitHub Releases would still trip Gatekeeper. Useful for local
+ *      one-off checks before secrets are wired up.
+ *
+ *   3. Ad-hoc fallback (`mode: 'ad-hoc'`) — no cert in keychain. We
+ *      pass `CSC_IDENTITY_AUTO_DISCOVERY=false` so electron-builder
+ *      doesn't fail looking for a cert, and we leave the yml defaults
+ *      (hardenedRuntime: false, notarize: false) untouched. The bundle
+ *      is ad-hoc signed and the user has to right-click → Open the
+ *      first time. This is what CI used to produce before secrets
+ *      were added.
+ *
+ * The CI workflow imports a cert from CSC_LINK at runtime — that lands
+ * in a temporary keychain that `security find-identity` also sees, so
+ * the same `mode: 'developer-id'` branch fires on the runner without
+ * any special-casing in build.mjs.
+ */
+function resolveMacSigningMode() {
+  if (hostPlatform !== 'darwin') {
+    return { mode: 'not-mac', extraArgs: [], extraEnv: {} }
+  }
+
+  const identityProbe = spawnSync(
+    'security',
+    ['find-identity', '-v', '-p', 'codesigning'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+  )
+  const identityOutput = `${identityProbe.stdout ?? ''}${identityProbe.stderr ?? ''}`
+  const hasDeveloperIdCert = /Developer ID Application/.test(identityOutput)
+
+  const ascApiKeyPath = (process.env.APPLE_API_KEY ?? '').trim()
+  const ascApiKeyId = (process.env.APPLE_API_KEY_ID ?? '').trim()
+  const ascApiIssuer = (process.env.APPLE_API_ISSUER ?? '').trim()
+  const hasAscApiKey = ascApiKeyPath && ascApiKeyId && ascApiIssuer
+
+  const appleId = (process.env.APPLE_ID ?? '').trim()
+  const appSpecificPassword = (process.env.APPLE_APP_SPECIFIC_PASSWORD ?? '').trim()
+  const appleTeamId = (process.env.APPLE_TEAM_ID ?? '').trim()
+  const hasApplePasswordTrio = appleId && appSpecificPassword && appleTeamId
+
+  const hasNotaryCreds = hasAscApiKey || hasApplePasswordTrio
+
+  // Also honour explicit ad-hoc override from the env: if the caller
+  // sets CSC_IDENTITY_AUTO_DISCOVERY=false manually we force the ad-hoc
+  // path even if a cert is in the keychain. Lets the user do a quick
+  // unsigned smoke build without uninstalling their cert.
+  const explicitAdHoc =
+    String(process.env.CSC_IDENTITY_AUTO_DISCOVERY ?? '').toLowerCase() === 'false'
+
+  if (!hasDeveloperIdCert || explicitAdHoc) {
+    return {
+      mode: 'ad-hoc',
+      extraArgs: [],
+      // Stop electron-builder from probing the keychain and failing
+      // with "no identity found" when none is wanted.
+      extraEnv: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+    }
+  }
+
+  if (!hasNotaryCreds) {
+    return {
+      mode: 'developer-id-no-notary',
+      extraArgs: [
+        '--config.mac.hardenedRuntime=true',
+        '--config.mac.notarize=false'
+      ],
+      extraEnv: {}
+    }
+  }
+
+  return {
+    mode: 'developer-id',
+    extraArgs: [
+      '--config.mac.hardenedRuntime=true',
+      '--config.mac.notarize=true'
+    ],
+    extraEnv: {}
+  }
+}
+
+function describeMacSigningMode(signing) {
+  switch (signing.mode) {
+    case 'developer-id':
+      return 'Developer ID signing + notarization (ASC API or app password)'
+    case 'developer-id-no-notary':
+      return 'Developer ID signing only (no notary creds — Gatekeeper will warn on download)'
+    case 'ad-hoc':
+      return 'ad-hoc signature (no Developer ID cert; right-click → Open required)'
+    default:
+      return signing.mode
+  }
+}
+
 function buildLocalTarget(target, releaseRoot) {
   const recoveredArtifactPath = recoverArtifact(
     target.outputDir,
@@ -185,6 +295,15 @@ function buildLocalTarget(target, releaseRoot) {
   ensureCleanDirectory(target.outputDir)
   installNativeDependencies(target.depPlatform, target.depArch)
 
+  const isMacOSTarget = target.depPlatform === 'darwin'
+  const signing = isMacOSTarget
+    ? resolveMacSigningMode()
+    : { mode: 'not-mac', extraArgs: [], extraEnv: {} }
+
+  if (isMacOSTarget) {
+    console.log(`    signing: ${describeMacSigningMode(signing)}`)
+  }
+
   run(
     npxCommand,
     [
@@ -194,9 +313,11 @@ function buildLocalTarget(target, releaseRoot) {
       'never',
       `--config.directories.output=${target.outputDir}`,
       `--config.${target.artifactOverrideKey}=${target.artifactFileName}`,
-      ...target.extraConfigArgs
+      ...target.extraConfigArgs,
+      ...signing.extraArgs
     ],
-    `build ${target.label}`
+    `build ${target.label}`,
+    { env: { ...process.env, ...signing.extraEnv } }
   )
 
   return copyArtifact(target.outputDir, releaseRoot, target.artifactFileName)
