@@ -161,6 +161,16 @@ function recoverArtifact(outputDir, releaseRoot, artifactFileName, legacyArtifac
 }
 
 function installNativeDependencies(platform, arch) {
+  // @electron/rebuild skips a module when the binary already exists for the
+  // right *arch* — it does not check *platform*. Building darwin-x64 before
+  // win32-x64 in an --all run leaves a Mach-O in build/Release and the
+  // win32 step silently skips it, packaging the wrong binary. Delete the
+  // build output first so every target always downloads the correct prebuilt.
+  const betterSqliteBuild = join(projectRoot, 'node_modules', 'better-sqlite3', 'build')
+  if (existsSync(betterSqliteBuild)) {
+    rmSync(betterSqliteBuild, { recursive: true, force: true })
+  }
+
   run(
     npxCommand,
     ['electron-builder', 'install-app-deps', `--platform=${platform}`, `--arch=${arch}`],
