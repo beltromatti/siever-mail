@@ -101,7 +101,7 @@ function EmailHtmlFrame({ html, title }: { html: string; title: string }): React
     const updateHeight = (): void => {
       const document = iframe.contentDocument
 
-      if (!document) {
+      if (!document?.documentElement || !document.body) {
         return
       }
 
@@ -164,9 +164,7 @@ function EmailHtmlFrame({ html, title }: { html: string; title: string }): React
           if (trimmed.length > 1) {
             const fragment = trimmed.slice(1)
             const anchor =
-              document.getElementById(fragment) ||
-              document.getElementsByName(fragment)[0] ||
-              null
+              document.getElementById(fragment) || document.getElementsByName(fragment)[0] || null
             anchor?.scrollIntoView({ behavior: 'smooth', block: 'start' })
           }
           return

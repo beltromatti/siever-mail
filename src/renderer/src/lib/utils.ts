@@ -6,7 +6,10 @@ export function cn(...inputs: ClassValue[]): string {
 }
 
 export function formatAppVersion(rawVersion: string): string {
-  return rawVersion.replace(/\.0+$/, '')
+  const normalizedVersion = rawVersion.trim().replace(/^v/i, '')
+  const [major = '0', minor = '0', patch = '0'] = normalizedVersion.split('.')
+
+  return `${major || '0'}.${minor || '0'}.${patch || '0'}`
 }
 
 export function formatAddress(address: { name?: string; address: string }): string {
