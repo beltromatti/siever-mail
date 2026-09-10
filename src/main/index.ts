@@ -10,7 +10,7 @@ import extensionMain from '@app/extension/main'
 
 import { loadRuntimeConfig } from './config/env'
 import { registerMailIpc } from './ipc/register-mail-ipc'
-import { prepareUpgradeMigration, restoreUpgradeStashIfNeeded } from './services/data-migration'
+import { finalizeUpgradeMigration, prepareUpgradeMigration } from './services/data-migration'
 import { MailService } from './services/mail-service'
 import { normalizeExternalHttpUrl } from './utils/external-url'
 
@@ -201,13 +201,17 @@ if (hasSingleInstanceLock) {
 
     prepareUpgradeMigration()
 
-    mailService = new MailService(loadRuntimeConfig())
-    void mailService
-      .start()
-      .then(() => {
-        restoreUpgradeStashIfNeeded()
-        return mailService?.installExtension(extensionMain)
-      })
+    const service = new MailService(loadRuntimeConfig())
+    mailService = service
+
+    // Storage first, then the upgrade migration, then the network. The
+    // finalize step purges the resyncable cache tables, so it has to land
+    // on a reconciled schema that no IMAP sync has started writing to yet.
+    void service
+      .prepareStorage()
+      .then(() => finalizeUpgradeMigration(service.createMigrationExecutor()))
+      .then(() => service.start())
+      .then(() => service.installExtension(extensionMain))
       .then(() => {
         if (extensionMain.id !== 'noop') {
           console.info(
@@ -216,7 +220,7 @@ if (hasSingleInstanceLock) {
         }
       })
       .catch((error) => {
-        console.error('[extension] install failed', error)
+        console.error('[startup] initialization failed', error)
       })
 
     registerMailIpc(mailService, () => mainWindow)

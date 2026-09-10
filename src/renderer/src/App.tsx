@@ -20,6 +20,14 @@ import {
   type ComposerRetryDraft
 } from '@renderer/features/mail/mail-composer-dialog'
 import { MessageList } from '@renderer/features/mail/message-list'
+import { MessageTable } from '@renderer/features/mail/message-table'
+import type { MessageListViewProps } from '@renderer/features/mail/message-list-view'
+import {
+  EMPTY_MESSAGE_HIGHLIGHT_TERMS,
+  type MessageHighlightTerms,
+  type PrimaryAddressMode
+} from '@renderer/features/mail/message-list-shared'
+import { WorkspaceLayout } from '@renderer/features/workspace/workspace-layout'
 import extensionRenderer from '@app/extension/renderer'
 import type { ExtensionSelectionContext, ExtensionHostHooks } from '@app/extension/types'
 import { MessageViewer } from '@renderer/features/mail/message-viewer'
@@ -27,13 +35,27 @@ import { MailToolbar } from '@renderer/features/mail/mail-toolbar'
 import { SettingsDialog } from '@renderer/features/settings/settings-dialog'
 import { Button } from '@renderer/components/ui/button'
 import { cn, formatAppVersion } from '@renderer/lib/utils'
+import { buildMessageSections } from '@renderer/lib/message-sections'
+import {
+  applySelectionIntent,
+  EMPTY_MESSAGE_SELECTION,
+  isSameMessageRef,
+  messageRefKey,
+  moveSelectionCursor,
+  reconcileSelection,
+  selectAllMessages,
+  summaryToMessageRef,
+  uniqueMessageRefs,
+  type MessageSelectionState,
+  type SelectionIntent
+} from '@renderer/lib/message-selection'
 import {
   ALL_INBOX_FOLDER_PATH,
-  DEFAULT_MESSAGE_LIST_SORT_DIRECTION,
-  DEFAULT_MESSAGE_LIST_SORT_FIELD,
+  DEFAULT_MESSAGE_LIST_FILTER,
+  DEFAULT_UI_PREFERENCES,
   MESSAGE_LIST_PAGE_SIZE
 } from '@shared/models'
-import { parseSearchQuery } from '@shared/search'
+import { highlightTermsForField, parseSearchQuery } from '@shared/search'
 import type {
   AccountConnectionStatus,
   AppCapabilities,
@@ -45,12 +67,19 @@ import type {
   MailMessageListPage,
   MailMessageListSort,
   MailMessageSummary,
+  MessageGroupingMode,
+  MessageListFilter,
   MessageRef,
+  UiPreferences,
   UnifiedInboxSummary,
   WindowControlsState
 } from '@shared/models'
+
 const ALL_INBOX_FOLDER_LABEL = 'TUTTI'
 const GMAIL_QUOTE_BLOCK_STYLE = 'margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex'
+
+/** Folders whose rows are about the recipient rather than the sender. */
+const RECIPIENT_ORIENTED_SPECIAL_USES = new Set(['\\Sent', '\\Drafts'])
 
 function htmlFromText(text: string): string {
   return text
@@ -134,49 +163,14 @@ function ensureForwardSubject(subject: string): string {
   return `Fwd: ${subject}`
 }
 
-function patchSeenFlag(flags: string[], seen: boolean): string[] {
-  const filteredFlags = flags.filter((flag) => flag !== '\\Seen')
-
-  if (!seen) {
-    return filteredFlags
-  }
-
-  return [...filteredFlags, '\\Seen']
-}
-
-function isSameMessageRef(left: MessageRef, right: MessageRef): boolean {
-  return (
-    left.accountId === right.accountId &&
-    left.folderPath === right.folderPath &&
-    left.uid === right.uid
-  )
-}
-
-function summaryToMessageRef(summary: MailMessageSummary): MessageRef {
-  return {
-    accountId: summary.accountId,
-    folderPath: summary.folderPath,
-    uid: summary.uid
-  }
-}
-
-function messageRefKey(ref: MessageRef): string {
-  return `${ref.accountId}:${ref.folderPath}:${ref.uid}`
-}
-
-function uniqueMessageRefs(refs: MessageRef[]): MessageRef[] {
-  const seen = new Set<string>()
-
-  return refs.filter((ref) => {
-    const key = messageRefKey(ref)
-
-    if (seen.has(key)) {
-      return false
-    }
-
-    seen.add(key)
-    return true
-  })
+/**
+ * Adds or removes one IMAP keyword in a local flag array. Optimistic UI runs
+ * through here so a read toggle never drops the flag keyword, mirroring what
+ * the database does server-side.
+ */
+function patchFlag(flags: string[], keyword: string, present: boolean): string[] {
+  const withoutKeyword = flags.filter((flag) => flag !== keyword)
+  return present ? [...withoutKeyword, keyword] : withoutKeyword
 }
 
 function moveAccountToFront(accounts: MailAccount[], accountId: string): MailAccount[] {
@@ -231,14 +225,7 @@ function useMailBootstrap(): {
     void reload()
   }, [reload])
 
-  return {
-    accounts,
-    capabilities,
-    loading,
-    error,
-    setAccounts,
-    reload
-  }
+  return { accounts, capabilities, loading, error, setAccounts, reload }
 }
 
 function AppFrame({
@@ -255,36 +242,36 @@ function AppFrame({
   onCloseWindow: () => void
 }): React.JSX.Element {
   return (
-    <div className={cn('h-screen overflow-hidden p-4', windowControlsState.enabled && 'pt-10')}>
+    <div className={cn('h-screen overflow-hidden p-2.5', windowControlsState.enabled && 'pt-9')}>
       {windowControlsState.dragTopRegionEnabled && <div className="window-drag-edge" aria-hidden />}
       {windowControlsState.enabled && (
         <div className="window-no-drag border-border bg-card/90 fixed top-0 right-0 z-[10000] flex overflow-hidden rounded-bl-md border-b border-l backdrop-blur">
           <button
             type="button"
-            className="hover:bg-secondary/70 inline-flex h-9 w-11 items-center justify-center transition-colors"
+            className="hover:bg-secondary/70 inline-flex h-8 w-10 items-center justify-center transition-colors"
             onClick={onMinimizeWindow}
             aria-label="Minimizza finestra"
             title="Minimizza"
           >
-            <Minus className="size-4" />
+            <Minus className="size-3.5" />
           </button>
           <button
             type="button"
-            className="hover:bg-secondary/70 inline-flex h-9 w-11 items-center justify-center transition-colors"
+            className="hover:bg-secondary/70 inline-flex h-8 w-10 items-center justify-center transition-colors"
             onClick={onToggleMaximizeWindow}
             aria-label={windowControlsState.maximized ? 'Riduci finestra' : 'Ingrandisci finestra'}
             title={windowControlsState.maximized ? 'Riduci' : 'Ingrandisci'}
           >
-            <Square className="size-3.5" />
+            <Square className="size-3" />
           </button>
           <button
             type="button"
-            className="hover:bg-destructive/80 hover:text-destructive-foreground inline-flex h-9 w-11 items-center justify-center transition-colors"
+            className="hover:bg-destructive/80 hover:text-destructive-foreground inline-flex h-8 w-10 items-center justify-center transition-colors"
             onClick={onCloseWindow}
             aria-label="Chiudi finestra"
             title="Chiudi"
           >
-            <X className="size-4" />
+            <X className="size-3.5" />
           </button>
         </div>
       )}
@@ -313,23 +300,17 @@ function App(): React.JSX.Element {
   const [accountConnections, setAccountConnections] = useState<
     Record<string, AccountConnectionStatus>
   >({})
-  const [selectedMessageRef, setSelectedMessageRef] = useState<MessageRef | null>(null)
-  const [multiSelectEnabled, setMultiSelectEnabled] = useState(false)
-  const [selectedMessageRefs, setSelectedMessageRefs] = useState<MessageRef[]>([])
+
+  // Selection and cursor are one value so every mutation stays atomic — a
+  // Ctrl-click that removes the cursor's row from the selection has to move
+  // both in the same commit or the UI shows a state that never existed.
+  const [selection, setSelection] = useState<MessageSelectionState>(EMPTY_MESSAGE_SELECTION)
   const [selectedMessage, setSelectedMessage] = useState<MailMessageDetail | null>(null)
   const [isMessageExpanded, setIsMessageExpanded] = useState(false)
   const [search, setSearch] = useState('')
-  const [messageListSort, setMessageListSort] = useState<MailMessageListSort>({
-    field: DEFAULT_MESSAGE_LIST_SORT_FIELD,
-    direction: DEFAULT_MESSAGE_LIST_SORT_DIRECTION
-  })
-  // Persisted visual-reversal preference (the "more recent at the bottom,
-  // start scrolled to the bottom" mode, à la iMessage/WhatsApp). This is
-  // NOT a sort direction — it only mirrors the rendered list and resets
-  // the initial scroll to the visual bottom. The active sort (date /
-  // sender / subject + asc/desc) is independent and lives in
-  // `messageListSort` above.
-  const [invertMessageListOrder, setInvertMessageListOrder] = useState(false)
+  const [messageFilter, setMessageFilter] = useState<MessageListFilter>(DEFAULT_MESSAGE_LIST_FILTER)
+  const [uiPreferences, setUiPreferences] = useState<UiPreferences>(DEFAULT_UI_PREFERENCES)
+
   const [loadingFolders, setLoadingFolders] = useState(false)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false)
@@ -338,14 +319,16 @@ function App(): React.JSX.Element {
   const [clearingAccountDataId, setClearingAccountDataId] = useState<string | null>(null)
   const [clearingDatabaseData, setClearingDatabaseData] = useState(false)
   const [viewError, setViewError] = useState<string | null>(null)
+
   const folderRequestIdRef = useRef(0)
   const loadingFoldersRequestIdRef = useRef<number | null>(null)
   const messageRequestIdRef = useRef(0)
   const loadingMessagesRequestIdRef = useRef<number | null>(null)
   const messageDetailRequestIdRef = useRef(0)
-  const toggleSeenExecutionIdRef = useRef(0)
+  const toggleFlagExecutionIdRef = useRef(0)
   const activeSearchQueryRef = useRef('')
   const pendingNotificationMessageRef = useRef<MessageRef | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
 
   const [composerOpen, setComposerOpen] = useState(false)
   const [composerInitial, setComposerInitial] = useState<ComposerInitialData | undefined>(undefined)
@@ -369,31 +352,67 @@ function App(): React.JSX.Element {
     activeSearchQueryRef.current = search.trim()
   }, [search])
 
-  // One-shot read of the persisted visual-reversal preference on mount.
-  // Falls back silently on read failure — a broken settings table should
-  // never crash the app shell.
+  // One-shot read of every persisted view preference. Falls back silently to
+  // the defaults — a preferences row must never be able to stop the
+  // workspace from opening.
   useEffect(() => {
     let disposed = false
+
     void window.mailApi
-      .getInvertMessageListDefaultOrder()
-      .then((value) => {
+      .getUiPreferences()
+      .then((preferences) => {
         if (!disposed) {
-          setInvertMessageListOrder(value)
+          setUiPreferences(preferences)
         }
       })
       .catch(() => undefined)
+
     return () => {
       disposed = true
     }
   }, [])
 
-  const handleMessageListSortChange = useCallback((next: MailMessageListSort): void => {
-    setMessageListSort(next)
+  /**
+   * Persists a preference change immediately and adopts whatever the main
+   * process echoes back, so an invalid value can never linger in the UI.
+   * Optimistic locally so the layout switch feels instant.
+   */
+  const uiPreferencesRef = useRef(uiPreferences)
+
+  useEffect(() => {
+    uiPreferencesRef.current = uiPreferences
+  }, [uiPreferences])
+
+  const updateUiPreferences = useCallback((patch: Partial<UiPreferences>): void => {
+    // Computed from a ref rather than inside a state updater: updaters must
+    // stay pure (React may invoke them more than once), and the IPC write
+    // below is very much not.
+    const next = { ...uiPreferencesRef.current, ...patch }
+    uiPreferencesRef.current = next
+    setUiPreferences(next)
+
+    void window.mailApi
+      .setUiPreferences(next)
+      .then((persisted) => {
+        uiPreferencesRef.current = persisted
+        setUiPreferences(persisted)
+      })
+      .catch(() => undefined)
   }, [])
 
-  const handleInvertMessageListOrderChanged = useCallback((value: boolean): void => {
-    setInvertMessageListOrder(value)
-  }, [])
+  const handleMessageListSortChange = useCallback(
+    (next: MailMessageListSort): void => {
+      updateUiPreferences({ messageListSort: next })
+    },
+    [updateUiPreferences]
+  )
+
+  const handleMessageGroupingChange = useCallback(
+    (next: MessageGroupingMode): void => {
+      updateUiPreferences({ messageGrouping: next })
+    },
+    [updateUiPreferences]
+  )
 
   useEffect(() => {
     let disposed = false
@@ -401,11 +420,9 @@ function App(): React.JSX.Element {
     void window.mailApi
       .getWindowControlsState()
       .then((state) => {
-        if (disposed) {
-          return
+        if (!disposed) {
+          setWindowControlsState(state)
         }
-
-        setWindowControlsState(state)
       })
       .catch(() => undefined)
 
@@ -426,9 +443,7 @@ function App(): React.JSX.Element {
   const handleToggleMaximizeWindow = useCallback((): void => {
     void window.mailApi
       .toggleMaximizeWindow()
-      .then((state) => {
-        setWindowControlsState(state)
-      })
+      .then((state) => setWindowControlsState(state))
       .catch(() => undefined)
   }, [])
 
@@ -452,22 +467,19 @@ function App(): React.JSX.Element {
     () => accounts.find((account) => account.id === selectedAccountId) || null,
     [accounts, selectedAccountId]
   )
+
   const connectionStatus = useMemo<'online' | 'connecting' | 'offline' | null>(() => {
     // Three states drive the badge in the header:
     //   - online: every relevant account is connected (or transparently
     //     reconnecting after a transient drop — `reconnecting` keeps
     //     the last-known data usable, so we don't downgrade the badge).
     //   - connecting: at least one account is in the initial handshake
-    //     (`connecting`) OR we don't have a state for it yet (the map
-    //     entry is missing). We can land here only briefly — the
-    //     snapshot effect below seeds the map on mount with whatever
-    //     state the engine already had at bootstrap, so "undefined"
-    //     means truly never-heard-from, and the next live event upgrades
-    //     it.
+    //     (`connecting`) OR we don't have a state for it yet. We can land
+    //     here only briefly — the snapshot effect below seeds the map on
+    //     mount with whatever state the engine already had at bootstrap.
     //   - offline: at least one account is in a terminal failure state
-    //     (`error` or `disconnected`) AND no account is still
-    //     connecting. Only then do we tell the user the connection is
-    //     actually lost.
+    //     AND no account is still connecting. Only then do we tell the
+    //     user the connection is actually lost.
     if (accounts.length === 0) {
       return null
     }
@@ -499,6 +511,7 @@ function App(): React.JSX.Element {
 
     return anyConnecting ? 'connecting' : 'offline'
   }, [accountConnections, accounts, selectedAccountId, selectedFolderPath])
+
   const refreshUnifiedInboxSummary = useCallback(async (): Promise<void> => {
     if (accounts.length === 0) {
       setAllInboxesSummary(null)
@@ -512,6 +525,7 @@ function App(): React.JSX.Element {
       return
     }
   }, [accounts.length])
+
   const allInboxesFolder = useMemo(() => {
     if (accounts.length === 0) {
       return undefined
@@ -524,6 +538,10 @@ function App(): React.JSX.Element {
       unseenCount: allInboxesSummary?.unseenCount ?? 0
     }
   }, [accounts.length, allInboxesSummary?.messageCount, allInboxesSummary?.unseenCount])
+
+  const clearSelection = useCallback((): void => {
+    setSelection(EMPTY_MESSAGE_SELECTION)
+  }, [])
 
   const cancelInFlightWork = useCallback(() => {
     folderRequestIdRef.current += 1
@@ -631,7 +649,9 @@ function App(): React.JSX.Element {
         const fetchedPage = await window.mailApi.listMessages(accountId, folderPath, {
           limit: targetLimit,
           query: options?.query,
-          sort: options?.sort
+          sort: options?.sort,
+          grouping: options?.grouping,
+          filter: options?.filter
         })
 
         if (requestId !== messageRequestIdRef.current) {
@@ -652,31 +672,39 @@ function App(): React.JSX.Element {
         setTotalMessagesInFolder(fetchedPage.total)
         setHasMoreMessages(fetchedPage.hasMore)
 
-        setSelectedMessageRef((currentRef) => {
-          const availableMessageRefKeys = new Set(
-            fetchedPage.messages.map((message) => messageRefKey(summaryToMessageRef(message)))
-          )
+        setSelection((current) => {
+          const availableRefs = fetchedPage.messages.map(summaryToMessageRef)
+          const availableKeys = new Set(availableRefs.map(messageRefKey))
           const pendingNotificationRef = pendingNotificationMessageRef.current
 
-          if (
-            pendingNotificationRef &&
-            availableMessageRefKeys.has(messageRefKey(pendingNotificationRef))
-          ) {
+          // A message opened from a desktop notification wins over whatever
+          // was selected, but only once the page that contains it lands.
+          if (pendingNotificationRef && availableKeys.has(messageRefKey(pendingNotificationRef))) {
             pendingNotificationMessageRef.current = null
-            return pendingNotificationRef
+            return {
+              selectedRefs: [pendingNotificationRef],
+              cursorRef: pendingNotificationRef,
+              anchorRef: pendingNotificationRef
+            }
           }
 
-          if (currentRef && availableMessageRefKeys.has(messageRefKey(currentRef))) {
-            return currentRef
+          const reconciled = reconcileSelection(current, availableRefs)
+
+          if (reconciled.selectedRefs.length > 0) {
+            return reconciled
           }
 
-          const firstMessage = fetchedPage.messages[0]
+          const firstMessage = availableRefs[0]
 
           if (!firstMessage) {
-            return null
+            return EMPTY_MESSAGE_SELECTION
           }
 
-          return summaryToMessageRef(firstMessage)
+          return {
+            selectedRefs: [firstMessage],
+            cursorRef: firstMessage,
+            anchorRef: firstMessage
+          }
         })
 
         if (folderPath === ALL_INBOX_FOLDER_PATH) {
@@ -699,7 +727,7 @@ function App(): React.JSX.Element {
         setMessages([])
         setTotalMessagesInFolder(0)
         setHasMoreMessages(false)
-        setSelectedMessageRef(null)
+        clearSelection()
         return null
       } finally {
         if (withPanelLoader && loadingMessagesRequestIdRef.current === requestId) {
@@ -707,10 +735,8 @@ function App(): React.JSX.Element {
           setLoadingMessages(false)
         }
       }
-
-      return null
     },
-    [refreshUnifiedInboxSummary]
+    [clearSelection, refreshUnifiedInboxSummary]
   )
 
   useEffect(() => {
@@ -746,30 +772,59 @@ function App(): React.JSX.Element {
     }
   }, [])
 
+  /**
+   * Everything the current view asks of `listMessages`, kept in a ref.
+   *
+   * Background refreshes are driven by IMAP sync events, and a callback that
+   * *captured* these values could still be holding the previous ones when an
+   * event fires — the subscription only picks up a new closure on the next
+   * render. A refresh started in that window would fetch with the old sort
+   * or grouping and, landing after the deliberate reload, overwrite it: the
+   * list stayed date-ordered after switching to "raggruppa per mittente"
+   * until something else forced a refetch. Reading the options at call time
+   * removes the window entirely, and lets `refreshCurrentFolder` keep a
+   * stable identity so the IMAP listener stops re-subscribing on every
+   * preference change.
+   */
+  const listOptionsRef = useRef<ListMessagesOptions>({
+    limit: MESSAGE_LIST_PAGE_SIZE,
+    sort: uiPreferences.messageListSort,
+    grouping: uiPreferences.messageGrouping,
+    filter: messageFilter
+  })
+
+  useEffect(() => {
+    listOptionsRef.current = {
+      limit: messageLimit,
+      query: search.trim() || undefined,
+      sort: uiPreferences.messageListSort,
+      grouping: uiPreferences.messageGrouping,
+      filter: messageFilter
+    }
+  }, [
+    messageFilter,
+    messageLimit,
+    search,
+    uiPreferences.messageGrouping,
+    uiPreferences.messageListSort
+  ])
+
   const refreshCurrentFolder = useCallback(
-    async (
-      accountId: string,
-      folderPath: string,
-      options?: {
-        limit?: number
-        query?: string
-        sort?: MailMessageListSort
-      }
-    ) => {
-      const targetLimit = Math.max(
-        MESSAGE_LIST_PAGE_SIZE,
-        Math.floor(options?.limit || messageLimit)
-      )
+    async (accountId: string, folderPath: string) => {
+      const options = listOptionsRef.current
       const requestId = ++messageRequestIdRef.current
+
       await loadMessages(accountId, folderPath, {
-        limit: targetLimit,
-        query: options?.query ?? (search.trim() || undefined),
-        sort: options?.sort ?? messageListSort,
+        ...options,
+        limit: Math.max(
+          MESSAGE_LIST_PAGE_SIZE,
+          Math.floor(options.limit || MESSAGE_LIST_PAGE_SIZE)
+        ),
         withPanelLoader: false,
         requestId
       })
     },
-    [loadMessages, messageLimit, messageListSort, search]
+    [loadMessages]
   )
 
   const removeAccount = useCallback(
@@ -786,7 +841,6 @@ function App(): React.JSX.Element {
         cancelInFlightWork()
         setAllInboxesSummary(null)
         setSelectedAccountId((current) => (current === accountId ? null : current))
-
         setAccounts((current) => current.filter((account) => account.id !== accountId))
       } catch (caughtError) {
         setViewError(
@@ -800,6 +854,16 @@ function App(): React.JSX.Element {
     },
     [cancelInFlightWork, removingAccountId, setAccounts]
   )
+
+  const resetMailboxView = useCallback((): void => {
+    setMessages([])
+    setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
+    setTotalMessagesInFolder(0)
+    setHasMoreMessages(false)
+    clearSelection()
+    setSelectedMessage(null)
+    setIsMessageExpanded(false)
+  }, [clearSelection])
 
   const clearAccountData = useCallback(
     async (accountId: string): Promise<void> => {
@@ -828,14 +892,7 @@ function App(): React.JSX.Element {
           cancelInFlightWork()
           setFolders([])
           setSelectedFolderPath(null)
-          setMessages([])
-          setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
-          setTotalMessagesInFolder(0)
-          setHasMoreMessages(false)
-          setSelectedMessageRef(null)
-          setSelectedMessageRefs([])
-          setSelectedMessage(null)
-          setIsMessageExpanded(false)
+          resetMailboxView()
 
           const requestId = ++folderRequestIdRef.current
           void loadFolders(accountId, { requestId })
@@ -860,6 +917,7 @@ function App(): React.JSX.Element {
       loadFolders,
       refreshUnifiedInboxSummary,
       removingAccountId,
+      resetMailboxView,
       selectedAccountId
     ]
   )
@@ -887,14 +945,7 @@ function App(): React.JSX.Element {
       setAllInboxesSummary(null)
       setFolders([])
       setSelectedFolderPath(null)
-      setMessages([])
-      setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
-      setTotalMessagesInFolder(0)
-      setHasMoreMessages(false)
-      setSelectedMessageRef(null)
-      setSelectedMessageRefs([])
-      setSelectedMessage(null)
-      setIsMessageExpanded(false)
+      resetMailboxView()
 
       if (selectedAccountId) {
         const requestId = ++folderRequestIdRef.current
@@ -915,6 +966,7 @@ function App(): React.JSX.Element {
     clearingDatabaseData,
     loadFolders,
     removingAccountId,
+    resetMailboxView,
     selectedAccountId
   ])
 
@@ -925,18 +977,8 @@ function App(): React.JSX.Element {
       return
     }
 
-    void refreshCurrentFolder(selectedAccountId, ALL_INBOX_FOLDER_PATH, {
-      limit: messageLimit,
-      query: search.trim() || undefined
-    })
-  }, [
-    messageLimit,
-    refreshCurrentFolder,
-    refreshUnifiedInboxSummary,
-    search,
-    selectedAccountId,
-    selectedFolderPath
-  ])
+    void refreshCurrentFolder(selectedAccountId, ALL_INBOX_FOLDER_PATH)
+  }, [refreshCurrentFolder, refreshUnifiedInboxSummary, selectedAccountId, selectedFolderPath])
 
   useEffect(() => {
     if (accounts.length === 0) {
@@ -973,20 +1015,14 @@ function App(): React.JSX.Element {
       setLoadingMoreMessages(false)
       setLoadingMessageDetail(false)
       setFolders([])
-      setMessages([])
-      setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
-      setTotalMessagesInFolder(0)
-      setHasMoreMessages(false)
       setSelectedFolderPath(null)
-      setSelectedMessage(null)
-      setSelectedMessageRef(null)
-      setSelectedMessageRefs([])
+      resetMailboxView()
       return
     }
 
     const requestId = ++folderRequestIdRef.current
     void loadFolders(selectedAccountId, { requestId })
-  }, [loadFolders, selectedAccountId])
+  }, [loadFolders, resetMailboxView, selectedAccountId])
 
   useEffect(() => {
     if (!selectedAccountId || !selectedFolderPath) {
@@ -994,52 +1030,53 @@ function App(): React.JSX.Element {
       loadingMessagesRequestIdRef.current = null
       setLoadingMessages(false)
       setLoadingMoreMessages(false)
-      setMessages([])
-      setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
-      setTotalMessagesInFolder(0)
-      setHasMoreMessages(false)
-      setSelectedMessageRef(null)
-      setSelectedMessageRefs([])
-      setSelectedMessage(null)
+      resetMailboxView()
       return
     }
 
     const requestId = ++messageRequestIdRef.current
-    const query = search.trim() || undefined
     void loadMessages(selectedAccountId, selectedFolderPath, {
       limit: messageLimit,
-      query,
-      sort: messageListSort,
+      query: search.trim() || undefined,
+      sort: uiPreferences.messageListSort,
+      grouping: uiPreferences.messageGrouping,
+      filter: messageFilter,
       withPanelLoader: true,
       requestId
     })
   }, [
     loadMessages,
+    messageFilter,
     messageLimit,
-    messageListSort,
+    resetMailboxView,
     search,
     selectedAccountId,
-    selectedFolderPath
+    selectedFolderPath,
+    uiPreferences.messageGrouping,
+    uiPreferences.messageListSort
   ])
 
+  // The reading pane follows a selection of exactly one. Above that the pane
+  // shows a summary instead, so there is nothing to fetch.
+  const readingRef = selection.selectedRefs.length === 1 ? selection.selectedRefs[0] : null
+  const readingKey = readingRef ? messageRefKey(readingRef) : null
+
   useEffect(() => {
-    if (!selectedMessageRef) {
+    if (!readingRef) {
       messageDetailRequestIdRef.current += 1
       setSelectedMessage(null)
       setIsMessageExpanded(false)
       return
     }
 
-    void loadMessageDetail(selectedMessageRef)
-  }, [loadMessageDetail, selectedMessageRef])
-
-  const closeMultiSelectSelection = useCallback((): void => {
-    setMultiSelectEnabled(false)
-    setSelectedMessageRefs([])
-  }, [])
+    void loadMessageDetail(readingRef)
+    // `readingKey` is the stable identity of `readingRef`; depending on the
+    // object itself would refetch on every list refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadMessageDetail, readingKey])
 
   useEffect(() => {
-    if (!isMessageExpanded && !multiSelectEnabled) {
+    if (!isMessageExpanded && selection.selectedRefs.length <= 1) {
       return
     }
 
@@ -1050,11 +1087,20 @@ function App(): React.JSX.Element {
 
       if (isMessageExpanded) {
         setIsMessageExpanded(false)
+        return
       }
 
-      if (multiSelectEnabled) {
-        closeMultiSelectSelection()
-      }
+      // Collapse a multi-selection down to the cursor rather than clearing
+      // it outright — Escape in a file manager narrows, it does not empty.
+      setSelection((current) =>
+        current.cursorRef
+          ? {
+              selectedRefs: [current.cursorRef],
+              cursorRef: current.cursorRef,
+              anchorRef: current.cursorRef
+            }
+          : EMPTY_MESSAGE_SELECTION
+      )
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -1062,29 +1108,7 @@ function App(): React.JSX.Element {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [closeMultiSelectSelection, isMessageExpanded, multiSelectEnabled])
-
-  // Refs that the global message-list keyboard handler (further down)
-  // reads at event time. The handler depends on values that change on
-  // every selection — keeping them in refs avoids rebinding the listener
-  // on each render and lets us declare the refs/state early while the
-  // actual effect lives next to the action helpers it needs.
-  const messagesRef = useRef<MailMessageSummary[]>(messages)
-  const selectedMessageRefValueRef = useRef<MessageRef | null>(selectedMessageRef)
-  const toolbarActionRefsValueRef = useRef<MessageRef[]>([])
-  const invertMessageListOrderRef = useRef(invertMessageListOrder)
-
-  useEffect(() => {
-    messagesRef.current = messages
-  }, [messages])
-
-  useEffect(() => {
-    selectedMessageRefValueRef.current = selectedMessageRef
-  }, [selectedMessageRef])
-
-  useEffect(() => {
-    invertMessageListOrderRef.current = invertMessageListOrder
-  }, [invertMessageListOrder])
+  }, [isMessageExpanded, selection.selectedRefs.length])
 
   useEffect(() => {
     if (!selectedAccountId || !selectedFolderPath || selectedFolderPath === ALL_INBOX_FOLDER_PATH) {
@@ -1136,9 +1160,6 @@ function App(): React.JSX.Element {
         event.added.length > 0 || event.updated.length > 0 || event.removedUids.length > 0
 
       if (selectedFolderPath === ALL_INBOX_FOLDER_PATH) {
-        // Any inbox of any included account can contribute — the DB query already
-        // filters on `resolveUnifiedInboxMailboxes()`, so we refresh unconditionally
-        // on real message deltas regardless of which account id is on the event.
         if (!hasMessageDelta) {
           return
         }
@@ -1176,15 +1197,13 @@ function App(): React.JSX.Element {
 
     // Seed the connection map with the engine's current view of every
     // account. The `onAccountConnectionChanged` stream above only carries
-    // STATE TRANSITIONS, so any 'connecting' / 'connected' burst that
-    // already happened before this subscription was bound (typically the
-    // initial connection during bootstrap) would otherwise stay
-    // invisible — and the badge would sit on "Connessione persa" until
-    // a real disconnect/reconnect cycle finally fired a transition. The
-    // snapshot is requested AFTER subscribing so any event landing
-    // between the two calls is captured by the listener, not lost in
-    // the gap; the merge below is fill-only so we never clobber a more
-    // recent value the live stream already delivered.
+    // STATE TRANSITIONS, so any burst that already happened before this
+    // subscription was bound (typically the initial connection during
+    // bootstrap) would otherwise stay invisible — and the badge would sit on
+    // "Connessione persa" until a real disconnect/reconnect cycle fired a
+    // transition. Requested AFTER subscribing so an event landing between
+    // the two calls is captured by the listener, not lost in the gap; the
+    // merge is fill-only so it never clobbers a fresher live value.
     let snapshotDisposed = false
     void window.mailApi
       .getAccountConnectionStates()
@@ -1192,15 +1211,18 @@ function App(): React.JSX.Element {
         if (snapshotDisposed) {
           return
         }
+
         setAccountConnections((current) => {
           let mutated = false
           const next: typeof current = { ...current }
+
           for (const state of states) {
             if (next[state.accountId] === undefined) {
               next[state.accountId] = state.status
               mutated = true
             }
           }
+
           return mutated ? next : current
         })
       })
@@ -1224,10 +1246,10 @@ function App(): React.JSX.Element {
       setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
       setTotalMessagesInFolder(0)
       setHasMoreMessages(false)
-      setSelectedMessageRef(ref)
-      setSelectedMessageRefs([])
+      setSelection({ selectedRefs: [ref], cursorRef: ref, anchorRef: ref })
       setSelectedMessage(null)
       setIsMessageExpanded(false)
+      setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
       setSelectedAccountId(ref.accountId)
       setSelectedFolderPath(ref.folderPath)
     })
@@ -1242,12 +1264,8 @@ function App(): React.JSX.Element {
     }
 
     setEmptyStateIntroStep('logo')
-    const textRevealTimer = window.setTimeout(() => {
-      setEmptyStateIntroStep('text')
-    }, 1400)
-    const buttonRevealTimer = window.setTimeout(() => {
-      setEmptyStateIntroStep('button')
-    }, 2300)
+    const textRevealTimer = window.setTimeout(() => setEmptyStateIntroStep('text'), 1400)
+    const buttonRevealTimer = window.setTimeout(() => setEmptyStateIntroStep('button'), 2300)
 
     return () => {
       window.clearTimeout(textRevealTimer)
@@ -1255,54 +1273,69 @@ function App(): React.JSX.Element {
     }
   }, [accounts.length, showWelcomeGate])
 
-  const filteredMessages = messages
-  const messageListTitle = search.trim() ? 'Risultati di Ricerca' : 'Conversazioni'
-  // Pre-parse the active search query so the list rows can highlight the
-  // matched substrings. We use the SAME parser the main process uses to
-  // build the WHERE — so the user never sees a "highlighted but not
-  // returned" or "returned but not highlighted" mismatch.
-  const searchHighlightTerms = useMemo<readonly string[]>(
-    () => parseSearchQuery(search).highlightTerms,
-    [search]
+  const messageListTitle = search.trim() ? 'Risultati di ricerca' : 'Conversazioni'
+
+  // Parsed once with the SAME parser the main process uses to build the
+  // WHERE, so the user never sees a "highlighted but not returned" or
+  // "returned but not highlighted" mismatch. Scoped terms only light up the
+  // field they were scoped to.
+  const highlightTerms = useMemo<MessageHighlightTerms>(() => {
+    const trimmed = search.trim()
+
+    if (!trimmed) {
+      return EMPTY_MESSAGE_HIGHLIGHT_TERMS
+    }
+
+    const parsed = parseSearchQuery(trimmed)
+
+    return {
+      sender: highlightTermsForField(parsed, 'sender'),
+      recipients: highlightTermsForField(parsed, 'recipients'),
+      subject: highlightTermsForField(parsed, 'subject'),
+      body: highlightTermsForField(parsed, 'body')
+    }
+  }, [search])
+
+  const messageSections = useMemo(
+    () =>
+      buildMessageSections(
+        messages,
+        uiPreferences.messageGrouping,
+        uiPreferences.messageListSort.field
+      ),
+    [messages, uiPreferences.messageGrouping, uiPreferences.messageListSort.field]
   )
-  // Panel-level loader state. Two distinct reasons to show a loader card instead
+
+  const orderedMessageRefs = useMemo(() => messages.map(summaryToMessageRef), [messages])
+
+  const currentFolder = useMemo(
+    () => folders.find((folder) => folder.path === selectedFolderPath) ?? null,
+    [folders, selectedFolderPath]
+  )
+
+  const primaryAddressMode: PrimaryAddressMode = RECIPIENT_ORIENTED_SPECIAL_USES.has(
+    currentFolder?.specialUse ?? ''
+  )
+    ? 'recipient'
+    : 'sender'
+
+  // Panel-level loader state. Two distinct reasons to show a loader instead
   // of the message list:
-  //   1. Our local DB read is in flight (loadingMessages) and we have nothing to
-  //      show yet — typical during the very first ms after switching folders.
-  //   2. The engine knows the server has messages in this folder
-  //      (totalMessagesInFolder > 0) but the sync worker hasn't landed the
-  //      envelopes yet. Happens during bootstrap of large accounts: folder
-  //      counts arrive in ~1s via STATUS, the actual envelopes follow as the
-  //      sync queue drains. Without this branch the UI would show an empty list
-  //      under a counter that says "6000 messaggi".
-  const isFolderAwaitingSync = !search.trim() && messages.length === 0 && totalMessagesInFolder > 0
-  const isInitialFolderLoad = loadingMessages && !search.trim() && messages.length === 0
+  //   1. our local DB read is in flight and we have nothing to show yet;
+  //   2. the engine knows the server has messages here but the sync worker
+  //      has not landed the envelopes yet — otherwise the UI would show an
+  //      empty list under a counter that says "2800 messaggi".
+  const isNarrowedView = Boolean(search.trim()) || messageFilter !== 'all'
+  const isFolderAwaitingSync = !isNarrowedView && messages.length === 0 && totalMessagesInFolder > 0
+  const isInitialFolderLoad = loadingMessages && !isNarrowedView && messages.length === 0
   const showMessagePanelLoader = isFolderAwaitingSync || isInitialFolderLoad
   const messagePanelLoaderText = isFolderAwaitingSync
     ? 'Sincronizzazione in corso…'
     : 'Caricamento messaggi…'
 
-  const filteredMessageRefs = useMemo(
-    () => filteredMessages.map(summaryToMessageRef),
-    [filteredMessages]
-  )
-  const selectedMessageRefKeys = useMemo(
-    () => new Set(selectedMessageRefs.map((ref) => messageRefKey(ref))),
-    [selectedMessageRefs]
-  )
-  const allVisibleMessagesSelected =
-    filteredMessageRefs.length > 0 &&
-    filteredMessageRefs.every((ref) => selectedMessageRefKeys.has(messageRefKey(ref)))
-
   useEffect(() => {
-    const availableRefs = new Set(
-      messages.map((message) => messageRefKey(summaryToMessageRef(message)))
-    )
-
-    setSelectedMessageRefs((current) =>
-      current.filter((ref) => availableRefs.has(messageRefKey(ref)))
-    )
-  }, [messages])
+    setSelection((current) => reconcileSelection(current, orderedMessageRefs))
+  }, [orderedMessageRefs])
 
   const loadMoreMessages = useCallback(async () => {
     if (
@@ -1318,14 +1351,13 @@ function App(): React.JSX.Element {
     setLoadingMoreMessages(true)
 
     try {
-      const nextLimit = messageLimit + MESSAGE_LIST_PAGE_SIZE
-      const query = search.trim() || undefined
-
       const requestId = ++messageRequestIdRef.current
       await loadMessages(selectedAccountId, selectedFolderPath, {
-        limit: nextLimit,
-        query,
-        sort: messageListSort,
+        limit: messageLimit + MESSAGE_LIST_PAGE_SIZE,
+        query: search.trim() || undefined,
+        sort: uiPreferences.messageListSort,
+        grouping: uiPreferences.messageGrouping,
+        filter: messageFilter,
         withPanelLoader: false,
         requestId
       })
@@ -1337,52 +1369,44 @@ function App(): React.JSX.Element {
     loadMessages,
     loadingMessages,
     loadingMoreMessages,
+    messageFilter,
     messageLimit,
-    messageListSort,
     search,
     selectedAccountId,
-    selectedFolderPath
+    selectedFolderPath,
+    uiPreferences.messageGrouping,
+    uiPreferences.messageListSort
   ])
 
-  const toggleMessageSelection = useCallback((ref: MessageRef): void => {
-    setSelectedMessageRefs((current) => {
-      const key = messageRefKey(ref)
-
-      if (current.some((selectedRef) => messageRefKey(selectedRef) === key)) {
-        return current.filter((selectedRef) => messageRefKey(selectedRef) !== key)
-      }
-
-      return [...current, ref]
-    })
-  }, [])
-
-  const handleMessageListSelect = useCallback(
-    (ref: MessageRef, options?: { activateMultiSelect?: boolean }): void => {
-      setSelectedMessageRef(ref)
-
-      if (options?.activateMultiSelect && !multiSelectEnabled) {
-        setMultiSelectEnabled(true)
-      }
-
-      if (multiSelectEnabled || options?.activateMultiSelect) {
-        toggleMessageSelection(ref)
-      }
+  const handleActivateRow = useCallback(
+    (ref: MessageRef, intent: SelectionIntent): void => {
+      setSelection((current) => applySelectionIntent(current, orderedMessageRefs, ref, intent))
     },
-    [multiSelectEnabled, toggleMessageSelection]
+    [orderedMessageRefs]
   )
 
-  const selectAllVisibleMessages = useCallback((): void => {
-    setSelectedMessageRefs((current) => uniqueMessageRefs([...current, ...filteredMessageRefs]))
-  }, [filteredMessageRefs])
+  const handleSelectAll = useCallback((): void => {
+    setSelection((current) => selectAllMessages(current, orderedMessageRefs))
+  }, [orderedMessageRefs])
 
-  const toggleMultiSelectMode = useCallback((): void => {
-    if (multiSelectEnabled) {
-      closeMultiSelectSelection()
+  /**
+   * Selecting a whole section is what makes grouping useful for the SIEVER
+   * workflow — group by sender, click the heading, hand the lot to ARCHIVIA
+   * SIEVER in one pass.
+   */
+  const handleSelectSection = useCallback((section: { messages: MailMessageSummary[] }): void => {
+    const sectionRefs = section.messages.map(summaryToMessageRef)
+
+    if (sectionRefs.length === 0) {
       return
     }
 
-    setMultiSelectEnabled(true)
-  }, [closeMultiSelectSelection, multiSelectEnabled])
+    setSelection({
+      selectedRefs: sectionRefs,
+      cursorRef: sectionRefs[0],
+      anchorRef: sectionRefs[0]
+    })
+  }, [])
 
   const removeMessageOptimistically = useCallback(
     (ref: MessageRef) => {
@@ -1395,59 +1419,44 @@ function App(): React.JSX.Element {
       }
 
       const removedMessage = messages[removedIndex]
-      const removedWasSelected = Boolean(
-        selectedMessageRef && isSameMessageRef(selectedMessageRef, ref)
-      )
-      const removedWasMultiSelected = selectedMessageRefs.some((selectedRef) =>
+      const wasSelected = selection.selectedRefs.some((selectedRef) =>
         isSameMessageRef(selectedRef, ref)
       )
-
-      // When the user removes the message they're currently focused on,
-      // advance the selection to the next visible message (falling back to
-      // the previous one if we just popped the tail). This keeps the
-      // focused-reading layout populated and matches the behaviour of every
-      // mainstream mail client — without this, the right pane (or focus
-      // pane) goes empty and the layout collapses back to the 3-column
-      // default because `selectedMessageRef = null` triggers
-      // `setIsMessageExpanded(false)` in the detail-load effect.
-      let nextSelectionAfterRemoval: MessageRef | null = null
-
-      if (removedWasSelected && !multiSelectEnabled) {
-        const nextNeighbor = messages[removedIndex + 1] ?? messages[removedIndex - 1] ?? null
-        if (nextNeighbor) {
-          nextSelectionAfterRemoval = summaryToMessageRef(nextNeighbor)
-        }
-      }
 
       setMessages((current) =>
         current.filter((message) => !isSameMessageRef(summaryToMessageRef(message), ref))
       )
-      setSelectedMessageRefs((current) =>
-        current.filter((selectedRef) => !isSameMessageRef(selectedRef, ref))
-      )
       setTotalMessagesInFolder((current) => Math.max(0, current - 1))
 
-      if (removedWasSelected) {
-        if (nextSelectionAfterRemoval) {
-          setSelectedMessageRef(nextSelectionAfterRemoval)
-          // Keep `selectedMessage` populated until the new detail loads —
-          // otherwise the viewer would flash to "Nessun messaggio
-          // selezionato" before the next email's body arrives.
-        } else {
-          setSelectedMessageRef(null)
-          setSelectedMessage(null)
-        }
-      }
+      setSelection((current) => {
+        const remainingRefs = current.selectedRefs.filter(
+          (selectedRef) => !isSameMessageRef(selectedRef, ref)
+        )
 
-      return {
-        ref,
-        removedIndex,
-        removedMessage,
-        removedWasSelected,
-        removedWasMultiSelected
-      }
+        if (remainingRefs.length > 0) {
+          return {
+            selectedRefs: remainingRefs,
+            cursorRef: remainingRefs[remainingRefs.length - 1],
+            anchorRef: remainingRefs[remainingRefs.length - 1]
+          }
+        }
+
+        // The last selected message just went away: advance to its neighbour
+        // so the reading pane stays populated and an expanded view does not
+        // collapse back to the split layout under the user.
+        const neighbour = messages[removedIndex + 1] ?? messages[removedIndex - 1] ?? null
+
+        if (!neighbour) {
+          return EMPTY_MESSAGE_SELECTION
+        }
+
+        const neighbourRef = summaryToMessageRef(neighbour)
+        return { selectedRefs: [neighbourRef], cursorRef: neighbourRef, anchorRef: neighbourRef }
+      })
+
+      return { ref, removedIndex, removedMessage, wasSelected }
     },
-    [messages, multiSelectEnabled, selectedMessageRef, selectedMessageRefs]
+    [messages, selection.selectedRefs]
   )
 
   const rollbackRemovedMessage = useCallback(
@@ -1455,8 +1464,7 @@ function App(): React.JSX.Element {
       ref: MessageRef
       removedIndex: number
       removedMessage: MailMessageSummary
-      removedWasSelected: boolean
-      removedWasMultiSelected: boolean
+      wasSelected: boolean
     }): void => {
       setMessages((current) => {
         if (
@@ -1475,17 +1483,13 @@ function App(): React.JSX.Element {
       })
       setTotalMessagesInFolder((current) => current + 1)
 
-      if (snapshot.removedWasSelected) {
-        setSelectedMessageRef(snapshot.ref)
-      }
-
-      if (snapshot.removedWasMultiSelected) {
-        setSelectedMessageRefs((current) => {
-          if (current.some((selectedRef) => isSameMessageRef(selectedRef, snapshot.ref))) {
+      if (snapshot.wasSelected) {
+        setSelection((current) => {
+          if (current.selectedRefs.some((ref) => isSameMessageRef(ref, snapshot.ref))) {
             return current
           }
 
-          return [...current, snapshot.ref]
+          return { ...current, selectedRefs: [...current.selectedRefs, snapshot.ref] }
         })
       }
     },
@@ -1516,6 +1520,7 @@ function App(): React.JSX.Element {
               : fallbackErrorMessage
           )
         }
+
         throw caughtError
       }
     },
@@ -1524,19 +1529,19 @@ function App(): React.JSX.Element {
 
   const runMessageRemovalAction = useCallback(
     async (
-      refs: MessageRef[],
+      refs: ReadonlyArray<MessageRef>,
       action: (ref: MessageRef) => Promise<void>,
       fallbackErrorMessage: string
     ): Promise<void> => {
-      const uniqueRefs = uniqueMessageRefs(refs)
+      const targetRefs = uniqueMessageRefs(refs)
 
-      if (uniqueRefs.length === 0) {
+      if (targetRefs.length === 0) {
         return
       }
 
       setViewError(null)
       const results = await Promise.all(
-        uniqueRefs.map(async (ref) => {
+        targetRefs.map(async (ref) => {
           try {
             await runOptimisticMessageRemoval(
               ref,
@@ -1554,116 +1559,85 @@ function App(): React.JSX.Element {
       )
 
       const failures = results.filter((result) => !result.ok)
-      const failedCount = failures.length
       const firstFailure = failures[0]
 
-      if (failedCount > 0) {
-        const firstErrorMessage =
-          firstFailure?.error instanceof Error && firstFailure.error.message.trim()
-            ? firstFailure.error.message
-            : fallbackErrorMessage
-
-        if (failedCount === 1) {
-          setViewError(firstErrorMessage || fallbackErrorMessage)
-          return
-        }
-
-        setViewError(
-          `${firstErrorMessage || fallbackErrorMessage} (${failedCount} operazioni non riuscite)`
-        )
+      if (failures.length === 0) {
+        return
       }
+
+      const firstErrorMessage =
+        firstFailure?.error instanceof Error && firstFailure.error.message.trim()
+          ? firstFailure.error.message
+          : fallbackErrorMessage
+
+      setViewError(
+        failures.length === 1
+          ? firstErrorMessage
+          : `${firstErrorMessage} (${failures.length} operazioni non riuscite)`
+      )
     },
     [runOptimisticMessageRemoval]
   )
 
-  const runSelectedMessageRemovalAction = useCallback(
-    async (
-      action: (ref: MessageRef) => Promise<void>,
-      fallbackErrorMessage: string
-    ): Promise<void> => {
-      if (!selectedMessageRef) {
-        return
-      }
+  const selectedSummaries = useMemo(() => {
+    const messageByKey = new Map(
+      messages.map((message) => [messageRefKey(summaryToMessageRef(message)), message])
+    )
 
-      await runMessageRemovalAction([selectedMessageRef], action, fallbackErrorMessage)
-    },
-    [runMessageRemovalAction, selectedMessageRef]
+    return selection.selectedRefs
+      .map((ref) => messageByKey.get(messageRefKey(ref)))
+      .filter((summary): summary is MailMessageSummary => Boolean(summary))
+  }, [messages, selection.selectedRefs])
+
+  const readingSummary = useMemo(
+    () => (readingKey ? (selectedSummaries[0] ?? null) : null),
+    [readingKey, selectedSummaries]
   )
 
-  const selectedMessageSummary = useMemo(() => {
-    if (!selectedMessageRef) {
-      return null
-    }
-
-    return (
-      messages.find(
-        (message) =>
-          message.accountId === selectedMessageRef.accountId &&
-          message.folderPath === selectedMessageRef.folderPath &&
-          message.uid === selectedMessageRef.uid
-      ) || null
-    )
-  }, [messages, selectedMessageRef])
-
-  const selectedMessageIsRead = selectedMessageSummary?.isRead ?? selectedMessage?.isRead ?? true
-  const selectedMessageForViewer = useMemo(() => {
+  // The list row is the freshest source of read/flag state (optimistic
+  // updates land there first), so the detail adopts it rather than showing a
+  // stale header while the refetch is in flight.
+  const messageForViewer = useMemo(() => {
     if (!selectedMessage) {
       return null
     }
 
-    if (selectedMessage.isRead === selectedMessageIsRead) {
+    if (!readingSummary) {
+      return selectedMessage
+    }
+
+    if (
+      selectedMessage.isRead === readingSummary.isRead &&
+      selectedMessage.isFlagged === readingSummary.isFlagged
+    ) {
       return selectedMessage
     }
 
     return {
       ...selectedMessage,
-      isRead: selectedMessageIsRead,
-      flags: patchSeenFlag(selectedMessage.flags, selectedMessageIsRead)
+      isRead: readingSummary.isRead,
+      isFlagged: readingSummary.isFlagged,
+      flags: patchFlag(
+        patchFlag(selectedMessage.flags, '\\Seen', readingSummary.isRead),
+        '\\Flagged',
+        readingSummary.isFlagged
+      )
     }
-  }, [selectedMessage, selectedMessageIsRead])
+  }, [readingSummary, selectedMessage])
 
-  const toolbarActionRefs = useMemo(() => {
-    if (multiSelectEnabled) {
-      return uniqueMessageRefs(selectedMessageRefs)
-    }
-
-    return selectedMessageRef ? [selectedMessageRef] : []
-  }, [multiSelectEnabled, selectedMessageRef, selectedMessageRefs])
-
-  useEffect(() => {
-    toolbarActionRefsValueRef.current = toolbarActionRefs
-  }, [toolbarActionRefs])
-
-  const toolbarActionMessages = useMemo(() => {
-    const messageByKey = new Map(
-      messages.map((message) => [messageRefKey(summaryToMessageRef(message)), message])
-    )
-    const items: MailMessageSummary[] = []
-
-    for (const ref of toolbarActionRefs) {
-      const summary = messageByKey.get(messageRefKey(ref))
-      if (summary) {
-        items.push(summary)
-      }
-    }
-
-    return items
-  }, [messages, toolbarActionRefs])
-
-  const shouldMarkToolbarSelectionAsRead =
-    toolbarActionMessages.length > 0 && toolbarActionMessages.some((message) => !message.isRead)
-  const toolbarToggleSeenLabel = shouldMarkToolbarSelectionAsRead
-    ? 'Segna letta'
-    : 'Segna non letta'
-  const canActOnToolbarSelection = toolbarActionRefs.length > 0
+  const shouldMarkSelectionAsRead =
+    selectedSummaries.length > 0 && selectedSummaries.some((message) => !message.isRead)
+  const toggleSeenLabel = shouldMarkSelectionAsRead ? 'Segna letta' : 'Segna non letta'
+  const selectionFlagged =
+    selectedSummaries.length > 0 && selectedSummaries.every((message) => message.isFlagged)
 
   const extensionSelection = useMemo<ExtensionSelectionContext>(
     () => ({
-      refs: uniqueMessageRefs(toolbarActionRefs),
-      summaries: toolbarActionMessages,
-      multiSelectActive: multiSelectEnabled
+      refs: selection.selectedRefs,
+      summaries: selectedSummaries,
+      multiSelectActive: selection.selectedRefs.length > 1
     }),
-    [multiSelectEnabled, toolbarActionMessages, toolbarActionRefs]
+    [selectedSummaries, selection.selectedRefs]
   )
 
   const extensionHostHooks = useMemo<ExtensionHostHooks>(
@@ -1674,148 +1648,152 @@ function App(): React.JSX.Element {
     [runOptimisticMessageRemoval]
   )
 
-  const applyOptimisticSeenState = useCallback((ref: MessageRef, seen: boolean): void => {
-    setMessages((current) =>
-      current.map((message) => {
-        if (
-          message.accountId !== ref.accountId ||
-          message.folderPath !== ref.folderPath ||
-          message.uid !== ref.uid
-        ) {
-          return message
-        }
-
-        return {
-          ...message,
-          isRead: seen,
-          flags: patchSeenFlag(message.flags, seen)
-        }
+  /**
+   * Applies a keyword change to the list row and, when it is the one being
+   * read, to the open detail. One helper for both keywords so the two can
+   * never drift — the previous code path rewrote the whole flag array and
+   * silently dropped `\Flagged` whenever a message was marked read.
+   */
+  const applyOptimisticFlagState = useCallback(
+    (ref: MessageRef, keyword: '\\Seen' | '\\Flagged', present: boolean): void => {
+      const patchSummary = (message: MailMessageSummary): MailMessageSummary => ({
+        ...message,
+        isRead: keyword === '\\Seen' ? present : message.isRead,
+        isFlagged: keyword === '\\Flagged' ? present : message.isFlagged,
+        flags: patchFlag(message.flags, keyword, present)
       })
-    )
 
-    setSelectedMessage((current) => {
-      if (
-        !current ||
-        current.accountId !== ref.accountId ||
-        current.folderPath !== ref.folderPath ||
-        current.uid !== ref.uid
-      ) {
-        return current
-      }
+      setMessages((current) =>
+        current.map((message) =>
+          isSameMessageRef(summaryToMessageRef(message), ref) ? patchSummary(message) : message
+        )
+      )
 
-      return {
-        ...current,
-        isRead: seen,
-        flags: patchSeenFlag(current.flags, seen)
-      }
-    })
-  }, [])
+      setSelectedMessage((current) => {
+        if (!current || !isSameMessageRef(current, ref)) {
+          return current
+        }
 
-  const getMessageReadState = useCallback(
-    (ref: MessageRef): boolean => {
-      const summary = messages.find(
-        (message) =>
-          message.accountId === ref.accountId &&
-          message.folderPath === ref.folderPath &&
-          message.uid === ref.uid
+        return { ...current, ...patchSummary(current) }
+      })
+    },
+    []
+  )
+
+  const getMessageKeywordState = useCallback(
+    (ref: MessageRef, keyword: '\\Seen' | '\\Flagged'): boolean => {
+      const summary = messages.find((message) =>
+        isSameMessageRef(summaryToMessageRef(message), ref)
       )
 
       if (summary) {
-        return summary.isRead
+        return keyword === '\\Seen' ? summary.isRead : summary.isFlagged
       }
 
-      if (
-        selectedMessage &&
-        selectedMessage.accountId === ref.accountId &&
-        selectedMessage.folderPath === ref.folderPath &&
-        selectedMessage.uid === ref.uid
-      ) {
-        return selectedMessage.isRead
+      if (selectedMessage && isSameMessageRef(selectedMessage, ref)) {
+        return keyword === '\\Seen' ? selectedMessage.isRead : selectedMessage.isFlagged
       }
 
-      return true
+      return keyword === '\\Seen'
     },
     [messages, selectedMessage]
   )
 
-  const setMessageSeen = useCallback(
-    async (ref: MessageRef, seen: boolean): Promise<void> => {
-      const previousSeen = getMessageReadState(ref)
+  const setMessageKeyword = useCallback(
+    async (ref: MessageRef, keyword: '\\Seen' | '\\Flagged', present: boolean): Promise<void> => {
+      const previous = getMessageKeywordState(ref, keyword)
 
-      if (previousSeen === seen) {
+      if (previous === present) {
         return
       }
 
-      const executionId = ++toggleSeenExecutionIdRef.current
+      const executionId = ++toggleFlagExecutionIdRef.current
       setViewError(null)
-      applyOptimisticSeenState(ref, seen)
+      applyOptimisticFlagState(ref, keyword, present)
 
       try {
-        await window.mailApi.toggleSeen({ ...ref, seen })
+        if (keyword === '\\Seen') {
+          await window.mailApi.toggleSeen({ ...ref, seen: present })
+        } else {
+          await window.mailApi.toggleFlagged({ ...ref, flagged: present })
+        }
       } catch (caughtError) {
-        if (executionId === toggleSeenExecutionIdRef.current) {
-          applyOptimisticSeenState(ref, previousSeen)
+        if (executionId === toggleFlagExecutionIdRef.current) {
+          applyOptimisticFlagState(ref, keyword, previous)
         }
 
         setViewError(
           caughtError instanceof Error
             ? caughtError.message
-            : 'Aggiornamento stato letto/non letto non riuscito.'
+            : keyword === '\\Seen'
+              ? 'Aggiornamento stato letto/non letto non riuscito.'
+              : 'Aggiornamento contrassegno non riuscito.'
         )
       }
     },
-    [applyOptimisticSeenState, getMessageReadState]
+    [applyOptimisticFlagState, getMessageKeywordState]
   )
 
-  const handleMessageListOpen = useCallback(
+  const handleOpenRow = useCallback(
     (ref: MessageRef): void => {
-      setSelectedMessageRef(ref)
+      setSelection({ selectedRefs: [ref], cursorRef: ref, anchorRef: ref })
       setIsMessageExpanded(true)
-      void setMessageSeen(ref, true)
+      void setMessageKeyword(ref, '\\Seen', true)
     },
-    [setMessageSeen]
+    [setMessageKeyword]
   )
 
-  const setSelectedMessageSeen = useCallback(
-    async (seen: boolean): Promise<void> => {
-      if (!selectedMessageRef) {
-        return
-      }
-
-      await setMessageSeen(selectedMessageRef, seen)
+  const handleToggleRowFlag = useCallback(
+    (ref: MessageRef, flagged: boolean): void => {
+      void setMessageKeyword(ref, '\\Flagged', flagged)
     },
-    [selectedMessageRef, setMessageSeen]
+    [setMessageKeyword]
   )
 
-  const setToolbarSelectionSeen = useCallback(async (): Promise<void> => {
-    if (toolbarActionRefs.length === 0) {
-      return
+  const setSelectionSeen = useCallback(async (): Promise<void> => {
+    const targetSeenState = shouldMarkSelectionAsRead
+
+    for (const ref of selection.selectedRefs) {
+      await setMessageKeyword(ref, '\\Seen', targetSeenState)
     }
+  }, [selection.selectedRefs, setMessageKeyword, shouldMarkSelectionAsRead])
 
-    const targetSeenState = shouldMarkToolbarSelectionAsRead
+  const setSelectionFlagged = useCallback(async (): Promise<void> => {
+    const targetFlaggedState = !selectionFlagged
 
-    for (const ref of toolbarActionRefs) {
-      await setMessageSeen(ref, targetSeenState)
+    for (const ref of selection.selectedRefs) {
+      await setMessageKeyword(ref, '\\Flagged', targetFlaggedState)
     }
-  }, [setMessageSeen, shouldMarkToolbarSelectionAsRead, toolbarActionRefs])
+  }, [selection.selectedRefs, selectionFlagged, setMessageKeyword])
 
-  const runToolbarMessageRemovalAction = useCallback(
+  const runSelectionRemovalAction = useCallback(
     async (
       action: (ref: MessageRef) => Promise<void>,
       fallbackErrorMessage: string
     ): Promise<void> => {
-      await runMessageRemovalAction(toolbarActionRefs, action, fallbackErrorMessage)
+      await runMessageRemovalAction(selection.selectedRefs, action, fallbackErrorMessage)
     },
-    [runMessageRemovalAction, toolbarActionRefs]
+    [runMessageRemovalAction, selection.selectedRefs]
   )
 
-  // Tracks whether any of the app's modal/composer dialogs is open. The
-  // global message-list keyboard handler below uses this to bail out so
-  // shortcuts (ArrowDown, Delete, Enter) don't fire into the messages
-  // pane while the user is interacting with a dialog. Radix focus-traps
-  // already keep keystrokes inside the dialog tree, but a Delete pressed
-  // while focus is on a non-input element (e.g. the dialog body) would
-  // still bubble to window without this gate.
+  // Refs the global key handler reads at event time. Keeping them in refs
+  // avoids rebinding the window listener on every selection change.
+  const orderedMessageRefsRef = useRef(orderedMessageRefs)
+  const selectionRef = useRef(selection)
+  const invertVisualOrderRef = useRef(uiPreferences.invertMessageListOrder)
+
+  useEffect(() => {
+    orderedMessageRefsRef.current = orderedMessageRefs
+  }, [orderedMessageRefs])
+
+  useEffect(() => {
+    selectionRef.current = selection
+  }, [selection])
+
+  useEffect(() => {
+    invertVisualOrderRef.current = uiPreferences.invertMessageListOrder
+  }, [uiPreferences.invertMessageListOrder])
+
   const isModalSurfaceOpen =
     composerOpen ||
     Boolean(composerSendError) ||
@@ -1824,104 +1802,90 @@ function App(): React.JSX.Element {
     extensionPrimaryDialogOpen
 
   useEffect(() => {
-    // Only mount the global navigation handler once the workspace has
-    // messages to navigate. Avoiding the listener on the welcome gate /
-    // bootstrap loader prevents accidental hijacks before the user can
-    // even act.
-    if (messages.length === 0) {
-      return
-    }
-
     const onKeyDown = (event: KeyboardEvent): void => {
       if (isModalSurfaceOpen) {
         return
       }
 
-      // Never hijack typing surfaces. The user expects every key to land
-      // wherever their cursor is (search, composer, signature editor…).
       const target = event.target as HTMLElement | null
-      if (target) {
-        if (target.isContentEditable) {
-          return
-        }
-        const tagName = target.tagName
-        if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
-          return
-        }
-      }
+      const isTypingSurface = Boolean(
+        target &&
+        (target.isContentEditable ||
+          target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT')
+      )
 
-      // Modifier combinations belong to OS / app-level shortcuts. The
-      // plain keys handled below are the only ones we intercept globally.
-      if (event.metaKey || event.ctrlKey || event.altKey) {
+      const isCommandModifier = event.metaKey || event.ctrlKey
+
+      // Focus the search field from anywhere, including while typing
+      // somewhere else — the one shortcut that has to win over the guard.
+      if (isCommandModifier && !event.altKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        searchInputRef.current?.focus()
+        searchInputRef.current?.select()
         return
       }
 
-      const currentMessages = messagesRef.current
-      const currentSelectedRef = selectedMessageRefValueRef.current
+      if (isTypingSurface) {
+        return
+      }
 
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        if (currentMessages.length === 0) {
-          return
-        }
-
-        const currentIndex = currentSelectedRef
-          ? currentMessages.findIndex((message) =>
-              isSameMessageRef(summaryToMessageRef(message), currentSelectedRef)
-            )
-          : -1
-
-        // Arrows always navigate by VISUAL direction, not by array
-        // index. When the list is rendered with the visual-reversal
-        // preference on (CSS `flex-col-reverse`), the DOM order is
-        // unchanged but rows visually flip, so "visually down" maps to
-        // the previous array index instead of the next one. Without
-        // this flip the arrow keys would feel inverted under that
-        // preference.
-        const goVisuallyDown =
-          (event.key === 'ArrowDown') !== invertMessageListOrderRef.current
-
-        // No selection yet → land on the newest message (array index
-        // 0). In normal layout that's the visual top; in reversed
-        // layout it's the visual bottom, which is also where the user
-        // starts looking on first paint (the container auto-scrolls to
-        // the end), so either way the first arrow press anchors them
-        // somewhere they can see.
-        const nextIndex =
-          currentIndex < 0
-            ? 0
-            : goVisuallyDown
-              ? Math.min(currentMessages.length - 1, currentIndex + 1)
-              : Math.max(0, currentIndex - 1)
-
-        const nextMessage = currentMessages[nextIndex]
-        if (!nextMessage) {
+      if (isCommandModifier && !event.altKey && event.key.toLowerCase() === 'a') {
+        if (orderedMessageRefsRef.current.length === 0) {
           return
         }
 
         event.preventDefault()
-        const nextRef = summaryToMessageRef(nextMessage)
-        if (!currentSelectedRef || !isSameMessageRef(currentSelectedRef, nextRef)) {
-          setSelectedMessageRef(nextRef)
-        }
+        handleSelectAll()
+        return
+      }
+
+      if (event.altKey || isCommandModifier) {
+        return
+      }
+
+      const orderedRefs = orderedMessageRefsRef.current
+
+      if (orderedRefs.length === 0) {
+        return
+      }
+
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+
+        // Arrows navigate by VISUAL direction. Under the inverted-list
+        // preference the DOM order is unchanged but the rows are mirrored,
+        // so "visually down" maps to the previous array index.
+        const goVisuallyDown = (event.key === 'ArrowDown') !== invertVisualOrderRef.current
+        setSelection((current) =>
+          moveSelectionCursor(
+            current,
+            orderedMessageRefsRef.current,
+            goVisuallyDown ? 1 : -1,
+            event.shiftKey
+          )
+        )
         return
       }
 
       if (event.key === 'Enter') {
-        if (!currentSelectedRef) {
+        const cursorRef = selectionRef.current.cursorRef
+
+        if (!cursorRef) {
           return
         }
 
         event.preventDefault()
-        handleMessageListOpen(currentSelectedRef)
+        handleOpenRow(cursorRef)
         return
       }
 
-      // Forward-Delete on PC/Mac AND Backspace (the de-facto delete key
-      // on Mac laptops without a forward-delete) both remove the current
-      // selection. The path is identical to the toolbar's "Elimina"
-      // button so multi-select wipes its entire current selection.
+      // Forward-Delete on PC/Mac AND Backspace (the de-facto delete key on
+      // Mac laptops without a forward-delete) both remove the selection.
       if (event.key === 'Delete' || event.key === 'Backspace') {
-        const refsToDelete = toolbarActionRefsValueRef.current
+        const refsToDelete = selectionRef.current.selectedRefs
+
         if (refsToDelete.length === 0) {
           return
         }
@@ -1938,24 +1902,22 @@ function App(): React.JSX.Element {
     }
 
     window.addEventListener('keydown', onKeyDown)
+
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [handleMessageListOpen, isModalSurfaceOpen, messages.length, runMessageRemovalAction])
+  }, [handleOpenRow, handleSelectAll, isModalSurfaceOpen, runMessageRemovalAction])
 
   const downloadSelectedMessageAttachment = useCallback(
     async (attachmentId: string): Promise<void> => {
-      if (!selectedMessageRef) {
+      if (!readingRef) {
         throw new Error('Nessun messaggio selezionato.')
       }
 
       setViewError(null)
 
       try {
-        await window.mailApi.downloadAttachment({
-          ref: selectedMessageRef,
-          attachmentId
-        })
+        await window.mailApi.downloadAttachment({ ref: readingRef, attachmentId })
       } catch (caughtError) {
         const errorMessage =
           caughtError instanceof Error && caughtError.message.trim()
@@ -1965,10 +1927,10 @@ function App(): React.JSX.Element {
         throw caughtError
       }
     },
-    [selectedMessageRef]
+    [readingRef]
   )
 
-  const openReplyComposer = (): void => {
+  const openReplyComposer = useCallback((): void => {
     if (!selectedMessage) {
       return
     }
@@ -1981,9 +1943,9 @@ function App(): React.JSX.Element {
       references: selectedMessage.messageId ? [selectedMessage.messageId] : undefined
     })
     setComposerOpen(true)
-  }
+  }, [selectedMessage])
 
-  const openForwardComposer = (): void => {
+  const openForwardComposer = useCallback((): void => {
     if (!selectedMessage) {
       return
     }
@@ -1993,7 +1955,7 @@ function App(): React.JSX.Element {
       html: buildForwardComposerHtml(selectedMessage)
     })
     setComposerOpen(true)
-  }
+  }, [selectedMessage])
 
   const handleComposerSendRequested = useCallback(
     (payload: ComposeMailInput, draft: ComposerRetryDraft): void => {
@@ -2004,14 +1966,12 @@ function App(): React.JSX.Element {
         try {
           await window.mailApi.sendMail(payload)
         } catch (caughtError) {
-          const errorMessage =
-            caughtError instanceof Error && caughtError.message.trim()
-              ? caughtError.message
-              : 'Invio email non riuscito.'
-
           setComposerSendError({
             draft,
-            message: errorMessage
+            message:
+              caughtError instanceof Error && caughtError.message.trim()
+                ? caughtError.message
+                : 'Invio email non riuscito.'
           })
         }
       })()
@@ -2075,7 +2035,7 @@ function App(): React.JSX.Element {
         <div className="flex h-full items-center justify-center">
           <div className="border-border bg-card/70 flex items-center gap-3 rounded-xl border px-5 py-4 text-sm">
             <LoaderCircle className="text-primary size-5 animate-spin" />
-            Avvio client email...
+            Avvio client email…
           </div>
         </div>
       </AppFrame>
@@ -2196,6 +2156,41 @@ function App(): React.JSX.Element {
     )
   }
 
+  const listViewProps: MessageListViewProps = {
+    title: messageListTitle,
+    messages,
+    sections: messageSections,
+    totalCount: totalMessagesInFolder,
+    selection,
+    highlightTerms,
+    sort: uiPreferences.messageListSort,
+    onSortChange: handleMessageListSortChange,
+    grouping: uiPreferences.messageGrouping,
+    onGroupingChange: handleMessageGroupingChange,
+    invertVisualOrder: uiPreferences.invertMessageListOrder,
+    primaryAddressMode,
+    canLoadMoreMessages: hasMoreMessages && messages.length >= MESSAGE_LIST_PAGE_SIZE,
+    loadingMoreMessages,
+    onLoadMoreMessages: () => void loadMoreMessages(),
+    onActivateRow: handleActivateRow,
+    onOpenRow: handleOpenRow,
+    onToggleFlag: handleToggleRowFlag,
+    onSelectSection: handleSelectSection,
+    onSelectAll: handleSelectAll,
+    onClearSelection: clearSelection
+  }
+
+  const messageListSlot = showMessagePanelLoader ? (
+    <div className="glass-panel flex h-full flex-col items-center justify-center gap-2.5 rounded-lg">
+      <LoaderCircle className="text-primary size-5 animate-spin" />
+      <p className="text-muted-foreground text-xs">{messagePanelLoaderText}</p>
+    </div>
+  ) : uiPreferences.layoutMode === 'outlook' ? (
+    <MessageTable {...listViewProps} />
+  ) : (
+    <MessageList {...listViewProps} />
+  )
+
   return (
     <AppFrame
       windowControlsState={windowControlsState}
@@ -2203,144 +2198,101 @@ function App(): React.JSX.Element {
       onToggleMaximizeWindow={handleToggleMaximizeWindow}
       onCloseWindow={handleCloseWindow}
     >
-      <div className="mx-auto grid h-full max-w-[1800px] grid-cols-[340px_minmax(0,1.35fr)_minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-4 overflow-hidden">
-        <aside className="row-span-2 flex h-full min-h-0 w-[340px] max-w-[340px] flex-col gap-4">
-          <div className="glass-panel rounded-xl p-4">
-            <div className="flex items-center gap-3">
-              <img
-                src={appLogo}
-                alt="Logo SIEVER Mail"
-                className="size-16 shrink-0 select-none"
-                draggable={false}
-              />
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-xs tracking-[0.14em] uppercase">
-                  VERSION {formatAppVersion(__APP_VERSION__)}
-                </p>
-                <h1 className="display-title mt-1 text-4xl whitespace-nowrap">SIEVER Mail</h1>
+      <WorkspaceLayout
+        mode={uiPreferences.layoutMode}
+        readerExpanded={isMessageExpanded}
+        header={
+          <div className="glass-panel flex items-center gap-2 rounded-lg px-2.5 py-2">
+            <img
+              src={appLogo}
+              alt="Logo SIEVER Mail"
+              className="size-8 shrink-0 select-none"
+              draggable={false}
+            />
+            <div className="min-w-0">
+              <h1 className="display-title truncate text-[15px] leading-tight">SIEVER Mail</h1>
+              <p className="text-muted-foreground flex items-center gap-1.5 text-[10px] leading-tight">
+                <span>{formatAppVersion(__APP_VERSION__)}</span>
                 {connectionStatus && (
-                  <p className="mt-1 inline-flex items-center gap-1.5 text-xs">
+                  <>
                     <span
                       className={cn(
-                        'inline-block size-1.5 rounded-full',
-                        connectionStatus === 'online' &&
-                          'bg-status-online shadow-status-online/40 shadow-[0_0_6px]',
-                        connectionStatus === 'connecting' &&
-                          'bg-muted-foreground/70 animate-pulse',
-                        connectionStatus === 'offline' &&
-                          'bg-status-offline shadow-status-offline/40 shadow-[0_0_6px]'
+                        'inline-block size-1.5 shrink-0 rounded-full',
+                        connectionStatus === 'online' && 'bg-status-online',
+                        connectionStatus === 'connecting' && 'bg-muted-foreground/70 animate-pulse',
+                        connectionStatus === 'offline' && 'bg-status-offline'
                       )}
                     />
                     <span
                       className={cn(
-                        connectionStatus === 'online' && 'text-muted-foreground',
-                        connectionStatus === 'connecting' && 'text-muted-foreground',
+                        'truncate',
                         connectionStatus === 'offline' && 'text-status-offline'
                       )}
                     >
                       {connectionStatus === 'online'
                         ? 'Sincronizzato'
                         : connectionStatus === 'connecting'
-                          ? 'Connessione in corso…'
+                          ? 'Connessione…'
                           : 'Connessione persa'}
                     </span>
-                  </p>
+                  </>
                 )}
-              </div>
+              </p>
             </div>
           </div>
-
-          <div className="min-h-0 flex-1">
-            {isMessageExpanded ? (
-              showMessagePanelLoader ? (
-                <div className="glass-panel flex h-full flex-col items-center justify-center gap-3 rounded-xl">
-                  <LoaderCircle className="text-primary size-6 animate-spin" />
-                  <p className="text-muted-foreground text-sm">{messagePanelLoaderText}</p>
-                </div>
-              ) : (
-                <MessageList
-                  title={messageListTitle}
-                  messages={filteredMessages}
-                  totalCount={totalMessagesInFolder}
-                  selectedMessage={selectedMessageRef}
-                  multiSelectEnabled={multiSelectEnabled}
-                  selectedMessageRefs={selectedMessageRefs}
-                  allVisibleSelected={allVisibleMessagesSelected}
-                  canLoadMoreMessages={hasMoreMessages && messages.length >= MESSAGE_LIST_PAGE_SIZE}
-                  loadingMoreMessages={loadingMoreMessages}
-                  compact
-                  highlightTerms={searchHighlightTerms}
-                  sort={messageListSort}
-                  onSortChange={handleMessageListSortChange}
-                  invertVisualOrder={invertMessageListOrder}
-                  onSelectMessage={handleMessageListSelect}
-                  onOpenMessage={handleMessageListOpen}
-                  onLoadMoreMessages={() => void loadMoreMessages()}
-                  onToggleMultiSelect={toggleMultiSelectMode}
-                  onSelectAllVisible={selectAllVisibleMessages}
-                />
-              )
-            ) : (
-              <div className="flex h-full min-h-0 flex-col">
-                <AccountSwitcher
-                  accounts={accounts}
-                  selectedAccountId={selectedAccountId}
-                  removingAccountId={removingAccountId}
-                  onSelectAccount={(accountId) => {
-                    cancelInFlightWork()
-                    setSelectedAccountId(accountId)
-                    setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
-                    setTotalMessagesInFolder(0)
-                    setHasMoreMessages(false)
-                    setSelectedMessageRef(null)
-                    setSelectedMessageRefs([])
-                    setSelectedMessage(null)
-                    setIsMessageExpanded(false)
-                  }}
-                  onRemoveAccount={(accountId) => void removeAccount(accountId)}
-                  onAddAccount={() => setAddAccountDialogOpen(true)}
-                />
-                <div className="mt-4 min-h-0 flex-1">
-                  {loadingFolders ? (
-                    <div className="glass-panel text-muted-foreground flex h-full items-center gap-2 rounded-xl p-3 text-sm">
-                      <LoaderCircle className="size-4 animate-spin" /> Caricamento cartelle...
-                    </div>
-                  ) : (
-                    <FolderSidebar
-                      folders={folders}
-                      allInboxesFolder={allInboxesFolder}
-                      selectedFolderPath={selectedFolderPath}
-                      onSelectFolder={(folderPath) => {
-                        cancelInFlightWork()
-                        setSelectedFolderPath(folderPath)
-                        setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
-                        setTotalMessagesInFolder(0)
-                        setHasMoreMessages(false)
-                        setSelectedMessageRef(null)
-                        setSelectedMessageRefs([])
-                        setSelectedMessage(null)
-                        setIsMessageExpanded(false)
-                      }}
-                    />
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </aside>
-
-        <section className="col-start-2 col-end-4 min-w-0">
+        }
+        accountSwitcher={
+          <AccountSwitcher
+            accounts={accounts}
+            selectedAccountId={selectedAccountId}
+            removingAccountId={removingAccountId}
+            onSelectAccount={(accountId) => {
+              cancelInFlightWork()
+              setSelectedAccountId(accountId)
+              setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
+              resetMailboxView()
+            }}
+            onRemoveAccount={(accountId) => void removeAccount(accountId)}
+            onAddAccount={() => setAddAccountDialogOpen(true)}
+          />
+        }
+        folders={
+          loadingFolders ? (
+            <div className="glass-panel text-muted-foreground flex h-full items-center gap-2 rounded-lg p-3 text-xs">
+              <LoaderCircle className="size-3.5 animate-spin" /> Caricamento cartelle…
+            </div>
+          ) : (
+            <FolderSidebar
+              folders={folders}
+              allInboxesFolder={allInboxesFolder}
+              selectedFolderPath={selectedFolderPath}
+              onSelectFolder={(folderPath) => {
+                cancelInFlightWork()
+                setSelectedFolderPath(folderPath)
+                setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
+                resetMailboxView()
+              }}
+            />
+          )
+        }
+        toolbar={
           <MailToolbar
             folders={folders}
             currentFolderPath={selectedFolderPath}
             search={search}
+            searchInputRef={searchInputRef}
             onSearchChange={(value) => {
               setSearch(value)
               setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
             }}
-            multiSelectEnabled={multiSelectEnabled}
-            canActOnMessage={canActOnToolbarSelection}
-            toggleSeenLabel={toolbarToggleSeenLabel}
+            filter={messageFilter}
+            onFilterChange={(next) => {
+              setMessageFilter(next)
+              setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
+            }}
+            selectedCount={selection.selectedRefs.length}
+            toggleSeenLabel={toggleSeenLabel}
+            selectionFlagged={selectionFlagged}
             extensionToolbarActions={extensionRenderer.toolbarActions}
             extensionSelection={extensionSelection}
             extensionHostHooks={extensionHostHooks}
@@ -2351,104 +2303,87 @@ function App(): React.JSX.Element {
             }}
             onOpenSettings={() => setSettingsOpen(true)}
             onArchiveClassic={() =>
-              void runToolbarMessageRemovalAction(async (ref) => {
+              void runSelectionRemovalAction(async (ref) => {
                 await window.mailApi.archiveMessage(ref)
               }, 'Archiviazione email non riuscita.')
             }
             onMoveToFolder={(destinationFolderPath) =>
-              void runToolbarMessageRemovalAction(async (ref) => {
+              void runSelectionRemovalAction(async (ref) => {
                 await window.mailApi.moveMessage({ ...ref, destinationFolderPath })
               }, 'Spostamento email non riuscito.')
             }
             onDelete={() =>
-              void runToolbarMessageRemovalAction(async (ref) => {
+              void runSelectionRemovalAction(async (ref) => {
                 await window.mailApi.deleteMessage(ref)
               }, 'Eliminazione email non riuscita.')
             }
-            onToggleSeen={() => void setToolbarSelectionSeen()}
+            onToggleSeen={() => void setSelectionSeen()}
+            onToggleFlagged={() => void setSelectionFlagged()}
+            onClearSelection={clearSelection}
           />
-        </section>
-
-        {!isMessageExpanded && (
-          <section className="col-start-2 row-start-2 min-h-0 min-w-0">
-            {showMessagePanelLoader ? (
-              <div className="glass-panel flex h-full flex-col items-center justify-center gap-3 rounded-xl">
-                <LoaderCircle className="text-primary size-6 animate-spin" />
-                <p className="text-muted-foreground text-sm">{messagePanelLoaderText}</p>
-              </div>
-            ) : (
-              <MessageList
-                title={messageListTitle}
-                messages={filteredMessages}
-                totalCount={totalMessagesInFolder}
-                selectedMessage={selectedMessageRef}
-                multiSelectEnabled={multiSelectEnabled}
-                selectedMessageRefs={selectedMessageRefs}
-                allVisibleSelected={allVisibleMessagesSelected}
-                canLoadMoreMessages={hasMoreMessages && messages.length >= MESSAGE_LIST_PAGE_SIZE}
-                loadingMoreMessages={loadingMoreMessages}
-                highlightTerms={searchHighlightTerms}
-                sort={messageListSort}
-                onSortChange={handleMessageListSortChange}
-                invertVisualOrder={invertMessageListOrder}
-                onSelectMessage={handleMessageListSelect}
-                onOpenMessage={handleMessageListOpen}
-                onLoadMoreMessages={() => void loadMoreMessages()}
-                onToggleMultiSelect={toggleMultiSelectMode}
-                onSelectAllVisible={selectAllVisibleMessages}
-              />
-            )}
-          </section>
-        )}
-
-        <main
-          className={`${isMessageExpanded ? 'col-start-2 col-end-4' : 'col-start-3'} row-start-2 flex min-h-0 min-w-0 flex-col gap-4`}
-        >
-          {viewError && (
-            <div className="border-destructive/35 bg-destructive/10 text-destructive-foreground rounded-xl border p-3 text-sm">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="size-4" />
-                {viewError}
-              </div>
+        }
+        messageList={messageListSlot}
+        notice={
+          viewError ? (
+            <div className="border-destructive/35 bg-destructive/10 text-destructive-foreground flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs">
+              <AlertTriangle className="size-3.5 shrink-0" />
+              <span className="min-w-0 flex-1">{viewError}</span>
+              <button
+                type="button"
+                onClick={() => setViewError(null)}
+                aria-label="Chiudi avviso"
+                className="hover:text-foreground shrink-0"
+              >
+                <X className="size-3.5" />
+              </button>
             </div>
-          )}
+          ) : null
+        }
+        reader={
+          <MessageViewer
+            folders={folders}
+            message={messageForViewer}
+            loading={loadingMessageDetail}
+            isExpanded={isMessageExpanded}
+            selectedCount={selection.selectedRefs.length}
+            onReply={openReplyComposer}
+            onForward={openForwardComposer}
+            onArchive={() =>
+              void runSelectionRemovalAction(async (ref) => {
+                await window.mailApi.archiveMessage(ref)
+              }, 'Archiviazione email non riuscita.')
+            }
+            onDelete={() =>
+              void runSelectionRemovalAction(async (ref) => {
+                await window.mailApi.deleteMessage(ref)
+              }, 'Eliminazione email non riuscita.')
+            }
+            onMoveToFolder={(destinationFolderPath) =>
+              void runSelectionRemovalAction(async (ref) => {
+                await window.mailApi.moveMessage({ ...ref, destinationFolderPath })
+              }, 'Spostamento email non riuscito.')
+            }
+            onToggleExpanded={() => {
+              if (!readingRef) {
+                return
+              }
 
-          <div className="min-h-0 flex-1">
-            <MessageViewer
-              folders={folders}
-              message={selectedMessageForViewer}
-              loading={loadingMessageDetail}
-              isExpanded={isMessageExpanded}
-              onReply={openReplyComposer}
-              onForward={openForwardComposer}
-              onArchive={() =>
-                void runSelectedMessageRemovalAction(async (ref) => {
-                  await window.mailApi.archiveMessage(ref)
-                }, 'Archiviazione email non riuscita.')
+              setIsMessageExpanded((current) => !current)
+            }}
+            onToggleSeen={(seen) => {
+              if (readingRef) {
+                void setMessageKeyword(readingRef, '\\Seen', seen)
               }
-              onDelete={() =>
-                void runSelectedMessageRemovalAction(async (ref) => {
-                  await window.mailApi.deleteMessage(ref)
-                }, 'Eliminazione email non riuscita.')
+            }}
+            onToggleFlagged={(flagged) => {
+              if (readingRef) {
+                void setMessageKeyword(readingRef, '\\Flagged', flagged)
               }
-              onMoveToFolder={(destinationFolderPath) =>
-                void runSelectedMessageRemovalAction(async (ref) => {
-                  await window.mailApi.moveMessage({ ...ref, destinationFolderPath })
-                }, 'Spostamento email non riuscito.')
-              }
-              onToggleExpanded={() => {
-                if (!selectedMessageRef) {
-                  return
-                }
-
-                setIsMessageExpanded((current) => !current)
-              }}
-              onToggleSeen={(seen) => void setSelectedMessageSeen(seen)}
-              onDownloadAttachment={downloadSelectedMessageAttachment}
-            />
-          </div>
-        </main>
-      </div>
+            }}
+            onDownloadAttachment={downloadSelectedMessageAttachment}
+          />
+        }
+      />
 
       <MailComposerDialog
         open={composerOpen}
@@ -2457,6 +2392,7 @@ function App(): React.JSX.Element {
         initialData={composerInitial}
         onSendRequested={handleComposerSendRequested}
       />
+
       <Dialog
         open={Boolean(composerSendError)}
         onOpenChange={(nextOpen) => !nextOpen && setComposerSendError(null)}
@@ -2466,14 +2402,14 @@ function App(): React.JSX.Element {
             <DialogTitle>Invio email non riuscito</DialogTitle>
             <DialogDescription>
               {composerSendError?.message ||
-                "Si e verificato un errore durante l'invio dell'email."}
+                "Si è verificato un errore durante l'invio dell'email."}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="border-destructive/35 bg-destructive/10 text-destructive-foreground rounded-xl border p-3 text-sm">
+          <div className="border-destructive/35 bg-destructive/10 text-destructive-foreground rounded-lg border p-2.5 text-xs">
             <div className="flex items-center gap-2">
-              <AlertTriangle className="size-4" />
-              L&apos;email non e stata inviata.
+              <AlertTriangle className="size-3.5" />
+              L&apos;email non è stata inviata.
             </div>
           </div>
 
@@ -2485,6 +2421,7 @@ function App(): React.JSX.Element {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
       <AddAccountDialog
         canUseGoogle={capabilities.googleOAuthReady}
         onAccountCreated={onAccountCreated}
@@ -2492,6 +2429,7 @@ function App(): React.JSX.Element {
         onOpenChange={setAddAccountDialogOpen}
         trigger={null}
       />
+
       {extensionRenderer.PrimaryActionDialog && (
         <extensionRenderer.PrimaryActionDialog
           open={extensionPrimaryDialogOpen}
@@ -2500,6 +2438,7 @@ function App(): React.JSX.Element {
           hostHooks={extensionHostHooks}
         />
       )}
+
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
@@ -2508,13 +2447,13 @@ function App(): React.JSX.Element {
         removingAccountId={removingAccountId}
         clearingAccountDataId={clearingAccountDataId}
         clearingDatabaseData={clearingDatabaseData}
-        invertMessageListOrder={invertMessageListOrder}
+        uiPreferences={uiPreferences}
+        onUiPreferencesChange={updateUiPreferences}
         onRemoveAccount={(accountId) => void removeAccount(accountId)}
         onClearAccountData={(accountId) => void clearAccountData(accountId)}
         onClearDatabaseData={() => void clearAllDataKeepAccounts()}
         onAddAccount={() => setAddAccountDialogOpen(true)}
         onUnifiedInboxPreferencesChanged={handleUnifiedInboxPreferencesChanged}
-        onInvertMessageListOrderChanged={handleInvertMessageListOrderChanged}
       />
     </AppFrame>
   )

@@ -1,512 +1,90 @@
-import {
-  type MouseEvent,
-  Fragment,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState
-} from 'react'
-import {
-  ArrowDownNarrowWide,
-  ArrowDownWideNarrow,
-  ArrowUpDown,
-  Calendar,
-  Check,
-  CheckCheck,
-  ListChecks,
-  Paperclip,
-  Tag,
-  User
-} from 'lucide-react'
+/**
+ * "Apple" message list: multi-line rows beside a reading pane.
+ *
+ * Tuned for density after the SIEVER review asked for "più roba a schermo,
+ * meno card grandi": rows are hairline-separated instead of floating cards,
+ * the unread state is a dot rather than a badge, and the attachment marker
+ * is an icon rather than a labelled chip. Roughly twice the messages fit on
+ * screen compared with the previous card list, with no information removed —
+ * the attachment marker in particular is now visible at every density, which
+ * it was not before.
+ */
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { Avatar, AvatarFallback } from '@renderer/components/ui/avatar'
-import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from '@renderer/components/ui/dropdown-menu'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Spinner } from '@renderer/components/ui/spinner'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger
-} from '@renderer/components/ui/tooltip'
-import { cn, formatAddress, formatDateLabel } from '@renderer/lib/utils'
 import { initialsFromName } from '@renderer/lib/email'
+import { messageRefKey, summaryToMessageRef } from '@renderer/lib/message-selection'
+import { cn, formatDateLabel } from '@renderer/lib/utils'
+import { MESSAGE_LIST_PAGE_SIZE } from '@shared/models'
+
+import type { MessageListViewProps } from './message-list-view'
 import {
-  DEFAULT_MESSAGE_LIST_SORT_DIRECTION,
-  DEFAULT_MESSAGE_LIST_SORT_FIELD,
-  MESSAGE_LIST_PAGE_SIZE,
-  type MailMessageListSort,
-  type MailMessageSummary,
-  type MessageListSortDirection,
-  type MessageListSortField,
-  type MessageRef
-} from '@shared/models'
-import { findHighlightRanges } from '@shared/search'
-
-interface MessageListProps {
-  title?: string
-  messages: MailMessageSummary[]
-  totalCount: number
-  selectedMessage: MessageRef | null
-  multiSelectEnabled: boolean
-  selectedMessageRefs: MessageRef[]
-  allVisibleSelected: boolean
-  canLoadMoreMessages: boolean
-  loadingMoreMessages: boolean
-  compact?: boolean
-  /**
-   * Lowercased, de-duplicated literal search terms to highlight inside
-   * each row's subject / preview / recipients. Comes straight from the
-   * shared search parser so highlights are guaranteed to line up with
-   * the DB's match decisions.
-   */
-  highlightTerms?: readonly string[]
-  /** Active sort applied to the list. */
-  sort: MailMessageListSort
-  onSortChange: (next: MailMessageListSort) => void
-  /**
-   * When true, flip the rendered list visually (CSS `flex-col-reverse`)
-   * so the newest (= array index 0) lands at the visual bottom and the
-   * scroll container starts anchored to the end. The underlying sort
-   * order is unchanged — this is a pure presentation toggle for users
-   * who prefer the iMessage/WhatsApp-style "scroll up to see history"
-   * layout. The pagination button stays the last child in DOM order so
-   * it appears at the visual top under this mode (where "load older"
-   * naturally lives).
-   */
-  invertVisualOrder?: boolean
-  onSelectMessage: (ref: MessageRef, options?: { activateMultiSelect?: boolean }) => void
-  onOpenMessage: (ref: MessageRef) => void
-  onLoadMoreMessages: () => void
-  onToggleMultiSelect: () => void
-  onSelectAllVisible: () => void
-}
-
-interface SortFieldOption {
-  field: MessageListSortField
-  label: string
-  icon: typeof Calendar
-  ascLabel: string
-  descLabel: string
-}
-
-const SORT_FIELD_OPTIONS: readonly SortFieldOption[] = [
-  {
-    field: 'date',
-    label: 'Data',
-    icon: Calendar,
-    descLabel: 'Più recenti prima',
-    ascLabel: 'Più vecchie prima'
-  },
-  {
-    field: 'sender',
-    label: 'Mittente',
-    icon: User,
-    descLabel: 'Z → A',
-    ascLabel: 'A → Z'
-  },
-  {
-    field: 'subject',
-    label: 'Oggetto',
-    icon: Tag,
-    descLabel: 'Z → A',
-    ascLabel: 'A → Z'
-  }
-]
-
-const WRAP_SAFETY_PADDING_PX = 18
-const TRUNCATION_ELLIPSIS = '...'
-const MESSAGE_CARD_TEXT_MAX_CHARACTERS = 140
-const MESSAGE_CARD_TEXT_COMPACT_MAX_CHARACTERS = 74
-const navigatorPlatform =
-  typeof navigator !== 'undefined'
-    ? 'userAgentData' in navigator
-      ? ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData
-          ?.platform ?? navigator.platform)
-      : navigator.platform
-    : ''
-const IS_MAC_PLATFORM =
-  typeof navigator !== 'undefined' && /mac|iphone|ipad|ipod/i.test(navigatorPlatform)
-let measureContext: CanvasRenderingContext2D | null = null
-
-function senderLabel(message: MailMessageSummary): string {
-  const first = message.from[0]
-
-  if (!first) {
-    return 'Mittente sconosciuto'
-  }
-
-  return first.name || first.address
-}
-
-function recipientsLabel(message: MailMessageSummary): string {
-  const recipients = message.to.length > 0 ? message.to : message.cc
-
-  if (recipients.length === 0) {
-    return 'A: N/D'
-  }
-
-  return `A: ${recipients.map(formatAddress).join(', ')}`
-}
-
-function messageRefKey(ref: MessageRef): string {
-  return `${ref.accountId}:${ref.folderPath}:${ref.uid}`
-}
-
-function getMeasureContext(): CanvasRenderingContext2D | null {
-  if (measureContext) {
-    return measureContext
-  }
-
-  if (typeof document === 'undefined') {
-    return null
-  }
-
-  const canvas = document.createElement('canvas')
-  measureContext = canvas.getContext('2d')
-  return measureContext
-}
-
-function wrapLongWord(
-  word: string,
-  maxWidthPx: number,
-  context: CanvasRenderingContext2D
-): string[] {
-  if (!word) {
-    return []
-  }
-
-  const chunks: string[] = []
-  let currentChunk = ''
-
-  for (const char of word) {
-    const nextChunk = `${currentChunk}${char}`
-
-    if (currentChunk && context.measureText(nextChunk).width > maxWidthPx) {
-      chunks.push(currentChunk)
-      currentChunk = char
-      continue
-    }
-
-    currentChunk = nextChunk
-  }
-
-  if (currentChunk) {
-    chunks.push(currentChunk)
-  }
-
-  return chunks
-}
-
-function wrapSingleLine(
-  line: string,
-  maxWidthPx: number,
-  context: CanvasRenderingContext2D
-): string[] {
-  const words = line.trim().split(/\s+/).filter(Boolean)
-
-  if (words.length === 0) {
-    return ['']
-  }
-
-  const wrapped: string[] = []
-  let currentLine = ''
-
-  for (const word of words) {
-    const nextLine = currentLine ? `${currentLine} ${word}` : word
-
-    if (context.measureText(nextLine).width <= maxWidthPx) {
-      currentLine = nextLine
-      continue
-    }
-
-    if (currentLine) {
-      wrapped.push(currentLine)
-      currentLine = ''
-    }
-
-    if (context.measureText(word).width <= maxWidthPx) {
-      currentLine = word
-      continue
-    }
-
-    const wordChunks = wrapLongWord(word, maxWidthPx, context)
-
-    if (wordChunks.length === 0) {
-      continue
-    }
-
-    wrapped.push(...wordChunks.slice(0, -1))
-    currentLine = wordChunks[wordChunks.length - 1] || ''
-  }
-
-  if (currentLine) {
-    wrapped.push(currentLine)
-  }
-
-  return wrapped.length > 0 ? wrapped : ['']
-}
-
-function wrapTextByWidth(text: string, maxWidthPx: number, font: string): string {
-  const context = getMeasureContext()
-
-  if (!context || !Number.isFinite(maxWidthPx) || maxWidthPx <= 0) {
-    return text
-  }
-
-  context.font = font
-  const lines = text.split(/\r?\n/)
-  const wrappedLines = lines.flatMap((line) => wrapSingleLine(line, maxWidthPx, context))
-  return wrappedLines.join('\n')
-}
-
-function lineCountForTextByWidth(text: string, maxWidthPx: number, font: string): number {
-  const wrapped = wrapTextByWidth(text, maxWidthPx, font)
-  return wrapped.split('\n').length
-}
-
-function isMultiSelectModifierPressed(event: MouseEvent<HTMLButtonElement>): boolean {
-  return IS_MAC_PLATFORM ? event.metaKey : event.ctrlKey
-}
-
-function truncateTextByLines(
-  text: string,
-  maxWidthPx: number,
-  font: string,
-  maxLines: number
-): string {
-  const normalizedMaxLines = Math.max(1, Math.floor(maxLines))
-
-  if (!text.trim()) {
-    return text
-  }
-
-  if (lineCountForTextByWidth(text, maxWidthPx, font) <= normalizedMaxLines) {
-    return text
-  }
-
-  let bestLength = 0
-  let low = 0
-  let high = text.length
-
-  while (low <= high) {
-    const candidateLength = Math.floor((low + high) / 2)
-    const candidate = `${text.slice(0, candidateLength).trimEnd()}${TRUNCATION_ELLIPSIS}`
-    const candidateLineCount = lineCountForTextByWidth(candidate, maxWidthPx, font)
-
-    if (candidateLineCount <= normalizedMaxLines) {
-      bestLength = candidateLength
-      low = candidateLength + 1
-      continue
-    }
-
-    high = candidateLength - 1
-  }
-
-  return `${text.slice(0, bestLength).trimEnd()}${TRUNCATION_ELLIPSIS}`
-}
-
-function renderHighlightedText(
-  text: string,
-  highlightTerms: readonly string[] | undefined
-): React.ReactNode {
-  if (!highlightTerms || highlightTerms.length === 0 || !text) {
-    return text
-  }
-
-  const ranges = findHighlightRanges(text, [...highlightTerms])
-
-  if (ranges.length === 0) {
-    return text
-  }
-
-  const segments: React.ReactNode[] = []
-  let cursor = 0
-
-  for (let index = 0; index < ranges.length; index += 1) {
-    const range = ranges[index]
-
-    if (range.start > cursor) {
-      segments.push(<Fragment key={`pre-${index}`}>{text.slice(cursor, range.start)}</Fragment>)
-    }
-
-    segments.push(
-      <mark
-        key={`match-${index}`}
-        className="bg-primary/30 text-foreground rounded-[2px] px-0.5"
-      >
-        {text.slice(range.start, range.end)}
-      </mark>
-    )
-    cursor = range.end
-  }
-
-  if (cursor < text.length) {
-    segments.push(<Fragment key="tail">{text.slice(cursor)}</Fragment>)
-  }
-
-  return segments
-}
-
-function AutoWrappedText({
-  text,
-  className,
-  maxLines,
-  maxCharacters,
-  highlightTerms
-}: {
-  text: string
-  className: string
-  maxLines?: number
-  maxCharacters?: number
-  highlightTerms?: readonly string[]
-}): React.JSX.Element {
-  const textRef = useRef<HTMLParagraphElement | null>(null)
-  const [wrappedText, setWrappedText] = useState(text)
-
-  useEffect(() => {
-    const element = textRef.current
-
-    if (!element) {
-      return
-    }
-
-    const updateWrap = (): void => {
-      const computedStyle = window.getComputedStyle(element)
-      const font = [
-        computedStyle.fontStyle,
-        computedStyle.fontVariant,
-        computedStyle.fontWeight,
-        computedStyle.fontSize,
-        computedStyle.fontFamily
-      ]
-        .filter(Boolean)
-        .join(' ')
-      const maxWidthPx = Math.max(40, element.clientWidth - WRAP_SAFETY_PADDING_PX)
-      const normalizedMaxCharacters =
-        typeof maxCharacters === 'number' && Number.isFinite(maxCharacters)
-          ? Math.max(1, Math.floor(maxCharacters))
-          : null
-      const normalizedByCharacterLimit =
-        normalizedMaxCharacters && text.length > normalizedMaxCharacters
-          ? `${text.slice(0, normalizedMaxCharacters).trimEnd()}${TRUNCATION_ELLIPSIS}`
-          : text
-      const normalizedByLineLimit =
-        typeof maxLines === 'number' && Number.isFinite(maxLines)
-          ? truncateTextByLines(normalizedByCharacterLimit, maxWidthPx, font, maxLines)
-          : normalizedByCharacterLimit
-
-      setWrappedText(wrapTextByWidth(normalizedByLineLimit, maxWidthPx, font))
-    }
-
-    updateWrap()
-
-    if (typeof ResizeObserver === 'undefined') {
-      return
-    }
-
-    const observer = new ResizeObserver(() => {
-      updateWrap()
-    })
-    observer.observe(element)
-
-    return () => {
-      observer.disconnect()
-    }
-  }, [maxCharacters, maxLines, text])
-
-  // Highlighting happens AFTER wrap so the canvas measurements (driven by
-  // the raw text in `setWrappedText`) stay accurate. The visual <mark>
-  // pill has no impact on the line-break decisions above.
-  return (
-    <p ref={textRef} className={className}>
-      {renderHighlightedText(wrappedText, highlightTerms)}
-    </p>
-  )
-}
+  AttachmentMark,
+  FlagToggle,
+  HighlightedText,
+  MessageListControls,
+  MessageSectionHeading,
+  primaryAddressLabel,
+  UnreadDot
+} from './message-list-shared'
+import { resolveSelectionIntent } from '@renderer/lib/message-selection'
 
 export function MessageList({
-  title = 'Conversazioni',
+  title,
   messages,
+  sections,
   totalCount,
-  selectedMessage,
-  multiSelectEnabled,
-  selectedMessageRefs,
-  allVisibleSelected,
-  canLoadMoreMessages,
-  loadingMoreMessages,
-  compact = false,
+  selection,
   highlightTerms,
   sort,
   onSortChange,
-  invertVisualOrder = false,
-  onSelectMessage,
-  onOpenMessage,
+  grouping,
+  onGroupingChange,
+  invertVisualOrder,
+  primaryAddressMode,
+  canLoadMoreMessages,
+  loadingMoreMessages,
   onLoadMoreMessages,
-  onToggleMultiSelect,
-  onSelectAllVisible
-}: MessageListProps): React.JSX.Element {
-  const activeSortOption =
-    SORT_FIELD_OPTIONS.find((option) => option.field === sort.field) ?? SORT_FIELD_OPTIONS[0]
-  const activeDirectionLabel =
-    sort.direction === 'asc' ? activeSortOption.ascLabel : activeSortOption.descLabel
-  const activeSortSummary = `${activeSortOption.label} · ${activeDirectionLabel}`
-  // The sort dropdown only stands out when the user has moved off the
-  // app-wide default (newest emails first by date). The non-default
-  // state swaps the trigger to the primary "filled" variant so it reads
-  // as an active filter at a glance — same affordance the multi-select
-  // toggle uses while engaged.
-  const isSortAtDefault =
-    sort.field === DEFAULT_MESSAGE_LIST_SORT_FIELD &&
-    sort.direction === DEFAULT_MESSAGE_LIST_SORT_DIRECTION
-
-  // Mirror the scroll position whenever the visual-reversal preference
-  // flips, so the same messages stay visible after the layout swap. The
-  // mirror is `newScrollTop = scrollHeight - oldScrollTop - clientHeight`
-  // — that's the inverse of "distance from the top of the content", so a
-  // user scrolled near the top in normal mode ends up scrolled near the
-  // bottom in inverted mode (showing the same range of messages but from
-  // the other side of the viewport).
-  //
-  // Mechanics:
-  //   • `scrollAreaRootRef` points to the Radix ScrollArea root; we walk
-  //     down to its `[data-radix-scroll-area-viewport]` child because
-  //     that's the element that actually scrolls (Radix wraps the
-  //     content in a Viewport).
-  //   • A passive scroll listener keeps `lastScrollTopRef` in sync, so
-  //     when the layout effect fires we know exactly where the user was
-  //     *before* the className toggle. (Reading scrollTop inside the
-  //     layout effect after the className change would be too late —
-  //     Chromium may have already adjusted it for the new direction.)
-  //   • `previousInvertRef` lets us tell a real toggle apart from a
-  //     re-render that happens for other reasons (selection change,
-  //     incoming messages, search, …) — in those cases we leave scroll
-  //     untouched.
-  const scrollAreaRootRef = useRef<HTMLDivElement | null>(null)
+  onActivateRow,
+  onOpenRow,
+  onToggleFlag,
+  onSelectSection,
+  onSelectAll,
+  onClearSelection
+}: MessageListViewProps): React.JSX.Element {
+  const [collapsedSectionKeys, setCollapsedSectionKeys] = useState<ReadonlySet<string>>(
+    () => new Set()
+  )
+  const scrollRootRef = useRef<HTMLDivElement | null>(null)
   const lastScrollTopRef = useRef(0)
   const previousInvertRef = useRef(invertVisualOrder)
 
-  function findScrollAreaViewport(): HTMLElement | null {
-    const root = scrollAreaRootRef.current
-    if (!root) {
-      return null
-    }
-    return root.querySelector<HTMLElement>('[data-radix-scroll-area-viewport]')
+  const selectedKeys = useMemo(
+    () => new Set(selection.selectedRefs.map(messageRefKey)),
+    [selection.selectedRefs]
+  )
+  const cursorKey = selection.cursorRef ? messageRefKey(selection.cursorRef) : null
+
+  const renderedSections = useMemo(
+    () => (invertVisualOrder ? [...sections].reverse() : sections),
+    [invertVisualOrder, sections]
+  )
+
+  function findViewport(): HTMLElement | null {
+    return (
+      scrollRootRef.current?.querySelector<HTMLElement>('[data-radix-scroll-area-viewport]') ?? null
+    )
   }
 
+  // Track the scroll position so the mirror below knows where the user was
+  // *before* the direction flip — reading it afterwards is too late, Chromium
+  // has already adjusted for the new flow direction.
   useEffect(() => {
-    const viewport = findScrollAreaViewport()
+    const viewport = findViewport()
+
     if (!viewport) {
       return
     }
@@ -514,333 +92,228 @@ export function MessageList({
     const onScroll = (): void => {
       lastScrollTopRef.current = viewport.scrollTop
     }
-    // Seed the ref with the initial position so the very first toggle
-    // after mount mirrors correctly even if the user never scrolled.
+
     lastScrollTopRef.current = viewport.scrollTop
     viewport.addEventListener('scroll', onScroll, { passive: true })
+
     return () => {
       viewport.removeEventListener('scroll', onScroll)
     }
   }, [])
 
+  // Mirror the scroll position when the inversion preference flips, so the
+  // same messages stay in view across the swap.
   useLayoutEffect(() => {
     if (previousInvertRef.current === invertVisualOrder) {
       return
     }
-    previousInvertRef.current = invertVisualOrder
 
-    const viewport = findScrollAreaViewport()
+    previousInvertRef.current = invertVisualOrder
+    const viewport = findViewport()
+
     if (!viewport) {
       return
     }
 
     const { scrollHeight, clientHeight } = viewport
+
     if (scrollHeight <= clientHeight) {
       return
     }
 
-    const oldScrollTop = lastScrollTopRef.current
     const maxScrollTop = scrollHeight - clientHeight
-    const mirroredScrollTop = Math.min(maxScrollTop, Math.max(0, maxScrollTop - oldScrollTop))
-
-    viewport.scrollTop = mirroredScrollTop
-    lastScrollTopRef.current = mirroredScrollTop
+    const mirrored = Math.min(maxScrollTop, Math.max(0, maxScrollTop - lastScrollTopRef.current))
+    viewport.scrollTop = mirrored
+    lastScrollTopRef.current = mirrored
   }, [invertVisualOrder])
-  const selectedMessageRefKeys = useMemo(
-    () => new Set(selectedMessageRefs.map((ref) => messageRefKey(ref))),
-    [selectedMessageRefs]
-  )
+
+  // Keep the keyboard cursor on screen while arrowing through a long folder.
+  useEffect(() => {
+    if (!cursorKey) {
+      return
+    }
+
+    scrollRootRef.current
+      ?.querySelector(`[data-message-key="${CSS.escape(cursorKey)}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [cursorKey])
+
   const resultsLabel =
     totalCount > messages.length ? `${messages.length} di ${totalCount}` : `${messages.length}`
-  const hasMessages = messages.length > 0
-  const showMultiSelectToggle = hasMessages || multiSelectEnabled
-  const showSelectAll = multiSelectEnabled && hasMessages && !allVisibleSelected
+  const selectedCount = selection.selectedRefs.length
 
   return (
-    <div
-      className={cn(
-        'glass-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl p-3',
-        compact && 'p-2.5'
-      )}
-    >
-      <div className="mb-2 flex items-center justify-between gap-2 px-1">
+    <div className="glass-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg">
+      <header className="border-border/60 flex h-11 shrink-0 items-center justify-between gap-2 border-b px-2.5">
         <div className="min-w-0">
-          <h3 className={cn('display-title text-xl', compact && 'text-lg')}>{title}</h3>
-          <p className="text-muted-foreground text-xs">{resultsLabel} risultati</p>
+          <h2 className="truncate text-[13px] font-semibold">{title}</h2>
+          <p className="text-muted-foreground text-[10px] leading-tight">
+            {selectedCount > 1 ? `${selectedCount} selezionate` : `${resultsLabel} messaggi`}
+          </p>
         </div>
 
-        <TooltipProvider delayDuration={120}>
-          <div className="flex shrink-0 items-center gap-1">
-            {/* Sort control: always visible (even on an empty list) so the
-                preference is obvious and discoverable. Composes with the
-                search box — the dropdown drives the same `sort` query
-                parameter that the active search results are ordered by. */}
-            <DropdownMenu>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant={isSortAtDefault ? 'outline' : 'default'}
-                      size="icon"
-                      className="size-8"
-                      aria-label={`Ordinamento: ${activeSortSummary}`}
-                      aria-pressed={!isSortAtDefault}
-                    >
-                      <ArrowUpDown className="size-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">{`Ordina: ${activeSortSummary}`}</TooltipContent>
-              </Tooltip>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel>Ordina per</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={sort.field}
-                  onValueChange={(nextField) => {
-                    onSortChange({
-                      field: nextField as MessageListSortField,
-                      direction: sort.direction
-                    })
-                  }}
-                >
-                  {SORT_FIELD_OPTIONS.map((option) => {
-                    const Icon = option.icon
-                    return (
-                      <DropdownMenuRadioItem
-                        key={option.field}
-                        value={option.field}
-                        className="gap-2"
-                      >
-                        <Icon className="size-4" />
-                        {option.label}
-                      </DropdownMenuRadioItem>
-                    )
-                  })}
-                </DropdownMenuRadioGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel>Direzione</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={sort.direction}
-                  onValueChange={(nextDirection) => {
-                    onSortChange({
-                      field: sort.field,
-                      direction: nextDirection as MessageListSortDirection
-                    })
-                  }}
-                >
-                  <DropdownMenuRadioItem value="desc" className="gap-2">
-                    <ArrowDownWideNarrow className="size-4" />
-                    {activeSortOption.descLabel}
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="asc" className="gap-2">
-                    <ArrowDownNarrowWide className="size-4" />
-                    {activeSortOption.ascLabel}
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+        <MessageListControls
+          sort={sort}
+          onSortChange={onSortChange}
+          grouping={grouping}
+          onGroupingChange={onGroupingChange}
+          selectedCount={selectedCount}
+          onClearSelection={onClearSelection}
+          onSelectAll={onSelectAll}
+          canSelectAll={messages.length > 0}
+        />
+      </header>
 
-            {showSelectAll && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8"
-                    onClick={onSelectAllVisible}
-                    aria-label="Seleziona tutto"
-                  >
-                    <CheckCheck className="size-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Seleziona tutto</TooltipContent>
-              </Tooltip>
-            )}
-
-            {showMultiSelectToggle && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={multiSelectEnabled ? 'secondary' : 'outline'}
-                    size="icon"
-                    className="size-8"
-                    onClick={onToggleMultiSelect}
-                    aria-label={
-                      multiSelectEnabled ? 'Esci dalla multi-selezione' : 'Multi-selezione'
-                    }
-                  >
-                    <ListChecks className="size-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {multiSelectEnabled ? 'Esci dalla multi-selezione' : 'Multi-selezione'}
-                </TooltipContent>
-              </Tooltip>
-            )}
-          </div>
-        </TooltipProvider>
-      </div>
-
-      <ScrollArea ref={scrollAreaRootRef} className="min-h-0 min-w-0 flex-1 overflow-x-hidden">
-        {/*
-          `gap` (instead of `space-y-*`) keeps the row spacing identical in
-          both flex directions. With `flex-col-reverse` Chromium also
-          anchors the initial scroll position to the visual bottom (= the
-          first DOM child), which is exactly what the inverted-list
-          preference wants — newest visible on open, scroll up reveals
-          older messages, "Carica altre" naturally lands at the visual top
-          because it's the last DOM child.
-        */}
-        <div
-          className={cn(
-            'flex min-w-0 flex-col gap-1.5 pr-2',
-            compact && 'gap-1 pr-1.5',
-            invertVisualOrder && 'flex-col-reverse'
-          )}
-        >
-          {messages.map((message) => {
-            const messageRef = {
-              accountId: message.accountId,
-              folderPath: message.folderPath,
-              uid: message.uid
-            } satisfies MessageRef
-            const isActive =
-              selectedMessage?.accountId === messageRef.accountId &&
-              selectedMessage?.folderPath === messageRef.folderPath &&
-              selectedMessage?.uid === messageRef.uid
-            const isMultiSelected = selectedMessageRefKeys.has(messageRefKey(messageRef))
-
-            const sender = senderLabel(message)
-            const recipients = recipientsLabel(message)
-            const maxTextCharacters = compact
-              ? MESSAGE_CARD_TEXT_COMPACT_MAX_CHARACTERS
-              : MESSAGE_CARD_TEXT_MAX_CHARACTERS
+      <ScrollArea ref={scrollRootRef} className="min-h-0 min-w-0 flex-1">
+        <div className={cn('flex min-w-0 flex-col', invertVisualOrder && 'flex-col-reverse')}>
+          {renderedSections.map((section) => {
+            const collapsed = collapsedSectionKeys.has(section.key)
+            const sectionRefs = section.messages.map(summaryToMessageRef)
+            const allSelected =
+              sectionRefs.length > 0 &&
+              sectionRefs.every((ref) => selectedKeys.has(messageRefKey(ref)))
+            const sectionMessages = invertVisualOrder
+              ? [...section.messages].reverse()
+              : section.messages
 
             return (
-              <Button
-                key={messageRefKey(messageRef)}
-                variant="ghost"
-                className={cn(
-                  'h-auto w-full max-w-full min-w-0 items-start justify-start rounded-lg border border-transparent px-3 py-2 text-left whitespace-normal',
-                  compact && 'px-2.5 py-2',
-                  isMultiSelected && 'border-primary/55 bg-primary/10 hover:bg-primary/15',
-                  isActive
-                    ? 'border-primary/45 bg-primary/10 text-foreground hover:bg-primary/15'
-                    : 'hover:border-border/65 hover:bg-secondary/45'
-                )}
-                onClick={(event) => {
-                  if (event.detail > 1) {
-                    return
-                  }
+              <section key={section.key} className="min-w-0">
+                {section.label && (
+                  <MessageSectionHeading
+                    section={section}
+                    collapsed={collapsed}
+                    allSelected={allSelected}
+                    uppercaseLabel={grouping === 'date'}
+                    onToggleCollapsed={() =>
+                      setCollapsedSectionKeys((current) => {
+                        const next = new Set(current)
 
-                  onSelectMessage(
-                    messageRef,
-                    isMultiSelectModifierPressed(event) ? { activateMultiSelect: true } : undefined
-                  )
-                }}
-                onDoubleClick={() => onOpenMessage(messageRef)}
-              >
-                {multiSelectEnabled && !compact && (
-                  <span
-                    className={cn(
-                      'mt-1 inline-flex size-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors',
-                      isMultiSelected
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'border-border bg-background/55 text-transparent'
-                    )}
-                  >
-                    <Check className="size-3" />
-                  </span>
+                        if (next.has(section.key)) {
+                          next.delete(section.key)
+                        } else {
+                          next.add(section.key)
+                        }
+
+                        return next
+                      })
+                    }
+                    onSelectSection={() => onSelectSection(section)}
+                  />
                 )}
 
-                <Avatar className={cn('border-border border', compact ? 'size-8' : 'size-9')}>
-                  <AvatarFallback
-                    className={cn('bg-secondary/90', compact ? 'text-[10px]' : 'text-[11px]')}
-                  >
-                    {initialsFromName(sender)}
-                  </AvatarFallback>
-                </Avatar>
+                {!collapsed &&
+                  sectionMessages.map((message) => {
+                    const messageRef = summaryToMessageRef(message)
+                    const key = messageRefKey(messageRef)
+                    const isSelected = selectedKeys.has(key)
+                    const isCursor = key === cursorKey
+                    const primaryLabel = primaryAddressLabel(message, primaryAddressMode)
 
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 items-start justify-between gap-2">
-                    <p
-                      className={cn(
-                        'min-w-0 flex-1 truncate',
-                        compact ? 'text-[13px]' : 'text-sm',
-                        message.isRead ? 'font-medium' : 'font-bold'
-                      )}
-                    >
-                      {renderHighlightedText(sender, highlightTerms)}
-                    </p>
-                    <p
-                      className={cn(
-                        'text-muted-foreground shrink-0',
-                        compact ? 'text-[10px]' : 'text-[11px]'
-                      )}
-                    >
-                      {formatDateLabel(message.date)}
-                    </p>
-                  </div>
-                  <AutoWrappedText
-                    text={recipients}
-                    maxLines={1}
-                    maxCharacters={maxTextCharacters}
-                    highlightTerms={highlightTerms}
-                    className={cn(
-                      'text-muted-foreground max-w-full min-w-0 whitespace-pre-wrap',
-                      compact ? 'mt-0.5 text-[10px]' : 'mt-0.5 text-xs'
-                    )}
-                  />
+                    return (
+                      <div
+                        key={key}
+                        data-message-key={key}
+                        role="option"
+                        aria-selected={isSelected}
+                        tabIndex={-1}
+                        onClick={(event) =>
+                          onActivateRow(messageRef, resolveSelectionIntent(event))
+                        }
+                        onDoubleClick={() => onOpenRow(messageRef)}
+                        className={cn(
+                          'group border-border/40 relative flex cursor-default gap-2 border-b px-2.5 py-1.5 transition-colors',
+                          isSelected
+                            ? 'bg-primary/14 hover:bg-primary/18'
+                            : 'hover:bg-secondary/45',
+                          // The cursor is drawn as an inset ring, never as a
+                          // fill: a row can be "current but not selected"
+                          // after a Ctrl-click that removed it, and the two
+                          // states have to look different.
+                          isCursor && !isSelected && 'ring-primary/45 ring-1 ring-inset',
+                          isCursor && isSelected && 'ring-primary/60 ring-1 ring-inset'
+                        )}
+                      >
+                        <UnreadDot unread={!message.isRead} />
 
-                  <AutoWrappedText
-                    text={message.subject}
-                    maxLines={compact ? 1 : 2}
-                    maxCharacters={maxTextCharacters}
-                    highlightTerms={highlightTerms}
-                    className={cn(
-                      'max-w-full min-w-0 whitespace-pre-wrap',
-                      compact ? 'mt-0.5 text-[12px]' : 'text-sm',
-                      message.isRead ? 'text-foreground/80' : 'text-foreground font-semibold'
-                    )}
-                  />
-                  {!compact &&
-                    (message.previewHydrated ? (
-                      <AutoWrappedText
-                        text={message.preview}
-                        highlightTerms={highlightTerms}
-                        className="text-muted-foreground mt-0.5 max-w-full min-w-0 text-xs whitespace-pre-wrap"
-                      />
-                    ) : (
-                      <p className="text-muted-foreground/60 mt-0.5 max-w-full min-w-0 text-xs italic">
-                        Caricamento anteprima…
-                      </p>
-                    ))}
+                        <Avatar className="border-border/70 mt-0.5 size-7 shrink-0 border">
+                          <AvatarFallback className="bg-secondary/80 text-[10px] font-semibold">
+                            {initialsFromName(primaryLabel)}
+                          </AvatarFallback>
+                        </Avatar>
 
-                  <div className={cn('mt-2 flex items-center gap-2', compact && 'mt-1.5')}>
-                    {!message.isRead && <Badge variant="default">Nuova</Badge>}
-                    {message.hasAttachments && !compact && (
-                      <span className="text-muted-foreground inline-flex items-center gap-1 text-[11px]">
-                        <Paperclip className="size-3.5" /> Allegati
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </Button>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex min-w-0 items-baseline gap-2">
+                            <p
+                              className={cn(
+                                'min-w-0 flex-1 truncate text-[12.5px] leading-5',
+                                message.isRead ? 'font-medium' : 'font-bold'
+                              )}
+                            >
+                              <HighlightedText
+                                text={primaryLabel}
+                                terms={
+                                  primaryAddressMode === 'sender'
+                                    ? highlightTerms.sender
+                                    : highlightTerms.recipients
+                                }
+                              />
+                            </p>
+
+                            <span className="text-muted-foreground shrink-0 text-[10.5px] tabular-nums">
+                              {formatDateLabel(message.date)}
+                            </span>
+                          </div>
+
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <p
+                              className={cn(
+                                'min-w-0 flex-1 truncate text-[12px] leading-5',
+                                message.isRead
+                                  ? 'text-foreground/80'
+                                  : 'text-foreground font-semibold'
+                              )}
+                            >
+                              <HighlightedText
+                                text={message.subject}
+                                terms={highlightTerms.subject}
+                              />
+                            </p>
+                            <AttachmentMark present={message.hasAttachments} />
+                            <FlagToggle
+                              flagged={message.isFlagged}
+                              onToggle={() => onToggleFlag(messageRef, !message.isFlagged)}
+                            />
+                          </div>
+
+                          {message.previewHydrated ? (
+                            <p className="text-muted-foreground min-w-0 truncate text-[11px] leading-4">
+                              <HighlightedText text={message.preview} terms={highlightTerms.body} />
+                            </p>
+                          ) : (
+                            <p className="text-muted-foreground/55 min-w-0 truncate text-[11px] leading-4 italic">
+                              Caricamento anteprima…
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+              </section>
             )
           })}
 
           {canLoadMoreMessages && (
-            <div className="pt-2">
+            <div className="p-2">
               <Button
                 variant="outline"
                 size="sm"
-                className="w-full"
+                className="h-7 w-full text-[11px]"
                 disabled={loadingMoreMessages}
                 onClick={onLoadMoreMessages}
               >
                 {loadingMoreMessages ? (
                   <>
-                    <Spinner className="size-4" /> Caricamento...
+                    <Spinner className="size-3.5" /> Caricamento…
                   </>
                 ) : (
                   `Carica altre ${MESSAGE_LIST_PAGE_SIZE} email`

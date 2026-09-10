@@ -12,6 +12,7 @@ import type {
   MailMessageSummary,
   MessageRef
 } from '@shared/models'
+import { deriveSenderKey, deriveSenderName } from '@shared/sender'
 
 import type { AppDatabase } from '../database'
 import type { GoogleOAuthService } from '../google-oauth'
@@ -335,27 +336,46 @@ export class AccountConnection extends EventEmitter {
   }
 
   async toggleSeen(ref: MessageRef, seen: boolean): Promise<void> {
+    await this.setKeyword(ref, '\\Seen', seen, 'toggle-seen')
+  }
+
+  /**
+   * Adds or removes the IMAP `\\Flagged` keyword — the "contrassegna" of
+   * Outlook and iOS Mail. It is server-side state, so the change shows up
+   * on every other client of the account without any extra plumbing.
+   */
+  async toggleFlagged(ref: MessageRef, flagged: boolean): Promise<void> {
+    await this.setKeyword(ref, '\\Flagged', flagged, 'toggle-flagged')
+  }
+
+  /**
+   * Single path for one-keyword mutations: push the change to the server,
+   * then reconcile just that keyword locally. Deliberately does NOT rewrite
+   * the whole flag set — doing so is how marking a message read used to
+   * wipe its flag until the next resync.
+   */
+  private async setKeyword(
+    ref: MessageRef,
+    keyword: string,
+    present: boolean,
+    operationLabel: string
+  ): Promise<void> {
     await this.enqueuePrimaryCommandAwaitable(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(ref.folderPath)
 
       try {
-        if (seen) {
-          await client.messageFlagsAdd(String(ref.uid), ['\\Seen'], { uid: true })
+        if (present) {
+          await client.messageFlagsAdd(String(ref.uid), [keyword], { uid: true })
         } else {
-          await client.messageFlagsRemove(String(ref.uid), ['\\Seen'], { uid: true })
+          await client.messageFlagsRemove(String(ref.uid), [keyword], { uid: true })
         }
       } finally {
         lock.release()
       }
 
-      await this.database.updateMessageFlags(
-        this.account.id,
-        ref.folderPath,
-        ref.uid,
-        seen ? ['\\Seen'] : []
-      )
-    }, `toggle-seen:${ref.folderPath}:${ref.uid}`)
+      await this.database.setMessageFlag(ref, keyword, present)
+    }, `${operationLabel}:${ref.folderPath}:${ref.uid}`)
   }
 
   async moveMessage(
@@ -1282,7 +1302,7 @@ export class AccountConnection extends EventEmitter {
       { uid: true, changedSince: sinceModseq }
     )) {
       const flags = [...(message.flags ?? new Set<string>())]
-      const updatedSummary = await this.database.updateMessageFlags(
+      const updatedSummary = await this.database.replaceMessageFlags(
         this.account.id,
         folderPath,
         message.uid,
@@ -1360,6 +1380,8 @@ export class AccountConnection extends EventEmitter {
         }
       }
 
+      const from = mapAddresses(envelope?.from)
+
       summaries.push({
         accountId: this.account.id,
         folderPath,
@@ -1367,7 +1389,7 @@ export class AccountConnection extends EventEmitter {
         threadId: fetched.threadId,
         messageId: envelope?.messageId,
         subject,
-        from: mapAddresses(envelope?.from),
+        from,
         to: mapAddresses(envelope?.to),
         cc: mapAddresses(envelope?.cc),
         date: internalDateToIso(fetched.internalDate),
@@ -1375,8 +1397,11 @@ export class AccountConnection extends EventEmitter {
         previewHydrated,
         flags,
         isRead: flags.includes('\\Seen'),
+        isFlagged: flags.includes('\\Flagged'),
         hasAttachments: hasAttachmentInStructure(fetched.bodyStructure),
-        size: fetched.size ?? 0
+        size: fetched.size ?? 0,
+        senderName: deriveSenderName(from),
+        senderKey: deriveSenderKey(from)
       })
     }
 
@@ -1477,7 +1502,7 @@ export class AccountConnection extends EventEmitter {
     }
 
     const flags = [...event.flags]
-    const summary = await this.database.updateMessageFlags(
+    const summary = await this.database.replaceMessageFlags(
       this.account.id,
       event.path,
       event.uid,

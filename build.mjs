@@ -217,11 +217,10 @@ function resolveMacSigningMode() {
     return { mode: 'not-mac', extraArgs: [], extraEnv: {} }
   }
 
-  const identityProbe = spawnSync(
-    'security',
-    ['find-identity', '-v', '-p', 'codesigning'],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
-  )
+  const identityProbe = spawnSync('security', ['find-identity', '-v', '-p', 'codesigning'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
   const identityOutput = `${identityProbe.stdout ?? ''}${identityProbe.stderr ?? ''}`
   const hasDeveloperIdCert = /Developer ID Application/.test(identityOutput)
 
@@ -257,20 +256,14 @@ function resolveMacSigningMode() {
   if (!hasNotaryCreds) {
     return {
       mode: 'developer-id-no-notary',
-      extraArgs: [
-        '--config.mac.hardenedRuntime=true',
-        '--config.mac.notarize=false'
-      ],
+      extraArgs: ['--config.mac.hardenedRuntime=true', '--config.mac.notarize=false'],
       extraEnv: {}
     }
   }
 
   return {
     mode: 'developer-id',
-    extraArgs: [
-      '--config.mac.hardenedRuntime=true',
-      '--config.mac.notarize=true'
-    ],
+    extraArgs: ['--config.mac.hardenedRuntime=true', '--config.mac.notarize=true'],
     extraEnv: {}
   }
 }

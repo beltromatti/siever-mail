@@ -57,9 +57,20 @@ open-source software released under the Apache License 2.0.
   pass through the OS keychain via Electron's `safeStorage`.
 - **Local-only data** — everything lives in a SQLite database on the user's
   machine. No remote analytics, no third-party tracking.
-- **Upgrade-safe migrations** — moving between versions automatically wipes
-  stale local state while keeping saved logins, so a new version always
-  starts from a clean schema without forcing you to redo your accounts.
+- **Two layouts, one product** — an _Apple_ arrangement (folders, list and
+  reading pane side by side) and an _Outlook_ one (dense sortable table on
+  top, message underneath). Same palette, same shortcuts, same features;
+  pick whichever fits the work.
+- **Built for triage** — group by date or by sender, filter to unread or
+  flagged, select a whole group with one click, and act on the selection in
+  bulk. Field-scoped search (`da:` `a:` `oggetto:`) narrows to one field
+  instead of matching every Cc line and signature block.
+- **Server-side flags** — the `\Flagged` keyword round-trips through IMAP,
+  so a message you flag here shows up flagged in Outlook and iOS Mail too.
+- **Upgrade-safe migrations** — a version change clears only the caches that
+  can be rebuilt from the server. Accounts, signatures, preferences, contact
+  history and any table an extension owns are carried across untouched, and
+  a failed upgrade recovers them from a backup taken before it started.
 
 ## Roadmap
 

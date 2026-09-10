@@ -15,7 +15,7 @@ import { Input } from '@renderer/components/ui/input'
 import { Label } from '@renderer/components/ui/label'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
 import { htmlToPlainText, splitRecipients } from '@renderer/lib/email'
-import { MAIL_COMPOSER_DEFAULT_FONT_FAMILY } from '@renderer/lib/mail-fonts'
+import { MAIL_COMPOSER_DEFAULT_FONT_FAMILY } from '@shared/mail-fonts'
 import type {
   ComposeMailInput,
   MailAccount,
@@ -461,15 +461,29 @@ export function MailComposerDialog({
     ]
   )
 
+  // Resetting the draft when the dialog opens is a state adjustment, not a
+  // synchronisation with an external system, so it happens during render
+  // rather than in an effect — the shape React documents for "adjusting
+  // state when a prop changes". Doing it in an effect committed a throwaway
+  // render with the previous draft still on screen first.
+  const [wasOpen, setWasOpen] = useState(open)
+
+  if (open !== wasOpen) {
+    setWasOpen(open)
+
+    if (open) {
+      setAttachments(initialData?.attachments ? [...initialData.attachments] : [])
+      setEditorFocusMode(false)
+    }
+  }
+
   useEffect(() => {
     if (!open) {
       composerBootstrapRequestIdRef.current += 1
       return
     }
 
-    setAttachments(initialData?.attachments ? [...initialData.attachments] : [])
-    setEditorFocusMode(false)
-
+    // The signature does come from outside React, so fetching it stays here.
     const requestId = ++composerBootstrapRequestIdRef.current
     const applyInitialState = (signatureHtml: string | null): void => {
       if (requestId !== composerBootstrapRequestIdRef.current) {

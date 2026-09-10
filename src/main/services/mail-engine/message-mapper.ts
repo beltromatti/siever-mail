@@ -2,6 +2,7 @@ import type { FetchMessageObject, MessageAddressObject, MessageStructureObject }
 import type { ParsedMail } from 'mailparser'
 
 import type { MailAddress, MailAttachment, MailMessageDetail } from '@shared/models'
+import { deriveSenderKey, deriveSenderName } from '@shared/sender'
 
 import { extractPreview, parseMessagePayload } from './preview'
 
@@ -150,6 +151,11 @@ export function mergeSummaryAndParsedIntoDetail(
   const rawHtml = typeof parsed.html === 'string' ? parsed.html : undefined
   const html = rawHtml ? inlineCidReferences(rawHtml, parsed) : undefined
 
+  const from = pickAddresses(
+    mapAddresses(parsed.from?.value as MessageAddressObject[] | undefined),
+    mapAddresses(envelope?.from)
+  )
+
   return {
     accountId,
     folderPath,
@@ -157,10 +163,7 @@ export function mergeSummaryAndParsedIntoDetail(
     threadId: fetched.threadId,
     messageId: envelope?.messageId,
     subject,
-    from: pickAddresses(
-      mapAddresses(parsed.from?.value as MessageAddressObject[] | undefined),
-      mapAddresses(envelope?.from)
-    ),
+    from,
     to: pickAddresses(
       mapAddresses(parsed.to?.value as MessageAddressObject[] | undefined),
       mapAddresses(envelope?.to)
@@ -181,8 +184,11 @@ export function mergeSummaryAndParsedIntoDetail(
     previewHydrated: true,
     flags,
     isRead: flags.includes('\\Seen'),
+    isFlagged: flags.includes('\\Flagged'),
     hasAttachments: attachments.length > 0 || hasAttachmentInStructure(fetched.bodyStructure),
     size: fetched.size ?? fetched.source?.length ?? 0,
+    senderName: deriveSenderName(from),
+    senderKey: deriveSenderKey(from),
     html,
     text: parsed.text || undefined,
     attachments

@@ -1,6 +1,6 @@
 import DOMPurify, { type Config as DOMPurifyConfig } from 'dompurify'
 
-import { normalizeMailFontFamilyValue } from './mail-fonts'
+import { normalizeMailFontFamilyValue } from '@shared/mail-fonts'
 import centuryGothicRegularUrl from '../../../../resources/centurygothic.ttf?url'
 
 export interface NormalizedMailHtml {

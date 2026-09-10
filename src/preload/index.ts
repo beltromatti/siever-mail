@@ -19,10 +19,9 @@ const desktopMailApi: DesktopMailApi = {
   bootstrap: async () => ipcRenderer.invoke(IPC_CHANNELS.bootstrap),
   getAccountConnectionStates: async () =>
     ipcRenderer.invoke(IPC_CHANNELS.getAccountConnectionStates),
-  getInvertMessageListDefaultOrder: async () =>
-    ipcRenderer.invoke(IPC_CHANNELS.getInvertMessageListDefaultOrder),
-  setInvertMessageListDefaultOrder: async (value) =>
-    ipcRenderer.invoke(IPC_CHANNELS.setInvertMessageListDefaultOrder, value),
+  getUiPreferences: async () => ipcRenderer.invoke(IPC_CHANNELS.getUiPreferences),
+  setUiPreferences: async (preferences) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setUiPreferences, preferences),
   addGoogleAccount: async () => ipcRenderer.invoke(IPC_CHANNELS.addGoogleAccount),
   addImapAccount: async (input) => ipcRenderer.invoke(IPC_CHANNELS.addImapAccount, input),
   markAccountLastViewed: async (accountId) =>
@@ -43,6 +42,7 @@ const desktopMailApi: DesktopMailApi = {
   deleteMessage: async (ref) => ipcRenderer.invoke(IPC_CHANNELS.deleteMessage, ref),
   archiveMessage: async (ref) => ipcRenderer.invoke(IPC_CHANNELS.archiveMessage, ref),
   toggleSeen: async (input) => ipcRenderer.invoke(IPC_CHANNELS.toggleSeen, input),
+  toggleFlagged: async (input) => ipcRenderer.invoke(IPC_CHANNELS.toggleFlagged, input),
   sendMail: async (input) => ipcRenderer.invoke(IPC_CHANNELS.sendMail, input),
   suggestContacts: async (query, limit) =>
     ipcRenderer.invoke(IPC_CHANNELS.suggestContacts, query, limit),

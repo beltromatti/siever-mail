@@ -23,14 +23,16 @@ import type {
   MessageRef,
   MoveMessageInput,
   PickedAttachment,
-  ToggleSeenInput
+  ToggleFlaggedInput,
+  ToggleSeenInput,
+  UiPreferences
 } from './models'
 
 export const IPC_CHANNELS = {
   bootstrap: 'app:bootstrap',
   getAccountConnectionStates: 'app:get-account-connection-states',
-  getInvertMessageListDefaultOrder: 'app:get-invert-message-list-default-order',
-  setInvertMessageListDefaultOrder: 'app:set-invert-message-list-default-order',
+  getUiPreferences: 'app:get-ui-preferences',
+  setUiPreferences: 'app:set-ui-preferences',
   addGoogleAccount: 'account:add-google',
   addImapAccount: 'account:add-imap',
   markAccountLastViewed: 'account:mark-last-viewed',
@@ -46,6 +48,7 @@ export const IPC_CHANNELS = {
   deleteMessage: 'message:delete',
   archiveMessage: 'message:archive',
   toggleSeen: 'message:toggle-seen',
+  toggleFlagged: 'message:toggle-flagged',
   sendMail: 'message:send',
   pickAttachments: 'compose:pick-attachments',
   suggestContacts: 'contact:suggest',
@@ -78,8 +81,10 @@ export interface DesktopMailApi {
    * subscribed (typically during bootstrap).
    */
   getAccountConnectionStates: () => Promise<AccountConnectionState[]>
-  getInvertMessageListDefaultOrder: () => Promise<boolean>
-  setInvertMessageListDefaultOrder: (value: boolean) => Promise<boolean>
+  /** Every persisted view preference in one payload. */
+  getUiPreferences: () => Promise<UiPreferences>
+  /** Persists the whole record and echoes back what was actually stored. */
+  setUiPreferences: (preferences: UiPreferences) => Promise<UiPreferences>
   addGoogleAccount: () => Promise<MailAccount>
   addImapAccount: (input: AddImapAccountInput) => Promise<MailAccount>
   markAccountLastViewed: (accountId: string) => Promise<void>
@@ -99,6 +104,7 @@ export interface DesktopMailApi {
   deleteMessage: (ref: MessageRef) => Promise<void>
   archiveMessage: (ref: MessageRef) => Promise<void>
   toggleSeen: (input: ToggleSeenInput) => Promise<void>
+  toggleFlagged: (input: ToggleFlaggedInput) => Promise<void>
   sendMail: (input: ComposeMailInput) => Promise<void>
   suggestContacts: (query: string, limit?: number) => Promise<MailContactSuggestion[]>
   listAccountSignatures: () => Promise<MailAccountSignature[]>

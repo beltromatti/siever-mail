@@ -66,7 +66,7 @@ const LEADING_PUNCTUATION_PATTERN = /^[\s.!?:;,·•\-–—]+/
 // a short numeric / alphanumeric token fused to a decorative symbol, with no
 // letters of its own. Requires at least one decorative symbol so we do not
 // eat legitimate leading digits (e.g. "96 hours from now …").
-const LEADING_DECORATIVE_TOKEN_PATTERN = /^(?:\d+[*~=_#\-]+|[#*~=_-]+\d+)\s*/
+const LEADING_DECORATIVE_TOKEN_PATTERN = /^(?:\d+[*~=_#-]+|[#*~=_-]+\d+)\s*/
 
 // Image / asset placeholder prefixes that various html-to-text converters
 // (mailparser's own, the default for marketing senders) emit when an <img>
@@ -90,8 +90,7 @@ const EMBEDDED_PROTOCOL_URI_PATTERN = /<(?:mailto|tel|sms|callto|skype):[^>]*>/g
 //   font-family: Arial !important;                 — a bare property line
 // The selector list is bounded at 200 chars to prevent catastrophic backtracks.
 const CSS_RULE_BLOCK_PATTERN = /[^{}]{0,200}\{[^{}]*\}/g
-const CSS_PROPERTY_LINE_PATTERN =
-  /\b[a-z-]{2,32}\s*:\s*[^;{}\n]{1,120}!important\s*;?/gi
+const CSS_PROPERTY_LINE_PATTERN = /\b[a-z-]{2,32}\s*:\s*[^;{}\n]{1,120}!important\s*;?/gi
 
 // CSS `@media` / `@supports` / `@container` / `@document` preludes that leak
 // when the source byte cap sliced a <style> block mid-rule and the outer
@@ -112,7 +111,12 @@ const DECORATIVE_RUN_PATTERN = /[*_=~]{2,}|-{3,}|\.{3,}|[·•◦▪▫…]+/g
 // soft-hyphen U+00AD to inject an invisible pre-header that only shows up in
 // Gmail's inbox glance — a human never sees them, so they are pure noise for
 // us.
-const INVISIBLE_CHAR_PATTERN = /[­͏​-‏‪-‮⁠-⁯﻿]/g
+// Spelled out as escapes rather than pasted literally: every code point
+// here is invisible in an editor, so a raw soft hyphen or grapheme joiner
+// in the source cannot be reviewed and is easy for a formatter to mangle.
+// U+034F leads the class on purpose: it is a combining mark, and placing
+// it after a base character makes the pair read as one grapheme.
+const INVISIBLE_CHAR_PATTERN = /[\u034f\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/gu
 
 // Standalone single decorative symbols (an isolated `*`, `~`, `=`, `_` that
 // wasn't caught by `DECORATIVE_RUN_PATTERN` because it had no neighbours) —
@@ -140,7 +144,8 @@ const TRUNCATED_URL_TAIL_PATTERN = /\s*\b(?:https?:?\/*|www\.)\w*$/i
 
 // Labels whose content is itself a URL or an image resource path carry no
 // value as a preview — drop the whole `[label]` instead of keeping the URL.
-const URL_LIKE_LABEL_PATTERN = /^(?:https?:|www\.)|\.(?:png|jpe?g|gif|svg|webp|bmp|tif[f]?)(?:[?#]|$)/i
+const URL_LIKE_LABEL_PATTERN =
+  /^(?:https?:|www\.)|\.(?:png|jpe?g|gif|svg|webp|bmp|tif[f]?)(?:[?#]|$)/i
 
 // Latin + extended Latin + Greek + Cyrillic word characters of length ≥ 3.
 // Used only to assess whether a candidate string carries enough real content.
@@ -151,7 +156,7 @@ const MIN_MEANINGFUL_WORDS_FOR_TEXT = 4
 function collapseWhitespace(value: string): string {
   return value
     .replace(INVISIBLE_CHAR_PATTERN, '')
-    .replace(/[\s ]+/g, ' ')
+    .replace(/[\s\u00a0]+/g, ' ')
     .trim()
 }
 
@@ -244,17 +249,19 @@ const NAMED_ENTITY_TABLE: Record<string, string> = {
 }
 
 function decodeBasicEntities(value: string): string {
-  return value
-    .replace(/&([a-zA-Z][a-zA-Z0-9]*);/g, (match, name: string) => {
-      const replacement = NAMED_ENTITY_TABLE[name.toLowerCase()]
-      return replacement !== undefined ? replacement : match
-    })
-    .replace(/&#(\d+);/g, (_match, code: string) => decodeNumericEntity(code, 10))
-    .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) => decodeNumericEntity(code, 16))
-    // An entity whose closing `;` was sliced off by truncation leaks as
-    // literal `&zwn`, `&am`, `&#34` etc. Trim that tail so it doesn't hit
-    // the preview as visible garbage.
-    .replace(/&#?[a-zA-Z0-9]{0,9}$/, '')
+  return (
+    value
+      .replace(/&([a-zA-Z][a-zA-Z0-9]*);/g, (match, name: string) => {
+        const replacement = NAMED_ENTITY_TABLE[name.toLowerCase()]
+        return replacement !== undefined ? replacement : match
+      })
+      .replace(/&#(\d+);/g, (_match, code: string) => decodeNumericEntity(code, 10))
+      .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) => decodeNumericEntity(code, 16))
+      // An entity whose closing `;` was sliced off by truncation leaks as
+      // literal `&zwn`, `&am`, `&#34` etc. Trim that tail so it doesn't hit
+      // the preview as visible garbage.
+      .replace(/&#?[a-zA-Z0-9]{0,9}$/, '')
+  )
 }
 
 // Pragmatic HTML-to-text for preview generation. We don't need a full DOM: we
@@ -279,10 +286,7 @@ function stripHtmlForPreview(html: string): string {
 
   const withBlockBoundaries = withoutChrome
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(
-      /<\/(?:p|div|li|tr|td|th|h[1-6]|blockquote|section|article|header|footer)>/gi,
-      '\n'
-    )
+    .replace(/<\/(?:p|div|li|tr|td|th|h[1-6]|blockquote|section|article|header|footer)>/gi, '\n')
 
   const stripped = withBlockBoundaries
     .replace(/<[^>]+>/g, ' ')
@@ -294,50 +298,52 @@ function stripHtmlForPreview(html: string): string {
 }
 
 function scrubPromotionalNoise(text: string): string {
-  return text
-    // Clean up malformed CSS that leaked into the plain-text alternative
-    // BEFORE touching anything else — if we strip URLs first we change char
-    // offsets and the CSS-block regex can fail to match reliably.
-    // Bare `@media (…)` / `@supports (…)` preludes that outlived the `{ … }`
-    // block stripper because the source was truncated mid-rule run first — if
-    // we let URL/bracket cleaners go before them, `(max-width:480px)` inside
-    // the media query prelude would lose its parenthesised anchor.
-    .replace(CSS_MEDIA_QUERY_PATTERN, ' ')
-    .replace(CSS_RULE_BLOCK_PATTERN, ' ')
-    .replace(CSS_PROPERTY_LINE_PATTERN, ' ')
-    // `<mailto:…>` / `<tel:…>` style pseudo-tags left over by html-to-text
-    // conversions — they survive our HTML stripper because they originate
-    // inside the already-plain-text source.
-    .replace(EMBEDDED_PROTOCOL_URI_PATTERN, ' ')
-    .replace(MARKDOWN_LINK_PATTERN, (_match, label: string) => {
-      const cleaned = label.trim()
-      if (!cleaned || cleaned === '#') return ' '
-      // `[https://cdn.example/logo.png](link)` — the visible label is an image
-      // URL / asset path, which contributes nothing to a preview; drop entirely.
-      if (URL_LIKE_LABEL_PATTERN.test(cleaned)) return ' '
-      return cleaned
-    })
-    .replace(TRUNCATED_MARKDOWN_LINK_TAIL_PATTERN, ' ')
-    .replace(BRACKET_LABEL_PATTERN, (_match, label: string) => {
-      const cleaned = label.trim()
-      if (!cleaned) return ' '
-      if (URL_LIKE_LABEL_PATTERN.test(cleaned)) return ' '
-      return cleaned
-    })
-    .replace(EMPTY_ANCHOR_PATTERN, ' ')
-    .replace(URL_PATTERN, ' ')
-    .replace(TRUNCATED_URL_TAIL_PATTERN, ' ')
-    .replace(UNCLOSED_BRACKET_TAIL_PATTERN, ' ')
-    .replace(DECORATIVE_RUN_PATTERN, ' ')
-    .replace(STANDALONE_DECORATIVE_SYMBOL_PATTERN, '$1 ')
-    // After URLs / labels have been stripped, balanced delimiters are often
-    // left empty (e.g. `(  )` from `(https://example.com)`). Kill them before
-    // they reach the reader.
-    .replace(EMPTY_DELIMITER_PAIR_PATTERN, ' ')
-    // URL-encoded JSON payloads sometimes contain literal `{` / `}` / `"`;
-    // once the URL half is stripped the surviving orphan stands on its own
-    // surrounded by whitespace. Those are never content.
-    .replace(ORPHAN_SYMBOL_PATTERN, '$1 ')
+  return (
+    text
+      // Clean up malformed CSS that leaked into the plain-text alternative
+      // BEFORE touching anything else — if we strip URLs first we change char
+      // offsets and the CSS-block regex can fail to match reliably.
+      // Bare `@media (…)` / `@supports (…)` preludes that outlived the `{ … }`
+      // block stripper because the source was truncated mid-rule run first — if
+      // we let URL/bracket cleaners go before them, `(max-width:480px)` inside
+      // the media query prelude would lose its parenthesised anchor.
+      .replace(CSS_MEDIA_QUERY_PATTERN, ' ')
+      .replace(CSS_RULE_BLOCK_PATTERN, ' ')
+      .replace(CSS_PROPERTY_LINE_PATTERN, ' ')
+      // `<mailto:…>` / `<tel:…>` style pseudo-tags left over by html-to-text
+      // conversions — they survive our HTML stripper because they originate
+      // inside the already-plain-text source.
+      .replace(EMBEDDED_PROTOCOL_URI_PATTERN, ' ')
+      .replace(MARKDOWN_LINK_PATTERN, (_match, label: string) => {
+        const cleaned = label.trim()
+        if (!cleaned || cleaned === '#') return ' '
+        // `[https://cdn.example/logo.png](link)` — the visible label is an image
+        // URL / asset path, which contributes nothing to a preview; drop entirely.
+        if (URL_LIKE_LABEL_PATTERN.test(cleaned)) return ' '
+        return cleaned
+      })
+      .replace(TRUNCATED_MARKDOWN_LINK_TAIL_PATTERN, ' ')
+      .replace(BRACKET_LABEL_PATTERN, (_match, label: string) => {
+        const cleaned = label.trim()
+        if (!cleaned) return ' '
+        if (URL_LIKE_LABEL_PATTERN.test(cleaned)) return ' '
+        return cleaned
+      })
+      .replace(EMPTY_ANCHOR_PATTERN, ' ')
+      .replace(URL_PATTERN, ' ')
+      .replace(TRUNCATED_URL_TAIL_PATTERN, ' ')
+      .replace(UNCLOSED_BRACKET_TAIL_PATTERN, ' ')
+      .replace(DECORATIVE_RUN_PATTERN, ' ')
+      .replace(STANDALONE_DECORATIVE_SYMBOL_PATTERN, '$1 ')
+      // After URLs / labels have been stripped, balanced delimiters are often
+      // left empty (e.g. `(  )` from `(https://example.com)`). Kill them before
+      // they reach the reader.
+      .replace(EMPTY_DELIMITER_PAIR_PATTERN, ' ')
+      // URL-encoded JSON payloads sometimes contain literal `{` / `}` / `"`;
+      // once the URL half is stripped the surviving orphan stands on its own
+      // surrounded by whitespace. Those are never content.
+      .replace(ORPHAN_SYMBOL_PATTERN, '$1 ')
+  )
 }
 
 function countMeaningfulWords(cleanedText: string): number {

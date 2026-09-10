@@ -6,18 +6,18 @@ need to read, debug or extend the code.
 
 ## Stack
 
-| Layer        | Technology                                                |
-| ------------ | --------------------------------------------------------- |
-| Shell        | [Electron](https://www.electronjs.org/)                   |
-| Bundler      | [`electron-vite`](https://electron-vite.org/) + Vite      |
-| UI           | [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) |
-| Styling      | [TailwindCSS v4](https://tailwindcss.com/) + shadcn-style components |
-| Local store  | [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) + [Prisma](https://www.prisma.io/) (SQLite adapter) |
-| Mail engine  | [`imapflow`](https://imapflow.com/) (IMAP) + [`nodemailer`](https://nodemailer.com/) (SMTP) |
-| Gmail        | [`googleapis`](https://github.com/googleapis/google-api-nodejs-client) (OAuth, no Gmail HTTP API) |
-| Editor       | [Squire](https://github.com/fastmail/Squire) (rich-text)  |
-| HTML safety  | [DOMPurify](https://github.com/cure53/DOMPurify)          |
-| Tests        | [Vitest](https://vitest.dev/) + Testing Library + Playwright |
+| Layer       | Technology                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------------ |
+| Shell       | [Electron](https://www.electronjs.org/)                                                                            |
+| Bundler     | [`electron-vite`](https://electron-vite.org/) + Vite                                                               |
+| UI          | [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)                                     |
+| Styling     | [TailwindCSS v4](https://tailwindcss.com/) + shadcn-style components                                               |
+| Local store | [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) + [Prisma](https://www.prisma.io/) (SQLite adapter) |
+| Mail engine | [`imapflow`](https://imapflow.com/) (IMAP) + [`nodemailer`](https://nodemailer.com/) (SMTP)                        |
+| Gmail       | [`googleapis`](https://github.com/googleapis/google-api-nodejs-client) (OAuth, no Gmail HTTP API)                  |
+| Editor      | [Squire](https://github.com/fastmail/Squire) (rich-text)                                                           |
+| HTML safety | [DOMPurify](https://github.com/cure53/DOMPurify)                                                                   |
+| Tests       | [Vitest](https://vitest.dev/) + Testing Library + Playwright                                                       |
 
 ## Process topology
 
@@ -80,27 +80,51 @@ schema drift is self-healing.
 
 Key tables:
 
-| Table                | Purpose                                                |
-| -------------------- | ------------------------------------------------------ |
-| `accounts`           | Mail accounts (IMAP/Gmail). `encrypted_secret` stores the safeStorage-wrapped password / OAuth refresh token. |
-| `folders`            | Per-account folder metadata + sync cursors (UID validity, modseq). |
-| `messages`           | Message envelopes + body cache + attachments JSON. |
-| `contacts`           | Address-book learned from sent/received traffic.   |
-| `account_signatures` | One signature row per account.                     |
-| `app_preferences`    | Singleton row: app-wide UI preferences (currently the unified-inbox account selection). |
+| Table                | Purpose                                                                                                                                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `accounts`           | Mail accounts (IMAP/Gmail). `encrypted_secret` stores the safeStorage-wrapped password / OAuth refresh token.                                                                                                          |
+| `folders`            | Per-account folder metadata + sync cursors (UID validity, modseq).                                                                                                                                                     |
+| `messages`           | Message envelopes + body cache + attachments JSON. Also carries `is_flagged` and the denormalised `sender_name` / `sender_key`, which let the database order and group by sender without sorting the raw address JSON. |
+| `contacts`           | Address-book learned from sent/received traffic.                                                                                                                                                                       |
+| `account_signatures` | One signature row per account.                                                                                                                                                                                         |
+| `app_preferences`    | Singleton row of app-wide UI preferences: unified-inbox account selection, layout mode, list sort, grouping, inverted-order flag. Read and written as one `UiPreferences` record.                                      |
 
 Extensions may install additional tables of their own through the
 `database.applyDdl()` handle exposed at install time. They share the
 same SQLite connection (and therefore the same WAL) so cross-table
 transactions stay safe; the host never reads or writes them.
 
-Versioning of the local data is tracked separately in
-`userData/install-version.json`. The migration module compares this marker
-against `app.getVersion()` at startup; on mismatch it stashes login rows
-into `userData/.upgrade-credentials-stash.json`, wipes the database +
-ancillary caches, and restores the stash once the new schema is in place.
-This guarantees a clean upgrade with preserved logins, even across schema
-changes.
+### Upgrade lifecycle
+
+Versioning of the local data is tracked in `userData/install-version.json`.
+`src/main/services/data-migration.ts` splits the file into two categories and
+treats them oppositely:
+
+- **cache** — `messages` and `folders`. The IMAP server is their source of
+  truth and their shape changes between releases, so a version change drops
+  them and lets the next sync rebuild them.
+- **user data** — everything else: accounts, signatures, preferences, the
+  contact history, and any table an extension installed. None of it exists
+  anywhere else, so it is never touched.
+
+The flow is: `prepareUpgradeMigration()` runs before the database is opened
+and takes a WAL-checkpointed backup; the schema reconciles additively as
+usual; `finalizeUpgradeMigration()` then purges the cache tables and stamps
+the new marker — deliberately before the mail engine starts, so the purge
+cannot race an incoming sync.
+
+If the app never reaches the finalize step, the pending marker is still on
+disk at the next launch and the recovery path takes over: the unusable file
+is set aside, the app boots on a fresh schema, and every table the backup and
+the new schema share — minus the cache — is copied back. That copy walks
+`sqlite_master` instead of a hardcoded list, which is how extension-owned
+tables survive without the public host knowing their names.
+
+> Releases up to 1.7.1 did the opposite: they deleted the whole database and
+> restored only accounts and signatures, silently destroying the SIEVER
+> archive root, every manually-added practice and the app preferences on each
+> update. `src/main/services/data-migration.test.ts` covers the new
+> behaviour, including the recovery path.
 
 ## Mail engine
 
@@ -122,9 +146,10 @@ reacts to events.
 
 `App.tsx` owns the top-level state:
 
-- Selected account, selected folder, selected message ref.
+- Selected account, selected folder.
 - The page-of-messages currently rendered + total count.
-- Multi-selection state.
+- The selection (see below).
+- The persisted `UiPreferences` record and the transient list filter.
 - Composer / settings / archive dialog open flags.
 - A normalised map of per-account connection statuses (used by the online /
   offline indicator in the header).
@@ -132,6 +157,64 @@ reacts to events.
 The IPC bridge exposed at `window.mailApi` is the single source of truth for
 all data; renderer state is essentially a denormalised cache of what the
 main process tells it via the four event channels above.
+
+### Selection model
+
+`src/renderer/src/lib/message-selection.ts` keeps two notions apart:
+
+- the **selection** — every row an action applies to;
+- the **cursor** — the row the keyboard is on, and the pivot a Shift range
+  measures from.
+
+Conflating them is what made a Ctrl-clicked row keep its highlight after
+being removed from the selection. They are one state value so every mutation
+commits atomically, and the list paints them differently: a fill for
+selected, an inset ring for the cursor. Mouse and keyboard follow the
+Explorer/Finder conventions — plain click replaces, Ctrl/Cmd toggles, Shift
+extends, `Ctrl/Cmd+A` selects all, `Esc` collapses to the cursor.
+
+The reading pane follows a selection of exactly one; above that it shows a
+summary and the toolbar acts on the whole set.
+
+### Layouts
+
+`src/renderer/src/features/workspace/workspace-layout.tsx` holds the two
+arrangements (`apple`, `outlook`). Both receive identical props and share
+every component inside them — only the geometry differs, plus which list
+shell fills the message slot (`message-list.tsx` vs `message-table.tsx`).
+Both shells implement `MessageListViewProps`, so the layout is a one-line
+preference rather than a fork in the state logic.
+
+### Grouping
+
+`src/renderer/src/lib/message-sections.ts` slices an already-ordered page
+into labelled runs. The database does the ordering: sender grouping asks the
+query to order by sender first so each run arrives contiguous. Section keys
+carry the run's ordinal because the same sender can legitimately appear in
+several runs while a re-ordered page is still in flight — duplicate React
+keys there break reconciliation and strand DOM nodes.
+
+### Search grammar
+
+`src/shared/search.ts` is parsed once and consumed by both sides: the main
+process turns the result into a Prisma `WHERE`, the renderer uses the same
+terms to highlight matches, so a row can never be "returned but not
+highlighted". Whitespace ANDs, a bare `OR` alternates, quotes make a phrase,
+and a `da:` / `a:` / `oggetto:` prefix (with the English `from:` / `to:` /
+`subject:` as aliases) confines a term to one field. Scoped terms only
+highlight the field they matched on.
+
+## Testing
+
+`npm test` runs two vitest projects: `main` on the node environment (main
+process and shared code) and `renderer` on jsdom. Path aliases mirror
+`electron.vite.config.ts`, and `@app/extension/*` resolves to the drop-in
+when one is checked out — so an extension can ship its own tests and they run
+with the host's suite. The `extension/**` globs are inert in the public
+repository, where the directory simply does not exist.
+
+`better-sqlite3` is rebuilt against Electron's ABI, so plain Node cannot load
+it; tests that need SQLite mock it over Node's built-in `node:sqlite`.
 
 ## Theming
 
@@ -188,14 +271,14 @@ resolution policy. A build-time constant `__APP_BUILD_VARIANT__`
 
 Defined in [`src/extension/types.ts`](../src/extension/types.ts):
 
-| Surface                             | Where it shows up                                      |
-| ----------------------------------- | ------------------------------------------------------ |
-| `defaultAccountSignatureHtml`       | Auto-applied to the very first account a user adds     |
-| `toolbarActions[]`                  | Buttons next to "Nuovo messaggio" in the mail toolbar  |
-| `settingsTabs[]`                    | Extra tabs after the core tabs in the Settings dialog  |
-| `PrimaryActionDialog`               | Optional dialog mounted at the renderer root           |
-| `install(context)`                  | IPC handlers, DDL, startup hooks                       |
-| `ExtensionPreloadInstaller`         | Additional methods merged onto `window.mailApi`        |
+| Surface                       | Where it shows up                                     |
+| ----------------------------- | ----------------------------------------------------- |
+| `defaultAccountSignatureHtml` | Auto-applied to the very first account a user adds    |
+| `toolbarActions[]`            | Buttons next to "Nuovo messaggio" in the mail toolbar |
+| `settingsTabs[]`              | Extra tabs after the core tabs in the Settings dialog |
+| `PrimaryActionDialog`         | Optional dialog mounted at the renderer root          |
+| `install(context)`            | IPC handlers, DDL, startup hooks                      |
+| `ExtensionPreloadInstaller`   | Additional methods merged onto `window.mailApi`       |
 
 The host is responsible for state coordination: it tracks which selected
 messages a toolbar action sees, opens/closes the primary dialog, and

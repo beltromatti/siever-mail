@@ -102,11 +102,6 @@ export interface ExtensionRenderer {
   readonly id: string
   readonly displayName: string
   /**
-   * Default signature mirrored on the renderer side so the composer can
-   * surface it without round-tripping to the main process.
-   */
-  readonly defaultAccountSignatureHtml: string
-  /**
    * Buttons rendered inline in the primary toolbar, immediately after
    * the built-in "Nuovo messaggio" action. Each receives the current
    * selection and a host-managed callback to trigger the primary
@@ -196,5 +191,10 @@ export interface ExtensionHostHooks {
  * `ipcRenderer`; the returned object is merged into the bridge surface
  * exposed on `window.mailApi`. Public builds return an empty object, so
  * `window.mailApi` carries only the host's own API in the public bundle.
+ *
+ * The return type is `object` rather than `Record<string, unknown>` on
+ * purpose: an extension naturally declares its bridge as a named interface,
+ * and TypeScript refuses to assign an interface to an index-signature type.
+ * The host only ever spreads the result, so the wider type costs nothing.
  */
-export type ExtensionPreloadInstaller = (ipcRenderer: IpcRenderer) => Record<string, unknown>
+export type ExtensionPreloadInstaller = (ipcRenderer: IpcRenderer) => object

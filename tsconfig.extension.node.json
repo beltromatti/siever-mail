@@ -1,0 +1,32 @@
+{
+  // Type-checks the main/preload halves of the optional extension drop-in.
+  //
+  // `npm run typecheck` deliberately resolves `@app/extension/*` to the public
+  // stubs in `src/extension/`, so it never sees the drop-in's code. Without
+  // this config the private tree was only ever validated by `electron-vite
+  // build`, which strips types with esbuild and reports nothing.
+  //
+  // The `extension/` directory is gitignored: this file is a no-op unless a
+  // drop-in is checked out alongside the host (see `npm run typecheck:ext`).
+  "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
+  "include": [
+    "src/main/**/*",
+    "src/preload/**/*",
+    "src/shared/**/*",
+    "src/extension/types.ts",
+    "extension/main/**/*",
+    "extension/preload/**/*"
+  ],
+  "compilerOptions": {
+    "composite": false,
+    "types": ["electron-vite/node"],
+    "baseUrl": ".",
+    "paths": {
+      "@main/*": ["src/main/*"],
+      "@shared/*": ["src/shared/*"],
+      "@app/extension/main": ["extension/main/index.ts"],
+      "@app/extension/preload": ["extension/preload/index.ts"],
+      "@app/extension/types": ["src/extension/types.ts"]
+    }
+  }
+}

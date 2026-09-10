@@ -45,8 +45,23 @@ export interface MailMessageSummary {
   previewHydrated: boolean
   flags: string[]
   isRead: boolean
+  /**
+   * Mirror of the IMAP `\\Flagged` keyword — the same "contrassegna"
+   * Outlook and iOS Mail show as a flag. It is a server-side flag, so
+   * toggling it here shows up on every other client of the account.
+   */
+  isFlagged: boolean
   hasAttachments: boolean
   size: number
+  /**
+   * Display name of the first sender, falling back to its address. Stored
+   * denormalised so the database can order and group on it directly
+   * instead of sorting the raw serialized address JSON — which would file
+   * every nameless sender in its own block.
+   */
+  senderName: string
+  /** Lowercased address of the first sender. The grouping key. */
+  senderKey: string
 }
 
 export interface MailMessageDetail extends MailMessageSummary {
@@ -56,7 +71,7 @@ export interface MailMessageDetail extends MailMessageSummary {
   attachments: MailAttachment[]
 }
 
-export type MessageListSortField = 'date' | 'sender' | 'subject'
+export type MessageListSortField = 'date' | 'sender' | 'subject' | 'size'
 export type MessageListSortDirection = 'asc' | 'desc'
 
 export interface MailMessageListSort {
@@ -64,13 +79,83 @@ export interface MailMessageListSort {
   direction: MessageListSortDirection
 }
 
+/**
+ * How the list breaks its rows into labelled sections.
+ *   • 'none'   — one flat run.
+ *   • 'date'   — Oggi / Ieri / this week / month / year buckets. Only
+ *                meaningful while the list is ordered by date, so the UI
+ *                falls back to a flat run under any other sort.
+ *   • 'sender' — one section per sender. The database orders by sender
+ *                first so each section is a single contiguous run, and the
+ *                active sort still decides the order *inside* it.
+ */
+export type MessageGroupingMode = 'none' | 'date' | 'sender'
+
+/**
+ * Transient view filter above the list — the "Tutto / Non letti" tabs every
+ * mail client puts there, plus the flagged view that gives the
+ * `\\Flagged` keyword somewhere to lead.
+ *
+ * Deliberately not persisted: a filter that survives a restart is how people
+ * end up convinced their mail has disappeared.
+ */
+export type MessageListFilter = 'all' | 'unread' | 'flagged'
+
+export const DEFAULT_MESSAGE_LIST_FILTER: MessageListFilter = 'all'
+
+/**
+ * The two shells the workspace can wear. Both share the same palette,
+ * spacing scale and components — they differ in how the three panes are
+ * arranged and how dense the rows are.
+ *   • 'apple'   — folders / list / reading pane side by side, list rendered
+ *                 as compact multi-line rows.
+ *   • 'outlook' — folders on the left, a dense single-line table on top and
+ *                 the reading pane underneath it.
+ */
+export type MailLayoutMode = 'apple' | 'outlook'
+
 export const DEFAULT_MESSAGE_LIST_SORT_FIELD: MessageListSortField = 'date'
 export const DEFAULT_MESSAGE_LIST_SORT_DIRECTION: MessageListSortDirection = 'desc'
+export const DEFAULT_MESSAGE_GROUPING_MODE: MessageGroupingMode = 'date'
+export const DEFAULT_MAIL_LAYOUT_MODE: MailLayoutMode = 'apple'
+
+/**
+ * Every persisted view preference in one payload. Kept as a single record
+ * (rather than a channel per toggle) so adding the next one costs nothing
+ * and the renderer only has one thing to load and one thing to save.
+ */
+export interface UiPreferences {
+  layoutMode: MailLayoutMode
+  /**
+   * Renders the list upside-down: same order, but the newest row sits at
+   * the visual bottom and the viewport starts anchored there. A pure
+   * presentation flip — `messageListSort` is untouched.
+   */
+  invertMessageListOrder: boolean
+  messageListSort: MailMessageListSort
+  messageGrouping: MessageGroupingMode
+}
+
+export const DEFAULT_UI_PREFERENCES: UiPreferences = {
+  layoutMode: DEFAULT_MAIL_LAYOUT_MODE,
+  invertMessageListOrder: false,
+  messageListSort: {
+    field: DEFAULT_MESSAGE_LIST_SORT_FIELD,
+    direction: DEFAULT_MESSAGE_LIST_SORT_DIRECTION
+  },
+  messageGrouping: DEFAULT_MESSAGE_GROUPING_MODE
+}
 
 export interface ListMessagesOptions {
   limit?: number
   query?: string
   sort?: MailMessageListSort
+  /**
+   * When 'sender', the query orders by sender before applying `sort`, so
+   * the renderer can slice the page into contiguous per-sender sections.
+   */
+  grouping?: MessageGroupingMode
+  filter?: MessageListFilter
 }
 
 export const MESSAGE_LIST_PAGE_SIZE = 100
@@ -141,6 +226,10 @@ export interface MoveMessageInput extends MessageRef {
 
 export interface ToggleSeenInput extends MessageRef {
   seen: boolean
+}
+
+export interface ToggleFlaggedInput extends MessageRef {
+  flagged: boolean
 }
 
 export interface ComposeAttachmentInput {

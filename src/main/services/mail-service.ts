@@ -33,13 +33,16 @@ import type {
   MessageRef,
   MoveMessageInput,
   PickedAttachment,
+  ToggleFlaggedInput,
   ToggleSeenInput,
+  UiPreferences,
   UnifiedInboxPreferences,
   UnifiedInboxSummary
 } from '@shared/models'
 import { ALL_INBOX_FOLDER_PATH, MESSAGE_LIST_PAGE_SIZE } from '@shared/models'
 
 import { AppDatabase } from './database'
+import type { MigrationSqlExecutor } from './data-migration'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
 import { GoogleOAuthService } from './google-oauth'
 import { MailEngine } from './mail-engine'
@@ -99,6 +102,16 @@ const accountSignatureInputSchema = z.object({
   accountId: z.string().trim().min(1),
   html: z.string().max(MAX_ACCOUNT_SIGNATURE_HTML_LENGTH)
 })
+const uiPreferencesSchema = z.object({
+  layoutMode: z.enum(['apple', 'outlook']),
+  invertMessageListOrder: z.boolean(),
+  messageListSort: z.object({
+    field: z.enum(['date', 'sender', 'subject', 'size']),
+    direction: z.enum(['asc', 'desc'])
+  }),
+  messageGrouping: z.enum(['none', 'date', 'sender'])
+})
+
 const unifiedInboxIncludedAccountsSchema = z.array(z.string().trim().min(1))
 
 const CONTACT_SUGGESTION_LIMIT_DEFAULT = 12
@@ -178,6 +191,29 @@ export class MailService {
       getMainWindow: () =>
         BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null
     })
+  }
+
+  /**
+   * Opens the database and reconciles its schema without touching the
+   * network. Split out of `start()` so the upgrade migration can finish
+   * its work — purging the resyncable cache tables, replaying a recovery
+   * backup — on a schema that already exists but that no IMAP sync has
+   * begun writing to yet.
+   */
+  async prepareStorage(): Promise<void> {
+    await this.database.waitUntilReady()
+  }
+
+  /**
+   * SQL surface handed to the upgrade migration's finalize step. It runs on
+   * the host's own connection on purpose: a second handle to the same file
+   * would contend on the WAL and make `VACUUM` fail with SQLITE_BUSY.
+   */
+  createMigrationExecutor(): MigrationSqlExecutor {
+    return {
+      run: (sql, params) => this.database.runRawSql(sql, params),
+      all: (sql, params) => this.database.runRawSqlQuery(sql, params)
+    }
   }
 
   async start(): Promise<void> {
@@ -335,14 +371,19 @@ export class MailService {
     return this.engine.snapshotAccountConnectionStates()
   }
 
-  async getInvertMessageListDefaultOrder(): Promise<boolean> {
-    return this.database.getInvertMessageListDefaultOrder()
+  async getUiPreferences(): Promise<UiPreferences> {
+    return this.database.getUiPreferences()
   }
 
-  async setInvertMessageListDefaultOrder(value: boolean): Promise<boolean> {
-    const normalized = Boolean(value)
-    await this.database.setInvertMessageListDefaultOrder(normalized)
-    return normalized
+  /**
+   * Validates and stores the whole preference record, then echoes back what
+   * was actually persisted so the renderer's state can never drift from the
+   * database (a value the schema rejects comes back as its default).
+   */
+  async setUiPreferences(preferences: UiPreferences): Promise<UiPreferences> {
+    const payload = uiPreferencesSchema.parse(preferences)
+    await this.database.setUiPreferences(payload)
+    return this.database.getUiPreferences()
   }
 
   async getUnifiedInboxPreferences(): Promise<UnifiedInboxPreferences> {
@@ -387,10 +428,24 @@ export class MailService {
     const limit = normalizeMessageListLimit(options?.limit)
     const query = options?.query?.trim()
     const sort = options?.sort
-    const messages = await this.database.listMessages(accountId, folderPath, limit, query, sort)
-    const totalInQuery = await this.database.countMessages(accountId, folderPath, query)
+    const grouping = options?.grouping
+    const filter = options?.filter
+    const messages = await this.database.listMessages(
+      accountId,
+      folderPath,
+      limit,
+      query,
+      sort,
+      grouping,
+      filter
+    )
+    const totalInQuery = await this.database.countMessages(accountId, folderPath, query, filter)
     const folder = await this.database.getFolder(accountId, folderPath)
-    const folderTotal = query ? totalInQuery : (folder?.messageCount ?? totalInQuery)
+    // A narrowed view reports what it actually holds; only the unfiltered
+    // folder can lean on the server-side message count, which knows about
+    // rows the local cache has not pulled down yet.
+    const isNarrowed = Boolean(query) || (filter && filter !== 'all')
+    const folderTotal = isNarrowed ? totalInQuery : (folder?.messageCount ?? totalInQuery)
     const total = Math.max(totalInQuery, folderTotal)
 
     return {
@@ -406,6 +461,7 @@ export class MailService {
     const limit = normalizeMessageListLimit(options?.limit)
     const query = options?.query?.trim()
     const sort = options?.sort
+    const filter = options?.filter
     const mailboxes = await this.engine.resolveUnifiedInboxMailboxes()
 
     if (mailboxes.length === 0) {
@@ -417,12 +473,20 @@ export class MailService {
       }
     }
 
-    const messages = await this.database.listMessagesInMailboxes(mailboxes, limit, query, sort)
-    const totalInQuery = query
-      ? await this.database.countMessagesInMailboxes(mailboxes, query)
+    const messages = await this.database.listMessagesInMailboxes(
+      mailboxes,
+      limit,
+      query,
+      sort,
+      options?.grouping,
+      filter
+    )
+    const isNarrowed = Boolean(query) || (filter && filter !== 'all')
+    const totalInQuery = isNarrowed
+      ? await this.database.countMessagesInMailboxes(mailboxes, query, filter)
       : await this.computeUnifiedMessageCount(mailboxes)
     const summary = await this.engine.computeUnifiedInboxSummary()
-    const folderTotal = query ? totalInQuery : summary.messageCount
+    const folderTotal = isNarrowed ? totalInQuery : summary.messageCount
     const total = Math.max(totalInQuery, folderTotal)
 
     return {
@@ -489,6 +553,14 @@ export class MailService {
     await this.engine.toggleSeen(
       { accountId: input.accountId, folderPath: input.folderPath, uid: input.uid },
       input.seen
+    )
+  }
+
+  async toggleFlagged(input: ToggleFlaggedInput): Promise<void> {
+    await this.ensureAccountExists(input.accountId)
+    await this.engine.toggleFlagged(
+      { accountId: input.accountId, folderPath: input.folderPath, uid: input.uid },
+      input.flagged
     )
   }
 

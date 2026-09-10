@@ -3,7 +3,7 @@
 /* Extension drop-in is gitignored, which would normally hide it from
    Tailwind's automatic source detection — explicitly opt the directory in
    so classes only used in extension/* land in the bundle. */
-@source "../../../../extension/**/*.{ts,tsx}";
+@source '../../../../extension/**/*.{ts,tsx}';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -93,6 +93,18 @@
     @apply border-border;
   }
 
+  /*
+    Keyboard focus is branded everywhere, including on plain <button>s that
+    do not opt into the ring utilities. Without this, Chrome paints its own
+    amber default outline, which looked like a stray warning colour next to
+    the app's blue focus ring. Components that declare `outline-none` plus a
+    `focus-visible:ring-*` simply override this.
+  */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring) / 0.75);
+    outline-offset: 2px;
+  }
+
   body {
     @apply bg-background text-foreground font-sans antialiased;
     margin: 0;
@@ -135,6 +147,34 @@
     background-color: hsl(var(--card) / 0.82);
     backdrop-filter: blur(16px);
     border: 1px solid hsl(var(--border) / 0.72);
+  }
+
+  /*
+    Dialog surface. Deliberately more translucent than .glass-panel: dialogs
+    float over the workspace and the user often needs to keep an eye on what
+    is underneath (the archive wizard asks for a folder name while the
+    relevant message and folder listing sit behind it). Heavy blur plus a
+    specular top edge is what keeps that legible instead of muddy — the
+    "water drop" read, rather than a flat scrim.
+  */
+  .glass-dialog {
+    background-color: hsl(var(--popover) / 0.78);
+    backdrop-filter: blur(28px) saturate(140%);
+    border: 1px solid hsl(var(--border) / 0.85);
+    box-shadow:
+      0 24px 60px -12px hsl(var(--background) / 0.9),
+      0 2px 10px -2px hsl(var(--background) / 0.6),
+      inset 0 1px 0 0 hsl(0 0% 100% / 0.07);
+  }
+
+  /*
+    Sticky section heading inside a scrolling message list (Oggi / Ieri /
+    one per sender). Opaque enough to hide rows scrolling underneath it
+    while still reading as part of the panel.
+  */
+  .list-section-heading {
+    background-color: hsl(var(--card) / 0.94);
+    backdrop-filter: blur(10px);
   }
 
   .display-title {

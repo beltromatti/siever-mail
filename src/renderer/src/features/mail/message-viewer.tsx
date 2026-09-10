@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Archive,
   ArrowRight,
+  CheckCheck,
+  Flag,
   FolderInput,
   Forward,
   LoaderCircle,
@@ -15,7 +17,6 @@ import {
   Trash2
 } from 'lucide-react'
 
-import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import {
   DropdownMenu,
@@ -32,7 +33,7 @@ import {
   TooltipTrigger
 } from '@renderer/components/ui/tooltip'
 import { buildMailFrameDocument, sanitizeMailHtml } from '@renderer/lib/mail-html'
-import { formatAddress, formatDateLabel } from '@renderer/lib/utils'
+import { cn, formatAddress, formatDateLabel } from '@renderer/lib/utils'
 import type { MailFolder, MailMessageDetail } from '@shared/models'
 
 interface MessageViewerProps {
@@ -40,6 +41,13 @@ interface MessageViewerProps {
   message: MailMessageDetail | null
   loading?: boolean
   isExpanded: boolean
+  /**
+   * How many messages are selected. Above one the pane shows a summary
+   * instead of a body: reading one message while acting on twelve is a
+   * mismatch every mail client avoids, and it is the state the toolbar's
+   * bulk actions belong to.
+   */
+  selectedCount: number
   onReply: () => void
   onForward: () => void
   onArchive: () => void
@@ -47,6 +55,7 @@ interface MessageViewerProps {
   onMoveToFolder: (folderPath: string) => void
   onToggleExpanded: () => void
   onToggleSeen: (seen: boolean) => void
+  onToggleFlagged: (flagged: boolean) => void
   onDownloadAttachment: (attachmentId: string) => Promise<void>
 }
 
@@ -254,6 +263,7 @@ export function MessageViewer({
   message,
   loading,
   isExpanded,
+  selectedCount,
   onReply,
   onForward,
   onArchive,
@@ -261,6 +271,7 @@ export function MessageViewer({
   onMoveToFolder,
   onToggleExpanded,
   onToggleSeen,
+  onToggleFlagged,
   onDownloadAttachment
 }: MessageViewerProps): React.JSX.Element {
   const [downloadingAttachmentIds, setDownloadingAttachmentIds] = useState<string[]>([])
@@ -292,79 +303,112 @@ export function MessageViewer({
     }
   }
 
+  if (selectedCount > 1) {
+    return (
+      <div className="glass-panel flex h-full min-h-0 flex-col items-center justify-center rounded-lg p-8 text-center">
+        <div className="bg-primary/12 text-primary rounded-full p-3">
+          <CheckCheck className="size-6" />
+        </div>
+        <p className="mt-4 text-base font-semibold">{selectedCount} messaggi selezionati</p>
+        <p className="text-muted-foreground mt-1.5 max-w-sm text-xs">
+          Usa la barra in alto per archiviare, spostare, contrassegnare o eliminare l&apos;intera
+          selezione in un colpo solo.
+        </p>
+      </div>
+    )
+  }
+
   if (!message) {
     if (loading) {
       return (
-        <div className="glass-panel flex h-full min-h-0 flex-col items-center justify-center rounded-xl p-10 text-center">
-          <LoaderCircle className="text-primary size-6 animate-spin" />
-          <p className="text-muted-foreground mt-3 text-sm">Caricamento email...</p>
+        <div className="glass-panel flex h-full min-h-0 flex-col items-center justify-center rounded-lg p-8 text-center">
+          <LoaderCircle className="text-primary size-5 animate-spin" />
+          <p className="text-muted-foreground mt-3 text-xs">Caricamento email…</p>
         </div>
       )
     }
 
     return (
-      <div className="glass-panel flex h-full min-h-0 flex-col items-center justify-center rounded-xl p-10 text-center">
-        <div className="bg-secondary/65 text-muted-foreground rounded-full p-4">
-          <MailPlus className="size-7" />
+      <div className="glass-panel flex h-full min-h-0 flex-col items-center justify-center rounded-lg p-8 text-center">
+        <div className="bg-secondary/65 text-muted-foreground rounded-full p-3">
+          <MailPlus className="size-6" />
         </div>
-        <h3 className="display-title mt-5 text-3xl">Seleziona un messaggio</h3>
-        <p className="text-muted-foreground mt-2 max-w-md text-sm">
-          Apri un&apos;email dalla lista centrale per leggere contenuto, allegati e rispondere
-          rapidamente.
+        <p className="mt-4 text-sm font-semibold">Nessun messaggio selezionato</p>
+        <p className="text-muted-foreground mt-1.5 max-w-sm text-xs">
+          Seleziona un&apos;email dalla lista per leggerne il contenuto e gli allegati.
         </p>
       </div>
     )
   }
 
   return (
-    <div className="glass-panel flex h-full min-h-0 flex-col rounded-xl">
-      <div className="border-border space-y-4 border-b p-5">
-        <div className="flex items-start justify-between gap-3">
-          <h2 className="display-title text-3xl leading-tight font-bold">{message.subject}</h2>
-          <TooltipProvider delayDuration={120}>
+    <div className="glass-panel flex h-full min-h-0 flex-col overflow-hidden rounded-lg">
+      <div className="border-border/60 space-y-2.5 border-b px-3.5 py-2.5">
+        <div className="flex items-start justify-between gap-2">
+          <h2 className="min-w-0 text-[15px] leading-snug font-semibold">{message.subject}</h2>
+          <TooltipProvider delayDuration={140}>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="mt-1"
+                  className="text-muted-foreground hover:text-foreground size-7 shrink-0"
                   onClick={onToggleExpanded}
-                  title={isExpanded ? 'Comprimi vista messaggio' : 'Espandi vista messaggio'}
+                  aria-label={isExpanded ? 'Comprimi vista messaggio' : 'Espandi vista messaggio'}
                 >
-                  {isExpanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+                  {isExpanded ? (
+                    <Minimize2 className="size-3.5" />
+                  ) : (
+                    <Maximize2 className="size-3.5" />
+                  )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">
+              <TooltipContent side="left">
                 {isExpanded ? 'Comprimi vista messaggio' : 'Espandi vista messaggio'}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="secondary" size="sm" className="gap-1.5" onClick={onReply}>
-            <Reply className="size-4" /> Rispondi
+        <div className="flex flex-wrap items-center gap-1">
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-[11.5px]"
+            onClick={onReply}
+          >
+            <Reply className="size-3.5" /> Rispondi
           </Button>
-          <Button variant="ghost" size="sm" className="gap-1.5" onClick={onForward}>
-            <Forward className="size-4" /> Inoltra
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-[11.5px]"
+            onClick={onForward}
+          >
+            <Forward className="size-3.5" /> Inoltra
           </Button>
-          <Button variant="ghost" size="sm" className="gap-1.5" onClick={onArchive}>
-            <Archive className="size-4" /> Archivia
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-[11.5px]"
+            onClick={onArchive}
+          >
+            <Archive className="size-3.5" /> Archivia
           </Button>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="gap-1.5">
-                <FolderInput className="size-4" /> Sposta
+              <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-[11.5px]">
+                <FolderInput className="size-3.5" /> Sposta
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
               {folders
                 .filter((folder) => folder.path !== message.folderPath)
                 .map((folder) => (
                   <DropdownMenuItem
                     key={folder.path}
-                    className="cursor-pointer"
+                    className="cursor-pointer text-[12px]"
                     onClick={() => onMoveToFolder(folder.path)}
                   >
                     {folder.name}
@@ -376,49 +420,69 @@ export function MessageViewer({
           <Button
             variant="ghost"
             size="sm"
-            className="gap-1.5"
+            className="h-7 gap-1.5 px-2 text-[11.5px]"
             onClick={() => onToggleSeen(!message.isRead)}
           >
-            <MailOpen className="size-4" />
+            <MailOpen className="size-3.5" />
             {message.isRead ? 'Segna non letta' : 'Segna letta'}
           </Button>
-          <Button variant="destructive" size="sm" className="gap-1.5" onClick={onDelete}>
-            <Trash2 className="size-4" /> Elimina
+
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              'h-7 gap-1.5 px-2 text-[11.5px]',
+              message.isFlagged && 'text-status-offline'
+            )}
+            onClick={() => onToggleFlagged(!message.isFlagged)}
+          >
+            <Flag className={cn('size-3.5', message.isFlagged && 'fill-current')} />
+            {message.isFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-destructive hover:bg-destructive/15 hover:text-destructive h-7 gap-1.5 px-2 text-[11.5px]"
+            onClick={onDelete}
+          >
+            <Trash2 className="size-3.5" /> Elimina
           </Button>
         </div>
 
-        <div className="bg-muted/30 text-muted-foreground grid gap-1 rounded-lg p-3 text-xs md:grid-cols-[80px,1fr]">
+        <div className="text-muted-foreground grid grid-cols-[3rem_1fr] gap-x-2 gap-y-0.5 text-[11px]">
           <span>Da</span>
-          <span className="text-foreground font-medium">{addressesToLabel(message.from)}</span>
+          <span className="text-foreground min-w-0 truncate font-medium">
+            {addressesToLabel(message.from)}
+          </span>
           <span>A</span>
-          <span>{addressesToLabel(message.to)}</span>
+          <span className="min-w-0 truncate">{addressesToLabel(message.to)}</span>
           {message.cc.length > 0 && (
             <>
               <span>Cc</span>
-              <span>{addressesToLabel(message.cc)}</span>
+              <span className="min-w-0 truncate">{addressesToLabel(message.cc)}</span>
             </>
           )}
           <span>Data</span>
-          <span>{formatDateLabel(message.date)}</span>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {!message.isRead && <Badge variant="default">NUOVA</Badge>}
-          {message.hasAttachments && (
-            <Badge variant="muted" className="gap-1.5">
-              <Paperclip className="size-3.5" /> {message.attachments.length} allegati
-            </Badge>
-          )}
-          {loading && (
-            <Badge variant="accent" className="gap-1.5">
-              <ArrowRight className="size-3.5 animate-pulse" /> Aggiornamento...
-            </Badge>
-          )}
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate">{formatDateLabel(message.date)}</span>
+            {message.hasAttachments && (
+              <span className="inline-flex shrink-0 items-center gap-1">
+                <Paperclip className="size-3" />
+                {message.attachments.length || ''}
+              </span>
+            )}
+            {loading && (
+              <span className="text-primary inline-flex shrink-0 items-center gap-1">
+                <ArrowRight className="size-3 animate-pulse" /> Aggiornamento…
+              </span>
+            )}
+          </span>
         </div>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1 px-1">
-        <div className="p-5">
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="p-3.5">
           {hasHtmlBody && message.html ? (
             <EmailHtmlFrame
               key={`${message.accountId}:${message.folderPath}:${message.uid}`}
@@ -433,9 +497,9 @@ export function MessageViewer({
 
           {message.attachments.length > 0 && (
             <>
-              <Separator className="my-6" />
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold">Allegati</h4>
+              <Separator className="my-4" />
+              <div className="space-y-1.5">
+                <h4 className="text-[12px] font-semibold">Allegati</h4>
                 <div className="grid gap-2 md:grid-cols-2">
                   {message.attachments.map((attachment) => {
                     const isDownloading = downloadingAttachmentIds.includes(attachment.id)
@@ -449,8 +513,12 @@ export function MessageViewer({
                         disabled={isDownloading}
                       >
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold">{attachment.fileName}</p>
-                          <p className="text-muted-foreground text-xs">{attachment.contentType}</p>
+                          <p className="truncate text-[12px] font-semibold">
+                            {attachment.fileName}
+                          </p>
+                          <p className="text-muted-foreground truncate text-[10.5px]">
+                            {attachment.contentType}
+                          </p>
                         </div>
                         {isDownloading ? (
                           <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">

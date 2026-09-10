@@ -132,6 +132,11 @@ export class MailEngine {
     await connection.toggleSeen(ref, seen)
   }
 
+  async toggleFlagged(ref: MessageRef, flagged: boolean): Promise<void> {
+    const connection = await this.requestConnection(ref.accountId)
+    await connection.toggleFlagged(ref, flagged)
+  }
+
   async moveMessage(
     ref: MessageRef,
     destinationFolderPath: string,

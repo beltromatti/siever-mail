@@ -35,18 +35,25 @@ export function AccountSwitcher({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          variant="outline"
-          className="border-border/70 bg-card/70 hover:bg-card h-12 w-full justify-between rounded-lg px-4 text-left"
+          variant="ghost"
+          className="border-border/60 bg-card/50 hover:bg-card/80 h-9 w-full justify-between gap-2 rounded-md border px-2.5 text-left"
         >
-          <div className="min-w-0">
-            <p className="text-muted-foreground truncate text-xs tracking-[0.14em] uppercase">
-              Account
-            </p>
-            <p className="text-foreground truncate text-sm font-semibold">
-              {selectedAccount ? selectedAccount.displayName : 'Nessun account'}
-            </p>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="bg-primary/15 text-primary flex size-5 shrink-0 items-center justify-center rounded">
+              <Mail className="size-3" />
+            </span>
+            <span className="min-w-0">
+              <span className="text-foreground block truncate text-[12px] font-semibold">
+                {selectedAccount ? selectedAccount.displayName : 'Nessun account'}
+              </span>
+              {selectedAccount && (
+                <span className="text-muted-foreground block truncate text-[10px] leading-tight font-normal">
+                  {selectedAccount.email}
+                </span>
+              )}
+            </span>
           </div>
-          <ChevronDown className="text-muted-foreground size-4" />
+          <ChevronDown className="text-muted-foreground size-3.5 shrink-0" />
         </Button>
       </DropdownMenuTrigger>
 

@@ -12,7 +12,9 @@ import type {
   ListMessagesOptions,
   MessageRef,
   MoveMessageInput,
-  ToggleSeenInput
+  ToggleFlaggedInput,
+  ToggleSeenInput,
+  UiPreferences
 } from '@shared/models'
 
 function registerHandler<Args extends unknown[], ReturnValue>(
@@ -43,12 +45,10 @@ export function registerMailIpc(
     mailService.getAccountConnectionStates()
   )
 
-  registerHandler(IPC_CHANNELS.getInvertMessageListDefaultOrder, async () =>
-    mailService.getInvertMessageListDefaultOrder()
-  )
+  registerHandler(IPC_CHANNELS.getUiPreferences, async () => mailService.getUiPreferences())
 
-  registerHandler(IPC_CHANNELS.setInvertMessageListDefaultOrder, async (value: unknown) =>
-    mailService.setInvertMessageListDefaultOrder(Boolean(value))
+  registerHandler(IPC_CHANNELS.setUiPreferences, async (preferences) =>
+    mailService.setUiPreferences(preferences as UiPreferences)
   )
 
   registerHandler(IPC_CHANNELS.addGoogleAccount, async () => {
@@ -112,6 +112,10 @@ export function registerMailIpc(
 
   registerHandler(IPC_CHANNELS.toggleSeen, async (payload) => {
     await mailService.toggleSeen(payload as ToggleSeenInput)
+  })
+
+  registerHandler(IPC_CHANNELS.toggleFlagged, async (payload) => {
+    await mailService.toggleFlagged(payload as ToggleFlaggedInput)
   })
 
   registerHandler(IPC_CHANNELS.sendMail, async (payload) => {

@@ -60,7 +60,10 @@ const db = new DatabaseSync(dbPath, { readOnly: true })
 // a human would immediately label as "broken preview" looking at an inbox.
 // A lone in-sentence URL is NOT bad; a URL-dominant preview is.
 const PATTERN_CHECKS = [
-  { id: 'html-tag-leading', test: (p) => /^\s*<\s*(?:!doctype|html|head|meta|style|body|!--)/i.test(p) },
+  {
+    id: 'html-tag-leading',
+    test: (p) => /^\s*<\s*(?:!doctype|html|head|meta|style|body|!--)/i.test(p)
+  },
   { id: 'angle-bracket-leak', test: (p) => /<[a-z!][^>]{0,200}>/i.test(p) },
   {
     id: 'url-dominant',
@@ -184,8 +187,12 @@ console.log('')
 console.log('── Esempi di cambiamento ──')
 for (const { subject, oldPreview, newPreview, oldFlags, newFlags } of beforeAfter.slice(0, 10)) {
   console.log(`[${subject?.slice(0, 60) || '?'}]`)
-  console.log(`  OLD${oldFlags.length ? ` (${oldFlags.join(',')})` : ''}: ${oldPreview.slice(0, 140)}`)
-  console.log(`  NEW${newFlags.length ? ` (${newFlags.join(',')})` : ''}: ${newPreview.slice(0, 140)}`)
+  console.log(
+    `  OLD${oldFlags.length ? ` (${oldFlags.join(',')})` : ''}: ${oldPreview.slice(0, 140)}`
+  )
+  console.log(
+    `  NEW${newFlags.length ? ` (${newFlags.join(',')})` : ''}: ${newPreview.slice(0, 140)}`
+  )
 }
 
 // ---- Pass 2b: re-feed every stored preview through the NEW parser as if it

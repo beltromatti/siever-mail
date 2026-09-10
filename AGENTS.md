@@ -19,3 +19,7 @@ REGOLE GENERALI DA SEGUIRE PER PROGRAMMARE SU QUESTA REPO:
 - sei invitato a usare codice gia scritto da altri opensource per implementare funzioni in maniera più potente e completa senza reinventare la ruota, prima di agire DEVI eseguire ricerce su internet in autonomia per cercare le soluzioni più aggiornate, repo da clonare e codice da implmentare, e soprattutto la relativa documentazione online, con possibilità ben accettata e promossa di eseguire ricerce complete anche su forum in caso di bug o di implementazioni ambigue per cercare la soluzione sempre più aggiornata e definitiva.
 
 - esegui ricerche su internet per implementare sempre la versione piu recente di librerie e api, allineandoti con la documentazione aggiornata e usandole perfettamente, vatti anche a leggere il codice direttamente dentro node_modules se ti aiuta a implementare correttamente le librerie.
+
+- `npm run typecheck` copre SOLO la variante pubblica: gli alias `@app/extension/*` puntano agli stub in `src/extension/` e la cartella `extension/` non entra nel programma TypeScript. Quando tocchi la extension privata usa anche `npm run typecheck:ext`, altrimenti gli errori di tipo del codice privato non li vede nessuno (`electron-vite build` non typecheck: esbuild scarta i tipi e basta).
+
+- prima di considerare finito un lavoro sull'app: `npm run typecheck`, `npm run typecheck:ext` (se hai la extension), `npm test`, `npm run lint` e le build di entrambe le varianti (`npx electron-vite build` e `LOAD_EXTENSION=1 npx electron-vite build`). Il lint deve restare a zero errori.

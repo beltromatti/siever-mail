@@ -67,6 +67,9 @@ model Message {
   previewHydrated Boolean @default(false) @map("preview_hydrated")
   flagsJson       String  @map("flags_json")
   isRead          Boolean @map("is_read")
+  isFlagged       Boolean @default(false) @map("is_flagged")
+  senderName      String  @default("") @map("sender_name")
+  senderKey       String  @default("") @map("sender_key")
   hasAttachments  Boolean @map("has_attachments")
   size            Int
   htmlBody        String? @map("html_body")
@@ -77,6 +80,8 @@ model Message {
 
   @@unique([accountId, folderPath, uid])
   @@index([accountId, folderPath, dateIso], map: "idx_messages_folder_date")
+  @@index([accountId, folderPath, senderKey], map: "idx_messages_folder_sender")
+  @@index([accountId, folderPath, isFlagged], map: "idx_messages_folder_flagged")
   @@map("messages")
 }
 
@@ -97,6 +102,11 @@ model Contact {
 model AppPreference {
   id                             Int     @id
   unifiedInboxIncludedAccountIds String? @map("unified_inbox_included_account_ids")
+  layoutMode                     String  @default("apple") @map("layout_mode")
+  invertMessageListDefaultOrder  Boolean @default(false) @map("invert_message_list_default_order")
+  messageListSortField           String  @default("date") @map("message_list_sort_field")
+  messageListSortDirection       String  @default("desc") @map("message_list_sort_direction")
+  messageGrouping                String  @default("date") @map("message_grouping")
   updatedAt                      BigInt  @map("updated_at")
 
   @@map("app_preferences")

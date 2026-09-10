@@ -26,7 +26,13 @@ import {
 } from '@renderer/components/ui/tooltip'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
 import { cn } from '@renderer/lib/utils'
-import type { DataStorageBreakdown, MailAccount } from '@shared/models'
+import type {
+  DataStorageBreakdown,
+  MailAccount,
+  MailLayoutMode,
+  MessageGroupingMode,
+  UiPreferences
+} from '@shared/models'
 
 type SettingsSectionId = 'accounts' | 'preferences' | 'data' | 'signatures' | string
 
@@ -45,20 +51,15 @@ interface SettingsDialogProps {
   removingAccountId: string | null
   clearingAccountDataId: string | null
   clearingDatabaseData: boolean
-  /**
-   * Current persisted value of the visual-reversal preference: when
-   * true, the message list is rendered upside-down (newest at the
-   * bottom, scroll starts anchored to the visual end). The active sort
-   * order is unaffected — this is purely a layout flip.
-   */
-  invertMessageListOrder: boolean
+  /** Every persisted view preference, as the workspace currently has it. */
+  uiPreferences: UiPreferences
+  /** Persists a subset of the preferences and adopts the stored result. */
+  onUiPreferencesChange: (patch: Partial<UiPreferences>) => void
   onRemoveAccount: (accountId: string) => void
   onClearAccountData: (accountId: string) => void
   onClearDatabaseData: () => void
   onAddAccount: () => void
   onUnifiedInboxPreferencesChanged: () => void
-  /** Called after the user flips the visual-reversal toggle (post-IPC). */
-  onInvertMessageListOrderChanged: (value: boolean) => void
 }
 
 const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
@@ -100,6 +101,65 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     description: tab.description
   }))
 ]
+
+const LAYOUT_OPTIONS: ReadonlyArray<{
+  mode: MailLayoutMode
+  label: string
+  description: string
+}> = [
+  {
+    mode: 'apple',
+    label: 'Apple',
+    description: 'Cartelle, elenco e lettura affiancati. Righe compatte su più linee.'
+  },
+  {
+    mode: 'outlook',
+    label: 'Outlook',
+    description: 'Tabella densa in alto, messaggio in basso. Circa 15 email a schermo.'
+  }
+]
+
+const GROUPING_OPTIONS: ReadonlyArray<{ mode: MessageGroupingMode; label: string }> = [
+  { mode: 'none', label: 'Nessuno' },
+  { mode: 'date', label: 'Data' },
+  { mode: 'sender', label: 'Mittente' }
+]
+
+/**
+ * Wireframe of each arrangement. A picture settles "where does the message
+ * end up" faster than a paragraph, and it keeps the two options comparable
+ * at a glance instead of describing them in prose.
+ */
+function LayoutPreview({
+  mode,
+  active
+}: {
+  mode: MailLayoutMode
+  active: boolean
+}): React.JSX.Element {
+  const paneClass = active ? 'bg-primary/35' : 'bg-muted-foreground/25'
+  const accentClass = active ? 'bg-primary/60' : 'bg-muted-foreground/40'
+
+  return (
+    <div
+      aria-hidden
+      className="border-border/70 bg-background/60 flex h-16 w-full gap-1 rounded border p-1"
+    >
+      <div className={cn('w-1/5 rounded-[2px]', paneClass)} />
+      {mode === 'outlook' ? (
+        <div className="flex flex-1 flex-col gap-1">
+          <div className={cn('h-2/5 rounded-[2px]', accentClass)} />
+          <div className={cn('flex-1 rounded-[2px]', paneClass)} />
+        </div>
+      ) : (
+        <div className="flex flex-1 gap-1">
+          <div className={cn('w-2/5 rounded-[2px]', accentClass)} />
+          <div className={cn('flex-1 rounded-[2px]', paneClass)} />
+        </div>
+      )}
+    </div>
+  )
+}
 
 const ACCOUNT_SEGMENT_COLOR_CLASSES = [
   'bg-primary',
@@ -157,36 +217,14 @@ export function SettingsDialog({
   removingAccountId,
   clearingAccountDataId,
   clearingDatabaseData,
-  invertMessageListOrder,
+  uiPreferences,
+  onUiPreferencesChange,
   onRemoveAccount,
   onClearAccountData,
   onClearDatabaseData,
   onAddAccount,
-  onUnifiedInboxPreferencesChanged,
-  onInvertMessageListOrderChanged
+  onUnifiedInboxPreferencesChanged
 }: SettingsDialogProps): React.JSX.Element {
-  const [invertOrderSaving, setInvertOrderSaving] = useState(false)
-  const [invertOrderError, setInvertOrderError] = useState<string | null>(null)
-
-  const handleInvertOrderToggle = async (next: boolean): Promise<void> => {
-    if (invertOrderSaving || next === invertMessageListOrder) {
-      return
-    }
-    setInvertOrderSaving(true)
-    setInvertOrderError(null)
-    try {
-      const persisted = await window.mailApi.setInvertMessageListDefaultOrder(next)
-      onInvertMessageListOrderChanged(persisted)
-    } catch (caughtError) {
-      const message =
-        caughtError instanceof Error && caughtError.message.trim()
-          ? caughtError.message
-          : 'Salvataggio preferenza non riuscito.'
-      setInvertOrderError(message)
-    } finally {
-      setInvertOrderSaving(false)
-    }
-  }
   const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>('accounts')
   const [dataBreakdown, setDataBreakdown] = useState<DataStorageBreakdown | null>(null)
   const [dataBreakdownLoading, setDataBreakdownLoading] = useState(false)
@@ -671,6 +709,50 @@ export function SettingsDialog({
 
                 <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
                   <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">
+                    Layout finestra
+                  </p>
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    Due disposizioni dello stesso spazio di lavoro. Cambiano la geometria e la
+                    densità, non le funzioni: colori, comandi e scorciatoie restano identici.
+                  </p>
+
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {LAYOUT_OPTIONS.map((option) => {
+                      const active = uiPreferences.layoutMode === option.mode
+
+                      return (
+                        <button
+                          key={option.mode}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => onUiPreferencesChange({ layoutMode: option.mode })}
+                          className={cn(
+                            'focus-visible:ring-ring/70 flex flex-col gap-2 rounded-md border p-3 text-left transition-colors outline-none focus-visible:ring-2',
+                            active
+                              ? 'border-primary/60 bg-primary/10'
+                              : 'border-border bg-background/40 hover:bg-secondary/40'
+                          )}
+                        >
+                          <LayoutPreview mode={option.mode} active={active} />
+                          <span
+                            className={cn(
+                              'text-sm font-semibold',
+                              active ? 'text-primary' : 'text-foreground'
+                            )}
+                          >
+                            {option.label}
+                          </span>
+                          <span className="text-muted-foreground text-xs">
+                            {option.description}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
+                  <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">
                     Visualizzazione lista email
                   </p>
                   <p className="text-muted-foreground mt-1 text-xs">
@@ -684,29 +766,49 @@ export function SettingsDialog({
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Button
                       type="button"
-                      variant={invertMessageListOrder ? 'outline' : 'default'}
+                      variant={uiPreferences.invertMessageListOrder ? 'outline' : 'default'}
                       size="sm"
-                      disabled={invertOrderSaving}
-                      onClick={() => void handleInvertOrderToggle(false)}
+                      onClick={() => onUiPreferencesChange({ invertMessageListOrder: false })}
                     >
                       Standard (parti dall&apos;alto)
                     </Button>
                     <Button
                       type="button"
-                      variant={invertMessageListOrder ? 'default' : 'outline'}
+                      variant={uiPreferences.invertMessageListOrder ? 'default' : 'outline'}
                       size="sm"
-                      disabled={invertOrderSaving}
-                      onClick={() => void handleInvertOrderToggle(true)}
+                      onClick={() => onUiPreferencesChange({ invertMessageListOrder: true })}
                     >
                       Invertita (parti dal fondo)
                     </Button>
                   </div>
+                </div>
 
-                  {invertOrderError && (
-                    <div className="text-destructive-foreground border-destructive/35 bg-destructive/10 mt-3 rounded-md border px-3 py-2 text-sm">
-                      {invertOrderError}
-                    </div>
-                  )}
+                <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
+                  <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">
+                    Raggruppamento predefinito
+                  </p>
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    Come la lista divide i messaggi in sezioni. Il raggruppamento per data richiede
+                    l&apos;ordinamento per data; quello per mittente funziona con qualsiasi
+                    ordinamento e permette di selezionare un intero mittente con un clic
+                    sull&apos;intestazione.
+                  </p>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {GROUPING_OPTIONS.map((option) => (
+                      <Button
+                        key={option.mode}
+                        type="button"
+                        variant={
+                          uiPreferences.messageGrouping === option.mode ? 'default' : 'outline'
+                        }
+                        size="sm"
+                        onClick={() => onUiPreferencesChange({ messageGrouping: option.mode })}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">

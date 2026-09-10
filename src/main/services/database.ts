@@ -16,11 +16,66 @@ import type {
   MailContactSuggestion,
   MailFolder,
   MailMessageDetail,
+  MailLayoutMode,
   MailMessageListSort,
   MailMessageSummary,
-  MessageRef
+  MessageGroupingMode,
+  MessageListFilter,
+  MessageListSortDirection,
+  MessageListSortField,
+  MessageRef,
+  UiPreferences
 } from '@shared/models'
-import { parseSearchQuery, type SearchTermGroup } from '@shared/search'
+import {
+  DEFAULT_MAIL_LAYOUT_MODE,
+  DEFAULT_MESSAGE_GROUPING_MODE,
+  DEFAULT_MESSAGE_LIST_SORT_DIRECTION,
+  DEFAULT_MESSAGE_LIST_SORT_FIELD,
+  DEFAULT_UI_PREFERENCES
+} from '@shared/models'
+import { parseSearchQuery, type SearchTerm, type SearchTermGroup } from '@shared/search'
+
+/**
+ * SQLite hands INTEGER columns back as `bigint` or `number` depending on
+ * adapter quirks; normalise both shapes to the boolean the UI expects.
+ */
+function toBooleanFlag(value: unknown): boolean {
+  if (typeof value === 'bigint') {
+    return value !== 0n
+  }
+  if (typeof value === 'number') {
+    return value !== 0
+  }
+  if (typeof value === 'boolean') {
+    return value
+  }
+  return false
+}
+
+/**
+ * Narrows a persisted string back to its union type. A value written by a
+ * newer build, or corrupted by hand, resolves to the default rather than
+ * leaking an invalid enum into the renderer.
+ */
+function pickFromAllowedValues<T extends string>(
+  value: unknown,
+  allowed: ReadonlyArray<T>,
+  fallback: T
+): T {
+  return typeof value === 'string' && (allowed as ReadonlyArray<string>).includes(value)
+    ? (value as T)
+    : fallback
+}
+
+const MAIL_LAYOUT_MODES: ReadonlyArray<MailLayoutMode> = ['apple', 'outlook']
+const MESSAGE_LIST_SORT_FIELDS: ReadonlyArray<MessageListSortField> = [
+  'date',
+  'sender',
+  'subject',
+  'size'
+]
+const MESSAGE_LIST_SORT_DIRECTIONS: ReadonlyArray<MessageListSortDirection> = ['asc', 'desc']
+const MESSAGE_GROUPING_MODES: ReadonlyArray<MessageGroupingMode> = ['none', 'date', 'sender']
 
 export interface StoredMailAccount extends MailAccount {
   encryptedSecret: string
@@ -122,22 +177,35 @@ function normalizeMessageSearchQuery(query?: string): string | null {
 }
 
 /**
- * Builds the per-term WHERE clause that matches the term against every
- * indexable field (subject, preview, sender/recipients, body). Each call
- * produces one OR of single-field `contains` predicates.
+ * Builds the per-term WHERE clause. An unscoped term matches against every
+ * indexable field; a scoped one is confined to the fields its prefix names,
+ * which is what stops `da:marconi` from also matching people cc'd on a
+ * thread or a name that merely appears in a signature block.
  */
-function buildSingleTermWhere(term: string): Prisma.MessageWhereInput {
-  return {
-    OR: [
-      { subject: { contains: term } },
-      { preview: { contains: term } },
-      { fromJson: { contains: term } },
-      { toJson: { contains: term } },
-      { ccJson: { contains: term } },
-      { bccJson: { contains: term } },
-      { textBody: { contains: term } },
-      { htmlBody: { contains: term } }
-    ]
+function buildSingleTermWhere(term: SearchTerm): Prisma.MessageWhereInput {
+  const value = term.value
+
+  switch (term.scope) {
+    case 'from':
+      return { fromJson: { contains: value } }
+    case 'to':
+      return { OR: [{ toJson: { contains: value } }, { ccJson: { contains: value } }] }
+    case 'subject':
+      return { subject: { contains: value } }
+    case 'any':
+    default:
+      return {
+        OR: [
+          { subject: { contains: value } },
+          { preview: { contains: value } },
+          { fromJson: { contains: value } },
+          { toJson: { contains: value } },
+          { ccJson: { contains: value } },
+          { bccJson: { contains: value } },
+          { textBody: { contains: value } },
+          { htmlBody: { contains: value } }
+        ]
+      }
   }
 }
 
@@ -166,6 +234,25 @@ function buildGroupWhere(group: SearchTermGroup): Prisma.MessageWhereInput | nul
  * Returns null when the input has no usable terms — callers treat that
  * as "no filter" and read the folder in full.
  */
+function buildMessageConstraints(
+  query?: string,
+  filter?: MessageListFilter
+): Prisma.MessageWhereInput[] {
+  const constraints: Prisma.MessageWhereInput[] = []
+  const searchWhere = buildMessageSearchWhere(query)
+  const filterWhere = buildMessageFilterWhere(filter)
+
+  if (searchWhere) {
+    constraints.push(searchWhere)
+  }
+
+  if (filterWhere) {
+    constraints.push(filterWhere)
+  }
+
+  return constraints
+}
+
 function buildMessageSearchWhere(query?: string): Prisma.MessageWhereInput | null {
   const normalizedQuery = normalizeMessageSearchQuery(query)
 
@@ -207,20 +294,51 @@ function buildMessageSearchWhere(query?: string): Prisma.MessageWhereInput | nul
  *                 the raw JSON groups same-sender threads together,
  *                 which is what the user actually wants in practice)
  */
+/**
+ * Narrows the page to unread or flagged messages. Both columns are indexed
+ * per (account, folder), so the filter costs an index seek rather than a
+ * scan even on a mailbox with thousands of rows.
+ */
+function buildMessageFilterWhere(filter?: MessageListFilter): Prisma.MessageWhereInput | null {
+  switch (filter) {
+    case 'unread':
+      return { isRead: false }
+    case 'flagged':
+      return { isFlagged: true }
+    default:
+      return null
+  }
+}
+
 function buildMessageOrderBy(
-  sort?: MailMessageListSort
+  sort?: MailMessageListSort,
+  grouping?: MessageGroupingMode
 ): Prisma.MessageOrderByWithRelationInput[] {
   const direction: Prisma.SortOrder = sort?.direction === 'asc' ? 'asc' : 'desc'
 
-  switch (sort?.field) {
-    case 'subject':
-      return [{ subject: direction }, { uid: direction }]
-    case 'sender':
-      return [{ fromJson: direction }, { dateIso: direction }, { uid: direction }]
-    case 'date':
-    default:
-      return [{ dateIso: direction }, { uid: direction }]
+  const withinGroup: Prisma.MessageOrderByWithRelationInput[] = (() => {
+    switch (sort?.field) {
+      case 'subject':
+        return [{ subject: direction }, { uid: direction }]
+      case 'sender':
+        return [{ senderName: direction }, { dateIso: direction }, { uid: direction }]
+      case 'size':
+        return [{ size: direction }, { dateIso: direction }, { uid: direction }]
+      case 'date':
+      default:
+        return [{ dateIso: direction }, { uid: direction }]
+    }
+  })()
+
+  // Sender grouping needs each sender's messages to arrive as one
+  // contiguous run, so the section key leads the ORDER BY and the user's
+  // chosen sort decides the order *inside* each section. Date grouping
+  // needs no help: it buckets an already date-ordered page.
+  if (grouping === 'sender' && sort?.field !== 'sender') {
+    return [{ senderName: 'asc' }, { senderKey: 'asc' }, ...withinGroup]
   }
+
+  return withinGroup
 }
 
 function normalizeStorageSectionSizesToTotal(
@@ -467,6 +585,15 @@ export class AppDatabase {
 
     this.prisma = new PrismaClient({ adapter })
     this.ready = this.initialize()
+  }
+
+  /**
+   * Resolves once the schema has been created and reconciled. Callers that
+   * need to touch the file directly (the upgrade migration) await this
+   * before doing so, so they never race the initial DDL.
+   */
+  async waitUntilReady(): Promise<void> {
+    await this.ready
   }
 
   /**
@@ -1484,6 +1611,9 @@ export class AppDatabase {
           previewHydrated: message.previewHydrated,
           flagsJson: JSON.stringify(message.flags),
           isRead: message.isRead,
+          isFlagged: message.isFlagged,
+          senderName: message.senderName,
+          senderKey: message.senderKey,
           hasAttachments: message.hasAttachments,
           size: message.size,
           htmlBody: null,
@@ -1508,6 +1638,9 @@ export class AppDatabase {
           previewHydrated: keepExistingPreview ? true : message.previewHydrated,
           flagsJson: JSON.stringify(message.flags),
           isRead: message.isRead,
+          isFlagged: message.isFlagged,
+          senderName: message.senderName,
+          senderKey: message.senderKey,
           hasAttachments: message.hasAttachments,
           size: message.size,
           updatedAt: now
@@ -1602,6 +1735,9 @@ export class AppDatabase {
     previewHydrated: boolean
     flagsJson: string
     isRead: boolean
+    isFlagged: boolean
+    senderName: string
+    senderKey: string
     hasAttachments: boolean
     size: number
   }): MailMessageSummary {
@@ -1620,8 +1756,11 @@ export class AppDatabase {
       previewHydrated: row.previewHydrated,
       flags: parseJsonArray(row.flagsJson),
       isRead: row.isRead,
+      isFlagged: row.isFlagged,
       hasAttachments: row.hasAttachments,
-      size: row.size
+      size: row.size,
+      senderName: row.senderName,
+      senderKey: row.senderKey
     }
   }
 
@@ -1630,50 +1769,43 @@ export class AppDatabase {
     folderPath: string,
     limit: number,
     query?: string,
-    sort?: MailMessageListSort
+    sort?: MailMessageListSort,
+    grouping?: MessageGroupingMode,
+    filter?: MessageListFilter
   ): Promise<MailMessageSummary[]> {
     await this.ready
 
     const normalizedLimit = Math.max(1, Math.floor(limit))
-    const searchWhere = buildMessageSearchWhere(query)
-    const where: Prisma.MessageWhereInput = searchWhere
-      ? {
-          accountId,
-          folderPath,
-          AND: [searchWhere]
-        }
-      : {
-          accountId,
-          folderPath
-        }
+    const constraints = buildMessageConstraints(query, filter)
+    const where: Prisma.MessageWhereInput =
+      constraints.length > 0
+        ? { accountId, folderPath, AND: constraints }
+        : { accountId, folderPath }
 
     const rows = await this.prisma.message.findMany({
       where,
-      orderBy: buildMessageOrderBy(sort),
+      orderBy: buildMessageOrderBy(sort, grouping),
       take: normalizedLimit
     })
 
     return rows.map((row) => this.mapMessageRowToSummary(row))
   }
 
-  async countMessages(accountId: string, folderPath: string, query?: string): Promise<number> {
+  async countMessages(
+    accountId: string,
+    folderPath: string,
+    query?: string,
+    filter?: MessageListFilter
+  ): Promise<number> {
     await this.ready
 
-    const searchWhere = buildMessageSearchWhere(query)
-    const where: Prisma.MessageWhereInput = searchWhere
-      ? {
-          accountId,
-          folderPath,
-          AND: [searchWhere]
-        }
-      : {
-          accountId,
-          folderPath
-        }
+    const constraints = buildMessageConstraints(query, filter)
+    const where: Prisma.MessageWhereInput =
+      constraints.length > 0
+        ? { accountId, folderPath, AND: constraints }
+        : { accountId, folderPath }
 
-    return this.prisma.message.count({
-      where
-    })
+    return this.prisma.message.count({ where })
   }
 
   async listAllMessageUids(accountId: string, folderPath: string): Promise<number[]> {
@@ -1713,7 +1845,9 @@ export class AppDatabase {
     mailboxes: Array<{ accountId: string; folderPath: string }>,
     limit: number,
     query?: string,
-    sort?: MailMessageListSort
+    sort?: MailMessageListSort,
+    grouping?: MessageGroupingMode,
+    filter?: MessageListFilter
   ): Promise<MailMessageSummary[]> {
     await this.ready
 
@@ -1731,13 +1865,9 @@ export class AppDatabase {
               folderPath: mailbox.folderPath
             }))
           }
-    const searchWhere = buildMessageSearchWhere(query)
-    const where: Prisma.MessageWhereInput = searchWhere
-      ? {
-          ...mailboxWhere,
-          AND: [searchWhere]
-        }
-      : mailboxWhere
+    const constraints = buildMessageConstraints(query, filter)
+    const where: Prisma.MessageWhereInput =
+      constraints.length > 0 ? { ...mailboxWhere, AND: constraints } : mailboxWhere
 
     // The unified inbox spans multiple (accountId, folderPath) pairs, so
     // we need extra tiebreakers between the user-picked sort field and
@@ -1745,7 +1875,7 @@ export class AppDatabase {
     // mailboxes with the same `dateIso` (or same subject/sender) would
     // shuffle on every refresh.
     const orderBy = [
-      ...buildMessageOrderBy(sort),
+      ...buildMessageOrderBy(sort, grouping),
       { accountId: 'asc' as Prisma.SortOrder },
       { folderPath: 'asc' as Prisma.SortOrder }
     ]
@@ -1761,7 +1891,8 @@ export class AppDatabase {
 
   async countMessagesInMailboxes(
     mailboxes: Array<{ accountId: string; folderPath: string }>,
-    query?: string
+    query?: string,
+    filter?: MessageListFilter
   ): Promise<number> {
     await this.ready
 
@@ -1778,17 +1909,11 @@ export class AppDatabase {
               folderPath: mailbox.folderPath
             }))
           }
-    const searchWhere = buildMessageSearchWhere(query)
-    const where: Prisma.MessageWhereInput = searchWhere
-      ? {
-          ...mailboxWhere,
-          AND: [searchWhere]
-        }
-      : mailboxWhere
+    const constraints = buildMessageConstraints(query, filter)
+    const where: Prisma.MessageWhereInput =
+      constraints.length > 0 ? { ...mailboxWhere, AND: constraints } : mailboxWhere
 
-    return this.prisma.message.count({
-      where
-    })
+    return this.prisma.message.count({ where })
   }
 
   async getMessage(ref: MessageRef): Promise<MailMessageDetail | null> {
@@ -1824,8 +1949,11 @@ export class AppDatabase {
       previewHydrated: row.previewHydrated,
       flags: parseJsonArray(row.flagsJson),
       isRead: row.isRead,
+      isFlagged: row.isFlagged,
       hasAttachments: row.hasAttachments,
       size: row.size,
+      senderName: row.senderName,
+      senderKey: row.senderKey,
       html: row.htmlBody ?? undefined,
       text: row.textBody ?? undefined,
       attachments: parseJsonArray<MailAttachment>(row.attachmentsJson)
@@ -1891,7 +2019,53 @@ export class AppDatabase {
     })
   }
 
-  async updateMessageFlags(
+  /**
+   * Adds or removes a single IMAP keyword, leaving every other flag on the
+   * row alone.
+   *
+   * This used to take the full flag array and overwrite the column with
+   * it, and its callers passed `['\\Seen']` or `[]` — so marking a message
+   * read silently dropped its `\\Flagged` keyword locally until the next
+   * full resync put it back. Toggling one keyword at a time is the only
+   * shape that composes safely.
+   */
+  async setMessageFlag(
+    ref: MessageRef,
+    flag: string,
+    present: boolean
+  ): Promise<MailMessageSummary | null> {
+    await this.ready
+
+    const existing = await this.prisma.message.findUnique({
+      where: {
+        accountId_folderPath_uid: {
+          accountId: ref.accountId,
+          folderPath: ref.folderPath,
+          uid: ref.uid
+        }
+      },
+      select: { flagsJson: true }
+    })
+
+    if (!existing) {
+      return null
+    }
+
+    const currentFlags = parseJsonArray<string>(existing.flagsJson).filter(
+      (value) => typeof value === 'string'
+    )
+    const nextFlags = present
+      ? Array.from(new Set([...currentFlags, flag]))
+      : currentFlags.filter((value) => value !== flag)
+
+    return this.replaceMessageFlags(ref.accountId, ref.folderPath, ref.uid, nextFlags)
+  }
+
+  /**
+   * Overwrites the whole keyword set. Only correct when the caller genuinely
+   * knows every flag the server holds — i.e. straight off an IMAP FETCH.
+   */
+  async replaceMessageFlags(
     accountId: string,
     folderPath: string,
     uid: number,
@@ -1904,6 +2078,7 @@ export class AppDatabase {
       data: {
         flagsJson: JSON.stringify(flags),
         isRead: flags.includes('\\Seen'),
+        isFlagged: flags.includes('\\Flagged'),
         updatedAt: BigInt(Date.now())
       }
     })
@@ -1989,6 +2164,9 @@ export class AppDatabase {
         preview_hydrated INTEGER NOT NULL DEFAULT 0,
         flags_json TEXT NOT NULL,
         is_read INTEGER NOT NULL,
+        is_flagged INTEGER NOT NULL DEFAULT 0,
+        sender_name TEXT NOT NULL DEFAULT '',
+        sender_key TEXT NOT NULL DEFAULT '',
         has_attachments INTEGER NOT NULL,
         size INTEGER NOT NULL,
         html_body TEXT,
@@ -2024,6 +2202,11 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS app_preferences (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         unified_inbox_included_account_ids TEXT,
+        layout_mode TEXT NOT NULL DEFAULT 'apple',
+        invert_message_list_default_order INTEGER NOT NULL DEFAULT 0,
+        message_list_sort_field TEXT NOT NULL DEFAULT 'date',
+        message_list_sort_direction TEXT NOT NULL DEFAULT 'desc',
+        message_grouping TEXT NOT NULL DEFAULT 'date',
         updated_at INTEGER NOT NULL
       )
     `)
@@ -2038,6 +2221,12 @@ export class AppDatabase {
     )
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_messages_folder_date ON messages(account_id, folder_path, date_iso DESC)'
+    )
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_messages_folder_sender ON messages(account_id, folder_path, sender_key)'
+    )
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_messages_folder_flagged ON messages(account_id, folder_path, is_flagged)'
     )
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_messages_folder_date_uid ON messages(account_id, folder_path, date_iso DESC, uid DESC)'
@@ -2122,45 +2311,92 @@ export class AppDatabase {
     )) as Array<{ name?: string }>
     const columnNames = new Set(columns.map((column) => column.name ?? ''))
 
-    if (!columnNames.has('invert_message_list_default_order')) {
-      await this.prisma.$executeRawUnsafe(
-        'ALTER TABLE app_preferences ADD COLUMN invert_message_list_default_order INTEGER NOT NULL DEFAULT 0'
+    const additions: Array<[column: string, definition: string]> = [
+      ['invert_message_list_default_order', 'INTEGER NOT NULL DEFAULT 0'],
+      ['layout_mode', "TEXT NOT NULL DEFAULT 'apple'"],
+      ['message_list_sort_field', "TEXT NOT NULL DEFAULT 'date'"],
+      ['message_list_sort_direction', "TEXT NOT NULL DEFAULT 'desc'"],
+      ['message_grouping', "TEXT NOT NULL DEFAULT 'date'"]
+    ]
+
+    for (const [column, definition] of additions) {
+      if (!columnNames.has(column)) {
+        await this.prisma.$executeRawUnsafe(
+          `ALTER TABLE app_preferences ADD COLUMN ${column} ${definition}`
+        )
+      }
+    }
+  }
+
+  /**
+   * Reads every persisted view preference in one go. Unknown or corrupted
+   * values fall back to the shared defaults instead of failing the read —
+   * a preference row can never be a reason the workspace refuses to open.
+   */
+  async getUiPreferences(): Promise<UiPreferences> {
+    await this.ready
+
+    const rows = (await this.prisma.$queryRaw`
+      SELECT layout_mode AS layoutMode,
+             invert_message_list_default_order AS invertOrder,
+             message_list_sort_field AS sortField,
+             message_list_sort_direction AS sortDirection,
+             message_grouping AS grouping
+      FROM app_preferences
+      WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
+      LIMIT 1
+    `) as Array<{
+      layoutMode?: unknown
+      invertOrder?: unknown
+      sortField?: unknown
+      sortDirection?: unknown
+      grouping?: unknown
+    }>
+
+    const row = rows[0]
+
+    if (!row) {
+      return DEFAULT_UI_PREFERENCES
+    }
+
+    return {
+      layoutMode: pickFromAllowedValues(
+        row.layoutMode,
+        MAIL_LAYOUT_MODES,
+        DEFAULT_MAIL_LAYOUT_MODE
+      ),
+      invertMessageListOrder: toBooleanFlag(row.invertOrder),
+      messageListSort: {
+        field: pickFromAllowedValues(
+          row.sortField,
+          MESSAGE_LIST_SORT_FIELDS,
+          DEFAULT_MESSAGE_LIST_SORT_FIELD
+        ),
+        direction: pickFromAllowedValues(
+          row.sortDirection,
+          MESSAGE_LIST_SORT_DIRECTIONS,
+          DEFAULT_MESSAGE_LIST_SORT_DIRECTION
+        )
+      },
+      messageGrouping: pickFromAllowedValues(
+        row.grouping,
+        MESSAGE_GROUPING_MODES,
+        DEFAULT_MESSAGE_GROUPING_MODE
       )
     }
   }
 
-  async getInvertMessageListDefaultOrder(): Promise<boolean> {
+  async setUiPreferences(preferences: UiPreferences): Promise<void> {
     await this.ready
 
-    const rows = (await this.prisma.$queryRaw`
-      SELECT invert_message_list_default_order AS value
-      FROM app_preferences
-      WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
-      LIMIT 1
-    `) as Array<{ value?: unknown }>
-
-    const raw = rows[0]?.value
-
-    // SQLite returns INTEGER as `bigint | number` depending on
-    // adapter quirks; normalise both to a boolean we can ship over IPC.
-    if (typeof raw === 'bigint') {
-      return raw !== 0n
-    }
-    if (typeof raw === 'number') {
-      return raw !== 0
-    }
-    return false
-  }
-
-  async setInvertMessageListDefaultOrder(value: boolean): Promise<void> {
-    await this.ready
-
-    const flag = value ? 1 : 0
-    const now = Date.now()
     await this.prisma.$executeRaw`
       UPDATE app_preferences
-      SET invert_message_list_default_order = ${flag},
-          updated_at = ${now}
+      SET layout_mode = ${preferences.layoutMode},
+          invert_message_list_default_order = ${preferences.invertMessageListOrder ? 1 : 0},
+          message_list_sort_field = ${preferences.messageListSort.field},
+          message_list_sort_direction = ${preferences.messageListSort.direction},
+          message_grouping = ${preferences.messageGrouping},
+          updated_at = ${Date.now()}
       WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
     `
   }
@@ -2204,6 +2440,48 @@ export class AppDatabase {
       // messages that already have a valid preview.
       await this.prisma.$executeRawUnsafe(
         "UPDATE messages SET preview_hydrated = 1 WHERE preview IS NOT NULL AND preview <> ''"
+      )
+    }
+
+    if (!columnNames.has('is_flagged')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE messages ADD COLUMN is_flagged INTEGER NOT NULL DEFAULT 0'
+      )
+      // `\\Flagged` has always been synced into flags_json — it was simply
+      // never surfaced. Backfill from what is already there so existing
+      // rows light up immediately instead of waiting for a resync.
+      await this.prisma.$executeRawUnsafe(
+        `UPDATE messages
+         SET is_flagged = 1
+         WHERE EXISTS (
+           SELECT 1 FROM json_each(messages.flags_json) WHERE json_each.value = '\\Flagged'
+         )`
+      )
+    }
+
+    if (!columnNames.has('sender_name') || !columnNames.has('sender_key')) {
+      if (!columnNames.has('sender_name')) {
+        await this.prisma.$executeRawUnsafe(
+          "ALTER TABLE messages ADD COLUMN sender_name TEXT NOT NULL DEFAULT ''"
+        )
+      }
+
+      if (!columnNames.has('sender_key')) {
+        await this.prisma.$executeRawUnsafe(
+          "ALTER TABLE messages ADD COLUMN sender_key TEXT NOT NULL DEFAULT ''"
+        )
+      }
+
+      // Derive both from the address array already on the row. Mirrors
+      // `deriveSenderName` / `deriveSenderKey` in @shared/sender — display
+      // name when there is one, address otherwise.
+      await this.prisma.$executeRawUnsafe(
+        `UPDATE messages
+         SET sender_name = COALESCE(
+               NULLIF(TRIM(COALESCE(json_extract(from_json, '$[0].name'), '')), ''),
+               TRIM(COALESCE(json_extract(from_json, '$[0].address'), ''))
+             ),
+             sender_key = LOWER(TRIM(COALESCE(json_extract(from_json, '$[0].address'), '')))`
       )
     }
   }

@@ -60,7 +60,7 @@ import {
   MAIL_EDITOR_DEFAULT_FONT_FAMILY,
   MAIL_FONT_OPTIONS,
   normalizeMailFontFamilyValue
-} from '@renderer/lib/mail-fonts'
+} from '@shared/mail-fonts'
 import { cn } from '@renderer/lib/utils'
 
 interface RichTextEditorProps {
