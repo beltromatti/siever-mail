@@ -19,6 +19,8 @@ import {
 } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
+import { IconButton } from '@renderer/components/ui/icon-button'
+import { AttachmentChip } from './attachment-chip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,12 +29,6 @@ import {
 } from '@renderer/components/ui/dropdown-menu'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Separator } from '@renderer/components/ui/separator'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger
-} from '@renderer/components/ui/tooltip'
 import { buildMailFrameDocument, sanitizeMailHtml } from '@renderer/lib/mail-html'
 import { cn, formatAddress, formatDateLabel, formatDateTimeLabel } from '@renderer/lib/utils'
 import type { MailFolder, MailMessageDetail } from '@shared/models'
@@ -393,8 +389,6 @@ export function MessageViewer({
               size="sm"
               className="h-6.5 gap-1.5 px-2 text-[11.5px]"
               onClick={onForward}
-              title="Inoltra"
-              aria-label="Inoltra"
             >
               <Forward className="size-3.5" /> Inoltra
             </Button>
@@ -402,28 +396,16 @@ export function MessageViewer({
             {/* Same divider the toolbar uses, so the labelled pair reads as
                 one group and the icons as another. */}
             <div className="bg-border/60 mx-0.5 h-5 w-px shrink-0" />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-6.5 shrink-0"
-              onClick={onArchive}
-              title="Archivia"
-              aria-label="Archivia"
-            >
+
+            <IconButton label="Archivia" className="size-6.5" onClick={onArchive}>
               <Archive className="size-3.5" />
-            </Button>
+            </IconButton>
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-6.5 shrink-0"
-                  title="Sposta"
-                  aria-label="Sposta"
-                >
+                <IconButton label="Sposta in una cartella" className="size-6.5">
                   <FolderInput className="size-3.5" />
-                </Button>
+                </IconButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
                 {folders
@@ -440,60 +422,38 @@ export function MessageViewer({
               </DropdownMenuContent>
             </DropdownMenu>
 
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-6.5 shrink-0"
+            <IconButton
+              label={message.isRead ? 'Segna come non letta' : 'Segna come letta'}
+              className="size-6.5"
               onClick={() => onToggleSeen(!message.isRead)}
-              title={message.isRead ? 'Segna non letta' : 'Segna letta'}
-              aria-label={message.isRead ? 'Segna non letta' : 'Segna letta'}
             >
               <MailOpen className="size-3.5" />
-            </Button>
+            </IconButton>
 
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn('size-6.5 shrink-0', message.isFlagged && 'text-status-offline')}
+            <IconButton
+              label={message.isFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
+              className={cn('size-6.5', message.isFlagged && 'text-status-offline')}
               onClick={() => onToggleFlagged(!message.isFlagged)}
-              title={message.isFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
-              aria-label={message.isFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
             >
               <Flag className={cn('size-3.5', message.isFlagged && 'fill-current')} />
-            </Button>
+            </IconButton>
 
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-destructive hover:bg-destructive/15 hover:text-destructive size-6.5 shrink-0"
+            <IconButton
+              label="Elimina"
+              className="text-destructive hover:bg-destructive/15 hover:text-destructive size-6.5"
               onClick={onDelete}
-              title="Elimina"
-              aria-label="Elimina"
             >
               <Trash2 className="size-3.5" />
-            </Button>
-            <TooltipProvider delayDuration={140}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="text-muted-foreground hover:text-foreground ml-1 size-6 shrink-0"
-                    onClick={onToggleExpanded}
-                    aria-label={isExpanded ? 'Comprimi vista messaggio' : 'Espandi vista messaggio'}
-                  >
-                    {isExpanded ? (
-                      <Minimize2 className="size-3.5" />
-                    ) : (
-                      <Maximize2 className="size-3.5" />
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="left">
-                  {isExpanded ? 'Comprimi vista messaggio' : 'Espandi vista messaggio'}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            </IconButton>
+
+            <IconButton
+              label={isExpanded ? 'Comprimi vista messaggio' : 'Espandi vista messaggio'}
+              tooltipSide="left"
+              className="text-muted-foreground hover:text-foreground ml-1 size-6"
+              onClick={onToggleExpanded}
+            >
+              {isExpanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+            </IconButton>
           </div>
         </div>
 
@@ -573,39 +533,21 @@ export function MessageViewer({
             <>
               <Separator className="my-4" />
               <div className="space-y-1.5">
-                <h4 className="text-[12px] font-semibold">Allegati</h4>
-                <div className="grid gap-2 md:grid-cols-2">
-                  {message.attachments.map((attachment) => {
-                    const isDownloading = downloadingAttachmentIds.includes(attachment.id)
-
-                    return (
-                      <button
-                        type="button"
-                        key={attachment.id}
-                        className="border-border bg-card/65 hover:bg-card/90 focus-visible:ring-ring flex w-full cursor-pointer items-center justify-between rounded-md border px-3 py-2 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-wait disabled:opacity-70"
-                        onClick={() => void downloadAttachment(attachment.id)}
-                        disabled={isDownloading}
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-[12px] font-semibold">
-                            {attachment.fileName}
-                          </p>
-                          <p className="text-muted-foreground truncate text-[10.5px]">
-                            {attachment.contentType}
-                          </p>
-                        </div>
-                        {isDownloading ? (
-                          <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
-                            <LoaderCircle className="size-3.5 animate-spin" /> Download...
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground text-xs">
-                            {Math.round(attachment.size / 1024)} KB
-                          </span>
-                        )}
-                      </button>
-                    )
-                  })}
+                <h4 className="text-muted-foreground text-[11px] font-semibold tracking-wide uppercase">
+                  {message.attachments.length === 1
+                    ? '1 allegato'
+                    : `${message.attachments.length} allegati`}
+                </h4>
+                <div className="flex flex-wrap gap-1.5">
+                  {message.attachments.map((attachment) => (
+                    <AttachmentChip
+                      key={attachment.id}
+                      fileName={attachment.fileName}
+                      sizeBytes={attachment.size}
+                      busy={downloadingAttachmentIds.includes(attachment.id)}
+                      onOpen={() => void downloadAttachment(attachment.id)}
+                    />
+                  ))}
                 </div>
               </div>
             </>

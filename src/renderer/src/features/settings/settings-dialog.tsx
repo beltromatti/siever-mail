@@ -18,12 +18,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@renderer/components/ui/select'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger
-} from '@renderer/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
 import { cn } from '@renderer/lib/utils'
 import type {
@@ -635,32 +630,30 @@ export function SettingsDialog({
                           </div>
                           <p className="text-muted-foreground truncate text-xs">{account.email}</p>
                         </div>
-                        <TooltipProvider delayDuration={90}>
-                          <div className="mt-0.5 flex shrink-0 items-center gap-1">
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    className="text-muted-foreground hover:text-destructive"
-                                    aria-label={`Disconnetti account ${account.email}`}
-                                    disabled={anyAccountMutationInFlight}
-                                    onClick={() => onRemoveAccount(account.id)}
-                                  >
-                                    {removingAccountId === account.id ? (
-                                      <LoaderCircle className="size-4 animate-spin" />
-                                    ) : (
-                                      <LogOut className="size-4" />
-                                    )}
-                                  </Button>
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent side="top">Disconnetti account</TooltipContent>
-                            </Tooltip>
-                          </div>
-                        </TooltipProvider>
+                        <div className="mt-0.5 flex shrink-0 items-center gap-1">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="text-muted-foreground hover:text-destructive"
+                                  aria-label={`Disconnetti account ${account.email}`}
+                                  disabled={anyAccountMutationInFlight}
+                                  onClick={() => onRemoveAccount(account.id)}
+                                >
+                                  {removingAccountId === account.id ? (
+                                    <LoaderCircle className="size-4 animate-spin" />
+                                  ) : (
+                                    <LogOut className="size-4" />
+                                  )}
+                                </Button>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">Disconnetti account</TooltipContent>
+                          </Tooltip>
+                        </div>
                       </div>
                     ))
                   )}
@@ -949,27 +942,25 @@ export function SettingsDialog({
                     </div>
                   ) : (
                     <>
-                      <TooltipProvider delayDuration={90}>
-                        <div className="bg-muted/45 flex h-8 w-full overflow-hidden rounded-md">
-                          {dataSections.map((section) => (
-                            <Tooltip key={section.id}>
-                              <TooltipTrigger asChild>
-                                <div
-                                  className={cn(
-                                    'h-full transition-opacity hover:opacity-90',
-                                    section.colorClass
-                                  )}
-                                  style={{ width: `${Math.max(0, section.ratio * 100)}%` }}
-                                  aria-label={`${section.label}: ${formatMegabytes(section.sizeBytes)}`}
-                                />
-                              </TooltipTrigger>
-                              <TooltipContent side="top">
-                                {section.label}: {formatMegabytes(section.sizeBytes)}
-                              </TooltipContent>
-                            </Tooltip>
-                          ))}
-                        </div>
-                      </TooltipProvider>
+                      <div className="bg-muted/45 flex h-8 w-full overflow-hidden rounded-md">
+                        {dataSections.map((section) => (
+                          <Tooltip key={section.id}>
+                            <TooltipTrigger asChild>
+                              <div
+                                className={cn(
+                                  'h-full transition-opacity hover:opacity-90',
+                                  section.colorClass
+                                )}
+                                style={{ width: `${Math.max(0, section.ratio * 100)}%` }}
+                                aria-label={`${section.label}: ${formatMegabytes(section.sizeBytes)}`}
+                              />
+                            </TooltipTrigger>
+                            <TooltipContent side="top">
+                              {section.label}: {formatMegabytes(section.sizeBytes)}
+                            </TooltipContent>
+                          </Tooltip>
+                        ))}
+                      </div>
 
                       <div className="mt-3 space-y-2">
                         {dataSections.map((section) => (

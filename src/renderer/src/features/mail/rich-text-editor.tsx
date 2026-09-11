@@ -44,12 +44,7 @@ import {
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
 import { Input } from '@renderer/components/ui/input'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger
-} from '@renderer/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { htmlToPlainText } from '@renderer/lib/email'
 import { buildMailFrameDocument, sanitizeMailHtmlToFragment } from '@renderer/lib/mail-html'
 import {
@@ -71,6 +66,12 @@ interface RichTextEditorProps {
   showExpandToggle?: boolean
   expandToContainer?: boolean
   defaultFontFamily?: string
+  /**
+   * Put the caret at the very top of the body once the editor is ready.
+   * Used for replies and forwards, where the recipient is already known and
+   * the next thing the user does is write.
+   */
+  autoFocusBody?: boolean
   onExpandedChange?: (expanded: boolean) => void
   onChange: (html: string, text: string) => void
 }
@@ -1975,6 +1976,7 @@ export function RichTextEditor({
   showExpandToggle = true,
   expandToContainer,
   defaultFontFamily = MAIL_EDITOR_DEFAULT_FONT_FAMILY,
+  autoFocusBody = false,
   onExpandedChange,
   onChange
 }: RichTextEditorProps): React.JSX.Element {
@@ -2029,7 +2031,7 @@ export function RichTextEditor({
     [onChange]
   )
 
-  const { editor } = useSquireInstance({
+  const { editor, ready } = useSquireInstance({
     iframeRef,
     initialHtml,
     placeholder,
@@ -2039,6 +2041,38 @@ export function RichTextEditor({
   })
 
   const active = useEditorActiveState(editor)
+
+  /**
+   * A reply opened with the caret in the "A" field, which is the one field
+   * already filled in: the user had to click into the body before writing a
+   * word. Placing it at the start of the body puts it above the quote and
+   * the signature, which is where the reply belongs.
+   *
+   * Waits for `ready` because the body is empty until Squire has set the
+   * initial HTML, and for the external value to land, or the caret would be
+   * placed in a document that is about to be replaced.
+   */
+  useEffect(() => {
+    if (!autoFocusBody || !ready || disabled) {
+      return
+    }
+
+    const frameDocument = iframeRef.current?.contentDocument
+
+    if (!editor || !frameDocument?.body.firstChild) {
+      return
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const range = frameDocument.createRange()
+      range.setStart(frameDocument.body, 0)
+      range.collapse(true)
+      editor.focus()
+      editor.setSelection(range)
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [autoFocusBody, disabled, editor, iframeRef, ready, value])
 
   // The font-size input shows `active.fontSizePx` directly when not focused
   // and the user's `fontSizeDraft` while typing — see the input's `value`
@@ -2119,13 +2153,42 @@ export function RichTextEditor({
     [active.isH1, active.isH2, active.isH3, runWithFocus]
   )
 
+  /**
+   * Squire's `makeOrderedList` / `makeUnorderedList` only build a list out of
+   * plain blocks: pointed at a list of the other kind they leave it as it
+   * was, so clicking "numerata" inside a bulleted list did nothing at all.
+   * Every other editor treats the two buttons as a choice, so unwrap the
+   * current list first and the second call then has plain blocks to work on.
+   */
   const toggleBulletList = useCallback((): void => {
-    runWithFocus((e) => (active.isUL ? e.removeList() : e.makeUnorderedList()))
-  }, [active.isUL, runWithFocus])
+    runWithFocus((e) => {
+      if (active.isUL) {
+        e.removeList()
+        return
+      }
+
+      if (active.isOL) {
+        e.removeList()
+      }
+
+      e.makeUnorderedList()
+    })
+  }, [active.isOL, active.isUL, runWithFocus])
 
   const toggleOrderedList = useCallback((): void => {
-    runWithFocus((e) => (active.isOL ? e.removeList() : e.makeOrderedList()))
-  }, [active.isOL, runWithFocus])
+    runWithFocus((e) => {
+      if (active.isOL) {
+        e.removeList()
+        return
+      }
+
+      if (active.isUL) {
+        e.removeList()
+      }
+
+      e.makeOrderedList()
+    })
+  }, [active.isOL, active.isUL, runWithFocus])
 
   const setAlignment = useCallback(
     (alignment: 'left' | 'center' | 'right' | 'justify'): void => {
@@ -2458,692 +2521,684 @@ export function RichTextEditor({
         expandToContainer && 'flex h-full min-h-0 flex-col'
       )}
     >
-      <TooltipProvider delayDuration={180}>
-        <div className="border-border bg-card/80 flex items-start gap-2 border-b p-2">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-            {renderToolbarButton(
-              'font-family',
-              'Font',
-              <PopoverPrimitive.Root
-                open={fontFamilyMenuOpen}
-                onOpenChange={setFontFamilyMenuOpen}
-                modal={false}
-              >
-                <PopoverPrimitive.Trigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 max-w-[10rem] gap-1 px-2 text-xs font-medium"
-                    onMouseDown={(event) => event.preventDefault()}
-                    title="Font"
-                    disabled={disabled || !editor}
-                  >
-                    <span className="truncate">{fontFamilyTriggerLabel}</span>
-                  </Button>
-                </PopoverPrimitive.Trigger>
-                <PopoverPrimitive.Portal>
-                  <PopoverPrimitive.Content
-                    side="bottom"
-                    align="start"
-                    sideOffset={4}
-                    className="border-border bg-popover text-popover-foreground shadow-background/65 z-50 max-h-80 min-w-[14rem] overflow-y-auto rounded-md border p-1 shadow-xl"
-                    onOpenAutoFocus={(event) => event.preventDefault()}
-                    onCloseAutoFocus={(event) => event.preventDefault()}
-                  >
-                    {active.fontFamily && !activeFontOption ? (
-                      <div className="text-muted-foreground px-2 py-1.5 text-xs opacity-50">
-                        Altro: {activeUnknownFontFamilyLabel || 'font originale'}
-                      </div>
-                    ) : null}
-                    {MAIL_FONT_OPTIONS.map((option) => {
-                      const checked = areMailFontFamiliesEquivalent(active.fontFamily, option.value)
-                      return (
-                        <button
-                          key={option.label}
-                          type="button"
-                          role="menuitemcheckbox"
-                          aria-checked={checked}
-                          className={cn(
-                            'focus:bg-secondary hover:bg-secondary flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-xs transition-colors outline-none select-none',
-                            checked && 'bg-secondary/60 font-semibold'
-                          )}
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => {
-                            setFontFamily(option.value)
-                            setFontFamilyMenuOpen(false)
-                          }}
-                        >
-                          <span style={{ fontFamily: option.value }}>{option.label}</span>
-                        </button>
-                      )
-                    })}
-                  </PopoverPrimitive.Content>
-                </PopoverPrimitive.Portal>
-              </PopoverPrimitive.Root>
-            )}
-
-            {renderToolbarButton(
-              'font-size',
-              'Dimensione testo',
-              <PopoverPrimitive.Root
-                open={fontSizeMenuOpen}
-                onOpenChange={setFontSizeMenuOpen}
-                modal={false}
-              >
-                <PopoverPrimitive.Anchor asChild>
-                  <div ref={fontSizeControlRef} className="relative w-16">
-                    <Input
-                      ref={fontSizeInputRef}
-                      value={
-                        fontSizeInputFocused
-                          ? fontSizeDraft
-                          : formatFontSizePxForDisplay(active.fontSizePx)
-                      }
-                      onChange={(event) => {
-                        // Allow decimals so a forwarded line authored in pt
-                        // (e.g. 13pt → 17.33px) round-trips visibly without
-                        // silently rounding to a different visual size.
-                        const next = event.target.value.replace(/[^0-9.]/g, '')
-                        const dotIndex = next.indexOf('.')
-                        const normalized =
-                          dotIndex === -1
-                            ? next
-                            : next.slice(0, dotIndex + 1) +
-                              next.slice(dotIndex + 1).replace(/\./g, '')
-                        setFontSizeDraft(normalized)
-                      }}
-                      onFocus={() => {
-                        setFontSizeInputFocused(true)
-                        setFontSizeDraft(formatFontSizePxForDisplay(active.fontSizePx))
-                        setFontSizeMenuOpen(true)
-                      }}
-                      onClick={() => {
-                        if (!disabled && editor) {
-                          setFontSizeMenuOpen(true)
-                        }
-                      }}
-                      onBlur={() => {
-                        applyManualFontSize()
-                        setFontSizeInputFocused(false)
-                        setFontSizeMenuOpen(false)
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault()
-                          applyManualFontSize()
-                          setFontSizeMenuOpen(false)
-                          return
-                        }
-                        if (event.key === 'ArrowDown') {
-                          event.preventDefault()
-                          setFontSizeMenuOpen(true)
-                          return
-                        }
-                        if (event.key === 'Escape') {
-                          event.preventDefault()
-                          setFontSizeDraft(String(active.fontSizePx))
-                          setFontSizeMenuOpen(false)
-                          event.currentTarget.blur()
-                        }
-                      }}
-                      className="hover:bg-secondary/60 h-8 w-full border-transparent bg-transparent px-1 text-center text-xs font-medium focus-visible:bg-transparent"
-                      inputMode="numeric"
-                      aria-label="Dimensione testo in pixel"
-                      title="Dimensione testo"
-                      disabled={disabled || !editor}
-                    />
-                  </div>
-                </PopoverPrimitive.Anchor>
-                <PopoverPrimitive.Portal>
-                  <PopoverPrimitive.Content
-                    side="bottom"
-                    align="start"
-                    sideOffset={4}
-                    className="border-border bg-popover text-popover-foreground shadow-background/65 z-50 w-16 min-w-0 overflow-hidden rounded-md border p-1 shadow-xl"
-                    onOpenAutoFocus={(event) => event.preventDefault()}
-                    onCloseAutoFocus={(event) => event.preventDefault()}
-                    onInteractOutside={(event) => {
-                      const target = event.target
-                      if (target instanceof Node && fontSizeControlRef.current?.contains(target)) {
-                        event.preventDefault()
-                      }
-                    }}
-                  >
-                    {FONT_SIZE_OPTIONS.map((option) => (
+      <div className="border-border bg-card/80 flex items-start gap-2 border-b p-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+          {renderToolbarButton(
+            'font-family',
+            'Font',
+            <PopoverPrimitive.Root
+              open={fontFamilyMenuOpen}
+              onOpenChange={setFontFamilyMenuOpen}
+              modal={false}
+            >
+              <PopoverPrimitive.Trigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 max-w-[10rem] gap-1 px-2 text-xs font-medium"
+                  onMouseDown={(event) => event.preventDefault()}
+                  aria-label="Font"
+                  disabled={disabled || !editor}
+                >
+                  <span className="truncate">{fontFamilyTriggerLabel}</span>
+                </Button>
+              </PopoverPrimitive.Trigger>
+              <PopoverPrimitive.Portal>
+                <PopoverPrimitive.Content
+                  side="bottom"
+                  align="start"
+                  sideOffset={4}
+                  className="border-border bg-popover text-popover-foreground shadow-background/65 z-50 max-h-80 min-w-[14rem] overflow-y-auto rounded-md border p-1 shadow-xl"
+                  onOpenAutoFocus={(event) => event.preventDefault()}
+                  onCloseAutoFocus={(event) => event.preventDefault()}
+                >
+                  {active.fontFamily && !activeFontOption ? (
+                    <div className="text-muted-foreground px-2 py-1.5 text-xs opacity-50">
+                      Altro: {activeUnknownFontFamilyLabel || 'font originale'}
+                    </div>
+                  ) : null}
+                  {MAIL_FONT_OPTIONS.map((option) => {
+                    const checked = areMailFontFamiliesEquivalent(active.fontFamily, option.value)
+                    return (
                       <button
-                        key={option.value}
+                        key={option.label}
                         type="button"
-                        role="option"
-                        aria-selected={
-                          Math.round(active.fontSizePx * 100) ===
-                          Math.round((parseFontSizePx(option.value) ?? 0) * 100)
-                        }
-                        className="focus:bg-secondary hover:bg-secondary flex w-full cursor-default items-center justify-center rounded-sm px-0 py-1 text-xs font-medium transition-colors outline-none select-none"
+                        role="menuitemcheckbox"
+                        aria-checked={checked}
+                        className={cn(
+                          'focus:bg-secondary hover:bg-secondary flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-xs transition-colors outline-none select-none',
+                          checked && 'bg-secondary/60 font-semibold'
+                        )}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => {
-                          const px = parseFontSizePx(option.value) ?? BASE_FONT_SIZE_PX
-                          setFontSizePx(px)
-                          setFontSizeDraft(option.label)
-                          setFontSizeMenuOpen(false)
+                          setFontFamily(option.value)
+                          setFontFamilyMenuOpen(false)
                         }}
                       >
-                        {option.label}
+                        <span style={{ fontFamily: option.value }}>{option.label}</span>
                       </button>
-                    ))}
-                  </PopoverPrimitive.Content>
-                </PopoverPrimitive.Portal>
-              </PopoverPrimitive.Root>
-            )}
+                    )
+                  })}
+                </PopoverPrimitive.Content>
+              </PopoverPrimitive.Portal>
+            </PopoverPrimitive.Root>
+          )}
 
-            {renderToolbarButton(
-              'text-color',
-              'Colore testo',
-              <PopoverPrimitive.Root
-                open={colorMenuOpen}
-                onOpenChange={setColorMenuOpen}
-                modal={false}
-              >
-                <PopoverPrimitive.Trigger asChild>
-                  <button
-                    type="button"
-                    className={cn(
-                      'inline-flex size-8 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-                      hasCustomTextColor
-                        ? 'border-border bg-secondary text-secondary-foreground'
-                        : 'hover:bg-secondary/60 border-transparent bg-transparent'
-                    )}
-                    onMouseDown={(event) => event.preventDefault()}
+          {renderToolbarButton(
+            'font-size',
+            'Dimensione testo',
+            <PopoverPrimitive.Root
+              open={fontSizeMenuOpen}
+              onOpenChange={setFontSizeMenuOpen}
+              modal={false}
+            >
+              <PopoverPrimitive.Anchor asChild>
+                <div ref={fontSizeControlRef} className="relative w-16">
+                  <Input
+                    ref={fontSizeInputRef}
+                    value={
+                      fontSizeInputFocused
+                        ? fontSizeDraft
+                        : formatFontSizePxForDisplay(active.fontSizePx)
+                    }
+                    onChange={(event) => {
+                      // Allow decimals so a forwarded line authored in pt
+                      // (e.g. 13pt → 17.33px) round-trips visibly without
+                      // silently rounding to a different visual size.
+                      const next = event.target.value.replace(/[^0-9.]/g, '')
+                      const dotIndex = next.indexOf('.')
+                      const normalized =
+                        dotIndex === -1
+                          ? next
+                          : next.slice(0, dotIndex + 1) +
+                            next.slice(dotIndex + 1).replace(/\./g, '')
+                      setFontSizeDraft(normalized)
+                    }}
+                    onFocus={() => {
+                      setFontSizeInputFocused(true)
+                      setFontSizeDraft(formatFontSizePxForDisplay(active.fontSizePx))
+                      setFontSizeMenuOpen(true)
+                    }}
+                    onClick={() => {
+                      if (!disabled && editor) {
+                        setFontSizeMenuOpen(true)
+                      }
+                    }}
+                    onBlur={() => {
+                      applyManualFontSize()
+                      setFontSizeInputFocused(false)
+                      setFontSizeMenuOpen(false)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        applyManualFontSize()
+                        setFontSizeMenuOpen(false)
+                        return
+                      }
+                      if (event.key === 'ArrowDown') {
+                        event.preventDefault()
+                        setFontSizeMenuOpen(true)
+                        return
+                      }
+                      if (event.key === 'Escape') {
+                        event.preventDefault()
+                        setFontSizeDraft(String(active.fontSizePx))
+                        setFontSizeMenuOpen(false)
+                        event.currentTarget.blur()
+                      }
+                    }}
+                    className="hover:bg-secondary/60 h-8 w-full border-transparent bg-transparent px-1 text-center text-xs font-medium focus-visible:bg-transparent"
+                    inputMode="numeric"
+                    aria-label="Dimensione testo in pixel"
                     disabled={disabled || !editor}
-                    title="Colore testo"
-                  >
-                    <span
-                      className="border-border/80 size-4 rounded-full border"
-                      style={{
-                        backgroundColor: active.color || 'hsl(var(--mail-editor-foreground))'
+                  />
+                </div>
+              </PopoverPrimitive.Anchor>
+              <PopoverPrimitive.Portal>
+                <PopoverPrimitive.Content
+                  side="bottom"
+                  align="start"
+                  sideOffset={4}
+                  className="border-border bg-popover text-popover-foreground shadow-background/65 z-50 w-16 min-w-0 overflow-hidden rounded-md border p-1 shadow-xl"
+                  onOpenAutoFocus={(event) => event.preventDefault()}
+                  onCloseAutoFocus={(event) => event.preventDefault()}
+                  onInteractOutside={(event) => {
+                    const target = event.target
+                    if (target instanceof Node && fontSizeControlRef.current?.contains(target)) {
+                      event.preventDefault()
+                    }
+                  }}
+                >
+                  {FONT_SIZE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="option"
+                      aria-selected={
+                        Math.round(active.fontSizePx * 100) ===
+                        Math.round((parseFontSizePx(option.value) ?? 0) * 100)
+                      }
+                      className="focus:bg-secondary hover:bg-secondary flex w-full cursor-default items-center justify-center rounded-sm px-0 py-1 text-xs font-medium transition-colors outline-none select-none"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        const px = parseFontSizePx(option.value) ?? BASE_FONT_SIZE_PX
+                        setFontSizePx(px)
+                        setFontSizeDraft(option.label)
+                        setFontSizeMenuOpen(false)
                       }}
-                    />
-                  </button>
-                </PopoverPrimitive.Trigger>
-                <PopoverPrimitive.Portal>
-                  <PopoverPrimitive.Content
-                    side="bottom"
-                    align="start"
-                    sideOffset={4}
-                    className="border-border bg-popover text-popover-foreground shadow-background/65 z-50 min-w-0 overflow-hidden rounded-md border p-2 shadow-xl"
-                    onOpenAutoFocus={(event) => event.preventDefault()}
-                    onCloseAutoFocus={(event) => event.preventDefault()}
-                  >
-                    <div className="grid grid-cols-6 gap-2">
-                      <Tooltip>
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </PopoverPrimitive.Content>
+              </PopoverPrimitive.Portal>
+            </PopoverPrimitive.Root>
+          )}
+
+          {renderToolbarButton(
+            'text-color',
+            'Colore testo',
+            <PopoverPrimitive.Root
+              open={colorMenuOpen}
+              onOpenChange={setColorMenuOpen}
+              modal={false}
+            >
+              <PopoverPrimitive.Trigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    'inline-flex size-8 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                    hasCustomTextColor
+                      ? 'border-border bg-secondary text-secondary-foreground'
+                      : 'hover:bg-secondary/60 border-transparent bg-transparent'
+                  )}
+                  onMouseDown={(event) => event.preventDefault()}
+                  disabled={disabled || !editor}
+                  aria-label="Colore testo"
+                >
+                  <span
+                    className="border-border/80 size-4 rounded-full border"
+                    style={{
+                      backgroundColor: active.color || 'hsl(var(--mail-editor-foreground))'
+                    }}
+                  />
+                </button>
+              </PopoverPrimitive.Trigger>
+              <PopoverPrimitive.Portal>
+                <PopoverPrimitive.Content
+                  side="bottom"
+                  align="start"
+                  sideOffset={4}
+                  className="border-border bg-popover text-popover-foreground shadow-background/65 z-50 min-w-0 overflow-hidden rounded-md border p-2 shadow-xl"
+                  onOpenAutoFocus={(event) => event.preventDefault()}
+                  onCloseAutoFocus={(event) => event.preventDefault()}
+                >
+                  <div className="grid grid-cols-6 gap-2">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="border-input bg-input/45 relative size-7 rounded-full border"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            setTextColor(EDITOR_BODY_COLOR_HEX)
+                            setColorMenuOpen(false)
+                          }}
+                        >
+                          <span className="bg-mail-editor-foreground absolute inset-1 rounded-full" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Predefinito</TooltipContent>
+                    </Tooltip>
+                    {TEXT_COLOR_OPTIONS.map((option) => (
+                      <Tooltip key={option.value}>
                         <TooltipTrigger asChild>
                           <button
                             type="button"
-                            className="border-input bg-input/45 relative size-7 rounded-full border"
+                            className="border-border/80 size-7 rounded-full border"
+                            style={{ backgroundColor: option.value }}
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => {
-                              setTextColor(EDITOR_BODY_COLOR_HEX)
+                              setTextColor(option.value)
                               setColorMenuOpen(false)
                             }}
-                          >
-                            <span className="bg-mail-editor-foreground absolute inset-1 rounded-full" />
-                          </button>
+                          />
                         </TooltipTrigger>
-                        <TooltipContent side="top">Predefinito</TooltipContent>
+                        <TooltipContent side="top">{option.label}</TooltipContent>
                       </Tooltip>
-                      {TEXT_COLOR_OPTIONS.map((option) => (
-                        <Tooltip key={option.value}>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              className="border-border/80 size-7 rounded-full border"
-                              style={{ backgroundColor: option.value }}
-                              onMouseDown={(event) => event.preventDefault()}
-                              onClick={() => {
-                                setTextColor(option.value)
-                                setColorMenuOpen(false)
-                              }}
-                            />
-                          </TooltipTrigger>
-                          <TooltipContent side="top">{option.label}</TooltipContent>
-                        </Tooltip>
-                      ))}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            className="border-input bg-input/45 hover:bg-secondary/60 inline-flex size-7 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => customColorInputRef.current?.click()}
-                            disabled={disabled || !editor}
-                          >
-                            <Palette className="text-foreground/85 size-4" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top">Colore personalizzato</TooltipContent>
-                      </Tooltip>
-                      <input
-                        ref={customColorInputRef}
-                        type="color"
-                        value={active.color || DEFAULT_CUSTOM_COLOR_PICKER_VALUE}
-                        onChange={(event) => {
-                          setTextColor(event.target.value.toLowerCase())
-                          setColorMenuOpen(false)
-                        }}
-                        className="sr-only"
-                        tabIndex={-1}
-                        aria-hidden="true"
-                      />
-                    </div>
-                  </PopoverPrimitive.Content>
-                </PopoverPrimitive.Portal>
-              </PopoverPrimitive.Root>
-            )}
-
-            {renderToolbarButton(
-              'text-highlight',
-              'Colore sfondo testo',
-              <PopoverPrimitive.Root
-                open={highlightMenuOpen}
-                onOpenChange={setHighlightMenuOpen}
-                modal={false}
-              >
-                <PopoverPrimitive.Trigger asChild>
-                  <button
-                    type="button"
-                    className={cn(
-                      'relative inline-flex size-8 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-                      hasCustomHighlightColor
-                        ? 'border-border bg-secondary text-secondary-foreground'
-                        : 'hover:bg-secondary/60 border-transparent bg-transparent'
-                    )}
-                    onMouseDown={(event) => event.preventDefault()}
-                    disabled={disabled || !editor}
-                    title="Colore sfondo testo"
-                  >
-                    <Highlighter className="text-foreground/85 size-4" />
-                    <span
-                      className="border-border/80 absolute right-1 bottom-1 left-1 h-1 rounded-full border"
-                      style={{ backgroundColor: active.highlight || 'transparent' }}
+                    ))}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="border-input bg-input/45 hover:bg-secondary/60 inline-flex size-7 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => customColorInputRef.current?.click()}
+                          disabled={disabled || !editor}
+                        >
+                          <Palette className="text-foreground/85 size-4" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Colore personalizzato</TooltipContent>
+                    </Tooltip>
+                    <input
+                      ref={customColorInputRef}
+                      type="color"
+                      value={active.color || DEFAULT_CUSTOM_COLOR_PICKER_VALUE}
+                      onChange={(event) => {
+                        setTextColor(event.target.value.toLowerCase())
+                        setColorMenuOpen(false)
+                      }}
+                      className="sr-only"
+                      tabIndex={-1}
+                      aria-hidden="true"
                     />
-                  </button>
-                </PopoverPrimitive.Trigger>
-                <PopoverPrimitive.Portal>
-                  <PopoverPrimitive.Content
-                    side="bottom"
-                    align="start"
-                    sideOffset={4}
-                    className="border-border bg-popover text-popover-foreground shadow-background/65 z-50 min-w-0 overflow-hidden rounded-md border p-2 shadow-xl"
-                    onOpenAutoFocus={(event) => event.preventDefault()}
-                    onCloseAutoFocus={(event) => event.preventDefault()}
-                  >
-                    <div className="grid grid-cols-4 gap-2">
-                      <Tooltip>
+                  </div>
+                </PopoverPrimitive.Content>
+              </PopoverPrimitive.Portal>
+            </PopoverPrimitive.Root>
+          )}
+
+          {renderToolbarButton(
+            'text-highlight',
+            'Colore sfondo testo',
+            <PopoverPrimitive.Root
+              open={highlightMenuOpen}
+              onOpenChange={setHighlightMenuOpen}
+              modal={false}
+            >
+              <PopoverPrimitive.Trigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    'relative inline-flex size-8 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                    hasCustomHighlightColor
+                      ? 'border-border bg-secondary text-secondary-foreground'
+                      : 'hover:bg-secondary/60 border-transparent bg-transparent'
+                  )}
+                  onMouseDown={(event) => event.preventDefault()}
+                  disabled={disabled || !editor}
+                  aria-label="Colore sfondo testo"
+                >
+                  <Highlighter className="text-foreground/85 size-4" />
+                  <span
+                    className="border-border/80 absolute right-1 bottom-1 left-1 h-1 rounded-full border"
+                    style={{ backgroundColor: active.highlight || 'transparent' }}
+                  />
+                </button>
+              </PopoverPrimitive.Trigger>
+              <PopoverPrimitive.Portal>
+                <PopoverPrimitive.Content
+                  side="bottom"
+                  align="start"
+                  sideOffset={4}
+                  className="border-border bg-popover text-popover-foreground shadow-background/65 z-50 min-w-0 overflow-hidden rounded-md border p-2 shadow-xl"
+                  onOpenAutoFocus={(event) => event.preventDefault()}
+                  onCloseAutoFocus={(event) => event.preventDefault()}
+                >
+                  <div className="grid grid-cols-4 gap-2">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="border-input bg-input/45 relative size-7 rounded-full border"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            setHighlightColor(DEFAULT_HIGHLIGHT_VALUE)
+                            setHighlightMenuOpen(false)
+                          }}
+                        >
+                          <span className="border-border/80 bg-background absolute inset-1 rounded-full border" />
+                          <span className="bg-destructive absolute top-3 left-1 h-0.5 w-5 rotate-45 rounded-full" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Nessuna evidenziazione</TooltipContent>
+                    </Tooltip>
+                    {TEXT_HIGHLIGHT_OPTIONS.map((option) => (
+                      <Tooltip key={option.value}>
                         <TooltipTrigger asChild>
                           <button
                             type="button"
-                            className="border-input bg-input/45 relative size-7 rounded-full border"
+                            className="border-border/80 size-7 rounded-full border"
+                            style={{ backgroundColor: option.value }}
                             onMouseDown={(event) => event.preventDefault()}
                             onClick={() => {
-                              setHighlightColor(DEFAULT_HIGHLIGHT_VALUE)
+                              setHighlightColor(option.value)
                               setHighlightMenuOpen(false)
                             }}
-                          >
-                            <span className="border-border/80 bg-background absolute inset-1 rounded-full border" />
-                            <span className="bg-destructive absolute top-3 left-1 h-0.5 w-5 rotate-45 rounded-full" />
-                          </button>
+                          />
                         </TooltipTrigger>
-                        <TooltipContent side="top">Nessuna evidenziazione</TooltipContent>
+                        <TooltipContent side="top">{option.label}</TooltipContent>
                       </Tooltip>
-                      {TEXT_HIGHLIGHT_OPTIONS.map((option) => (
-                        <Tooltip key={option.value}>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              className="border-border/80 size-7 rounded-full border"
-                              style={{ backgroundColor: option.value }}
-                              onMouseDown={(event) => event.preventDefault()}
-                              onClick={() => {
-                                setHighlightColor(option.value)
-                                setHighlightMenuOpen(false)
-                              }}
-                            />
-                          </TooltipTrigger>
-                          <TooltipContent side="top">{option.label}</TooltipContent>
-                        </Tooltip>
-                      ))}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            className="border-input bg-input/45 hover:bg-secondary/60 inline-flex size-7 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => customHighlightInputRef.current?.click()}
-                            disabled={disabled || !editor}
-                          >
-                            <Palette className="text-foreground/85 size-4" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top">Colore personalizzato</TooltipContent>
-                      </Tooltip>
-                      <input
-                        ref={customHighlightInputRef}
-                        type="color"
-                        value={active.highlight || DEFAULT_CUSTOM_HIGHLIGHT_PICKER_VALUE}
-                        onChange={(event) => {
-                          setHighlightColor(event.target.value.toLowerCase())
-                          setHighlightMenuOpen(false)
-                        }}
-                        className="sr-only"
-                        tabIndex={-1}
-                        aria-hidden="true"
-                      />
-                    </div>
-                  </PopoverPrimitive.Content>
-                </PopoverPrimitive.Portal>
-              </PopoverPrimitive.Root>
-            )}
+                    ))}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="border-input bg-input/45 hover:bg-secondary/60 inline-flex size-7 items-center justify-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => customHighlightInputRef.current?.click()}
+                          disabled={disabled || !editor}
+                        >
+                          <Palette className="text-foreground/85 size-4" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Colore personalizzato</TooltipContent>
+                    </Tooltip>
+                    <input
+                      ref={customHighlightInputRef}
+                      type="color"
+                      value={active.highlight || DEFAULT_CUSTOM_HIGHLIGHT_PICKER_VALUE}
+                      onChange={(event) => {
+                        setHighlightColor(event.target.value.toLowerCase())
+                        setHighlightMenuOpen(false)
+                      }}
+                      className="sr-only"
+                      tabIndex={-1}
+                      aria-hidden="true"
+                    />
+                  </div>
+                </PopoverPrimitive.Content>
+              </PopoverPrimitive.Portal>
+            </PopoverPrimitive.Root>
+          )}
 
-            {renderToolbarButton(
-              'heading',
-              'Titoli',
-              <DropdownMenu open={headingMenuOpen} onOpenChange={setHeadingMenuOpen} modal={false}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant={headingMenuOpen || activeHeadingLevel !== null ? 'secondary' : 'ghost'}
-                    size="icon"
-                    className="size-8"
-                    onMouseDown={(event) => event.preventDefault()}
-                    title="Titoli"
-                    disabled={disabled || !editor}
-                  >
-                    <HeadingTriggerIcon className="size-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  className="min-w-[10rem] p-1"
-                  onCloseAutoFocus={(event) => event.preventDefault()}
-                >
-                  {[
-                    { level: null, label: 'Paragrafo', icon: Pilcrow },
-                    { level: 1, label: 'Titolo 1', icon: Heading1 },
-                    { level: 2, label: 'Titolo 2', icon: Heading2 },
-                    { level: 3, label: 'Titolo 3', icon: Heading3 }
-                  ].map((option) => {
-                    const Icon = option.icon
-                    return (
-                      <DropdownMenuCheckboxItem
-                        key={option.label}
-                        checked={activeHeadingLevel === option.level}
-                        className="gap-2 text-xs"
-                        onSelect={(event) => {
-                          event.preventDefault()
-                          setHeadingLevel(option.level as 1 | 2 | 3 | null)
-                          setHeadingMenuOpen(false)
-                        }}
-                      >
-                        <Icon className="size-4" />
-                        {option.label}
-                      </DropdownMenuCheckboxItem>
-                    )
-                  })}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-
-            {inlineMarkButtons.map((button) => {
-              const Icon = button.icon
-              return renderToolbarButton(
-                button.id,
-                button.title,
+          {renderToolbarButton(
+            'heading',
+            'Titoli',
+            <DropdownMenu open={headingMenuOpen} onOpenChange={setHeadingMenuOpen} modal={false}>
+              <DropdownMenuTrigger asChild>
                 <Button
                   type="button"
-                  variant={button.active ? 'secondary' : 'ghost'}
+                  variant={headingMenuOpen || activeHeadingLevel !== null ? 'secondary' : 'ghost'}
                   size="icon"
                   className="size-8"
-                  onClick={button.action}
                   onMouseDown={(event) => event.preventDefault()}
-                  title={button.title}
-                  disabled={button.disabled || !editor}
+                  aria-label="Titoli"
+                  disabled={disabled || !editor}
                 >
-                  <Icon className="size-4" />
+                  <HeadingTriggerIcon className="size-4" />
                 </Button>
-              )
-            })}
-
-            {renderToolbarButton(
-              'alignment',
-              'Allineamento',
-              <DropdownMenu
-                open={alignmentMenuOpen}
-                onOpenChange={setAlignmentMenuOpen}
-                modal={false}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                className="min-w-[10rem] p-1"
+                onCloseAutoFocus={(event) => event.preventDefault()}
               >
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant={alignmentMenuOpen || hasNonDefaultAlignment ? 'secondary' : 'ghost'}
-                    size="icon"
-                    className="size-8"
-                    onMouseDown={(event) => event.preventDefault()}
-                    title="Allineamento"
-                    disabled={disabled || !editor}
-                  >
-                    <AlignmentTriggerIcon className="size-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  className="min-w-[11rem] p-1"
-                  onCloseAutoFocus={(event) => event.preventDefault()}
+                {[
+                  { level: null, label: 'Paragrafo', icon: Pilcrow },
+                  { level: 1, label: 'Titolo 1', icon: Heading1 },
+                  { level: 2, label: 'Titolo 2', icon: Heading2 },
+                  { level: 3, label: 'Titolo 3', icon: Heading3 }
+                ].map((option) => {
+                  const Icon = option.icon
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={option.label}
+                      checked={activeHeadingLevel === option.level}
+                      className="gap-2 text-xs"
+                      onSelect={(event) => {
+                        event.preventDefault()
+                        setHeadingLevel(option.level as 1 | 2 | 3 | null)
+                        setHeadingMenuOpen(false)
+                      }}
+                    >
+                      <Icon className="size-4" />
+                      {option.label}
+                    </DropdownMenuCheckboxItem>
+                  )
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
+          {inlineMarkButtons.map((button) => {
+            const Icon = button.icon
+            return renderToolbarButton(
+              button.id,
+              button.title,
+              <Button
+                type="button"
+                variant={button.active ? 'secondary' : 'ghost'}
+                size="icon"
+                className="size-8"
+                onClick={button.action}
+                onMouseDown={(event) => event.preventDefault()}
+                aria-label={button.title}
+                disabled={button.disabled || !editor}
+              >
+                <Icon className="size-4" />
+              </Button>
+            )
+          })}
+
+          {renderToolbarButton(
+            'alignment',
+            'Allineamento',
+            <DropdownMenu
+              open={alignmentMenuOpen}
+              onOpenChange={setAlignmentMenuOpen}
+              modal={false}
+            >
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant={alignmentMenuOpen || hasNonDefaultAlignment ? 'secondary' : 'ghost'}
+                  size="icon"
+                  className="size-8"
+                  onMouseDown={(event) => event.preventDefault()}
+                  aria-label="Allineamento"
+                  disabled={disabled || !editor}
                 >
-                  {[
-                    { value: 'left', label: 'Allinea a sinistra', icon: AlignLeft },
-                    { value: 'center', label: 'Centra', icon: AlignCenter },
-                    { value: 'right', label: 'Allinea a destra', icon: AlignRight },
-                    { value: 'justify', label: 'Giustifica', icon: AlignJustify }
-                  ].map((option) => {
-                    const Icon = option.icon
-                    return (
-                      <DropdownMenuCheckboxItem
-                        key={option.value}
-                        checked={
-                          option.value === 'left'
-                            ? active.alignment === null || active.alignment === 'left'
-                            : active.alignment === option.value
+                  <AlignmentTriggerIcon className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                className="min-w-[11rem] p-1"
+                onCloseAutoFocus={(event) => event.preventDefault()}
+              >
+                {[
+                  { value: 'left', label: 'Allinea a sinistra', icon: AlignLeft },
+                  { value: 'center', label: 'Centra', icon: AlignCenter },
+                  { value: 'right', label: 'Allinea a destra', icon: AlignRight },
+                  { value: 'justify', label: 'Giustifica', icon: AlignJustify }
+                ].map((option) => {
+                  const Icon = option.icon
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={option.value}
+                      checked={
+                        option.value === 'left'
+                          ? active.alignment === null || active.alignment === 'left'
+                          : active.alignment === option.value
+                      }
+                      className="gap-2 text-xs"
+                      onSelect={(event) => {
+                        event.preventDefault()
+                        setAlignment(option.value as Exclude<TextAlignment, null>)
+                        setAlignmentMenuOpen(false)
+                      }}
+                    >
+                      <Icon className="size-4" />
+                      {option.label}
+                    </DropdownMenuCheckboxItem>
+                  )
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
+          {listButtons.map((button) => {
+            const Icon = button.icon
+            return renderToolbarButton(
+              button.id,
+              button.title,
+              <Button
+                type="button"
+                variant={button.active ? 'secondary' : 'ghost'}
+                size="icon"
+                className="size-8"
+                onClick={button.action}
+                onMouseDown={(event) => event.preventDefault()}
+                aria-label={button.title}
+                disabled={button.disabled || !editor}
+              >
+                <Icon className="size-4" />
+              </Button>
+            )
+          })}
+
+          {indentQuoteButtons.map((button) => {
+            const Icon = button.icon
+            return renderToolbarButton(
+              button.id,
+              button.title,
+              <Button
+                type="button"
+                variant={button.active ? 'secondary' : 'ghost'}
+                size="icon"
+                className="size-8"
+                onClick={button.action}
+                onMouseDown={(event) => event.preventDefault()}
+                aria-label={button.title}
+                disabled={button.disabled || !editor}
+              >
+                <Icon className="size-4" />
+              </Button>
+            )
+          })}
+
+          {renderToolbarButton(
+            'line-height',
+            'Interlinea',
+            <DropdownMenu
+              open={lineHeightMenuOpen}
+              onOpenChange={setLineHeightMenuOpen}
+              modal={false}
+            >
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant={
+                    lineHeightMenuOpen ||
+                    (active.lineHeightRatio !== null &&
+                      Math.abs(active.lineHeightRatio - Number(DEFAULT_EDITOR_LINE_HEIGHT)) > 0.02)
+                      ? 'secondary'
+                      : 'ghost'
+                  }
+                  size="icon"
+                  className="size-8"
+                  onMouseDown={(event) => event.preventDefault()}
+                  aria-label="Interlinea"
+                  disabled={disabled || !editor}
+                >
+                  <LineSpacingIcon className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                className="min-w-[4.5rem] p-1"
+                onCloseAutoFocus={(event) => event.preventDefault()}
+              >
+                {EDITOR_LINE_HEIGHT_OPTIONS.map((option) => {
+                  // Match the option to the cascade-resolved ratio from the
+                  // caret. When nothing matches (e.g. caret on a paragraph
+                  // whose authored line-height is 1.4 — not in our presets,
+                  // or `normal`), no checkmark is shown — same UX as Gmail.
+                  const checked =
+                    active.lineHeightRatio !== null &&
+                    Math.abs(active.lineHeightRatio - Number(option.value)) < 0.02
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={option.value}
+                      checked={checked}
+                      className="text-xs"
+                      onSelect={(event) => {
+                        event.preventDefault()
+                        if (editor) {
+                          applyLineHeight(editor, option.value)
+                          editor.focus()
                         }
-                        className="gap-2 text-xs"
-                        onSelect={(event) => {
-                          event.preventDefault()
-                          setAlignment(option.value as Exclude<TextAlignment, null>)
-                          setAlignmentMenuOpen(false)
-                        }}
-                      >
-                        <Icon className="size-4" />
-                        {option.label}
-                      </DropdownMenuCheckboxItem>
-                    )
-                  })}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
+                        setLineHeightMenuOpen(false)
+                      }}
+                    >
+                      {option.label}
+                    </DropdownMenuCheckboxItem>
+                  )
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
 
-            {listButtons.map((button) => {
-              const Icon = button.icon
-              return renderToolbarButton(
-                button.id,
-                button.title,
-                <Button
-                  type="button"
-                  variant={button.active ? 'secondary' : 'ghost'}
-                  size="icon"
-                  className="size-8"
-                  onClick={button.action}
-                  onMouseDown={(event) => event.preventDefault()}
-                  title={button.title}
-                  disabled={button.disabled || !editor}
-                >
-                  <Icon className="size-4" />
-                </Button>
-              )
-            })}
+          {renderToolbarButton(
+            'inline-media',
+            'Inserisci media nel contenuto',
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              onClick={openMediaPicker}
+              onMouseDown={(event) => event.preventDefault()}
+              aria-label="Inserisci media nel contenuto"
+              disabled={disabled || !editor}
+            >
+              <ImagePlus className="size-4" />
+            </Button>
+          )}
 
-            {indentQuoteButtons.map((button) => {
-              const Icon = button.icon
-              return renderToolbarButton(
-                button.id,
-                button.title,
-                <Button
-                  type="button"
-                  variant={button.active ? 'secondary' : 'ghost'}
-                  size="icon"
-                  className="size-8"
-                  onClick={button.action}
-                  onMouseDown={(event) => event.preventDefault()}
-                  title={button.title}
-                  disabled={button.disabled || !editor}
-                >
-                  <Icon className="size-4" />
-                </Button>
-              )
-            })}
+          {renderToolbarButton(
+            'link',
+            'Link',
+            <Button
+              type="button"
+              variant={active.isLink ? 'secondary' : 'ghost'}
+              size="icon"
+              className="size-8"
+              onClick={openLinkEditor}
+              onMouseDown={(event) => event.preventDefault()}
+              aria-label="Link"
+              disabled={disabled || !editor}
+            >
+              <Link2 className="size-4" />
+            </Button>
+          )}
 
-            {renderToolbarButton(
-              'line-height',
-              'Interlinea',
-              <DropdownMenu
-                open={lineHeightMenuOpen}
-                onOpenChange={setLineHeightMenuOpen}
-                modal={false}
-              >
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant={
-                      lineHeightMenuOpen ||
-                      (active.lineHeightRatio !== null &&
-                        Math.abs(active.lineHeightRatio - Number(DEFAULT_EDITOR_LINE_HEIGHT)) >
-                          0.02)
-                        ? 'secondary'
-                        : 'ghost'
-                    }
-                    size="icon"
-                    className="size-8"
-                    onMouseDown={(event) => event.preventDefault()}
-                    title="Interlinea"
-                    disabled={disabled || !editor}
-                  >
-                    <LineSpacingIcon className="size-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  className="min-w-[4.5rem] p-1"
-                  onCloseAutoFocus={(event) => event.preventDefault()}
-                >
-                  {EDITOR_LINE_HEIGHT_OPTIONS.map((option) => {
-                    // Match the option to the cascade-resolved ratio from the
-                    // caret. When nothing matches (e.g. caret on a paragraph
-                    // whose authored line-height is 1.4 — not in our presets,
-                    // or `normal`), no checkmark is shown — same UX as Gmail.
-                    const checked =
-                      active.lineHeightRatio !== null &&
-                      Math.abs(active.lineHeightRatio - Number(option.value)) < 0.02
-                    return (
-                      <DropdownMenuCheckboxItem
-                        key={option.value}
-                        checked={checked}
-                        className="text-xs"
-                        onSelect={(event) => {
-                          event.preventDefault()
-                          if (editor) {
-                            applyLineHeight(editor, option.value)
-                            editor.focus()
-                          }
-                          setLineHeightMenuOpen(false)
-                        }}
-                      >
-                        {option.label}
-                      </DropdownMenuCheckboxItem>
-                    )
-                  })}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-
-            {renderToolbarButton(
-              'inline-media',
-              'Inserisci media nel contenuto',
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                onClick={openMediaPicker}
-                onMouseDown={(event) => event.preventDefault()}
-                title="Inserisci media nel contenuto"
-                disabled={disabled || !editor}
-              >
-                <ImagePlus className="size-4" />
-              </Button>
-            )}
-
-            {renderToolbarButton(
-              'link',
-              'Link',
-              <Button
-                type="button"
-                variant={active.isLink ? 'secondary' : 'ghost'}
-                size="icon"
-                className="size-8"
-                onClick={openLinkEditor}
-                onMouseDown={(event) => event.preventDefault()}
-                title="Link"
-                disabled={disabled || !editor}
-              >
-                <Link2 className="size-4" />
-              </Button>
-            )}
-
-            {renderToolbarButton(
-              'clear-formatting',
-              'Rimuovi formattazione',
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                onClick={clearFormatting}
-                onMouseDown={(event) => event.preventDefault()}
-                title="Rimuovi formattazione"
-                disabled={disabled || !editor || active.isEmpty}
-              >
-                <RemoveFormatting className="size-4" />
-              </Button>
-            )}
-          </div>
-
-          {showExpandToggle &&
-            renderToolbarButton(
-              'toggle-editor-size',
-              editorExpanded ? 'Riduci box di scrittura' : 'Espandi box di scrittura',
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-8 shrink-0 self-start"
-                onClick={() => setEditorExpanded(!editorExpanded)}
-                onMouseDown={(event) => event.preventDefault()}
-                title={editorExpanded ? 'Riduci box di scrittura' : 'Espandi box di scrittura'}
-              >
-                {editorExpanded ? (
-                  <Minimize2 className="size-4" />
-                ) : (
-                  <Maximize2 className="size-4" />
-                )}
-              </Button>
-            )}
+          {renderToolbarButton(
+            'clear-formatting',
+            'Rimuovi formattazione',
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              onClick={clearFormatting}
+              onMouseDown={(event) => event.preventDefault()}
+              aria-label="Rimuovi formattazione"
+              disabled={disabled || !editor || active.isEmpty}
+            >
+              <RemoveFormatting className="size-4" />
+            </Button>
+          )}
         </div>
-      </TooltipProvider>
+
+        {showExpandToggle &&
+          renderToolbarButton(
+            'toggle-editor-size',
+            editorExpanded ? 'Riduci box di scrittura' : 'Espandi box di scrittura',
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8 shrink-0 self-start"
+              onClick={() => setEditorExpanded(!editorExpanded)}
+              onMouseDown={(event) => event.preventDefault()}
+              aria-label={editorExpanded ? 'Riduci box di scrittura' : 'Espandi box di scrittura'}
+            >
+              {editorExpanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+            </Button>
+          )}
+      </div>
 
       <input
         ref={inlineMediaInputRef}

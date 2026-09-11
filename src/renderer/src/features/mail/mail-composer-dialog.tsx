@@ -11,10 +11,11 @@ import {
   DialogHeader,
   DialogTitle
 } from '@renderer/components/ui/dialog'
-import { Input } from '@renderer/components/ui/input'
-import { Label } from '@renderer/components/ui/label'
+import { IconButton } from '@renderer/components/ui/icon-button'
+import { AttachmentChip } from '@renderer/features/mail/attachment-chip'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
 import { htmlToPlainText, splitRecipients } from '@renderer/lib/email'
+import { cn } from '@renderer/lib/utils'
 import { MAIL_COMPOSER_DEFAULT_FONT_FAMILY } from '@shared/mail-fonts'
 import type {
   ComposeMailInput,
@@ -354,6 +355,13 @@ export function MailComposerDialog({
   const [activeTokenContext, setActiveTokenContext] = useState<RecipientTokenContext | null>(null)
   const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0)
   const [discardConfirmationOpen, setDiscardConfirmationOpen] = useState(false)
+  /**
+   * Cc and Ccn stay folded away until they are wanted. They were always on
+   * screen, which cost two rows of every message to serve the small minority
+   * that carbon-copies — and a reply that already carries a Cc list has to
+   * show them, so the toggle follows the content rather than overriding it.
+   */
+  const [ccBccRequested, setCcBccRequested] = useState(false)
   const toInputRef = useRef<HTMLInputElement | null>(null)
   const ccInputRef = useRef<HTMLInputElement | null>(null)
   const bccInputRef = useRef<HTMLInputElement | null>(null)
@@ -474,6 +482,10 @@ export function MailComposerDialog({
     if (open) {
       setAttachments(initialData?.attachments ? [...initialData.attachments] : [])
       setEditorFocusMode(false)
+      // Without this the disclosure stayed open for the rest of the session:
+      // one message that needed a Cc left every later message showing two
+      // empty rows it had no use for.
+      setCcBccRequested(false)
     }
   }
 
@@ -636,6 +648,122 @@ export function MailComposerDialog({
     account && toRecipients.length > 0 && form.subject.trim() && form.html.trim()
   )
 
+  /**
+   * The window said "Nuovo messaggio" even when the user had just hit
+   * Rispondi, which is the one moment they need confirming that the reply
+   * carried the thread with it. Read from the fields rather than sniffed
+   * from the subject prefix: only a reply carries `inReplyTo`, and only a
+   * forward arrives with a body already written.
+   */
+  const composerTitle = initialData?.inReplyTo
+    ? 'Rispondi'
+    : initialData?.html
+      ? 'Inoltra messaggio'
+      : 'Nuovo messaggio'
+
+  // Content wins over the toggle: a reply-all or a reopened draft that
+  // already carries copies must never hide them behind a disclosure.
+  const ccBccVisible = ccBccRequested || form.cc.trim().length > 0 || form.bcc.trim().length > 0
+
+  const ccBccToggle = ccBccVisible ? null : (
+    <button
+      type="button"
+      onClick={() => {
+        setCcBccRequested(true)
+        window.requestAnimationFrame(() => ccInputRef.current?.focus())
+      }}
+      disabled={!account}
+      className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/70 shrink-0 rounded-sm px-1 text-[11px] outline-none focus-visible:ring-2 disabled:opacity-50"
+    >
+      Cc/Ccn
+    </button>
+  )
+
+  /**
+   * One recipient row: gutter label, borderless input, and the suggestion
+   * list anchored under it. The three fields were 55 lines of identical JSX
+   * apiece, which is why they drifted apart — Bcc had picked up a different
+   * placeholder and Cc a different focus handler.
+   */
+  const renderRecipientField = (
+    field: RecipientFieldKey,
+    label: string,
+    placeholder: string,
+    trailing?: React.ReactNode
+  ): React.JSX.Element => {
+    // Looked up here rather than passed in: handing a ref to a function is
+    // what the "cannot access refs during render" rule is guarding against,
+    // even when the function only forwards it to a `ref` prop.
+    const containerRef =
+      field === 'to'
+        ? toFieldContainerRef
+        : field === 'cc'
+          ? ccFieldContainerRef
+          : bccFieldContainerRef
+    const inputRef = field === 'to' ? toInputRef : field === 'cc' ? ccInputRef : bccInputRef
+
+    const refreshFor = (element: HTMLInputElement): void => {
+      refreshRecipientSuggestions(field, element.value, element)
+    }
+
+    return (
+      <div className="flex items-center gap-2 px-2" ref={containerRef}>
+        <label
+          htmlFor={`compose-${field}`}
+          className="text-muted-foreground w-14 shrink-0 text-[11px]"
+        >
+          {label}
+        </label>
+        <div className="relative min-w-0 flex-1">
+          <input
+            ref={inputRef}
+            id={`compose-${field}`}
+            value={form[field]}
+            onChange={(event) => {
+              const value = event.target.value
+              setForm((current) => ({ ...current, [field]: value }))
+              refreshFor(event.currentTarget)
+            }}
+            onFocus={(event) => refreshFor(event.currentTarget)}
+            onClick={(event) => refreshFor(event.currentTarget)}
+            onKeyUp={(event) => refreshFor(event.currentTarget)}
+            onKeyDown={(event) => handleRecipientKeyDown(field, event)}
+            placeholder={placeholder}
+            disabled={!account}
+            className="placeholder:text-muted-foreground/70 h-8 w-full bg-transparent text-[12.5px] outline-none disabled:opacity-50"
+          />
+          {activeRecipientField === field && recipientSuggestions.length > 0 && (
+            <div className="border-border bg-popover absolute top-full right-0 left-0 z-40 mt-1 max-h-52 overflow-y-auto rounded-md border shadow-xl">
+              {recipientSuggestions.map((suggestion, index) => (
+                <button
+                  key={`${suggestion.email}-${index}`}
+                  type="button"
+                  className={cn(
+                    'hover:bg-secondary/70 flex w-full items-center justify-between gap-3 px-2 py-1.5 text-left text-[12px] transition-colors',
+                    highlightedSuggestionIndex === index && 'bg-secondary/65'
+                  )}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseEnter={() => setHighlightedSuggestionIndex(index)}
+                  onClick={() => applyRecipientSuggestion(field, suggestion)}
+                >
+                  <span className="truncate font-medium">
+                    {suggestion.name || suggestion.email}
+                  </span>
+                  {suggestion.name && (
+                    <span className="text-muted-foreground truncate text-[11px]">
+                      {suggestion.email}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {trailing}
+      </div>
+    )
+  }
+
   const handlePickAttachments = async (): Promise<void> => {
     const picked = await window.mailApi.pickAttachments()
 
@@ -733,11 +861,18 @@ export function MailComposerDialog({
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
           hideClose={editorFocusMode}
-          className={
+          className={cn(
+            'flex flex-col gap-2 p-4',
             editorFocusMode
               ? 'h-[92vh] max-h-[92vh] w-[min(1200px,calc(100vw-1.5rem))] overflow-hidden p-3'
-              : 'scrollbar-y max-h-[90vh] overflow-y-auto'
-          }
+              : // A managed height, not a content-driven one. Letting the
+                // panel size itself meant the editor got whatever was left
+                // after the envelope, which on a reply with a long recipient
+                // list was a couple of visible lines. The dialog now claims
+                // a comfortable working height and the editor takes every
+                // pixel the envelope and footer do not.
+                'h-[min(760px,calc(100vh-3rem))]'
+          )}
         >
           {editorFocusMode ? (
             <div className="h-full min-h-0">
@@ -761,232 +896,60 @@ export function MailComposerDialog({
             </div>
           ) : (
             <>
-              <DialogHeader>
-                <DialogTitle>Nuovo messaggio</DialogTitle>
-                <DialogDescription>
+              <DialogHeader className="gap-0 pb-1">
+                <DialogTitle className="text-[14px] leading-6">{composerTitle}</DialogTitle>
+                <DialogDescription className="text-[11px]">
                   {account
                     ? `Invio da ${account.email}`
                     : 'Seleziona prima un account per comporre una nuova email.'}
                 </DialogDescription>
               </DialogHeader>
 
-              <div className="space-y-3">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="md:col-span-2">
-                    <Label htmlFor="compose-to">A</Label>
-                    <div className="relative" ref={toFieldContainerRef}>
-                      <Input
-                        ref={toInputRef}
-                        id="compose-to"
-                        value={form.to}
-                        onChange={(event) => {
-                          const value = event.target.value
-                          setForm((current) => ({ ...current, to: value }))
-                          refreshRecipientSuggestions('to', value, event.currentTarget)
-                        }}
-                        onFocus={(event) =>
-                          refreshRecipientSuggestions(
-                            'to',
-                            event.currentTarget.value,
-                            event.currentTarget
-                          )
-                        }
-                        onClick={(event) =>
-                          refreshRecipientSuggestions(
-                            'to',
-                            event.currentTarget.value,
-                            event.currentTarget
-                          )
-                        }
-                        onKeyUp={(event) =>
-                          refreshRecipientSuggestions(
-                            'to',
-                            event.currentTarget.value,
-                            event.currentTarget
-                          )
-                        }
-                        onKeyDown={(event) => handleRecipientKeyDown('to', event)}
-                        placeholder="destinatario1@azienda.com, destinatario2@azienda.com"
-                        disabled={!account}
-                      />
-                      {activeRecipientField === 'to' && recipientSuggestions.length > 0 && (
-                        <div className="border-border bg-card absolute top-full right-0 left-0 z-40 mt-1 max-h-52 overflow-y-auto rounded-md border shadow-xl">
-                          {recipientSuggestions.map((suggestion, index) => (
-                            <button
-                              key={`${suggestion.email}-${index}`}
-                              type="button"
-                              className={`hover:bg-secondary/70 focus:bg-secondary/70 flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors ${
-                                highlightedSuggestionIndex === index ? 'bg-secondary/65' : ''
-                              }`}
-                              onMouseDown={(event) => event.preventDefault()}
-                              onMouseEnter={() => setHighlightedSuggestionIndex(index)}
-                              onClick={() => applyRecipientSuggestion('to', suggestion)}
-                            >
-                              <span className="truncate font-medium">
-                                {suggestion.name || suggestion.email}
-                              </span>
-                              {suggestion.name && (
-                                <span className="text-muted-foreground truncate text-xs">
-                                  {suggestion.email}
-                                </span>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
+              {/*
+                The envelope is a stack of hairline rows, not a grid of
+                labelled boxes. Each field used to be a `Label` above a
+                full-height `Input`, which cost about 84px per field and
+                pushed the editor — the only part anyone actually works in —
+                into the bottom third of the dialog. An inline label in a
+                fixed gutter reads the same and costs 32px, which is the
+                shape Outlook and Mail have both settled on.
+              */}
+              <div className="border-border/70 divide-border/50 divide-y rounded-md border">
+                {renderRecipientField('to', 'A', 'destinatario@azienda.com', ccBccToggle)}
+                {ccBccVisible && renderRecipientField('cc', 'Cc', 'opzionale')}
+                {ccBccVisible && renderRecipientField('bcc', 'Ccn', 'opzionale')}
 
-                  <div>
-                    <Label htmlFor="compose-cc">Cc</Label>
-                    <div className="relative" ref={ccFieldContainerRef}>
-                      <Input
-                        ref={ccInputRef}
-                        id="compose-cc"
-                        value={form.cc}
-                        onChange={(event) => {
-                          const value = event.target.value
-                          setForm((current) => ({ ...current, cc: value }))
-                          refreshRecipientSuggestions('cc', value, event.currentTarget)
-                        }}
-                        onFocus={(event) =>
-                          refreshRecipientSuggestions(
-                            'cc',
-                            event.currentTarget.value,
-                            event.currentTarget
-                          )
-                        }
-                        onClick={(event) =>
-                          refreshRecipientSuggestions(
-                            'cc',
-                            event.currentTarget.value,
-                            event.currentTarget
-                          )
-                        }
-                        onKeyUp={(event) =>
-                          refreshRecipientSuggestions(
-                            'cc',
-                            event.currentTarget.value,
-                            event.currentTarget
-                          )
-                        }
-                        onKeyDown={(event) => handleRecipientKeyDown('cc', event)}
-                        placeholder="opzionale"
-                        disabled={!account}
-                      />
-                      {activeRecipientField === 'cc' && recipientSuggestions.length > 0 && (
-                        <div className="border-border bg-card absolute top-full right-0 left-0 z-40 mt-1 max-h-52 overflow-y-auto rounded-md border shadow-xl">
-                          {recipientSuggestions.map((suggestion, index) => (
-                            <button
-                              key={`${suggestion.email}-${index}`}
-                              type="button"
-                              className={`hover:bg-secondary/70 focus:bg-secondary/70 flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors ${
-                                highlightedSuggestionIndex === index ? 'bg-secondary/65' : ''
-                              }`}
-                              onMouseDown={(event) => event.preventDefault()}
-                              onMouseEnter={() => setHighlightedSuggestionIndex(index)}
-                              onClick={() => applyRecipientSuggestion('cc', suggestion)}
-                            >
-                              <span className="truncate font-medium">
-                                {suggestion.name || suggestion.email}
-                              </span>
-                              {suggestion.name && (
-                                <span className="text-muted-foreground truncate text-xs">
-                                  {suggestion.email}
-                                </span>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <Label htmlFor="compose-bcc">Bcc</Label>
-                    <div className="relative" ref={bccFieldContainerRef}>
-                      <Input
-                        ref={bccInputRef}
-                        id="compose-bcc"
-                        value={form.bcc}
-                        onChange={(event) => {
-                          const value = event.target.value
-                          setForm((current) => ({ ...current, bcc: value }))
-                          refreshRecipientSuggestions('bcc', value, event.currentTarget)
-                        }}
-                        onFocus={(event) =>
-                          refreshRecipientSuggestions(
-                            'bcc',
-                            event.currentTarget.value,
-                            event.currentTarget
-                          )
-                        }
-                        onClick={(event) =>
-                          refreshRecipientSuggestions(
-                            'bcc',
-                            event.currentTarget.value,
-                            event.currentTarget
-                          )
-                        }
-                        onKeyUp={(event) =>
-                          refreshRecipientSuggestions(
-                            'bcc',
-                            event.currentTarget.value,
-                            event.currentTarget
-                          )
-                        }
-                        onKeyDown={(event) => handleRecipientKeyDown('bcc', event)}
-                        placeholder="opzionale"
-                        disabled={!account}
-                      />
-                      {activeRecipientField === 'bcc' && recipientSuggestions.length > 0 && (
-                        <div className="border-border bg-card absolute top-full right-0 left-0 z-40 mt-1 max-h-52 overflow-y-auto rounded-md border shadow-xl">
-                          {recipientSuggestions.map((suggestion, index) => (
-                            <button
-                              key={`${suggestion.email}-${index}`}
-                              type="button"
-                              className={`hover:bg-secondary/70 focus:bg-secondary/70 flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors ${
-                                highlightedSuggestionIndex === index ? 'bg-secondary/65' : ''
-                              }`}
-                              onMouseDown={(event) => event.preventDefault()}
-                              onMouseEnter={() => setHighlightedSuggestionIndex(index)}
-                              onClick={() => applyRecipientSuggestion('bcc', suggestion)}
-                            >
-                              <span className="truncate font-medium">
-                                {suggestion.name || suggestion.email}
-                              </span>
-                              {suggestion.name && (
-                                <span className="text-muted-foreground truncate text-xs">
-                                  {suggestion.email}
-                                </span>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="md:col-span-2">
-                    <Label htmlFor="compose-subject">Oggetto</Label>
-                    <Input
-                      id="compose-subject"
-                      value={form.subject}
-                      onChange={(event) =>
-                        setForm((current) => ({ ...current, subject: event.target.value }))
-                      }
-                      onFocus={() => closeRecipientSuggestions()}
-                      placeholder="Inserisci oggetto"
-                      disabled={!account}
-                    />
-                  </div>
+                <div className="flex items-center gap-2 px-2">
+                  <label
+                    htmlFor="compose-subject"
+                    className="text-muted-foreground w-14 shrink-0 text-[11px]"
+                  >
+                    Oggetto
+                  </label>
+                  <input
+                    id="compose-subject"
+                    value={form.subject}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, subject: event.target.value }))
+                    }
+                    onFocus={() => closeRecipientSuggestions()}
+                    placeholder="Inserisci oggetto"
+                    disabled={!account}
+                    className="placeholder:text-muted-foreground/70 h-8 min-w-0 flex-1 bg-transparent text-[12.5px] font-medium outline-none disabled:opacity-50"
+                  />
                 </div>
+              </div>
 
+              <div className="min-h-0 flex-1">
                 <RichTextEditor
                   value={form.html}
                   disabled={!account}
                   defaultFontFamily={MAIL_COMPOSER_DEFAULT_FONT_FAMILY}
                   expanded={editorFocusMode}
+                  expandToContainer
+                  // A reply already knows who it is going to, so the next
+                  // thing the user does is write. A new message does not.
+                  autoFocusBody={Boolean(initialData?.to?.length)}
                   onExpandedChange={(expanded) => {
                     setEditorFocusMode(expanded)
 
@@ -998,65 +961,65 @@ export function MailComposerDialog({
                     setForm((current) => ({ ...current, html, text }))
                   }}
                 />
-
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="gap-2"
-                      onClick={handlePickAttachments}
-                    >
-                      <Paperclip className="size-4" />
-                      Aggiungi allegati
-                    </Button>
-                    <span className="text-muted-foreground text-xs">
-                      {attachments.length} file selezionati
-                    </span>
-                  </div>
-
-                  {attachments.length > 0 && (
-                    <div className="border-border bg-muted/25 grid gap-2 rounded-md border p-2 md:grid-cols-2">
-                      {attachments.map((attachment) => (
-                        <div
-                          key={attachment.path}
-                          className="border-border bg-card/80 flex items-center justify-between rounded-md border px-2 py-1.5"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-xs font-semibold">{attachment.name}</p>
-                            <p className="text-muted-foreground text-[11px]">
-                              {Math.round(attachment.size / 1024)} KB
-                            </p>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="size-7"
-                            onClick={() => {
-                              setAttachments((current) =>
-                                current.filter((item) => item.path !== attachment.path)
-                              )
-                            }}
-                          >
-                            <X className="size-4" />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
               </div>
 
-              <DialogFooter>
-                <Button variant="ghost" onClick={() => handleDialogOpenChange(false)}>
-                  Annulla
+              {attachments.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {attachments.map((attachment) => (
+                    <AttachmentChip
+                      key={attachment.path}
+                      fileName={attachment.name}
+                      sizeBytes={attachment.size}
+                      trailing={
+                        <IconButton
+                          label={`Rimuovi ${attachment.name}`}
+                          tooltipSide="top"
+                          className="size-5"
+                          onClick={() => {
+                            setAttachments((current) =>
+                              current.filter((item) => item.path !== attachment.path)
+                            )
+                          }}
+                        >
+                          <X className="size-3" />
+                        </IconButton>
+                      }
+                    />
+                  ))}
+                </div>
+              )}
+
+              <DialogFooter className="sm:justify-between">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1.5 text-[12px]"
+                  onClick={handlePickAttachments}
+                  disabled={!account}
+                >
+                  <Paperclip className="size-3.5" />
+                  Allega
                 </Button>
-                <Button onClick={() => void handleSend()} disabled={!canSend} className="gap-2">
-                  <Send className="size-4" />
-                  Invia
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 text-[12px]"
+                    onClick={() => handleDialogOpenChange(false)}
+                  >
+                    Annulla
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => void handleSend()}
+                    disabled={!canSend}
+                    className="h-8 gap-1.5 text-[12px]"
+                  >
+                    <Send className="size-3.5" />
+                    Invia
+                  </Button>
+                </div>
               </DialogFooter>
             </>
           )}

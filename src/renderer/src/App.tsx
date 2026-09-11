@@ -34,6 +34,7 @@ import { MessageViewer } from '@renderer/features/mail/message-viewer'
 import { MailToolbar } from '@renderer/features/mail/mail-toolbar'
 import { SettingsDialog } from '@renderer/features/settings/settings-dialog'
 import { Button } from '@renderer/components/ui/button'
+import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { cn, formatAppVersion } from '@renderer/lib/utils'
 import { buildMessageSections } from '@renderer/lib/message-sections'
 import {
@@ -242,41 +243,47 @@ function AppFrame({
   onCloseWindow: () => void
 }): React.JSX.Element {
   return (
-    <div className={cn('h-screen overflow-hidden p-2.5', windowControlsState.enabled && 'pt-9')}>
-      {windowControlsState.dragTopRegionEnabled && <div className="window-drag-edge" aria-hidden />}
-      {windowControlsState.enabled && (
-        <div className="window-no-drag border-border bg-card/90 fixed top-0 right-0 z-[10000] flex overflow-hidden rounded-bl-md border-b border-l backdrop-blur">
-          <button
-            type="button"
-            className="hover:bg-secondary/70 inline-flex h-8 w-10 items-center justify-center transition-colors"
-            onClick={onMinimizeWindow}
-            aria-label="Minimizza finestra"
-            title="Minimizza"
-          >
-            <Minus className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            className="hover:bg-secondary/70 inline-flex h-8 w-10 items-center justify-center transition-colors"
-            onClick={onToggleMaximizeWindow}
-            aria-label={windowControlsState.maximized ? 'Riduci finestra' : 'Ingrandisci finestra'}
-            title={windowControlsState.maximized ? 'Riduci' : 'Ingrandisci'}
-          >
-            <Square className="size-3" />
-          </button>
-          <button
-            type="button"
-            className="hover:bg-destructive/80 hover:text-destructive-foreground inline-flex h-8 w-10 items-center justify-center transition-colors"
-            onClick={onCloseWindow}
-            aria-label="Chiudi finestra"
-            title="Chiudi"
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-      )}
-      <div className="h-full min-h-0">{children}</div>
-    </div>
+    <TooltipProvider delayDuration={140} skipDelayDuration={300}>
+      <div className={cn('h-screen overflow-hidden p-2.5', windowControlsState.enabled && 'pt-9')}>
+        {windowControlsState.dragTopRegionEnabled && (
+          <div className="window-drag-edge" aria-hidden />
+        )}
+        {windowControlsState.enabled && (
+          <div className="window-no-drag border-border bg-card/90 fixed top-0 right-0 z-[10000] flex overflow-hidden rounded-bl-md border-b border-l backdrop-blur">
+            <button
+              type="button"
+              className="hover:bg-secondary/70 inline-flex h-8 w-10 items-center justify-center transition-colors"
+              onClick={onMinimizeWindow}
+              aria-label="Minimizza finestra"
+              title="Minimizza"
+            >
+              <Minus className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              className="hover:bg-secondary/70 inline-flex h-8 w-10 items-center justify-center transition-colors"
+              onClick={onToggleMaximizeWindow}
+              aria-label={
+                windowControlsState.maximized ? 'Riduci finestra' : 'Ingrandisci finestra'
+              }
+              title={windowControlsState.maximized ? 'Riduci' : 'Ingrandisci'}
+            >
+              <Square className="size-3" />
+            </button>
+            <button
+              type="button"
+              className="hover:bg-destructive/80 hover:text-destructive-foreground inline-flex h-8 w-10 items-center justify-center transition-colors"
+              onClick={onCloseWindow}
+              aria-label="Chiudi finestra"
+              title="Chiudi"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )}
+        <div className="h-full min-h-0">{children}</div>
+      </div>
+    </TooltipProvider>
   )
 }
 
