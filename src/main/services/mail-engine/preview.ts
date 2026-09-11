@@ -1,5 +1,4 @@
 import type { ParsedMail } from 'mailparser'
-import { simpleParser } from 'mailparser'
 
 export const PREVIEW_MAX_LENGTH = 200
 
@@ -468,14 +467,6 @@ function pickBestCandidate(parsed: ParsedMail): string {
   }
 
   return htmlWordCount > textWordCount ? htmlCandidate : textCandidate || htmlCandidate
-}
-
-export async function parseMessagePayload(source: Buffer | string): Promise<ParsedMail> {
-  return simpleParser(source, {
-    skipImageLinks: true,
-    skipTextToHtml: true,
-    skipTextLinks: true
-  })
 }
 
 export function extractPreview(parsed: ParsedMail, subject: string): string {

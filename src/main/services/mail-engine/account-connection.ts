@@ -1,7 +1,6 @@
 import { EventEmitter } from 'node:events'
 
 import { ImapFlow, type ExistsEvent, type ExpungeEvent, type FlagsEvent } from 'imapflow'
-import { simpleParser } from 'mailparser'
 import type { ParsedMail } from 'mailparser'
 
 import { logMainError } from '@main/utils/error-utils'
@@ -24,7 +23,8 @@ import {
   mapAddresses,
   mapFetchedToDetail
 } from './message-mapper'
-import { extractPreview, parseMessagePayload } from './preview'
+import { extractPreview } from './preview'
+import { parseMessageSource } from './message-parts'
 import {
   IMAP_CONNECTION_TIMEOUT_MS,
   IMAP_GREETING_TIMEOUT_MS,
@@ -518,7 +518,7 @@ export class AccountConnection extends EventEmitter {
           throw new Error('Messaggio non disponibile sul server.')
         }
 
-        const parsed = await simpleParser(fetched.source)
+        const parsed = await parseMessageSource(fetched.source)
         return {
           source: fetched.source,
           parsed,
@@ -549,7 +549,7 @@ export class AccountConnection extends EventEmitter {
           throw new Error('Messaggio non disponibile sul server.')
         }
 
-        const parsed = await simpleParser(fetched.source)
+        const parsed = await parseMessageSource(fetched.source)
         const attachment = parsed.attachments[attachmentIndex]
 
         if (!attachment) {
@@ -1369,7 +1369,7 @@ export class AccountConnection extends EventEmitter {
       let previewHydrated = false
       if (options.includeBody && fetched.source) {
         try {
-          const parsed = await parseMessagePayload(fetched.source)
+          const parsed = await parseMessageSource(fetched.source)
           preview = extractPreview(parsed, subject)
           previewHydrated = true
         } catch {
@@ -1442,7 +1442,7 @@ export class AccountConnection extends EventEmitter {
 
       if (fetched.source) {
         try {
-          const parsed = await parseMessagePayload(fetched.source)
+          const parsed = await parseMessageSource(fetched.source)
           preview = extractPreview(parsed, subject)
         } catch {
           preview = subject

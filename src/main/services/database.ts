@@ -1980,6 +1980,13 @@ export class AppDatabase {
         textBody: text ?? (html ? null : ''),
         bccJson: JSON.stringify(bcc),
         attachmentsJson: JSON.stringify(attachments),
+        // Reconcile the list's paperclip against what the body actually
+        // holds. The envelope-time flag is a heuristic over BODYSTRUCTURE —
+        // it cannot tell a signature logo from a real attachment without the
+        // body. Now that we have the body, the answer is exact, so opening a
+        // message quietly corrects a row that was flagged for nothing more
+        // than the sender's logo.
+        hasAttachments: attachments.length > 0,
         updatedAt: BigInt(Date.now())
       }
     })

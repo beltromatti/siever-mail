@@ -65,6 +65,10 @@ open-source software released under the Apache License 2.0.
   flagged, select a whole group with one click, and act on the selection in
   bulk. Field-scoped search (`da:` `a:` `oggetto:`) narrows to one field
   instead of matching every Cc line and signature block.
+- **Attachments that mean something** — signature logos, banners and images
+  from the quoted chain stay part of the message they belong to instead of
+  being listed as attachments, so the paperclip marks mail that actually
+  carries a file.
 - **Server-side flags** — the `\Flagged` keyword round-trips through IMAP,
   so a message you flag here shows up flagged in Outlook and iOS Mail too.
 - **Upgrade-safe migrations** — a version change clears only the caches that

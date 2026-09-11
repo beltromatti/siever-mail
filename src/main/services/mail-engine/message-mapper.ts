@@ -4,7 +4,8 @@ import type { ParsedMail } from 'mailparser'
 import type { MailAddress, MailAttachment, MailMessageDetail } from '@shared/models'
 import { deriveSenderKey, deriveSenderName } from '@shared/sender'
 
-import { extractPreview, parseMessagePayload } from './preview'
+import { extractPreview } from './preview'
+import { parseMessageSource, partitionMessageAttachments } from './message-parts'
 
 export interface PartialMessage {
   accountId: string
@@ -37,19 +38,36 @@ export function pickAddresses(primary: MailAddress[], fallback: MailAddress[]): 
   return primary.length > 0 ? primary : fallback
 }
 
+/**
+ * An image part that carries a Content-ID is body imagery — a signature
+ * logo, a banner, a picture from the quoted chain below. Clients only assign
+ * a Content-ID to parts they intend to reference from the HTML.
+ *
+ * The envelope fetch has no body to check those references against (that is
+ * what `partitionMessageAttachments` does once the body is in hand), so this
+ * is the closest signal available at list time. Without it the paperclip
+ * appears on nearly every message an Outlook user sends and stops meaning
+ * anything.
+ */
+function isEmbeddedBodyImagePart(structure: MessageStructureObject): boolean {
+  return Boolean(structure.id) && (structure.type ?? '').toLowerCase().startsWith('image/')
+}
+
 export function hasAttachmentInStructure(structure?: MessageStructureObject): boolean {
   if (!structure) {
     return false
   }
 
-  const disposition = structure.disposition?.toLowerCase()
+  if (!isEmbeddedBodyImagePart(structure)) {
+    const disposition = structure.disposition?.toLowerCase()
 
-  if (disposition === 'attachment') {
-    return true
-  }
+    if (disposition === 'attachment') {
+      return true
+    }
 
-  if (disposition === 'inline' && structure.dispositionParameters?.filename) {
-    return true
+    if (disposition === 'inline' && structure.dispositionParameters?.filename) {
+      return true
+    }
   }
 
   return Boolean(structure.childNodes?.some((node) => hasAttachmentInStructure(node)))
@@ -84,7 +102,7 @@ export async function mapFetchedToDetail(
     throw new Error('Message source not available from IMAP server.')
   }
 
-  const parsed = await parseMessagePayload(fetched.source)
+  const parsed = await parseMessageSource(fetched.source)
 
   return mergeSummaryAndParsedIntoDetail(accountId, folderPath, fetched, parsed)
 }
@@ -140,13 +158,21 @@ export function mergeSummaryAndParsedIntoDetail(
   const flags = [...(fetched.flags ?? new Set<string>())]
   const subject = formatSubject(parsed.subject || envelope?.subject)
 
-  const attachments: MailAttachment[] = parsed.attachments.map((attachment, index) => ({
-    id: `${fetched.uid}-${index}`,
-    fileName: attachment.filename || `attachment-${index + 1}`,
-    contentType: attachment.contentType,
-    size: attachment.size,
-    cid: attachment.cid || undefined
-  }))
+  // Only what the sender actually attached reaches the reading pane's
+  // attachment list. Body imagery is already rendered inside the message, so
+  // listing it again offers the user `image005.png` next to the one document
+  // that matters. The id keeps the attachment's ORIGINAL index: downloads
+  // re-parse the message and index straight into `parsed.attachments`, so
+  // renumbering a filtered list would fetch the wrong file.
+  const attachments: MailAttachment[] = partitionMessageAttachments(parsed).official.map(
+    ({ index, attachment }) => ({
+      id: `${fetched.uid}-${index}`,
+      fileName: attachment.filename || `attachment-${index + 1}`,
+      contentType: attachment.contentType,
+      size: attachment.size,
+      cid: attachment.cid || undefined
+    })
+  )
 
   const rawHtml = typeof parsed.html === 'string' ? parsed.html : undefined
   const html = rawHtml ? inlineCidReferences(rawHtml, parsed) : undefined

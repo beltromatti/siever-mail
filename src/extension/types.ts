@@ -77,6 +77,15 @@ export interface ExtensionDatabaseHandle {
  * coupling to its internals. Extensions only depend on this contract.
  */
 export interface ExtensionMailEngineHandle {
+  /**
+   * Raw RFC 822 source plus a parsed view of it.
+   *
+   * The parse deliberately leaves `cid:` references in the HTML alone rather
+   * than rewriting them into inline `data:` URIs, so a consumer can tell the
+   * sender's attachments apart from the images the body renders and
+   * reconstruct the message faithfully. Use `partitionMessageAttachments`
+   * from `@main/services/mail-engine/message-parts` to make that split.
+   */
   fetchMessageRawSource(ref: MessageRef): Promise<{
     source: Buffer
     parsed: ParsedMail

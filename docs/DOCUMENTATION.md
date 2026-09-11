@@ -194,6 +194,39 @@ carry the run's ordinal because the same sender can legitimately appear in
 several runs while a re-ordered page is still in flight — duplicate React
 keys there break reconciliation and strand DOM nodes.
 
+### Attachments vs body imagery
+
+A modern Outlook message carries the sender's signature logos, the corporate
+banner and every picture from the quoted chain below as `cid:`-referenced
+MIME parts; a dozen of them is ordinary. Treating those as attachments puts a
+paperclip on nearly every message, offers `image005.png` next to the one real
+document in the reading pane, and — in the SIEVER archive — writes them all
+out as loose files beside the message.
+
+`src/main/services/mail-engine/message-parts.ts` owns the single rule that
+separates the two. A part is body content when its Content-ID is referenced
+from the HTML, when mailparser placed it in the `multipart/related`
+container, or when it is `inline` and carries a Content-ID. The cid reference
+is the decisive signal: disposition alone is not enough, because Outlook
+labels signature logos `Content-Disposition: attachment` while still drawing
+them through `cid:`. A message with no HTML body has nothing that could
+reference a `cid:`, so everything it carries counts as an attachment.
+
+Three consequences worth knowing:
+
+- `parseMessageSource` sets `skipImageLinks`, so `parsed.html` keeps its
+  `cid:` references instead of being rewritten into inline `data:` URIs.
+  Rewriting is convenient for a viewer but lossy for anything reconstructing
+  the message. The reading pane inlines them itself, later, on its own copy.
+- Classified attachments carry their **original index** in
+  `parsed.attachments`. Downloads re-parse the message and index straight
+  into that array, so a filtered list must never renumber.
+- The message list's paperclip comes from BODYSTRUCTURE, before any body is
+  available, so it uses the closest proxy — an image part with a Content-ID
+  is body imagery. Once the body is actually fetched the answer is exact, and
+  `updateMessageBody` writes the corrected flag back, so opening a message
+  quietly fixes a row that was flagged for nothing but a logo.
+
 ### Search grammar
 
 `src/shared/search.ts` is parsed once and consumed by both sides: the main
