@@ -9,6 +9,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { cn } from '@renderer/lib/utils'
 import type { MailAccount } from '@shared/models'
 
@@ -65,37 +66,41 @@ export function AccountSwitcher({
           <DropdownMenuItem
             key={account.id}
             className={cn(
-              'cursor-pointer items-start gap-3 rounded-md px-3 py-2',
+              'cursor-pointer items-start gap-2 rounded-md px-2 py-1.5',
               selectedAccountId === account.id && 'bg-secondary/65'
             )}
             onClick={() => onSelectAccount(account.id)}
           >
-            <div className="bg-primary/15 text-primary mt-0.5 rounded-md p-1.5">
-              <Mail className="size-4" />
+            <div className="bg-primary/15 text-primary mt-0.5 rounded p-1">
+              <Mail className="size-3.5" />
             </div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold">{account.displayName}</p>
-              <p className="text-muted-foreground truncate text-xs">{account.email}</p>
+              <p className="truncate text-[12px] font-semibold">{account.displayName}</p>
+              <p className="text-muted-foreground truncate text-[10.5px]">{account.email}</p>
             </div>
             {onRemoveAccount && (
-              <button
-                type="button"
-                className="text-muted-foreground hover:text-destructive focus-visible:ring-ring ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:outline-none"
-                title="Disconnetti account"
-                aria-label={`Disconnetti account ${account.email}`}
-                disabled={Boolean(removingAccountId)}
-                onClick={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  onRemoveAccount(account.id)
-                }}
-              >
-                {removingAccountId === account.id ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <LogOut className="size-4" />
-                )}
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-destructive focus-visible:ring-ring ml-auto inline-flex size-6 shrink-0 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                    aria-label={`Disconnetti account ${account.email}`}
+                    disabled={Boolean(removingAccountId)}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      onRemoveAccount(account.id)
+                    }}
+                  >
+                    {removingAccountId === account.id ? (
+                      <LoaderCircle className="size-3.5 animate-spin" />
+                    ) : (
+                      <LogOut className="size-3.5" />
+                    )}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Disconnetti account</TooltipContent>
+              </Tooltip>
             )}
           </DropdownMenuItem>
         ))}

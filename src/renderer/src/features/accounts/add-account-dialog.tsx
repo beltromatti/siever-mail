@@ -141,7 +141,7 @@ export function AddAccountDialog({
       {trigger !== null && (
         <DialogTrigger asChild>
           {trigger || (
-            <Button className="gap-2 rounded-lg text-sm" size="lg">
+            <Button className="gap-2" size="sm">
               <Plus className="size-4" />
               Aggiungi Account
             </Button>
@@ -149,7 +149,7 @@ export function AddAccountDialog({
         </DialogTrigger>
       )}
 
-      <DialogContent className="w-[min(880px,calc(100vw-1.5rem))]">
+      <DialogContent className="w-[min(720px,calc(100vw-1.5rem))]">
         <DialogHeader>
           <DialogTitle>Collega un account email</DialogTitle>
           <DialogDescription>
@@ -164,19 +164,21 @@ export function AddAccountDialog({
           </TabsList>
 
           {canUseGoogle && (
-            <TabsContent value="google" className="space-y-4">
-              <div className="border-border bg-card/60 rounded-lg border p-6">
-                <div className="space-y-2">
-                  <h3 className="display-title text-2xl">Accedi con Google</h3>
-                  <p className="text-muted-foreground text-sm">
+            <TabsContent value="google" className="space-y-3">
+              <div className="border-border bg-card/60 rounded-lg border p-3">
+                <div className="space-y-1">
+                  <h3 className="display-title text-[13px] leading-5">Accedi con Google</h3>
+                  <p className="text-muted-foreground text-[11px]">
                     Login sicuro OAuth 2.0. L&apos;account Gmail verrà sincronizzato con cartelle,
                     invio e gestione messaggi.
                   </p>
                 </div>
 
+                {/* `w-fit`, not `w-full`: a single sign-in button stretched
+                    across 880px read as a banner rather than a control. */}
                 <Button
-                  className="mt-6 w-full gap-2"
-                  size="lg"
+                  className="mt-3 w-fit gap-2"
+                  size="sm"
                   onClick={handleGoogleAdd}
                   disabled={pending}
                 >
@@ -191,9 +193,9 @@ export function AddAccountDialog({
             </TabsContent>
           )}
 
-          <TabsContent value="imap" className="space-y-4">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="space-y-2">
+          <TabsContent value="imap" className="space-y-3">
+            <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+              <div className="space-y-1">
                 <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
@@ -206,7 +208,7 @@ export function AddAccountDialog({
                 />
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-1">
                 <Label htmlFor="display-name">Nome visualizzato</Label>
                 <Input
                   id="display-name"
@@ -218,7 +220,7 @@ export function AddAccountDialog({
                 />
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-1">
                 <Label htmlFor="username">Username IMAP/SMTP</Label>
                 <Input
                   id="username"
@@ -230,7 +232,7 @@ export function AddAccountDialog({
                 />
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-1">
                 <Label htmlFor="password">Password</Label>
                 <Input
                   id="password"
@@ -243,7 +245,7 @@ export function AddAccountDialog({
                 />
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-1">
                 <Label htmlFor="imap-host">IMAP Host</Label>
                 <Input
                   id="imap-host"
@@ -255,7 +257,7 @@ export function AddAccountDialog({
                 />
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-1">
                 <Label htmlFor="imap-port">IMAP Port</Label>
                 <Input
                   id="imap-port"
@@ -269,7 +271,7 @@ export function AddAccountDialog({
                 />
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-1">
                 <Label htmlFor="smtp-host">SMTP Host</Label>
                 <Input
                   id="smtp-host"
@@ -281,7 +283,7 @@ export function AddAccountDialog({
                 />
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-1">
                 <Label htmlFor="smtp-port">SMTP Port</Label>
                 <Input
                   id="smtp-port"
@@ -296,15 +298,15 @@ export function AddAccountDialog({
               </div>
             </div>
 
-            <div className="border-border bg-muted/30 text-muted-foreground flex items-center gap-3 rounded-md border p-3 text-xs">
+            <div className="border-border bg-muted/30 text-muted-foreground flex items-center gap-3 rounded-md border p-3 text-[11px]">
               <Mail className="size-4" />
               Il client effettua subito verifica IMAP + SMTP sicura e salva le credenziali in
               storage cifrato locale.
             </div>
 
             <Button
-              className="w-full gap-2"
-              size="lg"
+              className="w-fit gap-2"
+              size="sm"
               onClick={handleImapAdd}
               disabled={pending || !canSubmitImap}
             >
@@ -319,12 +321,12 @@ export function AddAccountDialog({
         </Tabs>
 
         {error && (
-          <div className="border-destructive/35 bg-destructive/10 text-destructive-foreground rounded-md border p-3 text-sm">
+          <div className="border-destructive/35 bg-destructive/10 text-destructive-foreground rounded-md border p-3 text-[12px]">
             <div className="flex items-start gap-2">
               <AlertCircle className="mt-0.5 size-4" />
               <div className="min-w-0">
-                <p className="text-sm font-semibold">Diagnostica login</p>
-                <pre className="mt-1 font-sans text-xs leading-relaxed break-words whitespace-pre-wrap">
+                <p className="text-[12px] font-semibold">Diagnostica login</p>
+                <pre className="mt-1 font-sans text-[11px] leading-relaxed break-words whitespace-pre-wrap">
                   {error}
                 </pre>
               </div>

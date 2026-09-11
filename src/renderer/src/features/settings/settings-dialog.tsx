@@ -570,7 +570,7 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="h-[min(720px,calc(100vh-2rem))] w-[min(1080px,calc(100vw-2rem))] max-w-none grid-rows-[auto_minmax(0,1fr)] content-start gap-3 overflow-hidden">
+      <DialogContent className="h-[min(640px,calc(100vh-3rem))] w-[min(960px,calc(100vw-2rem))] max-w-none grid-rows-[auto_minmax(0,1fr)] content-start overflow-hidden">
         <DialogHeader className="pr-10">
           <DialogTitle>Impostazioni</DialogTitle>
           <DialogDescription>
@@ -578,15 +578,15 @@ export function SettingsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid h-full min-h-0 grid-cols-[220px_minmax(0,1fr)] gap-4">
-          <nav className="border-border bg-card/40 h-full overflow-y-auto rounded-lg border p-2">
+        <div className="grid h-full min-h-0 grid-cols-[168px_minmax(0,1fr)] gap-2.5">
+          <nav className="border-border bg-card/40 h-full overflow-y-auto rounded-lg border p-1.5">
             <ul className="space-y-1">
               {SETTINGS_SECTIONS.map((section) => (
                 <li key={section.id}>
                   <button
                     type="button"
                     className={cn(
-                      'w-full rounded-md px-3 py-2 text-left text-sm transition-colors',
+                      'w-full rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
                       section.id === activeSectionId
                         ? 'bg-primary/18 text-foreground border-primary/45 border'
                         : 'text-muted-foreground hover:bg-secondary/70 hover:text-foreground border border-transparent'
@@ -600,14 +600,14 @@ export function SettingsDialog({
             </ul>
           </nav>
 
-          <section className="border-border bg-card/30 flex h-full min-h-0 flex-col rounded-lg border p-4">
-            <h3 className="display-title text-xl">{activeSection.title}</h3>
-            <p className="text-muted-foreground mt-1 text-sm">{activeSection.description}</p>
+          <section className="border-border bg-card/30 flex h-full min-h-0 flex-col rounded-lg border p-3">
+            <h3 className="display-title text-[13px] leading-5">{activeSection.title}</h3>
+            <p className="text-muted-foreground mt-0.5 text-[11px]">{activeSection.description}</p>
             {activeSectionId === 'accounts' ? (
-              <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3">
+              <div className="mt-3 flex min-h-0 flex-1 flex-col gap-2.5">
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
                   {accounts.length === 0 ? (
-                    <div className="border-border text-muted-foreground rounded-md border border-dashed px-4 py-6 text-sm">
+                    <div className="border-border text-muted-foreground rounded-md border border-dashed px-3 py-4 text-[12px]">
                       Nessun account collegato.
                     </div>
                   ) : (
@@ -621,14 +621,18 @@ export function SettingsDialog({
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <p className="truncate text-sm font-semibold">{account.displayName}</p>
+                            <p className="truncate text-[12px] font-semibold">
+                              {account.displayName}
+                            </p>
                             {account.id === selectedAccountId && (
                               <Badge variant="muted" className="h-5 px-1.5 text-[10px]">
                                 Attivo
                               </Badge>
                             )}
                           </div>
-                          <p className="text-muted-foreground truncate text-xs">{account.email}</p>
+                          <p className="text-muted-foreground truncate text-[11px]">
+                            {account.email}
+                          </p>
                         </div>
                         <div className="mt-0.5 flex shrink-0 items-center gap-1">
                           <Tooltip>
@@ -660,6 +664,7 @@ export function SettingsDialog({
                 </div>
                 <Button
                   type="button"
+                  size="sm"
                   variant="outline"
                   className="w-fit gap-2"
                   disabled={anyAccountMutationInFlight}
@@ -672,8 +677,10 @@ export function SettingsDialog({
             ) : activeSectionId === 'preferences' ? (
               <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
                 <div className="border-border bg-card/55 rounded-md border p-3">
-                  <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">Tema</p>
-                  <p className="text-muted-foreground mt-1 text-xs">
+                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
+                    Tema
+                  </p>
+                  <p className="text-muted-foreground mt-1 text-[11px]">
                     Aspetto dell&apos;applicazione. Il tema scuro è quello predefinito.
                   </p>
                   <div className="mt-3 flex gap-2">
@@ -701,10 +708,10 @@ export function SettingsDialog({
                 </div>
 
                 <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
-                  <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">
+                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
                     Layout finestra
                   </p>
-                  <p className="text-muted-foreground mt-1 text-xs">
+                  <p className="text-muted-foreground mt-1 text-[11px]">
                     Due disposizioni dello stesso spazio di lavoro. Cambiano la geometria e la
                     densità, non le funzioni: colori, comandi e scorciatoie restano identici.
                   </p>
@@ -729,13 +736,13 @@ export function SettingsDialog({
                           <LayoutPreview mode={option.mode} active={active} />
                           <span
                             className={cn(
-                              'text-sm font-semibold',
+                              'text-[12px] font-semibold',
                               active ? 'text-primary' : 'text-foreground'
                             )}
                           >
                             {option.label}
                           </span>
-                          <span className="text-muted-foreground text-xs">
+                          <span className="text-muted-foreground text-[11px]">
                             {option.description}
                           </span>
                         </button>
@@ -745,10 +752,10 @@ export function SettingsDialog({
                 </div>
 
                 <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
-                  <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">
+                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
                     Visualizzazione lista email
                   </p>
-                  <p className="text-muted-foreground mt-1 text-xs">
+                  <p className="text-muted-foreground mt-1 text-[11px]">
                     L&apos;ordinamento (data, mittente, oggetto) resta invariato. Questa preferenza
                     decide solo se la lista parte dall&apos;alto o dal basso: in modalità invertita
                     le email seguono lo stesso ordine ma la posizione iniziale è scrollata fino al
@@ -777,10 +784,10 @@ export function SettingsDialog({
                 </div>
 
                 <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
-                  <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">
+                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
                     Raggruppamento predefinito
                   </p>
-                  <p className="text-muted-foreground mt-1 text-xs">
+                  <p className="text-muted-foreground mt-1 text-[11px]">
                     Come la lista divide i messaggi in sezioni. Il raggruppamento per data richiede
                     l&apos;ordinamento per data; quello per mittente funziona con qualsiasi
                     ordinamento e permette di selezionare un intero mittente con un clic
@@ -805,23 +812,23 @@ export function SettingsDialog({
                 </div>
 
                 <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
-                  <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">
+                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
                     Cartella TUTTI
                   </p>
-                  <p className="text-muted-foreground mt-1 text-xs">
+                  <p className="text-muted-foreground mt-1 text-[11px]">
                     Seleziona quali account includere nella cartella TUTTI. Le inbox degli account
                     esclusi non verranno aggregate e non verranno sincronizzate per TUTTI.
                   </p>
 
                   {accounts.length === 0 ? (
-                    <div className="border-border text-muted-foreground mt-3 rounded-md border border-dashed px-3 py-3 text-sm">
+                    <div className="border-border text-muted-foreground mt-3 rounded-md border border-dashed px-3 py-3 text-[12px]">
                       Collega almeno un account per configurare la cartella TUTTI.
                     </div>
                   ) : (
                     <div className="mt-3 flex flex-col gap-3">
                       <div className="space-y-2">
                         {unifiedInboxPreferencesLoading ? (
-                          <div className="text-muted-foreground flex items-center gap-2 rounded-md border border-dashed px-4 py-4 text-sm">
+                          <div className="text-muted-foreground flex items-center gap-2 rounded-md border border-dashed px-3 py-3 text-[12px]">
                             <LoaderCircle className="size-4 animate-spin" />
                             Caricamento preferenze TUTTI...
                           </div>
@@ -837,10 +844,10 @@ export function SettingsDialog({
                                 className="border-border/70 bg-card/45 flex items-center justify-between gap-3 rounded-md border px-3 py-2"
                               >
                                 <div className="min-w-0">
-                                  <p className="truncate text-sm font-medium">
+                                  <p className="truncate text-[12px] font-medium">
                                     {account.displayName || account.email}
                                   </p>
-                                  <p className="text-muted-foreground truncate text-xs">
+                                  <p className="text-muted-foreground truncate text-[11px]">
                                     {account.email}
                                   </p>
                                 </div>
@@ -874,19 +881,19 @@ export function SettingsDialog({
                       </div>
 
                       {normalizedUnifiedInboxDraftIncludedAccountIds.length === 0 && (
-                        <div className="text-muted-foreground rounded-md border border-dashed px-3 py-2 text-sm">
+                        <div className="text-muted-foreground rounded-md border border-dashed px-3 py-2 text-[12px]">
                           Nessun account incluso: la cartella TUTTI risultera vuota.
                         </div>
                       )}
 
                       {unifiedInboxPreferencesError && (
-                        <div className="text-destructive-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-sm">
+                        <div className="text-destructive-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
                           {unifiedInboxPreferencesError}
                         </div>
                       )}
 
                       {unifiedInboxPreferencesStatusMessage && !unifiedInboxPreferencesError && (
-                        <div className="border-border bg-card/55 text-muted-foreground rounded-md border px-3 py-2 text-sm">
+                        <div className="border-border bg-card/55 text-muted-foreground rounded-md border px-3 py-2 text-[12px]">
                           {unifiedInboxPreferencesStatusMessage}
                         </div>
                       )}
@@ -894,6 +901,7 @@ export function SettingsDialog({
                       <div>
                         <Button
                           type="button"
+                          size="sm"
                           className="gap-2"
                           onClick={() => void saveUnifiedInboxPreferences()}
                           disabled={
@@ -918,26 +926,26 @@ export function SettingsDialog({
             ) : activeSectionId === 'data' ? (
               <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
                 <div className="border-border bg-card/55 rounded-md border p-3">
-                  <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">
+                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
                     Totale Database
                   </p>
-                  <p className="mt-1 text-lg font-semibold">
+                  <p className="mt-1 text-[14px] font-semibold">
                     {formatMegabytes(dataBreakdown?.totalBytes ?? 0)}
                   </p>
                 </div>
 
                 <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
                   {dataBreakdownLoading ? (
-                    <div className="text-muted-foreground flex items-center gap-2 py-6 text-sm">
+                    <div className="text-muted-foreground flex items-center gap-2 py-6 text-[12px]">
                       <LoaderCircle className="size-4 animate-spin" />
                       Calcolo ripartizione dati...
                     </div>
                   ) : dataBreakdownError ? (
-                    <div className="text-destructive-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-sm">
+                    <div className="text-destructive-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
                       {dataBreakdownError}
                     </div>
                   ) : dataSections.length === 0 ? (
-                    <div className="text-muted-foreground py-6 text-sm">
+                    <div className="text-muted-foreground py-6 text-[12px]">
                       Nessun dato disponibile da visualizzare.
                     </div>
                   ) : (
@@ -966,7 +974,7 @@ export function SettingsDialog({
                         {dataSections.map((section) => (
                           <div
                             key={`legend-${section.id}`}
-                            className="border-border/70 bg-card/45 flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm"
+                            className="border-border/70 bg-card/45 flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-[12px]"
                           >
                             <div className="flex min-w-0 items-center gap-2">
                               <span
@@ -985,15 +993,15 @@ export function SettingsDialog({
                 </div>
 
                 <div className="border-border bg-card/55 rounded-md border p-3">
-                  <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">
+                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
                     Cancella dati per account
                   </p>
-                  <p className="text-muted-foreground mt-1 text-xs">
+                  <p className="text-muted-foreground mt-1 text-[11px]">
                     Reimposta a zero i dati locali di un singolo account mantenendo il login attivo.
                     Il bootstrap riparte come alla prima connessione.
                   </p>
                   {accounts.length === 0 ? (
-                    <div className="border-border text-muted-foreground mt-3 rounded-md border border-dashed px-3 py-3 text-sm">
+                    <div className="border-border text-muted-foreground mt-3 rounded-md border border-dashed px-3 py-3 text-[12px]">
                       Nessun account collegato.
                     </div>
                   ) : (
@@ -1004,8 +1012,10 @@ export function SettingsDialog({
                           className="border-border/70 bg-card/45 flex items-center justify-between gap-3 rounded-md border px-3 py-2"
                         >
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-medium">{account.displayName}</p>
-                            <p className="text-muted-foreground truncate text-xs">
+                            <p className="truncate text-[12px] font-medium">
+                              {account.displayName}
+                            </p>
+                            <p className="text-muted-foreground truncate text-[11px]">
                               {account.email}
                             </p>
                           </div>
@@ -1031,10 +1041,10 @@ export function SettingsDialog({
                 </div>
 
                 <div className="border-destructive/35 bg-destructive/5 rounded-md border p-3">
-                  <p className="text-muted-foreground text-xs tracking-[0.08em] uppercase">
+                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
                     Azione nucleare
                   </p>
-                  <p className="text-muted-foreground mt-1 text-xs">
+                  <p className="text-muted-foreground mt-1 text-[11px]">
                     Cancella ogni dato locale (email, cartelle, contatti, firme, pratiche,
                     impostazioni archivio). Gli account restano collegati e il bootstrap riparte in
                     parallelo per ognuno.
@@ -1042,6 +1052,7 @@ export function SettingsDialog({
                   <div className="mt-3">
                     <Button
                       type="button"
+                      size="sm"
                       variant="destructive"
                       className="gap-2"
                       disabled={clearingDatabaseData || anyAccountMutationInFlight}
@@ -1058,16 +1069,16 @@ export function SettingsDialog({
                 </div>
               </div>
             ) : activeSectionId === 'signatures' ? (
-              <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3">
+              <div className="mt-3 flex min-h-0 flex-1 flex-col gap-2.5">
                 {accounts.length === 0 ? (
-                  <div className="border-border text-muted-foreground rounded-md border border-dashed px-4 py-6 text-sm">
+                  <div className="border-border text-muted-foreground rounded-md border border-dashed px-3 py-4 text-[12px]">
                     Collega almeno un account per configurare le firme.
                   </div>
                 ) : (
                   <>
                     <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                       <div>
-                        <p className="text-muted-foreground mb-1 text-xs tracking-[0.08em] uppercase">
+                        <p className="text-muted-foreground mb-1 text-[11px] tracking-[0.08em] uppercase">
                           Account
                         </p>
                         <Select
@@ -1095,6 +1106,7 @@ export function SettingsDialog({
                       <div className="flex items-center gap-2">
                         <Button
                           type="button"
+                          size="sm"
                           variant="outline"
                           className="gap-2"
                           disabled={
@@ -1112,6 +1124,7 @@ export function SettingsDialog({
                         </Button>
                         <Button
                           type="button"
+                          size="sm"
                           className="gap-2"
                           disabled={signatureActionBlocked || !selectedSignatureDirty}
                           onClick={() => void saveSignature()}
@@ -1127,7 +1140,7 @@ export function SettingsDialog({
                     </div>
 
                     {signaturesLoading ? (
-                      <div className="text-muted-foreground flex min-h-0 flex-1 items-center gap-2 rounded-md border border-dashed px-4 py-6 text-sm">
+                      <div className="text-muted-foreground flex min-h-0 flex-1 items-center gap-2 rounded-md border border-dashed px-3 py-4 text-[12px]">
                         <LoaderCircle className="size-4 animate-spin" />
                         Caricamento firme...
                       </div>
@@ -1138,6 +1151,10 @@ export function SettingsDialog({
                           placeholder="Scrivi la firma per questo account..."
                           disabled={!signatureAccountId || anyAccountMutationInFlight}
                           showExpandToggle={false}
+                          // Without this the editor keeps its natural height
+                          // and spills past the section's rounded border, so
+                          // the signature ran into the panel's bottom edge.
+                          expandToContainer
                           onChange={(html) => {
                             if (!signatureAccountId) {
                               return
@@ -1153,13 +1170,13 @@ export function SettingsDialog({
                     )}
 
                     {signaturesError && (
-                      <div className="text-destructive-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-sm">
+                      <div className="text-destructive-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
                         {signaturesError}
                       </div>
                     )}
 
                     {signaturesStatusMessage && !signaturesError && (
-                      <div className="border-border bg-card/55 text-muted-foreground rounded-md border px-3 py-2 text-sm">
+                      <div className="border-border bg-card/55 text-muted-foreground rounded-md border px-3 py-2 text-[12px]">
                         {signaturesStatusMessage}
                       </div>
                     )}

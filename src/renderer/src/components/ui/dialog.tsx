@@ -241,7 +241,14 @@ const DialogContent = React.forwardRef<
             // wizard's practice picker opens past the panel's edge). Dialogs
             // whose content can grow — Settings, the composer — size and
             // scroll themselves.
-            'glass-dialog text-popover-foreground fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100vh-3rem)] w-[min(980px,calc(100vw-2rem))] gap-3.5 rounded-xl p-5',
+            // Dialogs carry the same density as the app behind them. They
+            // had drifted to a scale of their own — 20px padding, a 14px
+            // gap, an 18px title, 36-38px buttons — against a workspace
+            // built on 11-12.5px text and 26-32px controls, so opening
+            // Settings felt like opening a different program. One set of
+            // measurements here, rather than per-dialog overrides, is what
+            // keeps the next dialog in line without anyone remembering to.
+            'glass-dialog text-popover-foreground fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100vh-3rem)] w-[min(980px,calc(100vw-2rem))] gap-2.5 rounded-xl p-4',
             // While dragging, drop the transition so the panel tracks the
             // pointer exactly instead of easing behind it.
             isDragging ? 'transition-none select-none' : 'transition-shadow',
@@ -284,7 +291,7 @@ const DialogContent = React.forwardRef<
           {!hideClose && (
             <DialogPrimitive.Close
               disabled={closeDisabled}
-              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/65 absolute top-4 right-4 z-20 rounded-sm transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
+              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/65 absolute top-3.5 right-3.5 z-20 rounded-sm transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
             >
               <X className="size-4" />
               <span className="sr-only">Chiudi</span>
@@ -301,14 +308,24 @@ function DialogHeader({
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
-  return <div className={cn('flex flex-col gap-1 pr-8 text-left', className)} {...props} />
+  return <div className={cn('flex flex-col gap-0.5 pr-8 text-left', className)} {...props} />
 }
 
 function DialogFooter({
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
-  return <div className={cn('flex items-center justify-end gap-2', className)} {...props} />
+  return (
+    <div
+      className={cn(
+        // Footer buttons match the workspace's control height so a dialog's
+        // Conferma is the same object as the toolbar's Archivia.
+        'flex items-center justify-end gap-2 [&>button]:h-8 [&>button]:text-[12px]',
+        className
+      )}
+      {...props}
+    />
+  )
 }
 
 const DialogTitle = React.forwardRef<
@@ -317,7 +334,7 @@ const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn('display-title text-lg leading-tight font-bold', className)}
+    className={cn('display-title text-[14px] leading-6 font-bold', className)}
     {...props}
   />
 ))
@@ -329,7 +346,7 @@ const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn('text-muted-foreground text-xs', className)}
+    className={cn('text-muted-foreground text-[11px] leading-4', className)}
     {...props}
   />
 ))

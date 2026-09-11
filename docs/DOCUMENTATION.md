@@ -230,6 +230,67 @@ discoverable. That takes the action row from ~664px to ~339px, which is why
 the subject and the actions still share one line on a narrow pane instead of
 wrapping to a third row.
 
+### One density for every surface
+
+Dialogs used to carry a scale of their own — 20px padding, a 14px gap, an
+18px title, 36-38px buttons, 14px form controls — against a workspace built
+on 11-12.5px text and 26-32px controls. Opening Settings felt like opening a
+different program, and each new dialog inherited the drift.
+
+The measurements now live in the shared primitives rather than in each
+dialog: `components/ui/dialog.tsx` sets the panel's padding, gap, title and
+description, and footer buttons come out at the workspace's control height;
+`input.tsx`, `select.tsx`, `tabs.tsx`, `textarea.tsx`, `label.tsx` and
+`dropdown-menu.tsx` carry the same 32px / 12px sizing. A dialog that needs a
+different shape overrides it deliberately; one that says nothing lands in
+line by default. This covers the extension's surfaces too, since they build
+on the same primitives.
+
+### Icon-only controls
+
+Every control that shows no words needs a bubble naming it, and
+`components/ui/icon-button.tsx` is how: `label` is a required prop and
+becomes the tooltip, the `aria-label` and nothing else, so an icon-only
+control cannot be written without one. The `TooltipProvider` lives once at
+the app root — nested providers each imposed their own delay and reset the
+grace period when moving between neighbouring buttons.
+
+Native `title` attributes are not used for this. The OS draws them in its own
+style after its own delay, and where both existed (the editor's toolbar) a
+hover produced two boxes a second apart. The exception is a control that
+duplicates something the row around it already exposes — the archive
+wizard's tree chevrons, where the `treeitem` owns `aria-expanded` and the
+keyboard handling — which is marked `aria-hidden` instead of being named
+twice.
+
+### Attachments
+
+`features/mail/attachment-chip.tsx` renders one attachment as a single-line
+chip — type icon, name, size, one action — and serves both the reader and
+the composer, so an attachment looks the same arriving and leaving. It
+replaced two-line cards in a two-column grid, which spent over 100px on four
+short filenames and showed the MIME type under each where nobody needed it.
+The icon is chosen from the file extension rather than the MIME type: real
+mailboxes are full of parts typed `application/octet-stream` whose name
+still ends in `.pdf`.
+
+### The composer
+
+`features/mail/mail-composer-dialog.tsx` claims a working height
+(`min(760px, 100vh-3rem)`) instead of sizing itself from its content, and
+the editor takes whatever the envelope and footer leave. The envelope is a
+stack of hairline rows with the label in a gutter, not a label above a
+full-height input per field — that cost about 84px each and pushed the
+editor into the bottom third. Cc and Ccn fold behind a disclosure that
+content overrides: a reply-all or a reopened draft that already carries
+copies always shows them.
+
+The window is named after what the user is doing, read from the fields
+rather than sniffed from the subject prefix — only a reply carries
+`inReplyTo`, only a forward arrives with a body already written — and a
+reply opens with the caret at the top of the body, since the recipient is
+the one field already filled in.
+
 ### Grouping
 
 `src/renderer/src/lib/message-sections.ts` slices an already-ordered page
