@@ -183,7 +183,52 @@ arrangements (`apple`, `outlook`). Both receive identical props and share
 every component inside them — only the geometry differs, plus which list
 shell fills the message slot (`message-list.tsx` vs `message-table.tsx`).
 Both shells implement `MessageListViewProps`, so the layout is a one-line
-preference rather than a fork in the state logic.
+preference rather than a fork in the state logic. A third arrangement,
+`expanded`, is not a preference: it is what either layout becomes when the
+reading pane is expanded, and it narrows the list to a spine beside a
+full-height reader.
+
+Every dimension in that file is a `clamp()`, never a breakpoint and never a
+fixed pixel count, because the app has to survive any window size and any
+live resize rather than a handful of tested ones. The sidebar is
+`clamp(196px, 15%, 256px)`, the apple message list `clamp(288px, 27%, 408px)`
+and the expanded spine `clamp(260px, 22%, 360px)`, so each track keeps a
+usable floor, tracks the window in between and stops growing once more width
+would only pad it.
+
+The outlook split is the one measurement that cannot be expressed as a
+percentage, because what matters there is how many messages the user can take
+in at a glance. `src/renderer/src/features/mail/message-list-metrics.ts`
+holds the table's real chrome — panel header, column header, two grouping
+bands, border slack — and `messageTablePaneHeight(rows)` converts a row count
+into a pane height, so the layout asks for fifteen rows and the arithmetic
+follows the row height the table actually renders. The result is wrapped in
+`min(clamp(…15 rows…, 48%, …20 rows…), 62%)`: the outer `min()` is the safety
+valve, so a window too short to honour the floor gives up rows instead of
+starving the message below it.
+
+### The reading header
+
+The reading pane's header used to cost 151px — a subject line, a row of
+labelled actions and a four-line Da/A/Cc/Data grid — before a single line of
+the message appeared. In the outlook layout, where the reader is only about
+half the workspace, that was most of the space the customer wanted for the
+email itself. It is now 66px at every resolution, and the two rules that keep
+it there are worth stating because they are easy to undo by accident.
+
+First, the envelope collapses to one line (`Da · A · data · 📎`) with a
+`Dettagli` disclosure that expands the full grid in place, the way every mail
+client handles it.
+
+Second, only the actions the toolbar has no equivalent for carry a label.
+The toolbar labels what acts on the selection — archivia, sposta, segna,
+contrassegna, elimina — so repeating those words in the header stacked two
+identical rows on top of each other, most visibly in the expanded view. The
+header therefore labels `Rispondi` and `Inoltra` and keeps the rest as icons
+with tooltips; the labelled toolbar directly above is what makes them
+discoverable. That takes the action row from ~664px to ~339px, which is why
+the subject and the actions still share one line on a narrow pane instead of
+wrapping to a third row.
 
 ### Grouping
 

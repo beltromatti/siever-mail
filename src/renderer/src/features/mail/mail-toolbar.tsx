@@ -110,7 +110,13 @@ export function MailToolbar({
   const hasSelection = selectedCount > 0
 
   return (
-    <div className="glass-panel flex h-11 shrink-0 items-center gap-2 rounded-lg px-2">
+    // Labels on the message actions appear only when the bar is actually
+    // wide enough for them. At the 1180px minimum window the labelled row
+    // ran past the search field, so "Segna non le…" sat clipped mid-word
+    // while Contrassegna and Elimina were pushed out of sight. The query
+    // measures the CONTAINER, not the viewport: the same bar is narrower in
+    // the apple layout than in outlook at the same window size.
+    <div className="glass-panel @container flex h-11 shrink-0 items-center gap-2 rounded-lg px-2">
       <TooltipProvider delayDuration={140}>
         <div className="flex shrink-0 items-center gap-1.5">
           <Tooltip>
@@ -144,7 +150,8 @@ export function MailToolbar({
           <div className="flex w-max items-center gap-0.5 pr-1">
             {selectedCount > 1 && (
               <span className="text-primary mr-1 inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold">
-                {selectedCount} selezionate
+                {selectedCount}
+                <span className="hidden @[64rem]:inline">selezionate</span>
                 <button
                   type="button"
                   onClick={onClearSelection}
@@ -162,8 +169,11 @@ export function MailToolbar({
               className="h-7 gap-1.5 px-2 text-[11.5px]"
               disabled={!hasSelection}
               onClick={onArchiveClassic}
+              title="Archivia"
+              aria-label="Archivia"
             >
-              <Archive className="size-3.5" /> Archivia
+              <Archive className="size-3.5" />
+              <span className="hidden @[64rem]:inline">Archivia</span>
             </Button>
 
             <DropdownMenu>
@@ -173,8 +183,11 @@ export function MailToolbar({
                   size="sm"
                   className="h-7 gap-1.5 px-2 text-[11.5px]"
                   disabled={!hasSelection || destinationFolders.length === 0}
+                  title="Sposta"
+                  aria-label="Sposta"
                 >
-                  <FolderInput className="size-3.5" /> Sposta
+                  <FolderInput className="size-3.5" />
+                  <span className="hidden @[64rem]:inline">Sposta</span>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="max-h-80 overflow-y-auto">
@@ -196,9 +209,11 @@ export function MailToolbar({
               className="h-7 gap-1.5 px-2 text-[11.5px]"
               disabled={!hasSelection}
               onClick={onToggleSeen}
+              title={toggleSeenLabel}
+              aria-label={toggleSeenLabel}
             >
               <MailOpen className="size-3.5" />
-              {toggleSeenLabel}
+              <span className="hidden @[64rem]:inline">{toggleSeenLabel}</span>
             </Button>
 
             <Button
@@ -210,9 +225,13 @@ export function MailToolbar({
               )}
               disabled={!hasSelection}
               onClick={onToggleFlagged}
+              title={selectionFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
+              aria-label={selectionFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
             >
               <Flag className={cn('size-3.5', selectionFlagged && 'fill-current')} />
-              {selectionFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
+              <span className="hidden @[64rem]:inline">
+                {selectionFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
+              </span>
             </Button>
 
             <Button
@@ -221,8 +240,11 @@ export function MailToolbar({
               className="text-destructive hover:bg-destructive/15 hover:text-destructive h-7 gap-1.5 px-2 text-[11.5px]"
               disabled={!hasSelection}
               onClick={onDelete}
+              title="Elimina"
+              aria-label="Elimina"
             >
-              <Trash2 className="size-3.5" /> Elimina
+              <Trash2 className="size-3.5" />
+              <span className="hidden @[64rem]:inline">Elimina</span>
             </Button>
           </div>
         </div>

@@ -26,6 +26,8 @@ import {
 import { cn, formatByteSize, formatDateTimeLabel } from '@renderer/lib/utils'
 import { MESSAGE_LIST_PAGE_SIZE, type MessageListSortField } from '@shared/models'
 
+import { MESSAGE_TABLE_ROW_HEIGHT_PX } from './message-list-metrics'
+
 import type { MessageListViewProps } from './message-list-view'
 import {
   FlagToggle,
@@ -245,8 +247,9 @@ export function MessageTable({
                           onActivateRow(messageRef, resolveSelectionIntent(event))
                         }
                         onDoubleClick={() => onOpenRow(messageRef)}
+                        style={{ height: MESSAGE_TABLE_ROW_HEIGHT_PX }}
                         className={cn(
-                          'group border-border/25 grid h-[26px] cursor-default items-center gap-1.5 border-b px-2 text-[11.5px] transition-colors',
+                          'group border-border/25 grid cursor-default items-center gap-1.5 border-b px-2 text-[11.5px] transition-colors',
                           TABLE_GRID_TEMPLATE,
                           isSelected
                             ? 'bg-primary/16 hover:bg-primary/20'

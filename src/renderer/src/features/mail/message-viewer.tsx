@@ -4,6 +4,7 @@ import {
   Archive,
   ArrowRight,
   CheckCheck,
+  ChevronDown,
   Flag,
   FolderInput,
   Forward,
@@ -33,7 +34,7 @@ import {
   TooltipTrigger
 } from '@renderer/components/ui/tooltip'
 import { buildMailFrameDocument, sanitizeMailHtml } from '@renderer/lib/mail-html'
-import { cn, formatAddress, formatDateLabel } from '@renderer/lib/utils'
+import { cn, formatAddress, formatDateLabel, formatDateTimeLabel } from '@renderer/lib/utils'
 import type { MailFolder, MailMessageDetail } from '@shared/models'
 
 interface MessageViewerProps {
@@ -275,10 +276,15 @@ export function MessageViewer({
   onDownloadAttachment
 }: MessageViewerProps): React.JSX.Element {
   const [downloadingAttachmentIds, setDownloadingAttachmentIds] = useState<string[]>([])
+  // Envelope details stay collapsed by default and reset with the message:
+  // leaving them open would silently steal the height back from the body on
+  // the next mail the user opens.
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const hasHtmlBody = Boolean(message?.html?.trim())
 
   useEffect(() => {
     setDownloadingAttachmentIds([])
+    setDetailsOpen(false)
   }, [message?.accountId, message?.folderPath, message?.uid])
 
   const downloadAttachment = async (attachmentId: string): Promise<void> => {
@@ -343,142 +349,210 @@ export function MessageViewer({
 
   return (
     <div className="glass-panel flex h-full min-h-0 flex-col overflow-hidden rounded-lg">
-      <div className="border-border/60 space-y-2.5 border-b px-3.5 py-2.5">
-        <div className="flex items-start justify-between gap-2">
-          <h2 className="min-w-0 text-[15px] leading-snug font-semibold">{message.subject}</h2>
-          <TooltipProvider delayDuration={140}>
-            <Tooltip>
-              <TooltipTrigger asChild>
+      {/*
+        The header is deliberately tight. In the outlook layout the reading
+        pane is only about half the workspace, and the previous header — a
+        subject line, a row of actions and a four-line Da/A/Cc/Data grid —
+        ate 150px of it before a single line of the message showed. The
+        envelope details now collapse to one line with a "Dettagli"
+        disclosure, the way every mail client handles them, and expand in
+        place when the user actually wants them.
+      */}
+      <div className="border-border/60 flex shrink-0 flex-col gap-1.5 border-b px-3 py-2">
+        {/*
+          Subject and actions share one row, and which actions carry a label
+          follows one rule: the toolbar labels what acts on the selection
+          (archivia, sposta, segna, contrassegna, elimina), so repeating
+          those words here would stack two identical rows — most visibly in
+          the expanded view, where the two sit directly on top of each
+          other. This row therefore labels only what the toolbar has no
+          equivalent for, Rispondi and Inoltra, and keeps the rest as icons
+          with tooltips. The labelled toolbar right above is what makes
+          those icons discoverable.
+
+          The upshot is a row that is ~380px instead of ~664px at every
+          width, so it never competes with the subject: the subject is the
+          flexible half (`min-w-0`, truncates rather than pushing the
+          actions down) and `flex-wrap` is left only as a last-resort valve.
+        */}
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <h2 className="min-w-0 flex-1 truncate text-[14px] leading-6 font-semibold">
+            {message.subject}
+          </h2>
+          <div className="flex shrink-0 flex-wrap items-center gap-1">
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-6.5 gap-1.5 px-2 text-[11.5px]"
+              onClick={onReply}
+            >
+              <Reply className="size-3.5" /> Rispondi
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6.5 gap-1.5 px-2 text-[11.5px]"
+              onClick={onForward}
+              title="Inoltra"
+              aria-label="Inoltra"
+            >
+              <Forward className="size-3.5" /> Inoltra
+            </Button>
+
+            {/* Same divider the toolbar uses, so the labelled pair reads as
+                one group and the icons as another. */}
+            <div className="bg-border/60 mx-0.5 h-5 w-px shrink-0" />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6.5 shrink-0"
+              onClick={onArchive}
+              title="Archivia"
+              aria-label="Archivia"
+            >
+              <Archive className="size-3.5" />
+            </Button>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="text-muted-foreground hover:text-foreground size-7 shrink-0"
-                  onClick={onToggleExpanded}
-                  aria-label={isExpanded ? 'Comprimi vista messaggio' : 'Espandi vista messaggio'}
+                  className="size-6.5 shrink-0"
+                  title="Sposta"
+                  aria-label="Sposta"
                 >
-                  {isExpanded ? (
-                    <Minimize2 className="size-3.5" />
-                  ) : (
-                    <Maximize2 className="size-3.5" />
-                  )}
+                  <FolderInput className="size-3.5" />
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent side="left">
-                {isExpanded ? 'Comprimi vista messaggio' : 'Espandi vista messaggio'}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
+                {folders
+                  .filter((folder) => folder.path !== message.folderPath)
+                  .map((folder) => (
+                    <DropdownMenuItem
+                      key={folder.path}
+                      className="cursor-pointer text-[12px]"
+                      onClick={() => onMoveToFolder(folder.path)}
+                    >
+                      {folder.name}
+                    </DropdownMenuItem>
+                  ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-        <div className="flex flex-wrap items-center gap-1">
-          <Button
-            variant="secondary"
-            size="sm"
-            className="h-7 gap-1.5 px-2 text-[11.5px]"
-            onClick={onReply}
-          >
-            <Reply className="size-3.5" /> Rispondi
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 px-2 text-[11.5px]"
-            onClick={onForward}
-          >
-            <Forward className="size-3.5" /> Inoltra
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 px-2 text-[11.5px]"
-            onClick={onArchive}
-          >
-            <Archive className="size-3.5" /> Archivia
-          </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6.5 shrink-0"
+              onClick={() => onToggleSeen(!message.isRead)}
+              title={message.isRead ? 'Segna non letta' : 'Segna letta'}
+              aria-label={message.isRead ? 'Segna non letta' : 'Segna letta'}
+            >
+              <MailOpen className="size-3.5" />
+            </Button>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-[11.5px]">
-                <FolderInput className="size-3.5" /> Sposta
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
-              {folders
-                .filter((folder) => folder.path !== message.folderPath)
-                .map((folder) => (
-                  <DropdownMenuItem
-                    key={folder.path}
-                    className="cursor-pointer text-[12px]"
-                    onClick={() => onMoveToFolder(folder.path)}
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn('size-6.5 shrink-0', message.isFlagged && 'text-status-offline')}
+              onClick={() => onToggleFlagged(!message.isFlagged)}
+              title={message.isFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
+              aria-label={message.isFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
+            >
+              <Flag className={cn('size-3.5', message.isFlagged && 'fill-current')} />
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-destructive hover:bg-destructive/15 hover:text-destructive size-6.5 shrink-0"
+              onClick={onDelete}
+              title="Elimina"
+              aria-label="Elimina"
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+            <TooltipProvider delayDuration={140}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground hover:text-foreground ml-1 size-6 shrink-0"
+                    onClick={onToggleExpanded}
+                    aria-label={isExpanded ? 'Comprimi vista messaggio' : 'Espandi vista messaggio'}
                   >
-                    {folder.name}
-                  </DropdownMenuItem>
-                ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 px-2 text-[11.5px]"
-            onClick={() => onToggleSeen(!message.isRead)}
-          >
-            <MailOpen className="size-3.5" />
-            {message.isRead ? 'Segna non letta' : 'Segna letta'}
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(
-              'h-7 gap-1.5 px-2 text-[11.5px]',
-              message.isFlagged && 'text-status-offline'
-            )}
-            onClick={() => onToggleFlagged(!message.isFlagged)}
-          >
-            <Flag className={cn('size-3.5', message.isFlagged && 'fill-current')} />
-            {message.isFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-destructive hover:bg-destructive/15 hover:text-destructive h-7 gap-1.5 px-2 text-[11.5px]"
-            onClick={onDelete}
-          >
-            <Trash2 className="size-3.5" /> Elimina
-          </Button>
+                    {isExpanded ? (
+                      <Minimize2 className="size-3.5" />
+                    ) : (
+                      <Maximize2 className="size-3.5" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="left">
+                  {isExpanded ? 'Comprimi vista messaggio' : 'Espandi vista messaggio'}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
         </div>
 
-        <div className="text-muted-foreground grid grid-cols-[3rem_1fr] gap-x-2 gap-y-0.5 text-[11px]">
-          <span>Da</span>
-          <span className="text-foreground min-w-0 truncate font-medium">
+        <div className="text-muted-foreground flex items-baseline gap-1.5 text-[11px]">
+          <span className="text-foreground min-w-0 shrink truncate font-medium">
             {addressesToLabel(message.from)}
           </span>
-          <span>A</span>
-          <span className="min-w-0 truncate">{addressesToLabel(message.to)}</span>
-          {message.cc.length > 0 && (
-            <>
-              <span>Cc</span>
-              <span className="min-w-0 truncate">{addressesToLabel(message.cc)}</span>
-            </>
+          <span className="shrink-0 opacity-50">·</span>
+          <span className="min-w-0 shrink truncate">A {addressesToLabel(message.to)}</span>
+          <span className="shrink-0 opacity-50">·</span>
+          <span className="shrink-0 whitespace-nowrap">{formatDateLabel(message.date)}</span>
+          {message.hasAttachments && (
+            <span className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap">
+              <Paperclip className="size-3" />
+              {message.attachments.length || ''}
+            </span>
           )}
-          <span>Data</span>
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="truncate">{formatDateLabel(message.date)}</span>
-            {message.hasAttachments && (
-              <span className="inline-flex shrink-0 items-center gap-1">
-                <Paperclip className="size-3" />
-                {message.attachments.length || ''}
-              </span>
-            )}
-            {loading && (
-              <span className="text-primary inline-flex shrink-0 items-center gap-1">
-                <ArrowRight className="size-3 animate-pulse" /> Aggiornamento…
-              </span>
-            )}
-          </span>
+          {loading && (
+            <span className="text-primary inline-flex shrink-0 items-center gap-1 whitespace-nowrap">
+              <ArrowRight className="size-3 animate-pulse" /> Aggiornamento…
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => setDetailsOpen((current) => !current)}
+            aria-expanded={detailsOpen}
+            className="hover:text-foreground focus-visible:ring-ring/70 ml-auto inline-flex shrink-0 items-center gap-0.5 rounded-sm whitespace-nowrap outline-none focus-visible:ring-2"
+          >
+            Dettagli
+            <ChevronDown
+              className={cn('size-3 transition-transform', detailsOpen && 'rotate-180')}
+            />
+          </button>
         </div>
+
+        {detailsOpen && (
+          <div className="text-muted-foreground border-border/50 grid grid-cols-[2.75rem_minmax(0,1fr)] gap-x-2 gap-y-0.5 border-t pt-1.5 text-[11px]">
+            <span>Da</span>
+            <span className="text-foreground min-w-0 break-words">
+              {addressesToLabel(message.from)}
+            </span>
+            <span>A</span>
+            <span className="min-w-0 break-words">{addressesToLabel(message.to)}</span>
+            {message.cc.length > 0 && (
+              <>
+                <span>Cc</span>
+                <span className="min-w-0 break-words">{addressesToLabel(message.cc)}</span>
+              </>
+            )}
+            {message.bcc.length > 0 && (
+              <>
+                <span>Ccn</span>
+                <span className="min-w-0 break-words">{addressesToLabel(message.bcc)}</span>
+              </>
+            )}
+            <span>Data</span>
+            <span className="min-w-0">{formatDateTimeLabel(message.date)}</span>
+          </div>
+        )}
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
