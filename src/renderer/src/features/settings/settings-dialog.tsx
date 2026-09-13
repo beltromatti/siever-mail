@@ -756,11 +756,11 @@ export function SettingsDialog({
                     Visualizzazione lista email
                   </p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
-                    L&apos;ordinamento (data, mittente, oggetto) resta invariato. Questa preferenza
-                    decide solo se la lista parte dall&apos;alto o dal basso: in modalità invertita
-                    le email seguono lo stesso ordine ma la posizione iniziale è scrollata fino al
-                    fondo e si scorre verso l&apos;alto per andare indietro — stile chat (iMessage,
-                    WhatsApp).
+                    L&apos;ordinamento (data, mittente, oggetto) resta invariato. In modalità
+                    invertita l&apos;intera lista viene rovesciata, gruppi compresi: i messaggi più
+                    recenti stanno in fondo, la lista parte dal fondo e si scorre verso l&apos;alto
+                    per andare indietro — stile chat (iMessage, WhatsApp). Le frecce seguono
+                    l&apos;ordine che vedi.
                   </p>
 
                   <div className="mt-3 flex flex-wrap gap-2">

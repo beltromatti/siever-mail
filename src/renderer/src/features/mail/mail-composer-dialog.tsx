@@ -1037,7 +1037,7 @@ export function MailComposerDialog({
         <DialogContent
           hideClose
           role="alertdialog"
-          overlayClassName="z-[60] bg-background/80"
+          overlayClassName="z-[60]"
           className="z-[70] w-[min(430px,calc(100vw-2rem))] gap-5"
           onEscapeKeyDown={(event) => event.preventDefault()}
           onPointerDownOutside={(event) => event.preventDefault()}

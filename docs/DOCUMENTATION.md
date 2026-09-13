@@ -186,7 +186,10 @@ Both shells implement `MessageListViewProps`, so the layout is a one-line
 preference rather than a fork in the state logic. A third arrangement,
 `expanded`, is not a preference: it is what either layout becomes when the
 reading pane is expanded, and it narrows the list to a spine beside a
-full-height reader.
+full-height reader. The spine always uses the stacked rows of
+`message-list.tsx`, even from the outlook layout: a five-column table cannot
+fit in 260-360px, and the expanded view is meant to be the same screen
+whichever layout it came from.
 
 Every dimension in that file is a `clamp()`, never a breakpoint and never a
 fixed pixel count, because the app has to survive any window size and any
@@ -290,6 +293,43 @@ rather than sniffed from the subject prefix — only a reply carries
 `inReplyTo`, only a forward arrives with a body already written — and a
 reply opens with the caret at the top of the body, since the recipient is
 the one field already filled in.
+
+### Inverted order
+
+`invertMessageListOrder` mirrors the whole list, groups included: the
+scroll container is `flex-col-reverse` and each section renders its rows
+reversed — one reversal each, nothing more. The sections array must not be
+reversed as well; doing so cancelled the container's reversal, which left
+"Oggi" on top of an otherwise chat-style list and made the arrow keys jump
+the wrong way at every group boundary. Because the result is the exact
+mirror of the standard order, keyboard navigation only has to flip its
+direction, Shift-ranges stay contiguous, and the load-more row lands at the
+top where the older mail belongs.
+
+### The reading frame
+
+Messages render in a sandboxed `srcdoc` iframe whose height follows its
+content, so the reading pane scrolls as one surface with the attachments
+below. The frame binds its observers to the message document as soon as it
+is parsed, found by checking `contentDocument` on each animation frame. It
+used to wait for the frame's `load` event, which waits for every image:
+until then the observers sat on the placeholder `about:blank`, and the frame
+kept its 320px starting height while the newsletter underneath was already
+laid out. A slow image delayed the rest of the message; an image request
+that never settled hid it for good. `load` now only triggers a last
+measurement. The `ResizeObserver` is constructed from the frame's own window,
+and image `load`/`error` events are caught with a capturing listener on the
+document, so images the parser has not reached yet still count.
+
+Key events do not leave an iframe, so the frame forwards modifier chords to
+the app window — Cmd/Ctrl+F and any extension shortcut keep working after
+the user clicks into a message. Select-all, copy and cut stay with the frame.
+
+### Dialog scrim
+
+Dialogs can be dragged aside so the user can read what is behind them, so
+the scrim does not blur and only lightly dims. It steps back further once
+the panel has been moved and disappears while the panel is being dragged.
 
 ### Grouping
 

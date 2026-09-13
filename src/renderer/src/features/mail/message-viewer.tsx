@@ -60,6 +60,12 @@ const EXTERNAL_SCHEME_PATTERN = /^(https?|mailto|tel|sms):/i
 const MESSAGE_FRAME_SANDBOX = 'allow-same-origin'
 const MESSAGE_FRAME_MIN_HEIGHT = 320
 
+/**
+ * Chords the email body keeps for itself when it has focus: selecting and
+ * copying text out of a message is exactly what that focus is for.
+ */
+const FRAME_NATIVE_CHORD_CODES: ReadonlySet<string> = new Set(['KeyA', 'KeyC', 'KeyX'])
+
 interface MessageContentFrameElement extends HTMLIFrameElement {
   __messageFrameCleanup?: () => void
 }
@@ -101,11 +107,13 @@ function EmailHtmlFrame({ html, title }: { html: string; title: string }): React
       return
     }
 
+    let boundDocument: Document | null = null
     let resizeObserver: ResizeObserver | null = null
     let animationFrameId: number | null = null
+    let watchFrameId: number | null = null
 
     const updateHeight = (): void => {
-      const document = iframe.contentDocument
+      const document = boundDocument
 
       if (!document?.documentElement || !document.body) {
         return
@@ -132,12 +140,17 @@ function EmailHtmlFrame({ html, title }: { html: string; title: string }): React
       })
     }
 
-    const bindFrameDocument = (): void => {
-      const document = iframe.contentDocument
+    const unbind = (): void => {
+      iframe.__messageFrameCleanup?.()
+      iframe.__messageFrameCleanup = undefined
+      resizeObserver?.disconnect()
+      resizeObserver = null
+      boundDocument = null
+    }
 
-      if (!document) {
-        return
-      }
+    const bindFrameDocument = (document: Document): void => {
+      unbind()
+      boundDocument = document
 
       const handlePointerNavigation = (event: MouseEvent): void => {
         // event.target comes from the iframe's realm, so we cannot use
@@ -191,51 +204,128 @@ function EmailHtmlFrame({ html, title }: { html: string; title: string }): React
         event.stopPropagation()
       }
 
+      // Key events do not leave an iframe. Once the user had clicked into an
+      // email — to select a line, follow a link — every app shortcut went
+      // dead until they clicked back on the list: Cmd/Ctrl+F no longer
+      // reached the search box, and extension shortcuts never fired. Chords
+      // are handed to the app window; plain keys and the copy/select chords
+      // stay with the message.
+      const forwardShortcut = (event: KeyboardEvent): void => {
+        const isChord = event.metaKey || event.ctrlKey || event.altKey
+
+        if (!isChord || FRAME_NATIVE_CHORD_CODES.has(event.code)) {
+          return
+        }
+
+        const forwarded = new KeyboardEvent('keydown', {
+          key: event.key,
+          code: event.code,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          shiftKey: event.shiftKey,
+          repeat: event.repeat,
+          bubbles: true,
+          cancelable: true
+        })
+        window.dispatchEvent(forwarded)
+
+        if (forwarded.defaultPrevented) {
+          event.preventDefault()
+        }
+      }
+
       document.addEventListener('click', handlePointerNavigation, true)
       document.addEventListener('auxclick', handlePointerNavigation, true)
       document.addEventListener('submit', handleSubmit, true)
+      document.addEventListener('keydown', forwardShortcut)
+      // `load` and `error` do not bubble, but they do reach a capturing
+      // listener on the document — so every image counts, including the
+      // ones the parser has not reached yet when this runs.
+      document.addEventListener('load', scheduleHeightUpdate, true)
+      document.addEventListener('error', scheduleHeightUpdate, true)
+      document.fonts?.addEventListener('loadingdone', scheduleHeightUpdate)
 
-      resizeObserver = new ResizeObserver(() => {
-        scheduleHeightUpdate()
-      })
+      // The observer comes from the frame's own window: an observer created
+      // in the parent only runs in the parent's rendering steps, which is
+      // not a reliable place to learn that a child document changed size.
+      const FrameResizeObserver =
+        (document.defaultView as (Window & typeof globalThis) | null)?.ResizeObserver ??
+        ResizeObserver
+      resizeObserver = new FrameResizeObserver(() => scheduleHeightUpdate())
       resizeObserver.observe(document.documentElement)
-      resizeObserver.observe(document.body)
 
-      for (const image of document.images) {
-        image.addEventListener('load', scheduleHeightUpdate)
-        image.addEventListener('error', scheduleHeightUpdate)
+      if (document.body) {
+        resizeObserver.observe(document.body)
       }
 
       scheduleHeightUpdate()
 
-      const cleanup = (): void => {
+      iframe.__messageFrameCleanup = () => {
         document.removeEventListener('click', handlePointerNavigation, true)
         document.removeEventListener('auxclick', handlePointerNavigation, true)
         document.removeEventListener('submit', handleSubmit, true)
-
-        for (const image of document.images) {
-          image.removeEventListener('load', scheduleHeightUpdate)
-          image.removeEventListener('error', scheduleHeightUpdate)
-        }
+        document.removeEventListener('keydown', forwardShortcut)
+        document.removeEventListener('load', scheduleHeightUpdate, true)
+        document.removeEventListener('error', scheduleHeightUpdate, true)
+        document.fonts?.removeEventListener('loadingdone', scheduleHeightUpdate)
       }
-
-      iframe.__messageFrameCleanup = cleanup
     }
 
+    /**
+     * Binds to the message document the moment it is parsed, not when it
+     * has finished loading.
+     *
+     * This used to wait for the frame's `load` event, and `load` waits for
+     * every image in the message. Until then the observers were attached to
+     * the placeholder `about:blank` document, so the frame kept its 320px
+     * starting height while the email underneath was already laid out: a
+     * newsletter showed its first screen and nothing else. A slow image
+     * made the rest appear seconds later, and an image request that never
+     * settled meant it never appeared at all. Watching for the new document
+     * on each frame instead lets the height follow the content from the
+     * first paint, and images, fonts and late layout only ever grow it.
+     */
+    const watchForMessageDocument = (): void => {
+      watchFrameId = null
+      const document = iframe.contentDocument
+
+      if (
+        document &&
+        document !== boundDocument &&
+        document.URL === 'about:srcdoc' &&
+        document.body
+      ) {
+        bindFrameDocument(document)
+      }
+
+      if (!boundDocument || boundDocument.readyState !== 'complete') {
+        watchFrameId = window.requestAnimationFrame(watchForMessageDocument)
+      }
+    }
+
+    // `load` stays as the last word: by then every image has settled, so one
+    // final measurement catches anything the observers could not see.
     const handleLoad = (): void => {
-      iframe.__messageFrameCleanup?.()
-      resizeObserver?.disconnect()
-      resizeObserver = null
-      bindFrameDocument()
+      const document = iframe.contentDocument
+
+      if (document && document !== boundDocument) {
+        bindFrameDocument(document)
+      } else {
+        scheduleHeightUpdate()
+      }
     }
 
     iframe.addEventListener('load', handleLoad)
-    bindFrameDocument()
+    watchForMessageDocument()
 
     return () => {
       iframe.removeEventListener('load', handleLoad)
-      iframe.__messageFrameCleanup?.()
-      resizeObserver?.disconnect()
+      unbind()
+
+      if (watchFrameId !== null) {
+        window.cancelAnimationFrame(watchFrameId)
+      }
 
       if (animationFrameId !== null) {
         window.cancelAnimationFrame(animationFrameId)

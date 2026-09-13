@@ -174,7 +174,14 @@ const DialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
-    className={cn('bg-background/45 fixed inset-0 z-50 backdrop-blur-[3px]', className)}
+    className={cn(
+      // No blur, and only a light dim. Every dialog can be dragged aside
+      // precisely so the user can read what is behind it — an address, a
+      // practice number, the message being answered — and a blurred scrim
+      // made that impossible however far the panel was moved.
+      'bg-background/30 fixed inset-0 z-50 transition-[background-color,opacity] duration-200',
+      className
+    )}
     {...props}
   />
 ))
@@ -229,7 +236,14 @@ const DialogContent = React.forwardRef<
 
     return (
       <DialogPortal>
-        <DialogOverlay className={overlayClassName} />
+        {/*
+          Moving the panel is the user saying "let me see what is under
+          this", so the scrim steps back once the panel has been moved and
+          disappears entirely while it is being dragged.
+        */}
+        <DialogOverlay
+          className={cn(overlayClassName, isMoved && 'bg-background/10', isDragging && 'opacity-0')}
+        />
         <DialogPrimitive.Content
           ref={setPanelRef}
           style={{
@@ -248,10 +262,14 @@ const DialogContent = React.forwardRef<
             // Settings felt like opening a different program. One set of
             // measurements here, rather than per-dialog overrides, is what
             // keeps the next dialog in line without anyone remembering to.
-            'glass-dialog text-popover-foreground fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100vh-3rem)] w-[min(980px,calc(100vw-2rem))] gap-2.5 rounded-xl p-4',
+            'glass-dialog text-popover-foreground fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100vh-3rem)] w-[min(980px,calc(100vw-2rem))] gap-2.5 rounded-xl p-4 outline-none',
             // While dragging, drop the transition so the panel tracks the
             // pointer exactly instead of easing behind it.
             isDragging ? 'transition-none select-none' : 'transition-shadow',
+            // Radix focuses the panel itself on open. After any keyboard use
+            // Chromium then painted its default focus ring around the whole
+            // dialog — a blue frame that looked like a selection state.
+            // Focus is still visible on the controls inside.
             className
           )}
           {...props}

@@ -94,11 +94,6 @@ export function MessageTable({
   )
   const cursorKey = selection.cursorRef ? messageRefKey(selection.cursorRef) : null
 
-  const renderedSections = useMemo(
-    () => (invertVisualOrder ? [...sections].reverse() : sections),
-    [invertVisualOrder, sections]
-  )
-
   useEffect(() => {
     if (!cursorKey) {
       return
@@ -193,8 +188,20 @@ export function MessageTable({
       </div>
 
       <ScrollArea ref={scrollRootRef} className="min-h-0 min-w-0 flex-1">
+        {/*
+          Inverted order is `flex-col-reverse` on this container plus a
+          reversed row list inside each section — nothing else. The sections
+          array used to be reversed here as well, and the two reversals
+          cancelled out: rows ran oldest-to-newest inside each group while
+          the groups themselves stayed newest-first, so "Oggi" sat on top of
+          an otherwise chat-style list and the arrow keys jumped the wrong
+          way at every group boundary. With one reversal the whole list is
+          the exact mirror of the standard order, headings stay above their
+          own rows, and the load-more row lands at the top where the older
+          mail it fetches belongs.
+        */}
         <div className={cn('flex min-w-0 flex-col', invertVisualOrder && 'flex-col-reverse')}>
-          {renderedSections.map((section) => {
+          {sections.map((section) => {
             const collapsed = collapsedSectionKeys.has(section.key)
             const sectionRefs = section.messages.map(summaryToMessageRef)
             const allSelected =

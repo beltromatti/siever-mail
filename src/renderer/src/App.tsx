@@ -2192,7 +2192,12 @@ function App(): React.JSX.Element {
       <LoaderCircle className="text-primary size-5 animate-spin" />
       <p className="text-muted-foreground text-xs">{messagePanelLoaderText}</p>
     </div>
-  ) : uiPreferences.layoutMode === 'outlook' ? (
+  ) : // The expanded reader turns the list into a 260-360px spine in both
+  // layouts, and a five-column table cannot live there: it kept Da, A and
+  // a sliver of Oggetto and dropped the date. The expanded view is meant to
+  // be the same screen whichever layout you came from, so it always uses
+  // the stacked rows that were designed for a narrow column.
+  uiPreferences.layoutMode === 'outlook' && !isMessageExpanded ? (
     <MessageTable {...listViewProps} />
   ) : (
     <MessageList {...listViewProps} />
