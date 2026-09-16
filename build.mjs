@@ -353,7 +353,16 @@ function buildLinuxTarget(target, releaseRoot, packageName, envInjections) {
   const nodeModulesVolume = `${packageName}-${target.id}-node-modules`
   const npmCacheVolume = `${packageName}-${target.id}-npm-cache`
   const containerCommand = [
-    'npm install --package-lock=false',
+    // `npm ci`, not `npm install --package-lock=false`. The Linux targets
+    // install into a named Docker volume, and resolving a tree from
+    // package.json alone crashed npm 10.9.x inside both images
+    // ("Cannot read properties of null (reading 'edgesOut')") once they
+    // picked up a newer npm — the 1.8.0 tag failed on x64 and arm64 while
+    // Windows and macOS, which install with `npm ci` on the runner, passed.
+    // `npm ci` installs exactly what the lockfile says and never writes it
+    // back, so the bind-mounted lockfile stays untouched, which was the
+    // reason for `--package-lock=false` in the first place.
+    'npm ci --no-audit --no-fund',
     `npx electron-builder install-app-deps --platform=linux --arch=${target.depArch}`,
     [
       'npx electron-builder',
