@@ -179,3 +179,56 @@ export function findMailFontOption(value: string | null | undefined): MailFontOp
     }) ?? null
   )
 }
+
+/**
+ * Every stack this app authors, indexed by its primary family. The emoji and
+ * wordmark stacks are in here too: the corporate signature uses them, and
+ * they went through the same "primary family plus a bare generic" phase.
+ */
+const CANONICAL_STACKS_BY_PRIMARY: ReadonlyMap<string, string> = new Map(
+  [
+    ...MAIL_FONT_OPTIONS.map((option) => option.value),
+    MAIL_EMOJI_FONT_FAMILY,
+    MAIL_WORDMARK_FONT_FAMILY
+  ]
+    .map((stack) => [getPrimaryMailFontFamily(stack), stack] as const)
+    .filter((entry): entry is readonly [string, string] => entry[0] !== null)
+)
+
+const FONT_FAMILY_DECLARATION_PATTERN = /font-family\s*:\s*([^;"}]+)/gi
+
+/**
+ * Rewrites every font-family declaration whose primary family is one of ours
+ * to that family's full fallback chain.
+ *
+ * Content authored before the chains existed carries `'Century Gothic',
+ * sans-serif` — the house font and then a bare generic. That reads as
+ * Century Gothic only where Century Gothic is installed, and as Helvetica or
+ * Arial everywhere else: on a Mac, in Gmail, on a Windows machine without
+ * Office. The chains put the closest face each platform actually ships in
+ * between (Futura on macOS, URW Gothic on Linux, Trebuchet MS before the
+ * generic), so the message keeps its identity instead of collapsing.
+ *
+ * Only declarations we recognise are touched, and a stack that already is
+ * the canonical one is left byte-identical, so this is safe to run over the
+ * same HTML repeatedly.
+ */
+export function upgradeMailFontStacksInHtml(html: string): string {
+  if (!html) {
+    return html
+  }
+
+  return html.replace(FONT_FAMILY_DECLARATION_PATTERN, (declaration, value: string) => {
+    const primary = getPrimaryMailFontFamily(value)
+    const canonical = primary ? CANONICAL_STACKS_BY_PRIMARY.get(primary) : undefined
+
+    if (!canonical || normalizeMailFontFamilyValue(value) === canonical) {
+      return declaration
+    }
+
+    // Keep whatever trailing whitespace the author had, so the only
+    // difference in the stored HTML is the list of families itself.
+    const trailingWhitespace = value.match(/\s*$/)?.[0] ?? ''
+    return `${declaration.slice(0, declaration.length - value.length)}${canonical}${trailingWhitespace}`
+  })
+}

@@ -331,6 +331,24 @@ Dialogs can be dragged aside so the user can read what is behind them, so
 the scrim does not blur and only lightly dims. It steps back further once
 the panel has been moved and disappears while the panel is being dragged.
 
+### Authored fonts
+
+`shared/mail-fonts.ts` holds every stack the app authors. Each one is the
+house face first, then the closest face that actually ships on the other
+platforms, then a generic — email clients strip `@font-face`, so a font only
+renders if the recipient already has it, and `'Century Gothic', sans-serif`
+means Century Gothic in-house and Helvetica everywhere else.
+
+Content authored before those chains existed still carries the short form,
+which is why a signature saved in an older version arrived in plain Arial.
+`upgradeMailFontStacksInHtml` rewrites any declaration whose primary family
+is one of ours to that family's full chain, and the database runs it over
+signatures on the way in and on the way out, writing the result back the
+first time it changes anything. It only touches families we author and
+leaves canonical stacks byte-identical, so it is safe to run repeatedly.
+That also means text typed against those paragraphs inherits the chain, and
+the Firme editor shows the same HTML the recipient will get.
+
 ### Grouping
 
 `src/renderer/src/lib/message-sections.ts` slices an already-ordered page

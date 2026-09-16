@@ -6,6 +6,7 @@ import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3'
 
 import extensionMain from '@app/extension/main'
 import { logMainError } from '@main/utils/error-utils'
+import { upgradeMailFontStacksInHtml } from '@shared/mail-fonts'
 import type {
   DataStorageBreakdown,
   DataStorageSection,
@@ -664,13 +665,15 @@ export class AppDatabase {
       ORDER BY updated_at DESC
     `) as Array<{ accountId: string; html: string; updatedAt: bigint }>
 
-    return rows
-      .filter((row) => typeof row.accountId === 'string' && typeof row.html === 'string')
-      .map((row) => ({
-        accountId: row.accountId,
-        html: row.html,
-        updatedAt: toNumber(row.updatedAt)
-      }))
+    return Promise.all(
+      rows
+        .filter((row) => typeof row.accountId === 'string' && typeof row.html === 'string')
+        .map(async (row) => ({
+          accountId: row.accountId,
+          html: await this.withUpgradedSignatureFontStacks(row.accountId, row.html),
+          updatedAt: toNumber(row.updatedAt)
+        }))
+    )
   }
 
   async getAccountSignature(accountId: string): Promise<MailAccountSignature | null> {
@@ -690,9 +693,41 @@ export class AppDatabase {
 
     return {
       accountId: row.accountId,
-      html: row.html,
+      html: await this.withUpgradedSignatureFontStacks(row.accountId, row.html),
       updatedAt: toNumber(row.updatedAt)
     }
+  }
+
+  /**
+   * Signatures written before the font fallback chains existed carry the
+   * house font followed by a bare generic, so they lose their identity
+   * anywhere the font is not installed. Upgrading them on read means a
+   * signature saved in an older version starts arriving correctly without
+   * the user touching it; writing the result back makes it stick, so the
+   * Firme editor shows the same HTML the recipient will get, and text typed
+   * against those paragraphs inherits the full chain.
+   *
+   * Failing to persist is not worth surfacing: the upgraded HTML is already
+   * being returned, and the next read tries again.
+   */
+  private async withUpgradedSignatureFontStacks(accountId: string, html: string): Promise<string> {
+    const upgraded = upgradeMailFontStacksInHtml(html)
+
+    if (upgraded === html) {
+      return html
+    }
+
+    try {
+      await this.prisma.$executeRaw`
+        UPDATE account_signatures
+        SET html = ${upgraded}
+        WHERE account_id = ${accountId}
+      `
+    } catch (error) {
+      console.warn('[database] could not persist the upgraded signature font stacks', error)
+    }
+
+    return upgraded
   }
 
   async setAccountSignature(
@@ -702,7 +737,9 @@ export class AppDatabase {
     await this.ready
 
     const now = BigInt(Date.now())
-    const persistedHtml = html ?? ''
+    // Upgraded on the way in as well, so a signature pasted from an older
+    // message is stored with the chains rather than waiting for a read.
+    const persistedHtml = upgradeMailFontStacksInHtml(html ?? '')
 
     await this.prisma.$executeRaw`
       INSERT INTO account_signatures(account_id, html, updated_at)
