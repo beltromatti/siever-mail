@@ -6,7 +6,7 @@
  * signatures, which silently destroyed every extension's data and the app
  * preferences on each update.
  */
-import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -85,21 +85,37 @@ function dbPath(): string {
 
 /**
  * Minimal stand-in for the host schema: two cache tables the migration is
- * allowed to drop, plus the user-authored tables it must preserve —
- * including `extension_records`, which the host knows nothing about and
- * which only reaches the database through an extension.
+ * allowed to drop, plus the user-authored tables it must preserve.
  */
-function createSchema(db: SqliteTestAdapter): void {
+function createHostSchema(db: SqliteTestAdapter): void {
   db.exec(`
     CREATE TABLE accounts (id TEXT PRIMARY KEY, email TEXT NOT NULL);
-    CREATE TABLE account_signatures (account_id TEXT PRIMARY KEY, html TEXT NOT NULL);
+    CREATE TABLE account_signatures (
+      account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+      html TEXT NOT NULL
+    );
     CREATE TABLE app_preferences (id INTEGER PRIMARY KEY, unified TEXT);
     CREATE TABLE contacts (email_normalized TEXT PRIMARY KEY, usage_count INTEGER);
-    CREATE TABLE extension_settings (id INTEGER PRIMARY KEY, folder_path TEXT);
-    CREATE TABLE extension_records (id TEXT PRIMARY KEY, record_number TEXT, source TEXT);
     CREATE TABLE folders (id TEXT PRIMARY KEY, path TEXT);
     CREATE TABLE messages (id TEXT PRIMARY KEY, subject TEXT);
   `)
+}
+
+/**
+ * What an extension adds when it installs — after the host's schema and
+ * after the migration's finalize step, as in production. The host knows
+ * nothing about these tables.
+ */
+function installExtensionSchema(db: SqliteTestAdapter): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS extension_settings (id INTEGER PRIMARY KEY, folder_path TEXT);
+    CREATE TABLE IF NOT EXISTS extension_records (id TEXT PRIMARY KEY, record_number TEXT, source TEXT);
+  `)
+}
+
+function createSchema(db: SqliteTestAdapter): void {
+  createHostSchema(db)
+  installExtensionSchema(db)
 }
 
 function seedUserAndCacheData(db: SqliteTestAdapter): void {
@@ -153,6 +169,49 @@ describe('prepareUpgradeMigration', () => {
     prepareUpgradeMigration()
 
     expect(existsSync(join(appState.userDataPath, 'install-version.json'))).toBe(false)
+  })
+
+  it('backs up the user tables, not the resyncable cache', () => {
+    const db = new Database(dbPath())
+    createSchema(db)
+    seedUserAndCacheData(db)
+    db.close()
+
+    writeFileSync(
+      join(appState.userDataPath, 'install-version.json'),
+      JSON.stringify({ version: '1.7.0' })
+    )
+    appState.version = '1.8.0'
+
+    prepareUpgradeMigration()
+
+    const backup = new Database(join(appState.userDataPath, '.upgrade-backup.sqlite'))
+    const tables = (
+      backup.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{
+        name: string
+      }>
+    ).map((row) => row.name)
+
+    expect(tables).not.toContain('messages')
+    expect(tables).not.toContain('folders')
+    expect(countRows(backup, 'accounts')).toBe(1)
+    expect(countRows(backup, 'extension_records')).toBe(2)
+    backup.close()
+  })
+
+  it('never throws, even on a file it cannot read', () => {
+    writeFileSync(dbPath(), 'not a database')
+    writeFileSync(
+      join(appState.userDataPath, 'install-version.json'),
+      JSON.stringify({ version: '1.7.0' })
+    )
+    appState.version = '1.8.0'
+
+    expect(() => prepareUpgradeMigration()).not.toThrow()
+    // Nothing was touched: no backup, no pending record, the file is where it was.
+    expect(existsSync(dbPath())).toBe(true)
+    expect(existsSync(join(appState.userDataPath, '.upgrade-backup.sqlite'))).toBe(false)
+    expect(existsSync(join(appState.userDataPath, '.upgrade-pending.json'))).toBe(false)
   })
 
   it('never deletes the database when the version changes', () => {
@@ -250,9 +309,14 @@ describe('finalizeUpgradeMigration', () => {
     prepareUpgradeMigration()
     expect(existsSync(dbPath())).toBe(false)
 
+    // Production order: the host's schema, then finalize, and only then the
+    // extension installs and creates its own tables.
     const fresh = new Database(dbPath())
-    createSchema(fresh)
+    fresh.exec('PRAGMA foreign_keys = ON')
+    createHostSchema(fresh)
     await finalizeUpgradeMigration(createExecutor(fresh))
+    installExtensionSchema(fresh)
+    fresh.exec('ALTER TABLE extension_records ADD COLUMN added_later TEXT')
 
     // Everything the user authored is replayed — including the extension's
     // own tables, which the host never names anywhere.
@@ -272,8 +336,112 @@ describe('finalizeUpgradeMigration', () => {
     expect(countRows(fresh, 'messages')).toBe(0)
     expect(countRows(fresh, 'folders')).toBe(0)
 
+    // Foreign keys are back as the host had them.
+    expect(
+      (fresh.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number }).foreign_keys
+    ).toBe(1)
+
     fresh.close()
     expect(existsSync(join(appState.userDataPath, '.upgrade-pending.json'))).toBe(false)
+    expect(existsSync(join(appState.userDataPath, '.upgrade-backup.sqlite'))).toBe(false)
+    // A complete recovery leaves nothing set aside behind.
+    expect(readdirSync(appState.userDataPath).filter((name) => name.includes('.failed-'))).toEqual(
+      []
+    )
+  })
+
+  it('keeps what it could not restore, and still lets the app start', async () => {
+    const db = new Database(dbPath())
+    createSchema(db)
+    seedUserAndCacheData(db)
+    db.close()
+
+    writeFileSync(
+      join(appState.userDataPath, 'install-version.json'),
+      JSON.stringify({ version: '1.7.0' })
+    )
+    appState.version = '1.8.0'
+    prepareUpgradeMigration()
+    prepareUpgradeMigration()
+
+    // A new schema whose `contacts` rejects the old rows.
+    const fresh = new Database(dbPath())
+    createHostSchema(fresh)
+    fresh.exec('DROP TABLE contacts')
+    fresh.exec(
+      'CREATE TABLE contacts (email_normalized TEXT PRIMARY KEY, usage_count INTEGER, required TEXT NOT NULL)'
+    )
+    await finalizeUpgradeMigration(createExecutor(fresh))
+
+    // Everything else came back…
+    expect(countRows(fresh, 'accounts')).toBe(1)
+    expect(countRows(fresh, 'extension_records')).toBe(2)
+    expect(countRows(fresh, 'contacts')).toBe(0)
+    fresh.close()
+
+    // …the upgrade is over, and the user data is kept on disk.
+    expect(existsSync(join(appState.userDataPath, '.upgrade-pending.json'))).toBe(false)
+    const kept = readdirSync(appState.userDataPath).filter((name) => name.includes('.user-data-'))
+    expect(kept).toHaveLength(1)
+    const backup = new Database(join(appState.userDataPath, kept[0]))
+    expect(countRows(backup, 'contacts')).toBe(1)
+    backup.close()
+    expect(readdirSync(appState.userDataPath).some((name) => name.includes('.failed-'))).toBe(true)
+  })
+
+  it('gives the recovery up after two launches, keeping the user data', () => {
+    const db = new Database(dbPath())
+    createSchema(db)
+    seedUserAndCacheData(db)
+    db.close()
+
+    writeFileSync(
+      join(appState.userDataPath, 'install-version.json'),
+      JSON.stringify({ version: '1.7.0' })
+    )
+    appState.version = '1.8.0'
+
+    prepareUpgradeMigration() // backup
+    prepareUpgradeMigration() // recovery, first launch — which never finalises
+    new Database(dbPath()).close()
+    prepareUpgradeMigration() // recovery, second launch — neither
+    new Database(dbPath()).close()
+    prepareUpgradeMigration() // given up
+
+    expect(existsSync(join(appState.userDataPath, '.upgrade-pending.json'))).toBe(false)
+    expect(existsSync(join(appState.userDataPath, '.upgrade-backup.sqlite'))).toBe(false)
+    expect(
+      readdirSync(appState.userDataPath).filter((name) => name.includes('.user-data-'))
+    ).toHaveLength(1)
+    // The database of the last attempt is left to boot on.
+    expect(existsSync(dbPath())).toBe(true)
+    const marker = JSON.parse(
+      readFileSync(join(appState.userDataPath, 'install-version.json'), 'utf8')
+    ) as { version: string }
+    expect(marker.version).toBe('1.8.0')
+  })
+
+  it('moves the WAL along with a database it sets aside', () => {
+    const db = new Database(dbPath())
+    createSchema(db)
+    seedUserAndCacheData(db)
+    db.close()
+    writeFileSync(
+      join(appState.userDataPath, 'install-version.json'),
+      JSON.stringify({ version: '1.7.0' })
+    )
+    appState.version = '1.8.0'
+    prepareUpgradeMigration()
+
+    writeFileSync(`${dbPath()}-wal`, 'pending pages')
+    prepareUpgradeMigration()
+
+    expect(existsSync(`${dbPath()}-wal`)).toBe(false)
+    const setAside = readdirSync(appState.userDataPath).find((name) => /\.failed-\d+$/.test(name))
+    expect(setAside).toBeDefined()
+    expect(readFileSync(join(appState.userDataPath, `${setAside}-wal`), 'utf8')).toBe(
+      'pending pages'
+    )
   })
 
   it('replays only the columns the new schema still has', async () => {

@@ -61,7 +61,7 @@ import {
   sha256
 } from './attachment-files'
 import { AppDatabase } from './database'
-import type { MigrationSqlExecutor } from './data-migration'
+import { finalizeUpgradeMigration } from './data-migration'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
 import { GoogleOAuthService } from './google-oauth'
 import { MailEngine } from './mail-engine'
@@ -209,6 +209,7 @@ export class MailService {
   private readonly googleOAuthService: GoogleOAuthService
   private readonly engine: MailEngine
   private extension: ExtensionMain | null = null
+  private storageReady: Promise<void> | null = null
   // The copy each opened attachment was last written to, and what it held,
   // keyed by its folder: reopening an untouched copy needs no download.
   private readonly openedAttachments = new Map<string, { filePath: string; digest: string }>()
@@ -228,26 +229,25 @@ export class MailService {
   }
 
   /**
-   * Opens the database and reconciles its schema without touching the
-   * network. Split out of `start()` so the upgrade migration can finish
-   * its work — purging the resyncable cache tables, replaying a recovery
-   * backup — on a schema that already exists but that no IMAP sync has
-   * begun writing to yet.
-   */
-  async prepareStorage(): Promise<void> {
-    await this.database.waitUntilReady()
-  }
-
-  /**
-   * SQL surface handed to the upgrade migration's finalize step. It runs on
+   * Opens the database, reconciles its schema and finishes any upgrade
+   * migration on it — purging the resyncable cache, or putting the user
+   * data back after a failed upgrade — without touching the network.
+   *
+   * Everything the interface asks for waits on this (see
+   * `register-mail-ipc`): the window loads alongside, and must never read
+   * rows the migration is about to purge or restore. The migration runs on
    * the host's own connection on purpose: a second handle to the same file
    * would contend on the WAL and make `VACUUM` fail with SQLITE_BUSY.
    */
-  createMigrationExecutor(): MigrationSqlExecutor {
-    return {
-      run: (sql, params) => this.database.runRawSql(sql, params),
-      all: (sql, params) => this.database.runRawSqlQuery(sql, params)
-    }
+  openStorage(): Promise<void> {
+    this.storageReady ??= this.database.waitUntilReady().then(() =>
+      finalizeUpgradeMigration({
+        run: (sql, params) => this.database.runRawSql(sql, params),
+        all: (sql, params) => this.database.runRawSqlQuery(sql, params)
+      })
+    )
+
+    return this.storageReady
   }
 
   async start(): Promise<void> {

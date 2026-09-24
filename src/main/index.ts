@@ -12,7 +12,7 @@ import extensionMain from '@app/extension/main'
 import { loadRuntimeConfig } from './config/env'
 import { installAppMenu } from './app-menu'
 import { registerMailIpc } from './ipc/register-mail-ipc'
-import { finalizeUpgradeMigration, prepareUpgradeMigration } from './services/data-migration'
+import { prepareUpgradeMigration } from './services/data-migration'
 import { MailService } from './services/mail-service'
 import { normalizeExternalHttpUrl } from './utils/external-url'
 import { startFileLogging } from './utils/log-file'
@@ -220,12 +220,12 @@ if (hasSingleInstanceLock) {
     const service = new MailService(loadRuntimeConfig())
     mailService = service
 
-    // Storage first, then the upgrade migration, then the network. The
-    // finalize step purges the resyncable cache tables, so it has to land
-    // on a reconciled schema that no IMAP sync has started writing to yet.
+    // Storage and the upgrade migration first, then the network, then the
+    // extension. The migration purges the resyncable cache tables, so it
+    // has to land on a reconciled schema that no IMAP sync has started
+    // writing to yet; the interface's requests wait for it too.
     void service
-      .prepareStorage()
-      .then(() => finalizeUpgradeMigration(service.createMigrationExecutor()))
+      .openStorage()
       .then(() => service.start())
       .then(() => service.installExtension(extensionMain))
       .then(() => {

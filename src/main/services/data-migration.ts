@@ -14,44 +14,33 @@
  *     owns. None of it exists anywhere else; losing it is unrecoverable for
  *     the user.
  *
- * Up to 1.7.1 the upgrade path deleted the whole database and restored
- * only `accounts` + `account_signatures` from a JSON stash. That silently
- * wiped every extension's data, the unified-inbox preferences and the
- * contact history on *every single release* — settings users had made once
- * and expected to keep.
- *
- * The flow is now:
+ * The flow:
  *
  *   1. `prepareUpgradeMigration()` — before the database is opened.
- *      Detects the version change and takes a consistent backup copy of
- *      the file (WAL checkpointed first, so the copy is self-contained).
- *      Nothing is deleted.
- *   2. `AppDatabase` reconciles the schema additively, as it already does.
- *   3. `finalizeUpgradeMigration()` — as soon as the schema is ready and
- *      *before* the IMAP engine starts writing. Purges only the cache
- *      tables and the attachment scratch directories, stamps the new
+ *      Detects the version change and copies every user table, schema and
+ *      rows, into a small backup file. The cache is left out: it is the
+ *      bulk of the file and is rebuilt anyway. Nothing is deleted.
+ *   2. `AppDatabase` reconciles the schema additively, as it always does.
+ *   3. `finalizeUpgradeMigration()` — once the schema is ready and before
+ *      anything reads or syncs (the IPC layer waits for it). Purges the
+ *      cache tables and the attachment scratch directories, stamps the new
  *      version marker, drops the backup.
  *
- * If step 2 never completes (an unopenable or unreconcilable file, a crash
- * mid-startup), the pending marker is still on disk at the next launch and
- * `prepareUpgradeMigration()` takes the recovery path instead: the unusable
- * file is set aside, the app boots on a fresh schema, and every table the
- * backup and the new schema have in common — minus the cache tables — is
- * copied back row by row.
+ * If step 3 never ran — a file the new schema could not be applied to, a
+ * crash, the app quit mid-way — the pending record is still on disk at the
+ * next launch, and `prepareUpgradeMigration()` takes the recovery path: the
+ * file is set aside, the app boots on a fresh schema, and the finalize
+ * step puts every user table back from the backup. A table the fresh
+ * database does not have yet (an extension's, created only when the
+ * extension installs, after this) is recreated as it was, and its owner
+ * reconciles it like after any upgrade. The copy walks `sqlite_master`,
+ * so extension tables come back without the host knowing their names.
  *
- * That copy is deliberately table-agnostic: it walks `sqlite_master`
- * instead of a hardcoded list, so extension-owned tables survive without
- * the public host ever having to know their names.
+ * Nothing here may stop the app from starting: every failure is logged,
+ * the recovery is attempted at most `MAX_RECOVERY_ATTEMPTS` times, and a
+ * backup that could not be fully restored is kept on disk, never deleted.
  */
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync
-} from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import Database from 'better-sqlite3'
@@ -62,6 +51,7 @@ const DB_SIDECAR_SUFFIXES = ['-wal', '-shm', '-journal'] as const
 const VERSION_MARKER_FILE_NAME = 'install-version.json'
 const PENDING_UPGRADE_FILE_NAME = '.upgrade-pending.json'
 const BACKUP_FILE_NAME = '.upgrade-backup.sqlite'
+const BACKUP_SCHEMA_NAME = 'upgrade_backup'
 const ATTACHMENT_DIRECTORY_CANDIDATES = ['attachments', 'cache', 'temp', 'mail-cache']
 
 /**
@@ -69,13 +59,20 @@ const ATTACHMENT_DIRECTORY_CANDIDATES = ['attachments', 'cache', 'temp', 'mail-c
  * IMAP server is their source of truth. Everything else in the file is
  * user data and is preserved as-is.
  */
-const CACHE_TABLE_NAMES = ['messages', 'folders'] as const
+const CACHE_TABLE_NAMES: ReadonlySet<string> = new Set(['messages', 'folders'])
 
 /**
- * SQLite's own bookkeeping tables. They must never be copied during a
- * recovery — the fresh database maintains its own.
+ * SQLite's own bookkeeping tables. They must never be copied — every
+ * database maintains its own.
  */
 const INTERNAL_TABLE_PREFIX = 'sqlite_'
+
+/**
+ * Launches a recovery gets before it is given up. One retry covers a crash
+ * or an app quit halfway; a recovery that fails twice would fail for ever,
+ * and must not keep the app from starting.
+ */
+const MAX_RECOVERY_ATTEMPTS = 2
 
 type UpgradePhase = 'purge-cache' | 'recover-user-data'
 
@@ -84,7 +81,7 @@ type UpgradePhase = 'purge-cache' | 'recover-user-data'
  * database connection: opening a second handle to the same file while
  * Prisma holds one would contend on the WAL and make `VACUUM` fail with
  * SQLITE_BUSY. `prepareUpgradeMigration()` has no such constraint — it runs
- * before the host opens anything — so it still uses a direct handle.
+ * before the host opens anything — so it uses a direct handle.
  */
 export interface MigrationSqlExecutor {
   run(sql: string, params?: unknown[]): Promise<void>
@@ -96,6 +93,15 @@ interface PendingUpgradeRecord {
   toVersion: string
   startedAt: number
   phase: UpgradePhase
+  /** Launches that have started the recovery so far. */
+  attempts: number
+  /** Databases the recovery set aside; removed once it has fully succeeded. */
+  setAsidePaths: string[]
+}
+
+interface TableDefinition {
+  name: string
+  sql: string
 }
 
 /**
@@ -167,7 +173,18 @@ function readPendingUpgrade(pendingPath: string): PendingUpgradeRecord | null {
       fromVersion: typeof parsed.fromVersion === 'string' ? parsed.fromVersion : 'unknown',
       toVersion: typeof parsed.toVersion === 'string' ? parsed.toVersion : 'unknown',
       startedAt: typeof parsed.startedAt === 'number' ? parsed.startedAt : Date.now(),
-      phase: parsed.phase
+      phase: parsed.phase,
+      // Records written before attempts were counted: a recovery in flight
+      // has had its one launch.
+      attempts:
+        typeof parsed.attempts === 'number'
+          ? parsed.attempts
+          : parsed.phase === 'recover-user-data'
+            ? 1
+            : 0,
+      setAsidePaths: Array.isArray(parsed.setAsidePaths)
+        ? parsed.setAsidePaths.filter((path): path is string => typeof path === 'string')
+        : []
     }
   } catch {
     return null
@@ -178,106 +195,151 @@ function writePendingUpgrade(pendingPath: string, record: PendingUpgradeRecord):
   writeFileSync(pendingPath, `${JSON.stringify(record, null, 2)}\n`, 'utf8')
 }
 
-function removeDatabaseSidecars(dbPath: string): void {
+/** Removes a database file together with its WAL and journal sidecars. */
+function removeDatabaseFile(path: string): void {
+  rmSync(path, { force: true })
+
   for (const suffix of DB_SIDECAR_SUFFIXES) {
-    rmSync(`${dbPath}${suffix}`, { force: true })
+    rmSync(`${path}${suffix}`, { force: true })
   }
 }
 
 /**
- * Copies the live database to `destinationPath`. The WAL is checkpointed
- * and truncated first so the single copied file carries every committed
- * page — without that step a crash-consistent copy would be missing
- * anything still sitting in the -wal sidecar.
+ * Renames a database file and its sidecars together: a WAL left behind
+ * under the old name would hold committed pages of the file that moved,
+ * and be replayed into whatever database is created there next.
  */
-function backupDatabaseFile(dbPath: string, destinationPath: string): void {
-  const db = new Database(dbPath)
+function moveDatabaseFile(fromPath: string, toPath: string): void {
+  renameSync(fromPath, toPath)
 
-  try {
-    db.pragma('wal_checkpoint(TRUNCATE)')
-  } finally {
-    db.close()
+  for (const suffix of DB_SIDECAR_SUFFIXES) {
+    if (existsSync(`${fromPath}${suffix}`)) {
+      renameSync(`${fromPath}${suffix}`, `${toPath}${suffix}`)
+    }
   }
-
-  rmSync(destinationPath, { force: true })
-  removeDatabaseSidecars(destinationPath)
-  copyFileSync(dbPath, destinationPath)
-}
-
-function listRestorableTables(db: Database.Database): string[] {
-  const rows = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{
-    name?: string
-  }>
-
-  return rows
-    .map((row) => row.name)
-    .filter((name): name is string => Boolean(name))
-    .filter((name) => !name.startsWith(INTERNAL_TABLE_PREFIX))
-    .filter((name) => !CACHE_TABLE_NAMES.includes(name as (typeof CACHE_TABLE_NAMES)[number]))
-}
-
-function listColumns(db: Database.Database, tableName: string): string[] {
-  const rows = db.prepare(`PRAGMA table_info("${tableName}")`).all() as Array<{ name?: string }>
-  return rows.map((row) => row.name).filter((name): name is string => Boolean(name))
 }
 
 function quoteIdentifier(value: string): string {
   return `"${value.replace(/"/g, '""')}"`
 }
 
+function quoteLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
 /**
- * Detects a version change and takes a backup so the upgrade can be
- * finished (or recovered from) after the schema is reconciled.
+ * The tables that hold user data, with the statement that created each.
+ * Virtual tables and the shadow tables behind them are left out: they are
+ * indexes over other tables, rebuilt by their owner.
+ */
+function listUserTables(db: Database.Database): TableDefinition[] {
+  const rows = db
+    .prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY rowid`)
+    .all() as Array<{ name?: string; sql?: string | null }>
+  const tables = rows.filter(
+    (row): row is TableDefinition => typeof row.name === 'string' && typeof row.sql === 'string'
+  )
+  const virtualTables = tables
+    .filter((table) => /^CREATE\s+VIRTUAL\s+TABLE/i.test(table.sql))
+    .map((table) => table.name)
+
+  return tables.filter(
+    (table) =>
+      !table.name.startsWith(INTERNAL_TABLE_PREFIX) &&
+      !CACHE_TABLE_NAMES.has(table.name) &&
+      !virtualTables.some(
+        (virtualTable) => table.name === virtualTable || table.name.startsWith(`${virtualTable}_`)
+      )
+  )
+}
+
+function listColumns(db: Database.Database, tableName: string): string[] {
+  const rows = db.prepare(`PRAGMA table_info(${quoteIdentifier(tableName)})`).all() as Array<{
+    name?: string
+  }>
+  return rows.map((row) => row.name).filter((name): name is string => Boolean(name))
+}
+
+/**
+ * Copies every user table, definition and rows, into a new database file
+ * at `backupPath`. The cache — most of the file — is left out, so taking
+ * the backup costs little however large the mailbox.
+ */
+function backupUserTables(dbPath: string, backupPath: string): void {
+  removeDatabaseFile(backupPath)
+
+  const source = new Database(dbPath, { fileMustExist: true })
+
+  try {
+    const tables = listUserTables(source)
+    const backup = new Database(backupPath)
+
+    try {
+      for (const table of tables) {
+        backup.exec(table.sql)
+      }
+    } finally {
+      backup.close()
+    }
+
+    source.exec(`ATTACH DATABASE ${quoteLiteral(backupPath)} AS ${BACKUP_SCHEMA_NAME}`)
+
+    try {
+      source.exec('BEGIN')
+
+      try {
+        for (const table of tables) {
+          const columns = listColumns(source, table.name).map(quoteIdentifier).join(', ')
+          source.exec(
+            `INSERT INTO ${BACKUP_SCHEMA_NAME}.${quoteIdentifier(table.name)} (${columns}) ` +
+              `SELECT ${columns} FROM main.${quoteIdentifier(table.name)}`
+          )
+        }
+
+        source.exec('COMMIT')
+      } catch (error) {
+        source.exec('ROLLBACK')
+        throw error
+      }
+    } finally {
+      source.exec(`DETACH DATABASE ${BACKUP_SCHEMA_NAME}`)
+    }
+  } finally {
+    source.close()
+  }
+}
+
+/**
+ * Detects a version change and takes the user-data backup, or — when the
+ * previous upgrade never finished — sets the database aside for recovery.
  *
- * Must run BEFORE the database is opened by `MailService`.
+ * Must run BEFORE the database is opened by `MailService`. Never throws: a
+ * migration that cannot even be prepared must not stop the app starting.
  */
 export function prepareUpgradeMigration(): void {
   if (!shouldRunMigrations()) {
     return
   }
 
-  const { dbPath, backupPath, markerPath, pendingPath } = resolveMigrationPaths()
-  const currentVersion = app.getVersion()
+  try {
+    prepare(resolveMigrationPaths(), app.getVersion())
+  } catch (error) {
+    console.error('[data-migration] Could not prepare the upgrade; starting without it.', error)
+  }
+}
+
+function prepare(paths: MigrationPaths, currentVersion: string): void {
+  const { dbPath, backupPath, markerPath, pendingPath } = paths
   const pendingUpgrade = readPendingUpgrade(pendingPath)
 
-  // A pending record still on disk means the previous launch never reached
-  // `finalizeUpgradeMigration()`. The new schema could not be applied to the
-  // old file (or the process died trying), so re-running the same path would
-  // just fail again: set the file aside and boot on a fresh schema instead.
-  // The backup taken before that attempt still holds every user-authored
-  // row and is replayed by `finalizeUpgradeMigration()` once the new schema
-  // exists.
   if (pendingUpgrade) {
-    if (!existsSync(backupPath)) {
-      // Nothing to recover from — clear the marker so a broken pending file
-      // can never wedge startup, and let the app continue on whatever the
-      // database currently holds.
-      console.warn(
-        '[data-migration] Pending upgrade found without a backup; clearing it and continuing.'
-      )
-      rmSync(pendingPath, { force: true })
-      writeVersionMarker(markerPath, currentVersion)
-      return
-    }
-
-    if (existsSync(dbPath)) {
-      const setAsidePath = `${dbPath}.failed-${Date.now()}`
-      renameSync(dbPath, setAsidePath)
-      removeDatabaseSidecars(dbPath)
-      console.warn(
-        `[data-migration] Upgrade ${pendingUpgrade.fromVersion} -> ${pendingUpgrade.toVersion} ` +
-          `did not complete; database set aside at ${setAsidePath}. ` +
-          'Booting on a fresh schema and restoring user data from the backup.'
-      )
-    }
-
-    writePendingUpgrade(pendingPath, { ...pendingUpgrade, phase: 'recover-user-data' })
+    prepareRecovery(paths, pendingUpgrade, currentVersion)
     return
   }
 
   if (!existsSync(dbPath)) {
     // Fresh install (or a wiped profile): nothing to migrate.
-    rmSync(backupPath, { force: true })
+    removeDatabaseFile(backupPath)
     writeVersionMarker(markerPath, currentVersion)
     return
   }
@@ -289,16 +351,13 @@ export function prepareUpgradeMigration(): void {
   }
 
   try {
-    backupDatabaseFile(dbPath, backupPath)
+    backupUserTables(dbPath, backupPath)
   } catch (error) {
-    // A database we cannot even checkpoint is one we must not touch. Skip
-    // the migration entirely rather than risk destroying the only copy of
-    // the user's data; the app still boots and the schema reconciliation
-    // gets its chance.
-    console.error(
-      '[data-migration] Could not back up the existing database; skipping migration.',
-      error
-    )
+    // A database we cannot read is one we must not touch. Skip the
+    // migration rather than risk the only copy of the user's data; the
+    // app still boots and the schema reconciliation gets its chance.
+    removeDatabaseFile(backupPath)
+    console.error('[data-migration] Could not back up the user data; skipping migration.', error)
     return
   }
 
@@ -306,13 +365,86 @@ export function prepareUpgradeMigration(): void {
     fromVersion: recordedVersion ?? 'unknown',
     toVersion: currentVersion,
     startedAt: Date.now(),
-    phase: 'purge-cache'
+    phase: 'purge-cache',
+    attempts: 0,
+    setAsidePaths: []
   })
 
   console.info(
     `[data-migration] Upgrade ${recordedVersion ?? 'unknown'} -> ${currentVersion} detected; ` +
-      'backup taken, user data will be preserved.'
+      'user data backed up, it will be preserved.'
   )
+}
+
+/**
+ * A pending record means the previous launch never reached the end of
+ * `finalizeUpgradeMigration()`. Retrying the same path on the same file
+ * could fail the same way, so the file is set aside and the app boots on a
+ * fresh schema, into which the finalize step restores the backup.
+ */
+function prepareRecovery(
+  paths: MigrationPaths,
+  pendingUpgrade: PendingUpgradeRecord,
+  currentVersion: string
+): void {
+  const { dbPath, backupPath, markerPath, pendingPath } = paths
+  const upgrade = `${pendingUpgrade.fromVersion} -> ${pendingUpgrade.toVersion}`
+
+  if (!existsSync(backupPath)) {
+    // Nothing to recover from — clear the record so a broken pending file
+    // can never wedge startup, and continue on whatever the database holds.
+    console.warn(`[data-migration] Upgrade ${upgrade} left no backup; continuing without it.`)
+    rmSync(pendingPath, { force: true })
+    writeVersionMarker(markerPath, currentVersion)
+    return
+  }
+
+  if (
+    pendingUpgrade.phase === 'recover-user-data' &&
+    pendingUpgrade.attempts >= MAX_RECOVERY_ATTEMPTS
+  ) {
+    const keptPath = `${dbPath}.user-data-${Date.now()}`
+    moveDatabaseFile(backupPath, keptPath)
+    rmSync(pendingPath, { force: true })
+    writeVersionMarker(markerPath, currentVersion)
+    console.error(
+      `[data-migration] Recovery after the upgrade ${upgrade} did not complete in ` +
+        `${pendingUpgrade.attempts} launches; giving up. The user data is kept at ${keptPath}.`
+    )
+    return
+  }
+
+  const setAsidePath = existsSync(dbPath) ? `${dbPath}.failed-${Date.now()}` : null
+
+  if (setAsidePath) {
+    moveDatabaseFile(dbPath, setAsidePath)
+  }
+
+  try {
+    writePendingUpgrade(pendingPath, {
+      ...pendingUpgrade,
+      phase: 'recover-user-data',
+      attempts: pendingUpgrade.phase === 'recover-user-data' ? pendingUpgrade.attempts + 1 : 1,
+      setAsidePaths: setAsidePath
+        ? [...pendingUpgrade.setAsidePaths, setAsidePath]
+        : pendingUpgrade.setAsidePaths
+    })
+  } catch (error) {
+    // Without the record the next finalize would not know to restore: put
+    // the database back and leave things as the last launch did.
+    if (setAsidePath) {
+      moveDatabaseFile(setAsidePath, dbPath)
+    }
+
+    throw error
+  }
+
+  if (setAsidePath) {
+    console.warn(
+      `[data-migration] Upgrade ${upgrade} did not complete; database set aside at ` +
+        `${setAsidePath}. Booting on a fresh schema and restoring user data from the backup.`
+    )
+  }
 }
 
 /**
@@ -320,14 +452,29 @@ export function prepareUpgradeMigration(): void {
  *
  * Must run AFTER the schema has been reconciled and BEFORE the mail engine
  * starts syncing, so purging the cache tables cannot race an incoming write.
+ * Never throws: a failure leaves the pending record for the next launch.
  */
 export async function finalizeUpgradeMigration(executor: MigrationSqlExecutor): Promise<void> {
   if (!shouldRunMigrations()) {
     return
   }
 
-  const { userDataPath, dbPath, backupPath, markerPath, pendingPath } = resolveMigrationPaths()
-  const currentVersion = app.getVersion()
+  try {
+    await finalize(resolveMigrationPaths(), app.getVersion(), executor)
+  } catch (error) {
+    console.error(
+      '[data-migration] Finalize step failed; leaving the pending record so the next launch retries.',
+      error
+    )
+  }
+}
+
+async function finalize(
+  paths: MigrationPaths,
+  currentVersion: string,
+  executor: MigrationSqlExecutor
+): Promise<void> {
+  const { userDataPath, dbPath, backupPath, markerPath, pendingPath } = paths
   const pendingUpgrade = readPendingUpgrade(pendingPath)
 
   if (!pendingUpgrade) {
@@ -337,30 +484,34 @@ export async function finalizeUpgradeMigration(executor: MigrationSqlExecutor): 
 
   if (!existsSync(dbPath)) {
     console.warn(
-      '[data-migration] Database missing at finalize; leaving the pending marker in place.'
+      '[data-migration] Database missing at finalize; leaving the pending record in place.'
     )
     return
   }
 
-  try {
-    if (pendingUpgrade.phase === 'recover-user-data') {
-      await recoverUserDataFromBackup(executor, backupPath, pendingUpgrade)
+  if (pendingUpgrade.phase === 'recover-user-data') {
+    const failedTables = await recoverUserDataFromBackup(executor, backupPath, pendingUpgrade)
+
+    if (failedTables.length > 0) {
+      // What could not be put back stays on disk, in the backup and in the
+      // databases set aside, for whoever looks into it.
+      const keptPath = `${dbPath}.user-data-${Date.now()}`
+      moveDatabaseFile(backupPath, keptPath)
+      console.error(
+        `[data-migration] Could not restore ${failedTables.join(', ')}; ` +
+          `the user data is kept at ${keptPath}.`
+      )
     } else {
-      await purgeCacheTables(executor, pendingUpgrade)
+      pendingUpgrade.setAsidePaths.forEach(removeDatabaseFile)
     }
-  } catch (error) {
-    console.error(
-      '[data-migration] Finalize step failed; leaving the pending marker so the next launch retries.',
-      error
-    )
-    return
+  } else {
+    await purgeCacheTables(executor, pendingUpgrade)
   }
 
   purgeAttachmentScratchDirectories(userDataPath)
 
   rmSync(pendingPath, { force: true })
-  rmSync(backupPath, { force: true })
-  removeDatabaseSidecars(backupPath)
+  removeDatabaseFile(backupPath)
   writeVersionMarker(markerPath, currentVersion)
 }
 
@@ -414,74 +565,77 @@ async function purgeCacheTables(
 }
 
 /**
- * Replays every user-authored table from the pre-upgrade backup into the
- * freshly created database. Driven by `sqlite_master` rather than a fixed
- * list, so tables owned by an extension come across without the host
- * knowing anything about them; only columns present on both sides are
- * copied, which keeps the replay tolerant of additive schema changes.
+ * Puts every table of the backup back into the fresh database. Tables the
+ * new schema has get the columns both sides share, so additive schema
+ * changes cost nothing; tables it does not have yet — an extension's,
+ * created only when the extension installs — are recreated as they were.
+ *
+ * Each table succeeds or fails on its own, and foreign keys are off while
+ * rows go in, since the tables arrive in whatever order they were created.
+ * Returns the tables that could not be restored.
  */
 async function recoverUserDataFromBackup(
   executor: MigrationSqlExecutor,
   backupPath: string,
   pendingUpgrade: PendingUpgradeRecord
-): Promise<void> {
-  if (!existsSync(backupPath)) {
-    console.warn('[data-migration] No backup to recover from; starting clean.')
-    return
-  }
-
-  const targetTables = await listExistingTables(executor)
+): Promise<string[]> {
   const source = new Database(backupPath, { readonly: true, fileMustExist: true })
+  const targetTables = await listExistingTables(executor)
+  const [foreignKeys] = await executor.all<{ foreign_keys?: number }>('PRAGMA foreign_keys')
   const restoredTables: string[] = []
-  let restoredRows = 0
+  const failedTables: string[] = []
+
+  await executor.run('PRAGMA foreign_keys = OFF')
 
   try {
-    for (const tableName of listRestorableTables(source)) {
-      if (!targetTables.has(tableName)) {
-        continue
-      }
+    for (const table of listUserTables(source)) {
+      try {
+        if (!targetTables.has(table.name)) {
+          await executor.run(table.sql)
+        }
 
-      const targetColumns = new Set(await listTargetColumns(executor, tableName))
-      const sharedColumns = listColumns(source, tableName).filter((column) =>
-        targetColumns.has(column)
-      )
-
-      if (sharedColumns.length === 0) {
-        continue
-      }
-
-      const quotedColumns = sharedColumns.map(quoteIdentifier).join(', ')
-      const rows = source
-        .prepare(`SELECT ${quotedColumns} FROM ${quoteIdentifier(tableName)}`)
-        .all() as Array<Record<string, unknown>>
-
-      if (rows.length === 0) {
-        continue
-      }
-
-      const insertSql =
-        `INSERT OR REPLACE INTO ${quoteIdentifier(tableName)} (${quotedColumns}) ` +
-        `VALUES (${sharedColumns.map(() => '?').join(', ')})`
-
-      for (const row of rows) {
-        await executor.run(
-          insertSql,
-          sharedColumns.map((column) => row[column] ?? null)
+        const targetColumns = new Set(await listTargetColumns(executor, table.name))
+        const sharedColumns = listColumns(source, table.name).filter((column) =>
+          targetColumns.has(column)
         )
-      }
 
-      restoredTables.push(`${tableName}(${rows.length})`)
-      restoredRows += rows.length
+        if (sharedColumns.length === 0) {
+          continue
+        }
+
+        const quotedColumns = sharedColumns.map(quoteIdentifier).join(', ')
+        const rows = source
+          .prepare(`SELECT ${quotedColumns} FROM ${quoteIdentifier(table.name)}`)
+          .all() as Array<Record<string, unknown>>
+        const insertSql =
+          `INSERT OR REPLACE INTO ${quoteIdentifier(table.name)} (${quotedColumns}) ` +
+          `VALUES (${sharedColumns.map(() => '?').join(', ')})`
+
+        for (const row of rows) {
+          await executor.run(
+            insertSql,
+            sharedColumns.map((column) => row[column] ?? null)
+          )
+        }
+
+        restoredTables.push(`${table.name}(${rows.length})`)
+      } catch (error) {
+        failedTables.push(table.name)
+        console.error(`[data-migration] Could not restore table ${table.name}.`, error)
+      }
     }
   } finally {
     source.close()
+    await executor.run(`PRAGMA foreign_keys = ${foreignKeys?.foreign_keys ? 'ON' : 'OFF'}`)
   }
 
   console.info(
-    `[data-migration] Recovered ${restoredRows} user row(s) after the failed upgrade ` +
+    `[data-migration] Restored after the failed upgrade ` +
       `${pendingUpgrade.fromVersion} -> ${pendingUpgrade.toVersion}: ` +
       `${restoredTables.join(', ') || 'nothing to restore'}.`
   )
+
+  return failedTables
 }
 
 /**

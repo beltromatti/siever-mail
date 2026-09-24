@@ -39,53 +39,70 @@ export function registerMailIpc(
   mailService: MailService,
   getMainWindow: () => BrowserWindow | null
 ): void {
-  registerHandler(IPC_CHANNELS.bootstrap, async () => mailService.bootstrap())
+  // Channels that read or change stored data wait for the storage to be
+  // open and any upgrade migration to be done (see `MailService.openStorage`).
+  // Those that only drive the window or the shell, at the bottom, never
+  // wait: the window must stay movable and closable during a long upgrade.
+  const registerDataHandler = <Args extends unknown[], ReturnValue>(
+    channel: string,
+    handler: (...args: Args) => Promise<ReturnValue>
+  ): void => {
+    registerHandler(channel, async (...args: Args) => {
+      await mailService.openStorage()
+      return handler(...args)
+    })
+  }
 
-  registerHandler(IPC_CHANNELS.getAccountConnectionStates, async () =>
+  registerDataHandler(IPC_CHANNELS.bootstrap, async () => mailService.bootstrap())
+
+  registerDataHandler(IPC_CHANNELS.getAccountConnectionStates, async () =>
     mailService.getAccountConnectionStates()
   )
 
-  registerHandler(IPC_CHANNELS.getUiPreferences, async () => mailService.getUiPreferences())
+  registerDataHandler(IPC_CHANNELS.getUiPreferences, async () => mailService.getUiPreferences())
 
-  registerHandler(IPC_CHANNELS.setUiPreferences, async (preferences) =>
+  registerDataHandler(IPC_CHANNELS.setUiPreferences, async (preferences) =>
     mailService.setUiPreferences(preferences as UiPreferences)
   )
 
-  registerHandler(IPC_CHANNELS.addGoogleAccount, async () => {
+  registerDataHandler(IPC_CHANNELS.addGoogleAccount, async () => {
     return mailService.addGoogleAccount(getMainWindow() ?? undefined)
   })
 
-  registerHandler(IPC_CHANNELS.addImapAccount, async (payload) => {
+  registerDataHandler(IPC_CHANNELS.addImapAccount, async (payload) => {
     return mailService.addImapAccount(payload as AddImapAccountInput)
   })
 
-  registerHandler(IPC_CHANNELS.markAccountLastViewed, async (accountId: string) => {
+  registerDataHandler(IPC_CHANNELS.markAccountLastViewed, async (accountId: string) => {
     await mailService.markAccountLastViewed(accountId)
   })
 
-  registerHandler(IPC_CHANNELS.removeAccount, async (accountId: string) => {
+  registerDataHandler(IPC_CHANNELS.removeAccount, async (accountId: string) => {
     await mailService.removeAccount(accountId)
   })
 
-  registerHandler(IPC_CHANNELS.setActiveMailboxContext, async (context) => {
+  registerDataHandler(IPC_CHANNELS.setActiveMailboxContext, async (context) => {
     await mailService.setActiveMailboxContext((context as ActiveMailboxContext | null) ?? null)
   })
 
-  registerHandler(IPC_CHANNELS.listFolders, async (accountId: string) => {
+  registerDataHandler(IPC_CHANNELS.listFolders, async (accountId: string) => {
     return mailService.listFolders(accountId)
   })
 
-  registerHandler(IPC_CHANNELS.getUnifiedInboxSummary, async () => {
+  registerDataHandler(IPC_CHANNELS.getUnifiedInboxSummary, async () => {
     return mailService.getUnifiedInboxSummary()
   })
 
-  registerHandler(IPC_CHANNELS.getUnifiedInboxPreferences, async () => {
+  registerDataHandler(IPC_CHANNELS.getUnifiedInboxPreferences, async () => {
     return mailService.getUnifiedInboxPreferences()
   })
 
-  registerHandler(IPC_CHANNELS.setUnifiedInboxIncludedAccounts, async (accountIds: string[]) => {
-    return mailService.setUnifiedInboxIncludedAccounts(accountIds)
-  })
+  registerDataHandler(
+    IPC_CHANNELS.setUnifiedInboxIncludedAccounts,
+    async (accountIds: string[]) => {
+      return mailService.setUnifiedInboxIncludedAccounts(accountIds)
+    }
+  )
 
   registerHandler(
     IPC_CHANNELS.listMessages,
@@ -94,89 +111,89 @@ export function registerMailIpc(
     }
   )
 
-  registerHandler(IPC_CHANNELS.getMessage, async (ref) => {
+  registerDataHandler(IPC_CHANNELS.getMessage, async (ref) => {
     return mailService.getMessage(ref as MessageRef)
   })
 
-  registerHandler(IPC_CHANNELS.moveMessage, async (payload) => {
+  registerDataHandler(IPC_CHANNELS.moveMessage, async (payload) => {
     await mailService.moveMessage(payload as MoveMessageInput)
   })
 
-  registerHandler(IPC_CHANNELS.deleteMessage, async (ref) => {
+  registerDataHandler(IPC_CHANNELS.deleteMessage, async (ref) => {
     await mailService.deleteMessage(ref as MessageRef)
   })
 
-  registerHandler(IPC_CHANNELS.archiveMessage, async (ref) => {
+  registerDataHandler(IPC_CHANNELS.archiveMessage, async (ref) => {
     await mailService.archiveMessage(ref as MessageRef)
   })
 
-  registerHandler(IPC_CHANNELS.toggleSeen, async (payload) => {
+  registerDataHandler(IPC_CHANNELS.toggleSeen, async (payload) => {
     await mailService.toggleSeen(payload as ToggleSeenInput)
   })
 
-  registerHandler(IPC_CHANNELS.toggleFlagged, async (payload) => {
+  registerDataHandler(IPC_CHANNELS.toggleFlagged, async (payload) => {
     await mailService.toggleFlagged(payload as ToggleFlaggedInput)
   })
 
-  registerHandler(IPC_CHANNELS.sendMail, async (payload) => {
+  registerDataHandler(IPC_CHANNELS.sendMail, async (payload) => {
     await mailService.sendMail(payload as ComposeMailInput)
   })
 
-  registerHandler(IPC_CHANNELS.suggestContacts, async (query: string, limit?: number) => {
+  registerDataHandler(IPC_CHANNELS.suggestContacts, async (query: string, limit?: number) => {
     return mailService.suggestContacts(query, limit)
   })
 
-  registerHandler(IPC_CHANNELS.listAccountSignatures, async () => {
+  registerDataHandler(IPC_CHANNELS.listAccountSignatures, async () => {
     return mailService.listAccountSignatures()
   })
 
-  registerHandler(IPC_CHANNELS.getAccountSignature, async (accountId: string) => {
+  registerDataHandler(IPC_CHANNELS.getAccountSignature, async (accountId: string) => {
     return mailService.getAccountSignature(accountId)
   })
 
-  registerHandler(IPC_CHANNELS.setAccountSignature, async (accountId: string, html: string) => {
+  registerDataHandler(IPC_CHANNELS.setAccountSignature, async (accountId: string, html: string) => {
     return mailService.setAccountSignature(accountId, html)
   })
 
-  registerHandler(IPC_CHANNELS.getDataStorageBreakdown, async () => {
+  registerDataHandler(IPC_CHANNELS.getDataStorageBreakdown, async () => {
     return mailService.getDataStorageBreakdown()
   })
 
-  registerHandler(IPC_CHANNELS.clearAccountData, async (accountId: string) => {
+  registerDataHandler(IPC_CHANNELS.clearAccountData, async (accountId: string) => {
     await mailService.clearAccountData(accountId)
   })
 
-  registerHandler(IPC_CHANNELS.clearAllDataKeepAccounts, async () => {
+  registerDataHandler(IPC_CHANNELS.clearAllDataKeepAccounts, async () => {
     await mailService.clearAllDataKeepAccounts()
   })
 
-  registerHandler(IPC_CHANNELS.pickAttachments, async () => {
+  registerDataHandler(IPC_CHANNELS.pickAttachments, async () => {
     return mailService.pickAttachments(getMainWindow() ?? undefined)
   })
 
-  registerHandler(IPC_CHANNELS.openAttachment, async (payload) => {
+  registerDataHandler(IPC_CHANNELS.openAttachment, async (payload) => {
     return mailService.openAttachment(payload as AttachmentRef)
   })
 
-  registerHandler(IPC_CHANNELS.saveAttachment, async (payload) => {
+  registerDataHandler(IPC_CHANNELS.saveAttachment, async (payload) => {
     return mailService.saveAttachment(payload as AttachmentRef, getMainWindow() ?? undefined)
   })
 
-  registerHandler(IPC_CHANNELS.saveAllAttachments, async (ref) => {
+  registerDataHandler(IPC_CHANNELS.saveAllAttachments, async (ref) => {
     return mailService.saveAllAttachments(ref as MessageRef, getMainWindow() ?? undefined)
   })
 
-  registerHandler(IPC_CHANNELS.clearAttachmentCache, async () => {
+  registerDataHandler(IPC_CHANNELS.clearAttachmentCache, async () => {
     await mailService.clearAttachmentCache()
   })
 
-  registerHandler(IPC_CHANNELS.revealFile, async (filePath: string) => {
+  registerDataHandler(IPC_CHANNELS.revealFile, async (filePath: string) => {
     mailService.revealFile(filePath)
   })
 
-  registerHandler(IPC_CHANNELS.listRecentFiles, async () => mailService.listRecentFiles())
+  registerDataHandler(IPC_CHANNELS.listRecentFiles, async () => mailService.listRecentFiles())
 
-  registerHandler(IPC_CHANNELS.describeFiles, async (paths: string[]) => {
+  registerDataHandler(IPC_CHANNELS.describeFiles, async (paths: string[]) => {
     return mailService.describeFiles(paths)
   })
 
