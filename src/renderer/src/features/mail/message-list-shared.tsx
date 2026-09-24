@@ -171,6 +171,30 @@ export function FlagToggle({
   )
 }
 
+/**
+ * The account a message came to, on TUTTI's rows. As quiet as the date
+ * beside it, but always there: it is the account a reply or a move acts on.
+ */
+export function AccountTag({
+  label,
+  className
+}: {
+  label: string
+  className?: string
+}): React.JSX.Element {
+  return (
+    <span
+      className={cn(
+        'bg-secondary/80 text-muted-foreground inline-block max-w-full truncate rounded-sm px-1 align-middle text-[10px] leading-4',
+        className
+      )}
+      title={label}
+    >
+      {label}
+    </span>
+  )
+}
+
 export function AttachmentMark({ present }: { present: boolean }): React.JSX.Element {
   return (
     <span className="flex w-4 shrink-0 justify-center" aria-hidden={!present}>

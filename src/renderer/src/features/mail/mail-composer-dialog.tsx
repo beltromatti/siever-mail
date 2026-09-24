@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { Paperclip, Send, X } from 'lucide-react'
+import { ChevronDown, Paperclip, Send, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@renderer/components/ui/button'
+import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import {
   Dialog,
   DialogContent,
@@ -12,9 +13,22 @@ import {
   DialogHeader,
   DialogTitle
 } from '@renderer/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger
+} from '@renderer/components/ui/dropdown-menu'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { AttachMenu } from '@renderer/features/mail/attach-menu'
 import { AttachmentChip } from '@renderer/features/mail/attachment-chip'
+import {
+  buildComposerBody,
+  hasWrittenContent,
+  replaceComposerSignature,
+  splitSignature
+} from '@renderer/features/mail/composer-body'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
 import { htmlToPlainText, splitRecipients } from '@renderer/lib/email'
 import { cn } from '@renderer/lib/utils'
@@ -26,28 +40,41 @@ import type {
   PickedAttachment
 } from '@shared/models'
 
+export type ComposerKind = 'new' | 'reply' | 'forward'
+
 export interface ComposerInitialData {
+  kind: ComposerKind
+  /** The account the message goes out from. */
+  accountId: string
+  /**
+   * The account that received the message a reply or forward is about.
+   * Sending from another one is asked about first: the other side would
+   * hear back from an address they never wrote to.
+   */
+  sourceAccountId?: string
   to?: string[]
   cc?: string[]
   bcc?: string[]
   subject?: string
+  /** The message a reply or forward quotes, below the signature. */
+  quoteHtml?: string
+  /**
+   * A body taken as it is, signature included — a draft reopened after its
+   * send failed.
+   */
   html?: string
   inReplyTo?: string
   references?: string[]
   attachments?: PickedAttachment[]
 }
 
-export interface ComposerRetryDraft {
-  accountId: string
-  initialData: ComposerInitialData
-}
-
 interface MailComposerDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  account: MailAccount | null
+  accounts: MailAccount[]
   initialData?: ComposerInitialData
-  onSendRequested: (payload: ComposeMailInput, retryDraft: ComposerRetryDraft) => void
+  /** `draft` reopens the message as it was sent, should sending fail. */
+  onSendRequested: (payload: ComposeMailInput, draft: ComposerInitialData) => void
 }
 
 interface ComposerFormState {
@@ -69,165 +96,31 @@ interface RecipientTokenContext {
   tokenEnd: number
 }
 
-// An empty line to type on. A `div`, like every line the editor creates: a
-// paragraph would bring the browser's paragraph spacing with it.
-const EMPTY_COMPOSER_HTML = '<div><br></div>'
-const QUOTED_CONTENT_MARKER_PATTERNS = [
-  /<div\b[^>]*class=["'][^"']*\bgmail_quote\b/i,
-  /<blockquote\b/i,
-  /<hr\b/i
-]
-
-function normalizeSignatureHtmlForComposer(value: string | null | undefined): string | null {
-  const trimmed = (value ?? '').trim()
-
-  if (!trimmed) {
-    return null
-  }
-
-  const hasEmbeddedMedia = /<(?:img|svg|video|audio)\b/i.test(trimmed)
-  const visibleText = trimmed
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<(?:br|hr)\b[^>]*>/gi, ' ')
-    .replace(/&nbsp;|&#160;/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  if (!visibleText && !hasEmbeddedMedia) {
-    return null
-  }
-
-  return trimmed
+const COMPOSER_TITLES: Readonly<Record<ComposerKind, string>> = {
+  new: 'Nuovo messaggio',
+  reply: 'Rispondi',
+  forward: 'Inoltra messaggio'
 }
 
-function normalizeAuthoredIntroHtmlForComposer(value: string | null | undefined): string | null {
-  const trimmed = (value ?? '').trim()
-
-  if (!trimmed) {
-    return null
+function buildInitialFields(
+  initialData: ComposerInitialData | undefined
+): Pick<ComposerFormState, 'to' | 'cc' | 'bcc' | 'subject'> {
+  return {
+    to: (initialData?.to ?? []).join(', '),
+    cc: (initialData?.cc ?? []).join(', '),
+    bcc: (initialData?.bcc ?? []).join(', '),
+    subject: initialData?.subject ?? ''
   }
-
-  const hasEmbeddedMedia = /<(?:img|svg|video|audio)\b/i.test(trimmed)
-  const visibleText = trimmed
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<(?:br|hr)\b[^>]*>/gi, ' ')
-    .replace(/&nbsp;|&#160;/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  if (!visibleText && !hasEmbeddedMedia) {
-    return EMPTY_COMPOSER_HTML
-  }
-
-  return trimmed
-}
-
-function isEmptyComposerHtml(value: string | null | undefined): boolean {
-  const trimmed = (value ?? '').trim()
-
-  return !trimmed || /^<(p|div)>\s*(?:<br\s*\/?>)?\s*<\/\1>$/i.test(trimmed)
-}
-
-function joinComposerHtmlWithSignature(
-  htmlBeforeSignature: string | null | undefined,
-  signatureHtml: string
-): string {
-  return isEmptyComposerHtml(htmlBeforeSignature)
-    ? signatureHtml
-    : `${htmlBeforeSignature?.trim() ?? ''}${signatureHtml}`
-}
-
-function buildInitialHtml(
-  initialData: ComposerInitialData | undefined,
-  signatureHtml: string | null
-): string {
-  const normalizedSignatureHtml = normalizeSignatureHtmlForComposer(signatureHtml)
-  const initialHtml = typeof initialData?.html === 'string' ? initialData.html : null
-
-  if (!initialHtml) {
-    if (!normalizedSignatureHtml) {
-      return EMPTY_COMPOSER_HTML
-    }
-
-    return normalizedSignatureHtml
-  }
-
-  const firstQuotedContentIndex = QUOTED_CONTENT_MARKER_PATTERNS.reduce<number>(
-    (currentIndex, pattern) => {
-      const match = pattern.exec(initialHtml)
-
-      if (!match || match.index < 0) {
-        return currentIndex
-      }
-
-      if (currentIndex < 0) {
-        return match.index
-      }
-
-      return Math.min(currentIndex, match.index)
-    },
-    -1
-  )
-
-  if (firstQuotedContentIndex < 0) {
-    if (!normalizedSignatureHtml) {
-      return initialHtml
-    }
-
-    const normalizedSignatureForSearch = normalizedSignatureHtml.replace(/\s+/g, ' ').trim()
-    const normalizedInitialHtmlForSearch = initialHtml.replace(/\s+/g, ' ').trim()
-
-    if (
-      normalizedSignatureForSearch &&
-      normalizedInitialHtmlForSearch
-        .toLowerCase()
-        .includes(normalizedSignatureForSearch.toLowerCase())
-    ) {
-      return initialHtml
-    }
-
-    return joinComposerHtmlWithSignature(initialHtml, normalizedSignatureHtml)
-  }
-
-  const introHtml =
-    firstQuotedContentIndex < 0 ? initialHtml : initialHtml.slice(0, firstQuotedContentIndex)
-  const normalizedAuthoredIntroHtml =
-    normalizeAuthoredIntroHtmlForComposer(introHtml) ?? EMPTY_COMPOSER_HTML
-  const normalizedIntroHtml = introHtml.replace(/\s+/g, ' ').trim()
-
-  if (!normalizedSignatureHtml) {
-    return `${normalizedAuthoredIntroHtml}${initialHtml.slice(firstQuotedContentIndex)}`
-  }
-
-  const normalizedSignatureForSearch = normalizedSignatureHtml.replace(/\s+/g, ' ').trim()
-
-  if (
-    normalizedSignatureForSearch &&
-    normalizedIntroHtml.toLowerCase().includes(normalizedSignatureForSearch.toLowerCase())
-  ) {
-    return `${normalizedAuthoredIntroHtml}${initialHtml.slice(firstQuotedContentIndex)}`
-  }
-
-  const quotedHtml = initialHtml.slice(firstQuotedContentIndex)
-
-  return `${joinComposerHtmlWithSignature(normalizedAuthoredIntroHtml, normalizedSignatureHtml)}${quotedHtml}`
 }
 
 function buildInitialState(
   initialData: ComposerInitialData | undefined,
   signatureHtml: string | null
 ): ComposerFormState {
-  const html = buildInitialHtml(initialData, signatureHtml)
+  const html = initialData?.html ?? buildComposerBody(signatureHtml, initialData?.quoteHtml)
 
   return {
-    to: (initialData?.to ?? []).join(', '),
-    cc: (initialData?.cc ?? []).join(', '),
-    bcc: (initialData?.bcc ?? []).join(', '),
-    subject: initialData?.subject ?? '',
+    ...buildInitialFields(initialData),
     html,
     text: htmlToPlainText(html),
     inReplyTo: initialData?.inReplyTo,
@@ -235,36 +128,8 @@ function buildInitialState(
   }
 }
 
-function hasMeaningfulComposerHtml(value: string): boolean {
-  const trimmed = value.replace(/\u200B/g, '').trim()
-
-  if (!trimmed) {
-    return false
-  }
-
-  const document = new DOMParser().parseFromString(`<div>${trimmed}</div>`, 'text/html')
-  const root = document.body.firstElementChild
-
-  if (!root) {
-    return false
-  }
-
-  for (const node of [...root.querySelectorAll('script, style')]) {
-    node.remove()
-  }
-
-  const visibleText =
-    root.textContent
-      ?.replace(/\u00a0/g, ' ')
-      .replace(/\u200B/g, '')
-      .replace(/\s+/g, ' ')
-      .trim() ?? ''
-
-  if (visibleText) {
-    return true
-  }
-
-  return Boolean(root.querySelector('img, video, audio, table, hr, svg'))
+function attachmentPaths(attachments: ReadonlyArray<PickedAttachment> | undefined): string {
+  return (attachments ?? []).map((attachment) => attachment.path).join('\n')
 }
 
 function normalizeRecipientEmail(value: string): string {
@@ -346,11 +211,15 @@ function buildRecipientValueFromSuggestion(
 export function MailComposerDialog({
   open,
   onOpenChange,
-  account,
+  accounts,
   initialData,
   onSendRequested
 }: MailComposerDialogProps): React.JSX.Element {
   const [form, setForm] = useState<ComposerFormState>(() => buildInitialState(initialData, null))
+  const [accountId, setAccountId] = useState(initialData?.accountId ?? null)
+  // False while a new body waits for its signature: switching account then
+  // would race the signature being put in.
+  const [bodyReady, setBodyReady] = useState(initialData?.html !== undefined)
   const [attachments, setAttachments] = useState<PickedAttachment[]>([])
   const [editorFocusMode, setEditorFocusMode] = useState(false)
   const [recipientSuggestions, setRecipientSuggestions] = useState<MailContactSuggestion[]>([])
@@ -358,7 +227,7 @@ export function MailComposerDialog({
   const [activeRecipientField, setActiveRecipientField] = useState<RecipientFieldKey | null>(null)
   const [activeTokenContext, setActiveTokenContext] = useState<RecipientTokenContext | null>(null)
   const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0)
-  const [discardConfirmationOpen, setDiscardConfirmationOpen] = useState(false)
+  const { confirm, dialog: confirmDialog } = useConfirmDialog()
   /**
    * Cc and Ccn stay folded away until they are wanted. They were always on
    * screen, which cost two rows of every message to serve the small minority
@@ -373,7 +242,20 @@ export function MailComposerDialog({
   const ccFieldContainerRef = useRef<HTMLDivElement | null>(null)
   const bccFieldContainerRef = useRef<HTMLDivElement | null>(null)
   const suggestionRequestIdRef = useRef(0)
-  const composerBootstrapRequestIdRef = useRef(0)
+  const signatureRequestIdRef = useRef(0)
+  // Whether the sending account's signature went into the body. When it is
+  // missing at the next account switch, the user deleted it, and the next
+  // account's signature is not forced back in.
+  const bodyHadSignatureRef = useRef(false)
+
+  const account = accounts.find((candidate) => candidate.id === accountId) ?? null
+  // The "Da" row: with more than one account, and whenever the one a
+  // reopened draft names is gone, so another can be picked.
+  const hasAccountChoice = accounts.length > 1 || (!account && accounts.length > 0)
+  const kind = initialData?.kind ?? 'new'
+  const sourceAccount = initialData?.sourceAccountId
+    ? (accounts.find((candidate) => candidate.id === initialData.sourceAccountId) ?? null)
+    : null
 
   const closeRecipientSuggestions = useCallback((): void => {
     suggestionRequestIdRef.current += 1
@@ -484,6 +366,12 @@ export function MailComposerDialog({
     setWasOpen(open)
 
     if (open) {
+      const opening = buildInitialState(initialData, null)
+      // A new body waits for its signature (below); until then the previous
+      // message must not show through.
+      setForm(initialData?.html === undefined ? { ...opening, html: '', text: '' } : opening)
+      setBodyReady(initialData?.html !== undefined)
+      setAccountId(initialData?.accountId ?? null)
       setAttachments(initialData?.attachments ? [...initialData.attachments] : [])
       setEditorFocusMode(false)
       // Without this the disclosure stayed open for the rest of the session:
@@ -494,78 +382,141 @@ export function MailComposerDialog({
   }
 
   useEffect(() => {
-    if (!open) {
-      composerBootstrapRequestIdRef.current += 1
+    const requestId = ++signatureRequestIdRef.current
+
+    if (!open || !initialData) {
       return
     }
 
-    // The signature does come from outside React, so fetching it stays here.
-    const requestId = ++composerBootstrapRequestIdRef.current
+    // A reopened draft already holds whatever the user left of the signature.
+    if (initialData.html !== undefined) {
+      bodyHadSignatureRef.current = true
+      return
+    }
+
     const applyInitialState = (signatureHtml: string | null): void => {
-      if (requestId !== composerBootstrapRequestIdRef.current) {
+      if (requestId !== signatureRequestIdRef.current) {
         return
       }
 
+      bodyHadSignatureRef.current = splitSignature(signatureHtml) !== null
       setForm(buildInitialState(initialData, signatureHtml))
-    }
-
-    if (!account) {
-      applyInitialState(null)
-      return
+      setBodyReady(true)
     }
 
     void window.mailApi
-      .getAccountSignature(account.id)
-      .then((accountSignature) => {
-        if (requestId !== composerBootstrapRequestIdRef.current) {
-          return
-        }
-
-        applyInitialState(accountSignature?.html ?? null)
-      })
-      .catch(() => {
+      .getAccountSignature(initialData.accountId)
+      .then((signature) => applyInitialState(signature?.html ?? null))
+      .catch((error: unknown) => {
+        toast.error('Firma non disponibile', {
+          description: error instanceof Error ? error.message : undefined
+        })
         applyInitialState(null)
       })
-  }, [account, initialData, open])
+  }, [initialData, open])
 
-  const hasDiscardableContent = useMemo(
-    () =>
-      Boolean(
-        form.to.trim() ||
-        form.cc.trim() ||
-        form.bcc.trim() ||
-        form.subject.trim() ||
-        attachments.length > 0 ||
-        hasMeaningfulComposerHtml(form.html)
-      ),
-    [attachments.length, form.bcc, form.cc, form.html, form.subject, form.to]
-  )
+  /**
+   * Sends from another account, swapping the signature for its own. For a
+   * reply or forward, leaving the account the message arrived on is
+   * confirmed first.
+   */
+  const changeAccount = async (nextAccountId: string): Promise<void> => {
+    const nextAccount = accounts.find((candidate) => candidate.id === nextAccountId)
+
+    if (!nextAccount || nextAccount.id === accountId) {
+      return
+    }
+
+    if (sourceAccount && nextAccount.id !== sourceAccount.id) {
+      const isReply = kind === 'reply'
+      const confirmed = await confirm({
+        title: isReply ? 'Rispondere da un altro account?' : 'Inoltrare da un altro account?',
+        description: (
+          <>
+            Il messaggio è arrivato a <strong>{sourceAccount.email}</strong>.{' '}
+            {isReply
+              ? 'Rispondendo da un altro account, chi ti ha scritto riceve la risposta da un indirizzo diverso da quello a cui ha scritto'
+              : 'Inoltrandolo da un altro account, parte da un indirizzo diverso da quello che lo ha ricevuto'}{' '}
+            e la copia inviata resta nella posta di <strong>{nextAccount.email}</strong>.
+          </>
+        ),
+        confirmLabel: 'Cambia account'
+      })
+
+      if (!confirmed) {
+        return
+      }
+    }
+
+    setAccountId(nextAccount.id)
+    const requestId = ++signatureRequestIdRef.current
+
+    try {
+      const signatureHtml = (await window.mailApi.getAccountSignature(nextAccount.id))?.html ?? null
+
+      if (requestId !== signatureRequestIdRef.current) {
+        return
+      }
+
+      const insertIfMissing = !bodyHadSignatureRef.current
+      bodyHadSignatureRef.current = splitSignature(signatureHtml) !== null
+      setForm((current) => {
+        const html = replaceComposerSignature(current.html, signatureHtml, insertIfMissing)
+        return html === current.html ? current : { ...current, html, text: htmlToPlainText(html) }
+      })
+    } catch (error) {
+      toast.error(`Firma di ${nextAccount.email} non disponibile`, {
+        description: error instanceof Error ? error.message : undefined
+      })
+    }
+  }
 
   const closeComposerImmediately = useCallback((): void => {
-    setDiscardConfirmationOpen(false)
     closeRecipientSuggestions()
     setEditorFocusMode(false)
     onOpenChange(false)
   }, [closeRecipientSuggestions, onOpenChange])
 
-  const requestComposerClose = useCallback((): void => {
-    if (hasDiscardableContent) {
-      closeRecipientSuggestions()
-      setDiscardConfirmationOpen(true)
+  /**
+   * Closing asks first only when something the user put in would be lost:
+   * fields changed from how the composer opened, attachments, or anything
+   * written in the body. A reply opened and closed untouched — even after
+   * trying another account — just closes.
+   */
+  const requestComposerClose = async (): Promise<void> => {
+    closeRecipientSuggestions()
+    const initialFields = buildInitialFields(initialData)
+    const hasUserContent =
+      form.to !== initialFields.to ||
+      form.cc !== initialFields.cc ||
+      form.bcc !== initialFields.bcc ||
+      form.subject !== initialFields.subject ||
+      attachmentPaths(attachments) !== attachmentPaths(initialData?.attachments) ||
+      hasWrittenContent(form.html)
+
+    if (
+      hasUserContent &&
+      !(await confirm({
+        title: 'Chiudere la bozza?',
+        description: 'Chiudendo questa finestra perderai il contenuto già inserito nel messaggio.',
+        confirmLabel: 'Chiudi e scarta',
+        cancelLabel: 'Torna indietro',
+        destructive: true
+      }))
+    ) {
       return
     }
 
     closeComposerImmediately()
-  }, [closeComposerImmediately, closeRecipientSuggestions, hasDiscardableContent])
+  }
 
   const handleDialogOpenChange = (nextOpen: boolean): void => {
     if (nextOpen) {
-      setDiscardConfirmationOpen(false)
       onOpenChange(true)
       return
     }
 
-    requestComposerClose()
+    void requestComposerClose()
   }
 
   useEffect(() => {
@@ -652,18 +603,10 @@ export function MailComposerDialog({
     account && toRecipients.length > 0 && form.subject.trim() && form.html.trim()
   )
 
-  /**
-   * The window said "Nuovo messaggio" even when the user had just hit
-   * Rispondi, which is the one moment they need confirming that the reply
-   * carried the thread with it. Read from the fields rather than sniffed
-   * from the subject prefix: only a reply carries `inReplyTo`, and only a
-   * forward arrives with a body already written.
-   */
-  const composerTitle = initialData?.inReplyTo
-    ? 'Rispondi'
-    : initialData?.html
-      ? 'Inoltra messaggio'
-      : 'Nuovo messaggio'
+  // The window said "Nuovo messaggio" even when the user had just hit
+  // Rispondi, which is the one moment they need confirming that the reply
+  // carried the thread with it.
+  const composerTitle = COMPOSER_TITLES[kind]
 
   // Content wins over the toggle: a reply-all or a reopened draft that
   // already carries copies must never hide them behind a disclosure.
@@ -729,6 +672,11 @@ export function MailComposerDialog({
               refreshFor(event.currentTarget)
             }}
             onFocus={(event) => refreshFor(event.currentTarget)}
+            // Suggestions belong to the field being typed in. A reply
+            // focuses "A" on the way to the body, and without this its
+            // list stayed open over "Oggetto" while the user wrote below.
+            // Picking a suggestion never blurs: the list refuses the mouse.
+            onBlur={closeRecipientSuggestions}
             onClick={(event) => refreshFor(event.currentTarget)}
             onKeyUp={(event) => refreshFor(event.currentTarget)}
             onKeyDown={(event) => handleRecipientKeyDown(field, event)}
@@ -878,25 +826,24 @@ export function MailComposerDialog({
         name: attachment.name
       }))
     }
-    const retryDraft: ComposerRetryDraft = {
+    const draft: ComposerInitialData = {
+      kind,
       accountId: account.id,
-      initialData: {
-        to: payload.to,
-        cc: payload.cc,
-        bcc: payload.bcc,
-        subject: form.subject,
-        html: form.html,
-        inReplyTo: form.inReplyTo,
-        references: form.references,
-        attachments: [...attachments]
-      }
+      sourceAccountId: initialData?.sourceAccountId,
+      to: payload.to,
+      cc: payload.cc,
+      bcc: payload.bcc,
+      subject: form.subject,
+      html: form.html,
+      inReplyTo: form.inReplyTo,
+      references: form.references,
+      attachments: [...attachments]
     }
 
     closeRecipientSuggestions()
-    setDiscardConfirmationOpen(false)
     setEditorFocusMode(false)
     onOpenChange(false)
-    onSendRequested(payload, retryDraft)
+    onSendRequested(payload, draft)
   }
 
   return (
@@ -972,10 +919,9 @@ export function MailComposerDialog({
             <>
               <DialogHeader className="gap-0 pb-1">
                 <DialogTitle className="text-[14px] leading-6">{composerTitle}</DialogTitle>
-                <DialogDescription className="text-[11px]">
-                  {account
-                    ? `Invio da ${account.email}`
-                    : 'Seleziona prima un account per comporre una nuova email.'}
+                {/* With more than one account the "Da" row says it. */}
+                <DialogDescription className={cn('text-[11px]', hasAccountChoice && 'sr-only')}>
+                  {account ? `Invio da ${account.email}` : "Scegli l'account da cui inviare."}
                 </DialogDescription>
               </DialogHeader>
 
@@ -989,6 +935,56 @@ export function MailComposerDialog({
                 shape Outlook and Mail have both settled on.
               */}
               <div className="border-border/70 divide-border/50 divide-y rounded-md border">
+                {hasAccountChoice && (
+                  <div className="flex items-center gap-2 px-2">
+                    <span className="text-muted-foreground w-14 shrink-0 text-[11px]">Da</span>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          disabled={!bodyReady}
+                          className="hover:bg-secondary/60 focus-visible:ring-ring/70 -ml-1 flex h-8 min-w-0 items-center gap-1.5 rounded-sm px-1 text-left text-[12.5px] outline-none focus-visible:ring-2 disabled:opacity-50"
+                        >
+                          {account ? (
+                            <span className="min-w-0 truncate">
+                              {account.displayName}{' '}
+                              <span className="text-muted-foreground">&lt;{account.email}&gt;</span>
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">Scegli l&apos;account</span>
+                          )}
+                          <ChevronDown className="text-muted-foreground size-3.5 shrink-0" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="max-w-[min(32rem,90vw)]">
+                        <DropdownMenuRadioGroup
+                          value={accountId ?? ''}
+                          onValueChange={(nextAccountId) => void changeAccount(nextAccountId)}
+                        >
+                          {accounts.map((candidate) => (
+                            <DropdownMenuRadioItem
+                              key={candidate.id}
+                              value={candidate.id}
+                              className="gap-3"
+                            >
+                              <span className="min-w-0 flex-1 truncate">
+                                {candidate.displayName}{' '}
+                                <span className="text-muted-foreground">
+                                  &lt;{candidate.email}&gt;
+                                </span>
+                              </span>
+                              {candidate.id === sourceAccount?.id && (
+                                <span className="text-muted-foreground shrink-0 text-[10.5px]">
+                                  ha ricevuto il messaggio
+                                </span>
+                              )}
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                )}
                 {renderRecipientField('to', 'A', 'destinatario@azienda.com', ccBccToggle)}
                 {ccBccVisible && renderRecipientField('cc', 'Cc', 'opzionale')}
                 {ccBccVisible && renderRecipientField('bcc', 'Ccn', 'opzionale')}
@@ -1095,39 +1091,7 @@ export function MailComposerDialog({
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={open && discardConfirmationOpen}
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen) {
-            setDiscardConfirmationOpen(false)
-          }
-        }}
-      >
-        <DialogContent
-          hideClose
-          role="alertdialog"
-          overlayClassName="z-[60]"
-          className="z-[70] w-[min(430px,calc(100vw-2rem))] gap-5"
-          onEscapeKeyDown={(event) => event.preventDefault()}
-          onPointerDownOutside={(event) => event.preventDefault()}
-        >
-          <DialogHeader>
-            <DialogTitle>Chiudere la bozza?</DialogTitle>
-            <DialogDescription>
-              Chiudendo questa finestra perderai il contenuto già inserito nel messaggio.
-            </DialogDescription>
-          </DialogHeader>
-
-          <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => setDiscardConfirmationOpen(false)}>
-              Torna indietro
-            </Button>
-            <Button type="button" variant="destructive" onClick={closeComposerImmediately}>
-              Chiudi e scarta
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {confirmDialog}
     </>
   )
 }

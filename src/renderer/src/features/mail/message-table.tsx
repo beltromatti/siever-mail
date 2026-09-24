@@ -34,6 +34,7 @@ import { MESSAGE_TABLE_ROW_HEIGHT_PX } from './message-list-metrics'
 
 import type { MessageListViewProps } from './message-list-view'
 import {
+  AccountTag,
   FlagToggle,
   HighlightedText,
   MessageListControls,
@@ -80,6 +81,7 @@ export function MessageTable({
   onGroupingChange,
   invertVisualOrder,
   primaryAddressMode,
+  accountLabels,
   canLoadMoreMessages,
   loadingMoreMessages,
   onLoadMoreMessages,
@@ -179,7 +181,7 @@ export function MessageTable({
 
       <div
         className={cn(
-          'border-border/60 text-muted-foreground grid shrink-0 items-center gap-1.5 border-b px-2 py-1 text-[10px] tracking-[0.04em] uppercase',
+          'border-border/60 text-muted-foreground grid shrink-0 items-center gap-1.5 border-b px-2 py-1 text-[10px]',
           TABLE_GRID_TEMPLATE
         )}
       >
@@ -191,7 +193,9 @@ export function MessageTable({
           <Flag className="size-3" />
         </span>
         {renderColumnHeader(SORTABLE_COLUMNS[0])}
-        <span className="px-1">A</span>
+        {/* Under TUTTI the account a message came to says more than its
+            recipients, which are mostly that same account. */}
+        <span className="px-1">{accountLabels ? 'Account' : 'A'}</span>
         {renderColumnHeader(SORTABLE_COLUMNS[1])}
         {renderColumnHeader(SORTABLE_COLUMNS[2])}
         {renderColumnHeader(SORTABLE_COLUMNS[3])}
@@ -306,15 +310,21 @@ export function MessageTable({
                           />
                         </span>
 
-                        <span
-                          className="text-muted-foreground min-w-0 truncate px-1"
-                          title={recipientsLabel(message)}
-                        >
-                          <HighlightedText
-                            text={recipientsLabel(message)}
-                            terms={highlightTerms.recipients}
-                          />
-                        </span>
+                        {accountLabels ? (
+                          <span className="min-w-0 px-1">
+                            <AccountTag label={accountLabels.get(message.accountId) ?? ''} />
+                          </span>
+                        ) : (
+                          <span
+                            className="text-muted-foreground min-w-0 truncate px-1"
+                            title={recipientsLabel(message)}
+                          >
+                            <HighlightedText
+                              text={recipientsLabel(message)}
+                              terms={highlightTerms.recipients}
+                            />
+                          </span>
+                        )}
 
                         <span
                           className={cn(

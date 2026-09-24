@@ -16,6 +16,7 @@ import {
 import extensionRenderer from '@app/extension/renderer'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
+import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import {
   Dialog,
   DialogContent,
@@ -240,6 +241,7 @@ export function SettingsDialog({
   onUnifiedInboxPreferencesChanged
 }: SettingsDialogProps): React.JSX.Element {
   const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>('accounts')
+  const { confirm, dialog: confirmDialog } = useConfirmDialog()
   const [dataBreakdown, setDataBreakdown] = useState<DataStorageBreakdown | null>(null)
   const [dataBreakdownLoading, setDataBreakdownLoading] = useState(false)
   const [dataBreakdownError, setDataBreakdownError] = useState<string | null>(null)
@@ -1085,7 +1087,15 @@ export function SettingsDialog({
                             size="sm"
                             className="text-destructive hover:text-destructive shrink-0 gap-1.5"
                             disabled={anyAccountMutationInFlight}
-                            onClick={() => onClearAccountData(account.id)}
+                            onClick={() =>
+                              void confirm({
+                                title: `Cancellare i dati di ${account.email}?`,
+                                description:
+                                  "Email, cartelle e allegati aperti di questo account vengono tolti dal computer. L'account resta collegato e la posta si scarica di nuovo, come alla prima connessione.",
+                                confirmLabel: 'Cancella dati',
+                                destructive: true
+                              }).then((confirmed) => confirmed && onClearAccountData(account.id))
+                            }
                           >
                             {clearingAccountDataId === account.id ? (
                               <LoaderCircle className="size-3.5 animate-spin" />
@@ -1137,7 +1147,14 @@ export function SettingsDialog({
                       variant="destructive"
                       className="gap-2"
                       disabled={clearingDatabaseData || anyAccountMutationInFlight}
-                      onClick={onClearDatabaseData}
+                      onClick={() =>
+                        void confirm({
+                          title: 'Cancellare tutti i dati locali?',
+                          description: `${LOCAL_DATA_DESCRIPTION} Gli account restano collegati e la posta si scarica di nuovo.`,
+                          confirmLabel: 'Cancella tutto',
+                          destructive: true
+                        }).then((confirmed) => confirmed && onClearDatabaseData())
+                      }
                     >
                       {clearingDatabaseData ? (
                         <LoaderCircle className="size-4 animate-spin" />
@@ -1272,6 +1289,7 @@ export function SettingsDialog({
           </section>
         </div>
       </DialogContent>
+      {confirmDialog}
     </Dialog>
   )
 }

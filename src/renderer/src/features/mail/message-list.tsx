@@ -22,6 +22,7 @@ import { MESSAGE_LIST_PAGE_SIZE } from '@shared/models'
 
 import type { MessageListViewProps } from './message-list-view'
 import {
+  AccountTag,
   AttachmentMark,
   FlagToggle,
   HighlightedText,
@@ -48,6 +49,7 @@ export function MessageList({
   onGroupingChange,
   invertVisualOrder,
   primaryAddressMode,
+  accountLabels,
   canLoadMoreMessages,
   loadingMoreMessages,
   onLoadMoreMessages,
@@ -222,6 +224,7 @@ export function MessageList({
                     const isSelected = selectedKeys.has(key)
                     const isCursor = key === cursorKey
                     const primaryLabel = primaryAddressLabel(message, primaryAddressMode)
+                    const accountLabel = accountLabels?.get(message.accountId)
 
                     return (
                       <div
@@ -272,6 +275,10 @@ export function MessageList({
                                 }
                               />
                             </p>
+
+                            {accountLabel && (
+                              <AccountTag label={accountLabel} className="max-w-[40%] shrink-0" />
+                            )}
 
                             <span className="text-muted-foreground shrink-0 text-[10.5px] tabular-nums">
                               {formatDateLabel(message.date)}

@@ -261,6 +261,11 @@ const DialogContent = React.forwardRef<
             // measurements here, rather than per-dialog overrides, is what
             // keeps the next dialog in line without anyone remembering to.
             'glass-dialog text-popover-foreground fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100vh-3rem)] w-[min(980px,calc(100vw-2rem))] gap-2.5 rounded-xl p-4 outline-none',
+            // One column, as wide as the panel and no wider: an implicit
+            // track grows to its widest line, so one long unbreakable line
+            // (a subject, an address) pushed the rest out past the edge
+            // instead of letting it truncate.
+            'grid-cols-[minmax(0,1fr)]',
             // While dragging, drop the transition so the panel tracks the
             // pointer exactly instead of easing behind it.
             isDragging ? 'transition-none select-none' : 'transition-shadow',

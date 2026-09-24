@@ -39,7 +39,8 @@ import { cn, formatAddress, formatDateLabel, formatDateTimeLabel } from '@render
 import type { MailAttachment, MailFolder, MailMessageDetail } from '@shared/models'
 
 interface MessageViewerProps {
-  folders: MailFolder[]
+  /** Where "Sposta" can put the message: the other folders of its account. */
+  moveTargets: MailFolder[]
   message: MailMessageDetail | null
   loading?: boolean
   isExpanded: boolean
@@ -459,7 +460,7 @@ function EmailHtmlFrame({
 }
 
 export function MessageViewer({
-  folders,
+  moveTargets,
   message,
   loading,
   isExpanded,
@@ -669,22 +670,24 @@ export function MessageViewer({
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <IconButton label="Sposta in una cartella" className="size-6.5">
+                <IconButton
+                  label="Sposta in una cartella"
+                  className="size-6.5"
+                  disabled={moveTargets.length === 0}
+                >
                   <FolderInput className="size-3.5" />
                 </IconButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
-                {folders
-                  .filter((folder) => folder.path !== message.folderPath)
-                  .map((folder) => (
-                    <DropdownMenuItem
-                      key={folder.path}
-                      className="cursor-pointer text-[12px]"
-                      onClick={() => onMoveToFolder(folder.path)}
-                    >
-                      {folder.name}
-                    </DropdownMenuItem>
-                  ))}
+                {moveTargets.map((folder) => (
+                  <DropdownMenuItem
+                    key={folder.path}
+                    className="cursor-pointer text-[12px]"
+                    onClick={() => onMoveToFolder(folder.path)}
+                  >
+                    {folder.name}
+                  </DropdownMenuItem>
+                ))}
               </DropdownMenuContent>
             </DropdownMenu>
 

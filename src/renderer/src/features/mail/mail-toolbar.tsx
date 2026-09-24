@@ -30,8 +30,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui
 import type { MailFolder, MessageListFilter } from '@shared/models'
 
 interface MailToolbarProps {
-  folders: MailFolder[]
-  currentFolderPath: string | null
+  /** Where "Sposta" can put the selection: folders of its own account. */
+  moveTargets: MailFolder[]
+  /**
+   * Set when the selection spans more than one account, which no folder
+   * can take at once: "Sposta" then explains instead of listing folders.
+   */
+  onMoveAcrossAccounts?: () => void
   search: string
   onSearchChange: (value: string) => void
   searchInputRef: React.RefObject<HTMLInputElement | null>
@@ -78,8 +83,8 @@ const FILTER_OPTIONS: ReadonlyArray<{ value: MessageListFilter; label: string }>
  * touch.
  */
 export function MailToolbar({
-  folders,
-  currentFolderPath,
+  moveTargets,
+  onMoveAcrossAccounts,
   search,
   onSearchChange,
   searchInputRef,
@@ -101,7 +106,6 @@ export function MailToolbar({
   onToggleFlagged,
   onClearSelection
 }: MailToolbarProps): React.JSX.Element {
-  const destinationFolders = folders.filter((folder) => folder.path !== currentFolderPath)
   const hasSelection = selectedCount > 0
 
   return (
@@ -165,32 +169,46 @@ export function MailToolbar({
             <span className="hidden @[64rem]:inline">Archivia</span>
           </Button>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 gap-1.5 px-2 text-[11.5px]"
-                disabled={!hasSelection || destinationFolders.length === 0}
-                title="Sposta"
-                aria-label="Sposta"
-              >
-                <FolderInput className="size-3.5" />
-                <span className="hidden @[64rem]:inline">Sposta</span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-h-80 overflow-y-auto">
-              {destinationFolders.map((folder) => (
-                <DropdownMenuItem
-                  key={folder.path}
-                  className="cursor-pointer text-[12px]"
-                  onClick={() => onMoveToFolder(folder.path)}
+          {onMoveAcrossAccounts ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 px-2 text-[11.5px]"
+              onClick={onMoveAcrossAccounts}
+              title="Sposta"
+              aria-label="Sposta"
+            >
+              <FolderInput className="size-3.5" />
+              <span className="hidden @[64rem]:inline">Sposta</span>
+            </Button>
+          ) : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1.5 px-2 text-[11.5px]"
+                  disabled={!hasSelection || moveTargets.length === 0}
+                  title="Sposta"
+                  aria-label="Sposta"
                 >
-                  {folder.name}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                  <FolderInput className="size-3.5" />
+                  <span className="hidden @[64rem]:inline">Sposta</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="max-h-80 overflow-y-auto">
+                {moveTargets.map((folder) => (
+                  <DropdownMenuItem
+                    key={folder.path}
+                    className="cursor-pointer text-[12px]"
+                    onClick={() => onMoveToFolder(folder.path)}
+                  >
+                    {folder.name}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
 
           <Button
             variant="ghost"

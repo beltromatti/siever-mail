@@ -6,19 +6,10 @@ import { toast } from 'sonner'
 import appLogo from '@renderer/assets/logo.png'
 import { AddAccountDialog } from '@renderer/features/accounts/add-account-dialog'
 import { AccountSwitcher } from '@renderer/features/accounts/account-switcher'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle
-} from '@renderer/components/ui/dialog'
 import { FolderSidebar } from '@renderer/features/mail/folder-sidebar'
 import {
   MailComposerDialog,
-  type ComposerInitialData,
-  type ComposerRetryDraft
+  type ComposerInitialData
 } from '@renderer/features/mail/mail-composer-dialog'
 import { MessageList } from '@renderer/features/mail/message-list'
 import { MessageTable } from '@renderer/features/mail/message-table'
@@ -38,6 +29,7 @@ import { MailToolbar } from '@renderer/features/mail/mail-toolbar'
 import { useAttachmentActions } from '@renderer/features/mail/use-attachment-actions'
 import { SettingsDialog } from '@renderer/features/settings/settings-dialog'
 import { Button } from '@renderer/components/ui/button'
+import { ConfirmDialog, useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { cn, formatAppVersion } from '@renderer/lib/utils'
@@ -151,22 +143,22 @@ function formatQuotedDate(dateIso: string): string {
   }).format(date)
 }
 
-function buildReplyComposerHtml(message: MailMessageDetail): string {
+function buildReplyQuoteHtml(message: MailMessageDetail): string {
   const sender = message.from[0]
   const senderLabel = sender ? formatQuotedAddress(sender) : 'Mittente sconosciuto'
   const attributionLine = `Il giorno ${formatQuotedDate(message.date)} ${senderLabel} ha scritto:`
   const quotedBody = message.html ? message.html : htmlFromText(message.text || '')
 
-  return `<div dir="ltr"><br></div><div class="gmail_quote"><div dir="ltr" class="gmail_attr">${attributionLine}<br></div><blockquote class="gmail_quote" type="cite" style="${GMAIL_QUOTE_BLOCK_STYLE}">${quotedBody}</blockquote></div>`
+  return `<div class="gmail_quote"><div dir="ltr" class="gmail_attr">${attributionLine}<br></div><blockquote class="gmail_quote" type="cite" style="${GMAIL_QUOTE_BLOCK_STYLE}">${quotedBody}</blockquote></div>`
 }
 
-function buildForwardComposerHtml(message: MailMessageDetail): string {
+function buildForwardQuoteHtml(message: MailMessageDetail): string {
   const quotedBody = message.html ? message.html : htmlFromText(message.text || '')
   const fromHeader = message.from.length > 0 ? formatQuotedAddressList(message.from) : 'N/D'
   const toHeader = message.to.length > 0 ? formatQuotedAddressList(message.to) : 'N/D'
   const ccHeader = message.cc.length > 0 ? `<br>Cc: ${formatQuotedAddressList(message.cc)}` : ''
 
-  return `<div dir="ltr"><br><br></div><div class="gmail_quote"><div dir="ltr" class="gmail_attr">---------- Messaggio inoltrato ----------<br>Da: ${fromHeader}<br>Data: ${escapeHtml(formatQuotedDate(message.date))}<br>Oggetto: ${escapeHtml(message.subject)}<br>A: ${toHeader}${ccHeader}<br></div><blockquote class="gmail_quote" type="cite" style="${GMAIL_QUOTE_BLOCK_STYLE}">${quotedBody}</blockquote></div>`
+  return `<div class="gmail_quote"><div dir="ltr" class="gmail_attr">---------- Messaggio inoltrato ----------<br>Da: ${fromHeader}<br>Data: ${escapeHtml(formatQuotedDate(message.date))}<br>Oggetto: ${escapeHtml(message.subject)}<br>A: ${toHeader}${ccHeader}<br></div><blockquote class="gmail_quote" type="cite" style="${GMAIL_QUOTE_BLOCK_STYLE}">${quotedBody}</blockquote></div>`
 }
 
 function ensureReplySubject(subject: string): string {
@@ -211,6 +203,35 @@ function moveAccountToFront(accounts: MailAccount[], accountId: string): MailAcc
 
   nextAccounts.unshift(targetAccount)
   return nextAccounts
+}
+
+/**
+ * What TUTTI calls each account on its rows: the display name when no other
+ * account in the view shares it, the address otherwise.
+ */
+function buildAccountLabels(accounts: MailAccount[]): ReadonlyMap<string, string> {
+  const nameCounts = new Map<string, number>()
+
+  for (const account of accounts) {
+    const name = account.displayName.trim().toLowerCase()
+
+    if (name) {
+      nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1)
+    }
+  }
+
+  return new Map(
+    accounts.map((account) => {
+      const name = account.displayName.trim()
+      return [account.id, name && nameCounts.get(name.toLowerCase()) === 1 ? name : account.email]
+    })
+  )
+}
+
+function formatList(items: string[]): string {
+  return items.length <= 1
+    ? (items[0] ?? '')
+    : `${items.slice(0, -1).join(', ')} e ${items[items.length - 1]}`
 }
 
 function useMailBootstrap(): {
@@ -361,15 +382,20 @@ function App(): React.JSX.Element {
 
   const [composerOpen, setComposerOpen] = useState(false)
   const [composerInitial, setComposerInitial] = useState<ComposerInitialData | undefined>(undefined)
-  const [composerSendError, setComposerSendError] = useState<{
-    draft: ComposerRetryDraft
-    message: string
-  } | null>(null)
+  // Sends that failed, oldest first. Each is offered back once no composer
+  // is open, so retrying never replaces a message being written.
+  const [failedSends, setFailedSends] = useState<
+    ReadonlyArray<{ id: number; draft: ComposerInitialData; message: string }>
+  >([])
+  const failedSendIdRef = useRef(0)
+  const { confirm, dialog: confirmDialog, open: confirmOpen } = useConfirmDialog()
   const [addAccountDialogOpen, setAddAccountDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [extensionPrimaryDialogOpen, setExtensionPrimaryDialogOpen] = useState(false)
   const [showWelcomeGate, setShowWelcomeGate] = useState(true)
   const [allInboxesSummary, setAllInboxesSummary] = useState<UnifiedInboxSummary | null>(null)
+  // The accounts TUTTI gathers, so its rows can say which one each is from.
+  const [unifiedAccountIds, setUnifiedAccountIds] = useState<readonly string[]>([])
   const [emptyStateIntroStep, setEmptyStateIntroStep] = useState<'logo' | 'text' | 'button'>('logo')
   const [windowControlsState, setWindowControlsState] = useState<WindowControlsState>({
     enabled: false,
@@ -515,11 +541,6 @@ function App(): React.JSX.Element {
     void window.Notification.requestPermission().catch(() => undefined)
   }, [])
 
-  const selectedAccount = useMemo(
-    () => accounts.find((account) => account.id === selectedAccountId) || null,
-    [accounts, selectedAccountId]
-  )
-
   const syncSummary = useMemo(() => {
     const accountsOnScreen =
       selectedFolderPath === ALL_INBOX_FOLDER_PATH
@@ -542,6 +563,19 @@ function App(): React.JSX.Element {
       return
     }
   }, [accounts.length])
+
+  const refreshUnifiedAccountIds = useCallback(async (): Promise<void> => {
+    try {
+      const preferences = await window.mailApi.getUnifiedInboxPreferences()
+      setUnifiedAccountIds(preferences.includedAccountIds)
+    } catch {
+      return
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshUnifiedAccountIds()
+  }, [accounts.length, refreshUnifiedAccountIds])
 
   const allInboxesFolder = useMemo(() => {
     if (accounts.length === 0) {
@@ -850,6 +884,19 @@ function App(): React.JSX.Element {
         return
       }
 
+      const account = accounts.find((entry) => entry.id === accountId)
+      const confirmed = await confirm({
+        title: `Disconnettere ${account?.email ?? "l'account"}?`,
+        description:
+          'SIEVER Mail smette di ricevere e inviare con questo account e toglie dal computer la sua posta e la sua firma. Sul server non cambia nulla: puoi ricollegarlo quando vuoi.',
+        confirmLabel: 'Disconnetti',
+        destructive: true
+      })
+
+      if (!confirmed) {
+        return
+      }
+
       setViewError(null)
       setRemovingAccountId(accountId)
 
@@ -869,7 +916,7 @@ function App(): React.JSX.Element {
         setRemovingAccountId((current) => (current === accountId ? null : current))
       }
     },
-    [cancelInFlightWork, removingAccountId, setAccounts]
+    [accounts, cancelInFlightWork, confirm, removingAccountId, setAccounts]
   )
 
   const resetMailboxView = useCallback((): void => {
@@ -885,16 +932,6 @@ function App(): React.JSX.Element {
   const clearAccountData = useCallback(
     async (accountId: string): Promise<void> => {
       if (removingAccountId || clearingAccountDataId || clearingDatabaseData) {
-        return
-      }
-
-      const account = accounts.find((entry) => entry.id === accountId) || null
-      const accountLabel = account?.email || account?.displayName || 'questo account'
-      const shouldProceed = window.confirm(
-        `Vuoi cancellare tutti i dati locali di ${accountLabel} mantenendo il login attivo?`
-      )
-
-      if (!shouldProceed) {
         return
       }
 
@@ -927,7 +964,6 @@ function App(): React.JSX.Element {
       }
     },
     [
-      accounts,
       cancelInFlightWork,
       clearingAccountDataId,
       clearingDatabaseData,
@@ -941,14 +977,6 @@ function App(): React.JSX.Element {
 
   const clearAllDataKeepAccounts = useCallback(async (): Promise<void> => {
     if (removingAccountId || clearingAccountDataId || clearingDatabaseData) {
-      return
-    }
-
-    const shouldProceed = window.confirm(
-      'Vuoi cancellare tutti i dati locali dal database mantenendo gli account collegati?'
-    )
-
-    if (!shouldProceed) {
       return
     }
 
@@ -989,13 +1017,20 @@ function App(): React.JSX.Element {
 
   const handleUnifiedInboxPreferencesChanged = useCallback((): void => {
     void refreshUnifiedInboxSummary()
+    void refreshUnifiedAccountIds()
 
     if (!selectedAccountId || selectedFolderPath !== ALL_INBOX_FOLDER_PATH) {
       return
     }
 
     void refreshCurrentFolder(selectedAccountId, ALL_INBOX_FOLDER_PATH)
-  }, [refreshCurrentFolder, refreshUnifiedInboxSummary, selectedAccountId, selectedFolderPath])
+  }, [
+    refreshCurrentFolder,
+    refreshUnifiedAccountIds,
+    refreshUnifiedInboxSummary,
+    selectedAccountId,
+    selectedFolderPath
+  ])
 
   useEffect(() => {
     if (accounts.length === 0) {
@@ -1816,6 +1851,116 @@ function App(): React.JSX.Element {
     [runMessageRemovalAction, selection.selectedRefs]
   )
 
+  // Folders belong to one account, so where a selection can move depends on
+  // whose messages it holds — under TUTTI, not necessarily the account in
+  // the sidebar.
+  const selectionAccountIds = useMemo(
+    () => Array.from(new Set(selection.selectedRefs.map((ref) => ref.accountId))),
+    [selection.selectedRefs]
+  )
+  const moveAccountId = selectionAccountIds.length === 1 ? selectionAccountIds[0] : null
+  const [otherAccountFolders, setOtherAccountFolders] = useState<{
+    accountId: string
+    folders: MailFolder[]
+  } | null>(null)
+
+  useEffect(() => {
+    if (!moveAccountId || moveAccountId === selectedAccountId) {
+      return
+    }
+
+    let disposed = false
+
+    void window.mailApi
+      .listFolders(moveAccountId)
+      .then((accountFolders) => {
+        if (!disposed) {
+          setOtherAccountFolders({ accountId: moveAccountId, folders: accountFolders })
+        }
+      })
+      .catch((caughtError: unknown) => {
+        if (!disposed) {
+          setViewError(
+            caughtError instanceof Error
+              ? caughtError.message
+              : "Cartelle dell'account non disponibili."
+          )
+        }
+      })
+
+    const unsubscribe = window.mailApi.onFoldersChanged((event) => {
+      if (event.accountId === moveAccountId) {
+        setOtherAccountFolders({ accountId: moveAccountId, folders: event.folders })
+      }
+    })
+
+    return () => {
+      disposed = true
+      unsubscribe()
+    }
+  }, [moveAccountId, selectedAccountId])
+
+  const moveTargets = useMemo(() => {
+    const accountFolders =
+      moveAccountId === selectedAccountId
+        ? folders
+        : otherAccountFolders?.accountId === moveAccountId
+          ? otherAccountFolders.folders
+          : []
+    const [firstRef] = selection.selectedRefs
+    // Not offered: the folder the whole selection already sits in.
+    const sharedFolderPath =
+      firstRef && selection.selectedRefs.every((ref) => ref.folderPath === firstRef.folderPath)
+        ? firstRef.folderPath
+        : null
+
+    return accountFolders.filter((folder) => folder.path !== sharedFolderPath)
+  }, [folders, moveAccountId, otherAccountFolders, selectedAccountId, selection.selectedRefs])
+
+  /**
+   * "Sposta" on messages of several accounts: no folder can take them all,
+   * so it says so and offers to keep only those of the account last clicked.
+   */
+  const explainMixedAccountMove = useCallback(async (): Promise<void> => {
+    const keptAccountId = selection.cursorRef?.accountId ?? selectionAccountIds[0]
+    const keptAccount = accounts.find((account) => account.id === keptAccountId)
+
+    if (!keptAccount) {
+      return
+    }
+
+    const involved = selectionAccountIds.map(
+      (accountId) => accounts.find((account) => account.id === accountId)?.email ?? accountId
+    )
+    const confirmed = await confirm({
+      title: 'Messaggi di account diversi',
+      description: `La selezione comprende messaggi di ${formatList(involved)}. Ogni cartella appartiene a un solo account, quindi si spostano i messaggi di un account alla volta: vuoi tenere selezionati solo quelli di ${keptAccount.email}?`,
+      confirmLabel: 'Seleziona solo quelli'
+    })
+
+    if (!confirmed) {
+      return
+    }
+
+    setSelection((current) => {
+      const keptRefs = current.selectedRefs.filter((ref) => ref.accountId === keptAccount.id)
+      const cursorRef =
+        current.cursorRef?.accountId === keptAccount.id
+          ? current.cursorRef
+          : (keptRefs[keptRefs.length - 1] ?? null)
+
+      return { selectedRefs: keptRefs, cursorRef, anchorRef: cursorRef }
+    })
+  }, [accounts, confirm, selection.cursorRef?.accountId, selectionAccountIds])
+
+  const accountLabels = useMemo(() => {
+    if (selectedFolderPath !== ALL_INBOX_FOLDER_PATH || unifiedAccountIds.length < 2) {
+      return null
+    }
+
+    return buildAccountLabels(accounts.filter((account) => unifiedAccountIds.includes(account.id)))
+  }, [accounts, selectedFolderPath, unifiedAccountIds])
+
   // Refs the global key handler reads at event time. Keeping them in refs
   // avoids rebinding the window listener on every selection change.
   const orderedMessageRefsRef = useRef(orderedMessageRefs)
@@ -1834,12 +1979,21 @@ function App(): React.JSX.Element {
     invertVisualOrderRef.current = uiPreferences.invertMessageListOrder
   }, [uiPreferences.invertMessageListOrder])
 
+  // The failed send offered back right now, once no composer is open.
+  const failedSend = composerOpen ? null : (failedSends[0] ?? null)
+
   const isModalSurfaceOpen =
     composerOpen ||
-    Boolean(composerSendError) ||
+    failedSend !== null ||
+    confirmOpen ||
     addAccountDialogOpen ||
     settingsOpen ||
     extensionPrimaryDialogOpen
+
+  const openComposer = useCallback((data: ComposerInitialData): void => {
+    setComposerInitial(data)
+    setComposerOpen(true)
+  }, [])
 
   /**
    * Runs a command from the menu bar or its shortcut. Nothing happens over
@@ -1855,8 +2009,11 @@ function App(): React.JSX.Element {
 
       switch (command) {
         case 'compose':
-          setComposerInitial(undefined)
-          setComposerOpen(true)
+          if (!selectedAccountId) {
+            return false
+          }
+
+          openComposer({ kind: 'new', accountId: selectedAccountId })
           return true
         case 'settings':
           setSettingsOpen(true)
@@ -1876,7 +2033,7 @@ function App(): React.JSX.Element {
         }
       }
     },
-    [changeReaderZoom, isModalSurfaceOpen, selectedMessage]
+    [changeReaderZoom, isModalSurfaceOpen, openComposer, selectedAccountId, selectedMessage]
   )
   const runAppCommandRef = useRef(runAppCommand)
 
@@ -2008,51 +2165,60 @@ function App(): React.JSX.Element {
 
   const attachmentActions = useAttachmentActions(readingRef)
 
+  // A reply or forward goes out from the account that received the message
+  // — which, under TUTTI, is not necessarily the one in the sidebar.
   const openReplyComposer = useCallback((): void => {
     if (!selectedMessage) {
       return
     }
 
-    setComposerInitial({
+    openComposer({
+      kind: 'reply',
+      accountId: selectedMessage.accountId,
+      sourceAccountId: selectedMessage.accountId,
       to: selectedMessage.from.map((address) => address.address),
       subject: ensureReplySubject(selectedMessage.subject),
-      html: buildReplyComposerHtml(selectedMessage),
+      quoteHtml: buildReplyQuoteHtml(selectedMessage),
       inReplyTo: selectedMessage.messageId,
       references: selectedMessage.messageId ? [selectedMessage.messageId] : undefined
     })
-    setComposerOpen(true)
-  }, [selectedMessage])
+  }, [openComposer, selectedMessage])
 
   const openForwardComposer = useCallback((): void => {
     if (!selectedMessage) {
       return
     }
 
-    setComposerInitial({
+    openComposer({
+      kind: 'forward',
+      accountId: selectedMessage.accountId,
+      sourceAccountId: selectedMessage.accountId,
       subject: ensureForwardSubject(selectedMessage.subject),
-      html: buildForwardComposerHtml(selectedMessage)
+      quoteHtml: buildForwardQuoteHtml(selectedMessage)
     })
-    setComposerOpen(true)
-  }, [selectedMessage])
+  }, [openComposer, selectedMessage])
 
   const addressActions = useMemo<AddressActions>(
     () => ({
+      // Writing to someone from a message starts from the account that got it.
       onCompose: (address) => {
-        setComposerInitial({ to: [address.address] })
-        setComposerOpen(true)
+        const accountId = selectedMessage?.accountId ?? selectedAccountId
+
+        if (accountId) {
+          openComposer({ kind: 'new', accountId, to: [address.address] })
+        }
       },
       onSearch: (address) => {
         setSearch(address.address)
         setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
       }
     }),
-    []
+    [openComposer, selectedAccountId, selectedMessage?.accountId]
   )
 
   const handleComposerSendRequested = useCallback(
-    (payload: ComposeMailInput, draft: ComposerRetryDraft): void => {
+    (payload: ComposeMailInput, draft: ComposerInitialData): void => {
       setComposerOpen(false)
-      setComposerSendError(null)
 
       void (async () => {
         const sendingToast = toast.loading('Invio in corso…')
@@ -2065,39 +2231,35 @@ function App(): React.JSX.Element {
           toast.success('Messaggio inviato', { id: sendingToast })
         } catch (caughtError) {
           toast.dismiss(sendingToast)
-          setComposerSendError({
+          const failure = {
+            id: ++failedSendIdRef.current,
             draft,
             message:
               caughtError instanceof Error && caughtError.message.trim()
                 ? caughtError.message
                 : 'Invio email non riuscito.'
-          })
+          }
+          setFailedSends((current) => [...current, failure])
         }
       })()
     },
     []
   )
 
-  const handleRetryComposerSend = useCallback((): void => {
-    if (!composerSendError) {
-      return
-    }
+  const settleFailedSend = useCallback(
+    (retry: boolean): void => {
+      if (!failedSend) {
+        return
+      }
 
-    const matchingAccount = accounts.find(
-      (account) => account.id === composerSendError.draft.accountId
-    )
+      setFailedSends((current) => current.filter((entry) => entry.id !== failedSend.id))
 
-    if (!matchingAccount) {
-      setComposerSendError(null)
-      setViewError("Impossibile riaprire l'email: account di invio non disponibile.")
-      return
-    }
-
-    setComposerSendError(null)
-    setSelectedAccountId(matchingAccount.id)
-    setComposerInitial(composerSendError.draft.initialData)
-    setComposerOpen(true)
-  }, [accounts, composerSendError])
+      if (retry) {
+        openComposer(failedSend.draft)
+      }
+    },
+    [failedSend, openComposer]
+  )
 
   const onAccountCreated = (account: MailAccount): void => {
     requestDesktopNotificationPermission()
@@ -2270,6 +2432,7 @@ function App(): React.JSX.Element {
     onGroupingChange: handleMessageGroupingChange,
     invertVisualOrder: uiPreferences.invertMessageListOrder,
     primaryAddressMode,
+    accountLabels,
     canLoadMoreMessages: hasMoreMessages && messages.length >= MESSAGE_LIST_PAGE_SIZE,
     loadingMoreMessages,
     onLoadMoreMessages: () => void loadMoreMessages(),
@@ -2360,8 +2523,10 @@ function App(): React.JSX.Element {
         }
         toolbar={
           <MailToolbar
-            folders={folders}
-            currentFolderPath={selectedFolderPath}
+            moveTargets={moveTargets}
+            onMoveAcrossAccounts={
+              selectionAccountIds.length > 1 ? () => void explainMixedAccountMove() : undefined
+            }
             search={search}
             searchInputRef={searchInputRef}
             onSearchChange={(value) => {
@@ -2381,8 +2546,9 @@ function App(): React.JSX.Element {
             extensionHostHooks={extensionHostHooks}
             onActivateExtensionPrimaryAction={() => setExtensionPrimaryDialogOpen(true)}
             onCompose={() => {
-              setComposerInitial(undefined)
-              setComposerOpen(true)
+              if (selectedAccountId) {
+                openComposer({ kind: 'new', accountId: selectedAccountId })
+              }
             }}
             onOpenSettings={() => setSettingsOpen(true)}
             onArchiveClassic={() =>
@@ -2424,7 +2590,7 @@ function App(): React.JSX.Element {
         }
         reader={
           <MessageViewer
-            folders={folders}
+            moveTargets={moveTargets}
             message={messageForViewer}
             loading={loadingMessageDetail}
             isExpanded={isMessageExpanded}
@@ -2474,39 +2640,35 @@ function App(): React.JSX.Element {
       <MailComposerDialog
         open={composerOpen}
         onOpenChange={setComposerOpen}
-        account={selectedAccount}
+        accounts={accounts}
         initialData={composerInitial}
         onSendRequested={handleComposerSendRequested}
       />
 
-      <Dialog
-        open={Boolean(composerSendError)}
-        onOpenChange={(nextOpen) => !nextOpen && setComposerSendError(null)}
-      >
-        <DialogContent className="w-[min(520px,calc(100vw-1.5rem))]">
-          <DialogHeader>
-            <DialogTitle>Invio email non riuscito</DialogTitle>
-            <DialogDescription>
-              {composerSendError?.message ||
-                "Si è verificato un errore durante l'invio dell'email."}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="border-destructive/35 bg-destructive/10 text-destructive-foreground rounded-lg border p-2.5 text-xs">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="size-3.5" />
-              L&apos;email non è stata inviata.
+      <ConfirmDialog
+        open={failedSend !== null}
+        title="Invio non riuscito"
+        description={failedSend?.message}
+        details={
+          failedSend && (
+            <div className="border-destructive/35 bg-destructive/10 flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px]">
+              <AlertTriangle className="text-destructive size-3.5 shrink-0" />
+              <span className="min-w-0 truncate">
+                {failedSend.draft.subject
+                  ? `Il messaggio non è partito: «${failedSend.draft.subject}»`
+                  : 'Il messaggio non è partito.'}
+              </span>
             </div>
-          </div>
+          )
+        }
+        confirmLabel="Riapri e riprova"
+        cancelLabel="Scarta"
+        initialFocus="confirm"
+        onConfirm={() => settleFailedSend(true)}
+        onCancel={() => settleFailedSend(false)}
+      />
 
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setComposerSendError(null)}>
-              Chiudi
-            </Button>
-            <Button onClick={handleRetryComposerSend}>Riprova</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {confirmDialog}
 
       <AddAccountDialog
         canUseGoogle={capabilities.googleOAuthReady}

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ChevronDown, LoaderCircle, LogOut, Mail, Plus } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -31,9 +32,10 @@ export function AccountSwitcher({
   onAddAccount
 }: AccountSwitcherProps): React.JSX.Element {
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) || null
+  const [menuOpen, setMenuOpen] = useState(false)
 
   return (
-    <DropdownMenu>
+    <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
@@ -87,8 +89,11 @@ export function AccountSwitcher({
                     aria-label={`Disconnetti account ${account.email}`}
                     disabled={Boolean(removingAccountId)}
                     onClick={(event) => {
+                      // Not a pick of the account: the row must not select it.
                       event.preventDefault()
                       event.stopPropagation()
+                      // Disconnecting asks first, and the question replaces the menu.
+                      setMenuOpen(false)
                       onRemoveAccount(account.id)
                     }}
                   >
