@@ -255,6 +255,12 @@ export class MailService {
   }
 
   async stop(): Promise<void> {
+    try {
+      await this.extension?.uninstall?.()
+    } catch (error) {
+      logMainError('Extension teardown failed', error)
+    }
+
     await this.engine.stop()
     this.database.close()
   }

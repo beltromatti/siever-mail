@@ -45,36 +45,37 @@ open-source software released under the Apache License 2.0.
 ## Highlights
 
 - **Multi-account by design** — IMAP/SMTP and Gmail OAuth side by side, with
-  a unified inbox and per-account folder hierarchies.
-- **Snappy native feel** — the mail list, viewer and tree pickers are tuned
-  to behave like a native client (precise truncation, keyboard navigation,
-  real focus rings, no jank on resize).
-- **Real rich-text composer** — Squire-based editor with proper line-height,
-  paste sanitisation and signature handling.
-- **Background sync that doesn't poll** — server-pushed change events keep
-  the UI live without burning battery or hammering the server.
-- **Encrypted credentials at rest** — passwords and OAuth refresh tokens
-  pass through the OS keychain via Electron's `safeStorage`.
-- **Local-only data** — everything lives in a SQLite database on the user's
-  machine. No remote analytics, no third-party tracking.
+  a unified inbox (TUTTI) that tags each message with its account and acts
+  on it from that account: replies, forwards and moves never cross over
+  unasked.
+- **Snappy native feel** — keyboard navigation and selection the way
+  Finder and Explorer do it, precise truncation, no jank on resize, an
+  Italian menu bar on macOS.
+- **Light, dark or the system's** — one set of colour tokens, two palettes;
+  "Sistema" follows the computer as it switches.
 - **Two layouts, one product** — an _Apple_ arrangement (folders, list and
   reading pane side by side) and an _Outlook_ one (dense sortable table on
-  top, message underneath). Same palette, same shortcuts, same features;
-  pick whichever fits the work.
-- **Built for triage** — group by date or by sender, filter to unread or
-  flagged, select a whole group with one click, and act on the selection in
-  bulk. Field-scoped search (`da:` `a:` `oggetto:`) narrows to one field
-  instead of matching every Cc line and signature block.
-- **Attachments that mean something** — signature logos, banners and images
-  from the quoted chain stay part of the message they belong to instead of
-  being listed as attachments, so the paperclip marks mail that actually
-  carries a file.
-- **Server-side flags** — the `\Flagged` keyword round-trips through IMAP,
-  so a message you flag here shows up flagged in Outlook and iOS Mail too.
-- **Upgrade-safe migrations** — a version change clears only the caches that
-  can be rebuilt from the server. Accounts, signatures, preferences, contact
-  history and any table an extension owns are carried across untouched, and
-  a failed upgrade recovers them from a backup taken before it started.
+  top, message underneath). Same features in both.
+- **Built for triage** — sort by date, sender, subject or size, group
+  automatically or by sender, filter to unread or flagged, select a whole
+  group with one click and act on it in bulk. Search finds a sender by
+  typing part of the name; `da:` `a:` `oggetto:` narrow a term to one field.
+- **Mail that arrives as it was written** — the composer shows a message
+  exactly as it will be received, and sending writes that layout onto the
+  message so Outlook's Word engine and every other client keep it.
+- **Attachments that behave** — open with the default application, save one
+  or all, attach from the files recently used on the computer, or drop them
+  onto the composer. Signature logos and quoted pictures stay part of the
+  message instead of posing as attachments.
+- **Sync you can trust** — changes are pushed by the server, reconnection is
+  automatic, and "Sincronizzato" is only shown when it is true. An
+  operation the server refuses is reported, never pretended.
+- **Private by construction** — everything lives in a local SQLite database;
+  credentials go through the OS keychain via Electron's `safeStorage`. No
+  telemetry, no third-party tracking.
+- **Upgrade-safe** — a new version rebuilds only the message cache. Accounts,
+  signatures, preferences, contacts and any extension's data are kept, and
+  an update interrupted halfway is recovered on the next launch.
 
 ## Roadmap
 
@@ -105,29 +106,29 @@ node build.mjs 1.0.0 --all              # full matrix incl. Linux via Docker
 ```
 
 A GitHub Actions workflow at `.github/workflows/release.yml` runs the same
-script in parallel across `macos-latest`, `macos-13`, `windows-latest` and
-`ubuntu-latest` whenever a `v*` tag is pushed, then publishes the artifacts
-as a GitHub Release.
+script in parallel on macOS, Windows and Linux runners whenever a `v*` tag
+is pushed, then publishes the artifacts as a GitHub Release.
 
 ## Extensions
 
 SIEVER Mail ships with a small **extension surface** that lets a custom
 fork plug in features — toolbar actions, settings tabs, a primary-action
-dialog, IPC handlers, custom DDL, default account signature — without
-touching the public source tree. The host loads exactly one extension at
-build time through three Vite aliases:
+dialog, IPC handlers and tables of its own, fonts and colours for the
+composer, a default account signature — without touching the public source
+tree. The host loads exactly one extension at build time through four Vite
+aliases:
 
-- `@app/extension/main` — main-process entry (IPC + DDL + signature override)
-- `@app/extension/renderer` — renderer entry (toolbar actions, settings tabs, dialog)
+- `@app/extension/main` — main-process entry (install, IPC, tables, data reset)
+- `@app/extension/renderer` — renderer entry (toolbar actions, settings tabs, dialog, bundled fonts)
 - `@app/extension/preload` — preload bridge additions on `window.mailApi`
+- `@app/extension/shared` — loaded by both: the composer's fonts and colours
 
 In the public source the aliases resolve to **no-op stubs** under
 `src/extension/`, so the open-source build never imports any extension
 code beyond those stubs. The contract lives in
 [`src/extension/types.ts`](src/extension/types.ts); see
-[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md#extension-system) for the
-full description, including the path/env var any custom build is
-expected to provide its own extension at.
+[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md#extensions) for the full
+description.
 
 If you want to develop the host with a custom extension attached
 locally, drop the extension repo at `extension/` (the path the Vite
@@ -140,17 +141,11 @@ npm run dev:ext   # equivalent to LOAD_EXTENSION=1 npm run dev
 `npm run dev` keeps loading the no-op stubs as before, so you can
 switch back to a clean public build at any time without changing files.
 
-The historical context: SIEVER Mail was first developed as an internal
-tool for the Italian engineering company **SIEVER S.R.L.**. The
-company-specific customisations no longer live anywhere in this
-repository — they were lifted into a separate, private extension owned
-by the maintainer.
-
 ## Documentation
 
 - **[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)** — architecture and
-  implementation reference (stack, processes, data flow, IPC, extension
-  points).
+  implementation reference (startup, data and upgrades, mail engine,
+  interface, mail content, extension points, build).
 - **[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)** — issue policy, support
   channels and how the maintainer handles external contributions.
 
@@ -158,9 +153,9 @@ by the maintainer.
 
 The application is **in active development**. It is already fast, stable and
 usable as a daily-driver mail client; the surface area is being polished
-release after release. Breaking changes between versions are possible while
-the 1.x baseline settles — the upgrade-safe migration system is designed
-exactly for that.
+release after release. The data layout may change between versions while
+the 1.x baseline settles — the upgrade-safe migration is designed exactly
+for that.
 
 ## License
 

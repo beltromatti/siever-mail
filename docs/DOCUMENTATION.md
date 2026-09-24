@@ -1,542 +1,350 @@
 # SIEVER Mail — Technical Documentation
 
-This document describes the architecture, the runtime topology and the main
-implementation choices behind SIEVER Mail. It is intended for engineers who
-need to read, debug or extend the code.
+How SIEVER Mail is put together: the processes, the data, the mail engine,
+the interface and the extension surface. It is written for engineers who
+read, debug or extend the code. The code comments go deeper on each piece;
+this page is the map.
 
 ## Stack
 
-| Layer       | Technology                                                                                                         |
-| ----------- | ------------------------------------------------------------------------------------------------------------------ |
-| Shell       | [Electron](https://www.electronjs.org/)                                                                            |
-| Bundler     | [`electron-vite`](https://electron-vite.org/) + Vite                                                               |
-| UI          | [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)                                     |
-| Styling     | [TailwindCSS v4](https://tailwindcss.com/) + shadcn-style components                                               |
-| Local store | [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) + [Prisma](https://www.prisma.io/) (SQLite adapter) |
-| Mail engine | [`imapflow`](https://imapflow.com/) (IMAP) + [`nodemailer`](https://nodemailer.com/) (SMTP)                        |
-| Gmail       | [`googleapis`](https://github.com/googleapis/google-api-nodejs-client) (OAuth, no Gmail HTTP API)                  |
-| Editor      | [Squire](https://github.com/fastmail/Squire) (rich-text)                                                           |
-| HTML safety | [DOMPurify](https://github.com/cure53/DOMPurify)                                                                   |
-| Tests       | [Vitest](https://vitest.dev/) + Testing Library + Playwright                                                       |
+| Layer       | Technology                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
+| Shell       | [Electron](https://www.electronjs.org/) 39                                                             |
+| Bundler     | [electron-vite](https://electron-vite.org/) + Vite                                                     |
+| UI          | [React 19](https://react.dev/) + TypeScript, [Tailwind CSS v4](https://tailwindcss.com/), Radix/shadcn |
+| Local store | SQLite through [Prisma 7](https://www.prisma.io/) and its `better-sqlite3` adapter                     |
+| Mail        | [imapflow](https://imapflow.com/) (IMAP), [nodemailer](https://nodemailer.com/) (SMTP), mailparser     |
+| Gmail       | OAuth 2.0 over IMAP/SMTP (XOAUTH2); no Gmail HTTP API                                                  |
+| Editor      | [Squire](https://github.com/fastmail/Squire), inside a sandboxed iframe                                |
+| HTML safety | [DOMPurify](https://github.com/cure53/DOMPurify)                                                       |
+| Tests       | [Vitest](https://vitest.dev/) (node + jsdom projects)                                                  |
 
-## Process topology
+## Processes and startup
 
-SIEVER Mail uses the conventional Electron three-process model:
+The usual Electron split. Only the main process touches the network, the
+file system and the database; the renderer is context-isolated and reaches
+it through the typed `window.mailApi` bridge (`src/preload/index.ts`,
+channels in `src/shared/ipc.ts`).
 
-```
-┌────────────────────────────┐  IPC bridge   ┌──────────────────────────┐
-│  Main process (Node.js)    │ ←──────────→  │  Renderer process (React) │
-│  src/main/index.ts         │   contextBridge │  src/renderer/src/App.tsx │
-│   ▸ MailService             │   safe by design│   ▸ folder sidebar       │
-│   ▸ MailEngine (imapflow)   │                 │   ▸ message list         │
-│   ▸ AppDatabase (Prisma)    │                 │   ▸ message viewer       │
-│   ▸ GoogleOAuthService      │                 │   ▸ rich-text composer   │
-│   ▸ DataMigration           │                 │   ▸ settings dialog      │
-└────────────────────────────┘                  └──────────────────────────┘
-            │                                              │
-            │   src/preload/index.ts (typed window.mailApi)│
-            └──────────────────────────────────────────────┘
-```
+Startup, in `src/main/index.ts`:
 
-Only the main process talks to the OS, the network and the database. The
-renderer is sandboxed and gets a small typed surface (`window.mailApi`) via
-the preload bridge defined in `src/shared/ipc.ts`.
+1. `prepareUpgradeMigration()` — before the database is opened, detects a
+   version change and backs up the user data (see
+   [Upgrades](#upgrades)). Never throws.
+2. `MailService.openStorage()` — opens SQLite, reconciles the schema, then
+   finishes any upgrade migration.
+3. `MailService.start()` — the mail engine connects the accounts.
+4. The extension installs (see [Extensions](#extensions)).
+
+The window is created right away and loads alongside. **Every IPC channel
+that touches stored data waits for step 2** (`register-mail-ipc.ts`), so
+the interface never reads rows the migration is about to purge or restore;
+channels that only drive the window (minimise, close, …) never wait.
+
+The theme is applied before any of this, from a one-word file in the user
+data folder, so the first frame is already in the right colours
+(`src/main/theme.ts`).
 
 ## Source layout
 
 ```
 src/
-├── main/                  # Node-side: services, IPC, OS integration
-│   ├── index.ts           # entry point: lifecycle, single-instance lock,
-│   │                      # MailService boot, data migration hook-in
-│   ├── ipc/               # register-mail-ipc.ts: every IPC handler lives here
+├── main/                      Node side
+│   ├── index.ts               lifecycle, window, tray, startup order
+│   ├── app-menu.ts            macOS menu bar (Italian); none elsewhere
+│   ├── theme.ts               Sistema / Chiaro / Scuro → nativeTheme
+│   ├── ipc/register-mail-ipc.ts   every IPC handler
 │   ├── services/
-│   │   ├── mail-service.ts      # high-level façade (account CRUD, archive)
-│   │   ├── mail-engine/         # imap/SMTP connections, queues, transport
-│   │   ├── database.ts          # Prisma client + raw DDL + queries
-│   │   ├── google-oauth.ts      # Gmail OAuth refresh-token flow
-│   │   ├── secure-storage.ts    # Electron safeStorage wrapper
-│   │   └── data-migration.ts    # upgrade-safe wipe-except-logins
-│   ├── config/                  # runtime env loader
-│   └── utils/                   # error + URL helpers
-├── preload/index.ts             # contextBridge: exposes window.mailApi
-├── renderer/src/                # React app
-│   ├── App.tsx                  # root: bootstraps state, mounts shell
-│   ├── features/                # feature folders (mail/, settings/)
-│   ├── components/ui/           # shadcn-style components
-│   ├── lib/                     # tiny client utilities (utils, dates, ...)
-│   └── styles/globals.css       # Tailwind v4 entry + theme tokens
-├── shared/                      # types and IPC channel constants used both sides
-└── extensions/archive/          # public stub of the optional archive extension
+│   │   ├── mail-service.ts    façade the IPC layer calls
+│   │   ├── database.ts        Prisma client, raw DDL, queries
+│   │   ├── data-migration.ts  upgrade lifecycle
+│   │   ├── mail-engine/       connections, sync, sending, parsing
+│   │   ├── attachment-files.ts  opened/saved attachments on disk
+│   │   ├── recent-files.ts    the OS's recent documents, for "Allega"
+│   │   ├── google-oauth.ts    Gmail OAuth
+│   │   └── secure-storage.ts  safeStorage wrapper for secrets
+│   └── utils/                 logging to file, errors, external URLs
+├── preload/index.ts           window.mailApi
+├── renderer/src/
+│   ├── App.tsx                top-level state and wiring
+│   ├── features/              accounts, mail (list, table, reader,
+│   │                          composer, editor), settings, workspace
+│   ├── components/ui/         shared primitives (dialog, confirm, menus…)
+│   ├── lib/                   selection, sections, HTML pipelines, zoom
+│   └── styles/globals.css     Tailwind entry and the theme tokens
+├── shared/                    types, search grammar, fonts, sender/subject keys
+└── extension/                 the extension contract and its no-op stubs
 ```
 
-## Data model
+## Data
 
-The local store is a single SQLite file under
-`app.getPath('userData')/siever-mail.sqlite`. Schema is declared in
-`prisma/schema.prisma` and re-asserted at boot via raw `CREATE TABLE
-IF NOT EXISTS` statements in `src/main/services/database.ts` so that
-schema drift is self-healing.
+One SQLite file, `userData/siever-mail.sqlite`. The schema is declared in
+`prisma/schema.prisma` and applied at boot with raw
+`CREATE TABLE IF NOT EXISTS` plus additive column checks in `database.ts`,
+so an older file is brought forward in place.
 
-Key tables:
+| Table                | Holds                                                                                                                                                                        |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `accounts`           | IMAP and Gmail accounts; `encrypted_secret` is the password or OAuth token, encrypted with `safeStorage`.                                                                    |
+| `folders`            | Folder metadata and sync cursors (UIDVALIDITY, HIGHESTMODSEQ, last UID). _Cache._                                                                                            |
+| `messages`           | Envelopes, previews, flags, body cache. Denormalised `sender_label` / `sender_sort` / `subject_sort` let the database sort and group by sender or subject directly. _Cache._ |
+| `contacts`           | Addresses learned from traffic, for recipient suggestions.                                                                                                                   |
+| `account_signatures` | One signature per account, with the version of the page it was written for (`html_format`).                                                                                  |
+| `recent_files`       | Files the user attached, saved or an extension filed away, offered first in "Allega".                                                                                        |
+| `app_preferences`    | One row: theme, layout, list order, sort, grouping, reader zoom, the accounts TUTTI gathers.                                                                                 |
 
-| Table                | Purpose                                                                                                                                                                                                                |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `accounts`           | Mail accounts (IMAP/Gmail). `encrypted_secret` stores the safeStorage-wrapped password / OAuth refresh token.                                                                                                          |
-| `folders`            | Per-account folder metadata + sync cursors (UID validity, modseq).                                                                                                                                                     |
-| `messages`           | Message envelopes + body cache + attachments JSON. Also carries `is_flagged` and the denormalised `sender_name` / `sender_key`, which let the database order and group by sender without sorting the raw address JSON. |
-| `contacts`           | Address-book learned from sent/received traffic.                                                                                                                                                                       |
-| `account_signatures` | One signature row per account.                                                                                                                                                                                         |
-| `app_preferences`    | Singleton row of app-wide UI preferences: unified-inbox account selection, layout mode, list sort, grouping, inverted-order flag. Read and written as one `UiPreferences` record.                                      |
+An extension may add tables through the database handle it receives; they
+live in the same file and connection. The host never reads them.
 
-Extensions may install additional tables of their own through the
-`database.applyDdl()` handle exposed at install time. They share the
-same SQLite connection (and therefore the same WAL) so cross-table
-transactions stay safe; the host never reads or writes them.
+"Elimina tutti i dati" (Settings → Dati) empties everything but the
+accounts and the view preferences, then calls the extension's
+`clearData()`. Clearing one account's data drops its cache and opened
+attachments; the mail downloads again.
 
-### Upgrade lifecycle
+### Upgrades
 
-Versioning of the local data is tracked in `userData/install-version.json`.
-`src/main/services/data-migration.ts` splits the file into two categories and
-treats them oppositely:
+`data-migration.ts` treats the two kinds of rows oppositely. **Cache**
+(`messages`, `folders`, opened attachments) is rebuilt from the server, so a
+version change drops it. **User data** — every other table, an extension's
+included — exists nowhere else and is never dropped.
 
-- **cache** — `messages` and `folders`. The IMAP server is their source of
-  truth and their shape changes between releases, so a version change drops
-  them and lets the next sync rebuild them.
-- **user data** — everything else: accounts, signatures, preferences, the
-  contact history, and any table an extension installed. None of it exists
-  anywhere else, so it is never touched.
+- Before the database opens, a version change (`userData/install-version.json`)
+  copies every user table, definition and rows, into a small backup file,
+  leaving the cache out.
+- After the schema is reconciled, the finalize step purges the cache,
+  stamps the new version and drops the backup.
+- If a launch never gets there (a crash, the app quit, a file the new
+  schema cannot apply to), the next launch sets the file aside, boots on a
+  fresh schema and restores every table from the backup. A table the fresh
+  database lacks — an extension's, created only when it installs — is
+  recreated from its own definition, and its owner reconciles it like after
+  any upgrade. Tables are restored one by one; one that fails does not stop
+  the rest, and whatever could not be restored stays on disk.
+- A recovery that has not completed after two launches is given up,
+  keeping the user data on disk, so the app always starts.
 
-The flow is: `prepareUpgradeMigration()` runs before the database is opened
-and takes a WAL-checkpointed backup; the schema reconciles additively as
-usual; `finalizeUpgradeMigration()` then purges the cache tables and stamps
-the new marker — deliberately before the mail engine starts, so the purge
-cannot race an incoming sync.
+`SIEVER_FORCE_DATA_MIGRATION=1` runs the flow in development, where the
+version never changes. `data-migration.test.ts` covers each path.
 
-If the app never reaches the finalize step, the pending marker is still on
-disk at the next launch and the recovery path takes over: the unusable file
-is set aside, the app boots on a fresh schema, and every table the backup and
-the new schema share — minus the cache — is copied back. That copy walks
-`sqlite_master` instead of a hardcoded list, which is how extension-owned
-tables survive without the public host knowing their names.
-
-> Releases up to 1.7.1 did the opposite: they deleted the whole database and
-> restored only accounts and signatures, silently destroying the SIEVER
-> archive root, every manually-added practice and the app preferences on each
-> update. `src/main/services/data-migration.test.ts` covers the new
-> behaviour, including the recovery path.
+The Windows installer never touches the user data folder during an update
+(`build/installer.nsh`); a real uninstall asks.
 
 ## Mail engine
 
-`MailEngine` is the broker between the IMAP/SMTP world and the rest of the
-app. Each `Account` gets its own `AccountConnection` instance which holds
-an `imapflow` socket, a folder cache, a sync queue and IDLE-based change
-listeners. The engine emits four kinds of events into the renderer:
+`src/main/services/mail-engine/`. One `AccountConnection` per account, each
+with two IMAP clients:
 
-- `engine:messages-changed` — folder content delta (added/updated/removed).
-- `engine:folders-changed` — folder list / counts.
-- `engine:unified-inbox-changed` — aggregate summary across accounts.
-- `engine:account-connection-changed` — connection state machine
-  (`connecting` → `connected` → `reconnecting` → `error` / `disconnected`).
+- **primary** — what the user does (open, move, flag, delete, download) and
+  IDLE on the folder on screen, so its changes arrive as they happen;
+- **sync** — the initial download and background catch-up, so neither
+  waits for the other.
 
-There is no fixed-interval polling. All updates are server-pushed; the UI
-reacts to events.
+Sync runs in layers: envelopes first, in large batches, so the list fills
+at once; then previews; then incremental deltas driven by IDLE and by polls
+(20 s for the folder on screen, 45 s for the others). Bodies and
+attachments are fetched on demand.
 
-## Renderer state
+The connection has a state machine (`connecting`, `connected`,
+`reconnecting`, `offline`, `error`) that drives the sync badge in the
+header. It reconnects with a backoff (2 s up to 60 s), notices the network
+coming back (`net.isOnline`) and the machine waking or unlocking
+(`powerMonitor`) and checks the link with a NOOP rather than trusting a
+socket that may be dead. "Sincronizzato" is only shown when it is true.
 
-`App.tsx` owns the top-level state:
+What the user asks for is reported truthfully:
 
-- Selected account, selected folder.
-- The page-of-messages currently rendered + total count.
-- The selection (see below).
-- The persisted `UiPreferences` record and the transient list filter.
-- Composer / settings / archive dialog open flags.
-- A normalised map of per-account connection statuses (used by the online /
-  offline indicator in the header).
+- imapflow reports a refused MOVE, STORE or EXPUNGE as `false`, not an
+  error; each result is checked, and the local copy only changes when the
+  server's did. A server without MOVE gets copy-then-delete, step by step.
+- Without a connection, an operation waits up to 20 s for a reconnect and
+  then fails with the reason, so the interface puts back what it had
+  already shown. An account whose login was refused fails at once.
+- Sending goes over SMTP; for IMAP accounts a copy is filed in the Sent
+  folder afterwards, in the background (Gmail files its own). A sent
+  message is never reported as failed because that copy is late.
 
-The IPC bridge exposed at `window.mailApi` is the single source of truth for
-all data; renderer state is essentially a denormalised cache of what the
-main process tells it via the four event channels above.
+### What counts as an attachment
 
-### Selection model
+Real messages carry signature logos, banners and every picture of the
+quoted chain as `cid:` parts. `message-parts.ts` holds the one rule: a part
+is body content when the HTML references its Content-ID, when it sits in the
+`multipart/related` container, or when it is inline with a Content-ID.
+Everything else is an attachment. The list's paperclip, the reader and the
+extension's archive all use the same rule.
 
-`src/renderer/src/lib/message-selection.ts` keeps two notions apart:
+## Interface
 
-- the **selection** — every row an action applies to;
-- the **cursor** — the row the keyboard is on, and the pivot a Shift range
-  measures from.
+### State
 
-Conflating them is what made a Ctrl-clicked row keep its highlight after
-being removed from the selection. They are one state value so every mutation
-commits atomically, and the list paints them differently: a fill for
-selected, an inset ring for the cursor. Mouse and keyboard follow the
-Explorer/Finder conventions — plain click replaces, Ctrl/Cmd toggles, Shift
-extends, `Ctrl/Cmd+A` selects all, `Esc` collapses to the cursor.
+`App.tsx` owns the selected account and folder, the loaded page of
+messages, the selection, the persisted `UiPreferences` and the dialogs. The
+main process pushes changes through four events (messages, folders, TUTTI's
+summary, connection states); the renderer never polls.
 
-The reading pane follows a selection of exactly one; above that it shows a
-summary and the toolbar acts on the whole set.
+The selection (`lib/message-selection.ts`) keeps the **selected rows** and
+the **cursor** apart, following Finder/Explorer: click replaces, Ctrl/⌘
+toggles, Shift extends, ⌘/Ctrl+A selects all, Esc narrows to the cursor.
 
 ### Layouts
 
-`src/renderer/src/features/workspace/workspace-layout.tsx` holds the two
-arrangements (`apple`, `outlook`). Both receive identical props and share
-every component inside them — only the geometry differs, plus which list
-shell fills the message slot (`message-list.tsx` vs `message-table.tsx`).
-Both shells implement `MessageListViewProps`, so the layout is a one-line
-preference rather than a fork in the state logic. A third arrangement,
-`expanded`, is not a preference: it is what either layout becomes when the
-reading pane is expanded, and it narrows the list to a spine beside a
-full-height reader. The spine always uses the stacked rows of
-`message-list.tsx`, even from the outlook layout: a five-column table cannot
-fit in 260-360px, and the expanded view is meant to be the same screen
-whichever layout it came from.
+Two arrangements share every component (`features/workspace/workspace-layout.tsx`):
+_apple_ — folders, list and reader side by side — and _outlook_ — a dense
+sortable table above the reader. Both list shells implement
+`MessageListViewProps`. Expanding the reader turns either into the same
+narrow list beside a full-height message. Sizes are `clamp()`s, never
+breakpoints, so any window size works.
 
-Every dimension in that file is a `clamp()`, never a breakpoint and never a
-fixed pixel count, because the app has to survive any window size and any
-live resize rather than a handful of tested ones. The sidebar is
-`clamp(196px, 15%, 256px)`, the apple message list `clamp(288px, 27%, 408px)`
-and the expanded spine `clamp(260px, 22%, 360px)`, so each track keeps a
-usable floor, tracks the window in between and stops growing once more width
-would only pad it.
+### TUTTI and several accounts
 
-The outlook split is the one measurement that cannot be expressed as a
-percentage, because what matters there is how many messages the user can take
-in at a glance. `src/renderer/src/features/mail/message-list-metrics.ts`
-holds the table's real chrome — panel header, column header, two grouping
-bands, border slack — and `messageTablePaneHeight(rows)` converts a row count
-into a pane height, so the layout asks for fifteen rows and the arithmetic
-follows the row height the table actually renders. The result is wrapped in
-`min(clamp(…15 rows…, 48%, …20 rows…), 62%)`: the outer `min()` is the safety
-valve, so a window too short to honour the floor gives up rows instead of
-starving the message below it.
+TUTTI gathers the inboxes of the accounts chosen in Settings. Its rows say
+which account each message came to (a tag, or the "Account" column), and
+every action works on the message's own account: a reply or forward starts
+from it, "Sposta" lists its folders, a selection spanning accounts is
+explained rather than moved. The composer has a "Da" row whenever there is
+more than one account; moving a reply or forward to an account other than
+the one that received it is confirmed first, and the signature follows the
+account.
 
-### The reading header
+Questions like that use one component, `components/ui/confirm-dialog.tsx`,
+also available as `useConfirmDialog()` (`if (await confirm({ … }))`).
 
-The reading pane's header used to cost 151px — a subject line, a row of
-labelled actions and a four-line Da/A/Cc/Data grid — before a single line of
-the message appeared. In the outlook layout, where the reader is only about
-half the workspace, that was most of the space the customer wanted for the
-email itself. It is now 66px at every resolution, and the two rules that keep
-it there are worth stating because they are easy to undo by accident.
+### Lists, sorting and search
 
-First, the envelope collapses to one line (`Da · A · data · 📎`) with a
-`Dettagli` disclosure that expands the full grid in place, the way every mail
-client handles it.
+Sorting (date, sender, subject, size) and grouping (Automatico, Mittente,
+Nessuno) happen in the database; `lib/message-sections.ts` only slices the
+ordered page into sections. The search grammar in `shared/search.ts` is
+parsed once and used by both sides — the main process builds the `WHERE`,
+the renderer highlights the same terms. Words match sender, recipients,
+subject and body; `da:`, `a:`, `oggetto:` narrow a term to one field.
 
-Second, only the actions the toolbar has no equivalent for carry a label.
-The toolbar labels what acts on the selection — archivia, sposta, segna,
-contrassegna, elimina — so repeating those words in the header stacked two
-identical rows on top of each other, most visibly in the expanded view. The
-header therefore labels `Rispondi` and `Inoltra` and keeps the rest as icons
-with tooltips; the labelled toolbar directly above is what makes them
-discoverable. That takes the action row from ~664px to ~339px, which is why
-the subject and the actions still share one line on a narrow pane instead of
-wrapping to a third row.
+### Theme
 
-### One density for every surface
+`styles/globals.css` defines every colour as a token (HSL triplets), with a
+dark set and a light one under `prefers-color-scheme: light`. The choice in
+Settings (Sistema, Chiaro, Scuro) becomes Electron's `themeSource`, which is
+what that media query reports. Components only use the tokens. Message
+bodies stay on a white page in both themes, as they were written.
 
-Dialogs used to carry a scale of their own — 20px padding, a 14px gap, an
-18px title, 36-38px buttons, 14px form controls — against a workspace built
-on 11-12.5px text and 26-32px controls. Opening Settings felt like opening a
-different program, and each new dialog inherited the drift.
+## Mail content
 
-The measurements now live in the shared primitives rather than in each
-dialog: `components/ui/dialog.tsx` sets the panel's padding, gap, title and
-description, and footer buttons come out at the workspace's control height;
-`input.tsx`, `select.tsx`, `tabs.tsx`, `textarea.tsx`, `label.tsx` and
-`dropdown-menu.tsx` carry the same 32px / 12px sizing. A dialog that needs a
-different shape overrides it deliberately; one that says nothing lands in
-line by default. This covers the extension's surfaces too, since they build
-on the same primitives.
+### Reading
 
-### Icon-only controls
+Bodies are sanitised with DOMPurify and shown in a sandboxed `srcdoc`
+iframe whose height follows its content (`lib/mail-html.ts`). The page is a
+plain one, like any client's, so a message looks as it was sent. Ctrl/⌘ +
+wheel, a pinch or ⌘/Ctrl +/−/0 zoom the body (50–200 %), remembered across
+messages. Shortcut chords pressed inside the frame are forwarded to the app.
 
-Every control that shows no words needs a bubble naming it, and
-`components/ui/icon-button.tsx` is how: `label` is a required prop and
-becomes the tooltip, the `aria-label` and nothing else, so an icon-only
-control cannot be written without one. The `TooltipProvider` lives once at
-the app root — nested providers each imposed their own delay and reset the
-grace period when moving between neighbouring buttons.
+### Writing
 
-Native `title` attributes are not used for this. The OS draws them in its own
-style after its own delay, and where both existed (the editor's toolbar) a
-hover produced two boxes a second apart. The exception is a control that
-duplicates something the row around it already exposes — the archive
-wizard's tree chevrons, where the `treeitem` owns `aria-expanded` and the
-keyboard handling — which is marked `aria-hidden` instead of being named
-twice.
+The composer (`features/mail/mail-composer-dialog.tsx`) runs Squire in an
+iframe on the same page as the reader, so what is written looks as it will
+arrive. A body starts with lines to write on, the signature in a
+`gmail_signature` block and, for a reply or forward, the quote after a blank
+line (`composer-body.ts`). Changing the sending account swaps that block.
+
+Sending lays the message out once more off screen and writes onto it what
+it rendered as (`lib/outgoing-mail-html.ts`): fonts on text, margins on
+paragraphs and lists, line heights in pixels, link colours, image sizes,
+inside a document that tells Outlook to render at 96 dpi. Outlook's Word
+engine otherwise re-spaces paragraphs, ignores unitless line heights and
+drops inherited fonts.
+
+Font choices are full cross-platform stacks (`shared/mail-fonts.ts`): mail
+clients ignore `@font-face`, so a font only shows where it is installed. The
+public build starts in Arial; an extension can add fonts and colours and set
+the default.
 
 ### Attachments
 
-`features/mail/attachment-chip.tsx` renders one attachment as a single-line
-chip — type icon, name, size, one action — and serves both the reader and
-the composer, so an attachment looks the same arriving and leaving. It
-replaced two-line cards in a two-column grid, which spent over 100px on four
-short filenames and showed the MIME type under each where nobody needed it.
-The icon is chosen from the file extension rather than the MIME type: real
-mailboxes are full of parts typed `application/octet-stream` whose name
-still ends in `.pdf`.
+Opening one writes it to `userData/attachments/<account>/<message>` and
+hands it to the default application; executables are never launched from a
+click, and on Windows the copy carries the mark of the web. "Salva con nome"
+and "Salva tutti" write where the user chooses. The cache is measured and
+emptied in Settings → Dati and dropped on every upgrade. "Allega" offers
+the files recently used on the computer (Windows Recent, macOS Spotlight's
+last-used date, Linux `recently-used.xbel`) and in SIEVER Mail, and files
+can be dropped onto the composer.
 
-### The composer
+## Extensions
 
-`features/mail/mail-composer-dialog.tsx` claims a working height
-(`min(760px, 100vh-3rem)`) instead of sizing itself from its content, and
-the editor takes whatever the envelope and footer leave. The envelope is a
-stack of hairline rows with the label in a gutter, not a label above a
-full-height input per field — that cost about 84px each and pushed the
-editor into the bottom third. Cc and Ccn fold behind a disclosure that
-content overrides: a reply-all or a reopened draft that already carries
-copies always shows them.
+The host reserves one extension slot, filled at build time through four
+Vite aliases:
 
-The window is named after what the user is doing, read from the fields
-rather than sniffed from the subject prefix — only a reply carries
-`inReplyTo`, only a forward arrives with a body already written — and a
-reply opens with the caret at the top of the body, since the recipient is
-the one field already filled in.
+| Alias                     | Loaded by      | Public stub                         |
+| ------------------------- | -------------- | ----------------------------------- |
+| `@app/extension/main`     | main process   | `src/extension/main.public.ts`      |
+| `@app/extension/renderer` | renderer       | `src/extension/renderer.public.tsx` |
+| `@app/extension/preload`  | preload        | `src/extension/preload.public.ts`   |
+| `@app/extension/shared`   | main, renderer | `src/extension/shared.public.ts`    |
 
-### Inverted order
+With `LOAD_EXTENSION=1` and a checkout at `extension/` (gitignored), the
+aliases point at `extension/{main,renderer,preload,shared}/index.*`;
+otherwise at the stubs (`electron.vite.config.ts`). The host never imports
+extension code by path. The contract is `src/extension/types.ts`:
 
-`invertMessageListOrder` mirrors the whole list, groups included: the
-scroll container is `flex-col-reverse` and each section renders its rows
-reversed — one reversal each, nothing more. The sections array must not be
-reversed as well; doing so cancelled the container's reversal, which left
-"Oggi" on top of an otherwise chat-style list and made the arrow keys jump
-the wrong way at every group boundary. Because the result is the exact
-mirror of the standard order, keyboard navigation only has to flip its
-direction, Shift-ranges stay contiguous, and the load-more row lands at the
-top where the older mail belongs.
+| Surface                                     | What it does                                                                      |
+| ------------------------------------------- | --------------------------------------------------------------------------------- |
+| `ExtensionMain.install(context)`            | Runs once after the engine starts: DDL, IPC handlers, startup work.               |
+| `ExtensionMain.clearData()`                 | Deletes its data, as part of "Elimina tutti i dati".                              |
+| `ExtensionMain.uninstall()`                 | Optional; called when the app quits.                                              |
+| `ExtensionMain.defaultAccountSignatureHtml` | Signature given to the first account added. Empty in the public build.            |
+| `ExtensionRenderer.toolbarActions`          | Buttons after "Nuovo messaggio", given the selection.                             |
+| `ExtensionRenderer.settingsTabs`            | Tabs after the host's in Settings.                                                |
+| `ExtensionRenderer.PrimaryActionDialog`     | A dialog the host mounts and opens on request.                                    |
+| `ExtensionRenderer.fontFaceCss`             | `@font-face` rules for bundled fonts, applied to the app and every message frame. |
+| `ExtensionRenderer.localDataLabel`          | How the data `clearData()` removes reads in Settings.                             |
+| `ExtensionComposition` (shared)             | Fonts, default font, text colours and extra font stacks the composer offers.      |
+| `ExtensionPreloadInstaller`                 | Methods merged onto `window.mailApi`.                                             |
 
-### The reading frame
+`install()` receives an `ExtensionMainContext`: `app`, `ipcMain`, the user
+data path, a database handle (`applyDdl`, `query`, `execute`) on the host's
+connection, a mail engine handle (`fetchMessageRawSource`,
+`moveMessageToTrash`), `getMainWindow()` and `recordRecentFiles()`. Renderer
+surfaces get `ExtensionHostHooks` (optimistic removal from the list) so an
+extension reuses the host's behaviour instead of copying it.
 
-Messages render in a sandboxed `srcdoc` iframe whose height follows its
-content, so the reading pane scrolls as one surface with the attachments
-below. The frame binds its observers to the message document as soon as it
-is parsed, found by checking `contentDocument` on each animation frame. It
-used to wait for the frame's `load` event, which waits for every image:
-until then the observers sat on the placeholder `about:blank`, and the frame
-kept its 320px starting height while the newsletter underneath was already
-laid out. A slow image delayed the rest of the message; an image request
-that never settled hid it for good. `load` now only triggers a last
-measurement. The `ResizeObserver` is constructed from the frame's own window,
-and image `load`/`error` events are caught with a capturing listener on the
-document, so images the parser has not reached yet still count.
+An extension's tables survive upgrades and failed upgrades like the host's
+own (see [Upgrades](#upgrades)); it should create them with
+`CREATE TABLE IF NOT EXISTS` and add columns additively.
 
-Key events do not leave an iframe, so the frame forwards modifier chords to
-the app window — Cmd/Ctrl+F and any extension shortcut keep working after
-the user clicks into a message. Select-all, copy and cut stay with the frame.
-
-### Dialog scrim
-
-Dialogs can be dragged aside so the user can read what is behind them, so
-the scrim does not blur and only lightly dims. It steps back further once
-the panel has been moved and disappears while the panel is being dragged.
-
-### Authored fonts
-
-`shared/mail-fonts.ts` holds every stack the app authors. Each one is the
-house face first, then the closest face that actually ships on the other
-platforms, then a generic — email clients strip `@font-face`, so a font only
-renders if the recipient already has it, and `'Century Gothic', sans-serif`
-means Century Gothic in-house and Helvetica everywhere else.
-
-Content authored before those chains existed still carries the short form,
-which is why a signature saved in an older version arrived in plain Arial.
-`upgradeMailFontStacksInHtml` rewrites any declaration whose primary family
-is one of ours to that family's full chain, and the database runs it over
-signatures on the way in and on the way out, writing the result back the
-first time it changes anything. It only touches families we author and
-leaves canonical stacks byte-identical, so it is safe to run repeatedly.
-That also means text typed against those paragraphs inherits the chain, and
-the Firme editor shows the same HTML the recipient will get.
-
-### Grouping
-
-`src/renderer/src/lib/message-sections.ts` slices an already-ordered page
-into labelled runs. The database does the ordering: sender grouping asks the
-query to order by sender first so each run arrives contiguous. Section keys
-carry the run's ordinal because the same sender can legitimately appear in
-several runs while a re-ordered page is still in flight — duplicate React
-keys there break reconciliation and strand DOM nodes.
-
-### Attachments vs body imagery
-
-A modern Outlook message carries the sender's signature logos, the corporate
-banner and every picture from the quoted chain below as `cid:`-referenced
-MIME parts; a dozen of them is ordinary. Treating those as attachments puts a
-paperclip on nearly every message, offers `image005.png` next to the one real
-document in the reading pane, and — in the SIEVER archive — writes them all
-out as loose files beside the message.
-
-`src/main/services/mail-engine/message-parts.ts` owns the single rule that
-separates the two. A part is body content when its Content-ID is referenced
-from the HTML, when mailparser placed it in the `multipart/related`
-container, or when it is `inline` and carries a Content-ID. The cid reference
-is the decisive signal: disposition alone is not enough, because Outlook
-labels signature logos `Content-Disposition: attachment` while still drawing
-them through `cid:`. A message with no HTML body has nothing that could
-reference a `cid:`, so everything it carries counts as an attachment.
-
-Three consequences worth knowing:
-
-- `parseMessageSource` sets `skipImageLinks`, so `parsed.html` keeps its
-  `cid:` references instead of being rewritten into inline `data:` URIs.
-  Rewriting is convenient for a viewer but lossy for anything reconstructing
-  the message. The reading pane inlines them itself, later, on its own copy.
-- Classified attachments carry their **original index** in
-  `parsed.attachments`. Downloads re-parse the message and index straight
-  into that array, so a filtered list must never renumber.
-- The message list's paperclip comes from BODYSTRUCTURE, before any body is
-  available, so it uses the closest proxy — an image part with a Content-ID
-  is body imagery. Once the body is actually fetched the answer is exact, and
-  `updateMessageBody` writes the corrected flag back, so opening a message
-  quietly fixes a row that was flagged for nothing but a logo.
-
-### Search grammar
-
-`src/shared/search.ts` is parsed once and consumed by both sides: the main
-process turns the result into a Prisma `WHERE`, the renderer uses the same
-terms to highlight matches, so a row can never be "returned but not
-highlighted". Whitespace ANDs, a bare `OR` alternates, quotes make a phrase,
-and a `da:` / `a:` / `oggetto:` prefix (with the English `from:` / `to:` /
-`subject:` as aliases) confines a term to one field. Scoped terms only
-highlight the field they matched on.
+Type-check an extension with `npm run typecheck:ext` — `npm run typecheck`
+only sees the stubs, and the build strips types without checking them. Its
+tests (`extension/**/*.test.ts`) run with the host's `npm test`.
 
 ## Testing
 
-`npm test` runs two vitest projects: `main` on the node environment (main
-process and shared code) and `renderer` on jsdom. Path aliases mirror
-`electron.vite.config.ts`, and `@app/extension/*` resolves to the drop-in
-when one is checked out — so an extension can ship its own tests and they run
-with the host's suite. The `extension/**` globs are inert in the public
-repository, where the directory simply does not exist.
+`npm test` runs two Vitest projects: `main` (node) for the main process and
+`shared/`, `renderer` (jsdom) for the interface. Aliases mirror the build.
+`better-sqlite3` is compiled for Electron, so tests that need SQLite mock
+it over Node's built-in `node:sqlite`. Before a change is done:
+`npm run typecheck`, `npm run typecheck:ext` (with an extension),
+`npm test`, `npm run lint` and both builds (`npx electron-vite build`,
+`LOAD_EXTENSION=1 npx electron-vite build`).
 
-`better-sqlite3` is rebuilt against Electron's ABI, so plain Node cannot load
-it; tests that need SQLite mock it over Node's built-in `node:sqlite`.
+## Build and release
 
-## Theming
+`build.mjs <version>` builds installers: `--target=<id>` for one of
+`macos-arm64`, `macos-x64`, `windows-x64`, `linux-x64`, `linux-arm64`
+(Linux in Docker), `--all` for every one, none for macOS arm64 + Windows
+x64. It sets the version in `package.json` for the build and restores it
+afterwards, signs and notarises on macOS when the credentials are present,
+and writes to `release/<label>/v<version>/`. `runBuild()` is exported, so
+an extension can build its own releases with `loadExtension: true` and a
+label of its own.
 
-The Tailwind v4 setup lives in `src/renderer/src/styles/globals.css` and
-declares semantic tokens (`--background`, `--card`, `--primary`, `--ring`,
-…) plus optional brand tokens (`--brand-primary`, `--brand-accent`,
-`--status-online`, `--status-offline`). Components consume the tokens via
-`@theme inline`-mapped Tailwind colour utilities. Hardcoded colours are
-forbidden anywhere there is a sensible token.
+`.github/workflows/release.yml` runs the targets in parallel on `v*` tags
+and publishes a GitHub Release.
 
-## Build & release
+## Security
 
-The single-source-of-truth build entry is `build.mjs` at the repo root. It
-takes a positional `<version>` argument and the following flags:
-
-- `--target=<id>` — build a single target (`macos-arm64`, `macos-x64`,
-  `windows-x64`, `linux-x64`, `linux-arm64`).
-- `--all` — build the entire matrix in sequence (Linux runs in Docker).
-- (no flag) — build the default duo `macos-arm64` + `windows-x64` for
-  quick local releases.
-
-The script writes artifacts under `release/<variant>/v<version>/`. The
-`<variant>` segment is `public` for the open-source build and `siever`
-when the optional extension is loaded.
-
-`build.mjs` exports `runBuild()` so other scripts (notably the
-gitignored `build-siever.mjs` wrapper) can invoke the same logic with a
-preset variant.
-
-A GitHub Actions workflow (`.github/workflows/release.yml`) runs the
-script with `--target=<id>` on per-OS runners in parallel, downloads the
-artifacts and publishes them as a GitHub Release whenever a `v*` tag is
-pushed.
-
-## Extension system
-
-SIEVER Mail reserves a single optional extension slot loaded at build
-time through three Vite aliases:
-
-- `@app/extension/main` — main-process entry
-- `@app/extension/renderer` — renderer entry
-- `@app/extension/preload` — preload bridge additions
-
-Their target resolves to no-op stubs under `src/extension/` for the
-default open-source build. A custom build supplies its own
-implementation through those aliases (typically by checking out a
-private extension repository to a local path and pointing the aliases
-at it via `LOAD_EXTENSION=1`); see
-[`electron.vite.config.ts`](../electron.vite.config.ts) for the exact
-resolution policy. A build-time constant `__APP_BUILD_VARIANT__`
-(`'public' | 'siever'`) is also injected for diagnostic checks.
-
-### What an extension can contribute
-
-Defined in [`src/extension/types.ts`](../src/extension/types.ts):
-
-| Surface                       | Where it shows up                                     |
-| ----------------------------- | ----------------------------------------------------- |
-| `defaultAccountSignatureHtml` | Auto-applied to the very first account a user adds    |
-| `toolbarActions[]`            | Buttons next to "Nuovo messaggio" in the mail toolbar |
-| `settingsTabs[]`              | Extra tabs after the core tabs in the Settings dialog |
-| `PrimaryActionDialog`         | Optional dialog mounted at the renderer root          |
-| `install(context)`            | IPC handlers, DDL, startup hooks                      |
-| `ExtensionPreloadInstaller`   | Additional methods merged onto `window.mailApi`       |
-
-The host is responsible for state coordination: it tracks which selected
-messages a toolbar action sees, opens/closes the primary dialog, and
-provides `ExtensionHostHooks` (e.g. `optimisticallyRemoveMessage`) so
-extensions reuse the host's UX primitives rather than reimplementing
-them.
-
-### Extension main context
-
-The `install()` hook receives an `ExtensionMainContext` exposing:
-
-- `app` — the Electron `App` instance
-- `ipcMain` — for registering custom IPC handlers
-- `userDataDirectoryPath` — typically `app.getPath('userData')`
-- `database` — a thin SQL handle (`applyDdl` / `query` / `execute`) backed
-  by the host's shared SQLite connection so extension writes
-  participate in the same WAL
-- `mailEngine` — `fetchMessageRawSource(ref)` returns the raw RFC 822
-  source plus a parsed envelope; the extension can use it to materialise
-  archived emails, build attachments archives, etc.
-- `getMainWindow()` — to broadcast events back to the renderer
-
-This context is intentionally minimal so extensions stay portable across
-host versions.
-
-### Authoring an extension
-
-A new extension only needs three small entry files plus whatever
-internal modules it wants to keep private:
-
-```
-my-extension/
-├── main/
-│   └── index.ts        # `export default ExtensionMain`
-├── renderer/
-│   └── index.tsx       # `export default ExtensionRenderer`
-└── preload/
-    └── index.ts        # `export default ExtensionPreloadInstaller`
-```
-
-Pointing the Vite aliases at `my-extension/{main,renderer,preload}/index`
-and starting the build with the feature flag set is enough; nothing in
-the host's source tree needs to change.
-
-SIEVER Mail was originally developed as an internal tool for the
-Italian engineering company **SIEVER S.R.L.** (which is unrelated to
-the open-source project — see the README disclaimer). Their
-company-specific customisations have been split into a separate
-private repository owned by the maintainer, loaded as a regular
-extension through the surface above.
-
-## Security notes
-
-- The renderer runs with `contextIsolation: true` and `nodeIntegration: false`.
-- The preload script exposes only a small typed surface; nothing else
-  crosses the IPC boundary.
-- Incoming HTML mail bodies are sanitised with DOMPurify before display.
-- Credentials at rest pass through `safeStorage`. On platforms where the OS
-  keychain is unavailable, the application refuses to persist secrets.
-- External URLs go through `normalizeExternalHttpUrl()` and `shell.openExternal`
-  with strict allow-lists.
+- `contextIsolation: true`, `nodeIntegration: false`; the preload exposes
+  only the typed bridge, and navigation is limited to the app's own page.
+- Incoming HTML is sanitised with DOMPurify and shown in sandboxed frames.
+- Secrets pass through `safeStorage`; without an OS keychain they are not
+  stored.
+- External links open in the browser only if they are `http(s)`.
+- Opened attachments never execute; Windows marks them as downloaded.
 
 ## License
 
