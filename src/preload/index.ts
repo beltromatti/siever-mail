@@ -3,6 +3,9 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 import installExtensionPreload from '@app/extension/preload'
 import { IPC_CHANNELS, type DesktopMailApi } from '@shared/ipc'
 
+const REMOTE_METHOD_ERROR_PREFIX =
+  /^Error invoking remote method '[^']+':\s*(?:[A-Za-z]*Error:\s*)?/
+
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: IpcRendererEvent, payload: unknown): void => {
     listener(payload as T)
@@ -15,61 +18,68 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
   }
 }
 
+/**
+ * `ipcRenderer.invoke`, rejecting with the main process's own message.
+ * Electron rejects with "Error invoking remote method '<channel>': Error:
+ * <message>", and that prefix reached the user verbatim wherever an error
+ * is shown.
+ */
+async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
+  try {
+    return await ipcRenderer.invoke(channel, ...args)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(message.replace(REMOTE_METHOD_ERROR_PREFIX, ''), { cause: error })
+  }
+}
+
 const desktopMailApi: DesktopMailApi = {
-  bootstrap: async () => ipcRenderer.invoke(IPC_CHANNELS.bootstrap),
-  getAccountConnectionStates: async () =>
-    ipcRenderer.invoke(IPC_CHANNELS.getAccountConnectionStates),
-  getUiPreferences: async () => ipcRenderer.invoke(IPC_CHANNELS.getUiPreferences),
-  setUiPreferences: async (preferences) =>
-    ipcRenderer.invoke(IPC_CHANNELS.setUiPreferences, preferences),
-  addGoogleAccount: async () => ipcRenderer.invoke(IPC_CHANNELS.addGoogleAccount),
-  addImapAccount: async (input) => ipcRenderer.invoke(IPC_CHANNELS.addImapAccount, input),
-  markAccountLastViewed: async (accountId) =>
-    ipcRenderer.invoke(IPC_CHANNELS.markAccountLastViewed, accountId),
-  removeAccount: async (accountId) => ipcRenderer.invoke(IPC_CHANNELS.removeAccount, accountId),
-  setActiveMailboxContext: async (context) =>
-    ipcRenderer.invoke(IPC_CHANNELS.setActiveMailboxContext, context),
-  listFolders: async (accountId) => ipcRenderer.invoke(IPC_CHANNELS.listFolders, accountId),
-  getUnifiedInboxSummary: async () => ipcRenderer.invoke(IPC_CHANNELS.getUnifiedInboxSummary),
-  getUnifiedInboxPreferences: async () =>
-    ipcRenderer.invoke(IPC_CHANNELS.getUnifiedInboxPreferences),
+  bootstrap: async () => invoke(IPC_CHANNELS.bootstrap),
+  getAccountConnectionStates: async () => invoke(IPC_CHANNELS.getAccountConnectionStates),
+  getUiPreferences: async () => invoke(IPC_CHANNELS.getUiPreferences),
+  setUiPreferences: async (preferences) => invoke(IPC_CHANNELS.setUiPreferences, preferences),
+  addGoogleAccount: async () => invoke(IPC_CHANNELS.addGoogleAccount),
+  addImapAccount: async (input) => invoke(IPC_CHANNELS.addImapAccount, input),
+  markAccountLastViewed: async (accountId) => invoke(IPC_CHANNELS.markAccountLastViewed, accountId),
+  removeAccount: async (accountId) => invoke(IPC_CHANNELS.removeAccount, accountId),
+  setActiveMailboxContext: async (context) => invoke(IPC_CHANNELS.setActiveMailboxContext, context),
+  listFolders: async (accountId) => invoke(IPC_CHANNELS.listFolders, accountId),
+  getUnifiedInboxSummary: async () => invoke(IPC_CHANNELS.getUnifiedInboxSummary),
+  getUnifiedInboxPreferences: async () => invoke(IPC_CHANNELS.getUnifiedInboxPreferences),
   setUnifiedInboxIncludedAccounts: async (accountIds) =>
-    ipcRenderer.invoke(IPC_CHANNELS.setUnifiedInboxIncludedAccounts, accountIds),
+    invoke(IPC_CHANNELS.setUnifiedInboxIncludedAccounts, accountIds),
   listMessages: async (accountId, folderPath, options) =>
-    ipcRenderer.invoke(IPC_CHANNELS.listMessages, accountId, folderPath, options),
-  getMessage: async (ref) => ipcRenderer.invoke(IPC_CHANNELS.getMessage, ref),
-  moveMessage: async (input) => ipcRenderer.invoke(IPC_CHANNELS.moveMessage, input),
-  deleteMessage: async (ref) => ipcRenderer.invoke(IPC_CHANNELS.deleteMessage, ref),
-  archiveMessage: async (ref) => ipcRenderer.invoke(IPC_CHANNELS.archiveMessage, ref),
-  toggleSeen: async (input) => ipcRenderer.invoke(IPC_CHANNELS.toggleSeen, input),
-  toggleFlagged: async (input) => ipcRenderer.invoke(IPC_CHANNELS.toggleFlagged, input),
-  sendMail: async (input) => ipcRenderer.invoke(IPC_CHANNELS.sendMail, input),
-  suggestContacts: async (query, limit) =>
-    ipcRenderer.invoke(IPC_CHANNELS.suggestContacts, query, limit),
-  listAccountSignatures: async () => ipcRenderer.invoke(IPC_CHANNELS.listAccountSignatures),
-  getAccountSignature: async (accountId) =>
-    ipcRenderer.invoke(IPC_CHANNELS.getAccountSignature, accountId),
+    invoke(IPC_CHANNELS.listMessages, accountId, folderPath, options),
+  getMessage: async (ref) => invoke(IPC_CHANNELS.getMessage, ref),
+  moveMessage: async (input) => invoke(IPC_CHANNELS.moveMessage, input),
+  deleteMessage: async (ref) => invoke(IPC_CHANNELS.deleteMessage, ref),
+  archiveMessage: async (ref) => invoke(IPC_CHANNELS.archiveMessage, ref),
+  toggleSeen: async (input) => invoke(IPC_CHANNELS.toggleSeen, input),
+  toggleFlagged: async (input) => invoke(IPC_CHANNELS.toggleFlagged, input),
+  sendMail: async (input) => invoke(IPC_CHANNELS.sendMail, input),
+  suggestContacts: async (query, limit) => invoke(IPC_CHANNELS.suggestContacts, query, limit),
+  listAccountSignatures: async () => invoke(IPC_CHANNELS.listAccountSignatures),
+  getAccountSignature: async (accountId) => invoke(IPC_CHANNELS.getAccountSignature, accountId),
   setAccountSignature: async (accountId, html) =>
-    ipcRenderer.invoke(IPC_CHANNELS.setAccountSignature, accountId, html),
-  getDataStorageBreakdown: async () => ipcRenderer.invoke(IPC_CHANNELS.getDataStorageBreakdown),
-  clearAccountData: async (accountId) =>
-    ipcRenderer.invoke(IPC_CHANNELS.clearAccountData, accountId),
-  clearAllDataKeepAccounts: async () => ipcRenderer.invoke(IPC_CHANNELS.clearAllDataKeepAccounts),
-  pickAttachments: async () => ipcRenderer.invoke(IPC_CHANNELS.pickAttachments),
-  openAttachment: async (input) => ipcRenderer.invoke(IPC_CHANNELS.openAttachment, input),
-  saveAttachment: async (input) => ipcRenderer.invoke(IPC_CHANNELS.saveAttachment, input),
-  saveAllAttachments: async (ref) => ipcRenderer.invoke(IPC_CHANNELS.saveAllAttachments, ref),
-  clearAttachmentCache: async () => ipcRenderer.invoke(IPC_CHANNELS.clearAttachmentCache),
-  revealFile: async (filePath) => ipcRenderer.invoke(IPC_CHANNELS.revealFile, filePath),
-  listRecentFiles: async () => ipcRenderer.invoke(IPC_CHANNELS.listRecentFiles),
-  describeFiles: async (paths) => ipcRenderer.invoke(IPC_CHANNELS.describeFiles, paths),
+    invoke(IPC_CHANNELS.setAccountSignature, accountId, html),
+  getDataStorageBreakdown: async () => invoke(IPC_CHANNELS.getDataStorageBreakdown),
+  clearAccountData: async (accountId) => invoke(IPC_CHANNELS.clearAccountData, accountId),
+  clearAllDataKeepAccounts: async () => invoke(IPC_CHANNELS.clearAllDataKeepAccounts),
+  pickAttachments: async () => invoke(IPC_CHANNELS.pickAttachments),
+  openAttachment: async (input) => invoke(IPC_CHANNELS.openAttachment, input),
+  saveAttachment: async (input) => invoke(IPC_CHANNELS.saveAttachment, input),
+  saveAllAttachments: async (ref) => invoke(IPC_CHANNELS.saveAllAttachments, ref),
+  clearAttachmentCache: async () => invoke(IPC_CHANNELS.clearAttachmentCache),
+  revealFile: async (filePath) => invoke(IPC_CHANNELS.revealFile, filePath),
+  listRecentFiles: async () => invoke(IPC_CHANNELS.listRecentFiles),
+  describeFiles: async (paths) => invoke(IPC_CHANNELS.describeFiles, paths),
   getPathForFile: (file) => webUtils.getPathForFile(file),
-  openExternalUrl: async (url) => ipcRenderer.invoke(IPC_CHANNELS.openExternalUrl, url),
-  openLogsFolder: async () => ipcRenderer.invoke(IPC_CHANNELS.openLogsFolder),
-  getWindowControlsState: async () => ipcRenderer.invoke(IPC_CHANNELS.getWindowControlsState),
-  minimizeWindow: async () => ipcRenderer.invoke(IPC_CHANNELS.minimizeWindow),
-  toggleMaximizeWindow: async () => ipcRenderer.invoke(IPC_CHANNELS.toggleMaximizeWindow),
-  closeWindow: async () => ipcRenderer.invoke(IPC_CHANNELS.closeWindow),
+  openExternalUrl: async (url) => invoke(IPC_CHANNELS.openExternalUrl, url),
+  openLogsFolder: async () => invoke(IPC_CHANNELS.openLogsFolder),
+  getWindowControlsState: async () => invoke(IPC_CHANNELS.getWindowControlsState),
+  minimizeWindow: async () => invoke(IPC_CHANNELS.minimizeWindow),
+  toggleMaximizeWindow: async () => invoke(IPC_CHANNELS.toggleMaximizeWindow),
+  closeWindow: async () => invoke(IPC_CHANNELS.closeWindow),
   onOpenMessageFromNotification: (listener) =>
     subscribe(IPC_CHANNELS.openMessageFromNotification, listener),
   onWindowControlsStateChanged: (listener) =>

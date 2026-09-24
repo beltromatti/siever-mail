@@ -14,6 +14,7 @@ import type {
 import { z } from 'zod'
 
 import type { RuntimeConfig } from '@main/config/env'
+import { logMainError } from '@main/utils/error-utils'
 import type {
   AccountConnectionState,
   ActiveMailboxContext,
@@ -638,7 +639,13 @@ export class MailService {
 
       if (account.type === 'imap' && rawOutgoing) {
         const messageId = typeof result?.messageId === 'string' ? result.messageId.trim() : ''
-        await this.engine.appendToSent(account.id, rawOutgoing, messageId)
+        // The message has gone. Filing its copy in "Posta inviata" waits for
+        // the account's IMAP connection, however long that takes, so it must
+        // neither hold the result back nor turn it into a failure — which
+        // would invite sending it twice.
+        void this.engine.appendToSent(account.id, rawOutgoing, messageId).catch((error) => {
+          logMainError('Filing the sent copy failed', error, { accountId: account.id })
+        })
       }
     } finally {
       transport.close()

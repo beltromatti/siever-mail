@@ -89,6 +89,14 @@ interface QueuedTask {
   run: () => Promise<void>
 }
 
+/**
+ * How long something the user asked for (open, move, flag, download) waits
+ * for a connection that is not there. A reconnect usually takes a few
+ * seconds; past this the operation fails and says why, instead of hanging
+ * with the change already shown on screen.
+ */
+const USER_OPERATION_CONNECTION_WAIT_MS = 20_000
+
 interface FolderSyncPlan {
   uidValidity: bigint
   highestModseq: bigint | undefined
@@ -126,6 +134,35 @@ type AccountConnectionEvents = {
     removedUids: number[]
     bootstrap: boolean
   }) => void
+}
+
+/**
+ * Moves one message in the selected mailbox, and throws when the server did
+ * not. imapflow reports a refused MOVE (a folder that does not exist, a full
+ * quota) as `false` instead of an error, which let the message vanish here
+ * while it stayed where it was. And on a server without MOVE its own
+ * copy-then-delete deletes the original even when the copy was refused, so
+ * that path is spelled out here, in order, checking each step.
+ */
+async function moveOnServer(client: ImapFlow, uid: number, destination: string): Promise<void> {
+  const range = String(uid)
+
+  if (client.capabilities.has('MOVE')) {
+    if (!(await client.messageMove(range, destination, { uid: true }))) {
+      throw new Error(`Il server non ha spostato il messaggio in «${destination}».`)
+    }
+    return
+  }
+
+  if (!(await client.messageCopy(range, destination, { uid: true }))) {
+    throw new Error(`Il server non ha copiato il messaggio in «${destination}».`)
+  }
+
+  if (!(await client.messageDelete(range, { uid: true }))) {
+    throw new Error(
+      `Il messaggio è stato copiato in «${destination}» ma il server non lo ha rimosso dalla cartella di origine.`
+    )
+  }
 }
 
 export class AccountConnection extends EventEmitter {
@@ -350,7 +387,7 @@ export class AccountConnection extends EventEmitter {
   }
 
   async fetchMessageDetail(ref: MessageRef): Promise<FetchedMessageDetail> {
-    return this.enqueuePrimaryWithReturn<FetchedMessageDetail>(async () => {
+    return this.runUserOperation<FetchedMessageDetail>(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(ref.folderPath)
 
@@ -382,7 +419,7 @@ export class AccountConnection extends EventEmitter {
   }
 
   async fetchRawSource(ref: MessageRef): Promise<Buffer> {
-    return this.enqueuePrimaryWithReturn<Buffer>(async () => {
+    return this.runUserOperation<Buffer>(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(ref.folderPath)
 
@@ -429,15 +466,17 @@ export class AccountConnection extends EventEmitter {
     present: boolean,
     operationLabel: string
   ): Promise<void> {
-    await this.enqueuePrimaryCommandAwaitable(async () => {
+    await this.runUserOperation(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(ref.folderPath)
 
       try {
-        if (present) {
-          await client.messageFlagsAdd(String(ref.uid), [keyword], { uid: true })
-        } else {
-          await client.messageFlagsRemove(String(ref.uid), [keyword], { uid: true })
+        const stored = present
+          ? await client.messageFlagsAdd(String(ref.uid), [keyword], { uid: true })
+          : await client.messageFlagsRemove(String(ref.uid), [keyword], { uid: true })
+
+        if (!stored) {
+          throw new Error('Il server non ha aggiornato il messaggio.')
         }
       } finally {
         lock.release()
@@ -452,7 +491,7 @@ export class AccountConnection extends EventEmitter {
     destinationFolderPath: string,
     options: { markAsSeenBeforeMove?: boolean } = {}
   ): Promise<void> {
-    await this.enqueuePrimaryCommandAwaitable(async () => {
+    await this.runUserOperation(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(ref.folderPath)
 
@@ -461,7 +500,7 @@ export class AccountConnection extends EventEmitter {
           await client.messageFlagsAdd(String(ref.uid), ['\\Seen'], { uid: true })
         }
 
-        await client.messageMove(String(ref.uid), destinationFolderPath, { uid: true })
+        await moveOnServer(client, ref.uid, destinationFolderPath)
       } finally {
         lock.release()
       }
@@ -500,12 +539,14 @@ export class AccountConnection extends EventEmitter {
       return { sourceFolder: ref.folderPath, destinationFolder: trash.path }
     }
 
-    await this.enqueuePrimaryCommandAwaitable(async () => {
+    await this.runUserOperation(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(ref.folderPath)
 
       try {
-        await client.messageDelete(String(ref.uid), { uid: true })
+        if (!(await client.messageDelete(String(ref.uid), { uid: true }))) {
+          throw new Error('Il server non ha eliminato il messaggio.')
+        }
       } finally {
         lock.release()
       }
@@ -540,7 +581,7 @@ export class AccountConnection extends EventEmitter {
       return null
     }
 
-    await this.enqueuePrimaryCommandAwaitable(async () => {
+    await this.enqueueBackgroundOperation(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(sentFolder.path)
 
@@ -572,7 +613,7 @@ export class AccountConnection extends EventEmitter {
     parsed: ParsedMail
     internalDate: string
   }> {
-    return this.enqueuePrimaryWithReturn(async () => {
+    return this.runUserOperation(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(ref.folderPath)
 
@@ -609,7 +650,7 @@ export class AccountConnection extends EventEmitter {
     ref: MessageRef,
     indexes?: ReadonlyArray<number>
   ): Promise<FetchedAttachment[]> {
-    return this.enqueuePrimaryWithReturn(async () => {
+    return this.runUserOperation(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(ref.folderPath)
 
@@ -1896,10 +1937,72 @@ export class AccountConnection extends EventEmitter {
     this.startPrimaryWorkerIfNeeded()
   }
 
-  private async enqueuePrimaryCommandAwaitable(
-    run: () => Promise<void>,
-    label: string
-  ): Promise<void> {
+  /**
+   * Queues something the user is waiting on and settles with its outcome.
+   *
+   * While the account has no usable connection the operation waits, since
+   * a reconnect is usually seconds away, but not for ever: after
+   * `USER_OPERATION_CONNECTION_WAIT_MS` without one it leaves the queue and
+   * fails, so the interface can undo what it already showed. An account
+   * whose credentials were refused fails at once — no reconnect will come.
+   */
+  private runUserOperation<T>(run: () => Promise<T>, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      if (this.status === 'error' && this.lastError?.authFailed) {
+        reject(new Error(`Accesso a ${this.account.email} non riuscito: ricollega l'account.`))
+        return
+      }
+
+      let waitTimer: ReturnType<typeof setTimeout> | undefined
+
+      const task: QueuedTask = {
+        priority: 'user',
+        label,
+        run: async () => {
+          clearTimeout(waitTimer)
+
+          try {
+            resolve(await run())
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)))
+          }
+        }
+      }
+
+      const checkStillWaiting = (): void => {
+        const index = this.primaryQueue.indexOf(task)
+
+        if (index < 0) {
+          return
+        }
+
+        // Connected but busy with earlier operations: keep its turn.
+        if (this.primaryClient?.usable) {
+          waitTimer = setTimeout(checkStillWaiting, USER_OPERATION_CONNECTION_WAIT_MS)
+          return
+        }
+
+        this.primaryQueue.splice(index, 1)
+        reject(
+          new Error(
+            this.status === 'offline'
+              ? 'Nessuna connessione a internet: operazione non eseguita.'
+              : `Il server di ${this.account.email} non risponde: operazione non eseguita.`
+          )
+        )
+      }
+
+      waitTimer = setTimeout(checkStillWaiting, USER_OPERATION_CONNECTION_WAIT_MS)
+      this.primaryQueue.push(task)
+      this.startPrimaryWorkerIfNeeded()
+    })
+  }
+
+  /**
+   * Queues work nobody waits on at the screen, such as filing a sent copy.
+   * It runs whenever the connection is there, however long that takes.
+   */
+  private enqueueBackgroundOperation(run: () => Promise<void>, label: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.primaryQueue.push({
         priority: 'user',
@@ -1908,23 +2011,6 @@ export class AccountConnection extends EventEmitter {
           try {
             await run()
             resolve()
-          } catch (error) {
-            reject(error instanceof Error ? error : new Error(String(error)))
-          }
-        }
-      })
-      this.startPrimaryWorkerIfNeeded()
-    })
-  }
-
-  private async enqueuePrimaryWithReturn<T>(run: () => Promise<T>, label: string): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      this.primaryQueue.push({
-        priority: 'user',
-        label,
-        run: async () => {
-          try {
-            resolve(await run())
           } catch (error) {
             reject(error instanceof Error ? error : new Error(String(error)))
           }
