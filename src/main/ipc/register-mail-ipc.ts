@@ -1,4 +1,4 @@
-import { ipcMain, shell, type BrowserWindow } from 'electron'
+import { app, ipcMain, shell, type BrowserWindow } from 'electron'
 
 import type { MailService } from '@main/services/mail-service'
 import { normalizeExternalHttpUrl } from '@main/utils/external-url'
@@ -166,6 +166,14 @@ export function registerMailIpc(
 
     await shell.openExternal(safeExternalUrl)
     return true
+  })
+
+  registerHandler(IPC_CHANNELS.openLogsFolder, async () => {
+    const failure = await shell.openPath(app.getPath('logs'))
+
+    if (failure) {
+      throw new Error(failure)
+    }
   })
 
   registerHandler(IPC_CHANNELS.getWindowControlsState, async () => {

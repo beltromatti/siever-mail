@@ -60,6 +60,7 @@ export const IPC_CHANNELS = {
   clearAllDataKeepAccounts: 'data:clear-all-keep-accounts',
   downloadAttachment: 'message:download-attachment',
   openExternalUrl: 'app:open-external-url',
+  openLogsFolder: 'app:open-logs-folder',
   openMessageFromNotification: 'app:open-message-from-notification',
   getWindowControlsState: 'window:get-controls-state',
   minimizeWindow: 'window:minimize',
@@ -116,6 +117,8 @@ export interface DesktopMailApi {
   pickAttachments: () => Promise<PickedAttachment[]>
   downloadAttachment: (input: DownloadAttachmentInput) => Promise<DownloadAttachmentResult>
   openExternalUrl: (url: string) => Promise<boolean>
+  /** Reveals the folder the main process writes its log to. */
+  openLogsFolder: () => Promise<void>
   onOpenMessageFromNotification: (listener: (ref: MessageRef) => void) => () => void
   getWindowControlsState: () => Promise<WindowControlsState>
   minimizeWindow: () => Promise<void>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { LoaderCircle, LogOut, Mail, Plus, Save, Trash2 } from 'lucide-react'
+import { FolderOpen, LoaderCircle, LogOut, Mail, Plus, Save, Trash2 } from 'lucide-react'
 
 import extensionRenderer from '@app/extension/renderer'
 import { Badge } from '@renderer/components/ui/badge'
@@ -1032,6 +1032,28 @@ export function SettingsDialog({
                       ))}
                     </div>
                   )}
+                </div>
+
+                <div className="border-border bg-card/55 flex items-center justify-between gap-3 rounded-md border p-3">
+                  <div className="min-w-0">
+                    <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
+                      Diagnostica
+                    </p>
+                    <p className="text-muted-foreground mt-1 text-[11px]">
+                      SIEVER Mail annota connessioni ed errori in un registro sul computer. Se
+                      qualcosa non va, è il file da allegare alla segnalazione.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 gap-1.5"
+                    onClick={() => void window.mailApi.openLogsFolder()}
+                  >
+                    <FolderOpen className="size-3.5" />
+                    Apri cartella log
+                  </Button>
                 </div>
 
                 <div className="border-destructive/35 bg-destructive/5 rounded-md border p-3">

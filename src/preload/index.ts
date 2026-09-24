@@ -58,6 +58,7 @@ const desktopMailApi: DesktopMailApi = {
   pickAttachments: async () => ipcRenderer.invoke(IPC_CHANNELS.pickAttachments),
   downloadAttachment: async (input) => ipcRenderer.invoke(IPC_CHANNELS.downloadAttachment, input),
   openExternalUrl: async (url) => ipcRenderer.invoke(IPC_CHANNELS.openExternalUrl, url),
+  openLogsFolder: async () => ipcRenderer.invoke(IPC_CHANNELS.openLogsFolder),
   getWindowControlsState: async () => ipcRenderer.invoke(IPC_CHANNELS.getWindowControlsState),
   minimizeWindow: async () => ipcRenderer.invoke(IPC_CHANNELS.minimizeWindow),
   toggleMaximizeWindow: async () => ipcRenderer.invoke(IPC_CHANNELS.toggleMaximizeWindow),

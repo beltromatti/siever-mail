@@ -257,6 +257,49 @@ export function MessageSectionHeading({
 
 /* ───────────────────────── list header controls ───────────────────────── */
 
+/**
+ * The list's title — or, while a search is active, what is being searched
+ * for and the way out of it. A search left running is the most convincing
+ * way for mail to look as if it stopped arriving, so the query stays in
+ * sight above its results, one click or Esc from gone.
+ */
+export function MessageListTitle({
+  title,
+  searchQuery,
+  onClearSearch,
+  className
+}: {
+  title: string
+  searchQuery: string
+  onClearSearch: () => void
+  className?: string
+}): React.JSX.Element {
+  if (!searchQuery) {
+    return <h2 className={cn('truncate font-semibold', className)}>{title}</h2>
+  }
+
+  return (
+    <div className="flex min-w-0 items-center gap-1">
+      <h2 className={cn('min-w-0 truncate font-semibold', className)} title={searchQuery}>
+        Risultati per <span className="text-primary">«{searchQuery}»</span>
+      </h2>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={onClearSearch}
+            aria-label="Esci dalla ricerca"
+            className="text-muted-foreground hover:bg-secondary/60 hover:text-foreground focus-visible:ring-ring/70 inline-flex size-5 shrink-0 items-center justify-center rounded-sm transition-colors outline-none focus-visible:ring-2"
+          >
+            <X className="size-3.5" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Esci dalla ricerca (Esc)</TooltipContent>
+      </Tooltip>
+    </div>
+  )
+}
+
 interface SortFieldOption {
   field: MessageListSortField
   label: string

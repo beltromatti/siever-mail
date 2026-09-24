@@ -1,10 +1,12 @@
 import { EventEmitter } from 'node:events'
 
+import { net } from 'electron'
 import { ImapFlow, type ExistsEvent, type ExpungeEvent, type FlagsEvent } from 'imapflow'
 import type { ParsedMail } from 'mailparser'
 
-import { logMainError } from '@main/utils/error-utils'
+import { extractErrorDetails, logMainError } from '@main/utils/error-utils'
 import type {
+  AccountConnectionState,
   AccountConnectionStatus,
   FetchedMessageDetail,
   FetchedMessageSummary,
@@ -63,6 +65,13 @@ const BACKGROUND_FOLDER_POLL_INTERVAL_MS = 45_000
 const ACTIVE_FOLDER_POLL_INTERVAL_MS = 20_000
 const RECONNECT_BACKOFF_INITIAL_MS = 2_000
 const RECONNECT_BACKOFF_MAX_MS = 60_000
+const FOLDER_POLL_TASK_LABEL = 'folder-poll'
+// While the computer reports no network, how often to look again. Cheap: it
+// reads a flag Chromium keeps current, no packet leaves the machine.
+const OFFLINE_RECHECK_MS = 3_000
+// A NOOP normally answers in well under a second; one that takes this long
+// is a link that died while the computer slept or changed networks.
+const HEALTH_CHECK_TIMEOUT_MS = 20_000
 
 // Task scheduling priorities. The sync worker always drains higher priorities
 // first, so a freshly-opened folder (active-sync) jumps ahead of the historical
@@ -86,8 +95,10 @@ interface FolderSyncPlan {
   needsReconciliation: boolean
 }
 
+export type AccountConnectionSnapshot = Omit<AccountConnectionState, 'accountId'>
+
 type AccountConnectionEvents = {
-  status: (status: AccountConnectionStatus, error?: Error) => void
+  state: (state: AccountConnectionSnapshot) => void
   folders: (folders: MailFolder[]) => void
   'folder-counts': (update: {
     accountId: string
@@ -121,7 +132,6 @@ export class AccountConnection extends EventEmitter {
   private syncClient: ImapFlow | null = null
   private running = false
   private shuttingDown = false
-  private restartTimer: NodeJS.Timeout | null = null
   private backoffMs = RECONNECT_BACKOFF_INITIAL_MS
   private folderPollInterval: NodeJS.Timeout | null = null
   private connectionLoopPromise: Promise<void> | null = null
@@ -134,6 +144,13 @@ export class AccountConnection extends EventEmitter {
   private primaryWorkerActive = false
   private syncWorkerActive = false
   private status: AccountConnectionStatus = 'disconnected'
+  private lastError: { message: string; authFailed: boolean } | null = null
+  private lastContactAt: number | undefined
+  // Folders downloading their mail for the first time: what "syncing" means
+  // to the user. Incremental catch-ups take a second and are not reported.
+  private readonly bootstrappingFolders = new Set<string>()
+  // Resolves the pause between reconnect attempts early (see `nudge`).
+  private wakeRetry: (() => void) | null = null
 
   constructor(
     private readonly database: AppDatabase,
@@ -161,8 +178,37 @@ export class AccountConnection extends EventEmitter {
     this.account = account
   }
 
-  getStatus(): AccountConnectionStatus {
-    return this.status
+  getState(): AccountConnectionSnapshot {
+    return {
+      status: this.status,
+      syncing: this.status === 'connected' && this.bootstrappingFolders.size > 0,
+      errorMessage: this.status === 'error' ? this.lastError?.message : undefined,
+      authFailed: this.status === 'error' ? this.lastError?.authFailed : undefined,
+      lastContactAt: this.lastContactAt
+    }
+  }
+
+  /**
+   * Checks the link now rather than on the next timer — after the computer
+   * wakes up, the screen unlocks or the network changes. A connection
+   * waiting to retry retries at once, from a fresh backoff; a live one has
+   * to answer a NOOP or is torn down and rebuilt, then catches up on every
+   * folder in case something arrived while it could not hear.
+   */
+  nudge(): void {
+    if (!this.running) {
+      return
+    }
+
+    if (this.wakeRetry) {
+      this.backoffMs = RECONNECT_BACKOFF_INITIAL_MS
+      this.wakeRetry()
+      return
+    }
+
+    if (this.primaryClient && this.syncClient) {
+      void this.verifyConnection()
+    }
   }
 
   start(): void {
@@ -178,27 +224,38 @@ export class AccountConnection extends EventEmitter {
       })
     })
 
-    this.folderPollInterval = setInterval(() => {
-      this.enqueueSyncCommand(
-        async () => {
-          if (this.syncClient?.usable) {
-            await this.pollFolderStatuses()
-          }
-        },
-        'folder-poll',
-        'background'
-      )
-    }, BACKGROUND_FOLDER_POLL_INTERVAL_MS)
+    this.folderPollInterval = setInterval(
+      () => this.enqueueFolderPoll('background'),
+      BACKGROUND_FOLDER_POLL_INTERVAL_MS
+    )
+  }
+
+  /**
+   * Queues a STATUS sweep of every folder, unless one is already waiting: a
+   * long bootstrap would otherwise stack a sweep every interval and then
+   * run them back to back.
+   */
+  private enqueueFolderPoll(priority: TaskPriority): void {
+    if (this.syncQueue.some((task) => task.label === FOLDER_POLL_TASK_LABEL)) {
+      return
+    }
+
+    this.enqueueSyncCommand(
+      async () => {
+        if (this.syncClient?.usable) {
+          await this.pollFolderStatuses()
+        }
+      },
+      FOLDER_POLL_TASK_LABEL,
+      priority
+    )
   }
 
   async stop(): Promise<void> {
     this.shuttingDown = true
     this.running = false
-
-    if (this.restartTimer) {
-      clearTimeout(this.restartTimer)
-      this.restartTimer = null
-    }
+    // The loop may be parked between attempts; let it see `running` is off.
+    this.wakeRetry?.()
 
     if (this.folderPollInterval) {
       clearInterval(this.folderPollInterval)
@@ -568,21 +625,62 @@ export class AccountConnection extends EventEmitter {
     }, `download-attachment:${ref.folderPath}:${ref.uid}:${attachmentIndex}`)
   }
 
-  private setStatus(status: AccountConnectionStatus, error?: Error): void {
-    if (this.status === status) {
+  private setStatus(status: AccountConnectionStatus, error?: unknown): void {
+    const nextError =
+      status === 'error' && error !== undefined
+        ? {
+            message: error instanceof Error ? error.message : String(error),
+            authFailed: extractErrorDetails(error).authenticationFailed === true
+          }
+        : this.lastError
+
+    if (
+      this.status === status &&
+      nextError?.message === this.lastError?.message &&
+      nextError?.authFailed === this.lastError?.authFailed
+    ) {
       return
     }
+
+    console.info(
+      `[mail-engine] ${this.account.email}: ${this.status} -> ${status}` +
+        (status === 'error' && nextError ? ` (${nextError.message})` : '')
+    )
     this.status = status
-    this.emit('status', status, error)
+    this.lastError = status === 'connected' ? null : nextError
+    this.emitState()
+  }
+
+  private emitState(): void {
+    this.emit('state', this.getState())
+  }
+
+  /** The server just answered: the link is demonstrably alive. */
+  private markContact(): void {
+    this.lastContactAt = Date.now()
   }
 
   private async runConnectionLoop(): Promise<void> {
     while (this.running) {
+      if (!net.isOnline()) {
+        this.setStatus('offline')
+        await this.waitBeforeRetry(OFFLINE_RECHECK_MS)
+        continue
+      }
+
       let primary: ImapFlow | null = null
       let sync: ImapFlow | null = null
 
       try {
-        this.setStatus(this.status === 'disconnected' ? 'connecting' : 'reconnecting')
+        // First contact reads "connecting" and a dropped link "reconnecting".
+        // A failed attempt stays "error" through the retries that follow:
+        // flipping back on every retry made the badge flicker between
+        // "reconnecting" and "lost" for as long as the server was down.
+        if (this.status === 'disconnected') {
+          this.setStatus('connecting')
+        } else if (this.status === 'offline') {
+          this.setStatus('reconnecting')
+        }
 
         // Auth is resolved once and reused for both clients — for OAuth this
         // means we don't burn two token refreshes on every reconnect.
@@ -597,9 +695,11 @@ export class AccountConnection extends EventEmitter {
           // IDLE lives on the primary connection; forward the event to the
           // sync client's queue so the bulk sync fetches the new envelope
           // (and hydrates its preview) without pausing IDLE.
+          this.markContact()
           this.incrementalSyncFolder(event.path, 'active-sync')
         })
         primary.on('expunge', (event: ExpungeEvent) => {
+          this.markContact()
           this.enqueueSyncCommand(
             async () => {
               await this.handleExpungeEvent(event)
@@ -609,6 +709,7 @@ export class AccountConnection extends EventEmitter {
           )
         })
         primary.on('flags', (event: FlagsEvent) => {
+          this.markContact()
           this.enqueueSyncCommand(
             async () => {
               await this.handleFlagsEvent(event)
@@ -625,6 +726,7 @@ export class AccountConnection extends EventEmitter {
 
         await Promise.all([primary.connect(), sync.connect()])
 
+        this.markContact()
         this.setStatus('connected')
         this.backoffMs = RECONNECT_BACKOFF_INITIAL_MS
         this.startPrimaryWorkerIfNeeded()
@@ -638,8 +740,7 @@ export class AccountConnection extends EventEmitter {
           'background'
         )
 
-        const { closedBy, error: closeError } = await closedPromise
-        void closedBy
+        const { error: closeError } = await closedPromise
         this.primaryClient = null
         this.syncClient = null
         await this.safeShutdownClients(primary, sync)
@@ -649,6 +750,9 @@ export class AccountConnection extends EventEmitter {
         if (this.shuttingDown) {
           return
         }
+
+        this.bootstrappingFolders.clear()
+        this.setStatus(net.isOnline() ? 'reconnecting' : 'offline')
 
         if (closeError) {
           logMainError('IMAP connection closed with error', closeError, {
@@ -661,17 +765,18 @@ export class AccountConnection extends EventEmitter {
         await this.safeShutdownClients(primary, sync)
         primary = null
         sync = null
+        this.bootstrappingFolders.clear()
         logMainError('IMAP connection error', error, {
           accountId: this.account.id
         })
-        this.setStatus('error', error instanceof Error ? error : new Error(String(error)))
+        this.setStatus(net.isOnline() ? 'error' : 'offline', error)
       }
 
-      if (!this.running) {
-        break
+      // Offline, the top of the loop does the waiting — and retries the
+      // moment the network is back instead of after a grown backoff.
+      if (this.running && net.isOnline()) {
+        await this.waitBeforeRetry(this.nextBackoffDelay())
       }
-
-      await this.sleepWithBackoff()
     }
 
     this.setStatus('disconnected')
@@ -730,19 +835,100 @@ export class AccountConnection extends EventEmitter {
     )
   }
 
-  private async sleepWithBackoff(): Promise<void> {
+  private nextBackoffDelay(): number {
     const delay = this.backoffMs
     this.backoffMs = Math.min(
       RECONNECT_BACKOFF_MAX_MS,
       Math.max(RECONNECT_BACKOFF_INITIAL_MS, this.backoffMs * 2)
     )
+    return delay
+  }
 
-    await new Promise<void>((resolve) => {
-      this.restartTimer = setTimeout(() => {
-        this.restartTimer = null
+  /** A pause `nudge` and `stop` can cut short. */
+  private waitBeforeRetry(delayMs: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(wake, delayMs)
+
+      function wake(): void {
+        clearTimeout(timer)
         resolve()
-      }, delay)
+      }
+
+      this.wakeRetry = () => {
+        this.wakeRetry = null
+        wake()
+      }
+    }).finally(() => {
+      this.wakeRetry = null
     })
+  }
+
+  /**
+   * Proves both links are alive with a NOOP each, or tears them down so the
+   * loop rebuilds them. With the network up, a link busy with a task is left
+   * alone: a dead socket fails that task by itself, and a NOOP queued behind
+   * a long download would read as a timeout that never happened. Without a
+   * network the links are as good as gone, so the badge says so at once and
+   * both are probed regardless, instead of waiting for TCP to notice.
+   */
+  private async verifyConnection(): Promise<void> {
+    const primary = this.primaryClient
+    const sync = this.syncClient
+
+    if (!primary || !sync) {
+      return
+    }
+
+    const offline = !net.isOnline()
+
+    if (offline) {
+      this.setStatus('offline')
+    }
+
+    const probes = offline
+      ? [primary, sync]
+      : [this.primaryWorkerActive ? null : primary, this.syncWorkerActive ? null : sync].filter(
+          (client): client is ImapFlow => client !== null
+        )
+
+    if (probes.length === 0) {
+      return
+    }
+
+    try {
+      await Promise.all(probes.map((client) => this.noopWithin(client, HEALTH_CHECK_TIMEOUT_MS)))
+    } catch (error) {
+      logMainError('IMAP link failed its health check; reconnecting', error, {
+        accountId: this.account.id
+      })
+      // Closing one client resolves the loop's close watcher, which drops
+      // both and reconnects.
+      primary.close()
+      return
+    }
+
+    this.markContact()
+
+    if (this.status === 'offline') {
+      this.setStatus('connected')
+    }
+
+    this.enqueueFolderPoll('active-sync')
+  }
+
+  private async noopWithin(client: ImapFlow, timeoutMs: number): Promise<void> {
+    let timer: NodeJS.Timeout | undefined
+
+    try {
+      await Promise.race([
+        client.noop(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('NOOP timed out')), timeoutMs)
+        })
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   private requirePrimary(): ImapFlow {
@@ -766,8 +952,7 @@ export class AccountConnection extends EventEmitter {
     // All folder syncs enter the command queue at 'background' priority: INBOX therefore
     // fills first by queue order, while user clicks, IDLE deltas and active-folder
     // selections interleave at higher priorities as they arrive.
-    const selectable = folders.filter((folder) => !this.isFolderNonSelectable(folder))
-    const ordered = selectable.slice().sort((a, b) => {
+    const ordered = folders.slice().sort((a, b) => {
       const aIsInbox = a.specialUse === INBOX_SPECIAL_USE ? 0 : 1
       const bIsInbox = b.specialUse === INBOX_SPECIAL_USE ? 0 : 1
       return aIsInbox - bIsInbox
@@ -810,7 +995,7 @@ export class AccountConnection extends EventEmitter {
       folders[0] ||
       null
 
-    if (!preferred || this.isFolderNonSelectable(preferred)) {
+    if (!preferred) {
       return
     }
 
@@ -820,12 +1005,6 @@ export class AccountConnection extends EventEmitter {
     } finally {
       lock.release()
     }
-  }
-
-  private isFolderNonSelectable(folder: MailFolder): boolean {
-    // Heuristic: mailboxes whose path ends with '/[Gmail]' are container-only; imapflow surfaces them
-    // but SELECT would fail. Keep conservative and allow engine to catch and skip.
-    return folder.path === '[Gmail]' || folder.path === '[Google Mail]'
   }
 
   private async syncFolderList(): Promise<MailFolder[]> {
@@ -841,7 +1020,12 @@ export class AccountConnection extends EventEmitter {
       }
     })
 
-    const folders: MailFolder[] = mailboxes.map((mailbox) => ({
+    // A \\Noselect mailbox is only a parent in the hierarchy ("[Gmail]"):
+    // it can hold no mail, and in a flat folder list it is a dead entry.
+    const selectableMailboxes = mailboxes.filter(
+      (mailbox) => !mailbox.flags.has('\\Noselect') && !mailbox.flags.has('\\NonExistent')
+    )
+    const fetchedFolders: MailFolder[] = selectableMailboxes.map((mailbox) => ({
       id: `${this.account.id}:${mailbox.path}`,
       accountId: this.account.id,
       path: mailbox.path,
@@ -852,10 +1036,13 @@ export class AccountConnection extends EventEmitter {
       unseenCount: mailbox.status?.unseen ?? 0
     }))
 
-    await this.database.replaceFolders(this.account.id, folders)
+    await this.database.replaceFolders(this.account.id, fetchedFolders)
+    // Read back rather than emit the server's order: the sidebar must list
+    // folders the same way whether it loaded them or was told they changed.
+    const folders = await this.database.listFolders(this.account.id)
     this.emit('folders', folders)
 
-    for (const mailbox of mailboxes) {
+    for (const mailbox of selectableMailboxes) {
       if (typeof mailbox.status?.uidValidity !== 'undefined') {
         await this.checkAndResetIfUidValidityChanged(
           mailbox.path,
@@ -942,6 +1129,10 @@ export class AccountConnection extends EventEmitter {
     // Smaller batch sizes for incremental because each message carries ~32 KB
     // of body — a 250-batch is ~8 MB on the wire and lands in a second or two.
     if (plan.newUids.length > 0) {
+      if (plan.isBootstrap) {
+        this.setFolderBootstrapping(folderPath, true)
+      }
+
       const sortedUids = [...plan.newUids].sort((a, b) => b - a)
       const batchSize = plan.isBootstrap ? BOOTSTRAP_ENVELOPE_BATCH_SIZE : INCREMENTAL_BATCH_SIZE
       for (let index = 0; index < sortedUids.length; index += batchSize) {
@@ -1206,6 +1397,28 @@ export class AccountConnection extends EventEmitter {
   }
 
   private async finalizeFolderSync(folderPath: string, plan: FolderSyncPlan): Promise<void> {
+    try {
+      await this.writeFolderSyncState(folderPath, plan)
+    } finally {
+      this.setFolderBootstrapping(folderPath, false)
+    }
+  }
+
+  private setFolderBootstrapping(folderPath: string, bootstrapping: boolean): void {
+    const wasSyncing = this.getState().syncing
+
+    if (bootstrapping) {
+      this.bootstrappingFolders.add(folderPath)
+    } else {
+      this.bootstrappingFolders.delete(folderPath)
+    }
+
+    if (this.getState().syncing !== wasSyncing) {
+      this.emitState()
+    }
+  }
+
+  private async writeFolderSyncState(folderPath: string, plan: FolderSyncPlan): Promise<void> {
     if (!this.syncClient?.usable) {
       return
     }
@@ -1241,6 +1454,7 @@ export class AccountConnection extends EventEmitter {
       const unseenCount = Array.isArray(unseenCountSearch) ? unseenCountSearch.length : 0
 
       await this.database.updateFolderCounts(this.account.id, folderPath, plan.exists, unseenCount)
+      this.markContact()
 
       this.emit('folder-counts', {
         accountId: this.account.id,
@@ -1529,24 +1743,19 @@ export class AccountConnection extends EventEmitter {
 
     const syncClient = this.syncClient
     const folders = await this.database.listFolders(this.account.id)
-    // IDLE runs on primaryClient — skip the mailbox IDLE is currently watching,
-    // it already pushes exists/expunge/flags events in real time.
     const idleFolderPath =
       this.primaryClient?.mailbox && typeof this.primaryClient.mailbox !== 'boolean'
         ? this.primaryClient.mailbox.path
         : null
 
     let anySyncRun = false
+    let answered = false
 
+    // The folder IDLE watches is polled too. IDLE pushes its changes in real
+    // time, and when it does the sweep finds nothing to do; when a push
+    // gets lost — a server that drops notifications, a link that died
+    // without either side noticing — this is what still brings the mail in.
     for (const folder of folders) {
-      if (this.isFolderNonSelectable(folder)) {
-        continue
-      }
-
-      if (idleFolderPath && folder.path === idleFolderPath) {
-        continue
-      }
-
       try {
         const status = await syncClient.status(folder.path, {
           messages: true,
@@ -1554,6 +1763,7 @@ export class AccountConnection extends EventEmitter {
           uidValidity: true,
           highestModseq: true
         })
+        answered = true
 
         const state = await this.database.getFolderSyncState(this.account.id, folder.path)
         const hasChanges =
@@ -1589,6 +1799,10 @@ export class AccountConnection extends EventEmitter {
           folderPath: folder.path
         })
       }
+    }
+
+    if (answered) {
+      this.markContact()
     }
 
     // Nudge IDLE back to the preferred mailbox if the user switched folders in

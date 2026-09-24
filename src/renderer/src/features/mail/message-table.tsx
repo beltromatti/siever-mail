@@ -37,6 +37,7 @@ import {
   FlagToggle,
   HighlightedText,
   MessageListControls,
+  MessageListTitle,
   MessageSectionHeading,
   primaryAddressLabel,
   recipientsLabel,
@@ -66,6 +67,8 @@ const SORTABLE_COLUMNS: ReadonlyArray<SortableColumn> = [
 
 export function MessageTable({
   title,
+  searchQuery,
+  onClearSearch,
   messages,
   sections,
   totalCount,
@@ -150,8 +153,13 @@ export function MessageTable({
   return (
     <div className="glass-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg">
       <header className="border-border/60 flex h-9 shrink-0 items-center justify-between gap-2 border-b px-2.5">
-        <div className="flex min-w-0 items-baseline gap-2">
-          <h2 className="truncate text-[12px] font-semibold">{title}</h2>
+        <div className="flex min-w-0 items-center gap-2">
+          <MessageListTitle
+            title={title}
+            searchQuery={searchQuery}
+            onClearSearch={onClearSearch}
+            className="text-[12px]"
+          />
           <span className="text-muted-foreground shrink-0 text-[10px]">
             {selectedCount > 1 ? `${selectedCount} selezionate` : `${resultsLabel} messaggi`}
           </span>

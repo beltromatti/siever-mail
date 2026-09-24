@@ -16,7 +16,11 @@ export interface AccountWithSecret extends MailAccount {
 
 export const IMAP_CONNECTION_TIMEOUT_MS = 20_000
 export const IMAP_GREETING_TIMEOUT_MS = 20_000
-export const IMAP_SOCKET_TIMEOUT_MS = 5 * 60_000
+// Silence after which a link counts as dead. During IDLE imapflow answers it
+// with a NOOP and goes back to idling, so it doubles as a heartbeat; any
+// other command left without a reply this long fails, and the connection is
+// rebuilt instead of hanging.
+export const IMAP_SOCKET_TIMEOUT_MS = 2 * 60_000
 export const IMAP_MAX_IDLE_TIME_MS = 28 * 60_000
 
 const INLINE_MEDIA_DATA_URL_PATTERN = /<img\b([^>]*?)\bsrc=(['"])(data:[^'"]+)\2([^>]*)>/gi

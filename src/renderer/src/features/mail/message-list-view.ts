@@ -17,6 +17,9 @@ import type { MessageHighlightTerms, PrimaryAddressMode } from './message-list-s
  */
 export interface MessageListViewProps {
   title: string
+  /** The active search, trimmed; empty when there is none. */
+  searchQuery: string
+  onClearSearch: () => void
   messages: MailMessageSummary[]
   sections: MessageSection[]
   totalCount: number

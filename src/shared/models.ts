@@ -330,19 +330,35 @@ export interface WindowControlsState {
   dragTopRegionEnabled: boolean
 }
 
+/**
+ * Where an account's link to its server stands:
+ *   • 'connecting'   — first contact since the app started.
+ *   • 'connected'    — both IMAP links are up; changes arrive in real time.
+ *   • 'reconnecting' — an established link dropped and is being rebuilt.
+ *   • 'offline'      — the computer has no network; retries wait for it.
+ *   • 'error'        — the server could not be reached, or refused the
+ *                      login. Retries go on by themselves, backing off.
+ *   • 'disconnected' — the account's engine is stopped.
+ */
 export type AccountConnectionStatus =
   | 'connecting'
   | 'connected'
   | 'reconnecting'
+  | 'offline'
   | 'error'
   | 'disconnected'
 
 export interface AccountConnectionState {
   accountId: string
   status: AccountConnectionStatus
+  /** True while a folder is downloading its mail for the first time. */
+  syncing: boolean
+  /** Why the last attempt failed; set with 'error'. */
   errorMessage?: string
-  lastConnectedAt?: number
-  lastErrorAt?: number
+  /** The server turned the credentials down: retrying cannot fix it. */
+  authFailed?: boolean
+  /** The last moment the server answered, as epoch milliseconds. */
+  lastContactAt?: number
 }
 
 export interface FolderCountsEvent {

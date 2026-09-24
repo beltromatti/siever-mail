@@ -13,6 +13,7 @@ import { registerMailIpc } from './ipc/register-mail-ipc'
 import { finalizeUpgradeMigration, prepareUpgradeMigration } from './services/data-migration'
 import { MailService } from './services/mail-service'
 import { normalizeExternalHttpUrl } from './utils/external-url'
+import { startFileLogging } from './utils/log-file'
 
 import icon from '../../resources/icon.png?asset'
 
@@ -68,7 +69,7 @@ function createTray(): Tray {
       type: 'separator'
     },
     {
-      label: 'Quit',
+      label: 'Esci',
       click: () => {
         isQuitting = true
         app.quit()
@@ -189,6 +190,7 @@ app.on('second-instance', () => {
 
 if (hasSingleInstanceLock) {
   void app.whenReady().then(() => {
+    startFileLogging()
     electronApp.setAppUserModelId('com.siever.siever-mail')
 
     if (process.platform === 'darwin') {

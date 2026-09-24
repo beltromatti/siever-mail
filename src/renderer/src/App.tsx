@@ -27,6 +27,7 @@ import {
   type MessageHighlightTerms,
   type PrimaryAddressMode
 } from '@renderer/features/mail/message-list-shared'
+import { SyncStatusIndicator, summarizeSyncStatus } from '@renderer/features/workspace/sync-status'
 import { WorkspaceLayout } from '@renderer/features/workspace/workspace-layout'
 import extensionRenderer from '@app/extension/renderer'
 import type { ExtensionSelectionContext, ExtensionHostHooks } from '@app/extension/types'
@@ -60,7 +61,7 @@ import {
 } from '@shared/models'
 import { highlightTermsForField, parseSearchQuery } from '@shared/search'
 import type {
-  AccountConnectionStatus,
+  AccountConnectionState,
   AppCapabilities,
   ComposeMailInput,
   ListMessagesOptions,
@@ -308,7 +309,7 @@ function App(): React.JSX.Element {
   const [totalMessagesInFolder, setTotalMessagesInFolder] = useState(0)
   const [hasMoreMessages, setHasMoreMessages] = useState(false)
   const [accountConnections, setAccountConnections] = useState<
-    Record<string, AccountConnectionStatus>
+    Record<string, AccountConnectionState>
   >({})
 
   // Selection and cursor are one value so every mutation stays atomic — a
@@ -478,48 +479,13 @@ function App(): React.JSX.Element {
     [accounts, selectedAccountId]
   )
 
-  const connectionStatus = useMemo<'online' | 'connecting' | 'offline' | null>(() => {
-    // Three states drive the badge in the header:
-    //   - online: every relevant account is connected (or transparently
-    //     reconnecting after a transient drop — `reconnecting` keeps
-    //     the last-known data usable, so we don't downgrade the badge).
-    //   - connecting: at least one account is in the initial handshake
-    //     (`connecting`) OR we don't have a state for it yet. We can land
-    //     here only briefly — the snapshot effect below seeds the map on
-    //     mount with whatever state the engine already had at bootstrap.
-    //   - offline: at least one account is in a terminal failure state
-    //     AND no account is still connecting. Only then do we tell the
-    //     user the connection is actually lost.
-    if (accounts.length === 0) {
-      return null
-    }
-
-    const accountIdsToCheck =
+  const syncSummary = useMemo(() => {
+    const accountsOnScreen =
       selectedFolderPath === ALL_INBOX_FOLDER_PATH
-        ? accounts.map((account) => account.id)
-        : selectedAccountId
-          ? [selectedAccountId]
-          : null
+        ? accounts
+        : accounts.filter((account) => account.id === selectedAccountId)
 
-    if (!accountIdsToCheck || accountIdsToCheck.length === 0) {
-      return null
-    }
-
-    const allOnline = accountIdsToCheck.every((accountId) => {
-      const status = accountConnections[accountId]
-      return status === 'connected' || status === 'reconnecting'
-    })
-
-    if (allOnline) {
-      return 'online'
-    }
-
-    const anyConnecting = accountIdsToCheck.some((accountId) => {
-      const status = accountConnections[accountId]
-      return status === undefined || status === 'connecting'
-    })
-
-    return anyConnecting ? 'connecting' : 'offline'
+    return summarizeSyncStatus(accountsOnScreen, accountConnections)
   }, [accountConnections, accounts, selectedAccountId, selectedFolderPath])
 
   const refreshUnifiedInboxSummary = useCallback(async (): Promise<void> => {
@@ -1085,13 +1051,38 @@ function App(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadMessageDetail, readingKey])
 
+  const clearSearch = useCallback((): void => {
+    setSearch('')
+    setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
+  }, [])
+
+  // Escape steps back one level at a time: the expanded reader collapses, a
+  // multi-selection narrows to the cursor, and then a running search ends.
+  // Menus, dialogs and fields that used the key already default-prevented
+  // it — Radix layers do, and so does the search field.
+  const hasActiveSearch = search.trim().length > 0
+
   useEffect(() => {
-    if (!isMessageExpanded && selection.selectedRefs.length <= 1) {
+    const hasMultiSelection = selection.selectedRefs.length > 1
+
+    if (!isMessageExpanded && !hasMultiSelection && !hasActiveSearch) {
       return
     }
 
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') {
+      if (event.key !== 'Escape' || event.defaultPrevented) {
+        return
+      }
+
+      const target = event.target as HTMLElement | null
+
+      if (
+        target &&
+        (target.isContentEditable ||
+          target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT')
+      ) {
         return
       }
 
@@ -1100,17 +1091,22 @@ function App(): React.JSX.Element {
         return
       }
 
-      // Collapse a multi-selection down to the cursor rather than clearing
-      // it outright — Escape in a file manager narrows, it does not empty.
-      setSelection((current) =>
-        current.cursorRef
-          ? {
-              selectedRefs: [current.cursorRef],
-              cursorRef: current.cursorRef,
-              anchorRef: current.cursorRef
-            }
-          : EMPTY_MESSAGE_SELECTION
-      )
+      if (hasMultiSelection) {
+        // Collapse a multi-selection down to the cursor rather than clearing
+        // it outright — Escape in a file manager narrows, it does not empty.
+        setSelection((current) =>
+          current.cursorRef
+            ? {
+                selectedRefs: [current.cursorRef],
+                cursorRef: current.cursorRef,
+                anchorRef: current.cursorRef
+              }
+            : EMPTY_MESSAGE_SELECTION
+        )
+        return
+      }
+
+      clearSearch()
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -1118,7 +1114,7 @@ function App(): React.JSX.Element {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [isMessageExpanded, selection.selectedRefs.length])
+  }, [clearSearch, hasActiveSearch, isMessageExpanded, selection.selectedRefs.length])
 
   useEffect(() => {
     if (!selectedAccountId || !selectedFolderPath || selectedFolderPath === ALL_INBOX_FOLDER_PATH) {
@@ -1198,11 +1194,7 @@ function App(): React.JSX.Element {
     })
 
     const unsubscribeConnection = window.mailApi.onAccountConnectionChanged((state) => {
-      setAccountConnections((current) => ({ ...current, [state.accountId]: state.status }))
-
-      if (state.status === 'error' && state.errorMessage) {
-        setViewError((current) => current ?? state.errorMessage ?? null)
-      }
+      setAccountConnections((current) => ({ ...current, [state.accountId]: state }))
     })
 
     // Seed the connection map with the engine's current view of every
@@ -1228,7 +1220,7 @@ function App(): React.JSX.Element {
 
           for (const state of states) {
             if (next[state.accountId] === undefined) {
-              next[state.accountId] = state.status
+              next[state.accountId] = state
               mutated = true
             }
           }
@@ -1282,8 +1274,6 @@ function App(): React.JSX.Element {
       window.clearTimeout(buttonRevealTimer)
     }
   }, [accounts.length, showWelcomeGate])
-
-  const messageListTitle = search.trim() ? 'Risultati di ricerca' : 'Conversazioni'
 
   // Parsed once with the SAME parser the main process uses to build the
   // WHERE, so the user never sees a "highlighted but not returned" or
@@ -2181,7 +2171,9 @@ function App(): React.JSX.Element {
   }
 
   const listViewProps: MessageListViewProps = {
-    title: messageListTitle,
+    title: 'Conversazioni',
+    searchQuery: search.trim(),
+    onClearSearch: clearSearch,
     messages,
     sections: messageSections,
     totalCount: totalMessagesInFolder,
@@ -2242,30 +2234,7 @@ function App(): React.JSX.Element {
               <h1 className="display-title truncate text-[15px] leading-tight">SIEVER Mail</h1>
               <p className="text-muted-foreground flex items-center gap-1.5 text-[10px] leading-tight">
                 <span>{formatAppVersion(__APP_VERSION__)}</span>
-                {connectionStatus && (
-                  <>
-                    <span
-                      className={cn(
-                        'inline-block size-1.5 shrink-0 rounded-full',
-                        connectionStatus === 'online' && 'bg-status-online',
-                        connectionStatus === 'connecting' && 'bg-muted-foreground/70 animate-pulse',
-                        connectionStatus === 'offline' && 'bg-status-offline'
-                      )}
-                    />
-                    <span
-                      className={cn(
-                        'truncate',
-                        connectionStatus === 'offline' && 'text-status-offline'
-                      )}
-                    >
-                      {connectionStatus === 'online'
-                        ? 'Sincronizzato'
-                        : connectionStatus === 'connecting'
-                          ? 'Connessione…'
-                          : 'Connessione persa'}
-                    </span>
-                  </>
-                )}
+                {syncSummary && <SyncStatusIndicator summary={syncSummary} />}
               </p>
             </div>
           </div>

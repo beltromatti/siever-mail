@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, net, powerMonitor } from 'electron'
 
 import { logMainError } from '@main/utils/error-utils'
 import { IPC_CHANNELS } from '@shared/ipc'
@@ -26,10 +26,15 @@ export interface MailEngineDependencies {
   getMainWindow: () => BrowserWindow | null
 }
 
+// How often to compare the network state with the last one seen. Reading it
+// is free; Electron has no event for it in the main process.
+const NETWORK_WATCH_INTERVAL_MS = 3_000
+
 export class MailEngine {
   private readonly connections = new Map<string, AccountConnection>()
   private readonly notifications = new NotificationManager()
   private activeContext: ActiveMailboxContext | null = null
+  private networkWatch: NodeJS.Timeout | null = null
 
   constructor(private readonly deps: MailEngineDependencies) {}
 
@@ -38,13 +43,53 @@ export class MailEngine {
     for (const account of accounts) {
       await this.attachAccount(account.id)
     }
+
+    this.watchSystemEvents()
   }
 
   async stop(): Promise<void> {
+    this.unwatchSystemEvents()
     const connections = [...this.connections.values()]
     this.connections.clear()
     await Promise.allSettled(connections.map((connection) => connection.stop()))
     this.notifications.dispose()
+  }
+
+  /**
+   * Waking up, unlocking the screen and the network coming or going all
+   * leave the IMAP links in doubt. Every account checks itself right then,
+   * instead of on its next timer — mail that arrived during the night shows
+   * up as soon as the lid opens.
+   */
+  private watchSystemEvents(): void {
+    powerMonitor.on('resume', this.nudgeConnections)
+    powerMonitor.on('unlock-screen', this.nudgeConnections)
+
+    let wasOnline = net.isOnline()
+    this.networkWatch = setInterval(() => {
+      const online = net.isOnline()
+
+      if (online !== wasOnline) {
+        wasOnline = online
+        this.nudgeConnections()
+      }
+    }, NETWORK_WATCH_INTERVAL_MS)
+  }
+
+  private unwatchSystemEvents(): void {
+    powerMonitor.removeListener('resume', this.nudgeConnections)
+    powerMonitor.removeListener('unlock-screen', this.nudgeConnections)
+
+    if (this.networkWatch) {
+      clearInterval(this.networkWatch)
+      this.networkWatch = null
+    }
+  }
+
+  private readonly nudgeConnections = (): void => {
+    for (const connection of this.connections.values()) {
+      connection.nudge()
+    }
   }
 
   async addAccount(accountId: string): Promise<void> {
@@ -86,14 +131,10 @@ export class MailEngine {
    * existing value alone.
    */
   snapshotAccountConnectionStates(): AccountConnectionState[] {
-    const snapshot: AccountConnectionState[] = []
-    for (const [accountId, connection] of this.connections) {
-      snapshot.push({
-        accountId,
-        status: connection.getStatus()
-      })
-    }
-    return snapshot
+    return [...this.connections].map(([accountId, connection]) => ({
+      accountId,
+      ...connection.getState()
+    }))
   }
 
   setActiveContext(context: ActiveMailboxContext | null): void {
@@ -286,14 +327,8 @@ export class MailEngine {
       account
     )
 
-    connection.on('status', (status, error) => {
-      const state: AccountConnectionState = {
-        accountId,
-        status,
-        errorMessage: error?.message,
-        lastConnectedAt: status === 'connected' ? Date.now() : undefined,
-        lastErrorAt: status === 'error' ? Date.now() : undefined
-      }
+    connection.on('state', (snapshot) => {
+      const state: AccountConnectionState = { accountId, ...snapshot }
       this.broadcast(IPC_CHANNELS.accountConnectionChanged, state)
     })
 

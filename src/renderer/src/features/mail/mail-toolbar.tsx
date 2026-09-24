@@ -278,8 +278,25 @@ export function MailToolbar({
             ref={searchInputRef}
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') {
+                return
+              }
+
+              // First Escape empties the field, the next one leaves it.
+              event.preventDefault()
+
+              if (search) {
+                onSearchChange('')
+              } else {
+                event.currentTarget.blur()
+              }
+            }}
             placeholder="Cerca email"
-            className="h-8 pr-7 pl-7 text-[12px]"
+            aria-label="Cerca email"
+            spellCheck={false}
+            autoComplete="off"
+            className={cn('h-8 pr-7 pl-7 text-[12px]', search && 'border-primary/60 bg-primary/8')}
           />
           <Tooltip>
             <TooltipTrigger asChild>

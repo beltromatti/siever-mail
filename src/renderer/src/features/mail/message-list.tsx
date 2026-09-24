@@ -26,6 +26,7 @@ import {
   FlagToggle,
   HighlightedText,
   MessageListControls,
+  MessageListTitle,
   MessageSectionHeading,
   primaryAddressLabel,
   UnreadDot
@@ -34,6 +35,8 @@ import { resolveSelectionIntent } from '@renderer/lib/message-selection'
 
 export function MessageList({
   title,
+  searchQuery,
+  onClearSearch,
   messages,
   sections,
   totalCount,
@@ -141,7 +144,12 @@ export function MessageList({
     <div className="glass-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg">
       <header className="border-border/60 flex h-11 shrink-0 items-center justify-between gap-2 border-b px-2.5">
         <div className="min-w-0">
-          <h2 className="truncate text-[13px] font-semibold">{title}</h2>
+          <MessageListTitle
+            title={title}
+            searchQuery={searchQuery}
+            onClearSearch={onClearSearch}
+            className="text-[13px]"
+          />
           <p className="text-muted-foreground text-[10px] leading-tight">
             {selectedCount > 1 ? `${selectedCount} selezionate` : `${resultsLabel} messaggi`}
           </p>
