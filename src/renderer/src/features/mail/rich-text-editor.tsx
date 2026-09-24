@@ -1368,28 +1368,45 @@ function pathHasPattern(path: string, pattern: RegExp): boolean {
   return pattern.test(path)
 }
 
-const FONT_FAMILY_DECLARATION_PATTERN = /\bfont-family\s*:/i
+/**
+ * What a line the user types starts with: the default face and the
+ * default line height, written on the block itself. The page under the
+ * editor is a plain one (see `mail-html.ts`), so these have to live in the
+ * message — which is also what makes them arrive as they look.
+ */
+function authoringBlockDeclarations(defaultFontFamily: string | null): Array<[string, string]> {
+  return [
+    ...(defaultFontFamily ? [['font-family', defaultFontFamily] as [string, string]] : []),
+    ['line-height', DEFAULT_EDITOR_LINE_HEIGHT]
+  ]
+}
 
-// When the editor is initialized empty (or with the trivial `<p></p>` value
-// that the composer uses as a sentinel for "blank message"), wrap the caret
-// in a default block carrying the desired font-family inline. New typing
-// inherits Century Gothic without forcing it on quoted/inserted content
-// downstream — exactly the Gmail behaviour. For non-empty initial value with
-// a leading authored block (reply/forward), apply the default to the first
-// authored block before the gmail_quote so that the user's reply text
-// inherits, while the quoted body retains its original styling.
-function applyDefaultFontFamilyToInitialHtml(
+function authoringBlockStyle(defaultFontFamily: string | null): string {
+  return authoringBlockDeclarations(defaultFontFamily)
+    .map(([property, value]) => `${property}: ${value}`)
+    .join('; ')
+}
+
+function declaresProperty(style: string, property: string): boolean {
+  return new RegExp(`(?:^|;)\\s*${property}\\s*:`, 'i').test(style)
+}
+
+// When the editor is initialized empty (or with the single empty line the
+// composer uses as its sentinel for "blank message"), wrap the caret
+// in a default block carrying the authoring defaults inline. For a
+// non-empty initial value (reply, forward, signature) the leading authored
+// blocks before the quoted message get whatever defaults they do not
+// declare, so the user's text inherits them while the quoted body keeps its
+// original styling — the Gmail behaviour.
+function applyAuthoringDefaultsToInitialHtml(
   rawHtml: string,
   defaultFontFamily: string | null
 ): string {
-  if (!defaultFontFamily) {
-    return rawHtml
-  }
-
+  const declarations = authoringBlockDeclarations(defaultFontFamily)
   const trimmed = rawHtml.trim()
 
-  if (!trimmed || /^<p>\s*(?:<br\s*\/?>)?\s*<\/p>$/i.test(trimmed)) {
-    return `<div style="font-family: ${defaultFontFamily}"><br></div>`
+  if (!trimmed || /^<(p|div)>\s*(?:<br\s*\/?>)?\s*<\/\1>$/i.test(trimmed)) {
+    return `<div style="${authoringBlockStyle(defaultFontFamily)}"><br></div>`
   }
 
   const document = new DOMParser().parseFromString(`<div>${rawHtml}</div>`, 'text/html')
@@ -1399,47 +1416,37 @@ function applyDefaultFontFamilyToInitialHtml(
     return rawHtml
   }
 
-  // Two-pass: first detect whether any leading authored block is missing a
-  // font-family declaration. If everything is already styled, return the
-  // input string verbatim so the caller's referential check
-  // `value === lastSynced` short-circuits and we don't trigger a needless
-  // setHTML round-trip on every controlled re-render.
-  let needsTransform = false
+  const leadingBlocks: Element[] = []
+
   for (const child of root.children) {
-    const tagName = child.tagName.toLowerCase()
-    if (tagName === 'blockquote' || child.classList.contains('gmail_quote')) {
+    if (child.tagName.toLowerCase() === 'blockquote' || child.classList.contains('gmail_quote')) {
       break
     }
+
     if (isElementNode(child)) {
-      if (!FONT_FAMILY_DECLARATION_PATTERN.test(child.getAttribute('style') ?? '')) {
-        needsTransform = true
-        break
-      }
+      leadingBlocks.push(child)
     }
   }
 
-  if (!needsTransform) {
+  const missing = (block: Element): Array<[string, string]> =>
+    declarations.filter(
+      ([property]) => !declaresProperty(block.getAttribute('style') ?? '', property)
+    )
+
+  // Nothing to add: hand back the input untouched, so the caller's
+  // `value === lastSynced` check short-circuits instead of forcing a
+  // setHTML round-trip on every controlled re-render.
+  if (leadingBlocks.every((block) => missing(block).length === 0)) {
     return rawHtml
   }
 
-  for (const child of [...root.children]) {
-    const tagName = child.tagName.toLowerCase()
-    if (tagName === 'blockquote') {
-      break
-    }
-    if (child.classList.contains('gmail_quote')) {
-      break
-    }
+  for (const block of leadingBlocks) {
+    const additions = missing(block)
 
-    if (isElementNode(child)) {
-      const existingStyle = child.getAttribute('style') ?? ''
-      if (!FONT_FAMILY_DECLARATION_PATTERN.test(existingStyle)) {
-        const cleaned = existingStyle.trim().replace(/;+$/g, '')
-        const merged = cleaned
-          ? `${cleaned}; font-family: ${defaultFontFamily}`
-          : `font-family: ${defaultFontFamily}`
-        child.setAttribute('style', merged)
-      }
+    if (additions.length > 0) {
+      const existing = (block.getAttribute('style') ?? '').trim().replace(/;+$/g, '')
+      const added = additions.map(([property, value]) => `${property}: ${value}`).join('; ')
+      block.setAttribute('style', existing ? `${existing}; ${added}` : added)
     }
   }
 
@@ -1568,9 +1575,7 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
         return
       }
 
-      const blockAttributes = defaultFontFamily
-        ? { style: `font-family: ${defaultFontFamily}` }
-        : null
+      const blockAttributes = { style: authoringBlockStyle(defaultFontFamily) }
 
       const handlePreSquireKeyDown = (event: KeyboardEvent): void => {
         if (event.key !== 'Enter' || event.defaultPrevented || event.isComposing) {
@@ -2055,7 +2060,7 @@ export function RichTextEditor({
   // font-family declaration). The hook compares this transformed prop against
   // its internal "last synced" reference, so passing it on every render is
   // safe: equal values short-circuit, mutations push a new setHTML.
-  const initialHtml = applyDefaultFontFamilyToInitialHtml(value, normalizedDefaultFontFamily)
+  const initialHtml = applyAuthoringDefaultsToInitialHtml(value, normalizedDefaultFontFamily)
 
   const handleEditorChange = useCallback(
     (html: string): void => {

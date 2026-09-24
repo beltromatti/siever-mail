@@ -1,6 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { AlertTriangle, LoaderCircle, LogIn, Minus, Plus, Square, X } from 'lucide-react'
+import { toast } from 'sonner'
 
 import appLogo from '@renderer/assets/logo.png'
 import { AddAccountDialog } from '@renderer/features/accounts/add-account-dialog'
@@ -41,6 +42,7 @@ import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { cn, formatAppVersion } from '@renderer/lib/utils'
 import { buildMessageSections } from '@renderer/lib/message-sections'
+import { buildOutgoingMailHtml } from '@renderer/lib/outgoing-mail-html'
 import {
   applySelectionIntent,
   EMPTY_MESSAGE_SELECTION,
@@ -1958,9 +1960,16 @@ function App(): React.JSX.Element {
       setComposerSendError(null)
 
       void (async () => {
+        const sendingToast = toast.loading('Invio in corso…')
+
         try {
-          await window.mailApi.sendMail(payload)
+          await window.mailApi.sendMail({
+            ...payload,
+            html: await buildOutgoingMailHtml(payload.html)
+          })
+          toast.success('Messaggio inviato', { id: sendingToast })
         } catch (caughtError) {
+          toast.dismiss(sendingToast)
           setComposerSendError({
             draft,
             message:

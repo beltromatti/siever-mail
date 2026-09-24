@@ -69,7 +69,9 @@ interface RecipientTokenContext {
   tokenEnd: number
 }
 
-const EMPTY_COMPOSER_HTML = '<p></p>'
+// An empty line to type on. A `div`, like every line the editor creates: a
+// paragraph would bring the browser's paragraph spacing with it.
+const EMPTY_COMPOSER_HTML = '<div><br></div>'
 const QUOTED_CONTENT_MARKER_PATTERNS = [
   /<div\b[^>]*class=["'][^"']*\bgmail_quote\b/i,
   /<blockquote\b/i,
@@ -127,7 +129,7 @@ function normalizeAuthoredIntroHtmlForComposer(value: string | null | undefined)
 function isEmptyComposerHtml(value: string | null | undefined): boolean {
   const trimmed = (value ?? '').trim()
 
-  return !trimmed || /^<p>\s*(?:<br\s*\/?>)?\s*<\/p>$/i.test(trimmed)
+  return !trimmed || /^<(p|div)>\s*(?:<br\s*\/?>)?\s*<\/\1>$/i.test(trimmed)
 }
 
 function joinComposerHtmlWithSignature(

@@ -112,10 +112,14 @@ export function sanitizeMailHtmlToFragment(
   return targetDocument.createDocumentFragment()
 }
 
-// Baseline CSS shared by viewer and editor. Intentionally minimal and never
-// uses `!important` — the email author's CSS must always win. Gmail follows
-// the same philosophy. The Century Gothic @font-face is what gives our default
-// authored content its identity.
+// Baseline CSS shared by viewer and editor — the page every message is laid
+// out on, received or being written. It stays as close to a plain browser
+// page as possible: a white canvas, a readable default face and size for
+// mail that declares none, and nothing that reshapes content. Paragraph
+// spacing and line height are the author's, exactly as any other client
+// shows them; what the composer adds to a message it writes onto the
+// message itself (see `buildOutgoingMailHtml`), never into this sheet. No
+// `!important`: the author's CSS always wins.
 const MAIL_FRAME_BASELINE_CSS = `
 @font-face {
   font-family: 'Century Gothic';
@@ -150,12 +154,6 @@ body {
     'Segoe UI Emoji',
     sans-serif;
   font-size: 14px;
-  /* Matches the editor's Interlinea toolbar default
-     (DEFAULT_EDITOR_LINE_HEIGHT in rich-text-editor.tsx). Lines that
-     do not carry an explicit line-height inherit this value, so they
-     render at the same vertical rhythm as the signature blocks (which
-     all declare line-height 1.5). */
-  line-height: 1.5;
   font-synthesis: weight style;
 }
 
@@ -206,22 +204,11 @@ canvas {
   max-width: 100%;
   height: auto;
 }
-
-/* Match Gmail / Outlook: the P element ships with no implicit margin so
-   the signatures' paragraph rhythm equals what freshly-typed DIV lines
-   produce (DIV has no UA margin). Without this rule the editor uses
-   0.45rem and the viewer falls back to the browser default 1em — both
-   make the same email look far looser than how Gmail renders it. Authors
-   who want vertical separation use empty paragraphs / line breaks (what
-   our signature already does). */
-p {
-  margin: 0;
-}
 `
 
-// Editor-only additions on top of the shared baseline: live caret, placeholder
-// pseudo-element, blockquote/gmail_quote affordances that match the viewer's
-// look, and minimal styling for Squire's image-resize handles.
+// Editor-only additions on top of the shared baseline: the caret, the
+// placeholder and Squire's image-resize handles. Nothing here may change how
+// content lays out — the composer has to show the message as it will arrive.
 //
 // IMPORTANT: the empty-state flag lives on the <html> element, NOT on body.
 // Squire installs a MutationObserver on body with `subtree:true`, so any
@@ -260,37 +247,6 @@ html[data-empty='true'] body:not(:focus)::before {
   right: 18px;
   color: rgba(15, 23, 42, 0.45);
   pointer-events: none;
-}
-
-blockquote,
-.gmail_quote {
-  margin: 0.45rem 0 0.45rem 0.8ex;
-  padding-left: 1ex;
-  border-left: 1px solid rgba(15, 23, 42, 0.18);
-  color: #1f2328;
-}
-
-.gmail_attr {
-  color: rgba(15, 23, 42, 0.6);
-  font-size: 0.92em;
-  line-height: 1.45;
-  margin: 0.35rem 0;
-}
-
-ul, ol {
-  margin: 0.55rem 0;
-  padding-left: 1.35rem;
-}
-
-ul { list-style-type: disc; }
-ol { list-style-type: decimal; }
-
-li { margin: 0.2rem 0; }
-
-img {
-  display: inline-block;
-  max-width: 100%;
-  height: auto;
 }
 
 .squire-resize-container {

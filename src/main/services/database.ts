@@ -37,6 +37,7 @@ import {
 } from '@shared/models'
 import { parseSearchQuery, type SearchTerm, type SearchTermGroup } from '@shared/search'
 import { isMeaningfulDisplayName, senderSortKey } from '@shared/sender'
+import { SIGNATURE_HTML_FORMAT, upgradeLegacySignatureHtml } from '@shared/signature-html'
 import { subjectSortKey } from '@shared/subject'
 
 /**
@@ -706,17 +707,17 @@ export class AppDatabase {
     await this.ready
 
     const rows = (await this.prisma.$queryRaw`
-      SELECT account_id AS accountId, html AS html, updated_at AS updatedAt
+      SELECT account_id AS accountId, html AS html, html_format AS format, updated_at AS updatedAt
       FROM account_signatures
       ORDER BY updated_at DESC
-    `) as Array<{ accountId: string; html: string; updatedAt: bigint }>
+    `) as Array<{ accountId: string; html: string; format: bigint | number; updatedAt: bigint }>
 
     return Promise.all(
       rows
         .filter((row) => typeof row.accountId === 'string' && typeof row.html === 'string')
         .map(async (row) => ({
           accountId: row.accountId,
-          html: await this.withUpgradedSignatureFontStacks(row.accountId, row.html),
+          html: await this.withUpgradedSignature(row.accountId, row.html, toNumber(row.format)),
           updatedAt: toNumber(row.updatedAt)
         }))
     )
@@ -726,11 +727,11 @@ export class AppDatabase {
     await this.ready
 
     const rows = (await this.prisma.$queryRaw`
-      SELECT account_id AS accountId, html AS html, updated_at AS updatedAt
+      SELECT account_id AS accountId, html AS html, html_format AS format, updated_at AS updatedAt
       FROM account_signatures
       WHERE account_id = ${accountId}
       LIMIT 1
-    `) as Array<{ accountId: string; html: string; updatedAt: bigint }>
+    `) as Array<{ accountId: string; html: string; format: bigint | number; updatedAt: bigint }>
     const row = rows[0]
 
     if (!row || typeof row.accountId !== 'string' || typeof row.html !== 'string') {
@@ -739,38 +740,46 @@ export class AppDatabase {
 
     return {
       accountId: row.accountId,
-      html: await this.withUpgradedSignatureFontStacks(row.accountId, row.html),
+      html: await this.withUpgradedSignature(row.accountId, row.html, toNumber(row.format)),
       updatedAt: toNumber(row.updatedAt)
     }
   }
 
   /**
-   * Signatures written before the font fallback chains existed carry the
-   * house font followed by a bare generic, so they lose their identity
-   * anywhere the font is not installed. Upgrading them on read means a
-   * signature saved in an older version starts arriving correctly without
-   * the user touching it; writing the result back makes it stick, so the
-   * Firme editor shows the same HTML the recipient will get, and text typed
-   * against those paragraphs inherits the full chain.
+   * Brings a stored signature up to date on read, and writes the result back
+   * so the Firme editor shows the HTML the recipient will get:
+   *
+   *   • signatures from before the font fallback chains carry the house font
+   *     followed by a bare generic, and lose their identity wherever it is
+   *     not installed — they get the full chain;
+   *   • signatures from before format 2 relied on the old editor's page for
+   *     their compact spacing — it is written onto them (see
+   *     `upgradeLegacySignatureHtml`).
    *
    * Failing to persist is not worth surfacing: the upgraded HTML is already
    * being returned, and the next read tries again.
    */
-  private async withUpgradedSignatureFontStacks(accountId: string, html: string): Promise<string> {
-    const upgraded = upgradeMailFontStacksInHtml(html)
+  private async withUpgradedSignature(
+    accountId: string,
+    html: string,
+    format: number
+  ): Promise<string> {
+    const fontUpgraded = upgradeMailFontStacksInHtml(html)
+    const upgraded =
+      format < SIGNATURE_HTML_FORMAT ? upgradeLegacySignatureHtml(fontUpgraded) : fontUpgraded
 
-    if (upgraded === html) {
+    if (upgraded === html && format >= SIGNATURE_HTML_FORMAT) {
       return html
     }
 
     try {
       await this.prisma.$executeRaw`
         UPDATE account_signatures
-        SET html = ${upgraded}
+        SET html = ${upgraded}, html_format = ${SIGNATURE_HTML_FORMAT}
         WHERE account_id = ${accountId}
       `
     } catch (error) {
-      console.warn('[database] could not persist the upgraded signature font stacks', error)
+      console.warn('[database] could not persist the upgraded signature', error)
     }
 
     return upgraded
@@ -788,10 +797,11 @@ export class AppDatabase {
     const persistedHtml = upgradeMailFontStacksInHtml(html ?? '')
 
     await this.prisma.$executeRaw`
-      INSERT INTO account_signatures(account_id, html, updated_at)
-      VALUES (${accountId}, ${persistedHtml}, ${now})
+      INSERT INTO account_signatures(account_id, html, html_format, updated_at)
+      VALUES (${accountId}, ${persistedHtml}, ${SIGNATURE_HTML_FORMAT}, ${now})
       ON CONFLICT(account_id) DO UPDATE SET
         html = excluded.html,
+        html_format = excluded.html_format,
         updated_at = excluded.updated_at
     `
 
@@ -1092,9 +1102,14 @@ export class AppDatabase {
     }
   }
 
-  private async getDefaultSignatureHtmlForNewAccount(
+  /**
+   * A new account starts with the first account's signature — in whatever
+   * format it is stored, so a legacy one still gets upgraded on read — or,
+   * for the very first account, the extension's default.
+   */
+  private async getDefaultSignatureForNewAccount(
     tx: Prisma.TransactionClient
-  ): Promise<string> {
+  ): Promise<{ html: string; format: number }> {
     const existingAccounts = (await tx.$queryRaw`
       SELECT id AS id
       FROM accounts
@@ -1105,16 +1120,19 @@ export class AppDatabase {
 
     if (typeof firstAccountId === 'string' && firstAccountId) {
       const signatureRows = (await tx.$queryRaw`
-        SELECT html AS html
+        SELECT html AS html, html_format AS format
         FROM account_signatures
         WHERE account_id = ${firstAccountId}
         LIMIT 1
-      `) as Array<{ html: string }>
+      `) as Array<{ html: string; format: bigint | number }>
+      const row = signatureRows[0]
 
-      return typeof signatureRows[0]?.html === 'string' ? signatureRows[0].html : ''
+      return typeof row?.html === 'string'
+        ? { html: row.html, format: toNumber(row.format) }
+        : { html: '', format: SIGNATURE_HTML_FORMAT }
     }
 
-    return extensionMain.defaultAccountSignatureHtml
+    return { html: extensionMain.defaultAccountSignatureHtml, format: SIGNATURE_HTML_FORMAT }
   }
 
   async createAccount(input: CreateAccountInput): Promise<MailAccount> {
@@ -1123,7 +1141,7 @@ export class AppDatabase {
     const now = BigInt(Date.now())
 
     const created = await this.prisma.$transaction(async (tx) => {
-      const defaultSignatureHtml = await this.getDefaultSignatureHtmlForNewAccount(tx)
+      const defaultSignature = await this.getDefaultSignatureForNewAccount(tx)
       const account = await tx.account.create({
         data: {
           id: input.id,
@@ -1145,8 +1163,8 @@ export class AppDatabase {
       })
 
       await tx.$executeRaw`
-        INSERT INTO account_signatures(account_id, html, updated_at)
-        VALUES (${account.id}, ${defaultSignatureHtml}, ${now})
+        INSERT INTO account_signatures(account_id, html, html_format, updated_at)
+        VALUES (${account.id}, ${defaultSignature.html}, ${defaultSignature.format}, ${now})
         ON CONFLICT(account_id) DO NOTHING
       `
 
@@ -2479,9 +2497,11 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS account_signatures (
         account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         html TEXT NOT NULL,
+        html_format INTEGER NOT NULL DEFAULT 1,
         updated_at INTEGER NOT NULL
       )
     `)
+    await this.ensureSignatureFormatColumn()
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS recent_files (
@@ -2815,6 +2835,22 @@ export class AppDatabase {
       await this.prisma.$executeRawUnsafe(
         `UPDATE folders
          SET uid_validity = NULL, highest_modseq = NULL, last_known_uid = NULL, last_synced_at = NULL`
+      )
+    }
+  }
+
+  /**
+   * Rows written before signatures had a format get the column with the
+   * value 1, which is exactly what they are: authored against the old page.
+   */
+  private async ensureSignatureFormatColumn(): Promise<void> {
+    const columns = (await this.prisma.$queryRawUnsafe(
+      'PRAGMA table_info(account_signatures)'
+    )) as Array<{ name?: string }>
+
+    if (!columns.some((column) => column.name === 'html_format')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE account_signatures ADD COLUMN html_format INTEGER NOT NULL DEFAULT 1'
       )
     }
   }
