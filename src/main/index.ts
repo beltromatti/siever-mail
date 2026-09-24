@@ -10,6 +10,7 @@ import { IPC_CHANNELS } from '@shared/ipc'
 import extensionMain from '@app/extension/main'
 
 import { loadRuntimeConfig } from './config/env'
+import { installAppMenu } from './app-menu'
 import { registerMailIpc } from './ipc/register-mail-ipc'
 import { finalizeUpgradeMigration, prepareUpgradeMigration } from './services/data-migration'
 import { MailService } from './services/mail-service'
@@ -232,6 +233,7 @@ if (hasSingleInstanceLock) {
       })
 
     registerMailIpc(mailService, () => mainWindow)
+    installAppMenu(() => mainWindow)
 
     mainWindow = createMainWindow()
     appTray = createTray()

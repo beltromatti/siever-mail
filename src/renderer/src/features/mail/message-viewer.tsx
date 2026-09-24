@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   Archive,
@@ -31,8 +31,10 @@ import {
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { Separator } from '@renderer/components/ui/separator'
 import { buildMailFrameDocument, sanitizeMailHtml } from '@renderer/lib/mail-html'
+import { READER_ZOOM_RESET, wheelReaderZoom } from '@renderer/lib/reader-zoom'
 import { cn, formatAddress, formatDateLabel, formatDateTimeLabel } from '@renderer/lib/utils'
 import type { MailAttachment, MailFolder, MailMessageDetail } from '@shared/models'
 
@@ -59,6 +61,9 @@ interface MessageViewerProps {
   attachmentActions: AttachmentActions | null
   /** What a click on a person in the header can do. */
   addressActions?: AddressActions
+  /** Message body zoom, in percent (see `UiPreferences.readerZoom`). */
+  zoom: number
+  onZoomChange: (zoom: number) => void
 }
 
 const ALL_ATTACHMENTS_TASK_ID = '__all__'
@@ -136,9 +141,45 @@ function isExternalHrefValue(href: string): boolean {
   return EXTERNAL_SCHEME_PATTERN.test(href.trim())
 }
 
-function EmailHtmlFrame({ html, title }: { html: string; title: string }): React.JSX.Element {
+/** CSS `zoom` for a percentage. It reflows the page — text wraps anew at the
+ * pane's width — where a transform would only magnify it off the side. */
+function zoomFactor(zoom: number): string {
+  return String(zoom / 100)
+}
+
+function EmailHtmlFrame({
+  html,
+  title,
+  zoom,
+  onZoomWheel
+}: {
+  html: string
+  title: string
+  zoom: number
+  /** A Ctrl/⌘ + wheel (or pinch) over the message: the event's deltaY. */
+  onZoomWheel: (deltaY: number) => void
+}): React.JSX.Element {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
+  const boundDocumentRef = useRef<Document | null>(null)
+  // Re-measures the bound document; replaced by the binding effect.
+  const measureRef = useRef<() => void>(() => undefined)
+  const zoomRef = useRef(zoom)
+  const onZoomWheelRef = useRef(onZoomWheel)
   const [frameHeight, setFrameHeight] = useState(MESSAGE_FRAME_MIN_HEIGHT)
+
+  useEffect(() => {
+    onZoomWheelRef.current = onZoomWheel
+  }, [onZoomWheel])
+
+  useEffect(() => {
+    zoomRef.current = zoom
+    const document = boundDocumentRef.current
+
+    if (document?.documentElement) {
+      document.documentElement.style.zoom = zoomFactor(zoom)
+      measureRef.current()
+    }
+  }, [zoom])
   const normalizedMessageHtml = sanitizeMailHtml(html)
   const frameDocument = buildMailFrameDocument({
     bodyHtml: normalizedMessageHtml.bodyHtml,
@@ -160,17 +201,27 @@ function EmailHtmlFrame({ html, title }: { html: string; title: string }): React
 
     const updateHeight = (): void => {
       const document = boundDocument
+      const view = document?.defaultView
 
-      if (!document?.documentElement || !document.body) {
+      if (!document?.documentElement || !document.body || !view) {
         return
       }
 
-      const nextHeight =
-        Math.max(
-          MESSAGE_FRAME_MIN_HEIGHT,
-          document.documentElement.scrollHeight,
-          document.body.scrollHeight
-        ) + 2
+      // The root's scroll height never drops below the frame's own height,
+      // so it can grow the frame but never shrink it — zooming out left a
+      // tall white tail. The rendered box follows the zoom both ways; the
+      // body's scroll height (unzoomed, hence the factor) still catches
+      // content that overflows it.
+      const zoom = Number(document.documentElement.style.zoom) || 1
+      const bodyStyle = view.getComputedStyle(document.body)
+      const contentHeight = Math.max(
+        document.documentElement.getBoundingClientRect().height,
+        (document.body.scrollHeight +
+          Number.parseFloat(bodyStyle.marginTop) +
+          Number.parseFloat(bodyStyle.marginBottom)) *
+          zoom
+      )
+      const nextHeight = Math.max(MESSAGE_FRAME_MIN_HEIGHT, Math.ceil(contentHeight)) + 2
 
       setFrameHeight((current) => (current === nextHeight ? current : nextHeight))
     }
@@ -185,6 +236,7 @@ function EmailHtmlFrame({ html, title }: { html: string; title: string }): React
         updateHeight()
       })
     }
+    measureRef.current = scheduleHeightUpdate
 
     const unbind = (): void => {
       iframe.__messageFrameCleanup?.()
@@ -192,11 +244,24 @@ function EmailHtmlFrame({ html, title }: { html: string; title: string }): React
       resizeObserver?.disconnect()
       resizeObserver = null
       boundDocument = null
+      boundDocumentRef.current = null
     }
 
     const bindFrameDocument = (document: Document): void => {
       unbind()
       boundDocument = document
+      boundDocumentRef.current = document
+      document.documentElement.style.zoom = zoomFactor(zoomRef.current)
+
+      // Wheel events do not leave an iframe either: the zoom gesture over
+      // the message is caught here. A trackpad pinch arrives as a wheel
+      // event with ctrlKey set, on every platform.
+      const handleZoomWheel = (event: WheelEvent): void => {
+        if (event.ctrlKey || event.metaKey) {
+          event.preventDefault()
+          onZoomWheelRef.current(event.deltaY)
+        }
+      }
 
       const handlePointerNavigation = (event: MouseEvent): void => {
         // event.target comes from the iframe's realm, so we cannot use
@@ -285,6 +350,7 @@ function EmailHtmlFrame({ html, title }: { html: string; title: string }): React
       document.addEventListener('auxclick', handlePointerNavigation, true)
       document.addEventListener('submit', handleSubmit, true)
       document.addEventListener('keydown', forwardShortcut)
+      document.addEventListener('wheel', handleZoomWheel, { passive: false })
       // `load` and `error` do not bubble, but they do reach a capturing
       // listener on the document — so every image counts, including the
       // ones the parser has not reached yet when this runs.
@@ -312,6 +378,7 @@ function EmailHtmlFrame({ html, title }: { html: string; title: string }): React
         document.removeEventListener('auxclick', handlePointerNavigation, true)
         document.removeEventListener('submit', handleSubmit, true)
         document.removeEventListener('keydown', forwardShortcut)
+        document.removeEventListener('wheel', handleZoomWheel)
         document.removeEventListener('load', scheduleHeightUpdate, true)
         document.removeEventListener('error', scheduleHeightUpdate, true)
         document.fonts?.removeEventListener('loadingdone', scheduleHeightUpdate)
@@ -406,8 +473,47 @@ export function MessageViewer({
   onToggleSeen,
   onToggleFlagged,
   attachmentActions,
-  addressActions
+  addressActions,
+  zoom,
+  onZoomChange
 }: MessageViewerProps): React.JSX.Element {
+  // Wheel events can arrive many times a frame during a pinch; each one
+  // builds on the zoom the previous one set, not on a stale render's.
+  const zoomStateRef = useRef({ zoom, onZoomChange })
+  useEffect(() => {
+    zoomStateRef.current = { zoom, onZoomChange }
+  }, [zoom, onZoomChange])
+
+  const handleZoomWheel = useCallback((deltaY: number): void => {
+    const state = zoomStateRef.current
+    const next = wheelReaderZoom(state.zoom, deltaY)
+
+    if (next !== state.zoom) {
+      zoomStateRef.current = { ...state, zoom: next }
+      state.onZoomChange(next)
+    }
+  }, [])
+
+  // The same gesture over the rest of the pane — the header, the margins,
+  // the attachments — zooms the message too, and never the whole app.
+  const attachPaneZoomWheel = useCallback(
+    (pane: HTMLDivElement | null) => {
+      if (!pane) {
+        return
+      }
+
+      const handleWheel = (event: WheelEvent): void => {
+        if (event.ctrlKey || event.metaKey) {
+          event.preventDefault()
+          handleZoomWheel(event.deltaY)
+        }
+      }
+
+      pane.addEventListener('wheel', handleWheel, { passive: false })
+      return () => pane.removeEventListener('wheel', handleWheel)
+    },
+    [handleZoomWheel]
+  )
   // Attachments (and "all") with a download under way: their chip spins and
   // a second click is ignored until it lands.
   const [busyAttachmentIds, setBusyAttachmentIds] = useState<string[]>([])
@@ -501,7 +607,10 @@ export function MessageViewer({
   }
 
   return (
-    <div className="glass-panel flex h-full min-h-0 flex-col overflow-hidden rounded-lg">
+    <div
+      ref={attachPaneZoomWheel}
+      className="glass-panel flex h-full min-h-0 flex-col overflow-hidden rounded-lg"
+    >
       {/*
         The header is deliberately tight. In the outlook layout the reading
         pane is only about half the workspace, and the previous header — a
@@ -635,11 +744,34 @@ export function MessageViewer({
               <ArrowRight className="size-3 animate-pulse" /> Aggiornamento…
             </span>
           )}
+          {zoom !== READER_ZOOM_RESET && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => onZoomChange(READER_ZOOM_RESET)}
+                  aria-label={`Zoom del messaggio ${zoom}%: torna al 100%`}
+                  className="border-border/70 text-foreground hover:bg-secondary/60 focus-visible:ring-ring/70 ml-auto inline-flex h-4.5 shrink-0 items-center rounded-full border px-1.5 text-[10px] font-medium tabular-nums outline-none focus-visible:ring-2"
+                >
+                  {zoom}%
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                Zoom del messaggio · clic per tornare al 100%
+                <span className="text-muted-foreground block text-[10.5px] font-normal">
+                  {'⌘/Ctrl'} + rotellina, oppure {'⌘/Ctrl'} + e −
+                </span>
+              </TooltipContent>
+            </Tooltip>
+          )}
           <button
             type="button"
             onClick={() => setDetailsOpen((current) => !current)}
             aria-expanded={detailsOpen}
-            className="hover:text-foreground focus-visible:ring-ring/70 ml-auto inline-flex shrink-0 items-center gap-0.5 rounded-sm whitespace-nowrap outline-none focus-visible:ring-2"
+            className={cn(
+              'hover:text-foreground focus-visible:ring-ring/70 inline-flex shrink-0 items-center gap-0.5 rounded-sm whitespace-nowrap outline-none focus-visible:ring-2',
+              zoom === READER_ZOOM_RESET && 'ml-auto'
+            )}
           >
             Dettagli
             <ChevronDown
@@ -688,9 +820,14 @@ export function MessageViewer({
               key={`${message.accountId}:${message.folderPath}:${message.uid}`}
               html={message.html}
               title={`Contenuto email: ${message.subject || 'Messaggio senza oggetto'}`}
+              zoom={zoom}
+              onZoomWheel={handleZoomWheel}
             />
           ) : (
-            <pre className="text-foreground/90 font-sans text-sm whitespace-pre-wrap">
+            <pre
+              className="text-foreground/90 font-sans text-sm whitespace-pre-wrap"
+              style={{ zoom: zoomFactor(zoom) }}
+            >
               {message.text || '(Nessun contenuto)'}
             </pre>
           )}

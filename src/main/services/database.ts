@@ -29,11 +29,13 @@ import type {
   UiPreferences
 } from '@shared/models'
 import {
+  clampReaderZoom,
   DEFAULT_MAIL_LAYOUT_MODE,
   DEFAULT_MESSAGE_GROUPING_MODE,
   DEFAULT_MESSAGE_LIST_SORT_DIRECTION,
   DEFAULT_MESSAGE_LIST_SORT_FIELD,
-  DEFAULT_UI_PREFERENCES
+  DEFAULT_UI_PREFERENCES,
+  READER_ZOOM_DEFAULT
 } from '@shared/models'
 import { parseSearchQuery, type SearchTerm, type SearchTermGroup } from '@shared/search'
 import { isMeaningfulDisplayName, senderSortKey } from '@shared/sender'
@@ -2523,6 +2525,7 @@ export class AppDatabase {
         message_list_sort_field TEXT NOT NULL DEFAULT 'date',
         message_list_sort_direction TEXT NOT NULL DEFAULT 'desc',
         message_grouping TEXT NOT NULL DEFAULT 'auto',
+        reader_zoom INTEGER NOT NULL DEFAULT 100,
         updated_at INTEGER NOT NULL
       )
     `)
@@ -2641,7 +2644,8 @@ export class AppDatabase {
       ['layout_mode', "TEXT NOT NULL DEFAULT 'apple'"],
       ['message_list_sort_field', "TEXT NOT NULL DEFAULT 'date'"],
       ['message_list_sort_direction', "TEXT NOT NULL DEFAULT 'desc'"],
-      ['message_grouping', "TEXT NOT NULL DEFAULT 'auto'"]
+      ['message_grouping', "TEXT NOT NULL DEFAULT 'auto'"],
+      ['reader_zoom', 'INTEGER NOT NULL DEFAULT 100']
     ]
 
     for (const [column, definition] of additions) {
@@ -2672,7 +2676,8 @@ export class AppDatabase {
              invert_message_list_default_order AS invertOrder,
              message_list_sort_field AS sortField,
              message_list_sort_direction AS sortDirection,
-             message_grouping AS grouping
+             message_grouping AS grouping,
+             reader_zoom AS readerZoom
       FROM app_preferences
       WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
       LIMIT 1
@@ -2682,6 +2687,7 @@ export class AppDatabase {
       sortField?: unknown
       sortDirection?: unknown
       grouping?: unknown
+      readerZoom?: unknown
     }>
 
     const row = rows[0]
@@ -2713,7 +2719,8 @@ export class AppDatabase {
         row.grouping,
         MESSAGE_GROUPING_MODES,
         DEFAULT_MESSAGE_GROUPING_MODE
-      )
+      ),
+      readerZoom: clampReaderZoom(toFiniteNonNegativeNumber(row.readerZoom) || READER_ZOOM_DEFAULT)
     }
   }
 
@@ -2727,6 +2734,7 @@ export class AppDatabase {
           message_list_sort_field = ${preferences.messageListSort.field},
           message_list_sort_direction = ${preferences.messageListSort.direction},
           message_grouping = ${preferences.messageGrouping},
+          reader_zoom = ${preferences.readerZoom},
           updated_at = ${Date.now()}
       WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
     `

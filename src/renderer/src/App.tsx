@@ -43,6 +43,7 @@ import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { cn, formatAppVersion } from '@renderer/lib/utils'
 import { buildMessageSections } from '@renderer/lib/message-sections'
 import { buildOutgoingMailHtml } from '@renderer/lib/outgoing-mail-html'
+import { READER_ZOOM_RESET, steppedReaderZoom } from '@renderer/lib/reader-zoom'
 import {
   applySelectionIntent,
   EMPTY_MESSAGE_SELECTION,
@@ -58,6 +59,7 @@ import {
 } from '@renderer/lib/message-selection'
 import {
   ALL_INBOX_FOLDER_PATH,
+  clampReaderZoom,
   DEFAULT_MESSAGE_LIST_FILTER,
   DEFAULT_UI_PREFERENCES,
   MESSAGE_LIST_PAGE_SIZE
@@ -66,6 +68,7 @@ import { highlightTermsForField, parseSearchQuery } from '@shared/search'
 import type {
   AccountConnectionState,
   AppCapabilities,
+  AppMenuCommand,
   ComposeMailInput,
   ListMessagesOptions,
   MailAccount,
@@ -84,6 +87,18 @@ import type {
 
 const ALL_INBOX_FOLDER_LABEL = 'TUTTI'
 const GMAIL_QUOTE_BLOCK_STYLE = 'margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex'
+const READER_ZOOM_SAVE_DELAY_MS = 400
+
+/** ⌘/Ctrl + key → command. `=` is the unshifted `+` on US keyboards. */
+const APP_SHORTCUT_COMMANDS: Readonly<Record<string, AppMenuCommand>> = {
+  n: 'compose',
+  N: 'compose',
+  ',': 'settings',
+  '+': 'reader-zoom-in',
+  '=': 'reader-zoom-in',
+  '-': 'reader-zoom-out',
+  '0': 'reader-zoom-reset'
+}
 
 /** Folders whose rows are about the recipient rather than the sender. */
 const RECIPIENT_ORIENTED_SPECIAL_USES = new Set(['\\Sent', '\\Drafts'])
@@ -420,6 +435,29 @@ function App(): React.JSX.Element {
     },
     [updateUiPreferences]
   )
+
+  // The reader zoom changes on every wheel event of a pinch. It is shown at
+  // once and stored when the gesture settles, instead of once per event.
+  const readerZoomSaveTimerRef = useRef<number | null>(null)
+  const changeReaderZoom = useCallback((next: number): void => {
+    const zoom = clampReaderZoom(next)
+
+    if (zoom === uiPreferencesRef.current.readerZoom) {
+      return
+    }
+
+    uiPreferencesRef.current = { ...uiPreferencesRef.current, readerZoom: zoom }
+    setUiPreferences(uiPreferencesRef.current)
+
+    if (readerZoomSaveTimerRef.current !== null) {
+      window.clearTimeout(readerZoomSaveTimerRef.current)
+    }
+
+    readerZoomSaveTimerRef.current = window.setTimeout(() => {
+      readerZoomSaveTimerRef.current = null
+      void window.mailApi.setUiPreferences(uiPreferencesRef.current).catch(() => undefined)
+    }, READER_ZOOM_SAVE_DELAY_MS)
+  }, [])
 
   const handleMessageGroupingChange = useCallback(
     (next: MessageGroupingMode): void => {
@@ -1804,6 +1842,54 @@ function App(): React.JSX.Element {
     settingsOpen ||
     extensionPrimaryDialogOpen
 
+  /**
+   * Runs a command from the menu bar or its shortcut. Nothing happens over
+   * an open dialog, and the zoom commands need a message to zoom. Returns
+   * whether the command applied, so a shortcut that did nothing is left to
+   * whatever else wants the key.
+   */
+  const runAppCommand = useCallback(
+    (command: AppMenuCommand): boolean => {
+      if (isModalSurfaceOpen) {
+        return false
+      }
+
+      switch (command) {
+        case 'compose':
+          setComposerInitial(undefined)
+          setComposerOpen(true)
+          return true
+        case 'settings':
+          setSettingsOpen(true)
+          return true
+        default: {
+          if (!selectedMessage) {
+            return false
+          }
+
+          const current = uiPreferencesRef.current.readerZoom
+          changeReaderZoom(
+            command === 'reader-zoom-reset'
+              ? READER_ZOOM_RESET
+              : steppedReaderZoom(current, command === 'reader-zoom-in' ? 1 : -1)
+          )
+          return true
+        }
+      }
+    },
+    [changeReaderZoom, isModalSurfaceOpen, selectedMessage]
+  )
+  const runAppCommandRef = useRef(runAppCommand)
+
+  useEffect(() => {
+    runAppCommandRef.current = runAppCommand
+  }, [runAppCommand])
+
+  useEffect(
+    () => window.mailApi.onAppMenuCommand((command) => void runAppCommandRef.current(command)),
+    []
+  )
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (isModalSurfaceOpen) {
@@ -1827,6 +1913,16 @@ function App(): React.JSX.Element {
         event.preventDefault()
         searchInputRef.current?.focus()
         searchInputRef.current?.select()
+        return
+      }
+
+      // The commands the macOS menu lists, handled here so they work the same
+      // on Windows and Linux, where there is no menu bar.
+      const appCommand =
+        isCommandModifier && !event.altKey ? APP_SHORTCUT_COMMANDS[event.key] : null
+
+      if (appCommand && runAppCommandRef.current(appCommand)) {
+        event.preventDefault()
         return
       }
 
@@ -2369,6 +2465,8 @@ function App(): React.JSX.Element {
               }
             }}
             attachmentActions={attachmentActions}
+            zoom={uiPreferences.readerZoom}
+            onZoomChange={changeReaderZoom}
             addressActions={addressActions}
           />
         }

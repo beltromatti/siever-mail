@@ -1,6 +1,7 @@
 import type {
   AccountConnectionState,
   AddImapAccountInput,
+  AppMenuCommand,
   AttachmentRef,
   ActiveMailboxContext,
   AppBootstrap,
@@ -78,7 +79,8 @@ export const IPC_CHANNELS = {
   messagesChanged: 'engine:messages-changed',
   foldersChanged: 'engine:folders-changed',
   unifiedInboxChanged: 'engine:unified-inbox-changed',
-  accountConnectionChanged: 'engine:account-connection-changed'
+  accountConnectionChanged: 'engine:account-connection-changed',
+  appMenuCommand: 'app:menu-command'
 } as const
 
 export interface DesktopMailApi {
@@ -147,4 +149,5 @@ export interface DesktopMailApi {
   onFoldersChanged: (listener: (event: FoldersChangedEvent) => void) => () => void
   onUnifiedInboxChanged: (listener: (event: UnifiedInboxChangedEvent) => void) => () => void
   onAccountConnectionChanged: (listener: (state: AccountConnectionState) => void) => () => void
+  onAppMenuCommand: (listener: (command: AppMenuCommand) => void) => () => void
 }

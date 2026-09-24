@@ -78,7 +78,8 @@ const desktopMailApi: DesktopMailApi = {
   onFoldersChanged: (listener) => subscribe(IPC_CHANNELS.foldersChanged, listener),
   onUnifiedInboxChanged: (listener) => subscribe(IPC_CHANNELS.unifiedInboxChanged, listener),
   onAccountConnectionChanged: (listener) =>
-    subscribe(IPC_CHANNELS.accountConnectionChanged, listener)
+    subscribe(IPC_CHANNELS.accountConnectionChanged, listener),
+  onAppMenuCommand: (listener) => subscribe(IPC_CHANNELS.appMenuCommand, listener)
 }
 
 // Merge any extension-provided bridge methods (e.g. archive: IPC channels

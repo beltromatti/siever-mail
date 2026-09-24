@@ -123,6 +123,7 @@ model AppPreference {
   messageListSortField           String  @default("date") @map("message_list_sort_field")
   messageListSortDirection       String  @default("desc") @map("message_list_sort_direction")
   messageGrouping                String  @default("auto") @map("message_grouping")
+  readerZoom                     Int     @default(100) @map("reader_zoom")
   updatedAt                      BigInt  @map("updated_at")
 
   @@map("app_preferences")

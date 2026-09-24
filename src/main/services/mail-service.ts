@@ -41,7 +41,12 @@ import type {
   UnifiedInboxPreferences,
   UnifiedInboxSummary
 } from '@shared/models'
-import { ALL_INBOX_FOLDER_PATH, MESSAGE_LIST_PAGE_SIZE } from '@shared/models'
+import {
+  ALL_INBOX_FOLDER_PATH,
+  MESSAGE_LIST_PAGE_SIZE,
+  READER_ZOOM_MAX,
+  READER_ZOOM_MIN
+} from '@shared/models'
 
 import {
   accountAttachmentCacheDirectory,
@@ -130,7 +135,8 @@ const uiPreferencesSchema = z.object({
     field: z.enum(['date', 'sender', 'subject', 'size']),
     direction: z.enum(['asc', 'desc'])
   }),
-  messageGrouping: z.enum(['none', 'auto', 'sender'])
+  messageGrouping: z.enum(['none', 'auto', 'sender']),
+  readerZoom: z.number().int().min(READER_ZOOM_MIN).max(READER_ZOOM_MAX)
 })
 
 const unifiedInboxIncludedAccountsSchema = z.array(z.string().trim().min(1))

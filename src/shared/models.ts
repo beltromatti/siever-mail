@@ -161,6 +161,28 @@ export interface UiPreferences {
   invertMessageListOrder: boolean
   messageListSort: MailMessageListSort
   messageGrouping: MessageGroupingMode
+  /**
+   * How large message bodies are shown in the reading pane, in percent —
+   * the Ctrl/⌘ + wheel zoom Outlook and Mail offer. It scales the message
+   * only, never the app around it, and applies to every message.
+   */
+  readerZoom: number
+}
+
+/** What the application menu asks the page to do. */
+export type AppMenuCommand =
+  | 'compose'
+  | 'settings'
+  | 'reader-zoom-in'
+  | 'reader-zoom-out'
+  | 'reader-zoom-reset'
+
+export const READER_ZOOM_MIN = 50
+export const READER_ZOOM_MAX = 200
+export const READER_ZOOM_DEFAULT = 100
+
+export function clampReaderZoom(value: number): number {
+  return Math.min(READER_ZOOM_MAX, Math.max(READER_ZOOM_MIN, Math.round(value)))
 }
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
@@ -170,7 +192,8 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
     field: DEFAULT_MESSAGE_LIST_SORT_FIELD,
     direction: DEFAULT_MESSAGE_LIST_SORT_DIRECTION
   },
-  messageGrouping: DEFAULT_MESSAGE_GROUPING_MODE
+  messageGrouping: DEFAULT_MESSAGE_GROUPING_MODE,
+  readerZoom: READER_ZOOM_DEFAULT
 }
 
 export interface ListMessagesOptions {
