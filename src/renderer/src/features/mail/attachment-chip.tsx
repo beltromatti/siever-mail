@@ -43,7 +43,7 @@ function attachmentIcon(fileName: string): LucideIcon {
  * JSX is what "components created during render" warns about — it cannot
  * tell a lookup in a constant table from a component defined on the fly.
  */
-function AttachmentIcon({
+export function AttachmentIcon({
   fileName,
   className
 }: {
@@ -56,8 +56,10 @@ function AttachmentIcon({
 export interface AttachmentChipProps {
   fileName: string
   sizeBytes: number
-  /** What happens on click — download in the reader, nothing in the composer. */
+  /** What happens on click — open in the reader, nothing in the composer. */
   onOpen?: () => void
+  /** Tooltip line saying what the click does. */
+  openHint?: string
   /** Rendered at the trailing edge: remove in the composer, nothing in the reader. */
   trailing?: React.ReactNode
   busy?: boolean
@@ -81,6 +83,7 @@ export function AttachmentChip({
   fileName,
   sizeBytes,
   onOpen,
+  openHint,
   trailing,
   busy = false,
   className
@@ -105,40 +108,42 @@ export function AttachmentChip({
     </span>
   )
 
+  // The bubble names the file and belongs to the chip's own button; the
+  // trailing control (save, remove) keeps a bubble of its own.
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={cn(
-            'border-border/70 bg-card/60 inline-flex h-6.5 max-w-full items-center gap-1 rounded-md border pr-1 pl-2 transition-colors',
-            interactive && 'hover:border-border hover:bg-card cursor-pointer',
-            busy && 'pointer-events-none opacity-70',
-            className
-          )}
-        >
+    <span
+      className={cn(
+        'border-border/70 bg-card/60 inline-flex h-6.5 max-w-full items-center gap-1 rounded-md border pr-1 pl-2 transition-colors',
+        interactive && 'hover:border-border hover:bg-card',
+        busy && 'opacity-70',
+        className
+      )}
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
           {interactive ? (
             <button
               type="button"
               onClick={onOpen}
               disabled={busy}
-              aria-label={`Scarica ${fileName}`}
-              className="focus-visible:ring-ring/70 flex min-w-0 items-center rounded-sm outline-none focus-visible:ring-2"
+              aria-label={`Apri ${fileName}`}
+              className="focus-visible:ring-ring/70 flex min-w-0 cursor-pointer items-center rounded-sm outline-none focus-visible:ring-2 disabled:cursor-default"
             >
               {body}
             </button>
           ) : (
             body
           )}
-          {trailing}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="top">
-        {fileName}
-        <span className="text-muted-foreground block text-[10.5px] font-normal">
-          {size}
-          {interactive && ' · clicca per scaricare'}
-        </span>
-      </TooltipContent>
-    </Tooltip>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          {fileName}
+          <span className="text-muted-foreground block text-[10.5px] font-normal">
+            {size}
+            {openHint && ` · ${openHint}`}
+          </span>
+        </TooltipContent>
+      </Tooltip>
+      {trailing}
+    </span>
   )
 }

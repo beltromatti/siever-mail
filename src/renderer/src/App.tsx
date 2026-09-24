@@ -34,6 +34,7 @@ import type { ExtensionSelectionContext, ExtensionHostHooks } from '@app/extensi
 import { MessageViewer } from '@renderer/features/mail/message-viewer'
 import type { AddressActions } from '@renderer/features/mail/address-tokens'
 import { MailToolbar } from '@renderer/features/mail/mail-toolbar'
+import { useAttachmentActions } from '@renderer/features/mail/use-attachment-actions'
 import { SettingsDialog } from '@renderer/features/settings/settings-dialog'
 import { Button } from '@renderer/components/ui/button'
 import { Toaster } from '@renderer/components/ui/sonner'
@@ -1908,27 +1909,7 @@ function App(): React.JSX.Element {
     }
   }, [handleOpenRow, handleSelectAll, isModalSurfaceOpen, runMessageRemovalAction])
 
-  const downloadSelectedMessageAttachment = useCallback(
-    async (attachmentId: string): Promise<void> => {
-      if (!readingRef) {
-        throw new Error('Nessun messaggio selezionato.')
-      }
-
-      setViewError(null)
-
-      try {
-        await window.mailApi.downloadAttachment({ ref: readingRef, attachmentId })
-      } catch (caughtError) {
-        const errorMessage =
-          caughtError instanceof Error && caughtError.message.trim()
-            ? caughtError.message
-            : 'Download allegato non riuscito.'
-        setViewError(errorMessage)
-        throw caughtError
-      }
-    },
-    [readingRef]
-  )
+  const attachmentActions = useAttachmentActions(readingRef)
 
   const openReplyComposer = useCallback((): void => {
     if (!selectedMessage) {
@@ -2378,7 +2359,7 @@ function App(): React.JSX.Element {
                 void setMessageKeyword(readingRef, '\\Flagged', flagged)
               }
             }}
-            onDownloadAttachment={downloadSelectedMessageAttachment}
+            attachmentActions={attachmentActions}
             addressActions={addressActions}
           />
         }

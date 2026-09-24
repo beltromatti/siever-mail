@@ -118,6 +118,7 @@ const CONTACT_SUGGESTION_QUERY_SCAN_LIMIT = 120
  * ("gmail", "com"), and the list keeps its plain order.
  */
 const SEARCHED_SENDER_LIMIT = 200
+const RECENT_FILES_KEPT = 200
 
 function parseJsonArray<T>(value: string): T[] {
   try {
@@ -1006,6 +1007,7 @@ export class AppDatabase {
       this.prisma.message.deleteMany(),
       this.prisma.folder.deleteMany(),
       this.prisma.contact.deleteMany(),
+      this.prisma.recentFile.deleteMany(),
       this.prisma.$executeRaw`DELETE FROM account_signatures`,
       // Reset the singleton row of app preferences (unified inbox toggle)
       // back to its empty state. Extensions own their own tables and are
@@ -1021,6 +1023,54 @@ export class AppDatabase {
 
     await this.prisma.$executeRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)')
     await this.prisma.$executeRawUnsafe('VACUUM')
+  }
+
+  /**
+   * Remembers files the user just attached, saved or filed away, as the
+   * newest entries of the "Allega" menu. The history stays short: it is a
+   * convenience, not a record.
+   */
+  async recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void> {
+    await this.ready
+
+    if (paths.length === 0) {
+      return
+    }
+
+    const usedAt = BigInt(Date.now())
+
+    await this.prisma.$transaction([
+      ...paths.map((path) =>
+        this.prisma.recentFile.upsert({
+          where: { path },
+          create: { path, activity, usedAt },
+          update: { activity, usedAt }
+        })
+      ),
+      this.prisma.$executeRaw`
+        DELETE FROM recent_files
+        WHERE path NOT IN (
+          SELECT path FROM recent_files ORDER BY used_at DESC LIMIT ${RECENT_FILES_KEPT}
+        )
+      `
+    ])
+  }
+
+  async listRecentFiles(
+    limit: number
+  ): Promise<Array<{ path: string; activity: string; usedAt: number }>> {
+    await this.ready
+
+    const rows = await this.prisma.recentFile.findMany({
+      orderBy: { usedAt: 'desc' },
+      take: limit
+    })
+
+    return rows.map((row) => ({
+      path: row.path,
+      activity: row.activity,
+      usedAt: toNumber(row.usedAt)
+    }))
   }
 
   async getStoredAccountById(accountId: string): Promise<StoredMailAccount | null> {
@@ -2432,6 +2482,17 @@ export class AppDatabase {
         updated_at INTEGER NOT NULL
       )
     `)
+
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS recent_files (
+        path TEXT PRIMARY KEY,
+        activity TEXT NOT NULL,
+        used_at INTEGER NOT NULL
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_recent_files_used_at ON recent_files(used_at DESC)'
+    )
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS app_preferences (

@@ -1,14 +1,13 @@
 import type {
   AccountConnectionState,
   AddImapAccountInput,
+  AttachmentRef,
   ActiveMailboxContext,
   AppBootstrap,
   ComposeMailInput,
   FoldersChangedEvent,
   MailAccountSignature,
   DataStorageBreakdown,
-  DownloadAttachmentInput,
-  DownloadAttachmentResult,
   ListMessagesOptions,
   MailAccount,
   MessagesChangedEvent,
@@ -22,7 +21,10 @@ import type {
   MailMessageListPage,
   MessageRef,
   MoveMessageInput,
+  OpenAttachmentResult,
   PickedAttachment,
+  RecentFile,
+  SavedAttachments,
   ToggleFlaggedInput,
   ToggleSeenInput,
   UiPreferences
@@ -58,7 +60,13 @@ export const IPC_CHANNELS = {
   getDataStorageBreakdown: 'data:get-storage-breakdown',
   clearAccountData: 'data:clear-account',
   clearAllDataKeepAccounts: 'data:clear-all-keep-accounts',
-  downloadAttachment: 'message:download-attachment',
+  openAttachment: 'attachment:open',
+  saveAttachment: 'attachment:save',
+  saveAllAttachments: 'attachment:save-all',
+  clearAttachmentCache: 'attachment:clear-cache',
+  revealFile: 'file:reveal',
+  listRecentFiles: 'file:list-recent',
+  describeFiles: 'file:describe',
   openExternalUrl: 'app:open-external-url',
   openLogsFolder: 'app:open-logs-folder',
   openMessageFromNotification: 'app:open-message-from-notification',
@@ -115,7 +123,17 @@ export interface DesktopMailApi {
   clearAccountData: (accountId: string) => Promise<void>
   clearAllDataKeepAccounts: () => Promise<void>
   pickAttachments: () => Promise<PickedAttachment[]>
-  downloadAttachment: (input: DownloadAttachmentInput) => Promise<DownloadAttachmentResult>
+  openAttachment: (input: AttachmentRef) => Promise<OpenAttachmentResult>
+  /** Resolves to the saved path, or null when the user cancelled. */
+  saveAttachment: (input: AttachmentRef) => Promise<string | null>
+  saveAllAttachments: (ref: MessageRef) => Promise<SavedAttachments | null>
+  clearAttachmentCache: () => Promise<void>
+  revealFile: (filePath: string) => Promise<void>
+  listRecentFiles: () => Promise<RecentFile[]>
+  /** Files dropped on or picked for the composer, checked and sized. */
+  describeFiles: (paths: string[]) => Promise<PickedAttachment[]>
+  /** The path of a file dropped from the desktop (Electron `webUtils`). */
+  getPathForFile: (file: File) => string
   openExternalUrl: (url: string) => Promise<boolean>
   /** Reveals the folder the main process writes its log to. */
   openLogsFolder: () => Promise<void>

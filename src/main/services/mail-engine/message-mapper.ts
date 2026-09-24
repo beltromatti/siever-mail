@@ -5,7 +5,11 @@ import type { FetchedMessageDetail, MailAddress, MailAttachment } from '@shared/
 import { deriveSenderKey, deriveSenderName } from '@shared/sender'
 
 import { extractPreview } from './preview'
-import { parseMessageSource, partitionMessageAttachments } from './message-parts'
+import {
+  attachmentFileName,
+  parseMessageSource,
+  partitionMessageAttachments
+} from './message-parts'
 
 export interface PartialMessage {
   accountId: string
@@ -167,7 +171,7 @@ export function mergeSummaryAndParsedIntoDetail(
   const attachments: MailAttachment[] = partitionMessageAttachments(parsed).official.map(
     ({ index, attachment }) => ({
       id: `${fetched.uid}-${index}`,
-      fileName: attachment.filename || `attachment-${index + 1}`,
+      fileName: attachmentFileName(attachment, index),
       contentType: attachment.contentType,
       size: attachment.size,
       cid: attachment.cid || undefined

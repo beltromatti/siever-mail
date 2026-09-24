@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 
 import { app, BrowserWindow, Menu, Tray, nativeImage, shell } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
@@ -81,18 +82,23 @@ function createTray(): Tray {
   return tray
 }
 
+const RENDERER_ENTRY_PATH = join(__dirname, '../renderer/index.html')
+
+/**
+ * The window only ever shows the app's own page. Any other file — one
+ * dropped on the window, a `file:` link in a message — would replace the
+ * whole interface with it.
+ */
 function isAllowedNavigation(urlString: string): boolean {
   try {
     const url = new URL(urlString)
 
     if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-      const devUrl = new URL(process.env['ELECTRON_RENDERER_URL'])
-      if (url.origin === devUrl.origin) {
-        return true
-      }
+      return url.origin === new URL(process.env['ELECTRON_RENDERER_URL']).origin
     }
 
-    return url.protocol === 'file:'
+    url.hash = ''
+    return url.href === pathToFileURL(RENDERER_ENTRY_PATH).href
   } catch {
     return false
   }
@@ -169,7 +175,7 @@ function createMainWindow(): BrowserWindow {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     void window.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    void window.loadFile(join(__dirname, '../renderer/index.html'))
+    void window.loadFile(RENDERER_ENTRY_PATH)
   }
 
   return window

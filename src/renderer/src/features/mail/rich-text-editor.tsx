@@ -72,6 +72,12 @@ interface RichTextEditorProps {
    * the next thing the user does is write.
    */
   autoFocusBody?: boolean
+  /**
+   * A file is being dragged over the body. The editor never takes the drop
+   * itself — Chromium would open the file in its frame — so the host can
+   * cover it with a drop target of its own.
+   */
+  onFileDragEnter?: () => void
   onExpandedChange?: (expanded: boolean) => void
   onChange: (html: string, text: string) => void
 }
@@ -1447,6 +1453,7 @@ interface UseSquireInstanceOptions {
   defaultFontFamily: string | null
   disabled: boolean
   onChange: (html: string) => void
+  onFileDragEnter?: () => void
 }
 
 interface SquireBootstrap {
@@ -1481,6 +1488,7 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
   const [ready, setReady] = useState(false)
   const editorRef = useRef<SquireInstance | null>(null)
   const onChangeRef = useRef(onChange)
+  const onFileDragEnterRef = useRef(options.onFileDragEnter)
   // Track the last `initialHtml` value we pushed into Squire. Comparing the
   // *prop* (not the HTML round-trip from `editor.getHTML()`) is what makes
   // the controlled-component pattern stable: Squire reformats on setHTML so
@@ -1490,7 +1498,8 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
 
   useEffect(() => {
     onChangeRef.current = onChange
-  }, [onChange])
+    onFileDragEnterRef.current = options.onFileDragEnter
+  }, [onChange, options.onFileDragEnter])
 
   // Bootstrap Squire inside the iframe. We use `srcdoc` with an embedded
   // `<script src="…">` tag pointing at the Squire bundle — the script is
@@ -1589,11 +1598,34 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
         handleFormattedEmptyBlockBeforeInput(editor, event)
       }
 
+      // Files dragged in from the desktop belong to the host (attachments),
+      // never to the frame: left alone, Chromium would navigate the frame to
+      // the file or Squire would inline a `file://` image nobody can see.
+      // Text and HTML dragged within the body keep the default behaviour.
+      const handleFileDrag = (event: DragEvent): void => {
+        if (!event.dataTransfer?.types.includes('Files')) {
+          return
+        }
+
+        event.preventDefault()
+
+        if (event.type === 'dragenter') {
+          onFileDragEnterRef.current?.()
+        } else if (event.type === 'dragover') {
+          event.dataTransfer.dropEffect = onFileDragEnterRef.current ? 'copy' : 'none'
+        }
+      }
+      const fileDragEvents = ['dragenter', 'dragover', 'drop'] as const
+
       frameDocument.body.addEventListener('keydown', handlePreSquireKeyDown, true)
       frameDocument.body.addEventListener('beforeinput', handlePreSquireBeforeInput, true)
+      fileDragEvents.forEach((type) => frameDocument.addEventListener(type, handleFileDrag, true))
       frameCleanupFns.push(() => {
         frameDocument.body.removeEventListener('keydown', handlePreSquireKeyDown, true)
         frameDocument.body.removeEventListener('beforeinput', handlePreSquireBeforeInput, true)
+        fileDragEvents.forEach((type) =>
+          frameDocument.removeEventListener(type, handleFileDrag, true)
+        )
       })
 
       let editor: SquireInstance
@@ -1977,6 +2009,7 @@ export function RichTextEditor({
   expandToContainer,
   defaultFontFamily = MAIL_EDITOR_DEFAULT_FONT_FAMILY,
   autoFocusBody = false,
+  onFileDragEnter,
   onExpandedChange,
   onChange
 }: RichTextEditorProps): React.JSX.Element {
@@ -2037,7 +2070,8 @@ export function RichTextEditor({
     placeholder,
     defaultFontFamily: normalizedDefaultFontFamily,
     disabled,
-    onChange: handleEditorChange
+    onChange: handleEditorChange,
+    onFileDragEnter
   })
 
   const active = useEditorActiveState(editor)

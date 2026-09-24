@@ -283,13 +283,35 @@ export interface PickedAttachment {
   size: number
 }
 
-export interface DownloadAttachmentInput {
+export interface AttachmentRef {
   ref: MessageRef
   attachmentId: string
 }
 
-export interface DownloadAttachmentResult {
-  filePath: string
+/**
+ * How opening an attachment went. `blocked` is a type that runs code: it
+ * is never launched from a message, only saved on purpose. `no-application`
+ * means nothing on this computer opens that type.
+ */
+export type OpenAttachmentResult =
+  | { status: 'opened' }
+  | { status: 'blocked' }
+  | { status: 'no-application' }
+
+export interface SavedAttachments {
+  directory: string
+  filePaths: string[]
+}
+
+/** A file the "Allega" menu offers back. */
+export interface RecentFile {
+  path: string
+  name: string
+  /** The folder it sits in — what tells two files with one name apart. */
+  folder: string
+  /** What the user last did with it: "Allegato a un messaggio", "Aperto di recente"… */
+  activity: string
+  usedAt: number
 }
 
 export interface MailContactSuggestion {
@@ -309,7 +331,8 @@ export interface AppBootstrap {
 export interface DataStorageSection {
   id: string
   label: string
-  kind: 'account' | 'global'
+  /** `files`: copies of opened attachments, on disk beside the database. */
+  kind: 'account' | 'global' | 'files'
   sizeBytes: number
 }
 

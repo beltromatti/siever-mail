@@ -16,7 +16,7 @@ import type { AppDatabase } from '../database'
 import type { GoogleOAuthService } from '../google-oauth'
 import { decryptSecret } from '../secure-storage'
 
-import { AccountConnection } from './account-connection'
+import { AccountConnection, type FetchedAttachment } from './account-connection'
 import type { AccountWithSecret } from './mail-transport'
 import { NotificationManager } from './notifications'
 
@@ -225,12 +225,12 @@ export class MailEngine {
     return connection.fetchMessageRawSource(ref)
   }
 
-  async fetchAttachmentForDownload(
+  async fetchAttachments(
     ref: MessageRef,
-    attachmentIndex: number
-  ): Promise<Awaited<ReturnType<AccountConnection['fetchAttachmentForDownload']>>> {
+    indexes?: ReadonlyArray<number>
+  ): Promise<FetchedAttachment[]> {
     const connection = await this.requestConnection(ref.accountId)
-    return connection.fetchAttachmentForDownload(ref, attachmentIndex)
+    return connection.fetchAttachments(ref, indexes)
   }
 
   async computeUnifiedInboxSummary(): Promise<UnifiedInboxSummary> {

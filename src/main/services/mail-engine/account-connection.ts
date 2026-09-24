@@ -27,7 +27,11 @@ import {
   mapFetchedToDetail
 } from './message-mapper'
 import { extractPreview } from './preview'
-import { parseMessageSource } from './message-parts'
+import {
+  attachmentFileName,
+  parseMessageSource,
+  partitionMessageAttachments
+} from './message-parts'
 import {
   IMAP_CONNECTION_TIMEOUT_MS,
   IMAP_GREETING_TIMEOUT_MS,
@@ -96,6 +100,13 @@ interface FolderSyncPlan {
 }
 
 export type AccountConnectionSnapshot = Omit<AccountConnectionState, 'accountId'>
+
+export interface FetchedAttachment {
+  /** Position in the parsed attachment list — the key the reader uses. */
+  index: number
+  fileName: string
+  content: Buffer
+}
 
 type AccountConnectionEvents = {
   state: (state: AccountConnectionSnapshot) => void
@@ -588,10 +599,16 @@ export class AccountConnection extends EventEmitter {
     }, `fetch-archive:${ref.folderPath}:${ref.uid}`)
   }
 
-  async fetchAttachmentForDownload(
+  /**
+   * Attachments of one message, parsed from a single download of its
+   * source: the ones at `indexes` (positions in the parsed attachment list,
+   * as the reader's attachment ids carry them), or every file the reader
+   * lists when `indexes` is omitted.
+   */
+  async fetchAttachments(
     ref: MessageRef,
-    attachmentIndex: number
-  ): Promise<{ fileName: string; contentType: string; content: Buffer }> {
+    indexes?: ReadonlyArray<number>
+  ): Promise<FetchedAttachment[]> {
     return this.enqueuePrimaryWithReturn(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(ref.folderPath)
@@ -608,21 +625,25 @@ export class AccountConnection extends EventEmitter {
         }
 
         const parsed = await parseMessageSource(fetched.source)
-        const attachment = parsed.attachments[attachmentIndex]
+        const wanted = indexes
+          ? indexes.map((index) => ({ index, attachment: parsed.attachments[index] }))
+          : partitionMessageAttachments(parsed).official
 
-        if (!attachment) {
-          throw new Error('Allegato non disponibile per questo messaggio.')
-        }
+        return wanted.map(({ index, attachment }) => {
+          if (!attachment) {
+            throw new Error('Allegato non disponibile per questo messaggio.')
+          }
 
-        return {
-          fileName: attachment.filename || `allegato-${attachmentIndex + 1}`,
-          contentType: attachment.contentType || 'application/octet-stream',
-          content: Buffer.from(attachment.content)
-        }
+          return {
+            index,
+            fileName: attachmentFileName(attachment, index),
+            content: Buffer.from(attachment.content)
+          }
+        })
       } finally {
         lock.release()
       }
-    }, `download-attachment:${ref.folderPath}:${ref.uid}:${attachmentIndex}`)
+    }, `fetch-attachments:${ref.folderPath}:${ref.uid}`)
   }
 
   private setStatus(status: AccountConnectionStatus, error?: unknown): void {

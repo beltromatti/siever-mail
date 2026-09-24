@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { Paperclip, Send, X } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -12,6 +13,7 @@ import {
   DialogTitle
 } from '@renderer/components/ui/dialog'
 import { IconButton } from '@renderer/components/ui/icon-button'
+import { AttachMenu } from '@renderer/features/mail/attach-menu'
 import { AttachmentChip } from '@renderer/features/mail/attachment-chip'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
 import { htmlToPlainText, splitRecipients } from '@renderer/lib/email'
@@ -770,9 +772,7 @@ export function MailComposerDialog({
     )
   }
 
-  const handlePickAttachments = async (): Promise<void> => {
-    const picked = await window.mailApi.pickAttachments()
-
+  const addAttachments = (picked: PickedAttachment[]): void => {
     if (picked.length === 0) {
       return
     }
@@ -782,6 +782,41 @@ export function MailComposerDialog({
       const uniqueNew = picked.filter((item) => !knownPaths.has(item.path))
       return [...current, ...uniqueNew]
     })
+  }
+
+  const handlePickAttachments = async (): Promise<void> => {
+    try {
+      addAttachments(await window.mailApi.pickAttachments())
+    } catch (error) {
+      toast.error('Impossibile allegare i file', {
+        description: error instanceof Error ? error.message : undefined
+      })
+    }
+  }
+
+  /** Files chosen from the recent list or dropped on the composer. */
+  const attachPaths = async (paths: string[]): Promise<void> => {
+    if (paths.length === 0) {
+      return
+    }
+
+    try {
+      addAttachments(await window.mailApi.describeFiles(paths))
+    } catch (error) {
+      toast.error('Impossibile allegare il file', {
+        description: error instanceof Error ? error.message : undefined
+      })
+    }
+  }
+
+  // A file dragged over the composer turns the whole panel into a drop
+  // target. The editor lives in an iframe the panel cannot hear, so it
+  // reports a file drag entering it and the overlay takes over from there.
+  const [fileDragActive, setFileDragActive] = useState(false)
+  const beginFileDrag = (): void => {
+    if (account) {
+      setFileDragActive(true)
+    }
   }
 
   const handleRecipientKeyDown = (field: RecipientFieldKey, event: React.KeyboardEvent): void => {
@@ -867,6 +902,12 @@ export function MailComposerDialog({
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
           hideClose={editorFocusMode}
+          onDragEnter={(event) => {
+            if (event.dataTransfer.types.includes('Files')) {
+              event.preventDefault()
+              beginFileDrag()
+            }
+          }}
           className={cn(
             'flex flex-col gap-2 p-4',
             editorFocusMode
@@ -880,6 +921,30 @@ export function MailComposerDialog({
                 'h-[min(760px,calc(100vh-3rem))]'
           )}
         >
+          {fileDragActive && (
+            <div
+              className="border-primary/70 bg-background/85 absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed backdrop-blur-sm"
+              onDragOver={(event) => {
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'copy'
+              }}
+              onDragLeave={() => setFileDragActive(false)}
+              onDrop={(event) => {
+                event.preventDefault()
+                setFileDragActive(false)
+                void attachPaths(
+                  Array.from(event.dataTransfer.files)
+                    .map((file) => window.mailApi.getPathForFile(file))
+                    .filter(Boolean)
+                )
+              }}
+            >
+              {/* Children ignore the pointer so leaving them is not leaving the target. */}
+              <Paperclip className="text-primary pointer-events-none size-6" />
+              <p className="pointer-events-none text-[13px] font-medium">Rilascia per allegare</p>
+            </div>
+          )}
+
           {editorFocusMode ? (
             <div className="h-full min-h-0">
               <RichTextEditor
@@ -888,6 +953,7 @@ export function MailComposerDialog({
                 defaultFontFamily={MAIL_COMPOSER_DEFAULT_FONT_FAMILY}
                 expanded={editorFocusMode}
                 expandToContainer
+                onFileDragEnter={beginFileDrag}
                 onExpandedChange={(expanded) => {
                   setEditorFocusMode(expanded)
 
@@ -956,6 +1022,7 @@ export function MailComposerDialog({
                   // A reply already knows who it is going to, so the next
                   // thing the user does is write. A new message does not.
                   autoFocusBody={Boolean(initialData?.to?.length)}
+                  onFileDragEnter={beginFileDrag}
                   onExpandedChange={(expanded) => {
                     setEditorFocusMode(expanded)
 
@@ -996,17 +1063,11 @@ export function MailComposerDialog({
               )}
 
               <DialogFooter className="sm:justify-between">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 gap-1.5 text-[12px]"
-                  onClick={handlePickAttachments}
+                <AttachMenu
                   disabled={!account}
-                >
-                  <Paperclip className="size-3.5" />
-                  Allega
-                </Button>
+                  onAttachPaths={(paths) => void attachPaths(paths)}
+                  onBrowse={() => void handlePickAttachments()}
+                />
                 <div className="flex items-center gap-2">
                   <Button
                     variant="ghost"

@@ -104,6 +104,17 @@ model Contact {
   @@map("contacts")
 }
 
+/// Files the user attached, saved from a message or filed away through an
+/// extension. The "Allega" menu offers them back, newest first.
+model RecentFile {
+  path     String @id
+  activity String
+  usedAt   BigInt @map("used_at")
+
+  @@index([usedAt], map: "idx_recent_files_used_at")
+  @@map("recent_files")
+}
+
 model AppPreference {
   id                             Int     @id
   unifiedInboxIncludedAccountIds String? @map("unified_inbox_included_account_ids")

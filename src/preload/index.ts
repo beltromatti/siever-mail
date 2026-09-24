@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 
 import installExtensionPreload from '@app/extension/preload'
 import { IPC_CHANNELS, type DesktopMailApi } from '@shared/ipc'
@@ -56,7 +56,14 @@ const desktopMailApi: DesktopMailApi = {
     ipcRenderer.invoke(IPC_CHANNELS.clearAccountData, accountId),
   clearAllDataKeepAccounts: async () => ipcRenderer.invoke(IPC_CHANNELS.clearAllDataKeepAccounts),
   pickAttachments: async () => ipcRenderer.invoke(IPC_CHANNELS.pickAttachments),
-  downloadAttachment: async (input) => ipcRenderer.invoke(IPC_CHANNELS.downloadAttachment, input),
+  openAttachment: async (input) => ipcRenderer.invoke(IPC_CHANNELS.openAttachment, input),
+  saveAttachment: async (input) => ipcRenderer.invoke(IPC_CHANNELS.saveAttachment, input),
+  saveAllAttachments: async (ref) => ipcRenderer.invoke(IPC_CHANNELS.saveAllAttachments, ref),
+  clearAttachmentCache: async () => ipcRenderer.invoke(IPC_CHANNELS.clearAttachmentCache),
+  revealFile: async (filePath) => ipcRenderer.invoke(IPC_CHANNELS.revealFile, filePath),
+  listRecentFiles: async () => ipcRenderer.invoke(IPC_CHANNELS.listRecentFiles),
+  describeFiles: async (paths) => ipcRenderer.invoke(IPC_CHANNELS.describeFiles, paths),
+  getPathForFile: (file) => webUtils.getPathForFile(file),
   openExternalUrl: async (url) => ipcRenderer.invoke(IPC_CHANNELS.openExternalUrl, url),
   openLogsFolder: async () => ipcRenderer.invoke(IPC_CHANNELS.openLogsFolder),
   getWindowControlsState: async () => ipcRenderer.invoke(IPC_CHANNELS.getWindowControlsState),

@@ -46,6 +46,15 @@ export interface ClassifiedAttachment {
   attachment: Attachment
 }
 
+/**
+ * The name an attachment is shown and saved under. A part without one still
+ * needs something the user can recognise, the same in the reader and on
+ * disk.
+ */
+export function attachmentFileName(attachment: Attachment, index: number): string {
+  return attachment.filename || `allegato-${index + 1}`
+}
+
 export interface PartitionedMessageAttachments {
   /** Files the sender deliberately attached. */
   official: ClassifiedAttachment[]

@@ -55,6 +55,13 @@ export interface ExtensionMainContext {
   database: ExtensionDatabaseHandle
   mailEngine: ExtensionMailEngineHandle
   getMainWindow(): BrowserWindow | null
+  /**
+   * Offers files the extension wrote back to the user as the newest
+   * entries of the composer's "Allega" menu, labelled with what happened
+   * to them (e.g. "Salvato in …"). Files that are gone by the time the
+   * menu opens are left out.
+   */
+  recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void>
 }
 
 /**

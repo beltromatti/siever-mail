@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { mkdirSync, statSync } from 'node:fs'
+import { mkdir, stat, writeFile } from 'node:fs/promises'
+import { mkdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 
 import type {
   ExtensionDatabaseHandle,
@@ -20,9 +20,8 @@ import type {
   AddImapAccountInput,
   AppBootstrap,
   ComposeMailInput,
+  AttachmentRef,
   DataStorageBreakdown,
-  DownloadAttachmentInput,
-  DownloadAttachmentResult,
   ListMessagesOptions,
   MailAccount,
   MailAccountSignature,
@@ -32,7 +31,10 @@ import type {
   MailMessageListPage,
   MessageRef,
   MoveMessageInput,
+  OpenAttachmentResult,
   PickedAttachment,
+  RecentFile,
+  SavedAttachments,
   ToggleFlaggedInput,
   ToggleSeenInput,
   UiPreferences,
@@ -41,6 +43,17 @@ import type {
 } from '@shared/models'
 import { ALL_INBOX_FOLDER_PATH, MESSAGE_LIST_PAGE_SIZE } from '@shared/models'
 
+import {
+  accountAttachmentCacheDirectory,
+  attachmentCacheRoot,
+  clearAttachmentCache,
+  directorySize,
+  fileSha256,
+  isExecutableAttachment,
+  markFromInternet,
+  openedAttachmentDirectory,
+  sha256
+} from './attachment-files'
 import { AppDatabase } from './database'
 import type { MigrationSqlExecutor } from './data-migration'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
@@ -52,6 +65,7 @@ import {
   createSmtpTransport,
   verifyImapAccount
 } from './mail-engine/mail-transport'
+import { listRecentFiles } from './recent-files'
 import { decryptSecret, encryptSecret } from './secure-storage'
 
 const imapAccountSchema = z.object({
@@ -85,14 +99,21 @@ const composeSchema = z.object({
   )
 })
 
-const downloadAttachmentSchema = z.object({
-  ref: z.object({
-    accountId: z.string().trim().min(1),
-    folderPath: z.string().trim().min(1),
-    uid: z.number().int().positive()
-  }),
+const messageRefSchema = z.object({
+  accountId: z.string().trim().min(1),
+  folderPath: z.string().trim().min(1),
+  uid: z.number().int().positive()
+})
+const attachmentRefSchema = z.object({
+  ref: messageRefSchema,
   attachmentId: z.string().trim().min(1)
 })
+const filePathsSchema = z.array(z.string().min(1)).max(200)
+
+/** What the "Allega" menu calls the files it remembers from each place. */
+const SENT_ATTACHMENT_ACTIVITY = 'Allegato a un messaggio'
+const SAVED_ATTACHMENT_ACTIVITY = 'Salvato da un messaggio'
+const RECENT_FILES_OFFERED = 8
 const activeMailboxContextSchema = z.object({
   accountId: z.string().trim().min(1),
   folderPath: z.string().trim().min(1)
@@ -178,6 +199,9 @@ export class MailService {
   private readonly database: AppDatabase
   private readonly googleOAuthService: GoogleOAuthService
   private readonly engine: MailEngine
+  // The copy each opened attachment was last written to, and what it held,
+  // keyed by its folder: reopening an untouched copy needs no download.
+  private readonly openedAttachments = new Map<string, { filePath: string; digest: string }>()
 
   constructor(config: RuntimeConfig) {
     const userDataPath = app.getPath('userData')
@@ -252,7 +276,8 @@ export class MailService {
       database: databaseHandle,
       mailEngine: mailEngineHandle,
       getMainWindow: () =>
-        BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null
+        BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null,
+      recordRecentFiles: (paths, activity) => this.database.recordRecentFiles(paths, activity)
     }
 
     await extension.install(context)
@@ -340,6 +365,7 @@ export class MailService {
     await this.engine.removeAccount(accountId)
     await this.database.clearAccountData(accountId)
     await this.database.deleteAccount(accountId)
+    await this.dropOpenedAttachments(accountId)
   }
 
   async markAccountLastViewed(accountId: string): Promise<void> {
@@ -588,6 +614,10 @@ export class MailService {
         ...payload.cc.map((email) => ({ email })),
         ...payload.bcc.map((email) => ({ email }))
       ])
+      await this.database.recordRecentFiles(
+        payload.attachments.map((attachment) => attachment.path),
+        SENT_ATTACHMENT_ACTIVITY
+      )
 
       if (account.type === 'imap' && rawOutgoing) {
         const messageId = typeof result?.messageId === 'string' ? result.messageId.trim() : ''
@@ -638,15 +668,49 @@ export class MailService {
     )
   }
 
+  /**
+   * The database's share per account, plus the copies of opened
+   * attachments on disk beside it — everything local that the data
+   * settings let the user empty.
+   */
   async getDataStorageBreakdown(): Promise<DataStorageBreakdown> {
-    return this.database.getDataStorageBreakdown()
+    const [database, openedAttachmentsBytes] = await Promise.all([
+      this.database.getDataStorageBreakdown(),
+      directorySize(attachmentCacheRoot())
+    ])
+
+    return {
+      totalBytes: database.totalBytes + openedAttachmentsBytes,
+      sections: [
+        ...database.sections,
+        {
+          id: 'opened-attachments',
+          label: 'Allegati aperti',
+          kind: 'files',
+          sizeBytes: openedAttachmentsBytes
+        }
+      ]
+    }
   }
 
   async clearAccountData(accountId: string): Promise<void> {
     await this.ensureAccountExists(accountId)
     await this.engine.removeAccount(accountId)
     await this.database.clearAccountData(accountId)
+    await this.dropOpenedAttachments(accountId)
     await this.engine.addAccount(accountId)
+  }
+
+  private async dropOpenedAttachments(accountId?: string): Promise<void> {
+    const scope = accountId ? accountAttachmentCacheDirectory(accountId) : attachmentCacheRoot()
+
+    for (const directory of this.openedAttachments.keys()) {
+      if (directory.startsWith(scope)) {
+        this.openedAttachments.delete(directory)
+      }
+    }
+
+    await clearAttachmentCache(accountId)
   }
 
   async clearAllDataKeepAccounts(): Promise<void> {
@@ -658,6 +722,7 @@ export class MailService {
     await Promise.allSettled(accounts.map((account) => this.engine.removeAccount(account.id)))
 
     await this.database.clearAllDataKeepAccounts()
+    await this.dropOpenedAttachments()
 
     // Re-bootstrap all accounts in parallel. engine.addAccount returns once the
     // AccountConnection is created and its connection loop is started; the IMAP
@@ -665,36 +730,193 @@ export class MailService {
     await Promise.allSettled(accounts.map((account) => this.engine.addAccount(account.id)))
   }
 
-  async pickAttachments(): Promise<PickedAttachment[]> {
-    const result = await dialog.showOpenDialog({
-      title: 'Seleziona allegati',
-      properties: ['openFile', 'multiSelections']
-    })
-
-    if (result.canceled) {
-      return []
+  async pickAttachments(parentWindow?: BrowserWindow): Promise<PickedAttachment[]> {
+    const options = {
+      title: 'Allega file',
+      buttonLabel: 'Allega',
+      properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'>
     }
+    const result = parentWindow
+      ? await dialog.showOpenDialog(parentWindow, options)
+      : await dialog.showOpenDialog(options)
 
-    return result.filePaths.map((filePath) => ({
-      path: filePath,
-      name: basename(filePath),
-      size: statSync(filePath).size
-    }))
+    return result.canceled ? [] : this.describeFiles(result.filePaths)
   }
 
-  async downloadAttachment(input: DownloadAttachmentInput): Promise<DownloadAttachmentResult> {
-    const payload = downloadAttachmentSchema.parse(input)
-    const attachmentIndex = parseAttachmentIndex(payload.attachmentId)
-    const attachment = await this.engine.fetchAttachmentForDownload(payload.ref, attachmentIndex)
-    const downloadsDirectory = app.getPath('downloads')
-    await mkdir(downloadsDirectory, { recursive: true })
-    const fileName = sanitizePathSegment(attachment.fileName, 'allegato')
-    const filePath = await resolveUniqueFilePath(downloadsDirectory, fileName)
-    await writeFile(filePath, attachment.content)
+  /**
+   * Opens an attachment with the application the system uses for its type,
+   * from a copy in the account's attachment folder. The copy is reused
+   * while it is untouched; if the user edited it in the meantime, the
+   * attachment opens as a fresh copy beside it, so the message always
+   * shows what it actually contains.
+   */
+  async openAttachment(input: AttachmentRef): Promise<OpenAttachmentResult> {
+    const { ref, attachmentId } = attachmentRefSchema.parse(input)
+    const message = await this.requireMessage(ref)
+    const index = parseAttachmentIndex(attachmentId)
+    const listed = message.attachments.find((attachment) => attachment.id === attachmentId)
 
-    return {
-      filePath
+    if (!listed) {
+      throw new Error('Allegato non disponibile per questo messaggio.')
     }
+
+    if (isExecutableAttachment(listed.fileName)) {
+      return { status: 'blocked' }
+    }
+
+    const directory = openedAttachmentDirectory(ref.accountId, [
+      ref.folderPath,
+      ref.uid,
+      message.messageId ?? message.date,
+      index
+    ])
+    const known = this.openedAttachments.get(directory)
+    let filePath =
+      known && (await fileSha256(known.filePath)) === known.digest ? known.filePath : null
+
+    if (!filePath) {
+      const [attachment] = await this.engine.fetchAttachments(ref, [index])
+      const digest = sha256(attachment.content)
+      const target = join(directory, sanitizePathSegment(attachment.fileName, 'allegato'))
+      const existingDigest = await fileSha256(target)
+
+      if (existingDigest === digest) {
+        filePath = target
+      } else {
+        await mkdir(directory, { recursive: true })
+        filePath = existingDigest
+          ? await resolveUniqueFilePath(directory, basename(target))
+          : target
+        await writeFile(filePath, attachment.content)
+        await markFromInternet(filePath)
+      }
+
+      this.openedAttachments.set(directory, { filePath, digest })
+    }
+
+    const failure = await shell.openPath(filePath)
+    return failure ? { status: 'no-application' } : { status: 'opened' }
+  }
+
+  /** "Salva con nome…": the system save dialog, starting where the user last saved. */
+  async saveAttachment(input: AttachmentRef, parentWindow?: BrowserWindow): Promise<string | null> {
+    const { ref, attachmentId } = attachmentRefSchema.parse(input)
+    const message = await this.requireMessage(ref)
+    const listed = message.attachments.find((attachment) => attachment.id === attachmentId)
+
+    if (!listed) {
+      throw new Error('Allegato non disponibile per questo messaggio.')
+    }
+
+    const options = {
+      title: 'Salva allegato',
+      buttonLabel: 'Salva',
+      defaultPath: sanitizePathSegment(listed.fileName, 'allegato')
+    }
+    const choice = parentWindow
+      ? await dialog.showSaveDialog(parentWindow, options)
+      : await dialog.showSaveDialog(options)
+
+    if (choice.canceled || !choice.filePath) {
+      return null
+    }
+
+    const [attachment] = await this.engine.fetchAttachments(ref, [
+      parseAttachmentIndex(attachmentId)
+    ])
+    await writeFile(choice.filePath, attachment.content)
+    await markFromInternet(choice.filePath)
+    await this.database.recordRecentFiles([choice.filePath], SAVED_ATTACHMENT_ACTIVITY)
+
+    return choice.filePath
+  }
+
+  /**
+   * "Salva tutti": every attachment the reader lists, into one folder the
+   * user picks, from a single download of the message. Names already taken
+   * there get a " (1)" rather than overwriting anything.
+   */
+  async saveAllAttachments(
+    input: MessageRef,
+    parentWindow?: BrowserWindow
+  ): Promise<SavedAttachments | null> {
+    const ref = messageRefSchema.parse(input)
+    await this.requireMessage(ref)
+
+    const options = {
+      title: 'Salva tutti gli allegati',
+      buttonLabel: 'Salva qui',
+      properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>
+    }
+    const choice = parentWindow
+      ? await dialog.showOpenDialog(parentWindow, options)
+      : await dialog.showOpenDialog(options)
+    const directory = choice.filePaths[0]
+
+    if (choice.canceled || !directory) {
+      return null
+    }
+
+    const attachments = await this.engine.fetchAttachments(ref)
+    const filePaths: string[] = []
+
+    for (const attachment of attachments) {
+      const filePath = await resolveUniqueFilePath(
+        directory,
+        sanitizePathSegment(attachment.fileName, 'allegato')
+      )
+      await writeFile(filePath, attachment.content)
+      await markFromInternet(filePath)
+      filePaths.push(filePath)
+    }
+
+    await this.database.recordRecentFiles(filePaths, SAVED_ATTACHMENT_ACTIVITY)
+    return { directory, filePaths }
+  }
+
+  revealFile(filePath: string): void {
+    shell.showItemInFolder(z.string().min(1).parse(filePath))
+  }
+
+  async listRecentFiles(): Promise<RecentFile[]> {
+    return listRecentFiles(
+      await this.database.listRecentFiles(RECENT_FILES_OFFERED * 3),
+      RECENT_FILES_OFFERED
+    )
+  }
+
+  /**
+   * Turns paths dropped on the composer or picked from the recent files into
+   * attachments. Folders are refused by name, and a file that vanished or
+   * sits on a share that is gone says so, instead of failing at send time.
+   */
+  async describeFiles(input: string[]): Promise<PickedAttachment[]> {
+    const paths = filePathsSchema.parse(input)
+
+    return Promise.all(
+      paths.map(async (filePath) => {
+        const stats = await stat(filePath).catch(() => null)
+
+        if (!stats) {
+          throw new Error(`${basename(filePath)} non è più disponibile.`)
+        }
+
+        if (!stats.isFile()) {
+          throw new Error(`${basename(filePath)} è una cartella: si possono allegare solo file.`)
+        }
+
+        return { path: filePath, name: basename(filePath), size: stats.size }
+      })
+    )
+  }
+
+  async clearAttachmentCache(): Promise<void> {
+    await this.dropOpenedAttachments()
+  }
+
+  private async requireMessage(ref: MessageRef): Promise<MailMessageDetail> {
+    await this.ensureAccountExists(ref.accountId)
+    return this.getMessage(ref)
   }
 
   private async resolveEffectiveUnifiedInboxAccountIds(accounts: MailAccount[]): Promise<string[]> {

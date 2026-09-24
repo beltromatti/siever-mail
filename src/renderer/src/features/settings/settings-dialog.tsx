@@ -159,6 +159,7 @@ const ACCOUNT_SEGMENT_COLOR_CLASSES = [
   'bg-secondary/70'
 ]
 const GLOBAL_SEGMENT_COLOR_CLASS = 'bg-muted-foreground'
+const FILES_SEGMENT_COLOR_CLASS = 'bg-foreground/30'
 
 function formatMegabytes(sizeBytes: number): string {
   const megabytes = Math.max(0, sizeBytes) / (1024 * 1024)
@@ -218,6 +219,9 @@ export function SettingsDialog({
   const [dataBreakdown, setDataBreakdown] = useState<DataStorageBreakdown | null>(null)
   const [dataBreakdownLoading, setDataBreakdownLoading] = useState(false)
   const [dataBreakdownError, setDataBreakdownError] = useState<string | null>(null)
+  // Bumped after something the breakdown measures was emptied from here.
+  const [dataBreakdownRevision, setDataBreakdownRevision] = useState(0)
+  const [clearingOpenedAttachments, setClearingOpenedAttachments] = useState(false)
   const [signaturesByAccountId, setSignaturesByAccountId] = useState<Record<string, string>>({})
   const [signatureDraftsByAccountId, setSignatureDraftsByAccountId] = useState<
     Record<string, string>
@@ -338,8 +342,26 @@ export function SettingsDialog({
     accounts.length,
     removingAccountId,
     clearingAccountDataId,
-    clearingDatabaseData
+    clearingDatabaseData,
+    dataBreakdownRevision
   ])
+
+  const clearOpenedAttachments = async (): Promise<void> => {
+    setClearingOpenedAttachments(true)
+
+    try {
+      await window.mailApi.clearAttachmentCache()
+      setDataBreakdownRevision((current) => current + 1)
+    } catch (caughtError) {
+      setDataBreakdownError(
+        caughtError instanceof Error && caughtError.message.trim()
+          ? caughtError.message
+          : 'Pulizia degli allegati aperti non riuscita.'
+      )
+    } finally {
+      setClearingOpenedAttachments(false)
+    }
+  }
 
   useEffect(() => {
     if (!open || activeSectionId !== 'signatures') {
@@ -492,9 +514,11 @@ export function SettingsDialog({
         const colorClass =
           section.kind === 'global'
             ? GLOBAL_SEGMENT_COLOR_CLASS
-            : ACCOUNT_SEGMENT_COLOR_CLASSES[
-                accountColorIndex++ % ACCOUNT_SEGMENT_COLOR_CLASSES.length
-              ] || ACCOUNT_SEGMENT_COLOR_CLASSES[0]
+            : section.kind === 'files'
+              ? FILES_SEGMENT_COLOR_CLASS
+              : ACCOUNT_SEGMENT_COLOR_CLASSES[
+                  accountColorIndex++ % ACCOUNT_SEGMENT_COLOR_CLASSES.length
+                ] || ACCOUNT_SEGMENT_COLOR_CLASSES[0]
 
         return {
           ...section,
@@ -921,7 +945,7 @@ export function SettingsDialog({
               <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
                 <div className="border-border bg-card/55 rounded-md border p-3">
                   <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-                    Totale Database
+                    Spazio occupato
                   </p>
                   <p className="mt-1 text-[14px] font-semibold">
                     {formatMegabytes(dataBreakdown?.totalBytes ?? 0)}
@@ -976,9 +1000,26 @@ export function SettingsDialog({
                               />
                               <span className="truncate">{section.label}</span>
                             </div>
-                            <span className="text-muted-foreground shrink-0">
-                              {formatMegabytes(section.sizeBytes)}
-                            </span>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <span className="text-muted-foreground">
+                                {formatMegabytes(section.sizeBytes)}
+                              </span>
+                              {section.kind === 'files' && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 px-2 text-[11px]"
+                                  disabled={clearingOpenedAttachments}
+                                  onClick={() => void clearOpenedAttachments()}
+                                >
+                                  {clearingOpenedAttachments && (
+                                    <LoaderCircle className="size-3 animate-spin" />
+                                  )}
+                                  Svuota
+                                </Button>
+                              )}
+                            </div>
                           </div>
                         ))}
                       </div>

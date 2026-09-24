@@ -5,6 +5,7 @@ import {
   ArrowRight,
   CheckCheck,
   ChevronDown,
+  Download,
   Flag,
   FolderInput,
   Forward,
@@ -22,6 +23,7 @@ import { Button } from '@renderer/components/ui/button'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { AddressTokens, summarizeAddresses, type AddressActions } from './address-tokens'
 import { AttachmentChip } from './attachment-chip'
+import type { AttachmentActions } from './use-attachment-actions'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,7 +34,7 @@ import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Separator } from '@renderer/components/ui/separator'
 import { buildMailFrameDocument, sanitizeMailHtml } from '@renderer/lib/mail-html'
 import { cn, formatAddress, formatDateLabel, formatDateTimeLabel } from '@renderer/lib/utils'
-import type { MailFolder, MailMessageDetail } from '@shared/models'
+import type { MailAttachment, MailFolder, MailMessageDetail } from '@shared/models'
 
 interface MessageViewerProps {
   folders: MailFolder[]
@@ -54,11 +56,12 @@ interface MessageViewerProps {
   onToggleExpanded: () => void
   onToggleSeen: (seen: boolean) => void
   onToggleFlagged: (flagged: boolean) => void
-  onDownloadAttachment: (attachmentId: string) => Promise<void>
+  attachmentActions: AttachmentActions | null
   /** What a click on a person in the header can do. */
   addressActions?: AddressActions
 }
 
+const ALL_ATTACHMENTS_TASK_ID = '__all__'
 const EXTERNAL_SCHEME_PATTERN = /^(https?|mailto|tel|sms):/i
 const MESSAGE_FRAME_SANDBOX = 'allow-same-origin'
 const MESSAGE_FRAME_MIN_HEIGHT = 320
@@ -402,10 +405,12 @@ export function MessageViewer({
   onToggleExpanded,
   onToggleSeen,
   onToggleFlagged,
-  onDownloadAttachment,
+  attachmentActions,
   addressActions
 }: MessageViewerProps): React.JSX.Element {
-  const [downloadingAttachmentIds, setDownloadingAttachmentIds] = useState<string[]>([])
+  // Attachments (and "all") with a download under way: their chip spins and
+  // a second click is ignored until it lands.
+  const [busyAttachmentIds, setBusyAttachmentIds] = useState<string[]>([])
   // Envelope details stay collapsed by default and reset with the message:
   // leaving them open would silently steal the height back from the body on
   // the next mail the user opens.
@@ -413,29 +418,47 @@ export function MessageViewer({
   const hasHtmlBody = Boolean(message?.html?.trim())
 
   useEffect(() => {
-    setDownloadingAttachmentIds([])
+    setBusyAttachmentIds([])
     setDetailsOpen(false)
   }, [message?.accountId, message?.folderPath, message?.uid])
 
-  const downloadAttachment = async (attachmentId: string): Promise<void> => {
-    let canStartDownload = false
-    setDownloadingAttachmentIds((current) => {
-      if (current.includes(attachmentId)) {
+  const runAttachmentTask = async (busyId: string, task: () => Promise<void>): Promise<void> => {
+    let started = false
+    setBusyAttachmentIds((current) => {
+      if (current.includes(busyId)) {
         return current
       }
 
-      canStartDownload = true
-      return [...current, attachmentId]
+      started = true
+      return [...current, busyId]
     })
 
-    if (!canStartDownload) {
+    if (!started) {
       return
     }
 
     try {
-      await onDownloadAttachment(attachmentId)
+      await task()
     } finally {
-      setDownloadingAttachmentIds((current) => current.filter((id) => id !== attachmentId))
+      setBusyAttachmentIds((current) => current.filter((id) => id !== busyId))
+    }
+  }
+
+  const openAttachment = (attachment: MailAttachment): void => {
+    if (attachmentActions) {
+      void runAttachmentTask(attachment.id, () => attachmentActions.open(attachment))
+    }
+  }
+
+  const saveAttachment = (attachment: MailAttachment): void => {
+    if (attachmentActions) {
+      void runAttachmentTask(attachment.id, () => attachmentActions.save(attachment))
+    }
+  }
+
+  const saveAllAttachments = (): void => {
+    if (attachmentActions) {
+      void runAttachmentTask(ALL_ATTACHMENTS_TASK_ID, () => attachmentActions.saveAll())
     }
   }
 
@@ -676,21 +699,56 @@ export function MessageViewer({
             <>
               <Separator className="my-4" />
               <div className="space-y-1.5">
-                <h4 className="text-muted-foreground text-[11px] font-semibold tracking-wide uppercase">
-                  {message.attachments.length === 1
-                    ? '1 allegato'
-                    : `${message.attachments.length} allegati`}
-                </h4>
+                <div className="flex h-6 items-center justify-between gap-2">
+                  <h4 className="text-muted-foreground text-[11px] font-semibold tracking-wide uppercase">
+                    {message.attachments.length === 1
+                      ? '1 allegato'
+                      : `${message.attachments.length} allegati`}
+                  </h4>
+                  {message.attachments.length > 1 && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-muted-foreground hover:text-foreground h-6 gap-1.5 px-2 text-[11px]"
+                      disabled={busyAttachmentIds.includes(ALL_ATTACHMENTS_TASK_ID)}
+                      onClick={saveAllAttachments}
+                    >
+                      {busyAttachmentIds.includes(ALL_ATTACHMENTS_TASK_ID) ? (
+                        <LoaderCircle className="size-3.5 animate-spin" />
+                      ) : (
+                        <Download className="size-3.5" />
+                      )}
+                      Salva tutti
+                    </Button>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {message.attachments.map((attachment) => (
-                    <AttachmentChip
-                      key={attachment.id}
-                      fileName={attachment.fileName}
-                      sizeBytes={attachment.size}
-                      busy={downloadingAttachmentIds.includes(attachment.id)}
-                      onOpen={() => void downloadAttachment(attachment.id)}
-                    />
-                  ))}
+                  {message.attachments.map((attachment) => {
+                    const busy = busyAttachmentIds.includes(attachment.id)
+
+                    return (
+                      <AttachmentChip
+                        key={attachment.id}
+                        fileName={attachment.fileName}
+                        sizeBytes={attachment.size}
+                        busy={busy}
+                        onOpen={() => openAttachment(attachment)}
+                        openHint="Clic per aprire"
+                        trailing={
+                          <IconButton
+                            label="Salva con nome…"
+                            tooltipSide="top"
+                            className="text-muted-foreground hover:text-foreground size-5"
+                            disabled={busy}
+                            onClick={() => saveAttachment(attachment)}
+                          >
+                            <Download className="size-3" />
+                          </IconButton>
+                        }
+                      />
+                    )
+                  })}
                 </div>
               </div>
             </>

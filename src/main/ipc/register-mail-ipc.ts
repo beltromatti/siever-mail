@@ -7,8 +7,8 @@ import { IPC_CHANNELS } from '@shared/ipc'
 import type {
   AddImapAccountInput,
   ActiveMailboxContext,
+  AttachmentRef,
   ComposeMailInput,
-  DownloadAttachmentInput,
   ListMessagesOptions,
   MessageRef,
   MoveMessageInput,
@@ -151,11 +151,33 @@ export function registerMailIpc(
   })
 
   registerHandler(IPC_CHANNELS.pickAttachments, async () => {
-    return mailService.pickAttachments()
+    return mailService.pickAttachments(getMainWindow() ?? undefined)
   })
 
-  registerHandler(IPC_CHANNELS.downloadAttachment, async (payload) => {
-    return mailService.downloadAttachment(payload as DownloadAttachmentInput)
+  registerHandler(IPC_CHANNELS.openAttachment, async (payload) => {
+    return mailService.openAttachment(payload as AttachmentRef)
+  })
+
+  registerHandler(IPC_CHANNELS.saveAttachment, async (payload) => {
+    return mailService.saveAttachment(payload as AttachmentRef, getMainWindow() ?? undefined)
+  })
+
+  registerHandler(IPC_CHANNELS.saveAllAttachments, async (ref) => {
+    return mailService.saveAllAttachments(ref as MessageRef, getMainWindow() ?? undefined)
+  })
+
+  registerHandler(IPC_CHANNELS.clearAttachmentCache, async () => {
+    await mailService.clearAttachmentCache()
+  })
+
+  registerHandler(IPC_CHANNELS.revealFile, async (filePath: string) => {
+    mailService.revealFile(filePath)
+  })
+
+  registerHandler(IPC_CHANNELS.listRecentFiles, async () => mailService.listRecentFiles())
+
+  registerHandler(IPC_CHANNELS.describeFiles, async (paths: string[]) => {
+    return mailService.describeFiles(paths)
   })
 
   registerHandler(IPC_CHANNELS.openExternalUrl, async (rawUrl: string) => {
