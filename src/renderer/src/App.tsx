@@ -2234,7 +2234,7 @@ function App(): React.JSX.Element {
                         size="lg"
                       >
                         <Plus className="size-4" />
-                        Aggiungi Account
+                        Aggiungi account
                       </Button>
                     }
                   />
@@ -2246,7 +2246,7 @@ function App(): React.JSX.Element {
                 />
               )}
               <p className="text-muted-foreground pt-1 text-xs tracking-[0.14em] uppercase">
-                VERSION {formatAppVersion(__APP_VERSION__)}
+                Versione {formatAppVersion(__APP_VERSION__)}
               </p>
             </div>
           </div>

@@ -1,5 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FolderOpen, LoaderCircle, LogOut, Mail, Plus, Save, Trash2 } from 'lucide-react'
+import {
+  FolderOpen,
+  LoaderCircle,
+  LogOut,
+  Mail,
+  Monitor,
+  Moon,
+  Plus,
+  Save,
+  Sun,
+  Trash2,
+  type LucideIcon
+} from 'lucide-react'
 
 import extensionRenderer from '@app/extension/renderer'
 import { Badge } from '@renderer/components/ui/badge'
@@ -26,6 +38,7 @@ import type {
   DataStorageBreakdown,
   MailAccount,
   MailLayoutMode,
+  ThemeMode,
   UiPreferences
 } from '@shared/models'
 
@@ -95,6 +108,12 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     title: tab.title,
     description: tab.description
   }))
+]
+
+const THEME_OPTIONS: ReadonlyArray<{ mode: ThemeMode; label: string; icon: LucideIcon }> = [
+  { mode: 'system', label: 'Sistema', icon: Monitor },
+  { mode: 'light', label: 'Chiaro', icon: Sun },
+  { mode: 'dark', label: 'Scuro', icon: Moon }
 ]
 
 const LAYOUT_OPTIONS: ReadonlyArray<{
@@ -704,29 +723,30 @@ export function SettingsDialog({
                     Tema
                   </p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
-                    Aspetto dell&apos;applicazione. Il tema scuro è quello predefinito.
+                    Aspetto dell&apos;applicazione. Con Sistema segue il tema chiaro o scuro del
+                    computer, anche quando cambia durante la giornata. Il testo dei messaggi resta
+                    su pagina bianca in entrambi, come viene scritto e ricevuto.
                   </p>
-                  <div className="mt-3 flex gap-2">
-                    <Button
-                      type="button"
-                      variant="default"
-                      size="sm"
-                      className="gap-2"
-                      aria-pressed="true"
-                    >
-                      Scuro
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="gap-2"
-                      onClick={() => {
-                        window.alert('Il tema chiaro sarà disponibile nelle prossime versioni.')
-                      }}
-                    >
-                      Chiaro
-                    </Button>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {THEME_OPTIONS.map((option) => {
+                      const Icon = option.icon
+                      const active = uiPreferences.themeMode === option.mode
+
+                      return (
+                        <Button
+                          key={option.mode}
+                          type="button"
+                          variant={active ? 'default' : 'outline'}
+                          size="sm"
+                          className="gap-2"
+                          aria-pressed={active}
+                          onClick={() => onUiPreferencesChange({ themeMode: option.mode })}
+                        >
+                          <Icon className="size-3.5" />
+                          {option.label}
+                        </Button>
+                      )
+                    })}
                   </div>
                 </div>
 
@@ -1038,7 +1058,7 @@ export function SettingsDialog({
                   </p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
                     Reimposta a zero i dati locali di un singolo account mantenendo il login attivo.
-                    Il bootstrap riparte come alla prima connessione.
+                    La posta si scarica di nuovo, come alla prima connessione.
                   </p>
                   {accounts.length === 0 ? (
                     <div className="border-border text-muted-foreground mt-3 rounded-md border border-dashed px-3 py-3 text-[12px]">

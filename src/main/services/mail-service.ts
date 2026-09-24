@@ -70,6 +70,7 @@ import {
   createSmtpTransport,
   verifyImapAccount
 } from './mail-engine/mail-transport'
+import { applyThemeMode } from '../theme'
 import { listRecentFiles } from './recent-files'
 import { decryptSecret, encryptSecret } from './secure-storage'
 
@@ -129,6 +130,7 @@ const accountSignatureInputSchema = z.object({
   html: z.string().max(MAX_ACCOUNT_SIGNATURE_HTML_LENGTH)
 })
 const uiPreferencesSchema = z.object({
+  themeMode: z.enum(['system', 'light', 'dark']),
   layoutMode: z.enum(['apple', 'outlook']),
   invertMessageListOrder: z.boolean(),
   messageListSort: z.object({
@@ -405,8 +407,15 @@ export class MailService {
     return this.engine.snapshotAccountConnectionStates()
   }
 
+  /**
+   * Also puts the stored theme into effect: the launch reads it from a
+   * mirror file, which a new install or a restored database may not have
+   * yet.
+   */
   async getUiPreferences(): Promise<UiPreferences> {
-    return this.database.getUiPreferences()
+    const preferences = await this.database.getUiPreferences()
+    applyThemeMode(preferences.themeMode)
+    return preferences
   }
 
   /**
@@ -417,7 +426,7 @@ export class MailService {
   async setUiPreferences(preferences: UiPreferences): Promise<UiPreferences> {
     const payload = uiPreferencesSchema.parse(preferences)
     await this.database.setUiPreferences(payload)
-    return this.database.getUiPreferences()
+    return this.getUiPreferences()
   }
 
   async getUnifiedInboxPreferences(): Promise<UnifiedInboxPreferences> {

@@ -6,11 +6,15 @@ import { Toaster as SonnerToaster, type ToasterProps } from 'sonner'
  *
  * Sonner draws its toasts from a handful of CSS variables; pointing them at
  * our tokens is what makes a toast look like the dialogs and menus around
- * it in both themes, instead of carrying the library's own palette.
+ * it in both themes, instead of carrying the library's own palette. Its
+ * `system` theme reads the same colour scheme the app's theme sets, so what
+ * the library still styles itself follows along.
  */
 export function Toaster(props: ToasterProps): React.JSX.Element {
   return (
     <SonnerToaster
+      theme="system"
+      richColors
       position="bottom-right"
       offset={16}
       gap={8}
@@ -27,6 +31,8 @@ export function Toaster(props: ToasterProps): React.JSX.Element {
           '--error-text': 'hsl(var(--destructive))',
           '--error-border': 'hsl(var(--destructive) / 0.45)',
           '--border-radius': 'calc(var(--radius) - 2px)',
+          // The spinner of a pending toast.
+          '--gray11': 'hsl(var(--muted-foreground))',
           fontFamily: 'var(--font-sans)'
         } as CSSProperties
       }
@@ -37,7 +43,7 @@ export function Toaster(props: ToasterProps): React.JSX.Element {
           description: 'text-muted-foreground! text-[11px]!',
           actionButton:
             'bg-secondary! text-secondary-foreground! hover:bg-secondary/80! h-6! rounded-md! px-2! text-[11px]! font-medium!',
-          icon: 'text-primary'
+          icon: 'text-primary in-data-[type=error]:text-destructive'
         }
       }}
       {...props}

@@ -698,7 +698,7 @@ export function MessageViewer({
 
             <IconButton
               label={message.isFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
-              className={cn('size-6.5', message.isFlagged && 'text-status-offline')}
+              className={cn('size-6.5', message.isFlagged && 'text-flagged')}
               onClick={() => onToggleFlagged(!message.isFlagged)}
             >
               <Flag className={cn('size-3.5', message.isFlagged && 'fill-current')} />

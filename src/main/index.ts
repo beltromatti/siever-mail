@@ -16,6 +16,11 @@ import { finalizeUpgradeMigration, prepareUpgradeMigration } from './services/da
 import { MailService } from './services/mail-service'
 import { normalizeExternalHttpUrl } from './utils/external-url'
 import { startFileLogging } from './utils/log-file'
+import {
+  applyStoredThemeMode,
+  followThemeWithWindowBackgrounds,
+  windowBackgroundColor
+} from './theme'
 
 import icon from '../../resources/icon.png?asset'
 
@@ -117,7 +122,7 @@ function createMainWindow(): BrowserWindow {
     frame: !isWindows,
     autoHideMenuBar: true,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    backgroundColor: '#070b14',
+    backgroundColor: windowBackgroundColor(),
     icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -198,6 +203,8 @@ app.on('second-instance', () => {
 if (hasSingleInstanceLock) {
   void app.whenReady().then(() => {
     startFileLogging()
+    applyStoredThemeMode()
+    followThemeWithWindowBackgrounds()
     electronApp.setAppUserModelId('com.siever.siever-mail')
 
     if (process.platform === 'darwin') {

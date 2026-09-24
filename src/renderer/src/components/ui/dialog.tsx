@@ -176,9 +176,9 @@ const DialogOverlay = React.forwardRef<
     className={cn(
       // No blur, and only a light dim. Every dialog can be dragged aside
       // precisely so the user can read what is behind it — an address, a
-      // practice number, the message being answered — and a blurred scrim
+      // reference number, the message being answered — and a blurred scrim
       // made that impossible however far the panel was moved.
-      'bg-background/30 fixed inset-0 z-50 transition-[background-color,opacity] duration-200',
+      'bg-scrim fixed inset-0 z-50 transition-opacity duration-200',
       className
     )}
     {...props}
@@ -241,7 +241,7 @@ const DialogContent = React.forwardRef<
           disappears entirely while it is being dragged.
         */}
         <DialogOverlay
-          className={cn(overlayClassName, isMoved && 'bg-background/10', isDragging && 'opacity-0')}
+          className={cn(overlayClassName, isMoved && 'opacity-35', isDragging && 'opacity-0')}
         />
         <DialogPrimitive.Content
           ref={setPanelRef}

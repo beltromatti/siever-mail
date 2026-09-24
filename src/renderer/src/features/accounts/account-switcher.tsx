@@ -110,7 +110,7 @@ export function AccountSwitcher({
             <DropdownMenuSeparator />
             <DropdownMenuItem className="cursor-pointer gap-2 px-3 py-2" onClick={onAddAccount}>
               <Plus className="text-primary size-4" />
-              Aggiungi Account
+              Aggiungi account
             </DropdownMenuItem>
           </>
         )}

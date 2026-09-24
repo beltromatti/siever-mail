@@ -132,6 +132,10 @@ export const DEFAULT_MESSAGE_LIST_FILTER: MessageListFilter = 'all'
  */
 export type MailLayoutMode = 'apple' | 'outlook'
 
+/** "Sistema" follows the operating system; "Chiaro" and "Scuro" stay put. */
+export type ThemeMode = 'system' | 'light' | 'dark'
+export const DEFAULT_THEME_MODE: ThemeMode = 'system'
+
 export const DEFAULT_MESSAGE_LIST_SORT_FIELD: MessageListSortField = 'date'
 export const DEFAULT_MESSAGE_LIST_SORT_DIRECTION: MessageListSortDirection = 'desc'
 
@@ -152,6 +156,7 @@ export const DEFAULT_MAIL_LAYOUT_MODE: MailLayoutMode = 'apple'
  * and the renderer only has one thing to load and one thing to save.
  */
 export interface UiPreferences {
+  themeMode: ThemeMode
   layoutMode: MailLayoutMode
   /**
    * Renders the list upside-down: same order, but the newest row sits at
@@ -186,6 +191,7 @@ export function clampReaderZoom(value: number): number {
 }
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
+  themeMode: DEFAULT_THEME_MODE,
   layoutMode: DEFAULT_MAIL_LAYOUT_MODE,
   invertMessageListOrder: false,
   messageListSort: {

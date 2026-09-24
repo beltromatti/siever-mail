@@ -208,10 +208,7 @@ export function MailToolbar({
           <Button
             variant="ghost"
             size="sm"
-            className={cn(
-              'h-7 gap-1.5 px-2 text-[11.5px]',
-              selectionFlagged && 'text-status-offline'
-            )}
+            className={cn('h-7 gap-1.5 px-2 text-[11.5px]', selectionFlagged && 'text-flagged')}
             disabled={!hasSelection}
             onClick={onToggleFlagged}
             title={selectionFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}

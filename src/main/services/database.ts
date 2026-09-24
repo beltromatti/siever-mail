@@ -26,6 +26,7 @@ import type {
   MessageListSortDirection,
   MessageListSortField,
   MessageRef,
+  ThemeMode,
   UiPreferences
 } from '@shared/models'
 import {
@@ -34,6 +35,7 @@ import {
   DEFAULT_MESSAGE_GROUPING_MODE,
   DEFAULT_MESSAGE_LIST_SORT_DIRECTION,
   DEFAULT_MESSAGE_LIST_SORT_FIELD,
+  DEFAULT_THEME_MODE,
   DEFAULT_UI_PREFERENCES,
   READER_ZOOM_DEFAULT
 } from '@shared/models'
@@ -83,6 +85,7 @@ const MESSAGE_LIST_SORT_FIELDS: ReadonlyArray<MessageListSortField> = [
 ]
 const MESSAGE_LIST_SORT_DIRECTIONS: ReadonlyArray<MessageListSortDirection> = ['asc', 'desc']
 const MESSAGE_GROUPING_MODES: ReadonlyArray<MessageGroupingMode> = ['none', 'auto', 'sender']
+const THEME_MODES: ReadonlyArray<ThemeMode> = ['system', 'light', 'dark']
 
 export interface StoredMailAccount extends MailAccount {
   encryptedSecret: string
@@ -1022,9 +1025,9 @@ export class AppDatabase {
       this.prisma.recentFile.deleteMany(),
       this.prisma.$executeRaw`DELETE FROM account_signatures`,
       // Reset the singleton row of app preferences (unified inbox toggle)
-      // back to its empty state. Extensions own their own tables and are
-      // expected to clear themselves via their own IPC handlers when the
-      // user requests it.
+      // back to its empty state; how the app looks stays as chosen.
+      // Extensions own their own tables and clear them in their
+      // `clearData`, which the service calls right after this.
       this.prisma.$executeRaw`
         UPDATE app_preferences
         SET unified_inbox_included_account_ids = NULL,
@@ -2520,6 +2523,7 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS app_preferences (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         unified_inbox_included_account_ids TEXT,
+        theme_mode TEXT NOT NULL DEFAULT 'system',
         layout_mode TEXT NOT NULL DEFAULT 'apple',
         invert_message_list_default_order INTEGER NOT NULL DEFAULT 0,
         message_list_sort_field TEXT NOT NULL DEFAULT 'date',
@@ -2593,7 +2597,8 @@ export class AppDatabase {
       ['message_list_sort_field', "TEXT NOT NULL DEFAULT 'date'"],
       ['message_list_sort_direction', "TEXT NOT NULL DEFAULT 'desc'"],
       ['message_grouping', "TEXT NOT NULL DEFAULT 'auto'"],
-      ['reader_zoom', 'INTEGER NOT NULL DEFAULT 100']
+      ['reader_zoom', 'INTEGER NOT NULL DEFAULT 100'],
+      ['theme_mode', "TEXT NOT NULL DEFAULT 'system'"]
     ]
 
     for (const [column, definition] of additions) {
@@ -2620,7 +2625,8 @@ export class AppDatabase {
     await this.ready
 
     const rows = (await this.prisma.$queryRaw`
-      SELECT layout_mode AS layoutMode,
+      SELECT theme_mode AS themeMode,
+             layout_mode AS layoutMode,
              invert_message_list_default_order AS invertOrder,
              message_list_sort_field AS sortField,
              message_list_sort_direction AS sortDirection,
@@ -2630,6 +2636,7 @@ export class AppDatabase {
       WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
       LIMIT 1
     `) as Array<{
+      themeMode?: unknown
       layoutMode?: unknown
       invertOrder?: unknown
       sortField?: unknown
@@ -2645,6 +2652,7 @@ export class AppDatabase {
     }
 
     return {
+      themeMode: pickFromAllowedValues(row.themeMode, THEME_MODES, DEFAULT_THEME_MODE),
       layoutMode: pickFromAllowedValues(
         row.layoutMode,
         MAIL_LAYOUT_MODES,
@@ -2677,7 +2685,8 @@ export class AppDatabase {
 
     await this.prisma.$executeRaw`
       UPDATE app_preferences
-      SET layout_mode = ${preferences.layoutMode},
+      SET theme_mode = ${preferences.themeMode},
+          layout_mode = ${preferences.layoutMode},
           invert_message_list_default_order = ${preferences.invertMessageListOrder ? 1 : 0},
           message_list_sort_field = ${preferences.messageListSort.field},
           message_list_sort_direction = ${preferences.messageListSort.direction},

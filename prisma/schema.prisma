@@ -118,6 +118,7 @@ model RecentFile {
 model AppPreference {
   id                             Int     @id
   unifiedInboxIncludedAccountIds String? @map("unified_inbox_included_account_ids")
+  themeMode                      String  @default("system") @map("theme_mode")
   layoutMode                     String  @default("apple") @map("layout_mode")
   invertMessageListDefaultOrder  Boolean @default(false) @map("invert_message_list_default_order")
   messageListSortField           String  @default("date") @map("message_list_sort_field")

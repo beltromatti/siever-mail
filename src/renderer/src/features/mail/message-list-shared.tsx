@@ -158,7 +158,7 @@ export function FlagToggle({
             'inline-flex size-4 shrink-0 items-center justify-center rounded-sm transition-opacity',
             'focus-visible:ring-ring/70 outline-none focus-visible:opacity-100 focus-visible:ring-2',
             flagged
-              ? 'text-status-offline opacity-100'
+              ? 'text-flagged opacity-100'
               : 'text-muted-foreground/70 hover:text-foreground opacity-0 group-hover:opacity-100',
             className
           )}

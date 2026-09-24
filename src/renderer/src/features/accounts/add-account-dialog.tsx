@@ -143,7 +143,7 @@ export function AddAccountDialog({
           {trigger || (
             <Button className="gap-2" size="sm">
               <Plus className="size-4" />
-              Aggiungi Account
+              Aggiungi account
             </Button>
           )}
         </DialogTrigger>
