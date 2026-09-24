@@ -20,6 +20,7 @@ import {
 
 import { Button } from '@renderer/components/ui/button'
 import { IconButton } from '@renderer/components/ui/icon-button'
+import { AddressTokens, summarizeAddresses, type AddressActions } from './address-tokens'
 import { AttachmentChip } from './attachment-chip'
 import {
   DropdownMenu,
@@ -54,6 +55,8 @@ interface MessageViewerProps {
   onToggleSeen: (seen: boolean) => void
   onToggleFlagged: (flagged: boolean) => void
   onDownloadAttachment: (attachmentId: string) => Promise<void>
+  /** What a click on a person in the header can do. */
+  addressActions?: AddressActions
 }
 
 const EXTERNAL_SCHEME_PATTERN = /^(https?|mailto|tel|sms):/i
@@ -76,6 +79,46 @@ function addressesToLabel(addresses: { name?: string; address: string }[]): stri
   }
 
   return addresses.map(formatAddress).join(', ')
+}
+
+/**
+ * Who the message went to, in one short phrase. A message that names nobody
+ * in To or Cc reached this mailbox as a blind copy or through a list, which
+ * is worth saying rather than printing an empty "A".
+ */
+function recipientsSummary(message: MailMessageDetail): string {
+  const copies =
+    message.cc.length === 1
+      ? `Cc ${summarizeAddresses(message.cc)}`
+      : message.cc.length > 1
+        ? `Cc ${message.cc.length} persone`
+        : null
+
+  if (message.to.length > 0) {
+    const direct = `A ${summarizeAddresses(message.to)}`
+    return copies ? `${direct} · ${copies}` : direct
+  }
+
+  if (message.cc.length > 0) {
+    return `Cc ${summarizeAddresses(message.cc)}`
+  }
+
+  return 'Destinatari non divulgati'
+}
+
+function DetailsLabel({
+  children,
+  count
+}: {
+  children: React.ReactNode
+  count: number
+}): React.JSX.Element {
+  return (
+    <span className="whitespace-nowrap">
+      {children}
+      {count > 1 && <span className="ml-0.5 opacity-60">{count}</span>}
+    </span>
+  )
 }
 
 function resolveClickableUrl(element: Element): string | null {
@@ -359,7 +402,8 @@ export function MessageViewer({
   onToggleExpanded,
   onToggleSeen,
   onToggleFlagged,
-  onDownloadAttachment
+  onDownloadAttachment,
+  addressActions
 }: MessageViewerProps): React.JSX.Element {
   const [downloadingAttachmentIds, setDownloadingAttachmentIds] = useState<string[]>([])
   // Envelope details stay collapsed by default and reset with the message:
@@ -552,7 +596,9 @@ export function MessageViewer({
             {addressesToLabel(message.from)}
           </span>
           <span className="shrink-0 opacity-50">·</span>
-          <span className="min-w-0 shrink truncate">A {addressesToLabel(message.to)}</span>
+          {/* The first person and a count, never the whole list: the full
+              list lives under Dettagli, one token per person. */}
+          <span className="min-w-0 shrink truncate">{recipientsSummary(message)}</span>
           <span className="shrink-0 opacity-50">·</span>
           <span className="shrink-0 whitespace-nowrap">{formatDateLabel(message.date)}</span>
           {message.hasAttachments && (
@@ -578,35 +624,42 @@ export function MessageViewer({
             />
           </button>
         </div>
-
-        {detailsOpen && (
-          <div className="text-muted-foreground border-border/50 grid grid-cols-[2.75rem_minmax(0,1fr)] gap-x-2 gap-y-0.5 border-t pt-1.5 text-[11px]">
-            <span>Da</span>
-            <span className="text-foreground min-w-0 break-words">
-              {addressesToLabel(message.from)}
-            </span>
-            <span>A</span>
-            <span className="min-w-0 break-words">{addressesToLabel(message.to)}</span>
-            {message.cc.length > 0 && (
-              <>
-                <span>Cc</span>
-                <span className="min-w-0 break-words">{addressesToLabel(message.cc)}</span>
-              </>
-            )}
-            {message.bcc.length > 0 && (
-              <>
-                <span>Ccn</span>
-                <span className="min-w-0 break-words">{addressesToLabel(message.bcc)}</span>
-              </>
-            )}
-            <span>Data</span>
-            <span className="min-w-0">{formatDateTimeLabel(message.date)}</span>
-          </div>
-        )}
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-3.5">
+          {detailsOpen && (
+            // The envelope details sit at the top of the scrolling area
+            // rather than in the fixed header: a distribution list of four
+            // hundred people then scrolls past like the rest of the message
+            // instead of squeezing the body out of a half-height reading
+            // pane.
+            <div className="text-muted-foreground border-border/60 mb-3.5 grid grid-cols-[2.75rem_minmax(0,1fr)] items-baseline gap-x-2 gap-y-1.5 border-b pb-3 text-[11px]">
+              <DetailsLabel count={message.from.length}>Da</DetailsLabel>
+              <AddressTokens addresses={message.from} actions={addressActions} />
+              {message.to.length > 0 && (
+                <>
+                  <DetailsLabel count={message.to.length}>A</DetailsLabel>
+                  <AddressTokens addresses={message.to} actions={addressActions} />
+                </>
+              )}
+              {message.cc.length > 0 && (
+                <>
+                  <DetailsLabel count={message.cc.length}>Cc</DetailsLabel>
+                  <AddressTokens addresses={message.cc} actions={addressActions} />
+                </>
+              )}
+              {message.bcc.length > 0 && (
+                <>
+                  <DetailsLabel count={message.bcc.length}>Ccn</DetailsLabel>
+                  <AddressTokens addresses={message.bcc} actions={addressActions} />
+                </>
+              )}
+              <span>Data</span>
+              <span className="text-foreground min-w-0">{formatDateTimeLabel(message.date)}</span>
+            </div>
+          )}
+
           {hasHtmlBody && message.html ? (
             <EmailHtmlFrame
               key={`${message.accountId}:${message.folderPath}:${message.uid}`}

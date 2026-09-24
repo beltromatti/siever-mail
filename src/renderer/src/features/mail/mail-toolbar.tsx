@@ -135,7 +135,7 @@ export function MailToolbar({
 
       <div className="bg-border/60 h-5 w-px shrink-0" />
 
-      <div className="toolbar-scroll-x min-w-0 flex-1 overflow-x-auto overflow-y-hidden">
+      <div className="scrollbar-thin min-w-0 flex-1 overflow-x-auto overflow-y-hidden">
         <div className="flex w-max items-center gap-0.5 pr-1">
           {selectedCount > 1 && (
             <span className="text-primary mr-1 inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold">

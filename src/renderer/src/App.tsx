@@ -31,9 +31,11 @@ import { WorkspaceLayout } from '@renderer/features/workspace/workspace-layout'
 import extensionRenderer from '@app/extension/renderer'
 import type { ExtensionSelectionContext, ExtensionHostHooks } from '@app/extension/types'
 import { MessageViewer } from '@renderer/features/mail/message-viewer'
+import type { AddressActions } from '@renderer/features/mail/address-tokens'
 import { MailToolbar } from '@renderer/features/mail/mail-toolbar'
 import { SettingsDialog } from '@renderer/features/settings/settings-dialog'
 import { Button } from '@renderer/components/ui/button'
+import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { cn, formatAppVersion } from '@renderer/lib/utils'
 import { buildMessageSections } from '@renderer/lib/message-sections'
@@ -283,6 +285,7 @@ function AppFrame({
         )}
         <div className="h-full min-h-0">{children}</div>
       </div>
+      <Toaster />
     </TooltipProvider>
   )
 }
@@ -1964,6 +1967,20 @@ function App(): React.JSX.Element {
     setComposerOpen(true)
   }, [selectedMessage])
 
+  const addressActions = useMemo<AddressActions>(
+    () => ({
+      onCompose: (address) => {
+        setComposerInitial({ to: [address.address] })
+        setComposerOpen(true)
+      },
+      onSearch: (address) => {
+        setSearch(address.address)
+        setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
+      }
+    }),
+    []
+  )
+
   const handleComposerSendRequested = useCallback(
     (payload: ComposeMailInput, draft: ComposerRetryDraft): void => {
       setComposerOpen(false)
@@ -2393,6 +2410,7 @@ function App(): React.JSX.Element {
               }
             }}
             onDownloadAttachment={downloadSelectedMessageAttachment}
+            addressActions={addressActions}
           />
         }
       />

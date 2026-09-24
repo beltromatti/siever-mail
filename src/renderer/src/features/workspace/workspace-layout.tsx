@@ -151,17 +151,25 @@ export function WorkspaceLayout({
   )
 
   if (mode === 'outlook') {
+    // The column is declared as `minmax(0, 1fr)` for the same reason as the
+    // shell's: an implicit grid column is `auto`, which grows to the widest
+    // unbreakable line inside it. A message addressed to seventeen people
+    // put a single-line recipient list in the reading header, and that line
+    // stretched the table and the message past the right edge of the window.
     return shell(
       sideColumn,
       <>
         {toolbar}
         {notice}
         <div
-          className="grid min-h-0 flex-1 gap-2"
-          style={{ gridTemplateRows: `${OUTLOOK_TABLE_HEIGHT} minmax(0, 1fr)` }}
+          className="grid min-h-0 min-w-0 flex-1 gap-2"
+          style={{
+            gridTemplateColumns: 'minmax(0, 1fr)',
+            gridTemplateRows: `${OUTLOOK_TABLE_HEIGHT} minmax(0, 1fr)`
+          }}
         >
-          <div className="min-h-0">{messageList}</div>
-          <div className="min-h-0">{reader}</div>
+          <div className="min-h-0 min-w-0">{messageList}</div>
+          <div className="min-h-0 min-w-0">{reader}</div>
         </div>
       </>
     )

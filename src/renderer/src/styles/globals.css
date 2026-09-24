@@ -46,6 +46,8 @@
   --brand-accent: 49 98% 56%;
   --status-online: 142 70% 48%;
   --status-offline: 0 72% 56%;
+  --scrollbar-thumb: 218 16% 30%;
+  --scrollbar-thumb-hover: 217 14% 46%;
   --radius: 0.88rem;
 }
 
@@ -86,6 +88,8 @@
   --color-brand-accent: hsl(var(--brand-accent));
   --color-status-online: hsl(var(--status-online));
   --color-status-offline: hsl(var(--status-offline));
+  --color-scrollbar-thumb: hsl(var(--scrollbar-thumb));
+  --color-scrollbar-thumb-hover: hsl(var(--scrollbar-thumb-hover));
 }
 
 @layer base {
@@ -120,6 +124,45 @@
     height: 100%;
     min-height: 0;
     overflow: hidden;
+  }
+
+  /*
+    One scrollbar for the whole app. Every native scroll container — the
+    settings panes, dropdown menus, the archive picker's list, anything an
+    extension adds — gets the same thin rounded thumb as the Radix
+    ScrollArea, instead of the platform's default (on Windows, a grey
+    classic bar with arrow buttons). Deliberately the -webkit- pseudo
+    elements and not `scrollbar-width` / `scrollbar-color`: Chromium stops
+    honouring the pseudo elements on any element that sets the standard
+    properties, and the standard ones cannot round or inset the thumb.
+  */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    min-height: 32px;
+    min-width: 32px;
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-color: hsl(var(--scrollbar-thumb));
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--scrollbar-thumb-hover));
   }
 }
 
@@ -187,61 +230,17 @@
     text-wrap: balance;
   }
 
-  .toolbar-scroll-x {
-    scrollbar-width: thin;
-    scrollbar-color: hsl(var(--border) / 0.85) transparent;
+  /*
+    Thinner variant for strips that scroll sideways inside a bar (the
+    toolbar's actions): a full-size scrollbar there would be taller than the
+    gap it lives in.
+  */
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
   }
 
-  .toolbar-scroll-x::-webkit-scrollbar {
-    height: 7px;
-  }
-
-  .toolbar-scroll-x::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .toolbar-scroll-x::-webkit-scrollbar-thumb {
-    border-radius: 9999px;
-    background-color: hsl(var(--border) / 0.85);
-  }
-
-  .toolbar-scroll-x::-webkit-scrollbar-thumb:hover {
-    background-color: hsl(var(--border) / 0.85);
-  }
-
-  .scrollbar-y {
-    scrollbar-width: thin;
-    scrollbar-color: hsl(var(--border) / 0.88) transparent;
-  }
-
-  .scrollbar-y::-webkit-scrollbar {
-    width: 9px;
-  }
-
-  .scrollbar-y::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .scrollbar-y::-webkit-scrollbar-thumb {
-    border-radius: 9999px;
-    border: 2px solid transparent;
-    background-color: hsl(var(--border) / 0.88);
-    background-clip: content-box;
-  }
-
-  .scrollbar-y::-webkit-scrollbar-thumb:hover {
-    background-color: hsl(var(--muted-foreground) / 0.65);
-    background-clip: content-box;
-  }
-}
-
-@layer components {
-  /* Editor "shell" surrounding the iframe — toolbar background and rounded
-     edge. Per-content styles (font / blockquote / images / placeholder) live
-     inside the iframe document, not here, so marketing-email CSS can never
-     leak into the host renderer's cascade. */
-  .mail-editor-content {
-    min-height: 0;
-    background-color: hsl(var(--mail-editor-surface));
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    border-width: 1px;
   }
 }

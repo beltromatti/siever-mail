@@ -163,6 +163,39 @@ body > :first-child {
   margin-top: 0;
 }
 
+/* The message canvas is white in every app theme (mail is authored for a
+   white page), so its scrollbar is tuned for white rather than following
+   the app's theme tokens, while keeping the app's shape: a 6px rounded
+   thumb inset in a 10px track, no arrow buttons. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  min-width: 32px;
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background-color: rgba(31, 35, 40, 0.24);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(31, 35, 40, 0.4);
+}
+
 a {
   color: #0b57d0;
 }

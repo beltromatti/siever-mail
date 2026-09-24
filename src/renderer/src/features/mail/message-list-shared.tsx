@@ -469,22 +469,21 @@ export type PrimaryAddressMode = 'sender' | 'recipient'
 
 export function primaryAddressLabel(message: MailMessageSummary, mode: PrimaryAddressMode): string {
   if (mode === 'recipient') {
-    const recipients = message.to.length > 0 ? message.to : message.cc
-    const first = recipients[0]
-
-    if (!first) {
-      return 'Nessun destinatario'
-    }
-
-    const label = first.name?.trim() || first.address
-    return recipients.length > 1 ? `${label} +${recipients.length - 1}` : label
+    return message.to.length + message.cc.length > 0
+      ? recipientsLabel(message)
+      : 'Nessun destinatario'
   }
 
   return message.senderName || 'Mittente sconosciuto'
 }
 
+/**
+ * The "A" column: the first person the message names and how many others it
+ * reached. Copies count — a message sent to one person with four hundred in
+ * Cc is not a message to one person.
+ */
 export function recipientsLabel(message: MailMessageSummary): string {
-  const recipients = message.to.length > 0 ? message.to : message.cc
+  const recipients = [...message.to, ...message.cc]
 
   if (recipients.length === 0) {
     return '—'

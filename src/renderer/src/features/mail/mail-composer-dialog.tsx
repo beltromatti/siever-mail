@@ -733,7 +733,13 @@ export function MailComposerDialog({
             className="placeholder:text-muted-foreground/70 h-8 w-full bg-transparent text-[12.5px] outline-none disabled:opacity-50"
           />
           {activeRecipientField === field && recipientSuggestions.length > 0 && (
-            <div className="border-border bg-popover absolute top-full right-0 left-0 z-40 mt-1 max-h-52 overflow-y-auto rounded-md border shadow-xl">
+            // The list refuses the mouse-down that would move focus out of
+            // the field, so dragging its scrollbar keeps the keyboard on the
+            // recipient being typed.
+            <div
+              onMouseDown={(event) => event.preventDefault()}
+              className="border-border bg-popover absolute top-full right-0 left-0 z-40 mt-1 max-h-52 overflow-y-auto rounded-md border shadow-xl"
+            >
               {recipientSuggestions.map((suggestion, index) => (
                 <button
                   key={`${suggestion.email}-${index}`}
