@@ -58,6 +58,7 @@ model Message {
   threadId        String? @map("thread_id")
   messageId       String? @map("message_id")
   subject         String
+  subjectSort     String  @default("") @map("subject_sort")
   fromJson        String  @map("from_json")
   toJson          String  @map("to_json")
   ccJson          String  @map("cc_json")
@@ -70,6 +71,8 @@ model Message {
   isFlagged       Boolean @default(false) @map("is_flagged")
   senderName      String  @default("") @map("sender_name")
   senderKey       String  @default("") @map("sender_key")
+  senderLabel     String  @default("") @map("sender_label")
+  senderSort      String  @default("") @map("sender_sort")
   hasAttachments  Boolean @map("has_attachments")
   size            Int
   htmlBody        String? @map("html_body")
@@ -80,7 +83,9 @@ model Message {
 
   @@unique([accountId, folderPath, uid])
   @@index([accountId, folderPath, dateIso], map: "idx_messages_folder_date")
-  @@index([accountId, folderPath, senderKey], map: "idx_messages_folder_sender")
+  @@index([accountId, folderPath, senderSort], map: "idx_messages_folder_sender_sort")
+  @@index([senderKey], map: "idx_messages_sender_key")
+  @@index([accountId, folderPath, subjectSort], map: "idx_messages_folder_subject_sort")
   @@index([accountId, folderPath, isFlagged], map: "idx_messages_folder_flagged")
   @@map("messages")
 }
@@ -106,7 +111,7 @@ model AppPreference {
   invertMessageListDefaultOrder  Boolean @default(false) @map("invert_message_list_default_order")
   messageListSortField           String  @default("date") @map("message_list_sort_field")
   messageListSortDirection       String  @default("desc") @map("message_list_sort_direction")
-  messageGrouping                String  @default("date") @map("message_grouping")
+  messageGrouping                String  @default("auto") @map("message_grouping")
   updatedAt                      BigInt  @map("updated_at")
 
   @@map("app_preferences")

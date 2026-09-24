@@ -24,7 +24,11 @@ import {
   summaryToMessageRef
 } from '@renderer/lib/message-selection'
 import { cn, formatByteSize, formatDateTimeLabel } from '@renderer/lib/utils'
-import { MESSAGE_LIST_PAGE_SIZE, type MessageListSortField } from '@shared/models'
+import {
+  defaultSortDirection,
+  MESSAGE_LIST_PAGE_SIZE,
+  type MessageListSortField
+} from '@shared/models'
 
 import { MESSAGE_TABLE_ROW_HEIGHT_PX } from './message-list-metrics'
 
@@ -114,9 +118,7 @@ export function MessageTable({
       return
     }
 
-    // First click on a new column picks the direction people actually expect
-    // from it: newest and largest first, but names alphabetically.
-    onSortChange({ field, direction: field === 'date' || field === 'size' ? 'desc' : 'asc' })
+    onSortChange({ field, direction: defaultSortDirection(field) })
   }
 
   const renderColumnHeader = (column: SortableColumn): React.JSX.Element => {
@@ -218,7 +220,6 @@ export function MessageTable({
                     section={section}
                     collapsed={collapsed}
                     allSelected={allSelected}
-                    uppercaseLabel={grouping === 'date'}
                     dense
                     onToggleCollapsed={() =>
                       setCollapsedSectionKeys((current) => {

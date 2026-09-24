@@ -62,6 +62,14 @@ export interface MailMessageSummary {
   senderName: string
   /** Lowercased address of the first sender. The grouping key. */
   senderKey: string
+  /**
+   * The name the message is filed under when the list is sorted or grouped
+   * by sender, and the one its row shows: the header's display name, or —
+   * when the header carries only an address — the latest name that address
+   * used in any other message, so a bare "cristian.sangiorgi@…" files with
+   * "Cristian Sangiorgi". The address itself only when no name is known.
+   */
+  senderLabel: string
 }
 
 export interface MailMessageDetail extends MailMessageSummary {
@@ -70,6 +78,14 @@ export interface MailMessageDetail extends MailMessageSummary {
   text?: string
   attachments: MailAttachment[]
 }
+
+/**
+ * A message as the engine reads it off the server, before the database has
+ * filed it. The sender label is not in it: it depends on every message
+ * stored for the address, so only the database can work it out.
+ */
+export type FetchedMessageSummary = Omit<MailMessageSummary, 'senderLabel'>
+export type FetchedMessageDetail = Omit<MailMessageDetail, 'senderLabel'>
 
 export type MessageListSortField = 'date' | 'sender' | 'subject' | 'size'
 export type MessageListSortDirection = 'asc' | 'desc'
@@ -82,14 +98,16 @@ export interface MailMessageListSort {
 /**
  * How the list breaks its rows into labelled sections.
  *   • 'none'   — one flat run.
- *   • 'date'   — Oggi / Ieri / this week / month / year buckets. Only
- *                meaningful while the list is ordered by date, so the UI
- *                falls back to a flat run under any other sort.
- *   • 'sender' — one section per sender. The database orders by sender
- *                first so each section is a single contiguous run, and the
- *                active sort still decides the order *inside* it.
+ *   • 'auto'   — sections follow the sort, like Outlook's "Mostra in
+ *                gruppi": Oggi / Ieri / week / month buckets while ordered
+ *                by date, one section per sender while ordered by sender,
+ *                a flat run under subject or size.
+ *   • 'sender' — one section per sender under any sort. The database
+ *                orders by sender first so each section is a single
+ *                contiguous run, and the active sort still decides the
+ *                order *inside* it.
  */
-export type MessageGroupingMode = 'none' | 'date' | 'sender'
+export type MessageGroupingMode = 'none' | 'auto' | 'sender'
 
 /**
  * Transient view filter above the list — the "Tutto / Non letti" tabs every
@@ -116,7 +134,16 @@ export type MailLayoutMode = 'apple' | 'outlook'
 
 export const DEFAULT_MESSAGE_LIST_SORT_FIELD: MessageListSortField = 'date'
 export const DEFAULT_MESSAGE_LIST_SORT_DIRECTION: MessageListSortDirection = 'desc'
-export const DEFAULT_MESSAGE_GROUPING_MODE: MessageGroupingMode = 'date'
+
+/**
+ * The direction a field starts in when the user switches to it: newest and
+ * largest first, names alphabetically. Carrying the previous field's
+ * direction over turned "Data, più recenti prima" into "Mittente Z → A".
+ */
+export function defaultSortDirection(field: MessageListSortField): MessageListSortDirection {
+  return field === 'date' || field === 'size' ? 'desc' : 'asc'
+}
+export const DEFAULT_MESSAGE_GROUPING_MODE: MessageGroupingMode = 'auto'
 export const DEFAULT_MAIL_LAYOUT_MODE: MailLayoutMode = 'apple'
 
 /**

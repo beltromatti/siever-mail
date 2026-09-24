@@ -109,7 +109,7 @@ const uiPreferencesSchema = z.object({
     field: z.enum(['date', 'sender', 'subject', 'size']),
     direction: z.enum(['asc', 'desc'])
   }),
-  messageGrouping: z.enum(['none', 'date', 'sender'])
+  messageGrouping: z.enum(['none', 'auto', 'sender'])
 })
 
 const unifiedInboxIncludedAccountsSchema = z.array(z.string().trim().min(1))
@@ -527,7 +527,7 @@ export class MailService {
       fetched.attachments
     )
 
-    return (await this.database.getMessage(ref)) ?? fetched
+    return (await this.database.getMessage(ref)) ?? { ...fetched, senderLabel: fetched.senderName }
   }
 
   async moveMessage(input: MoveMessageInput): Promise<void> {

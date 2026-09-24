@@ -5,8 +5,8 @@ import { IPC_CHANNELS } from '@shared/ipc'
 import type {
   AccountConnectionState,
   ActiveMailboxContext,
+  FetchedMessageDetail,
   MailFolder,
-  MailMessageDetail,
   MailMessageSummary,
   MessageRef,
   UnifiedInboxSummary
@@ -117,7 +117,7 @@ export class MailEngine {
     await connection.forceSyncFolder(folderPath)
   }
 
-  async fetchMessageDetail(ref: MessageRef): Promise<MailMessageDetail> {
+  async fetchMessageDetail(ref: MessageRef): Promise<FetchedMessageDetail> {
     const connection = await this.requestConnection(ref.accountId)
     return connection.fetchMessageDetail(ref)
   }

@@ -38,6 +38,7 @@ import {
   X
 } from 'lucide-react'
 import {
+  defaultSortDirection,
   type MailMessageListSort,
   type MailMessageSummary,
   type MessageGroupingMode,
@@ -190,8 +191,7 @@ export function MessageSectionHeading({
   allSelected,
   onToggleCollapsed,
   onSelectSection,
-  dense,
-  uppercaseLabel
+  dense
 }: {
   section: MessageSection
   collapsed: boolean
@@ -199,12 +199,6 @@ export function MessageSectionHeading({
   onToggleCollapsed: () => void
   onSelectSection: () => void
   dense?: boolean
-  /**
-   * Date buckets ("Oggi", "Questa settimana") read as section labels and
-   * suit small caps. People's names do not — "ALESSANDRO MARCONI" shouts,
-   * and the sender's own capitalisation carries information.
-   */
-  uppercaseLabel?: boolean
 }): React.JSX.Element {
   return (
     <div
@@ -243,7 +237,10 @@ export function MessageSectionHeading({
         <span
           className={cn(
             'truncate text-[11px] font-semibold',
-            uppercaseLabel ? 'tracking-[0.06em] uppercase' : 'tracking-normal',
+            // Date buckets ("Oggi", "Questa settimana") suit small caps.
+            // Names do not: "ALESSANDRO MARCONI" shouts, and the sender's own
+            // capitalisation carries information.
+            section.kind === 'date' ? 'tracking-[0.06em] uppercase' : 'tracking-normal',
             allSelected ? 'text-primary' : 'text-foreground/75'
           )}
         >
@@ -287,12 +284,15 @@ export const SORT_FIELD_OPTIONS: readonly SortFieldOption[] = [
   }
 ]
 
-const GROUPING_OPTIONS: ReadonlyArray<{ mode: MessageGroupingMode; label: string; hint: string }> =
-  [
-    { mode: 'none', label: 'Nessuno', hint: 'Elenco continuo' },
-    { mode: 'date', label: 'Data', hint: 'Oggi, Ieri, per mese' },
-    { mode: 'sender', label: 'Mittente', hint: 'Una sezione per mittente' }
-  ]
+export const GROUPING_OPTIONS: ReadonlyArray<{
+  mode: MessageGroupingMode
+  label: string
+  hint: string
+}> = [
+  { mode: 'auto', label: 'Automatico', hint: "Segue l'ordinamento" },
+  { mode: 'sender', label: 'Mittente', hint: 'Una sezione per mittente' },
+  { mode: 'none', label: 'Nessuno', hint: 'Elenco continuo' }
+]
 
 export interface MessageListControlsProps {
   sort: MailMessageListSort
@@ -419,7 +419,7 @@ export function MessageListControls({
             onValueChange={(nextField) =>
               onSortChange({
                 field: nextField as MessageListSortField,
-                direction: sort.direction
+                direction: defaultSortDirection(nextField as MessageListSortField)
               })
             }
           >
@@ -474,7 +474,7 @@ export function primaryAddressLabel(message: MailMessageSummary, mode: PrimaryAd
       : 'Nessun destinatario'
   }
 
-  return message.senderName || 'Mittente sconosciuto'
+  return message.senderLabel || 'Mittente sconosciuto'
 }
 
 /**

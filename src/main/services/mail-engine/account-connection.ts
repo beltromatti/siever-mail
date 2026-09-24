@@ -6,8 +6,9 @@ import type { ParsedMail } from 'mailparser'
 import { logMainError } from '@main/utils/error-utils'
 import type {
   AccountConnectionStatus,
+  FetchedMessageDetail,
+  FetchedMessageSummary,
   MailFolder,
-  MailMessageDetail,
   MailMessageSummary,
   MessageRef
 } from '@shared/models'
@@ -280,8 +281,8 @@ export class AccountConnection extends EventEmitter {
     )
   }
 
-  async fetchMessageDetail(ref: MessageRef): Promise<MailMessageDetail> {
-    return this.enqueuePrimaryWithReturn<MailMessageDetail>(async () => {
+  async fetchMessageDetail(ref: MessageRef): Promise<FetchedMessageDetail> {
+    return this.enqueuePrimaryWithReturn<FetchedMessageDetail>(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(ref.folderPath)
 
@@ -1330,14 +1331,14 @@ export class AccountConnection extends EventEmitter {
     folderPath: string,
     uids: number[],
     options: { includeBody: boolean }
-  ): Promise<MailMessageSummary[]> {
+  ): Promise<FetchedMessageSummary[]> {
     if (uids.length === 0) {
       return []
     }
 
     const client = this.requireSync()
     const uidSequence = uids.join(',')
-    const summaries: MailMessageSummary[] = []
+    const summaries: FetchedMessageSummary[] = []
 
     // Shared fetch request — the only difference between bootstrap and
     // incremental mode is whether we ask IMAP for the first 32 KB of source in

@@ -10,6 +10,7 @@ import { upgradeMailFontStacksInHtml } from '@shared/mail-fonts'
 import type {
   DataStorageBreakdown,
   DataStorageSection,
+  FetchedMessageSummary,
   MailAccount,
   MailAddress,
   MailAttachment,
@@ -35,6 +36,8 @@ import {
   DEFAULT_UI_PREFERENCES
 } from '@shared/models'
 import { parseSearchQuery, type SearchTerm, type SearchTermGroup } from '@shared/search'
+import { isMeaningfulDisplayName, senderSortKey } from '@shared/sender'
+import { subjectSortKey } from '@shared/subject'
 
 /**
  * SQLite hands INTEGER columns back as `bigint` or `number` depending on
@@ -76,7 +79,7 @@ const MESSAGE_LIST_SORT_FIELDS: ReadonlyArray<MessageListSortField> = [
   'size'
 ]
 const MESSAGE_LIST_SORT_DIRECTIONS: ReadonlyArray<MessageListSortDirection> = ['asc', 'desc']
-const MESSAGE_GROUPING_MODES: ReadonlyArray<MessageGroupingMode> = ['none', 'date', 'sender']
+const MESSAGE_GROUPING_MODES: ReadonlyArray<MessageGroupingMode> = ['none', 'auto', 'sender']
 
 export interface StoredMailAccount extends MailAccount {
   encryptedSecret: string
@@ -108,10 +111,13 @@ interface CreateAccountInput {
 interface FolderPersistenceInput extends MailFolder {}
 interface ContactSuggestionInput extends MailContactSuggestion {}
 
-type MessagePersistenceInput = MailMessageSummary
-
 const APP_PREFERENCES_SINGLETON_ID = 1
 const CONTACT_SUGGESTION_QUERY_SCAN_LIMIT = 120
+/**
+ * Past this many matching senders a search is not looking for one of them
+ * ("gmail", "com"), and the list keeps its plain order.
+ */
+const SEARCHED_SENDER_LIMIT = 200
 
 function parseJsonArray<T>(value: string): T[] {
   try {
@@ -278,24 +284,6 @@ function buildMessageSearchWhere(query?: string): Prisma.MessageWhereInput | nul
 }
 
 /**
- * Translates the renderer's user-facing sort choice into the Prisma
- * `orderBy` clause. The clause always ends with a `uid` tiebreaker so
- * messages with identical primary keys land in a deterministic order
- * (Prisma + SQLite would otherwise be free to reshuffle them between
- * queries, which would visibly flicker the list during incremental
- * sync).
- *
- * The fields we order on are columns that already exist on the
- * messages table, so this is a pure index-friendly sort with no extra
- * computation per row:
- *   • 'date'    → `dateIso` (the indexed envelope date)
- *   • 'subject' → `subject` (raw text, case-insensitive enough for
- *                 SQLite's default collation)
- *   • 'sender'  → `fromJson` (the serialized address array; sorting on
- *                 the raw JSON groups same-sender threads together,
- *                 which is what the user actually wants in practice)
- */
-/**
  * Narrows the page to unread or flagged messages. Both columns are indexed
  * per (account, folder), so the filter costs an index seek rather than a
  * scan even on a mailbox with thousands of rows.
@@ -311,6 +299,15 @@ function buildMessageFilterWhere(filter?: MessageListFilter): Prisma.MessageWher
   }
 }
 
+/**
+ * The user's sort choice as a Prisma `orderBy`. Every clause ends with a
+ * `uid` tiebreaker so rows with equal keys keep a stable order between
+ * queries — otherwise the list flickers while incremental sync lands.
+ * Sender and subject order on denormalised keys (`sender_sort`,
+ * `subject_sort`) that fold case, accents and reply prefixes away; the raw
+ * columns sort by bytes, which puts every capital before every lower-case
+ * letter.
+ */
 function buildMessageOrderBy(
   sort?: MailMessageListSort,
   grouping?: MessageGroupingMode
@@ -320,9 +317,14 @@ function buildMessageOrderBy(
   const withinGroup: Prisma.MessageOrderByWithRelationInput[] = (() => {
     switch (sort?.field) {
       case 'subject':
-        return [{ subject: direction }, { uid: direction }]
+        return [{ subjectSort: direction }, { dateIso: 'desc' }, { uid: 'desc' }]
       case 'sender':
-        return [{ senderName: direction }, { dateIso: direction }, { uid: direction }]
+        // Senders by the name they are filed under, case and accents folded
+        // away; inside each, newest first. A bare "cristian.sangiorgi@…"
+        // files under the name that address last used, so it sorts with
+        // "Cristian Sangiorgi" — and the several addresses a company
+        // writes from under one name are one sender, as the user reads them.
+        return [{ senderSort: direction }, { dateIso: 'desc' }, { uid: 'desc' }]
       case 'size':
         return [{ size: direction }, { dateIso: direction }, { uid: direction }]
       case 'date':
@@ -332,14 +334,57 @@ function buildMessageOrderBy(
   })()
 
   // Sender grouping needs each sender's messages to arrive as one
-  // contiguous run, so the section key leads the ORDER BY and the user's
-  // chosen sort decides the order *inside* each section. Date grouping
-  // needs no help: it buckets an already date-ordered page.
+  // contiguous run, so the sender leads the ORDER BY and the user's chosen
+  // sort decides the order *inside* each section. Date grouping needs no
+  // help: it buckets an already date-ordered page.
   if (grouping === 'sender' && sort?.field !== 'sender') {
-    return [{ senderName: 'asc' }, { senderKey: 'asc' }, ...withinGroup]
+    return [{ senderSort: 'asc' }, ...withinGroup]
   }
 
   return withinGroup
+}
+
+/**
+ * Whether the list is being read sender by sender — sorted by sender, or
+ * grouped by it — which is when a search should bring the senders it names
+ * to the top.
+ */
+function ordersBySender(sort?: MailMessageListSort, grouping?: MessageGroupingMode): boolean {
+  return sort?.field === 'sender' || grouping === 'sender'
+}
+
+/**
+ * Rows whose From line matches the search. Typing "sangiorgi" finds every
+ * message that mentions Sangiorgi — as sender, in copy, in a signature — and
+ * when the list is then read sender by sender, the messages *from* that
+ * person are the ones being looked for, so they lead (see
+ * `findSearchedSenders`). Field-scoped terms other than `da:` never name a
+ * sender.
+ */
+function buildSenderMatchWhere(query?: string): Prisma.MessageWhereInput | null {
+  const normalizedQuery = normalizeMessageSearchQuery(query)
+
+  if (!normalizedQuery) {
+    return null
+  }
+
+  const senderTerms = parseSearchQuery(normalizedQuery).terms.filter(
+    (term) => term.scope === 'any' || term.scope === 'from'
+  )
+
+  if (senderTerms.length === 0) {
+    return null
+  }
+
+  return { OR: senderTerms.map((term) => ({ fromJson: { contains: term.value } })) }
+}
+
+/** The name a message's own header gives its sender, when it gives a real one. */
+function headerSenderName(message: FetchedMessageSummary): string | undefined {
+  const first = message.from[0]
+  return first && isMeaningfulDisplayName(first.name, first.address)
+    ? first.name?.trim()
+    : undefined
 }
 
 function normalizeStorageSectionSizesToTotal(
@@ -813,6 +858,11 @@ export class AppDatabase {
             LENGTH(COALESCE(thread_id, '')) +
             LENGTH(COALESCE(message_id, '')) +
             LENGTH(subject) +
+            LENGTH(subject_sort) +
+            LENGTH(sender_name) +
+            LENGTH(sender_key) +
+            LENGTH(sender_label) +
+            LENGTH(sender_sort) +
             LENGTH(from_json) +
             LENGTH(to_json) +
             LENGTH(cc_json) +
@@ -1587,7 +1637,7 @@ export class AppDatabase {
   async upsertMessageSummaries(
     accountId: string,
     folderPath: string,
-    messages: MessagePersistenceInput[]
+    messages: FetchedMessageSummary[]
   ): Promise<{ added: MailMessageSummary[]; updated: MailMessageSummary[] }> {
     await this.ready
 
@@ -1620,10 +1670,15 @@ export class AppDatabase {
     const existingByUid = new Map(existingRows.map((row) => [row.uid, row]))
     const contactSuggestions: ContactSuggestionInput[] = []
     const now = BigInt(Date.now())
+    const knownSenderNames = await this.resolveKnownSenderNames(messages)
 
     await this.prisma.$transaction(
       messages.map((message) => {
         const existing = existingByUid.get(message.uid) || null
+        const senderLabel =
+          headerSenderName(message) ?? knownSenderNames.get(message.senderKey) ?? message.senderName
+        const senderSort = senderSortKey(senderLabel)
+        const subjectSort = subjectSortKey(message.subject)
 
         contactSuggestions.push(
           ...extractContactSuggestionsFromAddresses(message.from),
@@ -1639,6 +1694,7 @@ export class AppDatabase {
           threadId: message.threadId ?? null,
           messageId: message.messageId ?? null,
           subject: message.subject,
+          subjectSort,
           fromJson: JSON.stringify(message.from),
           toJson: JSON.stringify(message.to),
           ccJson: JSON.stringify(message.cc),
@@ -1651,6 +1707,8 @@ export class AppDatabase {
           isFlagged: message.isFlagged,
           senderName: message.senderName,
           senderKey: message.senderKey,
+          senderLabel,
+          senderSort,
           hasAttachments: message.hasAttachments,
           size: message.size,
           htmlBody: null,
@@ -1667,6 +1725,7 @@ export class AppDatabase {
           threadId: message.threadId ?? null,
           messageId: message.messageId ?? null,
           subject: message.subject,
+          subjectSort,
           fromJson: JSON.stringify(message.from),
           toJson: JSON.stringify(message.to),
           ccJson: JSON.stringify(message.cc),
@@ -1678,6 +1737,8 @@ export class AppDatabase {
           isFlagged: message.isFlagged,
           senderName: message.senderName,
           senderKey: message.senderKey,
+          senderLabel,
+          senderSort,
           hasAttachments: message.hasAttachments,
           size: message.size,
           updatedAt: now
@@ -1686,11 +1747,12 @@ export class AppDatabase {
         if (existing) {
           result.updated.push({
             ...message,
+            senderLabel,
             preview: update.preview,
             previewHydrated: update.previewHydrated
           })
         } else {
-          result.added.push(message)
+          result.added.push({ ...message, senderLabel })
         }
 
         return this.prisma.message.upsert({
@@ -1709,6 +1771,69 @@ export class AppDatabase {
 
     this.queueContactSuggestions(contactSuggestions)
     return result
+  }
+
+  /**
+   * The name each address in `messages` last went by, for the rows that
+   * carry no name of their own.
+   *
+   * A message is filed under the name its header gives the sender. One that
+   * gives only an address — a phone, a scanner, a client that never set a
+   * name — is filed under the latest name that address used in any other
+   * message, so it sorts and groups with that person instead of apart as a
+   * bare address. When this batch brings a newer name, the nameless rows
+   * already stored for the address take it too.
+   */
+  private async resolveKnownSenderNames(
+    messages: ReadonlyArray<FetchedMessageSummary>
+  ): Promise<Map<string, string>> {
+    const keys = [...new Set(messages.map((message) => message.senderKey).filter(Boolean))]
+
+    if (keys.length === 0) {
+      return new Map()
+    }
+
+    // SQLite takes the bare `sender_name` from the row holding MAX(date_iso).
+    const stored = await this.prisma.$queryRaw<Array<{ key: string; name: string; date: string }>>`
+      SELECT sender_key AS key, sender_name AS name, MAX(date_iso) AS date
+      FROM messages
+      WHERE sender_key IN (${Prisma.join(keys)})
+        AND LOWER(TRIM(sender_name)) <> sender_key
+      GROUP BY sender_key
+    `
+    const known = new Map(stored.map((row) => [row.key, { name: row.name, date: row.date }]))
+    const newer = new Map<string, { name: string; date: string }>()
+
+    for (const message of messages) {
+      const name = headerSenderName(message)
+      const latest = newer.get(message.senderKey) ?? known.get(message.senderKey)
+
+      if (message.senderKey && name && (!latest || message.date > latest.date)) {
+        newer.set(message.senderKey, { name, date: message.date })
+      }
+    }
+
+    const relabels = [...newer]
+      .filter(([key, latest]) => known.get(key)?.name !== latest.name)
+      .map(
+        ([key, latest]) => this.prisma.$executeRaw`
+          UPDATE messages
+          SET sender_label = ${latest.name}, sender_sort = ${senderSortKey(latest.name)}
+          WHERE sender_key = ${key}
+            AND LOWER(TRIM(sender_name)) = sender_key
+            AND sender_label <> ${latest.name}
+        `
+      )
+
+    if (relabels.length > 0) {
+      await this.prisma.$transaction(relabels)
+    }
+
+    for (const [key, latest] of newer) {
+      known.set(key, latest)
+    }
+
+    return new Map([...known].map(([key, latest]) => [key, latest.name]))
   }
 
   async updateMessagePreviews(
@@ -1775,6 +1900,7 @@ export class AppDatabase {
     isFlagged: boolean
     senderName: string
     senderKey: string
+    senderLabel: string
     hasAttachments: boolean
     size: number
   }): MailMessageSummary {
@@ -1797,7 +1923,8 @@ export class AppDatabase {
       hasAttachments: row.hasAttachments,
       size: row.size,
       senderName: row.senderName,
-      senderKey: row.senderKey
+      senderKey: row.senderKey,
+      senderLabel: row.senderLabel
     }
   }
 
@@ -1819,13 +1946,72 @@ export class AppDatabase {
         ? { accountId, folderPath, AND: constraints }
         : { accountId, folderPath }
 
-    const rows = await this.prisma.message.findMany({
+    const rows = await this.findMessagePage(
       where,
-      orderBy: buildMessageOrderBy(sort, grouping),
-      take: normalizedLimit
-    })
+      buildMessageOrderBy(sort, grouping),
+      normalizedLimit,
+      ordersBySender(sort, grouping) ? buildSenderMatchWhere(query) : null
+    )
 
     return rows.map((row) => this.mapMessageRowToSummary(row))
+  }
+
+  /**
+   * One page of `where` in `orderBy` order — except that the messages from
+   * the senders `senderMatch` names come first. Two queries rather than a
+   * CASE in the ORDER BY: Prisma cannot order on an expression, and the
+   * list pages by growing `take`, so the split never shifts between pages.
+   */
+  private async findMessagePage(
+    where: Prisma.MessageWhereInput,
+    orderBy: Prisma.MessageOrderByWithRelationInput[],
+    take: number,
+    senderMatch: Prisma.MessageWhereInput | null
+  ): Promise<Prisma.MessageGetPayload<object>[]> {
+    const senders = senderMatch ? await this.findSearchedSenders(where, senderMatch) : []
+
+    if (senders.length === 0) {
+      return this.prisma.message.findMany({ where, orderBy, take })
+    }
+
+    const leading: Prisma.MessageWhereInput = { senderSort: { in: senders } }
+    const first = await this.prisma.message.findMany({
+      where: { AND: [where, leading] },
+      orderBy,
+      take
+    })
+
+    if (first.length >= take) {
+      return first
+    }
+
+    const rest = await this.prisma.message.findMany({
+      where: { AND: [where, { NOT: leading }] },
+      orderBy,
+      take: take - first.length
+    })
+
+    return [...first, ...rest]
+  }
+
+  /**
+   * The senders among `where` whose From line matches the search, as sort
+   * keys. Taken per sender rather than per row, so every message filed
+   * under that sender leads together — including one sent under a name, or
+   * from an address, the search does not match.
+   */
+  private async findSearchedSenders(
+    where: Prisma.MessageWhereInput,
+    senderMatch: Prisma.MessageWhereInput
+  ): Promise<string[]> {
+    const rows = await this.prisma.message.groupBy({
+      by: ['senderSort'],
+      where: { AND: [where, senderMatch, { senderSort: { not: '' } }] },
+      orderBy: { senderSort: 'asc' },
+      take: SEARCHED_SENDER_LIMIT + 1
+    })
+
+    return rows.length > SEARCHED_SENDER_LIMIT ? [] : rows.map((row) => row.senderSort)
   }
 
   async countMessages(
@@ -1917,11 +2103,12 @@ export class AppDatabase {
       { folderPath: 'asc' as Prisma.SortOrder }
     ]
 
-    const rows = await this.prisma.message.findMany({
+    const rows = await this.findMessagePage(
       where,
       orderBy,
-      take: normalizedLimit
-    })
+      normalizedLimit,
+      ordersBySender(sort, grouping) ? buildSenderMatchWhere(query) : null
+    )
 
     return rows.map((row) => this.mapMessageRowToSummary(row))
   }
@@ -1991,6 +2178,7 @@ export class AppDatabase {
       size: row.size,
       senderName: row.senderName,
       senderKey: row.senderKey,
+      senderLabel: row.senderLabel,
       html: row.htmlBody ?? undefined,
       text: row.textBody ?? undefined,
       attachments: parseJsonArray<MailAttachment>(row.attachmentsJson)
@@ -2199,6 +2387,7 @@ export class AppDatabase {
         thread_id TEXT,
         message_id TEXT,
         subject TEXT NOT NULL,
+        subject_sort TEXT NOT NULL DEFAULT '',
         from_json TEXT NOT NULL,
         to_json TEXT NOT NULL,
         cc_json TEXT NOT NULL,
@@ -2211,6 +2400,8 @@ export class AppDatabase {
         is_flagged INTEGER NOT NULL DEFAULT 0,
         sender_name TEXT NOT NULL DEFAULT '',
         sender_key TEXT NOT NULL DEFAULT '',
+        sender_label TEXT NOT NULL DEFAULT '',
+        sender_sort TEXT NOT NULL DEFAULT '',
         has_attachments INTEGER NOT NULL,
         size INTEGER NOT NULL,
         html_body TEXT,
@@ -2250,7 +2441,7 @@ export class AppDatabase {
         invert_message_list_default_order INTEGER NOT NULL DEFAULT 0,
         message_list_sort_field TEXT NOT NULL DEFAULT 'date',
         message_list_sort_direction TEXT NOT NULL DEFAULT 'desc',
-        message_grouping TEXT NOT NULL DEFAULT 'date',
+        message_grouping TEXT NOT NULL DEFAULT 'auto',
         updated_at INTEGER NOT NULL
       )
     `)
@@ -2266,8 +2457,17 @@ export class AppDatabase {
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_messages_folder_date ON messages(account_id, folder_path, date_iso DESC)'
     )
+    // Sender order moved from the raw address to `sender_sort`; the index
+    // that served the old ORDER BY only slowed every write down.
+    await this.prisma.$executeRawUnsafe('DROP INDEX IF EXISTS idx_messages_folder_sender')
     await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_messages_folder_sender ON messages(account_id, folder_path, sender_key)'
+      'CREATE INDEX IF NOT EXISTS idx_messages_folder_sender_sort ON messages(account_id, folder_path, sender_sort)'
+    )
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_messages_sender_key ON messages(sender_key)'
+    )
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_messages_folder_subject_sort ON messages(account_id, folder_path, subject_sort)'
     )
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_messages_folder_flagged ON messages(account_id, folder_path, is_flagged)'
@@ -2360,7 +2560,7 @@ export class AppDatabase {
       ['layout_mode', "TEXT NOT NULL DEFAULT 'apple'"],
       ['message_list_sort_field', "TEXT NOT NULL DEFAULT 'date'"],
       ['message_list_sort_direction', "TEXT NOT NULL DEFAULT 'desc'"],
-      ['message_grouping', "TEXT NOT NULL DEFAULT 'date'"]
+      ['message_grouping', "TEXT NOT NULL DEFAULT 'auto'"]
     ]
 
     for (const [column, definition] of additions) {
@@ -2370,6 +2570,12 @@ export class AppDatabase {
         )
       }
     }
+
+    // 'date' grouping became 'auto': it still buckets by date under a date
+    // sort, and now also groups by sender under a sender sort.
+    await this.prisma.$executeRawUnsafe(
+      "UPDATE app_preferences SET message_grouping = 'auto' WHERE message_grouping = 'date'"
+    )
   }
 
   /**
@@ -2526,6 +2732,28 @@ export class AppDatabase {
                TRIM(COALESCE(json_extract(from_json, '$[0].address'), ''))
              ),
              sender_key = LOWER(TRIM(COALESCE(json_extract(from_json, '$[0].address'), '')))`
+      )
+    }
+
+    // The sort keys fold accents and reply prefixes and take the best name
+    // across every message from an address — nothing SQL can derive from
+    // the row. Rows cached without them are dropped and every folder
+    // resynced from scratch, which is what an upgrade does to the cache.
+    const missingSortColumns = ['subject_sort', 'sender_label', 'sender_sort'].filter(
+      (column) => !columnNames.has(column)
+    )
+
+    if (missingSortColumns.length > 0) {
+      for (const column of missingSortColumns) {
+        await this.prisma.$executeRawUnsafe(
+          `ALTER TABLE messages ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`
+        )
+      }
+
+      await this.prisma.$executeRawUnsafe('DELETE FROM messages')
+      await this.prisma.$executeRawUnsafe(
+        `UPDATE folders
+         SET uid_validity = NULL, highest_modseq = NULL, last_known_uid = NULL, last_synced_at = NULL`
       )
     }
   }

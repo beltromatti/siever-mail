@@ -19,13 +19,13 @@ import {
   SelectValue
 } from '@renderer/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { GROUPING_OPTIONS } from '@renderer/features/mail/message-list-shared'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
 import { cn } from '@renderer/lib/utils'
 import type {
   DataStorageBreakdown,
   MailAccount,
   MailLayoutMode,
-  MessageGroupingMode,
   UiPreferences
 } from '@shared/models'
 
@@ -112,12 +112,6 @@ const LAYOUT_OPTIONS: ReadonlyArray<{
     label: 'Outlook',
     description: 'Tabella densa in alto, messaggio in basso. Circa 15 email a schermo.'
   }
-]
-
-const GROUPING_OPTIONS: ReadonlyArray<{ mode: MessageGroupingMode; label: string }> = [
-  { mode: 'none', label: 'Nessuno' },
-  { mode: 'date', label: 'Data' },
-  { mode: 'sender', label: 'Mittente' }
 ]
 
 /**
@@ -788,10 +782,10 @@ export function SettingsDialog({
                     Raggruppamento predefinito
                   </p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
-                    Come la lista divide i messaggi in sezioni. Il raggruppamento per data richiede
-                    l&apos;ordinamento per data; quello per mittente funziona con qualsiasi
-                    ordinamento e permette di selezionare un intero mittente con un clic
-                    sull&apos;intestazione.
+                    Come la lista divide i messaggi in sezioni. Automatico segue l&apos;ordinamento:
+                    per data se ordini per data, per mittente se ordini per mittente. Mittente
+                    raggruppa per mittente con qualsiasi ordinamento. Un clic sull&apos;intestazione
+                    di una sezione ne seleziona tutti i messaggi.
                   </p>
 
                   <div className="mt-3 flex flex-wrap gap-2">

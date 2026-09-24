@@ -190,7 +190,6 @@ export function MessageList({
                     section={section}
                     collapsed={collapsed}
                     allSelected={allSelected}
-                    uppercaseLabel={grouping === 'date'}
                     onToggleCollapsed={() =>
                       setCollapsedSectionKeys((current) => {
                         const next = new Set(current)

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildMessageSections, isGroupingApplicable } from './message-sections'
+import { buildMessageSections, resolveSectionKind } from './message-sections'
 import type { MailMessageSummary } from '@shared/models'
 
 const NOW = new Date('2026-09-10T12:00:00.000Z')
@@ -22,31 +22,34 @@ function message(overrides: Partial<MailMessageSummary> & { uid: number }): Mail
     hasAttachments: false,
     size: 0,
     senderName: 'Mittente',
-    senderKey: 'mittente@siever.it',
+    senderKey: 'mittente@example.com',
+    senderLabel: 'Mittente',
     ...overrides
   }
 }
 
-describe('isGroupingApplicable', () => {
+describe('resolveSectionKind', () => {
   it('never groups when the mode is none', () => {
-    expect(isGroupingApplicable('none', 'date')).toBe(false)
+    expect(resolveSectionKind('none', 'date')).toBe('none')
+    expect(resolveSectionKind('none', 'sender')).toBe('none')
   })
 
-  it('only buckets by date while the list is ordered by date', () => {
-    expect(isGroupingApplicable('date', 'date')).toBe(true)
-    expect(isGroupingApplicable('date', 'subject')).toBe(false)
-    expect(isGroupingApplicable('date', 'sender')).toBe(false)
+  it('follows the sort in auto mode', () => {
+    expect(resolveSectionKind('auto', 'date')).toBe('date')
+    expect(resolveSectionKind('auto', 'sender')).toBe('sender')
+    expect(resolveSectionKind('auto', 'subject')).toBe('none')
+    expect(resolveSectionKind('auto', 'size')).toBe('none')
   })
 
   it('groups by sender under any sort, because the query orders by sender first', () => {
-    expect(isGroupingApplicable('sender', 'date')).toBe(true)
-    expect(isGroupingApplicable('sender', 'subject')).toBe(true)
+    expect(resolveSectionKind('sender', 'date')).toBe('sender')
+    expect(resolveSectionKind('sender', 'subject')).toBe('sender')
   })
 })
 
 describe('buildMessageSections', () => {
   it('returns nothing for an empty page', () => {
-    expect(buildMessageSections([], 'date', 'date', NOW)).toEqual([])
+    expect(buildMessageSections([], 'auto', 'date', NOW)).toEqual([])
   })
 
   it('returns one unlabelled section when ungrouped', () => {
@@ -70,7 +73,7 @@ describe('buildMessageSections', () => {
         message({ uid: 4, date: '2026-09-02T09:00:00.000Z' }),
         message({ uid: 5, date: '2026-07-15T09:00:00.000Z' })
       ],
-      'date',
+      'auto',
       'date',
       NOW
     )
@@ -87,7 +90,7 @@ describe('buildMessageSections', () => {
   it('files a future-dated message with today rather than below the page', () => {
     const sections = buildMessageSections(
       [message({ uid: 1, date: '2026-09-30T09:00:00.000Z' })],
-      'date',
+      'auto',
       'date',
       NOW
     )
@@ -100,7 +103,7 @@ describe('buildMessageSections', () => {
         message({ uid: 1, date: '2026-09-10T09:00:00.000Z' }),
         message({ uid: 2, date: '2026-09-10T08:00:00.000Z' })
       ],
-      'date',
+      'auto',
       'date',
       NOW
     )
@@ -108,22 +111,61 @@ describe('buildMessageSections', () => {
     expect(sections[0].messages).toHaveLength(2)
   })
 
-  it('groups by sender key, not by display name spelling', () => {
+  it('groups by the name each address is filed under, not by header spelling', () => {
     const sections = buildMessageSections(
       [
-        message({ uid: 1, senderName: 'A. Beltrami', senderKey: 'a.beltrami@siever.it' }),
-        message({ uid: 2, senderName: 'Alessandro Beltrami', senderKey: 'a.beltrami@siever.it' }),
-        message({ uid: 3, senderName: 'Marconi', senderKey: 'marconi@sevenarchitettura.com' })
+        message({
+          uid: 1,
+          senderName: 'M. Rossi',
+          senderKey: 'm.rossi@example.com',
+          senderLabel: 'Mario Rossi'
+        }),
+        message({
+          uid: 2,
+          senderName: 'm.rossi@example.com',
+          senderKey: 'm.rossi@example.com',
+          senderLabel: 'Mario Rossi'
+        }),
+        message({
+          uid: 3,
+          senderName: 'Mario Rossi',
+          senderKey: 'mario@rossi.example.org',
+          senderLabel: 'Mario Rossi'
+        }),
+        message({
+          uid: 4,
+          senderName: 'Bianchi',
+          senderKey: 'bianchi@example.org',
+          senderLabel: 'Bianchi'
+        })
       ],
       'sender',
       'date',
       NOW
     )
 
-    expect(sections).toHaveLength(2)
-    expect(sections[0].label).toBe('A. Beltrami')
-    expect(sections[0].messages).toHaveLength(2)
-    expect(sections[1].label).toBe('Marconi')
+    expect(sections.map((section) => [section.label, section.messages.length])).toEqual([
+      ['Mario Rossi', 3],
+      ['Bianchi', 1]
+    ])
+  })
+
+  it('opens a section per sender when auto grouping meets a sender sort', () => {
+    const sections = buildMessageSections(
+      [
+        message({ uid: 1, senderKey: 'a@example.com', senderLabel: 'Anna' }),
+        message({ uid: 2, senderKey: 'a@example.com', senderLabel: 'Anna' }),
+        message({ uid: 3, senderKey: 'b@example.com', senderLabel: 'Bruno' })
+      ],
+      'auto',
+      'sender',
+      NOW
+    )
+
+    expect(sections.map((section) => [section.kind, section.label])).toEqual([
+      ['sender', 'Anna'],
+      ['sender', 'Bruno']
+    ])
   })
 
   it('gives every run a unique key even when a sender repeats', () => {
@@ -133,9 +175,9 @@ describe('buildMessageSections', () => {
     // heading elements in the DOM permanently.
     const sections = buildMessageSections(
       [
-        message({ uid: 1, senderName: 'LinkedIn', senderKey: 'a@linkedin.com' }),
-        message({ uid: 2, senderName: 'Amazon', senderKey: 'b@amazon.it' }),
-        message({ uid: 3, senderName: 'LinkedIn', senderKey: 'a@linkedin.com' })
+        message({ uid: 1, senderLabel: 'LinkedIn', senderKey: 'a@linkedin.com' }),
+        message({ uid: 2, senderLabel: 'Amazon', senderKey: 'b@amazon.it' }),
+        message({ uid: 3, senderLabel: 'LinkedIn', senderKey: 'a@linkedin.com' })
       ],
       'sender',
       'date',
@@ -161,13 +203,13 @@ describe('buildMessageSections', () => {
     expect(sections[0].unreadCount).toBe(2)
   })
 
-  it('falls back to a flat list when date grouping cannot apply', () => {
+  it('stays one flat run when auto grouping meets a subject sort', () => {
     const sections = buildMessageSections(
       [
         message({ uid: 1, date: '2026-09-10T09:00:00.000Z' }),
         message({ uid: 2, date: '2026-07-15T09:00:00.000Z' })
       ],
-      'date',
+      'auto',
       'subject',
       NOW
     )

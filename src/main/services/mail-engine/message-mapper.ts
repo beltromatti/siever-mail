@@ -1,7 +1,7 @@
 import type { FetchMessageObject, MessageAddressObject, MessageStructureObject } from 'imapflow'
 import type { ParsedMail } from 'mailparser'
 
-import type { MailAddress, MailAttachment, MailMessageDetail } from '@shared/models'
+import type { FetchedMessageDetail, MailAddress, MailAttachment } from '@shared/models'
 import { deriveSenderKey, deriveSenderName } from '@shared/sender'
 
 import { extractPreview } from './preview'
@@ -97,7 +97,7 @@ export async function mapFetchedToDetail(
   accountId: string,
   folderPath: string,
   fetched: FetchMessageObject
-): Promise<MailMessageDetail> {
+): Promise<FetchedMessageDetail> {
   if (!fetched.source) {
     throw new Error('Message source not available from IMAP server.')
   }
@@ -153,7 +153,7 @@ export function mergeSummaryAndParsedIntoDetail(
   folderPath: string,
   fetched: FetchMessageObject,
   parsed: ParsedMail
-): MailMessageDetail {
+): FetchedMessageDetail {
   const envelope = fetched.envelope
   const flags = [...(fetched.flags ?? new Set<string>())]
   const subject = formatSubject(parsed.subject || envelope?.subject)

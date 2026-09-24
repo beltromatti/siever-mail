@@ -37,13 +37,7 @@ function trimText(value: string, maxLength: number): string {
 }
 
 function senderLabel(message: MailMessageSummary): string {
-  const sender = message.from[0]
-
-  if (!sender) {
-    return 'Nuova email'
-  }
-
-  return sender.name || sender.address
+  return message.senderLabel || 'Nuova email'
 }
 
 interface PendingBatch {

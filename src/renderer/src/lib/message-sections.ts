@@ -1,4 +1,5 @@
 import type { MailMessageSummary, MessageGroupingMode, MessageListSortField } from '@shared/models'
+import { senderSortKey } from '@shared/sender'
 
 /**
  * Slices an already-ordered page of messages into the labelled sections the
@@ -23,11 +24,15 @@ export interface MessageSection {
    * headings behind for good. The run ordinal keeps every key unique.
    */
   key: string
+  kind: MessageSectionKind
   /** Heading shown above the run. Empty when the list is ungrouped. */
   label: string
   messages: MailMessageSummary[]
   unreadCount: number
 }
+
+/** What a page is actually cut by, once 'auto' has followed the sort. */
+export type MessageSectionKind = 'none' | 'date' | 'sender'
 
 const UNGROUPED_SECTION_KEY = '__all__'
 
@@ -97,33 +102,45 @@ function resolveDateSection(dateIso: string, now: Date): { key: string; label: s
   return { key: `month-${monthKey}`, label: capitalizeFirst(monthLabel) }
 }
 
+/**
+ * One section per sender as the user reads it: the name every address is
+ * filed under, keyed exactly as the database sorts it. Two spellings of one
+ * address never open two sections, and neither do the several addresses a
+ * company writes from under one name.
+ */
 function resolveSenderSection(message: MailMessageSummary): { key: string; label: string } {
-  const key = message.senderKey || message.senderName.toLowerCase()
+  const key = senderSortKey(message.senderLabel)
+
   return {
     key: key ? `sender-${key}` : 'sender-unknown',
-    label: message.senderName || message.senderKey || 'Mittente sconosciuto'
+    label: message.senderLabel || 'Mittente sconosciuto'
   }
 }
 
 /**
- * Date grouping only makes sense while the list is ordered by date — under
- * any other sort the buckets would interleave and produce a "Oggi" heading
- * three times down the page. Sender grouping is always valid because the
- * query puts the sender key first in its ORDER BY.
+ * 'auto' follows the sort: date buckets only make sense while the list is
+ * ordered by date (under any other sort they would interleave and put an
+ * "Oggi" heading three times down the page), and sender sections while it is
+ * ordered by sender. Subject and size stay one flat run — a heading per
+ * distinct value would be noise. Explicit sender grouping holds under any
+ * sort, because the query then puts the sender first in its ORDER BY.
  */
-export function isGroupingApplicable(
+export function resolveSectionKind(
   grouping: MessageGroupingMode,
   sortField: MessageListSortField
-): boolean {
-  if (grouping === 'none') {
-    return false
+): MessageSectionKind {
+  if (grouping !== 'auto') {
+    return grouping
   }
 
-  if (grouping === 'date') {
-    return sortField === 'date'
+  switch (sortField) {
+    case 'date':
+      return 'date'
+    case 'sender':
+      return 'sender'
+    default:
+      return 'none'
   }
-
-  return true
 }
 
 export function buildMessageSections(
@@ -139,10 +156,13 @@ export function buildMessageSections(
     return []
   }
 
-  if (!isGroupingApplicable(grouping, sortField)) {
+  const kind = resolveSectionKind(grouping, sortField)
+
+  if (kind === 'none') {
     return [
       {
         key: UNGROUPED_SECTION_KEY,
+        kind,
         label: '',
         messages,
         unreadCount: countUnread(messages)
@@ -151,7 +171,7 @@ export function buildMessageSections(
   }
 
   const resolveSection =
-    grouping === 'sender'
+    kind === 'sender'
       ? resolveSenderSection
       : (message: MailMessageSummary) => resolveDateSection(message.date, now)
 
@@ -170,6 +190,7 @@ export function buildMessageSections(
     currentGroupKey = key
     sections.push({
       key: `${key}#${sections.length}`,
+      kind,
       label,
       messages: [message],
       unreadCount: 0
