@@ -13,7 +13,7 @@ describe('isExecutableAttachment', () => {
   })
 
   it('opens documents and archives', () => {
-    for (const name of ['fattura.pdf', 'offerta.docx', 'dati.xlsm', 'foto.JPG', 'pratica.zip']) {
+    for (const name of ['fattura.pdf', 'offerta.docx', 'dati.xlsm', 'foto.JPG', 'archivio.zip']) {
       expect(isExecutableAttachment(name)).toBe(false)
     }
   })

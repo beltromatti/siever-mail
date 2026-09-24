@@ -17,52 +17,50 @@ describe('parseSearchQuery', () => {
   })
 
   it('ANDs whitespace-separated terms', () => {
-    expect(flatten('cappellaro padova')).toEqual([
-      [{ value: 'cappellaro', scope: 'any' }],
-      [{ value: 'padova', scope: 'any' }]
+    expect(flatten('verdi milano')).toEqual([
+      [{ value: 'verdi', scope: 'any' }],
+      [{ value: 'milano', scope: 'any' }]
     ])
   })
 
   it('ORs around the OR keyword and keeps the rest ANDed', () => {
-    expect(flatten('cappellaro OR padova ikea')).toEqual([
+    expect(flatten('verdi OR milano fattura')).toEqual([
       [
-        { value: 'cappellaro', scope: 'any' },
-        { value: 'padova', scope: 'any' }
+        { value: 'verdi', scope: 'any' },
+        { value: 'milano', scope: 'any' }
       ],
-      [{ value: 'ikea', scope: 'any' }]
+      [{ value: 'fattura', scope: 'any' }]
     ])
   })
 
   it('treats a quoted run as one literal term', () => {
-    expect(flatten('"posta certificata" ikea')).toEqual([
+    expect(flatten('"posta certificata" fattura')).toEqual([
       [{ value: 'posta certificata', scope: 'any' }],
-      [{ value: 'ikea', scope: 'any' }]
+      [{ value: 'fattura', scope: 'any' }]
     ])
   })
 
   it('scopes a term to the sender with da: / from: / mittente:', () => {
     for (const prefix of ['da', 'from', 'mittente']) {
-      expect(flatten(`${prefix}:marconi`)).toEqual([[{ value: 'marconi', scope: 'from' }]])
+      expect(flatten(`${prefix}:rossi`)).toEqual([[{ value: 'rossi', scope: 'from' }]])
     }
   })
 
   it('scopes recipients and subject', () => {
-    expect(flatten('a:beltrami')).toEqual([[{ value: 'beltrami', scope: 'to' }]])
+    expect(flatten('a:bianchi')).toEqual([[{ value: 'bianchi', scope: 'to' }]])
     expect(flatten('oggetto:sopralluogo')).toEqual([[{ value: 'sopralluogo', scope: 'subject' }]])
   })
 
   it('accepts a quoted phrase after a field prefix', () => {
-    expect(flatten('da:"alessandro marconi"')).toEqual([
-      [{ value: 'alessandro marconi', scope: 'from' }]
-    ])
+    expect(flatten('da:"mario rossi"')).toEqual([[{ value: 'mario rossi', scope: 'from' }]])
   })
 
   it('combines a scoped term with free terms', () => {
-    expect(flatten('da:marconi ikea')).toEqual([
-      [{ value: 'marconi', scope: 'from' }],
-      [{ value: 'ikea', scope: 'any' }]
+    expect(flatten('da:rossi fattura')).toEqual([
+      [{ value: 'rossi', scope: 'from' }],
+      [{ value: 'fattura', scope: 'any' }]
     ])
-    expect(parseSearchQuery('da:marconi ikea').hasScopedTerms).toBe(true)
+    expect(parseSearchQuery('da:rossi fattura').hasScopedTerms).toBe(true)
   })
 
   it('leaves an unknown prefix as a literal so colons stay searchable', () => {
@@ -78,25 +76,25 @@ describe('parseSearchQuery', () => {
   })
 
   it('de-duplicates terms while keeping distinct scopes apart', () => {
-    const parsed = parseSearchQuery('marconi marconi da:marconi')
+    const parsed = parseSearchQuery('rossi rossi da:rossi')
     expect(parsed.terms).toEqual([
-      { value: 'marconi', scope: 'any' },
-      { value: 'marconi', scope: 'from' }
+      { value: 'rossi', scope: 'any' },
+      { value: 'rossi', scope: 'from' }
     ])
   })
 })
 
 describe('highlightTermsForField', () => {
   it('paints unscoped terms everywhere', () => {
-    const parsed = parseSearchQuery('ikea')
-    expect(highlightTermsForField(parsed, 'sender')).toEqual(['ikea'])
-    expect(highlightTermsForField(parsed, 'subject')).toEqual(['ikea'])
-    expect(highlightTermsForField(parsed, 'body')).toEqual(['ikea'])
+    const parsed = parseSearchQuery('fattura')
+    expect(highlightTermsForField(parsed, 'sender')).toEqual(['fattura'])
+    expect(highlightTermsForField(parsed, 'subject')).toEqual(['fattura'])
+    expect(highlightTermsForField(parsed, 'body')).toEqual(['fattura'])
   })
 
   it('confines a scoped term to its own field', () => {
-    const parsed = parseSearchQuery('da:marconi')
-    expect(highlightTermsForField(parsed, 'sender')).toEqual(['marconi'])
+    const parsed = parseSearchQuery('da:rossi')
+    expect(highlightTermsForField(parsed, 'sender')).toEqual(['rossi'])
     expect(highlightTermsForField(parsed, 'subject')).toEqual([])
     expect(highlightTermsForField(parsed, 'body')).toEqual([])
   })
@@ -108,9 +106,9 @@ describe('findHighlightRanges', () => {
   })
 
   it('is case-insensitive and finds every occurrence', () => {
-    expect(findHighlightRanges('IKEA ikea', ['ikea'])).toEqual([
-      { start: 0, end: 4 },
-      { start: 5, end: 9 }
+    expect(findHighlightRanges('ROSSI rossi', ['rossi'])).toEqual([
+      { start: 0, end: 5 },
+      { start: 6, end: 11 }
     ])
   })
 

@@ -1,7 +1,7 @@
 /**
  * The rule that separates "the sender attached this file" from "the body
- * draws this image". Getting it wrong is what made SIEVER's archive folders
- * fill up with image005…image009 next to the one document that mattered.
+ * draws this image". Getting it wrong fills every folder a message is saved
+ * to with image005…image009 next to the one document that mattered.
  */
 import MailComposer from 'nodemailer/lib/mail-composer'
 import { describe, expect, it } from 'vitest'
@@ -26,9 +26,9 @@ function buildMessage(options: {
   attachments: TestAttachment[]
 }): Promise<Buffer> {
   const composer = new MailComposer({
-    from: 'a.beltrami@siever.it',
-    to: 'cliente@example.it',
-    subject: '805 IKEA VILLESSE RIQ ENE [ incontro ]',
+    from: 'anna@example.com',
+    to: 'mario@example.org',
+    subject: 'Commessa 805 — verbale incontro',
     html: options.html,
     text: options.text,
     attachments: options.attachments
@@ -62,10 +62,10 @@ async function partitionOf(options: {
 describe('collectReferencedContentIds', () => {
   it('finds cid references in attributes and in inline CSS', () => {
     const ids = collectReferencedContentIds(
-      `<img src="cid:logo@siever"><td background=cid:BANNER@x>` +
+      `<img src="cid:logo@example"><td background=cid:BANNER@x>` +
         `<div style="background:url('cid:quote@y')"></div>`
     )
-    expect([...ids].sort()).toEqual(['banner@x', 'logo@siever', 'quote@y'])
+    expect([...ids].sort()).toEqual(['banner@x', 'logo@example', 'quote@y'])
   })
 
   it('normalises angle brackets and percent-encoding', () => {
@@ -119,13 +119,13 @@ describe('partitionMessageAttachments', () => {
     // Outlook labels signature logos `attachment` while still drawing them
     // through cid:, so disposition alone would misclassify them.
     const result = await partitionOf({
-      html: '<p>x</p><img src="cid:logo@siever">',
+      html: '<p>x</p><img src="cid:logo@example">',
       attachments: [
         {
           filename: 'logo.png',
           content: 'a',
           contentType: 'image/png',
-          cid: 'logo@siever',
+          cid: 'logo@example',
           contentDisposition: 'attachment'
         },
         { filename: 'offerta.pdf', content: '%PDF', contentType: 'application/pdf' }
@@ -181,16 +181,16 @@ describe('partitionMessageAttachments', () => {
   it('leaves the cid references in the HTML alone', async () => {
     const parsed = await parseMessageSource(
       await buildMessage({
-        html: '<img src="cid:logo@siever">',
+        html: '<img src="cid:logo@example">',
         attachments: [
-          { filename: 'logo.png', content: 'a', contentType: 'image/png', cid: 'logo@siever' }
+          { filename: 'logo.png', content: 'a', contentType: 'image/png', cid: 'logo@example' }
         ]
       })
     )
 
     // Parsed with mailparser's defaults this would already be a data: URI,
     // which is lossy for anything rebuilding the message.
-    expect(parsed.html).toContain('cid:logo@siever')
+    expect(parsed.html).toContain('cid:logo@example')
     expect(parsed.html).not.toContain('data:image')
   })
 })

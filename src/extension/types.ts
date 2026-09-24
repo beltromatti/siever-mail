@@ -2,7 +2,7 @@
  * SIEVER Mail extension contract.
  *
  * The application reserves a single optional extension slot resolved at
- * build time by the Vite aliases `@app/extension/{main,renderer,preload}`.
+ * build time by the Vite aliases `@app/extension/{main,renderer,preload,shared}`.
  * The default resolution points at the no-op stubs shipped with the
  * public source tree under `src/extension/`. A custom build can supply
  * its own implementation through those aliases (see
@@ -21,7 +21,36 @@ import type { App, BrowserWindow, IpcMain, IpcRenderer } from 'electron'
 import type { ParsedMail } from 'mailparser'
 import type { ComponentType, ReactNode } from 'react'
 
+import type { MailFontOption } from '@shared/mail-fonts'
 import type { MailMessageSummary, MessageRef } from '@shared/models'
+
+/* ────────────────────────── both processes ────────────────────────── */
+
+export interface TextColorOption {
+  value: string
+  label: string
+}
+
+/**
+ * How mail is written in a build: the fonts offered and started in, and the
+ * text colours offered. Resolved through `@app/extension/shared`, which both
+ * processes load — the renderer draws the editor, the main process upgrades
+ * stored signatures to full font stacks.
+ */
+export interface ExtensionComposition {
+  /** Offered before the host's fonts; each value a full cross-platform stack. */
+  fonts: ReadonlyArray<MailFontOption>
+  /** The stack new text starts in. The host's own default when omitted. */
+  defaultFontFamily?: string
+  /** Offered before the host's colours in the text colour menu. */
+  textColors: ReadonlyArray<TextColorOption>
+  /**
+   * Further stacks the extension's own content uses — a wordmark face in a
+   * default signature, say — so stored HTML that names only their first
+   * family is upgraded to the whole chain, like any font in the menu.
+   */
+  extraFontStacks: ReadonlyArray<string>
+}
 
 /* ────────────────────────── main process ────────────────────────── */
 
@@ -42,6 +71,13 @@ export interface ExtensionMain {
    * re-installs.
    */
   install(context: ExtensionMainContext): Promise<void> | void
+  /**
+   * Deletes what the extension stores for the user, as part of the
+   * settings' "Elimina tutti i dati" — after the host has emptied its own
+   * tables, with every account still connected. Preferences may stay, the
+   * way the host keeps its layout and sorting.
+   */
+  clearData(): Promise<void>
   /**
    * Optional teardown hook invoked when the mail service stops.
    */
@@ -134,6 +170,18 @@ export interface ExtensionRenderer {
    * `openPrimaryActionDialog()`.
    */
   readonly PrimaryActionDialog: ComponentType<PrimaryActionDialogProps> | null
+  /**
+   * `@font-face` rules for fonts the extension bundles, applied to the app
+   * and to every message frame so they render the same on every machine.
+   * Empty when it bundles none.
+   */
+  readonly fontFaceCss: string
+  /**
+   * What `clearData` deletes, as it reads in the list the settings show
+   * under "Elimina tutti i dati" — e.g. "i modelli salvati". Empty when
+   * nothing.
+   */
+  readonly localDataLabel: string
 }
 
 export interface ToolbarActionDescriptor {

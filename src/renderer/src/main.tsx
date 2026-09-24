@@ -1,8 +1,18 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
+import extensionRenderer from '@app/extension/renderer'
+
 import App from './App'
 import './styles/globals.css'
+
+// Fonts an extension bundles are available to the whole app — the editor's
+// font menu shows each name in its own face.
+if (extensionRenderer.fontFaceCss) {
+  const fontFaces = document.createElement('style')
+  fontFaces.textContent = extensionRenderer.fontFaceCss
+  document.head.append(fontFaces)
+}
 
 // A file dropped anywhere that is not a drop target would make Chromium
 // navigate the window to it, replacing the app with the file. Drop targets

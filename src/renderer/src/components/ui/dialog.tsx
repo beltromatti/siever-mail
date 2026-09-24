@@ -32,11 +32,10 @@ interface DialogDragOffset {
 /**
  * Makes a centred dialog draggable by its top edge.
  *
- * The SIEVER team asked for this after hitting a real problem: the archive
- * wizard's last step asks for a folder name, and the information needed to
- * choose one — the folder listing and the message behind the dialog — was
- * covered by a panel they could not move. Dragging is the smallest change
- * that solves it without adding anything to the dialog's own layout.
+ * A dialog often asks for something the user has to read off the screen
+ * behind it — a folder name taken from the message being filed, say — and a
+ * panel that cannot move covers exactly that. Dragging is the smallest
+ * change that solves it without adding anything to the dialog's own layout.
  *
  * Panels stay centred by transform, so the drag adds an offset on top of the
  * centring translate rather than switching to absolute coordinates: the
@@ -164,7 +163,7 @@ function useDialogDrag(enabled: boolean): {
 
 /**
  * The veil behind a dialog. Light enough to read the workspace through it —
- * the archive wizard is often used while cross-checking the message list
+ * a dialog is often filled in while cross-checking the message list
  * underneath — and blurred so what shows through never competes with the
  * dialog's own text.
  */
@@ -251,10 +250,9 @@ const DialogContent = React.forwardRef<
           }}
           className={cn(
             // `max-h` is a ceiling, not a scroll container: an `overflow`
-            // here would clip absolutely-positioned children (the archive
-            // wizard's practice picker opens past the panel's edge). Dialogs
-            // whose content can grow — Settings, the composer — size and
-            // scroll themselves.
+            // here would clip absolutely-positioned children (a listbox that
+            // opens past the panel's edge). Dialogs whose content can grow —
+            // Settings, the composer — size and scroll themselves.
             // Dialogs carry the same density as the app behind them. They
             // had drifted to a scale of their own — 20px padding, a 14px
             // gap, an 18px title, 36-38px buttons — against a workspace

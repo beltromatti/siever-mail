@@ -2,63 +2,44 @@
  * Font stacks offered in the composer and used by authored mail.
  *
  * Email is not the web: virtually every client strips `@font-face`, so a
- * font only renders if the *recipient* already has it installed. SIEVER's
- * house font, Century Gothic, ships with Microsoft Office on Windows but
- * exists nowhere on macOS, on Linux, or in Gmail's web client — which is
- * exactly why messages that look right in-house arrive at customers in
- * plain Arial.
+ * font only renders if the *recipient* already has it installed. A face
+ * that ships with Office on Windows exists nowhere on macOS, on Linux or in
+ * Gmail's web client — which is how a message that looks right at the
+ * sender's desk arrives in plain Arial.
  *
- * The fix is not to change the font, it is to give every option a real
- * fallback chain: the house font first (so nothing changes for anyone who
- * has it), then the closest face that actually ships on each other
- * platform, then a generic. Century Gothic therefore falls back to Futura
- * on macOS and URW Gothic on Linux — all three are geometric sans faces
- * from the same Avant Garde lineage, so the message keeps its identity
- * instead of collapsing to Arial.
+ * So every option is a real fallback chain, following one rule: Windows
+ * face → macOS equivalent → free metric-compatible clone for Linux →
+ * generic family. A message keeps its character wherever it is read
+ * instead of collapsing to the reader's default.
  *
- * SIEVER Mail itself bundles Century Gothic as a webfont (see
- * `MAIL_FRAME_BASELINE_CSS`), so in-app rendering stays pixel-identical on
- * every platform regardless of what is installed.
- *
- * Every stack below follows the same rule: Windows face → macOS
- * equivalent → free metric-compatible clone for Linux → generic family.
+ * An extension can offer fonts of its own ahead of these and set the one
+ * new text starts in (see `ExtensionComposition`); the public build starts
+ * in Arial, the one face every platform actually ships.
  */
+import composition from '@app/extension/shared'
 
 export interface MailFontOption {
   label: string
   value: string
 }
 
-/**
- * SIEVER's house font. Windows/Office resolves Century Gothic itself;
- * macOS lands on Futura and Linux on URW Gothic, both geometric sans faces
- * with near-identical proportions. Trebuchet MS is the last humanist stop
- * before the generic fallback.
- */
-export const MAIL_EDITOR_DEFAULT_FONT_FAMILY =
-  "'Century Gothic', Futura, 'URW Gothic', 'Avant Garde', 'Trebuchet MS', Arial, sans-serif"
+const ARIAL_FONT_FAMILY = 'Arial, Helvetica, sans-serif'
+
+/** The stack new text starts in. */
+export const MAIL_EDITOR_DEFAULT_FONT_FAMILY = composition.defaultFontFamily ?? ARIAL_FONT_FAMILY
 export const MAIL_COMPOSER_DEFAULT_FONT_FAMILY = MAIL_EDITOR_DEFAULT_FONT_FAMILY
 export const MAIL_COMPOSER_SIGNATURE_SEPARATOR_HTML = ''
 
 /**
- * Stack for the emoji glyphs used in the signature blocks. Windows ships
- * Segoe UI Emoji, macOS/iOS Apple Color Emoji, most Linux distributions
- * Noto Color Emoji — without all three, one platform renders tofu.
+ * Stack for emoji glyphs. Windows ships Segoe UI Emoji, macOS/iOS Apple
+ * Color Emoji, most Linux distributions Noto Color Emoji — without all
+ * three, one platform renders tofu.
  */
 export const MAIL_EMOJI_FONT_FAMILY =
   "'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif"
 
-/**
- * Display face used for the SIEVER wordmark in the corporate signature.
- * Lucida Sans Unicode is the Windows name, Lucida Grande the macOS one for
- * the same family; DejaVu Sans is its usual Linux stand-in.
- */
-export const MAIL_WORDMARK_FONT_FAMILY =
-  "'Lucida Sans Unicode', 'Lucida Grande', 'DejaVu Sans', Verdana, sans-serif"
-
-export const MAIL_FONT_OPTIONS: readonly MailFontOption[] = [
-  { label: 'Century Gothic', value: MAIL_EDITOR_DEFAULT_FONT_FAMILY },
-  { label: 'Arial', value: 'Arial, Helvetica, sans-serif' },
+const HOST_FONT_OPTIONS: readonly MailFontOption[] = [
+  { label: 'Arial', value: ARIAL_FONT_FAMILY },
   { label: 'Arial Black', value: "'Arial Black', Gadget, Impact, sans-serif" },
   { label: 'Arial Narrow', value: "'Arial Narrow', 'Helvetica Neue Condensed', Arial, sans-serif" },
   // Calibri and Cambria are Office fonts with no macOS counterpart; Carlito
@@ -72,7 +53,12 @@ export const MAIL_FONT_OPTIONS: readonly MailFontOption[] = [
     value: "'Franklin Gothic Medium', 'Arial Narrow', Arial, Helvetica, sans-serif"
   },
   { label: 'Impact', value: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif" },
-  { label: 'Lucida Sans', value: MAIL_WORDMARK_FONT_FAMILY },
+  // Lucida Sans Unicode is the Windows name, Lucida Grande the macOS one for
+  // the same family; DejaVu Sans is its usual Linux stand-in.
+  {
+    label: 'Lucida Sans',
+    value: "'Lucida Sans Unicode', 'Lucida Grande', 'DejaVu Sans', Verdana, sans-serif"
+  },
   // Segoe UI is Windows-only; on macOS the nearest shipped UI face is
   // Helvetica Neue, and Linux almost always has DejaVu Sans.
   { label: 'Segoe UI', value: "'Segoe UI', 'Helvetica Neue', 'DejaVu Sans', Tahoma, sans-serif" },
@@ -90,7 +76,15 @@ export const MAIL_FONT_OPTIONS: readonly MailFontOption[] = [
   { label: 'Consolas', value: "Consolas, Menlo, 'DejaVu Sans Mono', 'Courier New', monospace" },
   { label: 'Courier New', value: "'Courier New', Courier, 'Liberation Mono', monospace" },
   { label: 'Lucida Console', value: "'Lucida Console', Monaco, 'DejaVu Sans Mono', monospace" }
-] as const
+]
+
+/** The font menu: the extension's fonts first, then the host's. */
+export const MAIL_FONT_OPTIONS: readonly MailFontOption[] = [
+  ...composition.fonts,
+  ...HOST_FONT_OPTIONS.filter(
+    (option) => !composition.fonts.some((font) => font.label === option.label)
+  )
+]
 
 export function normalizeMailFontFamilyValue(value: string | null | undefined): string | null {
   if (!value) {
@@ -181,15 +175,14 @@ export function findMailFontOption(value: string | null | undefined): MailFontOp
 }
 
 /**
- * Every stack this app authors, indexed by its primary family. The emoji and
- * wordmark stacks are in here too: the corporate signature uses them, and
- * they went through the same "primary family plus a bare generic" phase.
+ * Every stack this app authors, indexed by its primary family: the menu,
+ * the emoji stack and whatever the extension's own content uses.
  */
 const CANONICAL_STACKS_BY_PRIMARY: ReadonlyMap<string, string> = new Map(
   [
     ...MAIL_FONT_OPTIONS.map((option) => option.value),
     MAIL_EMOJI_FONT_FAMILY,
-    MAIL_WORDMARK_FONT_FAMILY
+    ...composition.extraFontStacks
   ]
     .map((stack) => [getPrimaryMailFontFamily(stack), stack] as const)
     .filter((entry): entry is readonly [string, string] => entry[0] !== null)
@@ -201,13 +194,11 @@ const FONT_FAMILY_DECLARATION_PATTERN = /font-family\s*:\s*([^;"}]+)/gi
  * Rewrites every font-family declaration whose primary family is one of ours
  * to that family's full fallback chain.
  *
- * Content authored before the chains existed carries `'Century Gothic',
- * sans-serif` — the house font and then a bare generic. That reads as
- * Century Gothic only where Century Gothic is installed, and as Helvetica or
- * Arial everywhere else: on a Mac, in Gmail, on a Windows machine without
- * Office. The chains put the closest face each platform actually ships in
- * between (Futura on macOS, URW Gothic on Linux, Trebuchet MS before the
- * generic), so the message keeps its identity instead of collapsing.
+ * Content written before the chains existed carries a face followed by a
+ * bare generic — `'Lucida Sans Unicode', sans-serif`. That reads as the
+ * face only where it is installed, and as Helvetica or Arial everywhere
+ * else. The chains put the closest face each platform actually ships in
+ * between, so the message keeps its identity instead of collapsing.
  *
  * Only declarations we recognise are touched, and a stack that already is
  * the canonical one is left byte-identical, so this is safe to run over the

@@ -14,6 +14,7 @@
     "src/preload/**/*",
     "src/shared/**/*",
     "src/extension/types.ts",
+    "extension/shared/**/*",
     "extension/main/**/*",
     "extension/preload/**/*"
   ],
@@ -26,7 +27,8 @@
       "@shared/*": ["src/shared/*"],
       "@app/extension/main": ["extension/main/index.ts"],
       "@app/extension/preload": ["extension/preload/index.ts"],
-      "@app/extension/types": ["src/extension/types.ts"]
+      "@app/extension/types": ["src/extension/types.ts"],
+      "@app/extension/shared": ["extension/shared/index.ts"]
     }
   }
 }

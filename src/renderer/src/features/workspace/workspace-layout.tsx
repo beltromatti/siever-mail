@@ -36,9 +36,8 @@ import {
 const SIDEBAR_WIDTH = 'clamp(196px, 15%, 256px)'
 
 /**
- * Message list beside the reading pane. Proportioned after the reference
- * the customer sent: the list is a scanning column, the message is the
- * thing being read, so the message gets the larger share. The lower bound
+ * Message list beside the reading pane. The list is a scanning column, the
+ * message is the thing being read, so the message gets the larger share. The lower bound
  * is what a three-line row needs before sender and subject start colliding;
  * the upper bound is where a wider list stops adding information.
  */
@@ -52,7 +51,7 @@ const EXPANDED_LIST_WIDTH = 'clamp(260px, 22%, 360px)'
 
 /**
  * Height of the dense table above the reading pane, expressed in rows
- * rather than pixels: never fewer than the team needs at a glance, never
+ * rather than pixels: never fewer than triage needs at a glance, never
  * more than is useful, and a proportional target in between. Everything
  * left over goes to the message — which is the point of the whole change.
  *
@@ -113,10 +112,9 @@ export function WorkspaceLayout({
     </div>
   )
 
-  // Expanded reading keeps the message list reachable: this is the mode the
-  // SIEVER team reads in, and they move through messages and delete without
-  // leaving it. Hiding the list here would cost them the workflow that made
-  // "la modalità schermo esteso viene persa" worth reporting.
+  // Expanded reading keeps the message list reachable: people read in this
+  // mode and move through messages and delete without leaving it. Hiding the
+  // list here would throw them out of it at every step.
   if (readerExpanded) {
     return (
       <div

@@ -48,8 +48,8 @@ export function formatDateLabel(value: string): string {
 }
 
 /**
- * Full date for the dense table view, matching the "venerdì 05/06/2026
- * 19:38" shape the SIEVER team reads in Outlook. The weekday earns its
+ * Full date for the dense table view, in the "venerdì 05/06/2026 19:38"
+ * shape Outlook uses. The weekday earns its
  * place there: at 15+ rows on screen it is the fastest way to locate the
  * day a message arrived without counting back from today.
  */

@@ -2,9 +2,9 @@
  * Physical measurements of the dense table, shared between the component
  * that draws it and the layout that sizes the pane around it.
  *
- * The outlook layout has to guarantee a minimum number of visible rows — the
- * SIEVER team works from roughly fifteen at a glance — while handing every
- * spare pixel to the message below. That calculation is only honest if it
+ * The outlook layout has to guarantee a minimum number of visible rows —
+ * people triaging mail work from roughly fifteen at a glance — while handing
+ * every spare pixel to the message below. That calculation is only honest if it
  * derives from the row height the table actually renders, so the number
  * lives here once instead of being duplicated as a magic value in a grid
  * template.
@@ -47,12 +47,11 @@ export const MESSAGE_TABLE_CHROME_HEIGHT_PX =
   MESSAGE_TABLE_BORDER_SLACK_PX
 
 /**
- * Rows the table aims to show whenever the window can afford them. The
- * customer put the useful floor at fourteen ("è suff che si rimangano in
- * alto 14 righe") and asked for more room below at the same time; fifteen
- * satisfies both because the reading header was cut from 151px to 66px, so
- * the extra row comes out of chrome we removed rather than out of the
- * message. Note this is an aim, not a guarantee: a window too short to
+ * Rows the table aims to show whenever the window can afford them. Fourteen
+ * is the useful floor for triage, and the message below wants room at the
+ * same time; fifteen satisfies both because the reading header was cut from
+ * 151px to 66px, so the extra row comes out of chrome we removed rather than
+ * out of the message. Note this is an aim, not a guarantee: a window too short to
  * honour it gives up rows rather than starving the reader — see
  * `MESSAGE_TABLE_MAX_SPLIT_SHARE`.
  */

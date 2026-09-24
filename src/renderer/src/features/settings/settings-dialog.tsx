@@ -60,8 +60,8 @@ interface SettingsDialogProps {
 const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'accounts',
-    label: 'Accounts',
-    title: 'Accounts',
+    label: 'Account',
+    title: 'Account',
     description: 'Configura e gestisci gli account email collegati.'
   },
   {
@@ -159,6 +159,11 @@ const ACCOUNT_SEGMENT_COLOR_CLASSES = [
   'bg-secondary/70'
 ]
 const GLOBAL_SEGMENT_COLOR_CLASS = 'bg-muted-foreground'
+
+/** What "Elimina tutti i dati" deletes, with whatever the extension keeps. */
+const LOCAL_DATA_DESCRIPTION = `Cancella ogni dato locale: email, cartelle, contatti, firme, file recenti e allegati aperti${
+  extensionRenderer.localDataLabel ? `, ${extensionRenderer.localDataLabel}` : ''
+}.`
 const FILES_SEGMENT_COLOR_CLASS = 'bg-foreground/30'
 
 function formatMegabytes(sizeBytes: number): string {
@@ -1102,9 +1107,8 @@ export function SettingsDialog({
                     Azione nucleare
                   </p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
-                    Cancella ogni dato locale (email, cartelle, contatti, firme, pratiche,
-                    impostazioni archivio). Gli account restano collegati e il bootstrap riparte in
-                    parallelo per ognuno.
+                    {LOCAL_DATA_DESCRIPTION} Gli account restano collegati e la posta si scarica di
+                    nuovo, per ognuno in parallelo.
                   </p>
                   <div className="mt-3">
                     <Button

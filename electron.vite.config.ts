@@ -15,8 +15,6 @@ if (extensionRequested && !extensionDirectoryAvailable) {
   )
 }
 
-const buildVariant: 'public' | 'siever' = extensionEnabled ? 'siever' : 'public'
-
 function extensionMainAliasTarget(): string {
   return extensionEnabled
     ? resolve('extension/main/index.ts')
@@ -29,6 +27,12 @@ function extensionRendererAliasTarget(): string {
     : resolve('src/extension/renderer.public.tsx')
 }
 
+function extensionSharedAliasTarget(): string {
+  return extensionEnabled
+    ? resolve('extension/shared/index.ts')
+    : resolve('src/extension/shared.public.ts')
+}
+
 function extensionPreloadAliasTarget(): string {
   return extensionEnabled
     ? resolve('extension/preload/index.ts')
@@ -39,7 +43,8 @@ const sharedAliases = {
   '@renderer': resolve('src/renderer/src'),
   '@shared': resolve('src/shared'),
   '@main': resolve('src/main'),
-  '@app/extension/types': resolve('src/extension/types.ts')
+  '@app/extension/types': resolve('src/extension/types.ts'),
+  '@app/extension/shared': extensionSharedAliasTarget()
 }
 
 const mainAliases = {
@@ -58,8 +63,7 @@ const preloadAliases = {
 }
 
 const define = {
-  __APP_VERSION__: JSON.stringify(appVersion),
-  __APP_BUILD_VARIANT__: JSON.stringify(buildVariant)
+  __APP_VERSION__: JSON.stringify(appVersion)
 }
 
 export default defineConfig({

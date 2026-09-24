@@ -16,7 +16,8 @@
       "@shared/*": ["src/shared/*"],
       "@app/extension/main": ["src/extension/main.public.ts"],
       "@app/extension/preload": ["src/extension/preload.public.ts"],
-      "@app/extension/types": ["src/extension/types.ts"]
+      "@app/extension/types": ["src/extension/types.ts"],
+      "@app/extension/shared": ["src/extension/shared.public.ts"]
     }
   }
 }

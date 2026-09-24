@@ -24,7 +24,10 @@ const alias = {
     : resolve('src/extension/renderer.public.tsx'),
   '@app/extension/preload': extensionAvailable
     ? resolve('extension/preload/index.ts')
-    : resolve('src/extension/preload.public.ts')
+    : resolve('src/extension/preload.public.ts'),
+  '@app/extension/shared': extensionAvailable
+    ? resolve('extension/shared/index.ts')
+    : resolve('src/extension/shared.public.ts')
 }
 
 /**

@@ -10,16 +10,15 @@
  *     carrying them across an upgrade risks half-populated or stale rows.
  *
  *   • USER DATA — everything else: accounts, signatures, app preferences,
- *     the contact history, and any table an extension owns (the SIEVER
- *     archive root and its practices, for instance). None of it exists
- *     anywhere else; losing it is unrecoverable for the user.
+ *     the contact history, the recent files, and any table an extension
+ *     owns. None of it exists anywhere else; losing it is unrecoverable for
+ *     the user.
  *
  * Up to 1.7.1 the upgrade path deleted the whole database and restored
  * only `accounts` + `account_signatures` from a JSON stash. That silently
- * wiped the archive root, every manually-added practice, the unified-inbox
- * preferences and the contact history on *every single release* — the
- * exact symptom the customer reported ("i percorsi preferiti non si devono
- * cancellare quando si aggiorna il software").
+ * wiped every extension's data, the unified-inbox preferences and the
+ * contact history on *every single release* — settings users had made once
+ * and expected to keep.
  *
  * The flow is now:
  *

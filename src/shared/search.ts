@@ -17,8 +17,8 @@
  *
  * Field scoping is what makes "show me only this sender's mail" work:
  * typing a name unscoped matches it in Cc lines and message bodies too,
- * which is exactly the noise the SIEVER team reported when they searched
- * for a colleague and got unrelated threads interleaved.
+ * which interleaves unrelated threads when what you want is one
+ * colleague's mail.
  *
  * Result shape:
  *   • the query is parsed into an array of AND-groups
@@ -30,8 +30,8 @@
  *   `foo OR bar`            → [ [foo, bar] ]           (foo OR bar)
  *   `foo OR bar baz`        → [ [foo, bar], [baz] ]    ((foo OR bar) AND baz)
  *   `"foo bar" baz`         → [ [foo bar], [baz] ]     ("foo bar" AND baz)
- *   `da:marconi ikea`       → [ [marconi@from], [ikea] ]
- *   `da:"a. beltrami"`      → [ [a. beltrami@from] ]
+ *   `da:rossi fattura`      → [ [rossi@from], [fattura] ]
+ *   `da:"m. rossi"`         → [ [m. rossi@from] ]
  */
 
 /** Which indexed field a term is restricted to. */
@@ -174,7 +174,7 @@ function tokenizeRawQuery(query: string): RawToken[] {
     const rawWord = text.slice(index, wordEnd)
     const { scope, value } = splitFieldScope(rawWord)
 
-    // `da:"alessandro marconi"` — the prefix consumed the word, and the
+    // `da:"mario rossi"` — the prefix consumed the word, and the
     // quoted phrase that immediately follows is its value.
     if (scope !== 'any' && !value && text[wordEnd] === '"') {
       const phrase = readQuotedPhrase(wordEnd)
@@ -270,8 +270,8 @@ export function parseSearchQuery(rawQuery: string | null | undefined): ParsedSea
 
 /**
  * Terms the renderer should highlight inside a given field. A term scoped
- * to another field is deliberately left out: searching `da:marconi` must
- * not paint "marconi" inside a message body, because the row was not
+ * to another field is deliberately left out: searching `da:rossi` must
+ * not paint "rossi" inside a message body, because the row was not
  * matched on that text.
  */
 export function highlightTermsForField(

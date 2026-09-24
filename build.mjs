@@ -15,10 +15,9 @@
  * `version` field for the duration of the build and restores the original
  * content in a finally block, even on crash or interrupt.
  *
- * The companion gitignored `build-siever.mjs` reuses the helpers exported at
- * the bottom of this file (after running `node build.mjs --help` it is also
- * loadable as a library) to produce the SIEVER-extension build by setting
- * `LOAD_EXTENSION=1` before delegating to `runBuild()`.
+ * The file doubles as a library: a private extension checked out under
+ * `extension/` builds its own releases by calling `runBuild()` with
+ * `loadExtension: true`, which sets `LOAD_EXTENSION=1` for the bundle.
  */
 import { spawnSync } from 'node:child_process'
 import {
@@ -553,22 +552,26 @@ function resolveTargetSelection(allLocal, allLinux, { explicitTarget, buildAll }
 }
 
 /**
- * Programmatic build entry-point. Reused from `build-siever.mjs`. Returns
+ * Programmatic build entry-point, also used by extension checkouts. Returns
  * the absolute paths of the artifacts that ended up in the release folder.
+ *
+ * `releaseLabel` names the folder under `release/` the artifacts land in;
+ * `loadExtension` bundles the extension found under `extension/`.
  */
 export function runBuild({
   rawVersion,
   buildAll = false,
   explicitTarget = null,
-  variant = 'public',
+  loadExtension = false,
+  releaseLabel = 'public',
   releaseRootSuffix = ''
 } = {}) {
   const version = normalizeVersionInput(rawVersion)
   const releaseTag = `v${version}`
   const distRoot = join(projectRoot, 'dist')
   const releaseRootName = releaseRootSuffix ? `${releaseTag}-${releaseRootSuffix}` : releaseTag
-  const releaseRoot = join(projectRoot, 'release', variant, releaseRootName)
-  const tempBuildRoot = join(distRoot, '.release-build', variant, releaseRootName)
+  const releaseRoot = join(projectRoot, 'release', releaseLabel, releaseRootName)
+  const tempBuildRoot = join(distRoot, '.release-build', releaseLabel, releaseRootName)
 
   ensureDirectory(releaseRoot)
   ensureDirectory(tempBuildRoot)
@@ -586,13 +589,13 @@ export function runBuild({
   })
 
   console.log(
-    `Preparing ${variant} release ${releaseTag} in ${releaseRoot}` +
+    `Preparing ${releaseLabel} release ${releaseTag} in ${releaseRoot}` +
       `\nTargets: ${[...localTargets, ...linuxTargets].map((t) => t.id).join(', ') || '(none)'}`
   )
 
   const envInjections = {
     SIEVER_APP_VERSION: version,
-    LOAD_EXTENSION: variant === 'siever' ? '1' : ''
+    LOAD_EXTENSION: loadExtension ? '1' : ''
   }
 
   withTransientPackageVersion(version, () => {

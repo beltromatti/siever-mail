@@ -1431,9 +1431,8 @@ function App(): React.JSX.Element {
   }, [orderedMessageRefs])
 
   /**
-   * Selecting a whole section is what makes grouping useful for the SIEVER
-   * workflow — group by sender, click the heading, hand the lot to ARCHIVIA
-   * SIEVER in one pass.
+   * Selecting a whole section is what makes grouping useful for filing mail
+   * — group by sender, click the heading, act on the lot in one pass.
    */
   const handleSelectSection = useCallback((section: { messages: MailMessageSummary[] }): void => {
     const sectionRefs = section.messages.map(summaryToMessageRef)

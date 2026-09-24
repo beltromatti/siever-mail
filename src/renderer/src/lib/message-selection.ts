@@ -11,10 +11,9 @@ import type { MailMessageSummary, MessageRef } from '@shared/models'
  *   • the CURSOR: the row the keyboard is on and the pivot Shift measures
  *     ranges from.
  *
- * Conflating the two is what produced the bug the SIEVER team reported:
- * Ctrl-clicking a selected row removed it from the selection but left it
- * looking selected, because the same highlight was painted for "current"
- * and for "selected". Keeping them separate here lets the renderer paint
+ * Conflating the two is what produced an old bug: Ctrl-clicking a selected
+ * row removed it from the selection but left it looking selected, because
+ * the same highlight was painted for "current" and for "selected". Keeping them separate here lets the renderer paint
  * them differently.
  */
 

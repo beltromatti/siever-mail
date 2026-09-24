@@ -4,14 +4,12 @@
  * renders.
  *
  * That distinction is not cosmetic. A modern Outlook message carries the
- * sender's signature logos, the corporate banner and every image from the
+ * sender's signature logos, a company banner and every image from the
  * quoted chain below as `cid:`-referenced parts — a dozen of them is
  * ordinary. Treating those as attachments means the message list shows a
  * paperclip on almost everything, the reading pane offers `image005.png`
- * next to the real document, and the SIEVER archive writes them all out as
- * loose files beside the message. The customer's report of "vengono
- * scompattate le immagini presenti nel corpo delle mail" is that last
- * symptom; the first two are the same defect seen from other angles.
+ * next to the real document, and anything that files a message's
+ * attachments away writes them all out as loose files beside it.
  */
 import type { Attachment, ParsedMail } from 'mailparser'
 import { simpleParser } from 'mailparser'

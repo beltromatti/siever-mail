@@ -205,6 +205,7 @@ export class MailService {
   private readonly database: AppDatabase
   private readonly googleOAuthService: GoogleOAuthService
   private readonly engine: MailEngine
+  private extension: ExtensionMain | null = null
   // The copy each opened attachment was last written to, and what it held,
   // keyed by its folder: reopening an untouched copy needs no download.
   private readonly openedAttachments = new Map<string, { filePath: string; digest: string }>()
@@ -287,6 +288,7 @@ export class MailService {
     }
 
     await extension.install(context)
+    this.extension = extension
   }
 
   async bootstrap(): Promise<AppBootstrap> {
@@ -729,6 +731,7 @@ export class MailService {
 
     await this.database.clearAllDataKeepAccounts()
     await this.dropOpenedAttachments()
+    await this.extension?.clearData()
 
     // Re-bootstrap all accounts in parallel. engine.addAccount returns once the
     // AccountConnection is created and its connection loop is started; the IMAP

@@ -48,7 +48,7 @@ import {
 import { findHighlightRanges, type SearchHighlightField } from '@shared/search'
 
 /**
- * Search terms to paint, per field. Scoped queries (`da:marconi`) only
+ * Search terms to paint, per field. Scoped queries (`da:rossi`) only
  * highlight the field they matched on, so a row never shows a highlight in
  * text that had nothing to do with why it was returned.
  */
@@ -182,8 +182,8 @@ export function AttachmentMark({ present }: { present: boolean }): React.JSX.Ele
 
 /**
  * Heading above a run of rows. Clicking it selects the whole run — that is
- * the point of grouping for the SIEVER workflow: gather everything from one
- * sender, then hand the lot to ARCHIVIA SIEVER in a single pass.
+ * the point of grouping when filing mail: gather everything from one
+ * sender, then act on the lot in a single pass.
  */
 export function MessageSectionHeading({
   section,
@@ -238,7 +238,7 @@ export function MessageSectionHeading({
           className={cn(
             'truncate text-[11px] font-semibold',
             // Date buckets ("Oggi", "Questa settimana") suit small caps.
-            // Names do not: "ALESSANDRO MARCONI" shouts, and the sender's own
+            // Names do not: "MARIO ROSSI" shouts, and the sender's own
             // capitalisation carries information.
             section.kind === 'date' ? 'tracking-[0.06em] uppercase' : 'tracking-normal',
             allSelected ? 'text-primary' : 'text-foreground/75'

@@ -3,8 +3,8 @@
  *
  * The regression these tests exist for: releases up to 1.7.1 wiped the
  * whole database on every version change and restored only accounts and
- * signatures, which silently destroyed the SIEVER archive root, the
- * manually-added practices and the app preferences on each update.
+ * signatures, which silently destroyed every extension's data and the app
+ * preferences on each update.
  */
 import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -86,8 +86,8 @@ function dbPath(): string {
 /**
  * Minimal stand-in for the host schema: two cache tables the migration is
  * allowed to drop, plus the user-authored tables it must preserve —
- * including `archive_practices`, which the public host knows nothing about
- * and which only reaches the database through the SIEVER extension.
+ * including `extension_records`, which the host knows nothing about and
+ * which only reaches the database through an extension.
  */
 function createSchema(db: SqliteTestAdapter): void {
   db.exec(`
@@ -95,21 +95,21 @@ function createSchema(db: SqliteTestAdapter): void {
     CREATE TABLE account_signatures (account_id TEXT PRIMARY KEY, html TEXT NOT NULL);
     CREATE TABLE app_preferences (id INTEGER PRIMARY KEY, unified TEXT);
     CREATE TABLE contacts (email_normalized TEXT PRIMARY KEY, usage_count INTEGER);
-    CREATE TABLE archive_settings (id INTEGER PRIMARY KEY, root_path TEXT);
-    CREATE TABLE archive_practices (id TEXT PRIMARY KEY, practice_number TEXT, source TEXT);
+    CREATE TABLE extension_settings (id INTEGER PRIMARY KEY, folder_path TEXT);
+    CREATE TABLE extension_records (id TEXT PRIMARY KEY, record_number TEXT, source TEXT);
     CREATE TABLE folders (id TEXT PRIMARY KEY, path TEXT);
     CREATE TABLE messages (id TEXT PRIMARY KEY, subject TEXT);
   `)
 }
 
 function seedUserAndCacheData(db: SqliteTestAdapter): void {
-  db.prepare('INSERT INTO accounts VALUES (?, ?)').run('acc-1', 'a.beltrami@siever.it')
+  db.prepare('INSERT INTO accounts VALUES (?, ?)').run('acc-1', 'anna@example.com')
   db.prepare('INSERT INTO account_signatures VALUES (?, ?)').run('acc-1', '<p>Cordiali saluti</p>')
   db.prepare('INSERT INTO app_preferences VALUES (?, ?)').run(1, 'acc-1')
   db.prepare('INSERT INTO contacts VALUES (?, ?)').run('mario@rossi.it', 4)
-  db.prepare('INSERT INTO archive_settings VALUES (?, ?)').run(1, 'Y:\\')
-  db.prepare('INSERT INTO archive_practices VALUES (?, ?, ?)').run('p-1', '866', 'manual')
-  db.prepare('INSERT INTO archive_practices VALUES (?, ?, ?)').run('p-2', '805', 'scan')
+  db.prepare('INSERT INTO extension_settings VALUES (?, ?)').run(1, 'Y:\\')
+  db.prepare('INSERT INTO extension_records VALUES (?, ?, ?)').run('p-1', '866', 'manual')
+  db.prepare('INSERT INTO extension_records VALUES (?, ?, ?)').run('p-2', '805', 'scan')
   db.prepare('INSERT INTO folders VALUES (?, ?)').run('f-1', 'INBOX')
   db.prepare('INSERT INTO messages VALUES (?, ?)').run('m-1', 'Sopralluogo')
 }
@@ -130,7 +130,7 @@ function countRows(db: SqliteTestAdapter, table: string): number {
 }
 
 beforeEach(() => {
-  appState.userDataPath = mkdtempSync(join(tmpdir(), 'siever-migration-'))
+  appState.userDataPath = mkdtempSync(join(tmpdir(), 'mail-migration-'))
   appState.version = '1.7.1'
   appState.isPackaged = true
 })
@@ -204,18 +204,18 @@ describe('finalizeUpgradeMigration', () => {
     expect(countRows(live, 'messages')).toBe(0)
     expect(countRows(live, 'folders')).toBe(0)
 
-    // User data: intact. This is the regression the customer reported.
+    // User data: intact. This is the regression users hit on every update.
     expect(countRows(live, 'accounts')).toBe(1)
     expect(countRows(live, 'account_signatures')).toBe(1)
     expect(countRows(live, 'app_preferences')).toBe(1)
     expect(countRows(live, 'contacts')).toBe(1)
-    expect(countRows(live, 'archive_practices')).toBe(2)
+    expect(countRows(live, 'extension_records')).toBe(2)
     expect(
       (
-        live.prepare('SELECT root_path FROM archive_settings WHERE id = 1').get() as {
-          root_path: string
+        live.prepare('SELECT folder_path FROM extension_settings WHERE id = 1').get() as {
+          folder_path: string
         }
-      ).root_path
+      ).folder_path
     ).toBe('Y:\\')
 
     live.close()
@@ -259,13 +259,13 @@ describe('finalizeUpgradeMigration', () => {
     expect(countRows(fresh, 'accounts')).toBe(1)
     expect(countRows(fresh, 'account_signatures')).toBe(1)
     expect(countRows(fresh, 'contacts')).toBe(1)
-    expect(countRows(fresh, 'archive_practices')).toBe(2)
+    expect(countRows(fresh, 'extension_records')).toBe(2)
     expect(
       (
-        fresh.prepare('SELECT root_path FROM archive_settings WHERE id = 1').get() as {
-          root_path: string
+        fresh.prepare('SELECT folder_path FROM extension_settings WHERE id = 1').get() as {
+          folder_path: string
         }
-      ).root_path
+      ).folder_path
     ).toBe('Y:\\')
 
     // The cache is not replayed: it resyncs from the server.
@@ -282,7 +282,7 @@ describe('finalizeUpgradeMigration', () => {
       CREATE TABLE accounts (id TEXT PRIMARY KEY, email TEXT NOT NULL, legacy_column TEXT);
       CREATE TABLE messages (id TEXT PRIMARY KEY, subject TEXT);
     `)
-    db.prepare('INSERT INTO accounts VALUES (?, ?, ?)').run('acc-1', 'a@siever.it', 'dropped')
+    db.prepare('INSERT INTO accounts VALUES (?, ?, ?)').run('acc-1', 'a@example.com', 'dropped')
     db.close()
 
     writeFileSync(
@@ -306,7 +306,7 @@ describe('finalizeUpgradeMigration', () => {
       email: string
       added_column: string | null
     }
-    expect(row).toEqual({ id: 'acc-1', email: 'a@siever.it', added_column: null })
+    expect(row).toEqual({ id: 'acc-1', email: 'a@example.com', added_column: null })
     fresh.close()
   })
 

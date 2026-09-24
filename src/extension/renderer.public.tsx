@@ -5,7 +5,9 @@ const noopExtensionRenderer: ExtensionRenderer = {
   displayName: 'No extension',
   toolbarActions: [],
   settingsTabs: [],
-  PrimaryActionDialog: null
+  PrimaryActionDialog: null,
+  fontFaceCss: '',
+  localDataLabel: ''
 }
 
 export default noopExtensionRenderer

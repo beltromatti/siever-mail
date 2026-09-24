@@ -1,8 +1,8 @@
 /**
  * "Apple" message list: multi-line rows beside a reading pane.
  *
- * Tuned for density after the SIEVER review asked for "più roba a schermo,
- * meno card grandi": rows are hairline-separated instead of floating cards,
+ * Tuned for density — more on screen, fewer big cards: rows are
+ * hairline-separated instead of floating cards,
  * the unread state is a dot rather than a badge, and the attachment marker
  * is an icon rather than a labelled chip. Roughly twice the messages fit on
  * screen compared with the previous card list, with no information removed —

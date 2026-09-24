@@ -24,8 +24,8 @@ export function deriveSenderName(from: ReadonlyArray<MailAddress>): string {
 
 /**
  * Identity of the sender, independent of how they spelled their display
- * name in any given message. Grouping keys off this so "A. Beltrami" and
- * "Alessandro Beltrami" from the same address stay in one section.
+ * name in any given message: "M. Rossi" and "Mario Rossi" writing from
+ * the same address are one sender.
  */
 export function deriveSenderKey(from: ReadonlyArray<MailAddress>): string {
   return from[0]?.address.trim().toLowerCase() ?? ''

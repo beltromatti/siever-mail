@@ -82,10 +82,10 @@ const desktopMailApi: DesktopMailApi = {
   onAppMenuCommand: (listener) => subscribe(IPC_CHANNELS.appMenuCommand, listener)
 }
 
-// Merge any extension-provided bridge methods (e.g. archive: IPC channels
-// added by the SIEVER extension) onto the host's API surface. The public
-// build's installer returns an empty object, so window.mailApi remains the
-// host's own API there.
+// Merge any extension-provided bridge methods (the IPC channels an
+// extension registers) onto the host's API surface. The public build's
+// installer returns an empty object, so window.mailApi remains the host's
+// own API there.
 const extensionBridge = installExtensionPreload(ipcRenderer)
 const mergedMailApi = { ...desktopMailApi, ...extensionBridge }
 

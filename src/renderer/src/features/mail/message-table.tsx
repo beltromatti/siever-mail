@@ -1,14 +1,14 @@
 /**
  * "Outlook" message table: one line per message, above the reading pane.
  *
- * Built from the layout the SIEVER team asked for by name — a dense grid of
- * Da / A / Oggetto / Ricevuto / Dimensione with clickable column headers and
- * collapsible group bands. At the app's default window height it shows
- * around fifteen messages at once, which was the explicit requirement.
+ * The layout Outlook users know by name — a dense grid of Da / A / Oggetto
+ * / Ricevuto / Dimensione with clickable column headers and collapsible
+ * group bands. At the app's default window height it shows around fifteen
+ * messages at once.
  *
  * Column headers double as the sort control: clicking one sorts by it and
- * clicking again flips the direction. That is the interaction the team
- * already knows, and it makes sorting discoverable without hunting for a
+ * clicking again flips the direction. That is the interaction those users
+ * already know, and it makes sorting discoverable without hunting for a
  * menu — the dropdown in the header bar stays for the fields that have no
  * column of their own.
  */

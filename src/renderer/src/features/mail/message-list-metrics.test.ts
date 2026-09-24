@@ -40,7 +40,7 @@ describe('the outlook split invariants', () => {
     )
   })
 
-  it('honours the fifteen rows the customer asked to keep at a glance', () => {
+  it('keeps fifteen rows at a glance', () => {
     expect(MESSAGE_TABLE_MIN_VISIBLE_ROWS).toBeGreaterThanOrEqual(15)
   })
 

@@ -7,16 +7,6 @@
 
 @custom-variant dark (&:is(.dark *));
 
-@font-face {
-  font-family: 'Century Gothic';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src:
-    local('Century Gothic'),
-    url('../../../../resources/centurygothic.ttf') format('truetype');
-}
-
 :root {
   --background: 223 43% 8%;
   --foreground: 220 33% 96%;
@@ -195,8 +185,8 @@
   /*
     Dialog surface. Deliberately more translucent than .glass-panel: dialogs
     float over the workspace and the user often needs to keep an eye on what
-    is underneath (the archive wizard asks for a folder name while the
-    relevant message and folder listing sit behind it). Heavy blur plus a
+    is underneath (a dialog asking for a name that has to be read off the
+    message behind it). Heavy blur plus a
     specular top edge is what keeps that legible instead of muddy — the
     "water drop" read, rather than a flat scrim.
   */

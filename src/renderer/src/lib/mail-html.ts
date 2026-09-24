@@ -1,7 +1,7 @@
 import DOMPurify, { type Config as DOMPurifyConfig } from 'dompurify'
 
+import extensionRenderer from '@app/extension/renderer'
 import { normalizeMailFontFamilyValue } from '@shared/mail-fonts'
-import centuryGothicRegularUrl from '../../../../resources/centurygothic.ttf?url'
 
 export interface NormalizedMailHtml {
   bodyHtml: string
@@ -120,16 +120,9 @@ export function sanitizeMailHtmlToFragment(
 // shows them; what the composer adds to a message it writes onto the
 // message itself (see `buildOutgoingMailHtml`), never into this sheet. No
 // `!important`: the author's CSS always wins.
+// Fonts an extension bundles render in every message frame too.
 const MAIL_FRAME_BASELINE_CSS = `
-@font-face {
-  font-family: 'Century Gothic';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src:
-    local('Century Gothic'),
-    url('${centuryGothicRegularUrl}') format('truetype');
-}
+${extensionRenderer.fontFaceCss}
 
 html {
   color-scheme: light;
@@ -142,7 +135,7 @@ body {
   margin: 0;
   padding: 14px 18px 18px;
   background: #ffffff;
-  color: #1f2328;
+  color: #000000;
   font-family:
     -apple-system,
     BlinkMacSystemFont,

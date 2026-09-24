@@ -1,8 +1,8 @@
 /**
- * Generic filesystem helpers shared between the host (download attachments
- * to the OS Downloads folder) and any extensions that materialise files on
- * disk (e.g. the SIEVER archive workflow). Intentionally domain-agnostic:
- * nothing here knows about archives, accounts or any product concept.
+ * Generic filesystem helpers shared between the host (attachments written
+ * to disk) and any extension that materialises files of its own.
+ * Intentionally domain-agnostic: nothing here knows about accounts or any
+ * product concept.
  */
 import { access, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'

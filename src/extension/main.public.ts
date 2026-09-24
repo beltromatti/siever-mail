@@ -12,6 +12,9 @@ const noopExtensionMain: ExtensionMain = {
   defaultAccountSignatureHtml: '',
   install(): void {
     /* nothing to install in the public build */
+  },
+  async clearData(): Promise<void> {
+    /* nothing stored in the public build */
   }
 }
 

@@ -71,8 +71,8 @@ const FILTER_OPTIONS: ReadonlyArray<{ value: MessageListFilter; label: string }>
  * Single action bar above the workspace.
  *
  * The message actions used to appear only while a separate "multi-selection
- * mode" was engaged, which is the mode the SIEVER team kept getting stuck
- * in. There is no mode any more: the actions are simply enabled whenever
+ * mode" was engaged, a mode people kept getting stuck in. There is no mode
+ * any more: the actions are simply enabled whenever
  * something is selected, and a counter appears once the selection grows
  * past one so it is always obvious how many messages the next click will
  * touch.

@@ -190,7 +190,7 @@ function normalizeMessageSearchQuery(query?: string): string | null {
 /**
  * Builds the per-term WHERE clause. An unscoped term matches against every
  * indexable field; a scoped one is confined to the fields its prefix names,
- * which is what stops `da:marconi` from also matching people cc'd on a
+ * which is what stops `da:rossi` from also matching people cc'd on a
  * thread or a name that merely appears in a signature block.
  */
 function buildSingleTermWhere(term: SearchTerm): Prisma.MessageWhereInput {
@@ -751,7 +751,7 @@ export class AppDatabase {
    * Brings a stored signature up to date on read, and writes the result back
    * so the Firme editor shows the HTML the recipient will get:
    *
-   *   • signatures from before the font fallback chains carry the house font
+   *   • signatures from before the font fallback chains carry a face
    *     followed by a bare generic, and lose their identity wherever it is
    *     not installed — they get the full chain;
    *   • signatures from before format 2 relied on the old editor's page for
@@ -2530,7 +2530,6 @@ export class AppDatabase {
       )
     `)
     await this.ensureAppPreferencesColumns()
-    await this.migrateUnifiedInboxFromLegacyArchiveSettings()
 
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_accounts_last_viewed ON accounts(last_viewed_at DESC)'
@@ -2572,57 +2571,6 @@ export class AppDatabase {
       INSERT OR IGNORE INTO app_preferences(id, unified_inbox_included_account_ids, updated_at)
       VALUES (${APP_PREFERENCES_SINGLETON_ID}, NULL, ${Date.now()})
     `)
-  }
-
-  /**
-   * On upgrade from a host build that stored unified-inbox preferences on
-   * the legacy `archive_settings` table (now owned by the SIEVER archive
-   * extension), migrate the value into the new host-owned `app_preferences`
-   * table so the user's setting survives the schema split. The migration
-   * is a no-op if the legacy table doesn't exist or its column was never
-   * populated.
-   */
-  private async migrateUnifiedInboxFromLegacyArchiveSettings(): Promise<void> {
-    try {
-      const legacyTable = (await this.prisma.$queryRawUnsafe(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'archive_settings'"
-      )) as Array<{ name?: string }>
-
-      if (!legacyTable[0]?.name) {
-        return
-      }
-
-      const legacyColumns = (await this.prisma.$queryRawUnsafe(
-        'PRAGMA table_info(archive_settings)'
-      )) as Array<{ name?: string }>
-
-      if (!legacyColumns.some((column) => column.name === 'unified_inbox_included_account_ids')) {
-        return
-      }
-
-      const legacyRows = (await this.prisma.$queryRawUnsafe(
-        'SELECT unified_inbox_included_account_ids AS value FROM archive_settings WHERE id = 1 LIMIT 1'
-      )) as Array<{ value?: unknown }>
-
-      const legacyValue = legacyRows[0]?.value
-
-      if (typeof legacyValue !== 'string' || !legacyValue.trim()) {
-        return
-      }
-
-      const now = Date.now()
-      await this.prisma.$executeRawUnsafe(
-        `UPDATE app_preferences
-         SET unified_inbox_included_account_ids = ?,
-             updated_at = ?
-         WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
-           AND (unified_inbox_included_account_ids IS NULL OR unified_inbox_included_account_ids = '')`,
-        legacyValue,
-        now
-      )
-    } catch (error) {
-      logMainError('Unified inbox preference migration from legacy archive_settings failed', error)
-    }
   }
 
   /**

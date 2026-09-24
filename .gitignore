@@ -30,7 +30,6 @@ scripts/.e2e-out/
 # Loaded by the Vite aliases when LOAD_EXTENSION=1 is set; without the
 # directory the aliases fall back to the public stubs in src/extension/.
 /extension/
-/build-siever.mjs
 
 # --- Local crash reports / scratch ---
 /dev/

@@ -36,6 +36,8 @@ import {
 // would be blocked silently and Squire would never reach the iframe window.
 import squireScriptUrl from 'squire-rte/dist/squire.js?url'
 
+import composition from '@app/extension/shared'
+import type { TextColorOption } from '@app/extension/types'
 import { Button } from '@renderer/components/ui/button'
 import {
   DropdownMenuCheckboxItem,
@@ -182,7 +184,7 @@ const DEFAULT_CUSTOM_HIGHLIGHT_PICKER_VALUE = '#fef08a'
 // to escape lives on an authored `<p style="color: …">` (signature,
 // reply, paste). This mirrors what Gmail/Outlook do when you click their
 // "Default text colour" entry: they wrap in `color: <body-default>`.
-const EDITOR_BODY_COLOR_HEX = '#1f2328'
+const EDITOR_BODY_COLOR_HEX = '#000000'
 const DEFAULT_TEXT_COLOR_HEX = EDITOR_BODY_COLOR_HEX
 
 // Highlight ("Nessuna evidenziazione"): clear via `transparent` rather
@@ -235,8 +237,9 @@ const EDITOR_LINE_HEIGHT_OPTIONS = [
   { value: '3', label: '3.00' }
 ] as const
 
-const TEXT_COLOR_OPTIONS = [
-  { value: '#7030a0', label: 'Viola SIEVER' },
+// An extension's own colours come first (see `ExtensionComposition`).
+const TEXT_COLOR_OPTIONS: ReadonlyArray<TextColorOption> = [
+  ...composition.textColors,
   { value: '#1f2937', label: 'Antracite' },
   { value: '#374151', label: 'Ardesia' },
   { value: '#6b7280', label: 'Grigio' },
@@ -258,7 +261,7 @@ const TEXT_COLOR_OPTIONS = [
   { value: '#4f46e5', label: 'Indaco' },
   { value: '#c026d3', label: 'Magenta' },
   { value: '#ec4899', label: 'Rosa' }
-] as const
+]
 
 const TEXT_HIGHLIGHT_OPTIONS = [
   { value: '#fef08a', label: 'Giallo' },
