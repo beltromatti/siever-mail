@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useRef, useState } from 'react'
 
 import { AlertCircle, Check, LoaderCircle, LogIn, Mail, Plus } from 'lucide-react'
 
@@ -14,6 +14,13 @@ import {
 } from '@renderer/components/ui/dialog'
 import { Input } from '@renderer/components/ui/input'
 import { Label } from '@renderer/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@renderer/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@renderer/components/ui/tabs'
 import type { MailAccount } from '@shared/models'
 
@@ -24,6 +31,9 @@ interface AddAccountDialogProps {
   open?: boolean
   onOpenChange?: (open: boolean) => void
 }
+
+type ImapForm = typeof DEFAULT_IMAP_FORM
+type MailServer = 'imap' | 'smtp'
 
 const DEFAULT_IMAP_FORM = {
   email: '',
@@ -36,6 +46,48 @@ const DEFAULT_IMAP_FORM = {
   smtpHost: '',
   smtpPort: '465',
   smtpSecure: true
+}
+
+/**
+ * The ports each kind of encryption is served on: SSL/TLS from the first
+ * byte, or STARTTLS on a plain connection that turns encrypted. Picking one
+ * moves a standard port to the other's, and typing a standard port picks
+ * its encryption — as Thunderbird does.
+ */
+const STANDARD_PORTS: Readonly<Record<MailServer, { tls: number; starttls: readonly number[] }>> = {
+  imap: { tls: 993, starttls: [143] },
+  smtp: { tls: 465, starttls: [587, 25] }
+}
+
+const SERVER_FIELDS = {
+  imap: { port: 'imapPort', secure: 'imapSecure' },
+  smtp: { port: 'smtpPort', secure: 'smtpSecure' }
+} as const
+
+function withPort(form: ImapForm, server: MailServer, port: string): ImapForm {
+  const fields = SERVER_FIELDS[server]
+  const standard = STANDARD_PORTS[server]
+  const number = Number(port)
+  const secure =
+    number === standard.tls
+      ? true
+      : standard.starttls.includes(number)
+        ? false
+        : form[fields.secure]
+
+  return { ...form, [fields.port]: port, [fields.secure]: secure }
+}
+
+function withEncryption(form: ImapForm, server: MailServer, secure: boolean): ImapForm {
+  const fields = SERVER_FIELDS[server]
+  const standard = STANDARD_PORTS[server]
+  const port = Number(form[fields.port])
+  const onStandardPort = port === standard.tls || standard.starttls.includes(port)
+  const nextPort = onStandardPort
+    ? String(secure ? standard.tls : standard.starttls[0])
+    : form[fields.port]
+
+  return { ...form, [fields.port]: nextPort, [fields.secure]: secure }
 }
 
 function getErrorMessage(caughtError: unknown, fallback: string): string {
@@ -62,10 +114,23 @@ export function AddAccountDialog({
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [imapForm, setImapForm] = useState(DEFAULT_IMAP_FORM)
+  // The username is the address for nearly every provider, so it follows
+  // the email until the user writes a different one.
+  const usernameEditedRef = useRef(false)
   const controlledOpen = typeof open === 'boolean'
   const dialogOpen = controlledOpen ? open : internalOpen
 
+  // Closing, however it happens, forgets what was typed — the password
+  // above all — and any error.
   const setDialogOpen = (nextOpen: boolean): void => {
+    if (!nextOpen) {
+      setImapForm(DEFAULT_IMAP_FORM)
+      usernameEditedRef.current = false
+      setActiveTab(canUseGoogle ? 'google' : 'imap')
+      setError(null)
+      setPending(false)
+    }
+
     if (!controlledOpen) {
       setInternalOpen(nextOpen)
     }
@@ -86,8 +151,30 @@ export function AddAccountDialog({
 
   const closeDialog = (): void => {
     setDialogOpen(false)
-    setError(null)
-    setPending(false)
+  }
+
+  const renderEncryption = (server: MailServer): React.JSX.Element => {
+    const secure = imapForm[SERVER_FIELDS[server].secure]
+
+    return (
+      <Select
+        value={secure ? 'tls' : 'starttls'}
+        onValueChange={(value) =>
+          setImapForm((current) => withEncryption(current, server, value === 'tls'))
+        }
+      >
+        <SelectTrigger
+          aria-label={`Crittografia ${server.toUpperCase()}`}
+          className="min-w-0 flex-1"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="tls">SSL/TLS</SelectItem>
+          <SelectItem value="starttls">STARTTLS</SelectItem>
+        </SelectContent>
+      </Select>
+    )
   }
 
   const handleGoogleAdd = async (): Promise<void> => {
@@ -201,9 +288,14 @@ export function AddAccountDialog({
                   id="email"
                   autoComplete="email"
                   value={imapForm.email}
-                  onChange={(event) =>
-                    setImapForm((current) => ({ ...current, email: event.target.value }))
-                  }
+                  onChange={(event) => {
+                    const email = event.target.value
+                    setImapForm((current) => ({
+                      ...current,
+                      email,
+                      username: usernameEditedRef.current ? current.username : email
+                    }))
+                  }}
                   placeholder="utente@azienda.com"
                 />
               </div>
@@ -221,13 +313,16 @@ export function AddAccountDialog({
               </div>
 
               <div className="space-y-1">
-                <Label htmlFor="username">Username IMAP/SMTP</Label>
+                <Label htmlFor="username">Nome utente</Label>
                 <Input
                   id="username"
                   value={imapForm.username}
-                  onChange={(event) =>
-                    setImapForm((current) => ({ ...current, username: event.target.value }))
-                  }
+                  onChange={(event) => {
+                    const username = event.target.value
+                    // Emptied, it goes back to following the email.
+                    usernameEditedRef.current = username !== ''
+                    setImapForm((current) => ({ ...current, username }))
+                  }}
                   placeholder="utente@azienda.com"
                 />
               </div>
@@ -246,7 +341,7 @@ export function AddAccountDialog({
               </div>
 
               <div className="space-y-1">
-                <Label htmlFor="imap-host">IMAP Host</Label>
+                <Label htmlFor="imap-host">Server IMAP</Label>
                 <Input
                   id="imap-host"
                   value={imapForm.imapHost}
@@ -258,21 +353,25 @@ export function AddAccountDialog({
               </div>
 
               <div className="space-y-1">
-                <Label htmlFor="imap-port">IMAP Port</Label>
-                <Input
-                  id="imap-port"
-                  type="number"
-                  min={1}
-                  max={65535}
-                  value={imapForm.imapPort}
-                  onChange={(event) =>
-                    setImapForm((current) => ({ ...current, imapPort: event.target.value }))
-                  }
-                />
+                <Label htmlFor="imap-port">Porta e crittografia IMAP</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="imap-port"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    className="w-24 shrink-0"
+                    value={imapForm.imapPort}
+                    onChange={(event) =>
+                      setImapForm((current) => withPort(current, 'imap', event.target.value))
+                    }
+                  />
+                  {renderEncryption('imap')}
+                </div>
               </div>
 
               <div className="space-y-1">
-                <Label htmlFor="smtp-host">SMTP Host</Label>
+                <Label htmlFor="smtp-host">Server SMTP</Label>
                 <Input
                   id="smtp-host"
                   value={imapForm.smtpHost}
@@ -284,24 +383,28 @@ export function AddAccountDialog({
               </div>
 
               <div className="space-y-1">
-                <Label htmlFor="smtp-port">SMTP Port</Label>
-                <Input
-                  id="smtp-port"
-                  type="number"
-                  min={1}
-                  max={65535}
-                  value={imapForm.smtpPort}
-                  onChange={(event) =>
-                    setImapForm((current) => ({ ...current, smtpPort: event.target.value }))
-                  }
-                />
+                <Label htmlFor="smtp-port">Porta e crittografia SMTP</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="smtp-port"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    className="w-24 shrink-0"
+                    value={imapForm.smtpPort}
+                    onChange={(event) =>
+                      setImapForm((current) => withPort(current, 'smtp', event.target.value))
+                    }
+                  />
+                  {renderEncryption('smtp')}
+                </div>
               </div>
             </div>
 
             <div className="border-border bg-muted/30 text-muted-foreground flex items-center gap-3 rounded-md border p-3 text-[11px]">
               <Mail className="size-4" />
-              Il client effettua subito verifica IMAP + SMTP sicura e salva le credenziali in
-              storage cifrato locale.
+              SIEVER Mail prova subito la connessione ai due server e conserva le credenziali
+              cifrate su questo computer.
             </div>
 
             <Button
@@ -315,13 +418,13 @@ export function AddAccountDialog({
               ) : (
                 <Check className="size-4" />
               )}
-              Collega Account IMAP
+              Collega account IMAP
             </Button>
           </TabsContent>
         </Tabs>
 
         {error && (
-          <div className="border-destructive/35 bg-destructive/10 text-destructive-foreground rounded-md border p-3 text-[12px]">
+          <div className="border-destructive/35 bg-destructive/10 text-destructive-soft-foreground rounded-md border p-3 text-[12px]">
             <div className="flex items-start gap-2">
               <AlertCircle className="mt-0.5 size-4" />
               <div className="min-w-0">

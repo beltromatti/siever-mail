@@ -137,7 +137,7 @@ export function extractInlineMediaAttachments(html: string): {
 }
 
 function formatConnectionMode(secure: boolean): string {
-  return secure ? 'SSL/TLS' : 'STARTTLS/TLS opportunistico'
+  return secure ? 'SSL/TLS' : 'STARTTLS'
 }
 
 export function composeImapVerificationError(input: AddImapAccountInput, error: unknown): Error {
@@ -198,6 +198,19 @@ export function composeSmtpVerificationError(input: AddImapAccountInput, error: 
   return new Error(lines.join('\n'))
 }
 
+/**
+ * An account's connection is encrypted one way or the other: SSL/TLS from
+ * the first byte (`secure`), or STARTTLS — which is then required, so a
+ * server that stops offering it is refused rather than spoken to in clear.
+ */
+export function imapEncryption(secure: boolean): { secure: boolean; doSTARTTLS?: true } {
+  return secure ? { secure } : { secure, doSTARTTLS: true }
+}
+
+function smtpEncryption(secure: boolean): { secure: boolean; requireTLS?: true } {
+  return secure ? { secure } : { secure, requireTLS: true }
+}
+
 export async function verifyImapAccount(
   input: AddImapAccountInput,
   googleOAuthService: GoogleOAuthService
@@ -207,7 +220,7 @@ export async function verifyImapAccount(
   const client = new ImapFlow({
     host: input.imapHost,
     port: input.imapPort,
-    secure: input.imapSecure,
+    ...imapEncryption(input.imapSecure),
     auth: {
       user: input.username,
       pass: input.password
@@ -238,7 +251,7 @@ export async function verifyImapAccount(
   const transport = nodemailer.createTransport({
     host: input.smtpHost,
     port: input.smtpPort,
-    secure: input.smtpSecure,
+    ...smtpEncryption(input.smtpSecure),
     auth: {
       user: input.username,
       pass: input.password
@@ -287,7 +300,7 @@ export async function createSmtpTransport(
     return nodemailer.createTransport({
       host: account.smtpHost,
       port: account.smtpPort,
-      secure: account.smtpSecure,
+      ...smtpEncryption(account.smtpSecure),
       auth: {
         user: account.username,
         pass: account.secret
@@ -300,7 +313,7 @@ export async function createSmtpTransport(
   return nodemailer.createTransport({
     host: account.smtpHost,
     port: account.smtpPort,
-    secure: account.smtpSecure,
+    ...smtpEncryption(account.smtpSecure),
     auth: {
       type: 'OAuth2',
       user: account.username,

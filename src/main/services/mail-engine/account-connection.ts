@@ -37,6 +37,7 @@ import {
   IMAP_GREETING_TIMEOUT_MS,
   IMAP_MAX_IDLE_TIME_MS,
   IMAP_SOCKET_TIMEOUT_MS,
+  imapEncryption,
   resolveImapAuth,
   type AccountWithSecret
 } from './mail-transport'
@@ -848,7 +849,7 @@ export class AccountConnection extends EventEmitter {
     return new ImapFlow({
       host: this.account.imapHost,
       port: this.account.imapPort,
-      secure: this.account.imapSecure,
+      ...imapEncryption(this.account.imapSecure),
       auth,
       connectionTimeout: IMAP_CONNECTION_TIMEOUT_MS,
       greetingTimeout: IMAP_GREETING_TIMEOUT_MS,

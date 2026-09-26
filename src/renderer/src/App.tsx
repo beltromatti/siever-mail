@@ -2323,7 +2323,7 @@ function App(): React.JSX.Element {
         <div className="mx-auto flex h-full max-w-xl items-center px-6">
           <div className="border-destructive/40 bg-destructive/15 w-full rounded-xl border p-6">
             <p className="display-title text-2xl">Errore inizializzazione</p>
-            <p className="text-destructive-foreground mt-2 text-sm">{bootstrapError}</p>
+            <p className="text-destructive-soft-foreground mt-2 text-sm">{bootstrapError}</p>
             <Button className="window-no-drag mt-5" onClick={() => void reloadBootstrap()}>
               Riprova
             </Button>
@@ -2583,7 +2583,7 @@ function App(): React.JSX.Element {
         messageList={messageListSlot}
         notice={
           viewError ? (
-            <div className="border-destructive/35 bg-destructive/10 text-destructive-foreground flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs">
+            <div className="border-destructive/35 bg-destructive/10 text-destructive-soft-foreground flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs">
               <AlertTriangle className="size-3.5 shrink-0" />
               <span className="min-w-0 flex-1">{viewError}</span>
               <button

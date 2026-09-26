@@ -932,7 +932,7 @@ export function SettingsDialog({
                       )}
 
                       {unifiedInboxPreferencesError && (
-                        <div className="text-destructive-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
+                        <div className="text-destructive-soft-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
                           {unifiedInboxPreferencesError}
                         </div>
                       )}
@@ -986,7 +986,7 @@ export function SettingsDialog({
                       Calcolo ripartizione dati...
                     </div>
                   ) : dataBreakdownError ? (
-                    <div className="text-destructive-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
+                    <div className="text-destructive-soft-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
                       {dataBreakdownError}
                     </div>
                   ) : dataSections.length === 0 ? (
@@ -1268,7 +1268,7 @@ export function SettingsDialog({
                     )}
 
                     {signaturesError && (
-                      <div className="text-destructive-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
+                      <div className="text-destructive-soft-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
                         {signaturesError}
                       </div>
                     )}
