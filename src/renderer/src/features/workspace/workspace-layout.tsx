@@ -18,9 +18,15 @@
  * pane needs to work, never past the point where more is wasted" — so the
  * layout stays right from the 1180×700 minimum up to 4K without a single
  * breakpoint.
+ *
+ * Those clamps are where the message list and the reading pane start. The
+ * divider between them can be dragged (`ResizableSplit`) within the minimums
+ * below, and snaps back onto the default. A dragged size is not kept: a new
+ * layout, expanded reading, or the next launch start from the default again.
  */
 import type { ReactNode } from 'react'
 
+import { ResizableSplit } from '@renderer/components/ui/resizable-split'
 import {
   MESSAGE_TABLE_MAX_SPLIT_SHARE,
   MESSAGE_TABLE_MAX_VISIBLE_ROWS,
@@ -50,6 +56,21 @@ const APPLE_LIST_WIDTH = 'clamp(288px, 27%, 408px)'
 const EXPANDED_LIST_WIDTH = 'clamp(260px, 22%, 360px)'
 
 /**
+ * How far the divider gives: the list keeps its sender, date and the start
+ * of the subject; the message keeps its header actions on one or two lines
+ * and room to read.
+ */
+const LIST_MIN_WIDTH = 240
+const READER_MIN_WIDTH = 420
+/**
+ * In expanded reading the toolbar shares the message's column: its fixed
+ * controls take some 700px, and its actions another 170 as bare icons.
+ */
+const EXPANDED_MAIN_MIN_WIDTH = 880
+const READER_MIN_HEIGHT = 200
+const RESIZE_LABEL = "Ridimensiona l'elenco e il messaggio"
+
+/**
  * Height of the dense table above the reading pane, expressed in rows
  * rather than pixels: never fewer than triage needs at a glance, never
  * more than is useful, and a proportional target in between. Everything
@@ -64,6 +85,9 @@ const OUTLOOK_TABLE_HEIGHT = `min(clamp(${messageTablePaneHeight(
 )}px, 48%, ${messageTablePaneHeight(
   MESSAGE_TABLE_MAX_VISIBLE_ROWS
 )}px), ${MESSAGE_TABLE_MAX_SPLIT_SHARE})`
+
+/** Rows the table keeps when the divider is dragged up as far as it goes. */
+const MESSAGE_TABLE_MIN_DRAGGED_ROWS = 3
 
 export interface WorkspaceLayoutProps {
   mode: 'apple' | 'outlook'
@@ -117,26 +141,34 @@ export function WorkspaceLayout({
   // list here would throw them out of it at every step.
   if (readerExpanded) {
     return (
-      <div
-        className="grid h-full min-h-0 gap-2"
-        style={{ gridTemplateColumns: `${EXPANDED_LIST_WIDTH} minmax(0, 1fr)` }}
-      >
-        <aside className="grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
-          {header}
-          {/*
-            `min-w-0` is not optional here: a grid item defaults to its
-            min-content width, and a message row's min-content is a long
-            unbroken subject. Without it the list panel grew past its track
-            and slid under the reading pane instead of truncating.
-          */}
-          <div className="min-h-0 min-w-0">{messageList}</div>
-        </aside>
-        <div className="flex min-h-0 min-w-0 flex-col gap-2">
-          {toolbar}
-          {notice}
-          <div className="min-h-0 flex-1">{reader}</div>
-        </div>
-      </div>
+      <ResizableSplit
+        key="expanded"
+        orientation="horizontal"
+        defaultSize={EXPANDED_LIST_WIDTH}
+        minFirst={LIST_MIN_WIDTH}
+        minSecond={EXPANDED_MAIN_MIN_WIDTH}
+        label={RESIZE_LABEL}
+        className="h-full"
+        first={
+          <aside className="grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
+            {header}
+            {/*
+              `min-w-0` is not optional here: a grid item defaults to its
+              min-content width, and a message row's min-content is a long
+              unbroken subject. Without it the list panel grew past its track
+              and slid under the reading pane instead of truncating.
+            */}
+            <div className="min-h-0 min-w-0">{messageList}</div>
+          </aside>
+        }
+        second={
+          <div className="flex h-full min-h-0 min-w-0 flex-col gap-2">
+            {toolbar}
+            {notice}
+            <div className="min-h-0 flex-1">{reader}</div>
+          </div>
+        }
+      />
     )
   }
 
@@ -159,16 +191,17 @@ export function WorkspaceLayout({
       <>
         {toolbar}
         {notice}
-        <div
-          className="grid min-h-0 min-w-0 flex-1 gap-2"
-          style={{
-            gridTemplateColumns: 'minmax(0, 1fr)',
-            gridTemplateRows: `${OUTLOOK_TABLE_HEIGHT} minmax(0, 1fr)`
-          }}
-        >
-          <div className="min-h-0 min-w-0">{messageList}</div>
-          <div className="min-h-0 min-w-0">{reader}</div>
-        </div>
+        <ResizableSplit
+          key="outlook"
+          orientation="vertical"
+          defaultSize={OUTLOOK_TABLE_HEIGHT}
+          minFirst={messageTablePaneHeight(MESSAGE_TABLE_MIN_DRAGGED_ROWS)}
+          minSecond={READER_MIN_HEIGHT}
+          label={RESIZE_LABEL}
+          className="flex-1"
+          first={messageList}
+          second={reader}
+        />
       </>
     )
   }
@@ -178,13 +211,17 @@ export function WorkspaceLayout({
     <>
       {toolbar}
       {notice}
-      <div
-        className="grid min-h-0 flex-1 gap-2"
-        style={{ gridTemplateColumns: `${APPLE_LIST_WIDTH} minmax(0, 1fr)` }}
-      >
-        <div className="min-h-0 min-w-0">{messageList}</div>
-        <div className="min-h-0 min-w-0">{reader}</div>
-      </div>
+      <ResizableSplit
+        key="apple"
+        orientation="horizontal"
+        defaultSize={APPLE_LIST_WIDTH}
+        minFirst={LIST_MIN_WIDTH}
+        minSecond={READER_MIN_WIDTH}
+        label={RESIZE_LABEL}
+        className="flex-1"
+        first={messageList}
+        second={reader}
+      />
     </>
   )
 }

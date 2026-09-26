@@ -194,6 +194,14 @@ sortable table above the reader. Both list shells implement
 narrow list beside a full-height message. Sizes are `clamp()`s, never
 breakpoints, so any window size works.
 
+The divider between list and reader can be dragged in all three
+(`components/ui/resizable-split.tsx`, the WAI-ARIA window splitter): within
+minimums that keep both panes usable, with a detent on the default — the
+grip lengthens and turns to the accent colour there, and letting go hands
+the size back to the `clamp()`. Arrow keys (Shift for bigger steps), Home,
+End, Enter and a double click work too. A dragged size is never stored: a
+new layout, expanded reading or the next launch start from the default.
+
 ### TUTTI and several accounts
 
 TUTTI gathers the inboxes of the accounts chosen in Settings. Its rows say

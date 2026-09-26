@@ -634,12 +634,13 @@ export function MessageViewer({
           those icons discoverable.
 
           The upshot is a row that is ~380px instead of ~664px at every
-          width, so it never competes with the subject: the subject is the
-          flexible half (`min-w-0`, truncates rather than pushing the
-          actions down) and `flex-wrap` is left only as a last-resort valve.
+          width, so it rarely competes with the subject: the subject is the
+          flexible half and truncates. Only when the pane is dragged narrow
+          enough to leave it under 12rem do the actions wrap below it —
+          a subject cut to its first letters says nothing.
         */}
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-          <h2 className="min-w-0 flex-1 truncate text-[14px] leading-6 font-semibold">
+          <h2 className="min-w-0 flex-[1_1_12rem] truncate text-[14px] leading-6 font-semibold">
             {message.subject}
           </h2>
           <div className="flex shrink-0 flex-wrap items-center gap-1">
