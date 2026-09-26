@@ -40,7 +40,7 @@ import {
   READER_ZOOM_DEFAULT
 } from '@shared/models'
 import { parseSearchQuery, type SearchTerm, type SearchTermGroup } from '@shared/search'
-import { isMeaningfulDisplayName, senderSortKey } from '@shared/sender'
+import { isMeaningfulDisplayName, isSameSenderName, senderSortKey } from '@shared/sender'
 import { SIGNATURE_HTML_FORMAT, upgradeLegacySignatureHtml } from '@shared/signature-html'
 import { subjectSortKey } from '@shared/subject'
 
@@ -392,6 +392,34 @@ function headerSenderName(message: FetchedMessageSummary): string | undefined {
   return first && isMeaningfulDisplayName(first.name, first.address)
     ? first.name?.trim()
     : undefined
+}
+
+/**
+ * How senders are filed (`resolveSenderLabels`, `senderSortKey`). Bumping it
+ * re-files the rows a database already holds on the next start.
+ */
+const SENDER_FILING_VERSION = 1
+
+interface SenderLabelUse {
+  label: string
+  count: number
+  date: string
+}
+
+/** Most messages first, then the most recent. */
+function compareLabelUses(left: SenderLabelUse, right: SenderLabelUse): number {
+  return right.count - left.count || (right.date > left.date ? 1 : right.date < left.date ? -1 : 0)
+}
+
+function dominantLabelUse(uses: ReadonlyArray<SenderLabelUse>): SenderLabelUse | undefined {
+  return [...uses].sort(compareLabelUses)[0]
+}
+
+function latestLabelUse(uses: ReadonlyArray<SenderLabelUse>): SenderLabelUse | undefined {
+  return uses.reduce<SenderLabelUse | undefined>(
+    (latest, use) => (!latest || use.date > latest.date ? use : latest),
+    undefined
+  )
 }
 
 function normalizeStorageSectionSizesToTotal(
@@ -1743,13 +1771,12 @@ export class AppDatabase {
     const existingByUid = new Map(existingRows.map((row) => [row.uid, row]))
     const contactSuggestions: ContactSuggestionInput[] = []
     const now = BigInt(Date.now())
-    const knownSenderNames = await this.resolveKnownSenderNames(messages)
+    const senderLabels = await this.resolveSenderLabels(messages)
 
     await this.prisma.$transaction(
       messages.map((message) => {
         const existing = existingByUid.get(message.uid) || null
-        const senderLabel =
-          headerSenderName(message) ?? knownSenderNames.get(message.senderKey) ?? message.senderName
+        const senderLabel = senderLabels.get(message) ?? message.senderName
         const senderSort = senderSortKey(senderLabel)
         const subjectSort = subjectSortKey(message.subject)
 
@@ -1847,54 +1874,93 @@ export class AppDatabase {
   }
 
   /**
-   * The name each address in `messages` last went by, for the rows that
-   * carry no name of their own.
+   * The label each message in `messages` is filed under.
    *
-   * A message is filed under the name its header gives the sender. One that
-   * gives only an address — a phone, a scanner, a client that never set a
-   * name — is filed under the latest name that address used in any other
-   * message, so it sorts and groups with that person instead of apart as a
-   * bare address. When this batch brings a newer name, the nameless rows
-   * already stored for the address take it too.
+   * A named message takes the label its address already uses for the same
+   * person (`isSameSenderName`) — the one most of its messages carry — so
+   * "A.beltrami-SIEVER" files with "A. Beltrami - SIEVER" and "Sangiorgi
+   * Cristian" with "Cristian Sangiorgi", while the different people a
+   * shared address speaks for keep their own names. A message that gives
+   * only an address — a phone, a scanner, a client that never set a name —
+   * takes the latest label its address went by, so it sorts with that
+   * person instead of apart as a bare address; when this batch brings a
+   * newer one, the nameless rows already stored for the address take it too.
    */
-  private async resolveKnownSenderNames(
+  private async resolveSenderLabels(
     messages: ReadonlyArray<FetchedMessageSummary>
-  ): Promise<Map<string, string>> {
+  ): Promise<Map<FetchedMessageSummary, string>> {
     const keys = [...new Set(messages.map((message) => message.senderKey).filter(Boolean))]
+    const labelsByKey = new Map<string, SenderLabelUse[]>()
 
-    if (keys.length === 0) {
-      return new Map()
-    }
+    if (keys.length > 0) {
+      const stored = await this.prisma.$queryRaw<
+        Array<{ key: string; label: string; count: number | bigint; date: string }>
+      >`
+        SELECT sender_key AS key, sender_label AS label, COUNT(*) AS count, MAX(date_iso) AS date
+        FROM messages
+        WHERE sender_key IN (${Prisma.join(keys)})
+          AND sender_label <> sender_key
+        GROUP BY sender_key, sender_label
+      `
 
-    // SQLite takes the bare `sender_name` from the row holding MAX(date_iso).
-    const stored = await this.prisma.$queryRaw<Array<{ key: string; name: string; date: string }>>`
-      SELECT sender_key AS key, sender_name AS name, MAX(date_iso) AS date
-      FROM messages
-      WHERE sender_key IN (${Prisma.join(keys)})
-        AND LOWER(TRIM(sender_name)) <> sender_key
-      GROUP BY sender_key
-    `
-    const known = new Map(stored.map((row) => [row.key, { name: row.name, date: row.date }]))
-    const newer = new Map<string, { name: string; date: string }>()
-
-    for (const message of messages) {
-      const name = headerSenderName(message)
-      const latest = newer.get(message.senderKey) ?? known.get(message.senderKey)
-
-      if (message.senderKey && name && (!latest || message.date > latest.date)) {
-        newer.set(message.senderKey, { name, date: message.date })
+      for (const row of stored) {
+        const uses = labelsByKey.get(row.key) ?? []
+        uses.push({ label: row.label, count: Number(row.count), date: row.date })
+        labelsByKey.set(row.key, uses)
       }
     }
 
-    const relabels = [...newer]
-      .filter(([key, latest]) => known.get(key)?.name !== latest.name)
+    const storedLatest = new Map(
+      [...labelsByKey].map(([key, uses]) => [key, latestLabelUse(uses)?.label])
+    )
+    const labels = new Map<FetchedMessageSummary, string>()
+
+    // Named messages first, oldest to newest, so a name a batch brings is
+    // known to every nameless message in it.
+    const named = messages
+      .filter((message) => message.senderKey && headerSenderName(message))
+      .sort((left, right) => (left.date < right.date ? -1 : left.date > right.date ? 1 : 0))
+
+    for (const message of named) {
+      const name = headerSenderName(message) as string
+      const uses = labelsByKey.get(message.senderKey) ?? []
+      const label =
+        dominantLabelUse(uses.filter((use) => isSameSenderName(use.label, name)))?.label ?? name
+      const use = uses.find((candidate) => candidate.label === label)
+
+      if (use) {
+        use.count += 1
+        use.date = message.date > use.date ? message.date : use.date
+      } else {
+        uses.push({ label, count: 1, date: message.date })
+      }
+
+      labelsByKey.set(message.senderKey, uses)
+      labels.set(message, label)
+    }
+
+    for (const message of messages) {
+      if (!labels.has(message)) {
+        labels.set(
+          message,
+          latestLabelUse(labelsByKey.get(message.senderKey) ?? [])?.label ?? message.senderName
+        )
+      }
+    }
+
+    const relabels = [...labelsByKey]
+      .map(([key, uses]) => [key, latestLabelUse(uses)?.label] as const)
+      .filter(
+        (entry): entry is readonly [string, string] =>
+          entry[1] !== undefined && entry[1] !== storedLatest.get(entry[0])
+      )
       .map(
-        ([key, latest]) => this.prisma.$executeRaw`
+        ([key, label]) => this.prisma.$executeRaw`
           UPDATE messages
-          SET sender_label = ${latest.name}, sender_sort = ${senderSortKey(latest.name)}
+          SET sender_label = ${label}, sender_sort = ${senderSortKey(label)}
           WHERE sender_key = ${key}
             AND LOWER(TRIM(sender_name)) = sender_key
-            AND sender_label <> ${latest.name}
+            AND sender_label <> ${label}
         `
       )
 
@@ -1902,11 +1968,81 @@ export class AppDatabase {
       await this.prisma.$transaction(relabels)
     }
 
-    for (const [key, latest] of newer) {
-      known.set(key, latest)
+    return labels
+  }
+
+  /**
+   * Brings every stored row in line with how senders are filed now: the
+   * spellings one address uses for the same person take that address's
+   * most used label, and every label gets the current key. Runs once per
+   * change of that scheme (`SENDER_FILING_VERSION`), on the rows already
+   * stored — an upgrade drops the message cache anyway, but a database
+   * kept across the change must not stay split.
+   */
+  private async fileSendersIfOutdated(): Promise<void> {
+    const [{ user_version: version }] =
+      await this.prisma.$queryRawUnsafe<Array<{ user_version: number | bigint }>>(
+        'PRAGMA user_version'
+      )
+
+    if (Number(version) >= SENDER_FILING_VERSION) {
+      return
     }
 
-    return new Map([...known].map(([key, latest]) => [key, latest.name]))
+    const rows = await this.prisma.$queryRaw<
+      Array<{ key: string; label: string; count: number | bigint; date: string }>
+    >`
+      SELECT sender_key AS key, sender_label AS label, COUNT(*) AS count, MAX(date_iso) AS date
+      FROM messages
+      WHERE sender_label <> sender_key
+      GROUP BY sender_key, sender_label
+    `
+    const usesByKey = new Map<string, SenderLabelUse[]>()
+
+    for (const row of rows) {
+      const uses = usesByKey.get(row.key) ?? []
+      uses.push({ label: row.label, count: Number(row.count), date: row.date })
+      usesByKey.set(row.key, uses)
+    }
+
+    const updates: Prisma.PrismaPromise<number>[] = []
+
+    for (const [key, uses] of usesByKey) {
+      const canonical: SenderLabelUse[] = []
+
+      for (const use of [...uses].sort(compareLabelUses)) {
+        const into = canonical.find((candidate) => isSameSenderName(candidate.label, use.label))
+
+        if (!into) {
+          canonical.push(use)
+        } else if (into.label !== use.label) {
+          updates.push(this.prisma.$executeRaw`
+            UPDATE messages SET sender_label = ${into.label}
+            WHERE sender_key = ${key} AND sender_label = ${use.label}
+          `)
+        }
+      }
+    }
+
+    if (updates.length > 0) {
+      await this.prisma.$transaction(updates)
+    }
+
+    const labels = await this.prisma.$queryRaw<Array<{ label: string }>>`
+      SELECT DISTINCT sender_label AS label FROM messages
+    `
+    const keyUpdates = labels.map(
+      ({ label }) => this.prisma.$executeRaw`
+        UPDATE messages SET sender_sort = ${senderSortKey(label)}
+        WHERE sender_label = ${label} AND sender_sort <> ${senderSortKey(label)}
+      `
+    )
+
+    if (keyUpdates.length > 0) {
+      await this.prisma.$transaction(keyUpdates)
+    }
+
+    await this.prisma.$executeRawUnsafe(`PRAGMA user_version = ${SENDER_FILING_VERSION}`)
   }
 
   async updateMessagePreviews(
@@ -2575,6 +2711,7 @@ export class AppDatabase {
       INSERT OR IGNORE INTO app_preferences(id, unified_inbox_included_account_ids, updated_at)
       VALUES (${APP_PREFERENCES_SINGLETON_ID}, NULL, ${Date.now()})
     `)
+    await this.fileSendersIfOutdated()
   }
 
   /**

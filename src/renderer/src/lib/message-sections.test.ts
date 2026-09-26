@@ -150,6 +150,23 @@ describe('buildMessageSections', () => {
     ])
   })
 
+  it('keeps spellings of one name in one section, titled as most messages spell it', () => {
+    const sections = buildMessageSections(
+      [
+        message({ uid: 1, senderKey: 'a.beltrami@siever.it', senderLabel: 'A.beltrami-SIEVER' }),
+        message({ uid: 2, senderKey: 'a.beltrami@siever.it', senderLabel: 'A. Beltrami - SIEVER' }),
+        message({ uid: 3, senderKey: 'a.beltrami@siever.it', senderLabel: 'A. Beltrami - SIEVER' })
+      ],
+      'auto',
+      'sender',
+      NOW
+    )
+
+    expect(sections.map((section) => [section.label, section.messages.length])).toEqual([
+      ['A. Beltrami - SIEVER', 3]
+    ])
+  })
+
   it('opens a section per sender when auto grouping meets a sender sort', () => {
     const sections = buildMessageSections(
       [

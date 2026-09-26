@@ -212,7 +212,19 @@ also available as `useConfirmDialog()` (`if (await confirm({ … }))`).
 
 Sorting (date, sender, subject, size) and grouping (Automatico, Mittente,
 Nessuno) happen in the database; `lib/message-sections.ts` only slices the
-ordered page into sections. The search grammar in `shared/search.ts` is
+ordered page into sections.
+
+A sender section is one sender as the reader sees them. The spellings one
+address uses for the same name share a label (`isSameSenderName` in
+`shared/sender.ts`: the identifying words in any order, initials, the
+desk words a company adds — "A.beltrami-SIEVER" and "A. Beltrami -
+SIEVER", "HYPE" and "Team HYPE"), while the different people a shared
+address relays keep their own; a message with no name takes its address's
+label, and labels that differ only in dress share a sort key. A database
+kept across a change of these rules is re-filed once at start
+(`SENDER_FILING_VERSION`).
+
+The search grammar in `shared/search.ts` is
 parsed once and used by both sides — the main process builds the `WHERE`,
 the renderer highlights the same terms. Words match sender, recipients,
 subject and body; `da:`, `a:`, `oggetto:` narrow a term to one field.

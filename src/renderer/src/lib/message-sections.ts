@@ -199,7 +199,32 @@ export function buildMessageSections(
 
   for (const section of sections) {
     section.unreadCount = countUnread(section.messages)
+
+    if (kind === 'sender') {
+      section.label = mostUsedLabel(section.messages) || section.label
+    }
   }
 
   return sections
+}
+
+/**
+ * The spelling most of a sender's messages carry. Labels that differ only
+ * in dress share a section; its heading should be the one people see most,
+ * not whichever message happens to be newest.
+ */
+function mostUsedLabel(messages: ReadonlyArray<MailMessageSummary>): string {
+  const counts = new Map<string, number>()
+  let best = ''
+
+  for (const message of messages) {
+    const count = (counts.get(message.senderLabel) ?? 0) + 1
+    counts.set(message.senderLabel, count)
+
+    if (count > (counts.get(best) ?? 0)) {
+      best = message.senderLabel
+    }
+  }
+
+  return best
 }
