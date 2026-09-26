@@ -44,10 +44,10 @@ open-source software released under the Apache License 2.0.
 
 ## Highlights
 
-- **Multi-account by design** — IMAP/SMTP and Gmail OAuth side by side, with
-  a unified inbox (TUTTI) that tags each message with its account and acts
-  on it from that account: replies, forwards and moves never cross over
-  unasked.
+- **Multi-account by design** — IMAP/SMTP (SSL/TLS or STARTTLS) and Gmail
+  OAuth side by side, with a unified inbox (TUTTI) that tags each message
+  with its account and acts on it from that account: replies, forwards and
+  moves never cross over unasked.
 - **Snappy native feel** — keyboard navigation and selection the way
   Finder and Explorer do it, precise truncation, no jank on resize, an
   Italian menu bar on macOS.
@@ -55,17 +55,22 @@ open-source software released under the Apache License 2.0.
   "Sistema" follows the computer as it switches.
 - **Two layouts, one product** — an _Apple_ arrangement (folders, list and
   reading pane side by side) and an _Outlook_ one (dense sortable table on
-  top, message underneath). Same features in both.
+  top, message underneath). Same features in both, and in both the divider
+  between list and message can be dragged; it snaps back to the default.
 - **Built for triage** — sort by date, sender, subject or size, group
   automatically or by sender, filter to unread or flagged, select a whole
-  group with one click and act on it in bulk. Search finds a sender by
-  typing part of the name; `da:` `a:` `oggetto:` narrow a term to one field.
+  group with one click and act on it in bulk. A sender's spellings of one
+  name share a group ("A. Beltrami - SIEVER" and "A.beltrami-SIEVER"),
+  while the different people a shared address relays keep theirs. Search
+  finds a sender by typing part of the name; `da:` `a:` `oggetto:` narrow a
+  term to one field.
 - **Mail that arrives as it was written** — the composer shows a message
   exactly as it will be received, and sending writes that layout onto the
   message so Outlook's Word engine and every other client keep it.
 - **Attachments that behave** — open with the default application, save one
   or all, attach from the files recently used on the computer, or drop them
-  onto the composer. Signature logos and quoted pictures stay part of the
+  onto the composer. A forward carries the original's attachments and a
+  reply offers them. Signature logos and quoted pictures stay part of the
   message instead of posing as attachments.
 - **Sync you can trust** — changes are pushed by the server, reconnection is
   automatic, and "Sincronizzato" is only shown when it is true. An
@@ -114,8 +119,8 @@ is pushed, then publishes the artifacts as a GitHub Release.
 SIEVER Mail ships with a small **extension surface** that lets a custom
 fork plug in features — toolbar actions, settings tabs, a primary-action
 dialog, IPC handlers and tables of its own, fonts and colours for the
-composer, a default account signature — without touching the public source
-tree. The host loads exactly one extension at build time through four Vite
+composer, a default account signature it can keep up to date in the
+signatures already stored — without touching the public source tree. The host loads exactly one extension at build time through four Vite
 aliases:
 
 - `@app/extension/main` — main-process entry (install, IPC, tables, data reset)

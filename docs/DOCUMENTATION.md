@@ -59,7 +59,7 @@ src/
 │   │   ├── database.ts        Prisma client, raw DDL, queries
 │   │   ├── data-migration.ts  upgrade lifecycle
 │   │   ├── mail-engine/       connections, sync, sending, parsing
-│   │   ├── attachment-files.ts  opened/saved attachments on disk
+│   │   ├── attachment-files.ts  attachment copies (opened, forwarded) on disk
 │   │   ├── recent-files.ts    the OS's recent documents, for "Allega"
 │   │   ├── google-oauth.ts    Gmail OAuth
 │   │   └── secure-storage.ts  safeStorage wrapper for secrets
@@ -98,13 +98,13 @@ live in the same file and connection. The host never reads them.
 
 "Elimina tutti i dati" (Settings → Dati) empties everything but the
 accounts and the view preferences, then calls the extension's
-`clearData()`. Clearing one account's data drops its cache and opened
-attachments; the mail downloads again.
+`clearData()`. Clearing one account's data drops its cache and the copies
+of its attachments; the mail downloads again.
 
 ### Upgrades
 
 `data-migration.ts` treats the two kinds of rows oppositely. **Cache**
-(`messages`, `folders`, opened attachments) is rebuilt from the server, so a
+(`messages`, `folders`, attachment copies) is rebuilt from the server, so a
 version change drops it. **User data** — every other table, an extension's
 included — exists nowhere else and is never dropped.
 
@@ -285,6 +285,9 @@ iframe on the same page as the reader, so what is written looks as it will
 arrive. A body starts with lines to write on, the signature in a
 `gmail_signature` block and, for a reply or forward, the quote after a blank
 line (`composer-body.ts`). Changing the sending account swaps that block.
+The lines the user writes carry the default face and line height on the
+block itself; a block the editor makes later — a list, a heading, a paste —
+gets them in the live document, so the caret never moves.
 
 Sending lays the message out once more off screen and writes onto it what
 it rendered as (`lib/outgoing-mail-html.ts`): fonts on text, margins on
