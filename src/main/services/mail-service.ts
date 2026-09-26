@@ -22,6 +22,7 @@ import type {
   AppBootstrap,
   ComposeMailInput,
   AttachmentRef,
+  CopiedAttachment,
   DataStorageBreakdown,
   ListMessagesOptions,
   MailAccount,
@@ -30,6 +31,7 @@ import type {
   MailFolder,
   MailMessageDetail,
   MailMessageListPage,
+  MessageAttachmentsRef,
   MessageRef,
   MoveMessageInput,
   OpenAttachmentResult,
@@ -52,12 +54,12 @@ import {
 import {
   accountAttachmentCacheDirectory,
   attachmentCacheRoot,
+  attachmentCopyDirectory,
   clearAttachmentCache,
   directorySize,
   fileSha256,
   isExecutableAttachment,
   markFromInternet,
-  openedAttachmentDirectory,
   sha256
 } from './attachment-files'
 import { AppDatabase } from './database'
@@ -114,6 +116,10 @@ const messageRefSchema = z.object({
 const attachmentRefSchema = z.object({
   ref: messageRefSchema,
   attachmentId: z.string().trim().min(1)
+})
+const messageAttachmentsRefSchema = z.object({
+  ref: messageRefSchema,
+  attachmentIds: z.array(z.string().trim().min(1)).min(1).max(200)
 })
 const filePathsSchema = z.array(z.string().min(1)).max(200)
 
@@ -210,9 +216,9 @@ export class MailService {
   private readonly engine: MailEngine
   private extension: ExtensionMain | null = null
   private storageReady: Promise<void> | null = null
-  // The copy each opened attachment was last written to, and what it held,
-  // keyed by its folder: reopening an untouched copy needs no download.
-  private readonly openedAttachments = new Map<string, { filePath: string; digest: string }>()
+  // The copy of each attachment last written, and what it held, keyed by its
+  // folder: an untouched copy is used again without a download.
+  private readonly attachmentCopies = new Map<string, { filePath: string; digest: string }>()
 
   constructor(config: RuntimeConfig) {
     const userDataPath = app.getPath('userData')
@@ -382,7 +388,7 @@ export class MailService {
     await this.engine.removeAccount(accountId)
     await this.database.clearAccountData(accountId)
     await this.database.deleteAccount(accountId)
-    await this.dropOpenedAttachments(accountId)
+    await this.dropAttachmentCopies(accountId)
   }
 
   async markAccountLastViewed(accountId: string): Promise<void> {
@@ -621,6 +627,10 @@ export class MailService {
       throw new Error('Account non trovato.')
     }
 
+    // A file attached a while ago may be gone by now; say which, rather than
+    // failing halfway through the upload.
+    await this.describeFiles(payload.attachments.map((attachment) => attachment.path))
+
     const account = {
       ...stored,
       secret: decryptSecret(stored.encryptedSecret)
@@ -714,8 +724,8 @@ export class MailService {
       sections: [
         ...database.sections,
         {
-          id: 'opened-attachments',
-          label: 'Allegati aperti',
+          id: 'attachment-copies',
+          label: 'Copie degli allegati',
           kind: 'files',
           sizeBytes: openedAttachmentsBytes
         }
@@ -727,16 +737,16 @@ export class MailService {
     await this.ensureAccountExists(accountId)
     await this.engine.removeAccount(accountId)
     await this.database.clearAccountData(accountId)
-    await this.dropOpenedAttachments(accountId)
+    await this.dropAttachmentCopies(accountId)
     await this.engine.addAccount(accountId)
   }
 
-  private async dropOpenedAttachments(accountId?: string): Promise<void> {
+  private async dropAttachmentCopies(accountId?: string): Promise<void> {
     const scope = accountId ? accountAttachmentCacheDirectory(accountId) : attachmentCacheRoot()
 
-    for (const directory of this.openedAttachments.keys()) {
+    for (const directory of this.attachmentCopies.keys()) {
       if (directory.startsWith(scope)) {
-        this.openedAttachments.delete(directory)
+        this.attachmentCopies.delete(directory)
       }
     }
 
@@ -752,7 +762,7 @@ export class MailService {
     await Promise.allSettled(accounts.map((account) => this.engine.removeAccount(account.id)))
 
     await this.database.clearAllDataKeepAccounts()
-    await this.dropOpenedAttachments()
+    await this.dropAttachmentCopies()
     await this.extension?.clearData()
 
     // Re-bootstrap all accounts in parallel. engine.addAccount returns once the
@@ -784,7 +794,6 @@ export class MailService {
   async openAttachment(input: AttachmentRef): Promise<OpenAttachmentResult> {
     const { ref, attachmentId } = attachmentRefSchema.parse(input)
     const message = await this.requireMessage(ref)
-    const index = parseAttachmentIndex(attachmentId)
     const listed = message.attachments.find((attachment) => attachment.id === attachmentId)
 
     if (!listed) {
@@ -795,38 +804,111 @@ export class MailService {
       return { status: 'blocked' }
     }
 
-    const directory = openedAttachmentDirectory(ref.accountId, [
-      ref.folderPath,
-      ref.uid,
-      message.messageId ?? message.date,
-      index
-    ])
-    const known = this.openedAttachments.get(directory)
-    let filePath =
-      known && (await fileSha256(known.filePath)) === known.digest ? known.filePath : null
+    const [copy] = await this.copyAttachments(ref, message, [listed.id], 'open')
+    const failure = await shell.openPath(copy.path)
+    return failure ? { status: 'no-application' } : { status: 'opened' }
+  }
 
-    if (!filePath) {
-      const [attachment] = await this.engine.fetchAttachments(ref, [index])
-      const digest = sha256(attachment.content)
-      const target = join(directory, sanitizePathSegment(attachment.fileName, 'allegato'))
-      const existingDigest = await fileSha256(target)
+  /**
+   * Copies of a message's attachments for a reply or forward to carry, as
+   * the message holds them. They are the composer's own, apart from the
+   * copies the reader opens: an application editing one of those must not
+   * change what a forward sends.
+   */
+  async copyMessageAttachments(input: MessageAttachmentsRef): Promise<CopiedAttachment[]> {
+    const { ref, attachmentIds } = messageAttachmentsRefSchema.parse(input)
+    const message = await this.requireMessage(ref)
+    const unknown = attachmentIds.find(
+      (attachmentId) => !message.attachments.some((attachment) => attachment.id === attachmentId)
+    )
 
-      if (existingDigest === digest) {
-        filePath = target
-      } else {
-        await mkdir(directory, { recursive: true })
-        filePath = existingDigest
-          ? await resolveUniqueFilePath(directory, basename(target))
-          : target
-        await writeFile(filePath, attachment.content)
-        await markFromInternet(filePath)
-      }
-
-      this.openedAttachments.set(directory, { filePath, digest })
+    if (unknown) {
+      throw new Error('Allegato non disponibile per questo messaggio.')
     }
 
-    const failure = await shell.openPath(filePath)
-    return failure ? { status: 'no-application' } : { status: 'opened' }
+    return this.copyAttachments(ref, message, attachmentIds, 'compose')
+  }
+
+  /**
+   * Copies of some attachments of a message, each in a folder of its own
+   * under the account's attachment folder, keyed by what it is for. A copy
+   * written before is used again while it is untouched; the others come
+   * from a single download of the message. A copy that changed since — an
+   * application saved over it — stays as it is, and the attachment gets a
+   * fresh copy beside it.
+   */
+  private async copyAttachments(
+    ref: MessageRef,
+    message: MailMessageDetail,
+    attachmentIds: ReadonlyArray<string>,
+    purpose: 'open' | 'compose'
+  ): Promise<CopiedAttachment[]> {
+    const requested = attachmentIds.map((attachmentId) => {
+      const index = parseAttachmentIndex(attachmentId)
+      const identity = [ref.folderPath, ref.uid, message.messageId ?? message.date, index]
+
+      return {
+        attachmentId,
+        index,
+        directory: attachmentCopyDirectory(
+          ref.accountId,
+          purpose === 'open' ? identity : [purpose, ...identity]
+        )
+      }
+    })
+    const paths = new Map<string, string>()
+
+    for (const { directory } of requested) {
+      const known = this.attachmentCopies.get(directory)
+
+      if (known && (await fileSha256(known.filePath)) === known.digest) {
+        paths.set(directory, known.filePath)
+      }
+    }
+
+    const missing = requested.filter(({ directory }) => !paths.has(directory))
+
+    if (missing.length > 0) {
+      const downloaded = await this.engine.fetchAttachments(
+        ref,
+        missing.map(({ index }) => index)
+      )
+
+      for (const [position, attachment] of downloaded.entries()) {
+        const { directory } = missing[position]
+        const digest = sha256(attachment.content)
+        const target = join(directory, sanitizePathSegment(attachment.fileName, 'allegato'))
+        const existingDigest = await fileSha256(target)
+        let filePath = target
+
+        if (existingDigest !== digest) {
+          await mkdir(directory, { recursive: true })
+          filePath = existingDigest
+            ? await resolveUniqueFilePath(directory, basename(target))
+            : target
+          await writeFile(filePath, attachment.content)
+          await markFromInternet(filePath)
+        }
+
+        this.attachmentCopies.set(directory, { filePath, digest })
+        paths.set(directory, filePath)
+      }
+    }
+
+    // Named as the message names it, which the file on disk may not be.
+    return Promise.all(
+      requested.map(async ({ attachmentId, directory }) => {
+        const filePath = paths.get(directory) as string
+        const listed = message.attachments.find((attachment) => attachment.id === attachmentId)
+
+        return {
+          attachmentId,
+          path: filePath,
+          name: listed?.fileName || basename(filePath),
+          size: (await stat(filePath)).size
+        }
+      })
+    )
   }
 
   /** "Salva con nome…": the system save dialog, starting where the user last saved. */
@@ -942,7 +1024,7 @@ export class MailService {
   }
 
   async clearAttachmentCache(): Promise<void> {
-    await this.dropOpenedAttachments()
+    await this.dropAttachmentCopies()
   }
 
   private async requireMessage(ref: MessageRef): Promise<MailMessageDetail> {

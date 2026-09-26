@@ -269,14 +269,23 @@ the default.
 
 ### Attachments
 
-Opening one writes it to `userData/attachments/<account>/<message>` and
-hands it to the default application; executables are never launched from a
-click, and on Windows the copy carries the mark of the web. "Salva con nome"
-and "Salva tutti" write where the user chooses. The cache is measured and
-emptied in Settings → Dati and dropped on every upgrade. "Allega" offers
-the files recently used on the computer (Windows Recent, macOS Spotlight's
-last-used date, Linux `recently-used.xbel`) and in SIEVER Mail, and files
-can be dropped onto the composer.
+Opening one writes a copy to `userData/attachments/<account>/<attachment>`
+and hands it to the default application; executables are never launched
+from a click, and on Windows the copy carries the mark of the web. "Salva
+con nome" and "Salva tutti" write where the user chooses. The copies are
+measured and emptied in Settings → Dati and dropped on every upgrade.
+
+A forward carries the original's attachments, as every client does: the
+composer shows them at once and the main process copies them from one
+download of the message (`copyMessageAttachments`), into copies of their
+own that no application the reader opened can change. Sending waits until
+every copy is there; one that failed says so on its chip, with "Riprova".
+A reply leaves them out, and "Allega" offers them under "Dal messaggio
+originale" — as it offers any the user removed from a forward — above the
+files recently used on the computer (Windows Recent, macOS Spotlight's
+last-used date, Linux `recently-used.xbel`) and in SIEVER Mail. Files can
+also be dropped onto the composer. A file that is gone by the time the
+message is sent is named in the error, not half-uploaded.
 
 ## Extensions
 

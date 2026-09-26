@@ -10,6 +10,7 @@ import type {
   AttachmentRef,
   ComposeMailInput,
   ListMessagesOptions,
+  MessageAttachmentsRef,
   MessageRef,
   MoveMessageInput,
   ToggleFlaggedInput,
@@ -181,6 +182,10 @@ export function registerMailIpc(
 
   registerDataHandler(IPC_CHANNELS.saveAllAttachments, async (ref) => {
     return mailService.saveAllAttachments(ref as MessageRef, getMainWindow() ?? undefined)
+  })
+
+  registerDataHandler(IPC_CHANNELS.copyMessageAttachments, async (payload) => {
+    return mailService.copyMessageAttachments(payload as MessageAttachmentsRef)
   })
 
   registerDataHandler(IPC_CHANNELS.clearAttachmentCache, async () => {

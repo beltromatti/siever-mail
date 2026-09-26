@@ -317,6 +317,17 @@ export interface AttachmentRef {
   attachmentId: string
 }
 
+/** Attachments of one message, by their id in `MailMessageDetail.attachments`. */
+export interface MessageAttachmentsRef {
+  ref: MessageRef
+  attachmentIds: string[]
+}
+
+/** A copy of a message's attachment, ready to go out with another message. */
+export interface CopiedAttachment extends PickedAttachment {
+  attachmentId: string
+}
+
 /**
  * How opening an attachment went. `blocked` is a type that runs code: it
  * is never launched from a message, only saved on purpose. `no-application`

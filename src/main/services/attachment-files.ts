@@ -1,13 +1,14 @@
 /**
- * Attachments on disk: the copies opened from the reader, and the files the
- * user saves.
+ * Attachments on disk: the copies opened from the reader or carried by a
+ * forward, and the files the user saves.
  *
- * An opened attachment lands in `userData/attachments/<account>/<message>`.
- * One folder per account, so clearing an account's data or removing the
- * account takes its copies with it, and the data settings can measure and
- * empty them; the upgrade migration drops the whole tree on every version
- * change, like the rest of the message cache. Each attachment keeps its own
- * file name — it is what the opening application shows in its title bar.
+ * A copy lands in `userData/attachments/<account>/<attachment>`. One folder
+ * per account, so clearing an account's data or removing the account takes
+ * its copies with it, and the data settings can measure and empty them; the
+ * upgrade migration drops the whole tree on every version change, like the
+ * rest of the message cache. Each attachment keeps its own file name — it
+ * is what the opening application shows in its title bar, and what the
+ * recipient of a forward sees.
  */
 import { createHash } from 'node:crypto'
 import { readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -114,12 +115,12 @@ export function accountAttachmentCacheDirectory(accountId: string): string {
 }
 
 /**
- * The folder one opened attachment lives in. Keyed on what identifies the
- * attachment for good — not the UID alone, which a server hands out again
- * after a mailbox is rebuilt — so a copy is never opened for the wrong
- * message.
+ * The folder one copy of an attachment lives in. Keyed on what identifies
+ * the attachment for good — not the UID alone, which a server hands out
+ * again after a mailbox is rebuilt — so a copy never stands in for the
+ * wrong message.
  */
-export function openedAttachmentDirectory(
+export function attachmentCopyDirectory(
   accountId: string,
   identity: ReadonlyArray<string | number>
 ): string {

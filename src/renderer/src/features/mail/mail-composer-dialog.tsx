@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { ChevronDown, Paperclip, Send, X } from 'lucide-react'
+import { ChevronDown, Paperclip, RotateCw, Send, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@renderer/components/ui/button'
@@ -36,11 +36,27 @@ import { MAIL_COMPOSER_DEFAULT_FONT_FAMILY } from '@shared/mail-fonts'
 import type {
   ComposeMailInput,
   MailAccount,
+  MailAttachment,
   MailContactSuggestion,
+  MessageRef,
   PickedAttachment
 } from '@shared/models'
 
 export type ComposerKind = 'new' | 'reply' | 'forward'
+
+/**
+ * An attachment as the composer holds it. One of the original message's
+ * attachments has no file until its copy is made, and says so if that fails.
+ */
+export interface ComposerAttachment {
+  name: string
+  size: number
+  /** The file that goes out. */
+  path?: string
+  /** Its id among the original message's attachments, when it is one of them. */
+  originalId?: string
+  failed?: boolean
+}
 
 export interface ComposerInitialData {
   kind: ComposerKind
@@ -65,7 +81,17 @@ export interface ComposerInitialData {
   html?: string
   inReplyTo?: string
   references?: string[]
-  attachments?: PickedAttachment[]
+  /**
+   * The message a reply or forward is about. A forward carries its
+   * attachments, as every client does; a reply leaves them out, and
+   * "Allega" offers them.
+   */
+  original?: {
+    ref: MessageRef
+    attachments: MailAttachment[]
+  }
+  /** A reopened draft's attachments, as they were. */
+  attachments?: ComposerAttachment[]
 }
 
 interface MailComposerDialogProps {
@@ -128,8 +154,35 @@ function buildInitialState(
   }
 }
 
-function attachmentPaths(attachments: ReadonlyArray<PickedAttachment> | undefined): string {
-  return (attachments ?? []).map((attachment) => attachment.path).join('\n')
+/** What a composer opens with: a draft's own, or a forward's originals. */
+function buildInitialAttachments(
+  initialData: ComposerInitialData | undefined
+): ComposerAttachment[] {
+  if (initialData?.attachments) {
+    return [...initialData.attachments]
+  }
+
+  if (initialData?.kind !== 'forward' || !initialData.original) {
+    return []
+  }
+
+  return initialData.original.attachments.map(originalAttachment)
+}
+
+function originalAttachment(attachment: MailAttachment): ComposerAttachment {
+  return { name: attachment.fileName, size: attachment.size, originalId: attachment.id }
+}
+
+function attachmentKey(attachment: ComposerAttachment): string {
+  return attachment.originalId ? `original:${attachment.originalId}` : `file:${attachment.path}`
+}
+
+function attachmentKeys(attachments: ReadonlyArray<ComposerAttachment>): string {
+  return attachments.map(attachmentKey).join('\n')
+}
+
+function isPendingOriginal(attachment: ComposerAttachment): boolean {
+  return Boolean(attachment.originalId && !attachment.path && !attachment.failed)
 }
 
 function normalizeRecipientEmail(value: string): string {
@@ -220,7 +273,7 @@ export function MailComposerDialog({
   // False while a new body waits for its signature: switching account then
   // would race the signature being put in.
   const [bodyReady, setBodyReady] = useState(initialData?.html !== undefined)
-  const [attachments, setAttachments] = useState<PickedAttachment[]>([])
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
   const [editorFocusMode, setEditorFocusMode] = useState(false)
   const [recipientSuggestions, setRecipientSuggestions] = useState<MailContactSuggestion[]>([])
   const [recipientQuery, setRecipientQuery] = useState('')
@@ -372,7 +425,7 @@ export function MailComposerDialog({
       setForm(initialData?.html === undefined ? { ...opening, html: '', text: '' } : opening)
       setBodyReady(initialData?.html !== undefined)
       setAccountId(initialData?.accountId ?? null)
-      setAttachments(initialData?.attachments ? [...initialData.attachments] : [])
+      setAttachments(buildInitialAttachments(initialData))
       setEditorFocusMode(false)
       // Without this the disclosure stayed open for the rest of the session:
       // one message that needed a Cc left every later message showing two
@@ -414,6 +467,63 @@ export function MailComposerDialog({
         applyInitialState(null)
       })
   }, [initialData, open])
+
+  // The original message's attachments the composer holds but has no file
+  // for yet, copied in one go: the ones a forward opens with, the ones
+  // picked from "Allega", the ones retried after a failure.
+  const pendingOriginalIds = attachments
+    .filter(isPendingOriginal)
+    .map((attachment) => attachment.originalId)
+    .join('\n')
+
+  useEffect(() => {
+    const original = initialData?.original
+
+    if (!open || !original || !pendingOriginalIds) {
+      return
+    }
+
+    const attachmentIds = pendingOriginalIds.split('\n')
+    let current = true
+
+    window.mailApi
+      .copyMessageAttachments({ ref: original.ref, attachmentIds })
+      .then((copies) => {
+        if (!current) {
+          return
+        }
+
+        const copiesById = new Map(copies.map((copy) => [copy.attachmentId, copy]))
+        setAttachments((items) =>
+          items.map((item) => {
+            const copy = item.originalId ? copiesById.get(item.originalId) : undefined
+            return copy && isPendingOriginal(item)
+              ? { ...item, name: copy.name, size: copy.size, path: copy.path }
+              : item
+          })
+        )
+      })
+      .catch((error: unknown) => {
+        if (!current) {
+          return
+        }
+
+        setAttachments((items) =>
+          items.map((item) =>
+            isPendingOriginal(item) && attachmentIds.includes(item.originalId as string)
+              ? { ...item, failed: true }
+              : item
+          )
+        )
+        toast.error('Allegati del messaggio originale non disponibili', {
+          description: error instanceof Error ? error.message : undefined
+        })
+      })
+
+    return () => {
+      current = false
+    }
+  }, [initialData, open, pendingOriginalIds])
 
   /**
    * Sends from another account, swapping the signature for its own. For a
@@ -491,7 +601,7 @@ export function MailComposerDialog({
       form.cc !== initialFields.cc ||
       form.bcc !== initialFields.bcc ||
       form.subject !== initialFields.subject ||
-      attachmentPaths(attachments) !== attachmentPaths(initialData?.attachments) ||
+      attachmentKeys(attachments) !== attachmentKeys(buildInitialAttachments(initialData)) ||
       hasWrittenContent(form.html)
 
     if (
@@ -599,8 +709,14 @@ export function MailComposerDialog({
 
   const toRecipients = useMemo(() => splitRecipients(form.to), [form.to])
 
+  // Every attachment must have its file: an original still being copied, or
+  // whose copy failed, would otherwise go missing without a word.
   const canSend = Boolean(
-    account && toRecipients.length > 0 && form.subject.trim() && form.html.trim()
+    account &&
+    toRecipients.length > 0 &&
+    form.subject.trim() &&
+    form.html.trim() &&
+    attachments.every((attachment) => attachment.path)
   )
 
   // The window said "Nuovo messaggio" even when the user had just hit
@@ -734,6 +850,34 @@ export function MailComposerDialog({
     })
   }
 
+  const originals = initialData?.original?.attachments ?? []
+  const unattachedOriginals = originals.filter(
+    (original) => !attachments.some((attachment) => attachment.originalId === original.id)
+  )
+
+  const attachOriginals = (attachmentIds: string[]): void => {
+    setAttachments((current) => [
+      ...current,
+      ...originals
+        .filter(
+          (original) =>
+            attachmentIds.includes(original.id) &&
+            !current.some((attachment) => attachment.originalId === original.id)
+        )
+        .map(originalAttachment)
+    ])
+  }
+
+  const retryAttachment = (key: string): void => {
+    setAttachments((current) =>
+      current.map((item) => (attachmentKey(item) === key ? { ...item, failed: false } : item))
+    )
+  }
+
+  const removeAttachment = (key: string): void => {
+    setAttachments((current) => current.filter((item) => attachmentKey(item) !== key))
+  }
+
   const handlePickAttachments = async (): Promise<void> => {
     try {
       addAttachments(await window.mailApi.pickAttachments())
@@ -821,10 +965,9 @@ export function MailComposerDialog({
       text: htmlToPlainText(form.html),
       inReplyTo: form.inReplyTo,
       references: form.references,
-      attachments: attachments.map((attachment) => ({
-        path: attachment.path,
-        name: attachment.name
-      }))
+      attachments: attachments.flatMap((attachment) =>
+        attachment.path ? [{ path: attachment.path, name: attachment.name }] : []
+      )
     }
     const draft: ComposerInitialData = {
       kind,
@@ -837,6 +980,7 @@ export function MailComposerDialog({
       html: form.html,
       inReplyTo: form.inReplyTo,
       references: form.references,
+      original: initialData?.original,
       attachments: [...attachments]
     }
 
@@ -1036,33 +1180,56 @@ export function MailComposerDialog({
 
               {attachments.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
-                  {attachments.map((attachment) => (
-                    <AttachmentChip
-                      key={attachment.path}
-                      fileName={attachment.name}
-                      sizeBytes={attachment.size}
-                      trailing={
-                        <IconButton
-                          label={`Rimuovi ${attachment.name}`}
-                          tooltipSide="top"
-                          className="size-5"
-                          onClick={() => {
-                            setAttachments((current) =>
-                              current.filter((item) => item.path !== attachment.path)
-                            )
-                          }}
-                        >
-                          <X className="size-3" />
-                        </IconButton>
-                      }
-                    />
-                  ))}
+                  {attachments.map((attachment) => {
+                    const key = attachmentKey(attachment)
+
+                    return (
+                      <AttachmentChip
+                        key={key}
+                        fileName={attachment.name}
+                        sizeBytes={attachment.size}
+                        busy={isPendingOriginal(attachment)}
+                        failed={attachment.failed}
+                        openHint={
+                          attachment.failed
+                            ? 'non scaricato dal messaggio originale'
+                            : isPendingOriginal(attachment)
+                              ? 'scaricamento dal messaggio originale…'
+                              : undefined
+                        }
+                        trailing={
+                          <>
+                            {attachment.failed && (
+                              <IconButton
+                                label={`Riprova a scaricare ${attachment.name}`}
+                                tooltipSide="top"
+                                className="size-5"
+                                onClick={() => retryAttachment(key)}
+                              >
+                                <RotateCw className="size-3" />
+                              </IconButton>
+                            )}
+                            <IconButton
+                              label={`Rimuovi ${attachment.name}`}
+                              tooltipSide="top"
+                              className="size-5"
+                              onClick={() => removeAttachment(key)}
+                            >
+                              <X className="size-3" />
+                            </IconButton>
+                          </>
+                        }
+                      />
+                    )
+                  })}
                 </div>
               )}
 
               <DialogFooter className="sm:justify-between">
                 <AttachMenu
                   disabled={!account}
+                  originals={unattachedOriginals}
+                  onAttachOriginals={attachOriginals}
                   onAttachPaths={(paths) => void attachPaths(paths)}
                   onBrowse={() => void handlePickAttachments()}
                 />

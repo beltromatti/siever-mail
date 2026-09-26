@@ -181,7 +181,7 @@ const ACCOUNT_SEGMENT_COLOR_CLASSES = [
 const GLOBAL_SEGMENT_COLOR_CLASS = 'bg-muted-foreground'
 
 /** What "Elimina tutti i dati" deletes, with whatever the extension keeps. */
-const LOCAL_DATA_DESCRIPTION = `Cancella ogni dato locale: email, cartelle, contatti, firme, file recenti e allegati aperti${
+const LOCAL_DATA_DESCRIPTION = `Cancella ogni dato locale: email, cartelle, contatti, firme, file recenti e copie degli allegati${
   extensionRenderer.localDataLabel ? `, ${extensionRenderer.localDataLabel}` : ''
 }.`
 const FILES_SEGMENT_COLOR_CLASS = 'bg-foreground/30'
@@ -247,7 +247,7 @@ export function SettingsDialog({
   const [dataBreakdownError, setDataBreakdownError] = useState<string | null>(null)
   // Bumped after something the breakdown measures was emptied from here.
   const [dataBreakdownRevision, setDataBreakdownRevision] = useState(0)
-  const [clearingOpenedAttachments, setClearingOpenedAttachments] = useState(false)
+  const [clearingAttachmentCopies, setClearingAttachmentCopies] = useState(false)
   const [signaturesByAccountId, setSignaturesByAccountId] = useState<Record<string, string>>({})
   const [signatureDraftsByAccountId, setSignatureDraftsByAccountId] = useState<
     Record<string, string>
@@ -372,8 +372,8 @@ export function SettingsDialog({
     dataBreakdownRevision
   ])
 
-  const clearOpenedAttachments = async (): Promise<void> => {
-    setClearingOpenedAttachments(true)
+  const clearAttachmentCopies = async (): Promise<void> => {
+    setClearingAttachmentCopies(true)
 
     try {
       await window.mailApi.clearAttachmentCache()
@@ -382,10 +382,10 @@ export function SettingsDialog({
       setDataBreakdownError(
         caughtError instanceof Error && caughtError.message.trim()
           ? caughtError.message
-          : 'Pulizia degli allegati aperti non riuscita.'
+          : 'Pulizia delle copie degli allegati non riuscita.'
       )
     } finally {
-      setClearingOpenedAttachments(false)
+      setClearingAttachmentCopies(false)
     }
   }
 
@@ -1037,10 +1037,10 @@ export function SettingsDialog({
                                   variant="ghost"
                                   size="sm"
                                   className="h-6 px-2 text-[11px]"
-                                  disabled={clearingOpenedAttachments}
-                                  onClick={() => void clearOpenedAttachments()}
+                                  disabled={clearingAttachmentCopies}
+                                  onClick={() => void clearAttachmentCopies()}
                                 >
-                                  {clearingOpenedAttachments && (
+                                  {clearingAttachmentCopies && (
                                     <LoaderCircle className="size-3 animate-spin" />
                                   )}
                                   Svuota
@@ -1091,7 +1091,7 @@ export function SettingsDialog({
                               void confirm({
                                 title: `Cancellare i dati di ${account.email}?`,
                                 description:
-                                  "Email, cartelle e allegati aperti di questo account vengono tolti dal computer. L'account resta collegato e la posta si scarica di nuovo, come alla prima connessione.",
+                                  "Email, cartelle e copie degli allegati di questo account vengono tolte dal computer. L'account resta collegato e la posta si scarica di nuovo, come alla prima connessione.",
                                 confirmLabel: 'Cancella dati',
                                 destructive: true
                               }).then((confirmed) => confirmed && onClearAccountData(account.id))

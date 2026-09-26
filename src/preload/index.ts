@@ -69,6 +69,7 @@ const desktopMailApi: DesktopMailApi = {
   openAttachment: async (input) => invoke(IPC_CHANNELS.openAttachment, input),
   saveAttachment: async (input) => invoke(IPC_CHANNELS.saveAttachment, input),
   saveAllAttachments: async (ref) => invoke(IPC_CHANNELS.saveAllAttachments, ref),
+  copyMessageAttachments: async (input) => invoke(IPC_CHANNELS.copyMessageAttachments, input),
   clearAttachmentCache: async () => invoke(IPC_CHANNELS.clearAttachmentCache),
   revealFile: async (filePath) => invoke(IPC_CHANNELS.revealFile, filePath),
   listRecentFiles: async () => invoke(IPC_CHANNELS.listRecentFiles),

@@ -2166,7 +2166,8 @@ function App(): React.JSX.Element {
   const attachmentActions = useAttachmentActions(readingRef)
 
   // A reply or forward goes out from the account that received the message
-  // — which, under TUTTI, is not necessarily the one in the sidebar.
+  // — which, under TUTTI, is not necessarily the one in the sidebar — and
+  // knows the message, for its attachments.
   const openReplyComposer = useCallback((): void => {
     if (!selectedMessage) {
       return
@@ -2180,7 +2181,11 @@ function App(): React.JSX.Element {
       subject: ensureReplySubject(selectedMessage.subject),
       quoteHtml: buildReplyQuoteHtml(selectedMessage),
       inReplyTo: selectedMessage.messageId,
-      references: selectedMessage.messageId ? [selectedMessage.messageId] : undefined
+      references: selectedMessage.messageId ? [selectedMessage.messageId] : undefined,
+      original: {
+        ref: summaryToMessageRef(selectedMessage),
+        attachments: selectedMessage.attachments
+      }
     })
   }, [openComposer, selectedMessage])
 
@@ -2194,7 +2199,11 @@ function App(): React.JSX.Element {
       accountId: selectedMessage.accountId,
       sourceAccountId: selectedMessage.accountId,
       subject: ensureForwardSubject(selectedMessage.subject),
-      quoteHtml: buildForwardQuoteHtml(selectedMessage)
+      quoteHtml: buildForwardQuoteHtml(selectedMessage),
+      original: {
+        ref: summaryToMessageRef(selectedMessage),
+        attachments: selectedMessage.attachments
+      }
     })
   }, [openComposer, selectedMessage])
 

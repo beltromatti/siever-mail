@@ -1,4 +1,5 @@
 import {
+  CircleAlert,
   File,
   FileArchive,
   FileAudio,
@@ -63,6 +64,8 @@ export interface AttachmentChipProps {
   /** Rendered at the trailing edge: remove in the composer, nothing in the reader. */
   trailing?: React.ReactNode
   busy?: boolean
+  /** The file could not be had; the chip says so until it is retried or removed. */
+  failed?: boolean
   className?: string
 }
 
@@ -86,6 +89,7 @@ export function AttachmentChip({
   openHint,
   trailing,
   busy = false,
+  failed = false,
   className
 }: AttachmentChipProps): React.JSX.Element {
   const size = formatByteSize(sizeBytes)
@@ -95,6 +99,8 @@ export function AttachmentChip({
     <span className="flex min-w-0 items-center gap-1.5">
       {busy ? (
         <LoaderCircle className="text-muted-foreground size-3.5 shrink-0 animate-spin" />
+      ) : failed ? (
+        <CircleAlert className="text-destructive size-3.5 shrink-0" />
       ) : (
         <AttachmentIcon fileName={fileName} className="text-muted-foreground size-3.5 shrink-0" />
       )}
@@ -116,6 +122,7 @@ export function AttachmentChip({
         'border-border/70 bg-card/60 inline-flex h-6.5 max-w-full items-center gap-1 rounded-md border pr-1 pl-2 transition-colors',
         interactive && 'hover:border-border hover:bg-card',
         busy && 'opacity-70',
+        failed && 'border-destructive/50',
         className
       )}
     >

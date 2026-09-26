@@ -6,6 +6,7 @@ import type {
   ActiveMailboxContext,
   AppBootstrap,
   ComposeMailInput,
+  CopiedAttachment,
   FoldersChangedEvent,
   MailAccountSignature,
   DataStorageBreakdown,
@@ -20,6 +21,7 @@ import type {
   MailContactSuggestion,
   MailMessageDetail,
   MailMessageListPage,
+  MessageAttachmentsRef,
   MessageRef,
   MoveMessageInput,
   OpenAttachmentResult,
@@ -64,6 +66,7 @@ export const IPC_CHANNELS = {
   openAttachment: 'attachment:open',
   saveAttachment: 'attachment:save',
   saveAllAttachments: 'attachment:save-all',
+  copyMessageAttachments: 'attachment:copy',
   clearAttachmentCache: 'attachment:clear-cache',
   revealFile: 'file:reveal',
   listRecentFiles: 'file:list-recent',
@@ -129,6 +132,8 @@ export interface DesktopMailApi {
   /** Resolves to the saved path, or null when the user cancelled. */
   saveAttachment: (input: AttachmentRef) => Promise<string | null>
   saveAllAttachments: (ref: MessageRef) => Promise<SavedAttachments | null>
+  /** Copies of a message's attachments, for a reply or forward to carry. */
+  copyMessageAttachments: (input: MessageAttachmentsRef) => Promise<CopiedAttachment[]>
   clearAttachmentCache: () => Promise<void>
   revealFile: (filePath: string) => Promise<void>
   listRecentFiles: () => Promise<RecentFile[]>

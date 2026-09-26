@@ -10,7 +10,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
-import type { RecentFile } from '@shared/models'
+import { formatByteSize } from '@renderer/lib/utils'
+import type { MailAttachment, RecentFile } from '@shared/models'
 
 import { AttachmentIcon } from './attachment-chip'
 
@@ -41,6 +42,9 @@ function formatUsedAt(usedAt: number, now = Date.now()): string {
 
 export interface AttachMenuProps {
   disabled?: boolean
+  /** The attachments of the message replied to or forwarded that are not attached. */
+  originals?: ReadonlyArray<MailAttachment>
+  onAttachOriginals?: (attachmentIds: string[]) => void
   /** Adds files the user picked from the recent list. */
   onAttachPaths: (paths: string[]) => void
   /** Opens the system file picker. */
@@ -48,7 +52,8 @@ export interface AttachMenuProps {
 }
 
 /**
- * "Allega": the files the user most likely wants — the ones they just had
+ * "Allega": the files the user most likely wants — the attachments of the
+ * message they are answering or forwarding, then the ones they just had
  * open, sent or saved, from anywhere on the computer or the network — with
  * the system picker one row below for everything else.
  *
@@ -57,6 +62,8 @@ export interface AttachMenuProps {
  */
 export function AttachMenu({
   disabled,
+  originals = [],
+  onAttachOriginals,
   onAttachPaths,
   onBrowse
 }: AttachMenuProps): React.JSX.Element {
@@ -93,6 +100,42 @@ export function AttachMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" side="top" className="w-80">
+        {originals.length > 0 && onAttachOriginals && (
+          <>
+            <DropdownMenuLabel className="text-muted-foreground text-[11px] font-medium">
+              Dal messaggio originale
+            </DropdownMenuLabel>
+            {originals.map((attachment) => (
+              <DropdownMenuItem
+                key={attachment.id}
+                className="gap-2 py-1.5"
+                onSelect={() => onAttachOriginals([attachment.id])}
+              >
+                <AttachmentIcon
+                  fileName={attachment.fileName}
+                  className="text-muted-foreground size-3.5 shrink-0"
+                />
+                <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
+                  {attachment.fileName}
+                </span>
+                <span className="text-muted-foreground shrink-0 text-[10.5px] tabular-nums">
+                  {formatByteSize(attachment.size)}
+                </span>
+              </DropdownMenuItem>
+            ))}
+            {originals.length > 1 && (
+              <DropdownMenuItem
+                className="gap-2 py-1.5 text-[12px]"
+                onSelect={() => onAttachOriginals(originals.map((attachment) => attachment.id))}
+              >
+                <Paperclip className="text-muted-foreground size-3.5" />
+                Allega tutti e {originals.length}
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+          </>
+        )}
+
         <DropdownMenuLabel className="text-muted-foreground text-[11px] font-medium">
           File recenti
         </DropdownMenuLabel>
