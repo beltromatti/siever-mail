@@ -5,6 +5,11 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs))
 }
 
+/** "1 messaggio", "3 messaggi": a count with its noun in the right number. */
+export function formatCount(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
 export function formatAppVersion(rawVersion: string): string {
   const normalizedVersion = rawVersion.trim().replace(/^v/i, '')
   const [major = '0', minor = '0', patch = '0'] = normalizedVersion.split('.')

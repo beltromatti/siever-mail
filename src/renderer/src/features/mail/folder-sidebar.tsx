@@ -2,7 +2,7 @@ import { Archive, File, Folder, Inbox, Send, ShieldAlert, Trash2 } from 'lucide-
 
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Separator } from '@renderer/components/ui/separator'
-import { cn } from '@renderer/lib/utils'
+import { cn, formatCount } from '@renderer/lib/utils'
 import type { MailFolder } from '@shared/models'
 
 interface FolderSidebarProps {
@@ -64,7 +64,9 @@ function FolderRow({
     <button
       type="button"
       onClick={onSelect}
-      title={`${name} — ${messageCount} messaggi${unseenCount > 0 ? `, ${unseenCount} non letti` : ''}`}
+      title={`${name} — ${formatCount(messageCount, 'messaggio', 'messaggi')}${
+        unseenCount > 0 ? `, ${formatCount(unseenCount, 'non letto', 'non letti')}` : ''
+      }`}
       className={cn(
         'focus-visible:ring-ring/70 flex h-[26px] w-full items-center gap-2 rounded px-2 text-left transition-colors outline-none focus-visible:ring-2',
         active

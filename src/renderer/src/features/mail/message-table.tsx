@@ -23,7 +23,7 @@ import {
   resolveSelectionIntent,
   summaryToMessageRef
 } from '@renderer/lib/message-selection'
-import { cn, formatByteSize, formatDateTimeLabel } from '@renderer/lib/utils'
+import { cn, formatByteSize, formatCount, formatDateTimeLabel } from '@renderer/lib/utils'
 import {
   defaultSortDirection,
   MESSAGE_LIST_PAGE_SIZE,
@@ -115,7 +115,9 @@ export function MessageTable({
 
   const selectedCount = selection.selectedRefs.length
   const resultsLabel =
-    totalCount > messages.length ? `${messages.length} di ${totalCount}` : `${messages.length}`
+    totalCount > messages.length
+      ? `${messages.length} di ${totalCount} messaggi`
+      : formatCount(messages.length, 'messaggio', 'messaggi')
 
   const toggleColumnSort = (field: MessageListSortField): void => {
     if (sort.field === field) {
@@ -163,7 +165,7 @@ export function MessageTable({
             className="text-[12px]"
           />
           <span className="text-muted-foreground shrink-0 text-[10px]">
-            {selectedCount > 1 ? `${selectedCount} selezionate` : `${resultsLabel} messaggi`}
+            {selectedCount > 1 ? `${selectedCount} selezionate` : resultsLabel}
           </span>
         </div>
 

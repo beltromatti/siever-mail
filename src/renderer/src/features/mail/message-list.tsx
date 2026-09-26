@@ -17,7 +17,7 @@ import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Spinner } from '@renderer/components/ui/spinner'
 import { initialsFromName } from '@renderer/lib/email'
 import { messageRefKey, summaryToMessageRef } from '@renderer/lib/message-selection'
-import { cn, formatDateLabel } from '@renderer/lib/utils'
+import { cn, formatCount, formatDateLabel } from '@renderer/lib/utils'
 import { MESSAGE_LIST_PAGE_SIZE } from '@shared/models'
 
 import type { MessageListViewProps } from './message-list-view'
@@ -139,7 +139,9 @@ export function MessageList({
   }, [cursorKey])
 
   const resultsLabel =
-    totalCount > messages.length ? `${messages.length} di ${totalCount}` : `${messages.length}`
+    totalCount > messages.length
+      ? `${messages.length} di ${totalCount} messaggi`
+      : formatCount(messages.length, 'messaggio', 'messaggi')
   const selectedCount = selection.selectedRefs.length
 
   return (
@@ -153,7 +155,7 @@ export function MessageList({
             className="text-[13px]"
           />
           <p className="text-muted-foreground text-[10px] leading-tight">
-            {selectedCount > 1 ? `${selectedCount} selezionate` : `${resultsLabel} messaggi`}
+            {selectedCount > 1 ? `${selectedCount} selezionate` : resultsLabel}
           </p>
         </div>
 

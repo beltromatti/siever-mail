@@ -23,7 +23,7 @@ import {
 } from '@renderer/components/ui/dropdown-menu'
 import { Button } from '@renderer/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
-import { cn } from '@renderer/lib/utils'
+import { cn, formatCount } from '@renderer/lib/utils'
 import type { MessageSection } from '@renderer/lib/message-sections'
 import {
   ArrowDownAZ,
@@ -272,7 +272,9 @@ export function MessageSectionHeading({
         </span>
         <span className="text-muted-foreground/70 shrink-0 text-[10px]">
           {section.messages.length}
-          {section.unreadCount > 0 ? ` · ${section.unreadCount} non letti` : ''}
+          {section.unreadCount > 0
+            ? ` · ${formatCount(section.unreadCount, 'non letto', 'non letti')}`
+            : ''}
         </span>
       </button>
     </div>
