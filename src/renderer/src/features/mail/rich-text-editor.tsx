@@ -1419,41 +1419,40 @@ function applyAuthoringDefaultsToInitialHtml(
     return rawHtml
   }
 
-  const leadingBlocks: Element[] = []
-
-  for (const child of root.children) {
-    if (child.tagName.toLowerCase() === 'blockquote' || child.classList.contains('gmail_quote')) {
-      break
-    }
-
-    if (isElementNode(child)) {
-      leadingBlocks.push(child)
-    }
-  }
-
-  const missing = (block: Element): Array<[string, string]> =>
-    declarations.filter(
-      ([property]) => !declaresProperty(block.getAttribute('style') ?? '', property)
-    )
-
   // Nothing to add: hand back the input untouched, so the caller's
   // `value === lastSynced` check short-circuits instead of forcing a
   // setHTML round-trip on every controlled re-render.
-  if (leadingBlocks.every((block) => missing(block).length === 0)) {
-    return rawHtml
-  }
+  return writeAuthoringDefaults(root, declarations) ? root.innerHTML : rawHtml
+}
 
-  for (const block of leadingBlocks) {
-    const additions = missing(block)
+/**
+ * Writes the authoring defaults onto the blocks the user writes in — every
+ * top-level block above the quoted message — that do not declare them yet.
+ * Returns whether it changed anything.
+ */
+function writeAuthoringDefaults(
+  root: Element,
+  declarations: ReadonlyArray<[string, string]>
+): boolean {
+  let changed = false
+
+  for (const block of Array.from(root.children)) {
+    if (block.tagName.toLowerCase() === 'blockquote' || block.classList.contains('gmail_quote')) {
+      break
+    }
+
+    const style = block.getAttribute('style') ?? ''
+    const additions = declarations.filter(([property]) => !declaresProperty(style, property))
 
     if (additions.length > 0) {
-      const existing = (block.getAttribute('style') ?? '').trim().replace(/;+$/g, '')
+      const existing = style.trim().replace(/;+$/g, '')
       const added = additions.map(([property, value]) => `${property}: ${value}`).join('; ')
       block.setAttribute('style', existing ? `${existing}; ${added}` : added)
+      changed = true
     }
   }
 
-  return root.innerHTML
+  return changed
 }
 
 interface UseSquireInstanceOptions {
@@ -1505,11 +1504,13 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
   // round-trip equality is unreliable, but the prop reference is stable.
   const lastSyncedHtmlRef = useRef<string | null>(null)
   const isApplyingExternalValueRef = useRef(false)
+  const defaultFontFamilyRef = useRef(defaultFontFamily)
 
   useEffect(() => {
     onChangeRef.current = onChange
     onFileDragEnterRef.current = options.onFileDragEnter
-  }, [onChange, options.onFileDragEnter])
+    defaultFontFamilyRef.current = defaultFontFamily
+  }, [defaultFontFamily, onChange, options.onFileDragEnter])
 
   // Bootstrap Squire inside the iframe. We use `srcdoc` with an embedded
   // `<script src="…">` tag pointing at the Squire bundle — the script is
@@ -1679,10 +1680,24 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
         if (isApplyingExternalValueRef.current) {
           return
         }
+        // A block made just now — a list, a heading, a paste — gets the
+        // authoring defaults here, in the live document, where the caret
+        // stays put. Left to the value the parent hands back, they would be
+        // added by a setHTML that throws the caret to the top of the body.
+        writeAuthoringDefaults(
+          editor.getRoot(),
+          authoringBlockDeclarations(defaultFontFamilyRef.current)
+        )
         const rawHtml = editor.getHTML()
         const html = stripEditorMarkerClassesFromHtml(rawHtml, frameDocument)
-        lastSyncedHtmlRef.current = html
+
         refreshEmptyState(frameDocument.body)
+
+        if (html === lastSyncedHtmlRef.current) {
+          return
+        }
+
+        lastSyncedHtmlRef.current = html
         onChangeRef.current(html)
       }
 
