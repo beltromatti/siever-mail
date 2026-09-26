@@ -10,6 +10,8 @@ const noopExtensionMain: ExtensionMain = {
   id: 'noop',
   displayName: 'No extension',
   defaultAccountSignatureHtml: '',
+  accountSignatureRevision: 0,
+  upgradeAccountSignatureHtml: (html) => html,
   install(): void {
     /* nothing to install in the public build */
   },

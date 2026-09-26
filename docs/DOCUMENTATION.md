@@ -89,7 +89,7 @@ so an older file is brought forward in place.
 | `folders`            | Folder metadata and sync cursors (UIDVALIDITY, HIGHESTMODSEQ, last UID). _Cache._                                                                                            |
 | `messages`           | Envelopes, previews, flags, body cache. Denormalised `sender_label` / `sender_sort` / `subject_sort` let the database sort and group by sender or subject directly. _Cache._ |
 | `contacts`           | Addresses learned from traffic, for recipient suggestions.                                                                                                                   |
-| `account_signatures` | One signature per account, with the version of the page it was written for (`html_format`).                                                                                  |
+| `account_signatures` | One signature per account, with the version of the page it was written for (`html_format`) and the edition of the extension's content it has (`extension_revision`).         |
 | `recent_files`       | Files the user attached, saved or an extension filed away, offered first in "Allega".                                                                                        |
 | `app_preferences`    | One row: theme, layout, list order, sort, grouping, reader zoom, the accounts TUTTI gathers.                                                                                 |
 
@@ -312,19 +312,20 @@ aliases point at `extension/{main,renderer,preload,shared}/index.*`;
 otherwise at the stubs (`electron.vite.config.ts`). The host never imports
 extension code by path. The contract is `src/extension/types.ts`:
 
-| Surface                                     | What it does                                                                      |
-| ------------------------------------------- | --------------------------------------------------------------------------------- |
-| `ExtensionMain.install(context)`            | Runs once after the engine starts: DDL, IPC handlers, startup work.               |
-| `ExtensionMain.clearData()`                 | Deletes its data, as part of "Elimina tutti i dati".                              |
-| `ExtensionMain.uninstall()`                 | Optional; called when the app quits.                                              |
-| `ExtensionMain.defaultAccountSignatureHtml` | Signature given to the first account added. Empty in the public build.            |
-| `ExtensionRenderer.toolbarActions`          | Buttons after "Nuovo messaggio", given the selection.                             |
-| `ExtensionRenderer.settingsTabs`            | Tabs after the host's in Settings.                                                |
-| `ExtensionRenderer.PrimaryActionDialog`     | A dialog the host mounts and opens on request.                                    |
-| `ExtensionRenderer.fontFaceCss`             | `@font-face` rules for bundled fonts, applied to the app and every message frame. |
-| `ExtensionRenderer.localDataLabel`          | How the data `clearData()` removes reads in Settings.                             |
-| `ExtensionComposition` (shared)             | Fonts, default font, text colours and extra font stacks the composer offers.      |
-| `ExtensionPreloadInstaller`                 | Methods merged onto `window.mailApi`.                                             |
+| Surface                                     | What it does                                                                                                   |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `ExtensionMain.install(context)`            | Runs once after the engine starts: DDL, IPC handlers, startup work.                                            |
+| `ExtensionMain.clearData()`                 | Deletes its data, as part of "Elimina tutti i dati".                                                           |
+| `ExtensionMain.uninstall()`                 | Optional; called when the app quits.                                                                           |
+| `ExtensionMain.defaultAccountSignatureHtml` | Signature given to the first account added. Empty in the public build.                                         |
+| `ExtensionMain.accountSignatureRevision`    | Edition of that content; stored signatures on an older one are handed, once, to `upgradeAccountSignatureHtml`. |
+| `ExtensionRenderer.toolbarActions`          | Buttons after "Nuovo messaggio", given the selection.                                                          |
+| `ExtensionRenderer.settingsTabs`            | Tabs after the host's in Settings.                                                                             |
+| `ExtensionRenderer.PrimaryActionDialog`     | A dialog the host mounts and opens on request.                                                                 |
+| `ExtensionRenderer.fontFaceCss`             | `@font-face` rules for bundled fonts, applied to the app and every message frame.                              |
+| `ExtensionRenderer.localDataLabel`          | How the data `clearData()` removes reads in Settings.                                                          |
+| `ExtensionComposition` (shared)             | Fonts, default font, text colours and extra font stacks the composer offers.                                   |
+| `ExtensionPreloadInstaller`                 | Methods merged onto `window.mailApi`.                                                                          |
 
 `install()` receives an `ExtensionMainContext`: `app`, `ipcMain`, the user
 data path, a database handle (`applyDdl`, `query`, `execute`) on the host's

@@ -66,6 +66,20 @@ export interface ExtensionMain {
    */
   readonly defaultAccountSignatureHtml: string
   /**
+   * The edition of the content the extension puts in signatures, raised
+   * whenever `defaultAccountSignatureHtml` gains something the signatures
+   * already stored should have too. Zero in public builds.
+   */
+  readonly accountSignatureRevision: number
+  /**
+   * Brings a stored signature from `fromRevision` up to
+   * `accountSignatureRevision`. The host calls it once per signature, the
+   * first time it reads one stored on an older edition, and never on a
+   * signature saved since. Returns the HTML as it was when there is
+   * nothing to add — a signature its owner rewrote without that content.
+   */
+  upgradeAccountSignatureHtml(html: string, fromRevision: number): string
+  /**
    * Wire IPC handlers, run DDL, kick off any startup logic. Called once
    * after the host's mail service is ready. Idempotent across hot
    * re-installs.
