@@ -142,7 +142,11 @@ with two IMAP clients:
 Sync runs in layers: envelopes first, in large batches, so the list fills
 at once; then previews; then incremental deltas driven by IDLE and by polls
 (20 s for the folder on screen, 45 s for the others). Bodies and
-attachments are fetched on demand.
+attachments are fetched on demand. When the cache and the server disagree
+on a folder's count, a reconciliation lines them up both ways: rows the
+server no longer has go, and messages it has but the cache lost come back,
+quietly, without a notification (Gmail hides a message from "Tutti i
+messaggi" for a moment while it is being archived).
 
 The connection has a state machine (`connecting`, `connected`,
 `reconnecting`, `offline`, `error`) that drives the sync badge in the
@@ -162,6 +166,12 @@ What the user asks for is reported truthfully:
 - Sending goes over SMTP; for IMAP accounts a copy is filed in the Sent
   folder afterwards, in the background (Gmail files its own). A sent
   message is never reported as failed because that copy is late.
+- "Archivia" moves a message to the account's archive folder (`\Archive`,
+  or one named so); on Gmail to "Tutti i messaggi", which is leaving the
+  inbox; elsewhere to an "Archivio" folder it creates the first time, as
+  Thunderbird and Apple Mail do.
+- An IMAP account's servers are reached over SSL/TLS or STARTTLS, as chosen
+  when it is added; STARTTLS is required, never opportunistic.
 
 ### What counts as an attachment
 
@@ -184,6 +194,12 @@ summary, connection states); the renderer never polls.
 The selection (`lib/message-selection.ts`) keeps the **selected rows** and
 the **cursor** apart, following Finder/Explorer: click replaces, Ctrl/⌘
 toggles, Shift extends, ⌘/Ctrl+A selects all, Esc narrows to the cursor.
+
+Archiving, deleting and moving take the rows out of the list before the
+server answers, and the reading pane moves on to the next message that is
+staying. What the server refuses comes back; once every removal started
+together has settled, so does the selection they had — unless the user has
+picked something else meanwhile.
 
 ### Layouts
 

@@ -46,6 +46,11 @@ import {
 // single IMAP FETCH because each envelope is tiny — used only for the initial
 // bulk sync where we want the list to populate as fast as possible and defer
 // the preview to a follow-up hydration pass.
+/** The folder archiving creates on a server that has none. */
+const ARCHIVE_FOLDER_NAME = 'Archivio'
+/** Gmail's own folders: "[Gmail]/…", or "[Google Mail]/…" where the brand differs. */
+const GMAIL_SYSTEM_FOLDER_PATTERN = /^\[(?:gmail|google mail)\]/i
+
 const BOOTSTRAP_ENVELOPE_BATCH_SIZE = 1000
 // Incremental batches: envelope + first PREVIEW_SOURCE_MAX_BYTES of source,
 // all in one FETCH. This is the path taken for every folder AFTER its initial
@@ -178,6 +183,9 @@ export class AccountConnection extends EventEmitter {
   //     minutes on the initial bootstrap of a large account without ever
   //     blocking user interactions.
   private primaryClient: ImapFlow | null = null
+  // An "Archivio" folder being created for the first archive, shared by
+  // every archive that asks for it meanwhile.
+  private archiveFolderCreation: Promise<MailFolder> | null = null
   private syncClient: ImapFlow | null = null
   private running = false
   private shuttingDown = false
@@ -562,14 +570,69 @@ export class AccountConnection extends EventEmitter {
   async archiveMessage(
     ref: MessageRef
   ): Promise<{ sourceFolder: string; destinationFolder: string }> {
-    const archiveFolder = await this.findFolderBySpecialUse(['\\Archive'], ['archive', 'archivio'])
+    const archiveFolder = await this.resolveArchiveFolder()
 
-    if (!archiveFolder) {
-      throw new Error("Cartella Archivio non disponibile per l'account.")
+    if (archiveFolder.path === ref.folderPath) {
+      throw new Error("Il messaggio è già nell'archivio.")
     }
 
     await this.moveMessage(ref, archiveFolder.path)
     return { sourceFolder: ref.folderPath, destinationFolder: archiveFolder.path }
+  }
+
+  /**
+   * Where archiving puts a message, decided as the big clients decide it:
+   * the account's archive folder, flagged `\Archive` or named so; on Gmail,
+   * "Tutti i messaggi" — archiving there is leaving the inbox, every other
+   * label stays; anywhere else an "Archivio" folder, created the first time,
+   * as Thunderbird and Apple Mail create theirs. Several messages archived
+   * at once share a single creation.
+   */
+  private async resolveArchiveFolder(): Promise<MailFolder> {
+    const archive = await this.findFolderBySpecialUse(
+      ['\\Archive'],
+      ['archive', 'archives', 'archivio']
+    )
+
+    if (archive) {
+      return archive
+    }
+
+    const folders = await this.database.listFolders(this.account.id)
+    const gmailAllMail = folders.find(
+      (folder) =>
+        folder.specialUse?.toLowerCase() === '\\all' &&
+        GMAIL_SYSTEM_FOLDER_PATTERN.test(folder.path)
+    )
+
+    if (gmailAllMail) {
+      return gmailAllMail
+    }
+
+    this.archiveFolderCreation ??= this.createArchiveFolder().finally(() => {
+      this.archiveFolderCreation = null
+    })
+
+    return this.archiveFolderCreation
+  }
+
+  private async createArchiveFolder(): Promise<MailFolder> {
+    const path = await this.runUserOperation(async () => {
+      const created = await this.requirePrimary().mailboxCreate(ARCHIVE_FOLDER_NAME)
+
+      if (!created?.path) {
+        throw new Error('Il server non ha creato la cartella Archivio.')
+      }
+
+      return created.path
+    }, 'create-archive-folder')
+    const folder = (await this.refreshFolders()).find((candidate) => candidate.path === path)
+
+    if (!folder) {
+      throw new Error('Il server non mostra la cartella Archivio appena creata.')
+    }
+
+    return folder
   }
 
   async appendToSent(rawMessage: Buffer, messageId: string): Promise<string | null> {
@@ -1206,7 +1269,11 @@ export class AccountConnection extends EventEmitter {
           : `incremental-batch:${folderPath}:${batchNumber}`
         this.enqueueSyncCommand(
           async () => {
-            await this.processSyncBatch(folderPath, batch, plan.isBootstrap)
+            await this.processSyncBatch(
+              folderPath,
+              batch,
+              plan.isBootstrap ? 'bootstrap' : 'incremental'
+            )
           },
           label,
           priority
@@ -1351,10 +1418,20 @@ export class AccountConnection extends EventEmitter {
     }
   }
 
+  /**
+   * Fetches and stores one batch of a folder's messages:
+   *   • `bootstrap` — the first sync: envelopes only (previews come later),
+   *     and no notification for mail that was already there;
+   *   • `incremental` — new arrivals: envelope and preview in one FETCH, so
+   *     a notification can carry the snippet at once;
+   *   • `recovery` — messages the server has but the cache lost (see
+   *     `reconcileLocalAgainstServer`): with previews, but no notification,
+   *     since they are not new.
+   */
   private async processSyncBatch(
     folderPath: string,
     batch: number[],
-    bootstrap: boolean
+    mode: 'bootstrap' | 'incremental' | 'recovery'
   ): Promise<void> {
     if (!this.syncClient?.usable) {
       return
@@ -1362,15 +1439,12 @@ export class AccountConnection extends EventEmitter {
 
     const client = this.syncClient
     const lock = await client.getMailboxLock(folderPath)
+    const bootstrap = mode === 'bootstrap'
 
     try {
-      // Bootstrap batches are envelope-only (hydration later). Incremental
-      // batches fetch envelope AND the preview body prefix in the same FETCH,
-      // so the row lands with a real, hydrated preview and notifications can
-      // fire with the snippet immediately.
-      const summaries = bootstrap
-        ? await this.fetchSummariesForUids(folderPath, batch, { includeBody: false })
-        : await this.fetchSummariesForUids(folderPath, batch, { includeBody: true })
+      const summaries = await this.fetchSummariesForUids(folderPath, batch, {
+        includeBody: !bootstrap
+      })
       if (summaries.length === 0) {
         return
       }
@@ -1388,7 +1462,7 @@ export class AccountConnection extends EventEmitter {
           added: result.added,
           updated: result.updated,
           removedUids: [],
-          bootstrap
+          bootstrap: mode !== 'incremental'
         })
       }
     } finally {
@@ -1733,6 +1807,15 @@ export class AccountConnection extends EventEmitter {
     return results
   }
 
+  /**
+   * Makes the cache hold exactly the folder's messages, both ways: rows for
+   * messages the server no longer has go, and messages it has but the cache
+   * lacks come back. The second way matters on Gmail: archiving moves a
+   * message into "Tutti i messaggi", where it already is, and for a moment
+   * the folder lists it no more — a reconciliation then drops it, and since
+   * its UID is below the highest known one, fetching only new UIDs would
+   * never bring it back.
+   */
   private async reconcileLocalAgainstServer(folderPath: string): Promise<void> {
     const client = this.requireSync()
     const localUids = await this.database.listAllMessageUids(this.account.id, folderPath)
@@ -1742,8 +1825,25 @@ export class AccountConnection extends EventEmitter {
     }
 
     const serverUids = await client.search({ uid: '1:*' }, { uid: true })
-    const serverUidSet = new Set(Array.isArray(serverUids) ? serverUids : [])
+    const serverUidList = Array.isArray(serverUids) ? serverUids : []
+    const serverUidSet = new Set(serverUidList)
+    const localUidSet = new Set(localUids)
     const staleUids = localUids.filter((uid) => !serverUidSet.has(uid))
+    const missingUids = serverUidList
+      .filter((uid) => !localUidSet.has(uid))
+      .sort((left, right) => right - left)
+
+    // Queued behind this pass, like new arrivals, so the lock is released first.
+    for (let index = 0; index < missingUids.length; index += INCREMENTAL_BATCH_SIZE) {
+      const batch = missingUids.slice(index, index + INCREMENTAL_BATCH_SIZE)
+      this.enqueueSyncCommand(
+        async () => {
+          await this.processSyncBatch(folderPath, batch, 'recovery')
+        },
+        `recovery-batch:${folderPath}:${index / INCREMENTAL_BATCH_SIZE + 1}`,
+        'background'
+      )
+    }
 
     if (staleUids.length === 0) {
       return

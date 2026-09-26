@@ -1483,6 +1483,22 @@ function App(): React.JSX.Element {
     })
   }, [])
 
+  /**
+   * The messages taken out of the list ahead of the server, as one burst
+   * however many actions started it — "Elimina" on a selection, an archive
+   * of several — and the selection before the first of them went. If the
+   * server refuses some, they come back, and once the burst is over so does
+   * that selection, less what did go: the list had moved on to a neighbour
+   * only because of them. A selection the user made meanwhile stands.
+   */
+  const removalBurstRef = useRef<{
+    leaving: Set<string>
+    selectionBefore: MessageSelectionState
+    advancedTo: MessageRef[]
+    removed: MessageRef[]
+    refused: MessageRef[]
+  } | null>(null)
+
   const removeMessageOptimistically = useCallback(
     (ref: MessageRef) => {
       const removedIndex = messages.findIndex((message) =>
@@ -1493,10 +1509,35 @@ function App(): React.JSX.Element {
         return null
       }
 
-      const removedMessage = messages[removedIndex]
-      const wasSelected = selection.selectedRefs.some((selectedRef) =>
-        isSameMessageRef(selectedRef, ref)
+      const burst = (removalBurstRef.current ??= {
+        leaving: new Set(),
+        selectionBefore: selection,
+        advancedTo: [],
+        removed: [],
+        refused: []
+      })
+      burst.leaving.add(messageRefKey(ref))
+
+      const isLeaving = (message: MailMessageSummary): boolean =>
+        burst.leaving.has(messageRefKey(summaryToMessageRef(message)))
+      // The neighbour the reading pane moves on to — never one leaving in the
+      // same burst — so it stays populated and an expanded view does not
+      // collapse back to the split layout under the user.
+      const neighbour =
+        messages.slice(removedIndex + 1).find((message) => !isLeaving(message)) ??
+        messages
+          .slice(0, removedIndex)
+          .reverse()
+          .find((message) => !isLeaving(message)) ??
+        null
+      const neighbourRef = neighbour ? summaryToMessageRef(neighbour) : null
+      const selectionEmptied = selection.selectedRefs.every((selectedRef) =>
+        burst.leaving.has(messageRefKey(selectedRef))
       )
+
+      if (selectionEmptied && neighbourRef) {
+        burst.advancedTo.push(neighbourRef)
+      }
 
       setMessages((current) =>
         current.filter((message) => !isSameMessageRef(summaryToMessageRef(message), ref))
@@ -1516,22 +1557,14 @@ function App(): React.JSX.Element {
           }
         }
 
-        // The last selected message just went away: advance to its neighbour
-        // so the reading pane stays populated and an expanded view does not
-        // collapse back to the split layout under the user.
-        const neighbour = messages[removedIndex + 1] ?? messages[removedIndex - 1] ?? null
-
-        if (!neighbour) {
-          return EMPTY_MESSAGE_SELECTION
-        }
-
-        const neighbourRef = summaryToMessageRef(neighbour)
-        return { selectedRefs: [neighbourRef], cursorRef: neighbourRef, anchorRef: neighbourRef }
+        return neighbourRef
+          ? { selectedRefs: [neighbourRef], cursorRef: neighbourRef, anchorRef: neighbourRef }
+          : EMPTY_MESSAGE_SELECTION
       })
 
-      return { ref, removedIndex, removedMessage, wasSelected }
+      return { ref, removedIndex, removedMessage: messages[removedIndex] }
     },
-    [messages, selection.selectedRefs]
+    [messages, selection]
   )
 
   const rollbackRemovedMessage = useCallback(
@@ -1539,7 +1572,6 @@ function App(): React.JSX.Element {
       ref: MessageRef
       removedIndex: number
       removedMessage: MailMessageSummary
-      wasSelected: boolean
     }): void => {
       setMessages((current) => {
         if (
@@ -1557,19 +1589,56 @@ function App(): React.JSX.Element {
         ]
       })
       setTotalMessagesInFolder((current) => current + 1)
-
-      if (snapshot.wasSelected) {
-        setSelection((current) => {
-          if (current.selectedRefs.some((ref) => isSameMessageRef(ref, snapshot.ref))) {
-            return current
-          }
-
-          return { ...current, selectedRefs: [...current.selectedRefs, snapshot.ref] }
-        })
-      }
     },
     []
   )
+
+  const settleRemoval = useCallback((ref: MessageRef, removed: boolean): void => {
+    const burst = removalBurstRef.current
+
+    if (!burst?.leaving.delete(messageRefKey(ref))) {
+      return
+    }
+
+    ;(removed ? burst.removed : burst.refused).push(ref)
+
+    if (burst.leaving.size > 0) {
+      return
+    }
+
+    removalBurstRef.current = null
+
+    if (burst.refused.length === 0) {
+      return
+    }
+
+    const listMovedTo = [...burst.selectionBefore.selectedRefs, ...burst.advancedTo]
+    const selectedRefs = burst.selectionBefore.selectedRefs.filter(
+      (selectedRef) =>
+        !burst.removed.some((removedRef) => isSameMessageRef(removedRef, selectedRef))
+    )
+
+    if (selectedRefs.length === 0) {
+      return
+    }
+
+    const kept = (candidate: MessageRef | null): MessageRef =>
+      candidate && selectedRefs.some((selectedRef) => isSameMessageRef(selectedRef, candidate))
+        ? candidate
+        : selectedRefs[selectedRefs.length - 1]
+
+    setSelection((current) =>
+      current.selectedRefs.every((currentRef) =>
+        listMovedTo.some((candidate) => isSameMessageRef(candidate, currentRef))
+      )
+        ? {
+            selectedRefs,
+            cursorRef: kept(burst.selectionBefore.cursorRef),
+            anchorRef: kept(burst.selectionBefore.anchorRef)
+          }
+        : current
+    )
+  }, [])
 
   const runOptimisticMessageRemoval = useCallback(
     async <T,>(
@@ -1582,11 +1651,15 @@ function App(): React.JSX.Element {
       setViewError(null)
 
       try {
-        return await operation()
+        const result = await operation()
+        settleRemoval(ref, true)
+        return result
       } catch (caughtError) {
         if (snapshot) {
           rollbackRemovedMessage(snapshot)
         }
+
+        settleRemoval(ref, false)
 
         if (!options?.suppressError) {
           setViewError(
@@ -1599,7 +1672,7 @@ function App(): React.JSX.Element {
         throw caughtError
       }
     },
-    [removeMessageOptimistically, rollbackRemovedMessage]
+    [removeMessageOptimistically, rollbackRemovedMessage, settleRemoval]
   )
 
   const runMessageRemovalAction = useCallback(
