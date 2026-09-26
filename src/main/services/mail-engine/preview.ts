@@ -1,5 +1,7 @@
 import type { ParsedMail } from 'mailparser'
 
+import { EMPTY_SUBJECT_LABEL } from '@shared/subject'
+
 export const PREVIEW_MAX_LENGTH = 200
 
 // ---------------------------------------------------------------------------
@@ -400,7 +402,7 @@ function removeLeadingSubject(body: string, subject: string): string {
 }
 
 function finalizePreview(candidate: string, subject: string): string {
-  const fallbackSubject = subject.trim() || '(Senza oggetto)'
+  const fallbackSubject = subject.trim() || EMPTY_SUBJECT_LABEL
 
   if (!candidate) {
     return fallbackSubject

@@ -395,10 +395,13 @@ function headerSenderName(message: FetchedMessageSummary): string | undefined {
 }
 
 /**
- * How senders are filed (`resolveSenderLabels`, `senderSortKey`). Bumping it
- * re-files the rows a database already holds on the next start.
+ * How rows are filed for sorting and grouping (`resolveSenderLabels`,
+ * `senderSortKey`, `subjectSortKey`). Bumping it re-files the rows a
+ * database already holds on the next start:
+ *   1 — one sender's spellings of a name share a label;
+ *   2 — subjects sort by their first letter or digit, those without one first.
  */
-const SENDER_FILING_VERSION = 1
+const SORT_FILING_VERSION = 2
 
 interface StoredSignatureRow {
   accountId: string
@@ -2016,20 +2019,20 @@ export class AppDatabase {
   }
 
   /**
-   * Brings every stored row in line with how senders are filed now: the
-   * spellings one address uses for the same person take that address's
-   * most used label, and every label gets the current key. Runs once per
-   * change of that scheme (`SENDER_FILING_VERSION`), on the rows already
-   * stored — an upgrade drops the message cache anyway, but a database
-   * kept across the change must not stay split.
+   * Brings every stored row in line with how rows are filed now: the
+   * spellings one address uses for the same person take that address's most
+   * used label, and every label and subject gets the current key. Runs once
+   * per change of that scheme (`SORT_FILING_VERSION`), on the rows already
+   * stored — an upgrade drops the message cache anyway, but a database kept
+   * across the change must not stay split.
    */
-  private async fileSendersIfOutdated(): Promise<void> {
+  private async refileIfOutdated(): Promise<void> {
     const [{ user_version: version }] =
       await this.prisma.$queryRawUnsafe<Array<{ user_version: number | bigint }>>(
         'PRAGMA user_version'
       )
 
-    if (Number(version) >= SENDER_FILING_VERSION) {
+    if (Number(version) >= SORT_FILING_VERSION) {
       return
     }
 
@@ -2072,21 +2075,40 @@ export class AppDatabase {
       await this.prisma.$transaction(updates)
     }
 
-    const labels = await this.prisma.$queryRaw<Array<{ label: string }>>`
-      SELECT DISTINCT sender_label AS label FROM messages
+    // Keys are worked out here and written by primary key, only where they
+    // changed: a mailbox of tens of thousands of rows re-files in a moment.
+    const keyed = await this.prisma.$queryRaw<
+      Array<{
+        id: string
+        senderLabel: string
+        senderSort: string
+        subject: string
+        subjectSort: string
+      }>
+    >`
+      SELECT id AS id, sender_label AS senderLabel, sender_sort AS senderSort,
+        subject AS subject, subject_sort AS subjectSort
+      FROM messages
     `
-    const keyUpdates = labels.map(
-      ({ label }) => this.prisma.$executeRaw`
-        UPDATE messages SET sender_sort = ${senderSortKey(label)}
-        WHERE sender_label = ${label} AND sender_sort <> ${senderSortKey(label)}
-      `
-    )
+    const keyUpdates = keyed.flatMap((row) => {
+      const senderSort = senderSortKey(row.senderLabel)
+      const subjectSort = subjectSortKey(row.subject)
+
+      return senderSort === row.senderSort && subjectSort === row.subjectSort
+        ? []
+        : [
+            this.prisma.$executeRaw`
+              UPDATE messages SET sender_sort = ${senderSort}, subject_sort = ${subjectSort}
+              WHERE id = ${row.id}
+            `
+          ]
+    })
 
     if (keyUpdates.length > 0) {
       await this.prisma.$transaction(keyUpdates)
     }
 
-    await this.prisma.$executeRawUnsafe(`PRAGMA user_version = ${SENDER_FILING_VERSION}`)
+    await this.prisma.$executeRawUnsafe(`PRAGMA user_version = ${SORT_FILING_VERSION}`)
   }
 
   async updateMessagePreviews(
@@ -2756,7 +2778,7 @@ export class AppDatabase {
       INSERT OR IGNORE INTO app_preferences(id, unified_inbox_included_account_ids, updated_at)
       VALUES (${APP_PREFERENCES_SINGLETON_ID}, NULL, ${Date.now()})
     `)
-    await this.fileSendersIfOutdated()
+    await this.refileIfOutdated()
   }
 
   /**

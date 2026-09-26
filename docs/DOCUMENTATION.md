@@ -230,12 +230,17 @@ SIEVER", "HYPE" and "Team HYPE"), while the different people a shared
 address relays keep their own; a message with no name takes its address's
 label, and labels that differ only in dress share a sort key. A database
 kept across a change of these rules is re-filed once at start
-(`SENDER_FILING_VERSION`).
+(`SORT_FILING_VERSION`).
 
-The search grammar in `shared/search.ts` is
-parsed once and used by both sides — the main process builds the `WHERE`,
-the renderer highlights the same terms. Words match sender, recipients,
-subject and body; `da:`, `a:`, `oggetto:` narrow a term to one field.
+A subject sorts by what it is about (`shared/subject.ts`): reply and
+forward prefixes in any language and gateway tags are stripped, and the
+quotes or symbols it opens with are passed over; messages without a
+subject come first.
+
+The search grammar in `shared/search.ts` is parsed once and used by both
+sides — the main process builds the `WHERE`, the renderer highlights the
+same terms. Words match sender, recipients, subject and body; `da:`, `a:`,
+`oggetto:` narrow a term to one field.
 
 ### Theme
 

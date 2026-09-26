@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { stripSubjectPrefixes, subjectSortKey } from './subject'
+import { EMPTY_SUBJECT_LABEL, stripSubjectPrefixes, subjectSortKey } from './subject'
 
 describe('stripSubjectPrefixes', () => {
   it('strips stacked reply and forward prefixes in any client language', () => {
@@ -26,5 +26,18 @@ describe('subjectSortKey', () => {
 
   it('folds case and accents', () => {
     expect(subjectSortKey('Città  Estense')).toBe('citta estense')
+  })
+
+  it('sorts by the first letter or digit, past quotes, brackets and symbols', () => {
+    expect(subjectSortKey('"Best drum kit" (50% OFF)')).toBe('best drum kit" (50% off)')
+    expect(subjectSortKey('(CHECK THIS OUT!) Vol. 3')).toBe('check this out!) vol. 3')
+    expect(subjectSortKey('$5 Kit')).toBe('5 kit')
+    expect(subjectSortKey('!!!')).toBe('!!!')
+  })
+
+  it('files every message without a subject together, first', () => {
+    expect(subjectSortKey(EMPTY_SUBJECT_LABEL)).toBe('')
+    expect(subjectSortKey('Re:')).toBe('')
+    expect(subjectSortKey(`Re: ${EMPTY_SUBJECT_LABEL}`)).toBe('')
   })
 })

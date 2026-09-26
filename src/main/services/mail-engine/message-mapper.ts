@@ -3,6 +3,7 @@ import type { ParsedMail } from 'mailparser'
 
 import type { FetchedMessageDetail, MailAddress, MailAttachment } from '@shared/models'
 import { deriveSenderKey, deriveSenderName } from '@shared/sender'
+import { EMPTY_SUBJECT_LABEL } from '@shared/subject'
 
 import { extractPreview } from './preview'
 import {
@@ -78,7 +79,7 @@ export function hasAttachmentInStructure(structure?: MessageStructureObject): bo
 }
 
 export function formatSubject(subject: string | undefined): string {
-  return subject?.trim() ? subject.trim() : '(Senza oggetto)'
+  return subject?.trim() ? subject.trim() : EMPTY_SUBJECT_LABEL
 }
 
 export function internalDateToIso(internalDate: Date | string | undefined): string {
