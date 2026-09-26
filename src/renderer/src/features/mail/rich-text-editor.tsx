@@ -2120,9 +2120,12 @@ export function RichTextEditor({
       return
     }
 
+    // Inside the first line rather than before it, so the toolbar shows the
+    // face and colour the first keystroke will have — a signature's leading
+    // lines can carry their own.
     const frame = window.requestAnimationFrame(() => {
       const range = frameDocument.createRange()
-      range.setStart(frameDocument.body, 0)
+      range.setStart(frameDocument.body.firstElementChild ?? frameDocument.body, 0)
       range.collapse(true)
       editor.focus()
       editor.setSelection(range)
