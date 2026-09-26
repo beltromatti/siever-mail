@@ -166,6 +166,8 @@ What the user asks for is reported truthfully:
 - Sending goes over SMTP; for IMAP accounts a copy is filed in the Sent
   folder afterwards, in the background (Gmail files its own). A sent
   message is never reported as failed because that copy is late.
+- "Elimina" moves a message to the Trash; in the Trash, or on an account
+  without one, it deletes for good, after asking.
 - "Archivia" moves a message to the account's archive folder (`\Archive`,
   or one named so); on Gmail to "Tutti i messaggi", which is leaving the
   inbox; elsewhere to an "Archivio" folder it creates the first time, as

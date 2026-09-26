@@ -1924,6 +1924,44 @@ function App(): React.JSX.Element {
     [runMessageRemovalAction, selection.selectedRefs]
   )
 
+  /**
+   * "Elimina", from the toolbar, the reader or the keyboard. In the Trash it
+   * deletes for good, as every client does there, so it asks first.
+   */
+  const deleteMessages = useCallback(
+    async (refs: ReadonlyArray<MessageRef>): Promise<void> => {
+      if (refs.length === 0) {
+        return
+      }
+
+      const inTrash = currentFolder?.specialUse?.toLowerCase() === '\\trash'
+
+      if (
+        inTrash &&
+        !(await confirm({
+          title:
+            refs.length === 1
+              ? 'Eliminare definitivamente il messaggio?'
+              : `Eliminare definitivamente ${refs.length} messaggi?`,
+          description: 'Sono nel Cestino: eliminati da qui non si possono più recuperare.',
+          confirmLabel: 'Elimina definitivamente',
+          destructive: true
+        }))
+      ) {
+        return
+      }
+
+      await runMessageRemovalAction(
+        refs,
+        async (ref) => {
+          await window.mailApi.deleteMessage(ref)
+        },
+        'Eliminazione email non riuscita.'
+      )
+    },
+    [confirm, currentFolder?.specialUse, runMessageRemovalAction]
+  )
+
   // Folders belong to one account, so where a selection can move depends on
   // whose messages it holds — under TUTTI, not necessarily the account in
   // the sidebar.
@@ -2219,13 +2257,7 @@ function App(): React.JSX.Element {
         }
 
         event.preventDefault()
-        void runMessageRemovalAction(
-          refsToDelete,
-          async (ref) => {
-            await window.mailApi.deleteMessage(ref)
-          },
-          'Eliminazione email non riuscita.'
-        )
+        void deleteMessages(refsToDelete)
       }
     }
 
@@ -2234,7 +2266,7 @@ function App(): React.JSX.Element {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [handleOpenRow, handleSelectAll, isModalSurfaceOpen, runMessageRemovalAction])
+  }, [deleteMessages, handleOpenRow, handleSelectAll, isModalSurfaceOpen])
 
   const attachmentActions = useAttachmentActions(readingRef)
 
@@ -2643,11 +2675,7 @@ function App(): React.JSX.Element {
                 await window.mailApi.moveMessage({ ...ref, destinationFolderPath })
               }, 'Spostamento email non riuscito.')
             }
-            onDelete={() =>
-              void runSelectionRemovalAction(async (ref) => {
-                await window.mailApi.deleteMessage(ref)
-              }, 'Eliminazione email non riuscita.')
-            }
+            onDelete={() => void deleteMessages(selection.selectedRefs)}
             onToggleSeen={() => void setSelectionSeen()}
             onToggleFlagged={() => void setSelectionFlagged()}
             onClearSelection={clearSelection}
@@ -2684,11 +2712,7 @@ function App(): React.JSX.Element {
                 await window.mailApi.archiveMessage(ref)
               }, 'Archiviazione email non riuscita.')
             }
-            onDelete={() =>
-              void runSelectionRemovalAction(async (ref) => {
-                await window.mailApi.deleteMessage(ref)
-              }, 'Eliminazione email non riuscita.')
-            }
+            onDelete={() => void deleteMessages(selection.selectedRefs)}
             onMoveToFolder={(destinationFolderPath) =>
               void runSelectionRemovalAction(async (ref) => {
                 await window.mailApi.moveMessage({ ...ref, destinationFolderPath })

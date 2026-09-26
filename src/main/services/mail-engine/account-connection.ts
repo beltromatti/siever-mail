@@ -538,12 +538,16 @@ export class AccountConnection extends EventEmitter {
     return { sourceFolder: ref.folderPath, destinationFolder: trash.path }
   }
 
+  /**
+   * Deleting moves a message to the Trash; one already there, or on an
+   * account without a Trash, is deleted for good — as every client does.
+   */
   async deleteMessage(
     ref: MessageRef
   ): Promise<{ sourceFolder: string; destinationFolder?: string }> {
     const trash = await this.findFolderBySpecialUse(['\\Trash'], ['trash', 'cestino'])
 
-    if (trash) {
+    if (trash && trash.path !== ref.folderPath) {
       await this.moveMessage(ref, trash.path)
       return { sourceFolder: ref.folderPath, destinationFolder: trash.path }
     }
