@@ -125,6 +125,7 @@ model AppPreference {
   messageListSortDirection       String  @default("desc") @map("message_list_sort_direction")
   messageGrouping                String  @default("auto") @map("message_grouping")
   readerZoom                     Int     @default(100) @map("reader_zoom")
+  extensionSignatureRevision     Int     @default(0) @map("extension_signature_revision")
   updatedAt                      BigInt  @map("updated_at")
 
   @@map("app_preferences")

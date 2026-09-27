@@ -91,7 +91,7 @@ so an older file is brought forward in place.
 | `contacts`           | Addresses learned from traffic, for recipient suggestions.                                                                                                                   |
 | `account_signatures` | One signature per account, with the version of the page it was written for (`html_format`) and the edition of the extension's content it has (`extension_revision`).         |
 | `recent_files`       | Files the user attached, saved or an extension filed away, offered first in "Allega".                                                                                        |
-| `app_preferences`    | One row: theme, layout, list order, sort, grouping, reader zoom, the accounts TUTTI gathers.                                                                                 |
+| `app_preferences`    | One row: theme, layout, list order, sort, grouping, reader zoom, the accounts TUTTI gathers, the extension signature edition every account has joined.                       |
 
 An extension may add tables through the database handle it receives; they
 live in the same file and connection. The host never reads them.
@@ -99,7 +99,7 @@ live in the same file and connection. The host never reads them.
 "Elimina tutti i dati" (Settings → Dati) empties everything but the
 accounts and the view preferences, then calls the extension's
 `clearData()`. Clearing one account's data drops its cache and the copies
-of its attachments; the mail downloads again.
+of its attachments, and keeps its signature; the mail downloads again.
 
 ### Upgrades
 
@@ -197,6 +197,15 @@ The selection (`lib/message-selection.ts`) keeps the **selected rows** and
 the **cursor** apart, following Finder/Explorer: click replaces, Ctrl/⌘
 toggles, Shift extends, ⌘/Ctrl+A selects all, Esc narrows to the cursor.
 
+A message is marked read the way Outlook does it by default (Apple Mail,
+Thunderbird and Gmail agree where it matters): shown in the reading pane it
+stays as it is while it is being read, and is marked read once the pane
+moves on — to another message, to several, to another folder, account or
+search. Opening it (Invio, a double click, the expand button, the next
+message in expanded reading) marks it at once. A state the user sets by
+hand while it is shown stays; a message whose body never showed, or that
+left the list, is not touched (`followShownMessage` in `App.tsx`).
+
 Archiving, deleting and moving take the rows out of the list before the
 server answers, and the reading pane moves on to the next message that is
 staying. What the server refuses comes back; once every removal started
@@ -212,7 +221,7 @@ sortable table above the reader. Both list shells implement
 narrow list beside a full-height message. Sizes are `clamp()`s, never
 breakpoints, so any window size works.
 
-The divider between list and reader can be dragged in all three
+The divider between list and reader can be dragged in both layouts
 (`components/ui/resizable-split.tsx`, the WAI-ARIA window splitter): within
 minimums that keep both panes usable, with a detent on the default — the
 grip lengthens and turns to the accent colour there, and letting go hands
@@ -338,20 +347,20 @@ aliases point at `extension/{main,renderer,preload,shared}/index.*`;
 otherwise at the stubs (`electron.vite.config.ts`). The host never imports
 extension code by path. The contract is `src/extension/types.ts`:
 
-| Surface                                     | What it does                                                                                                   |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `ExtensionMain.install(context)`            | Runs once after the engine starts: DDL, IPC handlers, startup work.                                            |
-| `ExtensionMain.clearData()`                 | Deletes its data, as part of "Elimina tutti i dati".                                                           |
-| `ExtensionMain.uninstall()`                 | Optional; called when the app quits.                                                                           |
-| `ExtensionMain.defaultAccountSignatureHtml` | Signature given to the first account added. Empty in the public build.                                         |
-| `ExtensionMain.accountSignatureRevision`    | Edition of that content; stored signatures on an older one are handed, once, to `upgradeAccountSignatureHtml`. |
-| `ExtensionRenderer.toolbarActions`          | Buttons after "Nuovo messaggio", given the selection.                                                          |
-| `ExtensionRenderer.settingsTabs`            | Tabs after the host's in Settings.                                                                             |
-| `ExtensionRenderer.PrimaryActionDialog`     | A dialog the host mounts and opens on request.                                                                 |
-| `ExtensionRenderer.fontFaceCss`             | `@font-face` rules for bundled fonts, applied to the app and every message frame.                              |
-| `ExtensionRenderer.localDataLabel`          | How the data `clearData()` removes reads in Settings.                                                          |
-| `ExtensionComposition` (shared)             | Fonts, default font, text colours and extra font stacks the composer offers.                                   |
-| `ExtensionPreloadInstaller`                 | Methods merged onto `window.mailApi`.                                                                          |
+| Surface                                     | What it does                                                                                                                                |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ExtensionMain.install(context)`            | Runs once after the engine starts: DDL, IPC handlers, startup work.                                                                         |
+| `ExtensionMain.clearData()`                 | Deletes its data, as part of "Elimina tutti i dati".                                                                                        |
+| `ExtensionMain.uninstall()`                 | Optional; called when the app quits.                                                                                                        |
+| `ExtensionMain.defaultAccountSignatureHtml` | Signature given to the first account added. Empty in the public build.                                                                      |
+| `ExtensionMain.accountSignatureRevision`    | Edition of that content; stored signatures on an older one — and accounts without one — are handed, once, to `upgradeAccountSignatureHtml`. |
+| `ExtensionRenderer.toolbarActions`          | Buttons after "Nuovo messaggio", given the selection.                                                                                       |
+| `ExtensionRenderer.settingsTabs`            | Tabs after the host's in Settings.                                                                                                          |
+| `ExtensionRenderer.PrimaryActionDialog`     | A dialog the host mounts and opens on request.                                                                                              |
+| `ExtensionRenderer.fontFaceCss`             | `@font-face` rules for bundled fonts, applied to the app and every message frame.                                                           |
+| `ExtensionRenderer.localDataLabel`          | How the data `clearData()` removes reads in Settings.                                                                                       |
+| `ExtensionComposition` (shared)             | Fonts, default font, text colours and extra font stacks the composer offers.                                                                |
+| `ExtensionPreloadInstaller`                 | Methods merged onto `window.mailApi`.                                                                                                       |
 
 `install()` receives an `ExtensionMainContext`: `app`, `ipcMain`, the user
 data path, a database handle (`applyDdl`, `query`, `execute`) on the host's

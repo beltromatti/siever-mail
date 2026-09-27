@@ -1,4 +1,12 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 
 import { AlertTriangle, LoaderCircle, LogIn, Minus, Plus, Square, X } from 'lucide-react'
 import { toast } from 'sonner'
@@ -1491,6 +1499,17 @@ function App(): React.JSX.Element {
    * that selection, less what did go: the list had moved on to a neighbour
    * only because of them. A selection the user made meanwhile stands.
    */
+  /**
+   * The message shown alone in the reading pane, once its body is on
+   * screen — see the read-state rules at `followShownMessage`. `keepState`
+   * is set when the user marks it read or unread by hand.
+   */
+  const shownMessageRef = useRef<{
+    ref: MessageRef
+    wasUnread: boolean
+    keepState: boolean
+  } | null>(null)
+
   const removalBurstRef = useRef<{
     leaving: Set<string>
     selectionBefore: MessageSelectionState
@@ -1507,6 +1526,11 @@ function App(): React.JSX.Element {
 
       if (removedIndex < 0) {
         return null
+      }
+
+      // Gone from the list, it is not "read and left": it keeps its state.
+      if (shownMessageRef.current && isSameMessageRef(shownMessageRef.current.ref, ref)) {
+        shownMessageRef.current = null
       }
 
       const burst = (removalBurstRef.current ??= {
@@ -1882,14 +1906,103 @@ function App(): React.JSX.Element {
     [applyOptimisticFlagState, getMessageKeywordState]
   )
 
-  const handleOpenRow = useCallback(
-    (ref: MessageRef): void => {
-      setSelection({ selectedRefs: [ref], cursorRef: ref, anchorRef: ref })
-      setIsMessageExpanded(true)
-      void setMessageKeyword(ref, '\\Seen', true)
-    },
-    [setMessageKeyword]
-  )
+  // Opening marks the message read once its body shows (`followShownMessage`).
+  const handleOpenRow = useCallback((ref: MessageRef): void => {
+    setSelection({ selectedRefs: [ref], cursorRef: ref, anchorRef: ref })
+    setIsMessageExpanded(true)
+  }, [])
+
+  /**
+   * Read state follows Outlook's default, which Apple Mail, Thunderbird and
+   * Gmail agree with where it matters:
+   *   • a message shown in the reading pane stays as it is while it is being
+   *     read, and is marked read once the pane moves on from it — to another
+   *     message, to several, to another folder, account or search;
+   *   • opening it — Invio, a double click, the expand button, the next
+   *     message in expanded reading — marks it read at once, as opening it in
+   *     its own window does;
+   *   • a message the user marks read or unread by hand while it is shown
+   *     keeps what they chose;
+   *   • only a message whose body showed counts, and one that left the list —
+   *     archived, moved, deleted — is left as it is.
+   * A failure to tell the server is not reported: the user has moved on, and
+   * the message only stays unread.
+   */
+  const shownKey =
+    readingRef && selectedMessage && isSameMessageRef(selectedMessage, readingRef)
+      ? readingKey
+      : null
+
+  const followShownMessage = useEffectEvent((): void => {
+    const markRead = (ref: MessageRef, wasUnread: boolean): void => {
+      const summary = messages.find((message) =>
+        isSameMessageRef(summaryToMessageRef(message), ref)
+      )
+
+      // Off the page — another folder or search is on screen — the server
+      // still hears of it.
+      if (
+        (summary ? summary.isRead : !wasUnread) ||
+        !accounts.some((a) => a.id === ref.accountId)
+      ) {
+        return
+      }
+
+      const executionId = ++toggleFlagExecutionIdRef.current
+
+      if (summary) {
+        applyOptimisticFlagState(ref, '\\Seen', true)
+      }
+
+      void window.mailApi.toggleSeen({ ...ref, seen: true }).catch(() => {
+        if (summary && executionId === toggleFlagExecutionIdRef.current) {
+          applyOptimisticFlagState(ref, '\\Seen', false)
+        }
+      })
+    }
+
+    const previous = shownMessageRef.current
+    const shown = shownKey ? readingRef : null
+
+    if (previous && shown && isSameMessageRef(previous.ref, shown)) {
+      if (isMessageExpanded) {
+        previous.keepState = false
+        markRead(shown, true)
+      }
+
+      return
+    }
+
+    if (previous && !previous.keepState) {
+      markRead(previous.ref, previous.wasUnread)
+    }
+
+    // The list row is the freshest read state; the detail may lag behind it.
+    shownMessageRef.current = shown
+      ? {
+          ref: shown,
+          wasUnread: !(readingSummary?.isRead ?? selectedMessage?.isRead ?? true),
+          keepState: false
+        }
+      : null
+
+    if (shown && isMessageExpanded) {
+      markRead(shown, true)
+    }
+  })
+
+  useEffect(() => {
+    followShownMessage()
+  }, [shownKey, isMessageExpanded])
+
+  /** Read state set by hand stays when the reading pane moves on. */
+  const keepShownReadState = useCallback((refs: ReadonlyArray<MessageRef>): void => {
+    const shown = shownMessageRef.current
+
+    if (shown && refs.some((ref) => isSameMessageRef(ref, shown.ref))) {
+      shown.keepState = true
+    }
+  }, [])
 
   const handleToggleRowFlag = useCallback(
     (ref: MessageRef, flagged: boolean): void => {
@@ -1900,11 +2013,12 @@ function App(): React.JSX.Element {
 
   const setSelectionSeen = useCallback(async (): Promise<void> => {
     const targetSeenState = shouldMarkSelectionAsRead
+    keepShownReadState(selection.selectedRefs)
 
     for (const ref of selection.selectedRefs) {
       await setMessageKeyword(ref, '\\Seen', targetSeenState)
     }
-  }, [selection.selectedRefs, setMessageKeyword, shouldMarkSelectionAsRead])
+  }, [keepShownReadState, selection.selectedRefs, setMessageKeyword, shouldMarkSelectionAsRead])
 
   const setSelectionFlagged = useCallback(async (): Promise<void> => {
     const targetFlaggedState = !selectionFlagged
@@ -2727,6 +2841,7 @@ function App(): React.JSX.Element {
             }}
             onToggleSeen={(seen) => {
               if (readingRef) {
+                keepShownReadState([readingRef])
                 void setMessageKeyword(readingRef, '\\Seen', seen)
               }
             }}

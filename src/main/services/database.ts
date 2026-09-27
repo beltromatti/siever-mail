@@ -1043,6 +1043,8 @@ export class AppDatabase {
   async clearAccountData(accountId: string): Promise<void> {
     await this.ready
 
+    // The cache only: the mail comes back from the server, a signature
+    // would not.
     await this.prisma.$transaction([
       this.prisma.message.deleteMany({
         where: {
@@ -1053,11 +1055,7 @@ export class AppDatabase {
         where: {
           accountId
         }
-      }),
-      this.prisma.$executeRaw`
-        DELETE FROM account_signatures
-        WHERE account_id = ${accountId}
-      `
+      })
     ])
 
     // Checkpoint + VACUUM the same way clearAllDataKeepAccounts does: SQLite
@@ -2733,6 +2731,7 @@ export class AppDatabase {
         message_list_sort_direction TEXT NOT NULL DEFAULT 'desc',
         message_grouping TEXT NOT NULL DEFAULT 'auto',
         reader_zoom INTEGER NOT NULL DEFAULT 100,
+        extension_signature_revision INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
       )
     `)
@@ -2779,6 +2778,46 @@ export class AppDatabase {
       VALUES (${APP_PREFERENCES_SINGLETON_ID}, NULL, ${Date.now()})
     `)
     await this.refileIfOutdated()
+    await this.joinSignatureEdition()
+  }
+
+  /**
+   * When the extension's signature edition rises, every account takes part
+   * once — an account without a stored signature too, as every one is after
+   * "Elimina tutti i dati": it gets an empty one on the edition before, for
+   * `withUpgradedSignature` to bring forward on its first read like the
+   * rest. The edition reached is kept in `app_preferences`, so a later
+   * "Elimina tutti i dati" leaves the accounts without a signature, as it
+   * says.
+   */
+  private async joinSignatureEdition(): Promise<void> {
+    const revision = extensionMain.accountSignatureRevision
+    const [row] = (await this.prisma.$queryRaw`
+      SELECT extension_signature_revision AS revision
+      FROM app_preferences
+      WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
+    `) as Array<{ revision: bigint | number }>
+    const reached = toNumber(row?.revision ?? 0)
+
+    if (reached >= revision) {
+      return
+    }
+
+    const now = BigInt(Date.now())
+
+    await this.prisma.$transaction([
+      this.prisma.$executeRaw`
+        INSERT INTO account_signatures(account_id, html, html_format, extension_revision, updated_at)
+        SELECT id, '', ${SIGNATURE_HTML_FORMAT}, ${reached}, ${now}
+        FROM accounts
+        WHERE id NOT IN (SELECT account_id FROM account_signatures)
+      `,
+      this.prisma.$executeRaw`
+        UPDATE app_preferences
+        SET extension_signature_revision = ${revision}
+        WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
+      `
+    ])
   }
 
   /**
@@ -2802,7 +2841,8 @@ export class AppDatabase {
       ['message_list_sort_direction', "TEXT NOT NULL DEFAULT 'desc'"],
       ['message_grouping', "TEXT NOT NULL DEFAULT 'auto'"],
       ['reader_zoom', 'INTEGER NOT NULL DEFAULT 100'],
-      ['theme_mode', "TEXT NOT NULL DEFAULT 'system'"]
+      ['theme_mode', "TEXT NOT NULL DEFAULT 'system'"],
+      ['extension_signature_revision', 'INTEGER NOT NULL DEFAULT 0']
     ]
 
     for (const [column, definition] of additions) {

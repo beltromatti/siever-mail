@@ -73,10 +73,12 @@ export interface ExtensionMain {
   readonly accountSignatureRevision: number
   /**
    * Brings a stored signature from `fromRevision` up to
-   * `accountSignatureRevision`. The host calls it once per signature, the
-   * first time it reads one stored on an older edition, and never on a
-   * signature saved since. Returns the HTML as it was when there is
-   * nothing to add — a signature its owner rewrote without that content.
+   * `accountSignatureRevision`: adds what the editions since brought, or
+   * puts the whole default in its place — the extension decides, edition
+   * by edition. The host calls it once per signature, the first time it
+   * reads one stored on an older edition, never on a signature saved since;
+   * an account without a signature takes part as an empty one. Returns the
+   * HTML as it was when there is nothing to do.
    */
   upgradeAccountSignatureHtml(html: string, fromRevision: number): string
   /**

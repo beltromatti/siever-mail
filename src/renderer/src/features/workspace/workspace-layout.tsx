@@ -19,10 +19,12 @@
  * layout stays right from the 1180×700 minimum up to 4K without a single
  * breakpoint.
  *
- * Those clamps are where the message list and the reading pane start. The
- * divider between them can be dragged (`ResizableSplit`) within the minimums
- * below, and snaps back onto the default. A dragged size is not kept: a new
- * layout, expanded reading, or the next launch start from the default again.
+ * In the two layouts those clamps are where the message list and the
+ * reading pane start: the divider between them can be dragged
+ * (`ResizableSplit`) within the minimums below, and snaps back onto the
+ * default. A dragged size is not kept: a new layout, expanded reading, or
+ * the next launch start from the default again. Expanded reading keeps its
+ * fixed strip.
  */
 import type { ReactNode } from 'react'
 
@@ -62,11 +64,6 @@ const EXPANDED_LIST_WIDTH = 'clamp(260px, 22%, 360px)'
  */
 const LIST_MIN_WIDTH = 240
 const READER_MIN_WIDTH = 420
-/**
- * In expanded reading the toolbar shares the message's column: its fixed
- * controls take some 700px, and its actions another 170 as bare icons.
- */
-const EXPANDED_MAIN_MIN_WIDTH = 880
 const READER_MIN_HEIGHT = 200
 const RESIZE_LABEL = "Ridimensiona l'elenco e il messaggio"
 
@@ -141,34 +138,26 @@ export function WorkspaceLayout({
   // list here would throw them out of it at every step.
   if (readerExpanded) {
     return (
-      <ResizableSplit
-        key="expanded"
-        orientation="horizontal"
-        defaultSize={EXPANDED_LIST_WIDTH}
-        minFirst={LIST_MIN_WIDTH}
-        minSecond={EXPANDED_MAIN_MIN_WIDTH}
-        label={RESIZE_LABEL}
-        className="h-full"
-        first={
-          <aside className="grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
-            {header}
-            {/*
-              `min-w-0` is not optional here: a grid item defaults to its
-              min-content width, and a message row's min-content is a long
-              unbroken subject. Without it the list panel grew past its track
-              and slid under the reading pane instead of truncating.
-            */}
-            <div className="min-h-0 min-w-0">{messageList}</div>
-          </aside>
-        }
-        second={
-          <div className="flex h-full min-h-0 min-w-0 flex-col gap-2">
-            {toolbar}
-            {notice}
-            <div className="min-h-0 flex-1">{reader}</div>
-          </div>
-        }
-      />
+      <div
+        className="grid h-full min-h-0 gap-2"
+        style={{ gridTemplateColumns: `${EXPANDED_LIST_WIDTH} minmax(0, 1fr)` }}
+      >
+        <aside className="grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
+          {header}
+          {/*
+            `min-w-0` is not optional here: a grid item defaults to its
+            min-content width, and a message row's min-content is a long
+            unbroken subject. Without it the list panel grew past its track
+            and slid under the reading pane instead of truncating.
+          */}
+          <div className="min-h-0 min-w-0">{messageList}</div>
+        </aside>
+        <div className="flex min-h-0 min-w-0 flex-col gap-2">
+          {toolbar}
+          {notice}
+          <div className="min-h-0 flex-1">{reader}</div>
+        </div>
+      </div>
     )
   }
 
