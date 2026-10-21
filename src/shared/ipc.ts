@@ -71,6 +71,7 @@ export const IPC_CHANNELS = {
   sendMail: 'message:send',
   pickAttachments: 'compose:pick-attachments',
   suggestContacts: 'contact:suggest',
+  forgetContact: 'contact:forget',
   listAccountSignatures: 'signature:list-account',
   getAccountSignature: 'signature:get-account',
   setAccountSignature: 'signature:set-account',
@@ -170,6 +171,8 @@ export interface DesktopMailApi {
   setMessagesFlagged: (input: SetMessagesKeywordInput) => Promise<MessagesActionResult>
   sendMail: (input: ComposeMailInput) => Promise<void>
   suggestContacts: (query: string, limit?: number) => Promise<MailContactSuggestion[]>
+  /** Takes an address out of the suggestions, until the user writes to it again. */
+  forgetContact: (address: string) => Promise<void>
   listAccountSignatures: () => Promise<MailAccountSignature[]>
   getAccountSignature: (accountId: string) => Promise<MailAccountSignature | null>
   setAccountSignature: (accountId: string, html: string) => Promise<MailAccountSignature | null>

@@ -30,16 +30,23 @@ import {
   replaceComposerSignature,
   splitSignature
 } from '@renderer/features/mail/composer-body'
+import { RecipientField, type RecipientFieldKey } from '@renderer/features/mail/recipient-field'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
 import { commandForKeyEvent, useShortcutOverrides } from '@renderer/lib/command-shortcuts'
-import { htmlToPlainText, splitRecipients } from '@renderer/lib/email'
+import { htmlToPlainText } from '@renderer/lib/email'
 import { cn } from '@renderer/lib/utils'
+import {
+  addressKey,
+  isValidEmailAddress,
+  mergeRecipients,
+  parseRecipients
+} from '@shared/email-address'
 import { MAIL_COMPOSER_DEFAULT_FONT_FAMILY } from '@shared/mail-fonts'
 import type {
   ComposeMailInput,
   MailAccount,
+  MailAddress,
   MailAttachment,
-  MailContactSuggestion,
   MessageRef,
   PickedAttachment
 } from '@shared/models'
@@ -70,9 +77,9 @@ export interface ComposerInitialData {
    * hear back from an address they never wrote to.
    */
   sourceAccountId?: string
-  to?: string[]
-  cc?: string[]
-  bcc?: string[]
+  to?: MailAddress[]
+  cc?: MailAddress[]
+  bcc?: MailAddress[]
   subject?: string
   /** The message a reply or forward quotes, below the signature. */
   quoteHtml?: string
@@ -106,9 +113,9 @@ interface MailComposerDialogProps {
 }
 
 interface ComposerFormState {
-  to: string
-  cc: string
-  bcc: string
+  to: MailAddress[]
+  cc: MailAddress[]
+  bcc: MailAddress[]
   subject: string
   html: string
   text: string
@@ -116,13 +123,11 @@ interface ComposerFormState {
   references?: string[]
 }
 
-type RecipientFieldKey = 'to' | 'cc' | 'bcc'
+/** What is typed in each recipient field and not yet a recipient. */
+type RecipientDrafts = Readonly<Record<RecipientFieldKey, string>>
 
-interface RecipientTokenContext {
-  query: string
-  tokenStart: number
-  tokenEnd: number
-}
+const EMPTY_RECIPIENT_DRAFTS: RecipientDrafts = { to: '', cc: '', bcc: '' }
+const RECIPIENT_FIELDS: ReadonlyArray<RecipientFieldKey> = ['to', 'cc', 'bcc']
 
 const COMPOSER_TITLES: Readonly<Record<ComposerKind, string>> = {
   new: 'Nuovo messaggio',
@@ -134,9 +139,9 @@ function buildInitialFields(
   initialData: ComposerInitialData | undefined
 ): Pick<ComposerFormState, 'to' | 'cc' | 'bcc' | 'subject'> {
   return {
-    to: (initialData?.to ?? []).join(', '),
-    cc: (initialData?.cc ?? []).join(', '),
-    bcc: (initialData?.bcc ?? []).join(', '),
+    to: initialData?.to ?? [],
+    cc: initialData?.cc ?? [],
+    bcc: initialData?.bcc ?? [],
     subject: initialData?.subject ?? ''
   }
 }
@@ -187,80 +192,9 @@ function isPendingOriginal(attachment: ComposerAttachment): boolean {
   return Boolean(attachment.originalId && !attachment.path && !attachment.failed)
 }
 
-function normalizeRecipientEmail(value: string): string {
-  return value.trim().toLowerCase()
-}
-
-function getRecipientTokenContext(
-  value: string,
-  caretPosition: number | null
-): RecipientTokenContext {
-  const safeCaret = Math.max(0, Math.min(caretPosition ?? value.length, value.length))
-  const lastCommaIndex = value.lastIndexOf(',', Math.max(0, safeCaret - 1))
-  const tokenStart = lastCommaIndex < 0 ? 0 : lastCommaIndex + 1
-  const nextCommaIndex = value.indexOf(',', safeCaret)
-  const tokenEnd = nextCommaIndex >= 0 ? nextCommaIndex : value.length
-  const query = value.slice(tokenStart, tokenEnd).trim()
-
-  return {
-    query,
-    tokenStart,
-    tokenEnd
-  }
-}
-
-function pushUniqueRecipient(
-  recipients: string[],
-  knownRecipients: Set<string>,
-  value: string
-): void {
-  const normalized = normalizeRecipientEmail(value)
-
-  if (!normalized || knownRecipients.has(normalized)) {
-    return
-  }
-
-  knownRecipients.add(normalized)
-  recipients.push(value.trim())
-}
-
-function buildRecipientValueFromSuggestion(
-  value: string,
-  tokenContext: RecipientTokenContext,
-  selectedSuggestion: MailContactSuggestion
-): { value: string; cursor: number } {
-  const selectedEmail = selectedSuggestion.email.trim()
-  const recipients: string[] = []
-  const knownRecipients = new Set<string>()
-  const leftRecipients = splitRecipients(value.slice(0, tokenContext.tokenStart))
-  const rightRecipients = splitRecipients(value.slice(tokenContext.tokenEnd))
-
-  for (const recipient of leftRecipients) {
-    pushUniqueRecipient(recipients, knownRecipients, recipient)
-  }
-
-  pushUniqueRecipient(recipients, knownRecipients, selectedEmail)
-
-  for (const recipient of rightRecipients) {
-    pushUniqueRecipient(recipients, knownRecipients, recipient)
-  }
-
-  const replacedAtEnd = tokenContext.tokenEnd >= value.length
-  const nextValue = recipients.join(', ')
-
-  if (replacedAtEnd) {
-    const withTrailingSeparator = nextValue ? `${nextValue}, ` : `${selectedEmail}, `
-
-    return {
-      value: withTrailingSeparator,
-      cursor: withTrailingSeparator.length
-    }
-  }
-
-  return {
-    value: nextValue,
-    cursor: nextValue.length
-  }
+/** The addresses of a recipient list, in order: whether two lists name the same people. */
+function recipientKeys(recipients: ReadonlyArray<MailAddress>): string {
+  return recipients.map((recipient) => addressKey(recipient.address)).join('\n')
 }
 
 export function MailComposerDialog({
@@ -277,11 +211,7 @@ export function MailComposerDialog({
   const [bodyReady, setBodyReady] = useState(initialData?.html !== undefined)
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
   const [editorFocusMode, setEditorFocusMode] = useState(false)
-  const [recipientSuggestions, setRecipientSuggestions] = useState<MailContactSuggestion[]>([])
-  const [recipientQuery, setRecipientQuery] = useState('')
-  const [activeRecipientField, setActiveRecipientField] = useState<RecipientFieldKey | null>(null)
-  const [activeTokenContext, setActiveTokenContext] = useState<RecipientTokenContext | null>(null)
-  const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0)
+  const [recipientDrafts, setRecipientDrafts] = useState<RecipientDrafts>(EMPTY_RECIPIENT_DRAFTS)
   const { confirm, dialog: confirmDialog } = useConfirmDialog()
   const shortcutOverrides = useShortcutOverrides()
   /**
@@ -293,11 +223,7 @@ export function MailComposerDialog({
   const [ccBccRequested, setCcBccRequested] = useState(false)
   const toInputRef = useRef<HTMLInputElement | null>(null)
   const ccInputRef = useRef<HTMLInputElement | null>(null)
-  const bccInputRef = useRef<HTMLInputElement | null>(null)
-  const toFieldContainerRef = useRef<HTMLDivElement | null>(null)
-  const ccFieldContainerRef = useRef<HTMLDivElement | null>(null)
-  const bccFieldContainerRef = useRef<HTMLDivElement | null>(null)
-  const suggestionRequestIdRef = useRef(0)
+  const subjectInputRef = useRef<HTMLInputElement | null>(null)
   const signatureRequestIdRef = useRef(0)
   // Whether the sending account's signature went into the body. When it is
   // missing at the next account switch, the user deleted it, and the next
@@ -315,104 +241,6 @@ export function MailComposerDialog({
   const sourceAccount = initialData?.sourceAccountId
     ? (accounts.find((candidate) => candidate.id === initialData.sourceAccountId) ?? null)
     : null
-
-  const closeRecipientSuggestions = useCallback((): void => {
-    suggestionRequestIdRef.current += 1
-    setRecipientSuggestions([])
-    setRecipientQuery('')
-    setActiveRecipientField(null)
-    setActiveTokenContext(null)
-    setHighlightedSuggestionIndex(0)
-  }, [])
-
-  const getRecipientFieldValue = useCallback(
-    (field: RecipientFieldKey): string => {
-      if (field === 'to') {
-        return form.to
-      }
-
-      if (field === 'cc') {
-        return form.cc
-      }
-
-      return form.bcc
-    },
-    [form.bcc, form.cc, form.to]
-  )
-
-  const getRecipientInput = useCallback((field: RecipientFieldKey): HTMLInputElement | null => {
-    if (field === 'to') {
-      return toInputRef.current
-    }
-
-    if (field === 'cc') {
-      return ccInputRef.current
-    }
-
-    return bccInputRef.current
-  }, [])
-
-  const refreshRecipientSuggestions = useCallback(
-    (field: RecipientFieldKey, value: string, input: HTMLInputElement): void => {
-      if (!open || !account) {
-        closeRecipientSuggestions()
-        return
-      }
-
-      const tokenContext = getRecipientTokenContext(value, input.selectionStart)
-
-      if (!tokenContext.query) {
-        setRecipientSuggestions([])
-        setRecipientQuery('')
-        setActiveTokenContext(null)
-        setActiveRecipientField(field)
-        setHighlightedSuggestionIndex(0)
-        return
-      }
-
-      setActiveRecipientField(field)
-      setActiveTokenContext(tokenContext)
-      setRecipientQuery(tokenContext.query)
-      setHighlightedSuggestionIndex(0)
-    },
-    [account, closeRecipientSuggestions, open]
-  )
-
-  const applyRecipientSuggestion = useCallback(
-    (field: RecipientFieldKey, suggestion: MailContactSuggestion): void => {
-      const input = getRecipientInput(field)
-      const currentValue = getRecipientFieldValue(field)
-      const tokenContext =
-        activeRecipientField === field && activeTokenContext
-          ? activeTokenContext
-          : getRecipientTokenContext(currentValue, input?.selectionStart ?? currentValue.length)
-      const applied = buildRecipientValueFromSuggestion(currentValue, tokenContext, suggestion)
-
-      setForm((current) => ({
-        ...current,
-        [field]: applied.value
-      }))
-      closeRecipientSuggestions()
-
-      window.requestAnimationFrame(() => {
-        const target = getRecipientInput(field)
-
-        if (!target) {
-          return
-        }
-
-        target.focus()
-        target.setSelectionRange(applied.cursor, applied.cursor)
-      })
-    },
-    [
-      activeRecipientField,
-      activeTokenContext,
-      closeRecipientSuggestions,
-      getRecipientFieldValue,
-      getRecipientInput
-    ]
-  )
 
   // Resetting the draft when the dialog opens is a state adjustment, not a
   // synchronisation with an external system, so it happens during render
@@ -432,6 +260,7 @@ export function MailComposerDialog({
       setBodyReady(initialData?.html !== undefined)
       setAccountId(initialData?.accountId ?? null)
       setAttachments(buildInitialAttachments(initialData))
+      setRecipientDrafts(EMPTY_RECIPIENT_DRAFTS)
       setEditorFocusMode(false)
       // Without this the disclosure stayed open for the rest of the session:
       // one message that needed a Cc left every later message showing two
@@ -597,10 +426,9 @@ export function MailComposerDialog({
   }
 
   const closeComposerImmediately = useCallback((): void => {
-    closeRecipientSuggestions()
     setEditorFocusMode(false)
     onOpenChange(false)
-  }, [closeRecipientSuggestions, onOpenChange])
+  }, [onOpenChange])
 
   /**
    * Closing asks first only when something the user put in would be lost:
@@ -609,12 +437,13 @@ export function MailComposerDialog({
    * trying another account — just closes.
    */
   const requestComposerClose = async (): Promise<void> => {
-    closeRecipientSuggestions()
     const initialFields = buildInitialFields(initialData)
     const hasUserContent =
-      form.to !== initialFields.to ||
-      form.cc !== initialFields.cc ||
-      form.bcc !== initialFields.bcc ||
+      RECIPIENT_FIELDS.some(
+        (field) =>
+          recipientKeys(form[field]) !== recipientKeys(initialFields[field]) ||
+          recipientDrafts[field].trim()
+      ) ||
       form.subject !== initialFields.subject ||
       attachmentKeys(attachments) !== attachmentKeys(buildInitialAttachments(initialData)) ||
       hasWrittenContent(form.html)
@@ -644,92 +473,22 @@ export function MailComposerDialog({
     void requestComposerClose()
   }
 
-  useEffect(() => {
-    if (!open || !account || !activeRecipientField || !recipientQuery || !activeTokenContext) {
-      return
-    }
-
-    const activeValue = getRecipientFieldValue(activeRecipientField)
-    const existingRecipients = new Set(
-      [
-        ...splitRecipients(activeValue.slice(0, activeTokenContext.tokenStart)),
-        ...splitRecipients(activeValue.slice(activeTokenContext.tokenEnd))
-      ].map((value) => normalizeRecipientEmail(value))
-    )
-    const requestId = ++suggestionRequestIdRef.current
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const suggestions = await window.mailApi.suggestContacts(recipientQuery, 12)
-
-          if (requestId !== suggestionRequestIdRef.current) {
-            return
-          }
-
-          const filteredSuggestions = suggestions.filter(
-            (suggestion) => !existingRecipients.has(normalizeRecipientEmail(suggestion.email))
-          )
-
-          setRecipientSuggestions(filteredSuggestions)
-          setHighlightedSuggestionIndex((current) =>
-            Math.min(current, Math.max(0, filteredSuggestions.length - 1))
-          )
-        } catch {
-          if (requestId === suggestionRequestIdRef.current) {
-            setRecipientSuggestions([])
-            setHighlightedSuggestionIndex(0)
-          }
-        }
-      })()
-    }, 120)
-
-    return () => {
-      window.clearTimeout(timer)
-    }
-  }, [
-    account,
-    activeRecipientField,
-    activeTokenContext,
-    getRecipientFieldValue,
-    open,
-    recipientQuery
-  ])
-
-  useEffect(() => {
-    if (!open || !activeRecipientField) {
-      return
-    }
-
-    const onMouseDown = (event: MouseEvent): void => {
-      const target = event.target as Node | null
-
-      if (
-        !target ||
-        toFieldContainerRef.current?.contains(target) ||
-        ccFieldContainerRef.current?.contains(target) ||
-        bccFieldContainerRef.current?.contains(target)
-      ) {
-        return
-      }
-
-      closeRecipientSuggestions()
-    }
-
-    window.addEventListener('mousedown', onMouseDown)
-
-    return () => {
-      window.removeEventListener('mousedown', onMouseDown)
-    }
-  }, [activeRecipientField, closeRecipientSuggestions, open])
-
-  const toRecipients = useMemo(() => splitRecipients(form.to), [form.to])
+  const takenRecipientKeys = useMemo(
+    () =>
+      new Set(
+        [...form.to, ...form.cc, ...form.bcc].map((recipient) => addressKey(recipient.address))
+      ),
+    [form.bcc, form.cc, form.to]
+  )
+  const hasRecipients = RECIPIENT_FIELDS.some(
+    (field) => form[field].length > 0 || recipientDrafts[field].trim()
+  )
 
   // Every attachment must have its file: an original still being copied, or
   // whose copy failed, would otherwise go missing without a word.
   const canSend = Boolean(
     account &&
-    toRecipients.length > 0 &&
-    form.subject.trim() &&
+    hasRecipients &&
     form.html.trim() &&
     attachments.every((attachment) => attachment.path)
   )
@@ -741,7 +500,11 @@ export function MailComposerDialog({
 
   // Content wins over the toggle: a reply-all or a reopened draft that
   // already carries copies must never hide them behind a disclosure.
-  const ccBccVisible = ccBccRequested || form.cc.trim().length > 0 || form.bcc.trim().length > 0
+  const ccBccVisible =
+    ccBccRequested ||
+    form.cc.length > 0 ||
+    form.bcc.length > 0 ||
+    Boolean(recipientDrafts.cc || recipientDrafts.bcc)
 
   const ccBccToggle = ccBccVisible ? null : (
     <button
@@ -757,101 +520,42 @@ export function MailComposerDialog({
     </button>
   )
 
-  /**
-   * One recipient row: gutter label, borderless input, and the suggestion
-   * list anchored under it. The three fields were 55 lines of identical JSX
-   * apiece, which is why they drifted apart — Bcc had picked up a different
-   * placeholder and Cc a different focus handler.
-   */
+  /** A recipient moved to another field: dragged there, or sent from its menu. */
+  const moveRecipient = (
+    recipient: MailAddress,
+    from: RecipientFieldKey,
+    to: RecipientFieldKey
+  ): void => {
+    const key = addressKey(recipient.address)
+    setForm((current) => ({
+      ...current,
+      [from]: current[from].filter((entry) => addressKey(entry.address) !== key),
+      [to]: mergeRecipients(current[to], [recipient])
+    }))
+  }
+
   const renderRecipientField = (
     field: RecipientFieldKey,
-    label: string,
     placeholder: string,
     trailing?: React.ReactNode
-  ): React.JSX.Element => {
-    // Looked up here rather than passed in: handing a ref to a function is
-    // what the "cannot access refs during render" rule is guarding against,
-    // even when the function only forwards it to a `ref` prop.
-    const containerRef =
-      field === 'to'
-        ? toFieldContainerRef
-        : field === 'cc'
-          ? ccFieldContainerRef
-          : bccFieldContainerRef
-    const inputRef = field === 'to' ? toInputRef : field === 'cc' ? ccInputRef : bccInputRef
-
-    const refreshFor = (element: HTMLInputElement): void => {
-      refreshRecipientSuggestions(field, element.value, element)
-    }
-
-    return (
-      <div className="flex items-center gap-2 px-2" ref={containerRef}>
-        <label
-          htmlFor={`compose-${field}`}
-          className="text-muted-foreground w-14 shrink-0 text-[11px]"
-        >
-          {label}
-        </label>
-        <div className="relative min-w-0 flex-1">
-          <input
-            ref={inputRef}
-            id={`compose-${field}`}
-            value={form[field]}
-            onChange={(event) => {
-              const value = event.target.value
-              setForm((current) => ({ ...current, [field]: value }))
-              refreshFor(event.currentTarget)
-            }}
-            onFocus={(event) => refreshFor(event.currentTarget)}
-            // Suggestions belong to the field being typed in. A reply
-            // focuses "A" on the way to the body, and without this its
-            // list stayed open over "Oggetto" while the user wrote below.
-            // Picking a suggestion never blurs: the list refuses the mouse.
-            onBlur={closeRecipientSuggestions}
-            onClick={(event) => refreshFor(event.currentTarget)}
-            onKeyUp={(event) => refreshFor(event.currentTarget)}
-            onKeyDown={(event) => handleRecipientKeyDown(field, event)}
-            placeholder={placeholder}
-            disabled={!account}
-            className="placeholder:text-muted-foreground/70 h-8 w-full bg-transparent text-[12.5px] outline-none disabled:opacity-50"
-          />
-          {activeRecipientField === field && recipientSuggestions.length > 0 && (
-            // The list refuses the mouse-down that would move focus out of
-            // the field, so dragging its scrollbar keeps the keyboard on the
-            // recipient being typed.
-            <div
-              onMouseDown={(event) => event.preventDefault()}
-              className="border-border bg-popover absolute top-full right-0 left-0 z-40 mt-1 max-h-52 overflow-y-auto rounded-md border shadow-xl"
-            >
-              {recipientSuggestions.map((suggestion, index) => (
-                <button
-                  key={`${suggestion.email}-${index}`}
-                  type="button"
-                  className={cn(
-                    'hover:bg-secondary/70 flex w-full items-center justify-between gap-3 px-2 py-1.5 text-left text-[12px] transition-colors',
-                    highlightedSuggestionIndex === index && 'bg-secondary/65'
-                  )}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onMouseEnter={() => setHighlightedSuggestionIndex(index)}
-                  onClick={() => applyRecipientSuggestion(field, suggestion)}
-                >
-                  <span className="truncate font-medium">
-                    {suggestion.name || suggestion.email}
-                  </span>
-                  {suggestion.name && (
-                    <span className="text-muted-foreground truncate text-[11px]">
-                      {suggestion.email}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        {trailing}
-      </div>
-    )
-  }
+  ): React.JSX.Element => (
+    <RecipientField
+      field={field}
+      recipients={form[field]}
+      onRecipientsChange={(update) =>
+        setForm((current) => ({ ...current, [field]: update(current[field]) }))
+      }
+      draft={recipientDrafts[field]}
+      onDraftChange={(draft) => setRecipientDrafts((current) => ({ ...current, [field]: draft }))}
+      takenKeys={takenRecipientKeys}
+      moveTargets={RECIPIENT_FIELDS.filter((target) => target !== field)}
+      onMoveRecipient={moveRecipient}
+      placeholder={placeholder}
+      disabled={!account}
+      inputRef={field === 'to' ? toInputRef : field === 'cc' ? ccInputRef : undefined}
+      trailing={trailing}
+    />
+  )
 
   const addAttachments = (picked: PickedAttachment[]): void => {
     if (picked.length === 0) {
@@ -928,43 +632,6 @@ export function MailComposerDialog({
     }
   }
 
-  const handleRecipientKeyDown = (field: RecipientFieldKey, event: React.KeyboardEvent): void => {
-    if (activeRecipientField !== field || recipientSuggestions.length === 0) {
-      return
-    }
-
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      setHighlightedSuggestionIndex((current) =>
-        Math.min(current + 1, recipientSuggestions.length - 1)
-      )
-      return
-    }
-
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      setHighlightedSuggestionIndex((current) => Math.max(current - 1, 0))
-      return
-    }
-
-    if (event.key === 'Enter' || event.key === 'Tab') {
-      const selectedSuggestion = recipientSuggestions[highlightedSuggestionIndex]
-
-      if (!selectedSuggestion) {
-        return
-      }
-
-      event.preventDefault()
-      applyRecipientSuggestion(field, selectedSuggestion)
-      return
-    }
-
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      closeRecipientSuggestions()
-    }
-  }
-
   const runComposerCommand = (commandId: string): void => {
     switch (commandId) {
       case 'send':
@@ -990,11 +657,46 @@ export function MailComposerDialog({
       return
     }
 
+    // What is still typed goes too, as it would on leaving its field.
+    const [to, cc, bcc] = RECIPIENT_FIELDS.map((field) =>
+      mergeRecipients(form[field], parseRecipients(recipientDrafts[field]))
+    )
+    const invalid = [...to, ...cc, ...bcc].filter(
+      (recipient) => !isValidEmailAddress(recipient.address)
+    )
+
+    setForm((current) => ({ ...current, to, cc, bcc }))
+    setRecipientDrafts(EMPTY_RECIPIENT_DRAFTS)
+
+    if (invalid.length > 0) {
+      toast.error(
+        invalid.length === 1
+          ? `«${invalid[0].address}» non è un indirizzo valido`
+          : `${invalid.length} indirizzi non sono validi`,
+        { description: 'Correggi o togli i destinatari in rosso, poi invia.' }
+      )
+      return
+    }
+
+    if (
+      !form.subject.trim() &&
+      !(await confirm({
+        title: 'Inviare senza oggetto?',
+        description:
+          'Chi riceve il messaggio non saprà di cosa tratta finché non lo apre, e cercarlo sarà più difficile.',
+        confirmLabel: 'Invia senza oggetto',
+        cancelLabel: 'Scrivi l’oggetto'
+      }))
+    ) {
+      window.requestAnimationFrame(() => subjectInputRef.current?.focus())
+      return
+    }
+
     const payload: ComposeMailInput = {
       accountId: account.id,
-      to: splitRecipients(form.to),
-      cc: splitRecipients(form.cc),
-      bcc: splitRecipients(form.bcc),
+      to,
+      cc,
+      bcc,
       subject: form.subject.trim(),
       html: form.html,
       text: htmlToPlainText(form.html),
@@ -1008,9 +710,9 @@ export function MailComposerDialog({
       kind,
       accountId: account.id,
       sourceAccountId: initialData?.sourceAccountId,
-      to: payload.to,
-      cc: payload.cc,
-      bcc: payload.bcc,
+      to,
+      cc,
+      bcc,
       subject: form.subject,
       html: form.html,
       inReplyTo: form.inReplyTo,
@@ -1019,7 +721,6 @@ export function MailComposerDialog({
       attachments: [...attachments]
     }
 
-    closeRecipientSuggestions()
     setEditorFocusMode(false)
     onOpenChange(false)
     onSendRequested(payload, draft)
@@ -1030,6 +731,15 @@ export function MailComposerDialog({
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
           hideClose={editorFocusMode}
+          // A new message starts from who it goes to; a reply in its body,
+          // once that is in (`autoFocusBody`) — never on the "Da" menu.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault()
+
+            if (!initialData?.to?.length) {
+              toInputRef.current?.focus()
+            }
+          }}
           // Escape leaves the full-screen editor first, as its toggle does;
           // only then does it ask to close the message.
           onEscapeKeyDown={(event) => {
@@ -1102,13 +812,7 @@ export function MailComposerDialog({
                 expanded={editorFocusMode}
                 expandToContainer
                 onFileDragEnter={beginFileDrag}
-                onExpandedChange={(expanded) => {
-                  setEditorFocusMode(expanded)
-
-                  if (expanded) {
-                    closeRecipientSuggestions()
-                  }
-                }}
+                onExpandedChange={setEditorFocusMode}
                 onChange={(html, text) => {
                   setForm((current) => ({ ...current, html, text }))
                 }}
@@ -1184,9 +888,9 @@ export function MailComposerDialog({
                     </DropdownMenu>
                   </div>
                 )}
-                {renderRecipientField('to', 'A', 'destinatario@azienda.com', ccBccToggle)}
-                {ccBccVisible && renderRecipientField('cc', 'Cc', 'opzionale')}
-                {ccBccVisible && renderRecipientField('bcc', 'Ccn', 'opzionale')}
+                {renderRecipientField('to', 'Nome o indirizzo email', ccBccToggle)}
+                {ccBccVisible && renderRecipientField('cc', 'Copia per conoscenza')}
+                {ccBccVisible && renderRecipientField('bcc', 'Copia nascosta')}
 
                 <div className="flex items-center gap-2 px-2">
                   <label
@@ -1196,12 +900,12 @@ export function MailComposerDialog({
                     Oggetto
                   </label>
                   <input
+                    ref={subjectInputRef}
                     id="compose-subject"
                     value={form.subject}
                     onChange={(event) =>
                       setForm((current) => ({ ...current, subject: event.target.value }))
                     }
-                    onFocus={() => closeRecipientSuggestions()}
                     placeholder="Inserisci oggetto"
                     disabled={!account}
                     className="placeholder:text-muted-foreground/70 h-8 min-w-0 flex-1 bg-transparent text-[12.5px] font-medium outline-none disabled:opacity-50"
@@ -1221,13 +925,7 @@ export function MailComposerDialog({
                   // new message does not.
                   autoFocusBody={Boolean(initialData?.to?.length) && bodyReady}
                   onFileDragEnter={beginFileDrag}
-                  onExpandedChange={(expanded) => {
-                    setEditorFocusMode(expanded)
-
-                    if (expanded) {
-                      closeRecipientSuggestions()
-                    }
-                  }}
+                  onExpandedChange={setEditorFocusMode}
                   onChange={(html, text) => {
                     setForm((current) => ({ ...current, html, text }))
                   }}

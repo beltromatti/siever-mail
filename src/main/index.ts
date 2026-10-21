@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, Menu, Tray, nativeImage, shell } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { config as loadDotenv } from 'dotenv'
+import { z } from 'zod'
 import { IPC_CHANNELS } from '@shared/ipc'
 
 import extensionMain from '@app/extension/main'
@@ -30,6 +31,9 @@ const dotenvPath = is.dev ? join(process.cwd(), '.env') : join(process.resources
 if (existsSync(dotenvPath)) {
   loadDotenv({ path: dotenvPath })
 }
+
+// Input the main process turns down is described in the app's language.
+z.config(z.locales.it())
 
 let mainWindow: BrowserWindow | null = null
 let mailService: MailService | null = null

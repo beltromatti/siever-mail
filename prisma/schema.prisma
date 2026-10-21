@@ -99,13 +99,21 @@ model Message {
   @@map("messages")
 }
 
+/// The people the composer suggests: everyone the stored mail names, the
+/// ones the user writes to counted (see `AppDatabase.recordContactsWritten`).
 model Contact {
   emailNormalized String  @id @map("email_normalized")
   emailAddress    String  @map("email_address")
   displayName     String? @map("display_name")
   nameNormalized  String? @map("name_normalized")
+  /// Messages the user wrote to the address.
   usageCount      Int     @default(0) @map("usage_count")
+  /// When the user last wrote to it, 0 when never.
   lastUsedAt      BigInt  @map("last_used_at")
+  /// The newest message the address sent the user, null when it never did.
+  lastReceivedAt  BigInt? @map("last_received_at")
+  /// When the user took it out of the suggestions; writing to it again brings it back.
+  hiddenAt        BigInt? @map("hidden_at")
   updatedAt       BigInt  @map("updated_at")
 
   @@index([lastUsedAt], map: "idx_contacts_last_used")

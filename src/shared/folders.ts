@@ -38,7 +38,10 @@ export function folderRoleLabel(role: FolderRole): string {
  * also recognises the usual names in many languages), and INBOX, which IMAP
  * spells that way in any case.
  */
-export function folderRole(folder: Pick<MailFolder, 'path' | 'specialUse'>): FolderRole | null {
+export function folderRole(folder: {
+  path: string
+  specialUse?: string | null
+}): FolderRole | null {
   if (folder.path.toUpperCase() === 'INBOX') {
     return '\\Inbox'
   }

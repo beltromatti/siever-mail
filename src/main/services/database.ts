@@ -41,16 +41,24 @@ import {
   DEFAULT_UI_PREFERENCES,
   READER_ZOOM_DEFAULT
 } from '@shared/models'
+import { addressKey, isValidEmailAddress } from '@shared/email-address'
+import { folderRole, type FolderRole } from '@shared/folders'
 import {
   foldSearchText,
   parseSearchQuery,
   type SearchTerm,
   type SearchTermGroup
 } from '@shared/search'
-import { isMeaningfulDisplayName, isSameSenderName, senderSortKey } from '@shared/sender'
+import {
+  cleanDisplayName,
+  isMeaningfulDisplayName,
+  isSameSenderName,
+  senderSortKey
+} from '@shared/sender'
 import { SIGNATURE_HTML_FORMAT, upgradeLegacySignatureHtml } from '@shared/signature-html'
 import { subjectSortKey } from '@shared/subject'
 
+import { rankContactSuggestions, type ContactCandidate } from './contact-ranking'
 import { plainTextOfHtml } from './mail-engine/preview'
 
 /**
@@ -136,10 +144,16 @@ interface CreateAccountInput {
 }
 
 interface FolderPersistenceInput extends MailFolder {}
-interface ContactSuggestionInput extends MailContactSuggestion {}
 
 const APP_PREFERENCES_SINGLETON_ID = 1
-const CONTACT_SUGGESTION_QUERY_SCAN_LIMIT = 120
+/** Contacts the suggestions weigh for one query: the most written to among those matching. */
+const CONTACT_SUGGESTION_SCAN_LIMIT = 400
+/** Learned contacts wait this long to be written together. */
+const CONTACT_LEARN_DELAY_MS = 150
+/** A sent folder's new messages are counted once its sync has settled. */
+const SENT_RECOUNT_DELAY_MS = 3_000
+const CONTACT_WRITE_BATCH_SIZE = 500
+const CONTACT_REBUILD_PAGE_SIZE = 2_000
 /**
  * Past this many matching senders a search is not looking for one of them
  * ("gmail", "com"), and the list keeps its plain order.
@@ -621,124 +635,88 @@ function normalizeStorageSectionSizesToTotal(
     .sort((left, right) => right.sizeBytes - left.sizeBytes)
 }
 
-function normalizeContactEmail(email: string): string {
-  return email.trim().toLowerCase()
-}
-
-function normalizeContactName(name: string): string {
-  return name
-    .trim()
-    .replace(/\s+/g, ' ')
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-}
-
-function sanitizeContactName(name: string | undefined): string | undefined {
-  if (!name) {
-    return undefined
-  }
-
-  const normalized = name.trim().replace(/\s+/g, ' ')
-
-  if (!normalized) {
-    return undefined
-  }
-
-  return normalized
-}
-
-function isLikelyValidEmail(value: string): boolean {
-  if (!value || value.includes(' ')) {
-    return false
-  }
-
-  const atIndex = value.indexOf('@')
-  if (atIndex <= 0 || atIndex !== value.lastIndexOf('@')) {
-    return false
-  }
-
-  const domainPart = value.slice(atIndex + 1)
-  return domainPart.includes('.')
-}
-
-function buildContactSuggestionInput(
-  email: string | undefined,
+/** Someone stored mail names, to learn as a contact (`AppDatabase.learnContacts`). */
+export interface LearnedContact {
+  address: string
   name?: string
-): ContactSuggestionInput | null {
-  if (!email) {
+  /** When they wrote to the user: the date of a message they sent. */
+  receivedAt?: number
+}
+
+/** A contact ready to be written: its address checked, its name cleaned. */
+interface ContactEntry extends LearnedContact {
+  key: string
+}
+
+/** Folders whose people are not learned: drafts hold addresses half typed, spam strangers. */
+const UNLEARNED_FOLDER_ROLES: ReadonlySet<FolderRole | null> = new Set(['\\Drafts', '\\Junk'])
+
+/** The contact `address` stands for, or null when mail cannot be addressed to it. */
+function contactEntry(address: MailAddress, receivedAt?: number): ContactEntry | null {
+  const trimmed = address.address.trim()
+
+  if (!isValidEmailAddress(trimmed)) {
     return null
   }
 
-  const trimmedEmail = email.trim()
-  const normalizedEmail = normalizeContactEmail(trimmedEmail)
-
-  if (!isLikelyValidEmail(normalizedEmail)) {
-    return null
-  }
+  const name = cleanDisplayName(address.name)
 
   return {
-    email: normalizedEmail,
-    name: sanitizeContactName(name)
+    key: addressKey(trimmed),
+    address: trimmed,
+    name: isMeaningfulDisplayName(name, trimmed) ? name : undefined,
+    receivedAt
   }
 }
 
-function extractContactSuggestionsFromAddresses(
-  addresses: MailAddress[]
-): ContactSuggestionInput[] {
-  return addresses
-    .map((address) => buildContactSuggestionInput(address.address, address.name))
-    .filter((address): address is ContactSuggestionInput => Boolean(address))
-}
-
-function extractContactSuggestionsFromUnknownAddresses(
-  addresses: unknown[]
-): ContactSuggestionInput[] {
-  const suggestions: ContactSuggestionInput[] = []
-
-  for (const address of addresses) {
-    if (!address || typeof address !== 'object') {
-      continue
-    }
-
-    const candidate = address as { address?: unknown; name?: unknown }
-    const email = typeof candidate.address === 'string' ? candidate.address : undefined
-    const name = typeof candidate.name === 'string' ? candidate.name : undefined
-    const suggestion = buildContactSuggestionInput(email, name)
-
-    if (suggestion) {
-      suggestions.push(suggestion)
-    }
+/**
+ * The people a stored message names: who sent it — but the user, in a
+ * sent folder — with its date, and whoever it went to.
+ */
+function contactsOfMessage(
+  message: Pick<FetchedMessageSummary, 'from' | 'to' | 'cc' | 'date'>,
+  role: FolderRole | null
+): ContactEntry[] {
+  if (UNLEARNED_FOLDER_ROLES.has(role)) {
+    return []
   }
 
-  return suggestions
+  const date = Date.parse(message.date)
+  const senders = role === '\\Sent' ? [] : message.from
+  const sent = Number.isFinite(date) && date > 0 ? date : undefined
+
+  return [
+    ...senders.map((address) => contactEntry(address, sent)),
+    ...message.to.map((address) => contactEntry(address)),
+    ...message.cc.map((address) => contactEntry(address))
+  ].filter((entry): entry is ContactEntry => entry !== null)
 }
 
-function collapseContactSuggestions(
-  suggestions: ContactSuggestionInput[]
-): ContactSuggestionInput[] {
-  const uniqueByEmail = new Map<string, ContactSuggestionInput>()
+/**
+ * One entry for what two say of the same address: the latest date it wrote
+ * on, and the name it gave then — or the name already known.
+ */
+function mergeContactEntries(known: ContactEntry, next: ContactEntry): ContactEntry {
+  const newer = (next.receivedAt ?? 0) > (known.receivedAt ?? 0)
 
-  for (const suggestion of suggestions) {
-    const normalized = buildContactSuggestionInput(suggestion.email, suggestion.name)
+  return {
+    key: known.key,
+    address: known.address,
+    name: (newer && next.name) || known.name || next.name,
+    receivedAt: newer ? next.receivedAt : known.receivedAt
+  }
+}
 
-    if (!normalized) {
-      continue
-    }
+/** `entries` with each address once. */
+function collapseContactEntries(entries: Iterable<ContactEntry>): Map<string, ContactEntry> {
+  const byKey = new Map<string, ContactEntry>()
 
-    const existing = uniqueByEmail.get(normalized.email)
-
-    if (!existing) {
-      uniqueByEmail.set(normalized.email, normalized)
-      continue
-    }
-
-    if (!existing.name && normalized.name) {
-      uniqueByEmail.set(normalized.email, normalized)
-    }
+  for (const entry of entries) {
+    const known = byKey.get(entry.key)
+    byKey.set(entry.key, known ? mergeContactEntries(known, entry) : entry)
   }
 
-  return [...uniqueByEmail.values()]
+  return byKey
 }
 
 function folderPriority(folder: Pick<MailFolder, 'specialUse'>): number {
@@ -800,11 +778,13 @@ function mapFolderRow(row: {
 export class AppDatabase {
   private readonly prisma: PrismaClient
   private readonly ready: Promise<void>
-  private contactSuggestionsSeeded = false
-  private contactSuggestionSeedInFlight: Promise<void> | null = null
-  private readonly queuedContactSuggestions = new Map<string, ContactSuggestionInput>()
-  private queuedContactSuggestionsFlushTimer: ReturnType<typeof setTimeout> | null = null
-  private queuedContactSuggestionsFlushInFlight: Promise<void> | null = null
+  private readonly queuedContacts = new Map<string, ContactEntry>()
+  private contactFlushTimer: ReturnType<typeof setTimeout> | null = null
+  private contactFlush: Promise<void> | null = null
+  private sentRecountTimer: ReturnType<typeof setTimeout> | null = null
+  private sentRecount: Promise<void> = Promise.resolve()
+  /** Set when the contacts table predates what it now counts: `initialize` rebuilds it. */
+  private contactsOutdated = false
 
   constructor(filePath: string) {
     mkdirSync(dirname(filePath), { recursive: true })
@@ -1216,6 +1196,7 @@ export class AppDatabase {
       this.prisma.folder.deleteMany(),
       this.prisma.contact.deleteMany(),
       this.prisma.recentFile.deleteMany(),
+      this.prisma.recentFolder.deleteMany(),
       this.prisma.$executeRaw`DELETE FROM account_signatures`,
       // Reset the singleton row of app preferences (unified inbox toggle)
       // back to its empty state; how the app looks stays as chosen.
@@ -1657,268 +1638,369 @@ export class AppDatabase {
     })
   }
 
-  async upsertContactSuggestions(suggestions: ContactSuggestionInput[]): Promise<void> {
-    await this.ready
+  /**
+   * Learns the people in `contacts` — the senders and recipients of stored
+   * mail, the user's own accounts — a moment later and in one write: a
+   * folder's first sync names thousands. A known contact keeps its counts,
+   * takes the latest date it wrote on with the name it gave then, and
+   * otherwise keeps the name it had.
+   */
+  learnContacts(contacts: ReadonlyArray<LearnedContact>): void {
+    for (const contact of contacts) {
+      const entry = contactEntry(contact, contact.receivedAt)
+      const queued = entry && this.queuedContacts.get(entry.key)
 
-    const collapsedSuggestions = collapseContactSuggestions(suggestions)
+      if (entry) {
+        this.queuedContacts.set(entry.key, queued ? mergeContactEntries(queued, entry) : entry)
+      }
+    }
 
-    if (collapsedSuggestions.length === 0) {
+    if (this.queuedContacts.size === 0 || this.contactFlushTimer !== null) {
       return
     }
 
-    await this.insertMissingContactSuggestions(collapsedSuggestions)
+    this.contactFlushTimer = setTimeout(() => {
+      this.contactFlushTimer = null
+      void this.flushLearnedContacts()
+    }, CONTACT_LEARN_DELAY_MS)
   }
 
-  queueContactSuggestions(suggestions: ContactSuggestionInput[]): void {
-    const collapsedSuggestions = collapseContactSuggestions(suggestions)
-
-    if (collapsedSuggestions.length === 0) {
-      return
-    }
-
-    for (const suggestion of collapsedSuggestions) {
-      const existing = this.queuedContactSuggestions.get(suggestion.email)
-
-      if (!existing || (!existing.name && suggestion.name)) {
-        this.queuedContactSuggestions.set(suggestion.email, suggestion)
-      }
-    }
-
-    if (this.queuedContactSuggestionsFlushTimer !== null) {
-      return
-    }
-
-    this.queuedContactSuggestionsFlushTimer = setTimeout(() => {
-      this.queuedContactSuggestionsFlushTimer = null
-      void this.flushQueuedContactSuggestions()
-    }, 150)
-  }
-
-  async ensureContactSuggestionsSeeded(): Promise<void> {
+  /**
+   * Counts a message the user sent: each recipient written to once more,
+   * now, under the name the message gave them — and back among the
+   * suggestions, if it had been taken out.
+   */
+  async recordContactsWritten(recipients: ReadonlyArray<MailAddress>): Promise<void> {
     await this.ready
 
-    if (this.contactSuggestionsSeeded) {
+    const entries = collapseContactEntries(
+      recipients.flatMap((recipient) => contactEntry(recipient) ?? [])
+    )
+    const now = BigInt(Date.now())
+
+    if (entries.size === 0) {
       return
     }
 
-    const pendingSeed = this.contactSuggestionSeedInFlight
+    await this.prisma.$transaction(
+      [...entries.values()].map(
+        (entry) => this.prisma.$executeRaw`
+          INSERT INTO contacts (
+            email_normalized, email_address, display_name, name_normalized,
+            usage_count, last_used_at, updated_at
+          )
+          VALUES (
+            ${entry.key}, ${entry.address}, ${entry.name ?? null},
+            ${entry.name ? foldSearchText(entry.name) : null}, 1, ${now}, ${now}
+          )
+          ON CONFLICT(email_normalized) DO UPDATE SET
+            email_address = excluded.email_address,
+            display_name = COALESCE(excluded.display_name, contacts.display_name),
+            name_normalized = COALESCE(excluded.name_normalized, contacts.name_normalized),
+            usage_count = contacts.usage_count + 1,
+            last_used_at = excluded.last_used_at,
+            hidden_at = NULL,
+            updated_at = excluded.updated_at
+        `
+      )
+    )
+  }
 
-    if (pendingSeed) {
-      await pendingSeed
-      return
-    }
+  /** Takes an address out of the suggestions, until the user writes to it again. */
+  async hideContact(address: string): Promise<void> {
+    await this.ready
 
-    const seedPromise = (async () => {
-      const existingContacts = await this.prisma.contact.count()
-
-      if (existingContacts > 0) {
-        this.contactSuggestionsSeeded = true
-        return
-      }
-
-      const messages = await this.prisma.message.findMany({
-        select: {
-          fromJson: true,
-          toJson: true,
-          ccJson: true,
-          bccJson: true
-        }
-      })
-      const suggestions: ContactSuggestionInput[] = []
-
-      for (const message of messages) {
-        suggestions.push(
-          ...extractContactSuggestionsFromAddresses(parseJsonArray<MailAddress>(message.fromJson)),
-          ...extractContactSuggestionsFromAddresses(parseJsonArray<MailAddress>(message.toJson)),
-          ...extractContactSuggestionsFromAddresses(parseJsonArray<MailAddress>(message.ccJson)),
-          ...extractContactSuggestionsFromUnknownAddresses(parseJsonArray(message.bccJson))
-        )
-      }
-
-      if (suggestions.length > 0) {
-        await this.insertMissingContactSuggestions(collapseContactSuggestions(suggestions))
-      }
-
-      this.contactSuggestionsSeeded = true
-    })()
-
-    this.contactSuggestionSeedInFlight = seedPromise
-
-    try {
-      await seedPromise
-    } finally {
-      if (this.contactSuggestionSeedInFlight === seedPromise) {
-        this.contactSuggestionSeedInFlight = null
-      }
-    }
+    const now = BigInt(Date.now())
+    await this.prisma.contact.updateMany({
+      where: { emailNormalized: addressKey(address) },
+      data: { hiddenAt: now, updatedAt: now }
+    })
   }
 
   async listContactSuggestions(query: string, limit: number): Promise<MailContactSuggestion[]> {
     await this.ready
 
-    const normalizedEmailQuery = normalizeContactEmail(query)
-    const normalizedNameQuery = normalizeContactName(query)
-    const hasEmailQuery = Boolean(normalizedEmailQuery)
-    const hasNameQuery = Boolean(normalizedNameQuery)
+    // The first word narrows the table down; the ranking weighs the rest.
+    const [firstWord] = foldSearchText(query.trim()).split(/\s+/)
 
-    if (!hasEmailQuery && !hasNameQuery) {
+    if (!firstWord) {
       return []
     }
 
-    const normalizedLimit = Math.max(1, Math.floor(limit))
-    const orFilters: Array<{
-      emailNormalized?: { contains: string }
-      nameNormalized?: { contains: string }
-    }> = []
+    const pattern = `%${firstWord}%`
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        key: string
+        address: string
+        name: string | null
+        usageCount: number | bigint
+        lastUsedAt: number | bigint
+        lastReceivedAt: number | bigint | null
+      }>
+    >`
+      SELECT email_normalized AS key, email_address AS address, display_name AS name,
+        usage_count AS usageCount, last_used_at AS lastUsedAt, last_received_at AS lastReceivedAt
+      FROM contacts
+      WHERE hidden_at IS NULL
+        AND (email_normalized LIKE ${pattern} OR name_normalized LIKE ${pattern})
+      ORDER BY usage_count DESC, MAX(last_used_at, COALESCE(last_received_at, 0)) DESC
+      LIMIT ${CONTACT_SUGGESTION_SCAN_LIMIT}
+    `
 
-    if (hasEmailQuery) {
-      orFilters.push({
-        emailNormalized: {
-          contains: normalizedEmailQuery
-        }
-      })
-    }
-
-    if (hasNameQuery) {
-      orFilters.push({
-        nameNormalized: {
-          contains: normalizedNameQuery
-        }
-      })
-    }
-
-    const candidates = await this.prisma.contact.findMany({
-      where: {
-        OR: orFilters
-      },
-      orderBy: [{ usageCount: 'desc' }, { lastUsedAt: 'desc' }],
-      take: Math.max(normalizedLimit * 4, CONTACT_SUGGESTION_QUERY_SCAN_LIMIT)
-    })
-
-    return candidates
-      .map((candidate) => {
-        const emailScore =
-          hasEmailQuery && candidate.emailNormalized.startsWith(normalizedEmailQuery)
-            ? 100
-            : hasEmailQuery && candidate.emailNormalized.includes(normalizedEmailQuery)
-              ? 40
-              : 0
-        const nameNormalized = candidate.nameNormalized ?? ''
-        const nameScore =
-          hasNameQuery && nameNormalized.startsWith(normalizedNameQuery)
-            ? 80
-            : hasNameQuery && nameNormalized.includes(normalizedNameQuery)
-              ? 30
-              : 0
-
-        return {
-          score: emailScore + nameScore + Math.min(candidate.usageCount, 50),
-          usageCount: candidate.usageCount,
-          lastUsedAt: toNumber(candidate.lastUsedAt),
-          value: {
-            email: candidate.emailAddress,
-            name: candidate.displayName ?? undefined
-          } satisfies MailContactSuggestion
-        }
-      })
-      .sort((left, right) => {
-        const scoreDiff = right.score - left.score
-
-        if (scoreDiff !== 0) {
-          return scoreDiff
-        }
-
-        const usageDiff = right.usageCount - left.usageCount
-
-        if (usageDiff !== 0) {
-          return usageDiff
-        }
-
-        return right.lastUsedAt - left.lastUsedAt
-      })
-      .slice(0, normalizedLimit)
-      .map((entry) => entry.value)
+    return rankContactSuggestions(
+      query,
+      rows.map((row): ContactCandidate => ({
+        key: row.key,
+        address: row.address,
+        name: row.name,
+        usageCount: toNumber(row.usageCount),
+        lastUsedAt: toNumber(row.lastUsedAt),
+        lastReceivedAt: row.lastReceivedAt === null ? null : toNumber(row.lastReceivedAt)
+      })),
+      limit
+    )
   }
 
-  private async insertMissingContactSuggestions(
-    suggestions: ContactSuggestionInput[]
-  ): Promise<void> {
-    if (suggestions.length === 0) {
-      return
+  private async flushLearnedContacts(): Promise<void> {
+    if (this.contactFlush) {
+      await this.contactFlush
     }
 
-    const normalizedEmails = suggestions.map((suggestion) => suggestion.email)
-    const existingContacts = await this.prisma.contact.findMany({
-      where: {
-        emailNormalized: {
-          in: normalizedEmails
-        }
-      },
-      select: {
-        emailNormalized: true
-      }
-    })
-    const existingEmails = new Set(existingContacts.map((contact) => contact.emailNormalized))
-    const newContacts = suggestions.filter((suggestion) => !existingEmails.has(suggestion.email))
-
-    if (newContacts.length === 0) {
-      return
-    }
-
-    const now = BigInt(Date.now())
-
-    await this.prisma.contact.createMany({
-      data: newContacts.map((contact) => ({
-        emailNormalized: contact.email,
-        emailAddress: contact.email,
-        displayName: contact.name ?? null,
-        nameNormalized: contact.name ? normalizeContactName(contact.name) : null,
-        usageCount: 1,
-        lastUsedAt: now,
-        updatedAt: now
-      }))
-    })
-  }
-
-  private async flushQueuedContactSuggestions(): Promise<void> {
-    if (this.queuedContactSuggestionsFlushInFlight) {
-      await this.queuedContactSuggestionsFlushInFlight
-      return
-    }
-
-    const flushPromise = (async () => {
-      while (this.queuedContactSuggestions.size > 0) {
-        const batch = [...this.queuedContactSuggestions.values()]
-        this.queuedContactSuggestions.clear()
+    const flush = (async () => {
+      while (this.queuedContacts.size > 0) {
+        const batch = [...this.queuedContacts.values()]
+        this.queuedContacts.clear()
 
         try {
-          await this.insertMissingContactSuggestions(batch)
+          await this.writeLearnedContacts(batch)
         } catch (error) {
-          for (const suggestion of batch) {
-            const existing = this.queuedContactSuggestions.get(suggestion.email)
-
-            if (!existing || (!existing.name && suggestion.name)) {
-              this.queuedContactSuggestions.set(suggestion.email, suggestion)
-            }
+          // Back in the queue for the next flush, merged with what came since.
+          for (const entry of batch) {
+            const queued = this.queuedContacts.get(entry.key)
+            this.queuedContacts.set(entry.key, queued ? mergeContactEntries(entry, queued) : entry)
           }
 
-          logMainError('Background contact suggestion flush failed', error, {
-            pendingSuggestions: batch.length
-          })
+          logMainError('Learning contacts failed', error, { pending: batch.length })
           return
         }
       }
     })()
 
-    this.queuedContactSuggestionsFlushInFlight = flushPromise
+    this.contactFlush = flush
 
     try {
-      await flushPromise
+      await flush
     } finally {
-      if (this.queuedContactSuggestionsFlushInFlight === flushPromise) {
-        this.queuedContactSuggestionsFlushInFlight = null
+      if (this.contactFlush === flush) {
+        this.contactFlush = null
       }
     }
+  }
+
+  private async writeLearnedContacts(entries: ReadonlyArray<ContactEntry>): Promise<void> {
+    const now = BigInt(Date.now())
+
+    for (let start = 0; start < entries.length; start += CONTACT_WRITE_BATCH_SIZE) {
+      await this.prisma.$transaction(
+        entries.slice(start, start + CONTACT_WRITE_BATCH_SIZE).map((entry) => {
+          const receivedAt = entry.receivedAt === undefined ? null : BigInt(entry.receivedAt)
+          const name = entry.name ?? null
+
+          return this.prisma.$executeRaw`
+            INSERT INTO contacts (
+              email_normalized, email_address, display_name, name_normalized,
+              usage_count, last_used_at, last_received_at, updated_at
+            )
+            VALUES (
+              ${entry.key}, ${entry.address}, ${name}, ${name && foldSearchText(name)},
+              0, 0, ${receivedAt}, ${now}
+            )
+            ON CONFLICT(email_normalized) DO UPDATE SET
+              display_name = CASE
+                WHEN excluded.display_name IS NOT NULL AND (
+                  contacts.display_name IS NULL
+                  OR excluded.last_received_at > COALESCE(contacts.last_received_at, 0)
+                ) THEN excluded.display_name
+                ELSE contacts.display_name
+              END,
+              name_normalized = CASE
+                WHEN excluded.display_name IS NOT NULL AND (
+                  contacts.display_name IS NULL
+                  OR excluded.last_received_at > COALESCE(contacts.last_received_at, 0)
+                ) THEN excluded.name_normalized
+                ELSE contacts.name_normalized
+              END,
+              last_received_at = NULLIF(
+                MAX(COALESCE(contacts.last_received_at, 0), COALESCE(excluded.last_received_at, 0)),
+                0
+              ),
+              updated_at = excluded.updated_at
+            WHERE (contacts.display_name IS NULL AND excluded.display_name IS NOT NULL)
+              OR excluded.last_received_at > COALESCE(contacts.last_received_at, 0)
+          `
+        })
+      )
+    }
+  }
+
+  /**
+   * Counts again, a moment after a sent folder took new messages, how
+   * often the user wrote to each address (`recountContactsWritten`).
+   */
+  private scheduleSentRecount(): void {
+    if (this.sentRecountTimer !== null) {
+      clearTimeout(this.sentRecountTimer)
+    }
+
+    this.sentRecountTimer = setTimeout(() => {
+      this.sentRecountTimer = null
+      this.sentRecount = this.sentRecount
+        .then(() => this.recountContactsWritten())
+        .catch((error: unknown) => logMainError('Counting sent mail failed', error))
+    }, SENT_RECOUNT_DELAY_MS)
+  }
+
+  /**
+   * How often the user wrote to each address, from the stored sent folders
+   * of every account: the messages sent from any client and device, those
+   * sent from here already counted at the time (`recordContactsWritten`).
+   * A count only grows — mail deleted from "Posta inviata" was still
+   * written — so counting twice, or a folder synced twice, changes nothing.
+   */
+  private async recountContactsWritten(): Promise<void> {
+    const sentRole = '\\sent'
+    const rows = await this.prisma.$queryRaw<
+      Array<{ address: string; count: number | bigint; lastDate: string | null }>
+    >`
+      WITH sent AS (
+        SELECT m.id AS id, m.date_iso AS date, m.to_json AS toJson, m.cc_json AS ccJson,
+          m.bcc_json AS bccJson
+        FROM messages m
+        JOIN folders f ON f.account_id = m.account_id AND f.path = m.folder_path
+        WHERE lower(f.special_use) = ${sentRole}
+      ),
+      recipients AS (
+        SELECT sent.id AS id, sent.date AS date, json_extract(r.value, '$.address') AS address
+        FROM sent, json_each(sent.toJson) r
+        UNION ALL
+        SELECT sent.id, sent.date, json_extract(r.value, '$.address') FROM sent, json_each(sent.ccJson) r
+        UNION ALL
+        SELECT sent.id, sent.date, json_extract(r.value, '$.address') FROM sent, json_each(sent.bccJson) r
+      )
+      SELECT MIN(trim(address)) AS address, COUNT(DISTINCT id) AS count, MAX(date) AS lastDate
+      FROM recipients
+      WHERE address IS NOT NULL AND trim(address) <> ''
+      GROUP BY lower(trim(address))
+    `
+
+    if (rows.length === 0) {
+      return
+    }
+
+    const stored = new Map(
+      (
+        await this.prisma.contact.findMany({
+          select: { emailNormalized: true, usageCount: true, lastUsedAt: true }
+        })
+      ).map((contact) => [contact.emailNormalized, contact])
+    )
+    const now = BigInt(Date.now())
+    const writes = rows.flatMap((row) => {
+      const entry = contactEntry({ address: row.address })
+      const count = toNumber(row.count)
+      const lastDate = Date.parse(row.lastDate ?? '')
+      const lastUsedAt = BigInt(Number.isFinite(lastDate) && lastDate > 0 ? lastDate : 0)
+      const known = entry && stored.get(entry.key)
+
+      if (!entry || (known && known.usageCount >= count && known.lastUsedAt >= lastUsedAt)) {
+        return []
+      }
+
+      return [
+        this.prisma.$executeRaw`
+          INSERT INTO contacts (email_normalized, email_address, usage_count, last_used_at, updated_at)
+          VALUES (${entry.key}, ${entry.address}, ${count}, ${lastUsedAt}, ${now})
+          ON CONFLICT(email_normalized) DO UPDATE SET
+            usage_count = MAX(contacts.usage_count, excluded.usage_count),
+            last_used_at = MAX(contacts.last_used_at, excluded.last_used_at),
+            updated_at = excluded.updated_at
+        `
+      ]
+    })
+
+    for (let start = 0; start < writes.length; start += CONTACT_WRITE_BATCH_SIZE) {
+      await this.prisma.$transaction(writes.slice(start, start + CONTACT_WRITE_BATCH_SIZE))
+    }
+  }
+
+  /**
+   * The contacts learned afresh from every stored message, as sync learns
+   * them, and the sent mail counted: once, when the table gains what it
+   * counts now. What it held before counted nothing — every address once —
+   * and kept names with their quotes and addresses no mail can reach.
+   */
+  private async rebuildContacts(): Promise<void> {
+    const folders = await this.prisma.folder.findMany({
+      select: { accountId: true, path: true, specialUse: true }
+    })
+    const roles = new Map(
+      folders.map((folder) => [`${folder.accountId}\n${folder.path}`, folderRole(folder)])
+    )
+    const entries: ContactEntry[] = []
+    let after = ''
+
+    for (;;) {
+      const page = await this.prisma.message.findMany({
+        where: { id: { gt: after } },
+        orderBy: { id: 'asc' },
+        take: CONTACT_REBUILD_PAGE_SIZE,
+        select: {
+          id: true,
+          accountId: true,
+          folderPath: true,
+          fromJson: true,
+          toJson: true,
+          ccJson: true,
+          dateIso: true
+        }
+      })
+
+      for (const message of page) {
+        entries.push(
+          ...contactsOfMessage(
+            {
+              from: parseJsonArray<MailAddress>(message.fromJson),
+              to: parseJsonArray<MailAddress>(message.toJson),
+              cc: parseJsonArray<MailAddress>(message.ccJson),
+              date: message.dateIso
+            },
+            roles.get(`${message.accountId}\n${message.folderPath}`) ?? null
+          )
+        )
+      }
+
+      if (page.length < CONTACT_REBUILD_PAGE_SIZE) {
+        break
+      }
+
+      after = page[page.length - 1].id
+    }
+
+    // The accounts' own addresses, which no message may name yet.
+    const accounts = await this.prisma.account.findMany({
+      select: { email: true, displayName: true }
+    })
+
+    await this.prisma.contact.deleteMany()
+    await this.writeLearnedContacts([
+      ...collapseContactEntries([
+        ...accounts.flatMap(
+          (account) => contactEntry({ address: account.email, name: account.displayName }) ?? []
+        ),
+        ...entries
+      ]).values()
+    ])
+    await this.recountContactsWritten()
   }
 
   async getUnifiedInboxIncludedAccountIds(): Promise<string[] | null> {
@@ -1992,7 +2074,12 @@ export class AppDatabase {
     })
 
     const existingByUid = new Map(existingRows.map((row) => [row.uid, row]))
-    const contactSuggestions: ContactSuggestionInput[] = []
+    const folder = await this.prisma.folder.findUnique({
+      where: { accountId_path: { accountId, path: folderPath } },
+      select: { path: true, specialUse: true }
+    })
+    const role = folder ? folderRole(folder) : null
+    const contacts: ContactEntry[] = []
     const now = BigInt(Date.now())
     const senderLabels = await this.resolveSenderLabels(messages)
 
@@ -2003,11 +2090,7 @@ export class AppDatabase {
         const senderSort = senderSortKey(senderLabel)
         const subjectSort = subjectSortKey(message.subject)
 
-        contactSuggestions.push(
-          ...extractContactSuggestionsFromAddresses(message.from),
-          ...extractContactSuggestionsFromAddresses(message.to),
-          ...extractContactSuggestionsFromAddresses(message.cc)
-        )
+        contacts.push(...contactsOfMessage(message, role))
 
         const create = {
           id: this.makeMessagePrimaryId(accountId, folderPath, message.uid),
@@ -2095,7 +2178,12 @@ export class AppDatabase {
       })
     )
 
-    this.queueContactSuggestions(contactSuggestions)
+    this.learnContacts(contacts)
+
+    if (role === '\\Sent' && result.added.length > 0) {
+      this.scheduleSentRecount()
+    }
+
     return result
   }
 
@@ -2826,11 +2914,7 @@ export class AppDatabase {
       }
     })
 
-    const bccSuggestions = extractContactSuggestionsFromUnknownAddresses(bcc)
-
-    if (bccSuggestions.length > 0) {
-      this.queueContactSuggestions(bccSuggestions)
-    }
+    this.learnContacts(bcc)
 
     return existing.hasAttachments !== hasAttachments ||
       existing.preview !== preview ||
@@ -3002,6 +3086,12 @@ export class AppDatabase {
   }
 
   close(): void {
+    for (const timer of [this.contactFlushTimer, this.sentRecountTimer]) {
+      if (timer !== null) {
+        clearTimeout(timer)
+      }
+    }
+
     void this.prisma.$disconnect()
   }
 
@@ -3102,9 +3192,12 @@ export class AppDatabase {
         name_normalized TEXT,
         usage_count INTEGER NOT NULL DEFAULT 0,
         last_used_at INTEGER NOT NULL,
+        last_received_at INTEGER,
+        hidden_at INTEGER,
         updated_at INTEGER NOT NULL
       )
     `)
+    await this.ensureContactColumns()
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS account_signatures (
@@ -3200,6 +3293,11 @@ export class AppDatabase {
       VALUES (${APP_PREFERENCES_SINGLETON_ID}, NULL, ${Date.now()})
     `)
     await this.refileIfOutdated()
+
+    if (this.contactsOutdated) {
+      await this.rebuildContacts()
+    }
+
     await this.joinSignatureEdition()
   }
 
@@ -3534,6 +3632,24 @@ export class AppDatabase {
         'ALTER TABLE account_signatures ADD COLUMN extension_revision INTEGER NOT NULL DEFAULT 0'
       )
     }
+  }
+
+  /**
+   * Contacts stored before they counted the mail written to them get the
+   * columns, and `initialize` learns them all again (`rebuildContacts`).
+   */
+  private async ensureContactColumns(): Promise<void> {
+    const columns = (await this.prisma.$queryRawUnsafe('PRAGMA table_info(contacts)')) as Array<{
+      name?: string
+    }>
+
+    if (columns.some((column) => column.name === 'last_received_at')) {
+      return
+    }
+
+    await this.prisma.$executeRawUnsafe('ALTER TABLE contacts ADD COLUMN last_received_at INTEGER')
+    await this.prisma.$executeRawUnsafe('ALTER TABLE contacts ADD COLUMN hidden_at INTEGER')
+    this.contactsOutdated = true
   }
 
   private async ensureAccountLastViewedAtColumn(): Promise<void> {

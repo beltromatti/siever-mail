@@ -364,9 +364,9 @@ export interface ComposeAttachmentInput {
 
 export interface ComposeMailInput {
   accountId: string
-  to: string[]
-  cc: string[]
-  bcc: string[]
+  to: MailAddress[]
+  cc: MailAddress[]
+  bcc: MailAddress[]
   subject: string
   html: string
   text: string

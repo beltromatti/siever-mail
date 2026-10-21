@@ -48,6 +48,7 @@ import type {
   UnifiedFolderSummary,
   UnifiedPreferences
 } from '@shared/models'
+import { isValidEmailAddress } from '@shared/email-address'
 import { UNIFIED_FOLDER_ROLES, unifiedFolderRole, type FolderRole } from '@shared/folders'
 import { MESSAGE_LIST_PAGE_SIZE, READER_ZOOM_MAX, READER_ZOOM_MIN } from '@shared/models'
 import { parseSearchQuery } from '@shared/search'
@@ -93,23 +94,38 @@ const imapAccountSchema = z.object({
   smtpSecure: z.boolean()
 })
 
-const composeSchema = z.object({
-  accountId: z.string().trim().min(1),
-  to: z.array(z.string().trim().email()),
-  cc: z.array(z.string().trim().email()),
-  bcc: z.array(z.string().trim().email()),
-  subject: z.string().trim().min(1),
-  html: z.string(),
-  text: z.string(),
-  inReplyTo: z.string().optional(),
-  references: z.array(z.string()).optional(),
-  attachments: z.array(
-    z.object({
-      path: z.string().min(1),
-      name: z.string().optional()
+/** A recipient as the composer hands it over, its address checked as the composer checks it. */
+const recipientSchema = z.object({
+  name: z.string().trim().max(256).optional(),
+  address: z
+    .string()
+    .trim()
+    .refine(isValidEmailAddress, {
+      error: (issue) => `«${String(issue.input)}» non è un indirizzo email valido.`
     })
-  )
 })
+
+const composeSchema = z
+  .object({
+    accountId: z.string().trim().min(1),
+    to: z.array(recipientSchema),
+    cc: z.array(recipientSchema),
+    bcc: z.array(recipientSchema),
+    subject: z.string().trim(),
+    html: z.string(),
+    text: z.string(),
+    inReplyTo: z.string().optional(),
+    references: z.array(z.string()).optional(),
+    attachments: z.array(
+      z.object({
+        path: z.string().min(1),
+        name: z.string().optional()
+      })
+    )
+  })
+  .refine((payload) => payload.to.length + payload.cc.length + payload.bcc.length > 0, {
+    error: 'Aggiungi almeno un destinatario.'
+  })
 
 const messageRefSchema = z.object({
   accountId: z.string().trim().min(1),
@@ -351,8 +367,6 @@ export class MailService {
   }
 
   async bootstrap(): Promise<AppBootstrap> {
-    await this.database.ensureContactSuggestionsSeeded()
-
     return {
       capabilities: {
         googleOAuthReady: this.googleOAuthService.isConfigured()
@@ -383,12 +397,7 @@ export class MailService {
     })
 
     await this.includeAccountInUnifiedInbox(account.id)
-    this.database.queueContactSuggestions([
-      {
-        email: account.email,
-        name: account.displayName
-      }
-    ])
+    this.database.learnContacts([{ address: account.email, name: account.displayName }])
     await this.engine.addAccount(account.id)
     return account
   }
@@ -417,12 +426,7 @@ export class MailService {
     })
 
     await this.includeAccountInUnifiedInbox(account.id)
-    this.database.queueContactSuggestions([
-      {
-        email: account.email,
-        name: account.displayName
-      }
-    ])
+    this.database.learnContacts([{ address: account.email, name: account.displayName }])
     await this.engine.addAccount(account.id)
     return account
   }
@@ -818,11 +822,10 @@ export class MailService {
     try {
       const result = await transport.sendMail(outgoing)
 
-      this.database.queueContactSuggestions([
-        ...payload.to.map((email) => ({ email })),
-        ...payload.cc.map((email) => ({ email })),
-        ...payload.bcc.map((email) => ({ email }))
-      ])
+      // The message has gone: counting who it went to must not turn that into a failure.
+      void this.database
+        .recordContactsWritten([...payload.to, ...payload.cc, ...payload.bcc])
+        .catch((error: unknown) => logMainError('Counting the recipients failed', error))
       await this.database.recordRecentFiles(
         payload.attachments.map((attachment) => attachment.path),
         SENT_ATTACHMENT_ACTIVITY
@@ -844,8 +847,6 @@ export class MailService {
   }
 
   async suggestContacts(query: string, limit?: number): Promise<MailContactSuggestion[]> {
-    await this.database.ensureContactSuggestionsSeeded()
-
     const normalizedQuery = query.trim()
 
     if (!normalizedQuery) {
@@ -858,6 +859,11 @@ export class MailService {
       : CONTACT_SUGGESTION_LIMIT_DEFAULT
 
     return this.database.listContactSuggestions(normalizedQuery, normalizedLimit)
+  }
+
+  /** Takes an address out of the composer's suggestions. */
+  async forgetContact(address: string): Promise<void> {
+    await this.database.hideContact(z.string().trim().min(1).parse(address))
   }
 
   async listAccountSignatures(): Promise<MailAccountSignature[]> {

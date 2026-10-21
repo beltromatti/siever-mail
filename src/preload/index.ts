@@ -70,6 +70,7 @@ const desktopMailApi: DesktopMailApi = {
   setMessagesFlagged: async (input) => invoke(IPC_CHANNELS.setMessagesFlagged, input),
   sendMail: async (input) => invoke(IPC_CHANNELS.sendMail, input),
   suggestContacts: async (query, limit) => invoke(IPC_CHANNELS.suggestContacts, query, limit),
+  forgetContact: async (address) => invoke(IPC_CHANNELS.forgetContact, address),
   listAccountSignatures: async () => invoke(IPC_CHANNELS.listAccountSignatures),
   getAccountSignature: async (accountId) => invoke(IPC_CHANNELS.getAccountSignature, accountId),
   setAccountSignature: async (accountId, html) =>

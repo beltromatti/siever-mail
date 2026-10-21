@@ -1,10 +1,3 @@
-export function splitRecipients(raw: string): string[] {
-  return raw
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
-}
-
 export function htmlToPlainText(html: string): string {
   return html
     .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')

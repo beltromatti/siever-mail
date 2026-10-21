@@ -1,4 +1,5 @@
 import { app, ipcMain, shell, type BrowserWindow } from 'electron'
+import { z } from 'zod'
 
 import { popupPageContextMenu } from '@main/context-menu'
 import type { MailService } from '@main/services/mail-service'
@@ -22,6 +23,11 @@ import type {
   UiPreferences
 } from '@shared/models'
 
+/** What a rejected input has wrong, each thing once: "«x@y.i» non è un indirizzo email valido." */
+function validationMessage(error: z.ZodError): string {
+  return [...new Set(error.issues.map((issue) => issue.message))].slice(0, 3).join(' ')
+}
+
 function registerHandler<Args extends unknown[], ReturnValue>(
   channel: string,
   handler: (...args: Args) => Promise<ReturnValue>
@@ -35,7 +41,8 @@ function registerHandler<Args extends unknown[], ReturnValue>(
         channel,
         args: sanitizeForLog(args)
       })
-      throw error
+      // Input turned down says what is wrong with it, not its issues as JSON.
+      throw error instanceof z.ZodError ? new Error(validationMessage(error)) : error
     }
   })
 }
@@ -186,6 +193,10 @@ export function registerMailIpc(
   registerDataHandler(IPC_CHANNELS.suggestContacts, async (query: string, limit?: number) => {
     return mailService.suggestContacts(query, limit)
   })
+
+  registerDataHandler(IPC_CHANNELS.forgetContact, async (address: string) =>
+    mailService.forgetContact(address)
+  )
 
   registerDataHandler(IPC_CHANNELS.listAccountSignatures, async () => {
     return mailService.listAccountSignatures()

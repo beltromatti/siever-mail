@@ -2876,8 +2876,8 @@ function App(): React.JSX.Element {
         kind: 'reply',
         accountId: message.accountId,
         sourceAccountId: message.accountId,
-        to: recipients.to.map((address) => address.address),
-        cc: recipients.cc.map((address) => address.address),
+        to: recipients.to,
+        cc: recipients.cc,
         subject: ensureReplySubject(message.subject),
         quoteHtml: await buildReplyQuoteHtml(message),
         inReplyTo: message.messageId,
@@ -2921,7 +2921,7 @@ function App(): React.JSX.Element {
         const accountId = readingRef?.accountId ?? selectedAccountId
 
         if (accountId) {
-          openComposer({ kind: 'new', accountId, to: [address.address] })
+          openComposer({ kind: 'new', accountId, to: [address] })
         }
       },
       onSearch: (address) => {
@@ -3188,7 +3188,7 @@ function App(): React.JSX.Element {
       const accountId = readingRef?.accountId ?? selectedAccountId
 
       if (accountId && !isModalSurfaceOpen) {
-        openComposer({ kind: 'new', accountId, to: [request.address] })
+        openComposer({ kind: 'new', accountId, to: [{ address: request.address }] })
       }
     }
   })

@@ -6,7 +6,12 @@ import nodemailer from 'nodemailer'
 import MailComposer from 'nodemailer/lib/mail-composer'
 
 import { extractErrorDetails, logMainError } from '@main/utils/error-utils'
-import type { AddImapAccountInput, ComposeMailInput, MailAccount } from '@shared/models'
+import type {
+  AddImapAccountInput,
+  ComposeMailInput,
+  MailAccount,
+  MailAddress
+} from '@shared/models'
 
 import type { GoogleOAuthService } from '../google-oauth'
 
@@ -36,10 +41,10 @@ const INLINE_MEDIA_MIME_TO_EXTENSION: Record<string, string> = {
 }
 
 export interface OutgoingMessagePayload {
-  from: string
-  to: string[]
-  cc: string[]
-  bcc: string[]
+  from: MailAddress
+  to: MailAddress[]
+  cc: MailAddress[]
+  bcc: MailAddress[]
   subject: string
   html: string
   text: string
@@ -329,7 +334,8 @@ export function createOutgoingMessagePayload(
   const inlineMedia = extractInlineMediaAttachments(input.html)
 
   return {
-    from: `${account.displayName} <${account.email}>`,
+    // An object, not "Name <address>": a name with a comma read as two senders.
+    from: { name: account.displayName, address: account.email },
     to: input.to,
     cc: input.cc,
     bcc: input.bcc,
