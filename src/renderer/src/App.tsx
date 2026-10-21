@@ -99,6 +99,10 @@ import type {
 const ALL_INBOX_FOLDER_LABEL = 'TUTTI'
 const GMAIL_QUOTE_BLOCK_STYLE = 'margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex'
 const READER_ZOOM_SAVE_DELAY_MS = 400
+/** The rows around the one being read whose bodies are fetched ahead. */
+const PREFETCHED_NEIGHBOUR_OFFSETS = [1, -1, 2, -2]
+/** How long a message stays in the pane before its neighbours are fetched: skimming past fetches nothing. */
+const PREFETCH_DWELL_MS = 300
 
 /** Folders whose rows are about the recipient rather than the sender. */
 const RECIPIENT_ORIENTED_SPECIAL_USES = new Set(['\\Sent', '\\Drafts'])
@@ -381,7 +385,8 @@ function App(): React.JSX.Element {
   const [loadingFolders, setLoadingFolders] = useState(false)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false)
-  const [loadingMessageDetail, setLoadingMessageDetail] = useState(false)
+  // The message whose body could not be downloaded, for the pane to offer a retry.
+  const [failedMessageDetailKey, setFailedMessageDetailKey] = useState<string | null>(null)
   const [removingAccountId, setRemovingAccountId] = useState<string | null>(null)
   const [clearingAccountDataId, setClearingAccountDataId] = useState<string | null>(null)
   const [clearingDatabaseData, setClearingDatabaseData] = useState(false)
@@ -620,7 +625,6 @@ function App(): React.JSX.Element {
     setLoadingFolders(false)
     setLoadingMessages(false)
     setLoadingMoreMessages(false)
-    setLoadingMessageDetail(false)
   }, [])
 
   const loadFolders = useCallback(
@@ -813,17 +817,16 @@ function App(): React.JSX.Element {
 
   const loadMessageDetail = useCallback(async (ref: MessageRef) => {
     const requestId = ++messageDetailRequestIdRef.current
-    setLoadingMessageDetail(true)
+    setFailedMessageDetailKey(null)
     setSelectedMessage(null)
 
     try {
-      const detail = await window.mailApi.getMessage(ref)
+      const detail = await window.mailApi.readMessage(ref)
 
-      if (requestId !== messageDetailRequestIdRef.current) {
-        return
+      // Null: the pane moved on before this message's turn came.
+      if (detail && requestId === messageDetailRequestIdRef.current) {
+        setSelectedMessage(detail)
       }
-
-      setSelectedMessage(detail)
     } catch (caughtError) {
       if (requestId !== messageDetailRequestIdRef.current) {
         return
@@ -832,11 +835,7 @@ function App(): React.JSX.Element {
       setViewError(
         caughtError instanceof Error ? caughtError.message : 'Errore nel caricamento messaggio.'
       )
-      setSelectedMessage(null)
-    } finally {
-      if (requestId === messageDetailRequestIdRef.current) {
-        setLoadingMessageDetail(false)
-      }
+      setFailedMessageDetailKey(messageRefKey(ref))
     }
   }, [])
 
@@ -1082,7 +1081,6 @@ function App(): React.JSX.Element {
       setLoadingFolders(false)
       setLoadingMessages(false)
       setLoadingMoreMessages(false)
-      setLoadingMessageDetail(false)
       setFolders([])
       setSelectedFolderPath(null)
       resetMailboxView()
@@ -1782,36 +1780,49 @@ function App(): React.JSX.Element {
     [readingKey, selectedSummaries]
   )
 
-  // The list row is the freshest source of read/flag state (optimistic
-  // updates land there first), so the detail adopts it rather than showing a
-  // stale header while the refetch is in flight.
-  const messageForViewer = useMemo(() => {
-    if (!selectedMessage) {
-      return null
-    }
+  // The body of the message being read, once it has arrived.
+  const readingDetail =
+    selectedMessage && readingRef && isSameMessageRef(selectedMessage, readingRef)
+      ? selectedMessage
+      : null
 
-    if (!readingSummary) {
-      return selectedMessage
+  // Until its body arrives, the pane shows what the list knows of the
+  // message at once. Once it has, the list row is still the freshest source
+  // of read/flag state (optimistic updates land there first), so the detail
+  // adopts it rather than showing a stale header.
+  const messageForViewer = useMemo((): MailMessageDetail | null => {
+    if (!readingDetail) {
+      return readingSummary
+        ? { ...readingSummary, bcc: [], replyTo: [], references: [], attachments: [] }
+        : null
     }
 
     if (
-      selectedMessage.isRead === readingSummary.isRead &&
-      selectedMessage.isFlagged === readingSummary.isFlagged
+      !readingSummary ||
+      (readingDetail.isRead === readingSummary.isRead &&
+        readingDetail.isFlagged === readingSummary.isFlagged)
     ) {
-      return selectedMessage
+      return readingDetail
     }
 
     return {
-      ...selectedMessage,
+      ...readingDetail,
       isRead: readingSummary.isRead,
       isFlagged: readingSummary.isFlagged,
       flags: patchFlag(
-        patchFlag(selectedMessage.flags, '\\Seen', readingSummary.isRead),
+        patchFlag(readingDetail.flags, '\\Seen', readingSummary.isRead),
         '\\Flagged',
         readingSummary.isFlagged
       )
     }
-  }, [readingSummary, selectedMessage])
+  }, [readingDetail, readingSummary])
+
+  const readerBodyStatus =
+    !readingKey || readingDetail
+      ? 'ready'
+      : readingKey === failedMessageDetailKey
+        ? 'failed'
+        : 'loading'
 
   const shouldMarkSelectionAsRead =
     selectedSummaries.length > 0 && selectedSummaries.some((message) => !message.isRead)
@@ -1962,10 +1973,7 @@ function App(): React.JSX.Element {
    * A failure to tell the server is not reported: the user has moved on, and
    * the message only stays unread.
    */
-  const shownKey =
-    readingRef && selectedMessage && isSameMessageRef(selectedMessage, readingRef)
-      ? readingKey
-      : null
+  const shownKey = readingDetail ? readingKey : null
 
   const followShownMessage = useEffectEvent((): void => {
     const markRead = (ref: MessageRef, wasUnread: boolean): void => {
@@ -2037,6 +2045,35 @@ function App(): React.JSX.Element {
   useEffect(() => {
     followShownMessage()
   }, [shownKey, isMessageExpanded])
+
+  // The messages either side of the one shown are the likeliest to be read
+  // next: their bodies come down while this one is being read.
+  const prefetchNeighbours = useEffectEvent((): void => {
+    const index = readingRef
+      ? orderedMessageRefs.findIndex((ref) => isSameMessageRef(ref, readingRef))
+      : -1
+
+    if (index < 0) {
+      return
+    }
+
+    const neighbours = PREFETCHED_NEIGHBOUR_OFFSETS.map(
+      (offset) => orderedMessageRefs[index + offset]
+    ).filter((ref): ref is MessageRef => ref !== undefined)
+
+    if (neighbours.length > 0) {
+      void window.mailApi.prefetchMessages(neighbours).catch(() => undefined)
+    }
+  })
+
+  useEffect(() => {
+    if (!shownKey) {
+      return
+    }
+
+    const timer = setTimeout(prefetchNeighbours, PREFETCH_DWELL_MS)
+    return () => clearTimeout(timer)
+  }, [shownKey])
 
   /** Read state set by hand stays when the reading pane moves on. */
   const keepShownReadState = useCallback((refs: ReadonlyArray<MessageRef>): void => {
@@ -2394,8 +2431,33 @@ function App(): React.JSX.Element {
     [accounts]
   )
 
+  /**
+   * The body of a message an action needs: the one in the reading pane, or
+   * fetched — joining the download under way when the pane still waits for
+   * it. Null, with the reason shown, when it cannot be had.
+   */
+  const messageDetailFor = useCallback(
+    async (ref: MessageRef): Promise<MailMessageDetail | null> => {
+      if (readingDetail && isSameMessageRef(readingDetail, ref)) {
+        return readingDetail
+      }
+
+      try {
+        return await window.mailApi.getMessage(ref)
+      } catch (caughtError) {
+        setViewError(
+          caughtError instanceof Error ? caughtError.message : 'Errore nel caricamento messaggio.'
+        )
+        return null
+      }
+    },
+    [readingDetail]
+  )
+
   const openReplyComposer = useCallback(
-    async (mode: 'sender' | 'all', message = selectedMessage): Promise<void> => {
+    async (mode: 'sender' | 'all', ref: MessageRef | null = readingRef): Promise<void> => {
+      const message = ref ? await messageDetailFor(ref) : null
+
       if (!message) {
         return
       }
@@ -2418,11 +2480,13 @@ function App(): React.JSX.Element {
         }
       })
     },
-    [openComposer, ownAddresses, selectedMessage]
+    [messageDetailFor, openComposer, ownAddresses, readingRef]
   )
 
   const openForwardComposer = useCallback(
-    async (message = selectedMessage): Promise<void> => {
+    async (ref: MessageRef | null = readingRef): Promise<void> => {
+      const message = ref ? await messageDetailFor(ref) : null
+
       if (!message) {
         return
       }
@@ -2439,14 +2503,14 @@ function App(): React.JSX.Element {
         }
       })
     },
-    [openComposer, selectedMessage]
+    [messageDetailFor, openComposer, readingRef]
   )
 
   const addressActions = useMemo<AddressActions>(
     () => ({
       // Writing to someone from a message starts from the account that got it.
       onCompose: (address) => {
-        const accountId = selectedMessage?.accountId ?? selectedAccountId
+        const accountId = readingRef?.accountId ?? selectedAccountId
 
         if (accountId) {
           openComposer({ kind: 'new', accountId, to: [address.address] })
@@ -2457,7 +2521,7 @@ function App(): React.JSX.Element {
         setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
       }
     }),
-    [openComposer, selectedAccountId, selectedMessage?.accountId]
+    [openComposer, readingRef?.accountId, selectedAccountId]
   )
 
   const archiveSelection = useCallback(
@@ -2505,14 +2569,14 @@ function App(): React.JSX.Element {
         return true
       case 'reply':
       case 'reply-all':
-        if (!selectedMessage) {
+        if (!readingRef) {
           return false
         }
 
         void openReplyComposer(commandId === 'reply' ? 'sender' : 'all')
         return true
       case 'forward':
-        if (!selectedMessage) {
+        if (!readingRef) {
           return false
         }
 
@@ -2563,7 +2627,7 @@ function App(): React.JSX.Element {
       case 'reader-zoom-in':
       case 'reader-zoom-out':
       case 'reader-zoom-reset':
-        if (!selectedMessage) {
+        if (!readingRef) {
           return false
         }
 
@@ -2593,7 +2657,7 @@ function App(): React.JSX.Element {
       }
 
       // Writing to someone from a message starts from the account that got it.
-      const accountId = selectedMessage?.accountId ?? selectedAccountId
+      const accountId = readingRef?.accountId ?? selectedAccountId
 
       if (accountId && !isModalSurfaceOpen) {
         openComposer({ kind: 'new', accountId, to: [request.address] })
@@ -2729,20 +2793,13 @@ function App(): React.JSX.Element {
         return
       case 'reply':
       case 'reply-all':
-      case 'forward': {
-        // The message may not have loaded into the reading pane yet.
-        const detail =
-          selectedMessage && isSameMessageRef(selectedMessage, ref)
-            ? selectedMessage
-            : await window.mailApi.getMessage(ref)
-
+      case 'forward':
         if (chosen === 'forward') {
-          await openForwardComposer(detail)
+          await openForwardComposer(ref)
         } else {
-          await openReplyComposer(chosen === 'reply' ? 'sender' : 'all', detail)
+          await openReplyComposer(chosen === 'reply' ? 'sender' : 'all', ref)
         }
         return
-      }
       case 'toggle-read':
       case 'toggle-flag':
       case 'archive':
@@ -3059,9 +3116,16 @@ function App(): React.JSX.Element {
                 allInboxesFolder={allInboxesFolder}
                 selectedFolderPath={selectedFolderPath}
                 onSelectFolder={(folderPath) => {
+                  setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
+
+                  // The folder already open stays as it is: emptying it here
+                  // left the list blank, with nothing to load it again.
+                  if (folderPath === selectedFolderPath) {
+                    return
+                  }
+
                   cancelInFlightWork()
                   setSelectedFolderPath(folderPath)
-                  setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
                   resetMailboxView()
                 }}
               />
@@ -3133,7 +3197,12 @@ function App(): React.JSX.Element {
             <MessageViewer
               moveTargets={moveTargets}
               message={messageForViewer}
-              loading={loadingMessageDetail}
+              bodyStatus={readerBodyStatus}
+              onRetryBody={() => {
+                if (readingRef) {
+                  void loadMessageDetail(readingRef)
+                }
+              }}
               isExpanded={isMessageExpanded}
               selectedCount={selection.selectedRefs.length}
               onReply={() => void openReplyComposer('sender')}

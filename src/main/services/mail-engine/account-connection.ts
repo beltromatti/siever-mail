@@ -32,15 +32,20 @@ import {
   hasAttachmentInStructure,
   internalDateToIso,
   mapAddresses,
-  mapFetchedToDetail
+  mapFetchedToDetail,
+  mergeSummaryAndParsedIntoDetail
 } from './message-mapper'
 import { collectFetchResults, formatUidSet } from './fetch-results'
 import { extractPreview } from './preview'
+import { attachmentFileName, parseMessageSource } from './message-parts'
 import {
-  attachmentFileName,
-  parseMessageSource,
-  partitionMessageAttachments
-} from './message-parts'
+  PARTIAL_BODY_THRESHOLD_BYTES,
+  buildPartSource,
+  buildPartialSource,
+  decodedPartSize,
+  partHeaderKey,
+  planPartialBody
+} from './message-skeleton'
 import {
   IMAP_CONNECTION_TIMEOUT_MS,
   IMAP_GREETING_TIMEOUT_MS,
@@ -80,6 +85,10 @@ const HYDRATION_BATCH_SIZE = 250
 // work with. Runs on the sync client only — never on the critical user path.
 const PREVIEW_SOURCE_MAX_BYTES = 32 * 1024
 const INBOX_SPECIAL_USE = '\\Inbox'
+// The newest messages of the inbox whose bodies are kept ready, fetched on
+// the sync connection after each sync of it: new mail, and the first screen
+// of the list, open at once.
+const RECENT_INBOX_BODIES = 25
 const BACKGROUND_FOLDER_POLL_INTERVAL_MS = 45_000
 const ACTIVE_FOLDER_POLL_INTERVAL_MS = 20_000
 const RECONNECT_BACKOFF_INITIAL_MS = 2_000
@@ -102,6 +111,32 @@ interface QueuedTask {
   priority: TaskPriority
   label: string
   run: () => Promise<void>
+}
+
+/**
+ * Why a message's body is wanted, which decides when and how it is fetched:
+ *   • `read` — the reading pane shows it. A later read takes the place of
+ *     one still waiting its turn: arrowing down a list fetches the message
+ *     the pane ends on, not every one it went past;
+ *   • `use` — something waits on it (a reply, a forward): it is fetched
+ *     however many reads come after;
+ *   • `prefetch` — it is likely to be read next. It is fetched on the sync
+ *     connection, so what the user asks for never waits behind it.
+ */
+export type BodyLoadIntent = 'read' | 'use' | 'prefetch'
+
+type BodyLoadSettlement = PromiseWithResolvers<FetchedMessageDetail | null>
+
+interface BodyLoad {
+  ref: MessageRef
+  size: number
+  /** The connection whose queue it waits in. */
+  lane: 'primary' | 'sync'
+  task: QueuedTask
+  /** Why it is wanted; a read is dropped only when nothing else wants it. */
+  intents: Set<BodyLoadIntent>
+  /** Settles with the body, or null when it was only read and a later read took its place. */
+  settlement: BodyLoadSettlement
 }
 
 /**
@@ -156,6 +191,19 @@ type AccountConnectionEvents = {
  * scattered selection can still make a long line, and servers cap those.
  */
 const UID_COMMAND_CHUNK = 500
+
+/** Takes the queue's next task: the first of the highest priority waiting. */
+function pickNextTask(queue: QueuedTask[]): QueuedTask | null {
+  for (const priority of PRIORITY_ORDER) {
+    const index = queue.findIndex((task) => task.priority === priority)
+
+    if (index >= 0) {
+      return queue.splice(index, 1)[0] ?? null
+    }
+  }
+
+  return null
+}
 
 function chunk<T>(items: ReadonlyArray<T>, size: number): T[][] {
   const chunks: T[][] = []
@@ -238,6 +286,11 @@ export class AccountConnection extends EventEmitter {
   private readonly syncQueue: QueuedTask[] = []
   private primaryWorkerActive = false
   private syncWorkerActive = false
+  // Bodies being fetched, by folder and UID: whoever else wants one meanwhile
+  // waits on the same fetch.
+  private readonly bodyLoads = new Map<string, BodyLoad>()
+  // The reading pane's fetch while it waits its turn (see `BodyLoadIntent`).
+  private waitingRead: BodyLoad | null = null
   private status: AccountConnectionStatus = 'disconnected'
   private lastError: { message: string; authFailed: boolean } | null = null
   private lastContactAt: number | undefined
@@ -446,41 +499,296 @@ export class AccountConnection extends EventEmitter {
     )
   }
 
-  async fetchMessageDetail(ref: MessageRef): Promise<FetchedMessageDetail> {
-    return this.runUserOperation<FetchedMessageDetail>(async () => {
-      const client = this.requirePrimary()
-      const lock = await client.getMailboxLock(ref.folderPath)
+  /**
+   * Fetches a message's body, stores it with the message and resolves with
+   * it — or, for a read, with null when a later read took its place (see
+   * `BodyLoadIntent`). `size` is the message's size, which decides whether
+   * its attachments come with it (see `PARTIAL_BODY_THRESHOLD_BYTES`).
+   */
+  loadMessageBody(
+    ref: MessageRef,
+    size: number,
+    intent: 'use' | 'prefetch'
+  ): Promise<FetchedMessageDetail>
+  loadMessageBody(
+    ref: MessageRef,
+    size: number,
+    intent: BodyLoadIntent
+  ): Promise<FetchedMessageDetail | null>
+  loadMessageBody(
+    ref: MessageRef,
+    size: number,
+    intent: BodyLoadIntent
+  ): Promise<FetchedMessageDetail | null> {
+    const key = `${ref.folderPath}\u0000${ref.uid}`
+    const load =
+      this.bodyLoads.get(key) ??
+      (intent === 'prefetch'
+        ? this.queueBodyLoad(key, ref, size, 'sync', 'active-sync')
+        : this.queueBodyLoad(key, ref, size, 'primary', 'user'))
 
-      try {
-        const fetched = await this.fetchOneRequested(client, ref, {
-          threadId: true,
-          envelope: true,
-          flags: true,
-          internalDate: true,
-          size: true,
-          bodyStructure: true,
-          source: true
-        })
+    load.intents.add(intent)
 
-        return mapFetchedToDetail(this.account.id, ref.folderPath, fetched)
-      } finally {
-        lock.release()
+    // A prefetch the user now waits on is fetched as what they asked for.
+    if (intent !== 'prefetch' && load.lane === 'sync' && this.isWaiting(load)) {
+      this.moveBodyLoad(load, 'primary')
+    }
+
+    if (intent === 'read') {
+      if (this.waitingRead && this.waitingRead !== load) {
+        this.giveWay(this.waitingRead)
       }
-    }, `fetch-detail:${ref.folderPath}:${ref.uid}`)
+
+      this.waitingRead = load
+    }
+
+    return load.settlement.promise
   }
 
-  async fetchRawSource(ref: MessageRef): Promise<Buffer> {
-    return this.runUserOperation<Buffer>(async () => {
-      const client = this.requirePrimary()
-      const lock = await client.getMailboxLock(ref.folderPath)
+  private queueBodyLoad(
+    key: string,
+    ref: MessageRef,
+    size: number,
+    lane: BodyLoad['lane'],
+    priority: TaskPriority
+  ): BodyLoad {
+    const settlement: BodyLoadSettlement = Promise.withResolvers()
+    const load: BodyLoad = {
+      ref,
+      size,
+      lane,
+      task: this.queueBodyFetch(ref, size, lane, priority, settlement),
+      intents: new Set(),
+      settlement
+    }
 
-      try {
-        const fetched = await this.fetchOneRequested(client, ref, { source: true })
-        return fetched.source as Buffer
-      } finally {
-        lock.release()
+    void settlement.promise
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.bodyLoads.get(key) === load) {
+          this.bodyLoads.delete(key)
+        }
+
+        if (this.waitingRead === load) {
+          this.waitingRead = null
+        }
+      })
+
+    this.bodyLoads.set(key, load)
+    return load
+  }
+
+  /**
+   * Queues the fetch of a body on a connection, settling `settlement` with
+   * it. The primary connection runs everything at 'user' priority.
+   */
+  private queueBodyFetch(
+    ref: MessageRef,
+    size: number,
+    lane: BodyLoad['lane'],
+    priority: TaskPriority,
+    settlement: BodyLoadSettlement
+  ): QueuedTask {
+    const label = `load-body:${ref.folderPath}:${ref.uid}`
+
+    if (lane === 'primary') {
+      const operation = this.queuePrimaryOperation(
+        () => this.fetchAndStoreBody(this.requirePrimary(), ref, size),
+        label
+      )
+      operation.promise.then(settlement.resolve, settlement.reject)
+      return operation.task
+    }
+
+    const task: QueuedTask = {
+      priority,
+      label,
+      run: async () => {
+        try {
+          settlement.resolve(await this.fetchAndStoreBody(this.requireSync(), ref, size))
+        } catch (error) {
+          settlement.reject(error instanceof Error ? error : new Error(String(error)))
+        }
       }
-    }, `fetch-source:${ref.folderPath}:${ref.uid}`)
+    }
+
+    this.syncQueue.push(task)
+    this.startSyncWorkerIfNeeded()
+    return task
+  }
+
+  /** Whether a body load still waits its turn, rather than being under way or done. */
+  private isWaiting(load: BodyLoad): boolean {
+    return (load.lane === 'primary' ? this.primaryQueue : this.syncQueue).includes(load.task)
+  }
+
+  private moveBodyLoad(load: BodyLoad, lane: BodyLoad['lane']): void {
+    const queue = load.lane === 'primary' ? this.primaryQueue : this.syncQueue
+    queue.splice(queue.indexOf(load.task), 1)
+    load.lane = lane
+    load.task = this.queueBodyFetch(
+      load.ref,
+      load.size,
+      lane,
+      lane === 'primary' ? 'user' : 'active-sync',
+      load.settlement
+    )
+  }
+
+  /**
+   * Keeps the bodies of the inbox's newest messages ready (see
+   * `RECENT_INBOX_BODIES`), behind everything else the sync connection has
+   * to do. One that fails is fetched when it is read.
+   */
+  private async prefetchRecentBodies(folderPath: string): Promise<void> {
+    const missing = await this.database.listRecentMessagesWithoutBody(
+      this.account.id,
+      folderPath,
+      RECENT_INBOX_BODIES
+    )
+
+    for (const { uid, size } of missing) {
+      const ref = { accountId: this.account.id, folderPath, uid }
+      const key = `${folderPath}\u0000${uid}`
+
+      if (!this.bodyLoads.has(key)) {
+        const load = this.queueBodyLoad(key, ref, size, 'sync', 'background')
+        load.intents.add('prefetch')
+        load.settlement.promise.catch(() => undefined)
+      }
+    }
+  }
+
+  /**
+   * A read that a later one replaced before its turn came: dropped, unless
+   * something else wants the message too — a reply waiting on it keeps its
+   * turn, a prefetch goes back to the sync connection.
+   */
+  private giveWay(load: BodyLoad): void {
+    // Under way already: it lands in a moment either way.
+    if (!this.isWaiting(load)) {
+      return
+    }
+
+    load.intents.delete('read')
+
+    if (load.intents.has('use')) {
+      return
+    }
+
+    if (load.intents.has('prefetch')) {
+      this.moveBodyLoad(load, 'sync')
+      return
+    }
+
+    const queue = load.lane === 'primary' ? this.primaryQueue : this.syncQueue
+    queue.splice(queue.indexOf(load.task), 1)
+    this.bodyLoads.delete(`${load.ref.folderPath}\u0000${load.ref.uid}`)
+    load.settlement.resolve(null)
+  }
+
+  private async fetchAndStoreBody(
+    client: ImapFlow,
+    ref: MessageRef,
+    size: number
+  ): Promise<FetchedMessageDetail> {
+    const lock = await client.getMailboxLock(ref.folderPath)
+    let detail: FetchedMessageDetail
+
+    try {
+      detail =
+        size > PARTIAL_BODY_THRESHOLD_BYTES
+          ? await this.fetchBodyWithoutAttachments(client, ref)
+          : await this.fetchWholeBody(client, ref)
+    } finally {
+      lock.release()
+    }
+
+    const updated = await this.database.updateMessageBody(ref, detail)
+
+    if (updated) {
+      this.emit('messages', {
+        accountId: this.account.id,
+        folderPath: ref.folderPath,
+        added: [],
+        updated: [updated],
+        removedUids: [],
+        bootstrap: false
+      })
+    }
+
+    return detail
+  }
+
+  private async fetchWholeBody(client: ImapFlow, ref: MessageRef): Promise<FetchedMessageDetail> {
+    const fetched = await this.fetchOneRequested(client, ref, {
+      threadId: true,
+      envelope: true,
+      flags: true,
+      internalDate: true,
+      size: true,
+      bodyStructure: true,
+      source: true
+    })
+
+    return mapFetchedToDetail(this.account.id, ref.folderPath, fetched)
+  }
+
+  /**
+   * A large message's body without its attachments: its structure first,
+   * then the text and the pictures the text draws, rebuilt into the message
+   * it is with every file left empty (see `buildPartialSource`). The files
+   * are listed with their size and come down one by one when opened.
+   */
+  private async fetchBodyWithoutAttachments(
+    client: ImapFlow,
+    ref: MessageRef
+  ): Promise<FetchedMessageDetail> {
+    const head = (
+      await this.fetchRequested(client, ref.folderPath, [ref.uid], {
+        threadId: true,
+        envelope: true,
+        flags: true,
+        internalDate: true,
+        size: true,
+        bodyStructure: true,
+        headers: true
+      })
+    ).get(ref.uid)
+
+    if (!head?.envelope || !head.bodyStructure || !head.headers) {
+      throw new Error('Messaggio non disponibile sul server.')
+    }
+
+    const plan = planPartialBody(head.bodyStructure)
+
+    // A message of a single part has nothing to leave out.
+    if (!plan) {
+      return this.fetchWholeBody(client, ref)
+    }
+
+    const parts = (
+      await this.fetchRequested(client, ref.folderPath, [ref.uid], {
+        bodyParts: [...plan.headerParts.map(partHeaderKey), ...plan.contentParts]
+      })
+    ).get(ref.uid)?.bodyParts
+
+    if (!parts) {
+      throw new Error('Messaggio non disponibile sul server.')
+    }
+
+    const parsed = await parseMessageSource(
+      buildPartialSource(head.headers, head.bodyStructure, parts)
+    )
+    const detail = mergeSummaryAndParsedIntoDetail(this.account.id, ref.folderPath, head, parsed)
+
+    return {
+      ...detail,
+      attachments: detail.attachments.map((attachment) => {
+        const omitted = attachment.part ? plan.omittedParts.get(attachment.part) : undefined
+        return omitted ? { ...attachment, size: decodedPartSize(omitted) } : attachment
+      })
+    }
   }
 
   /** Marks messages of one folder read or unread, in one command. */
@@ -830,27 +1138,36 @@ export class AccountConnection extends EventEmitter {
   }
 
   /**
-   * Attachments of one message, parsed from a single download of its
-   * source: the ones at `indexes` (positions in the parsed attachment list,
-   * as the reader's attachment ids carry them), or every file the reader
-   * lists when `indexes` is omitted.
+   * Attachments of one message, by their position in its parsed list of
+   * parts (as the reader's attachment ids carry it). A large message gives
+   * each file from its own part, in one command; a smaller one from a
+   * single download of the whole message.
    */
   async fetchAttachments(
     ref: MessageRef,
-    indexes?: ReadonlyArray<number>
+    attachments: ReadonlyArray<{ index: number; part?: string }>,
+    messageSize: number
   ): Promise<FetchedAttachment[]> {
     return this.runUserOperation(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(ref.folderPath)
 
       try {
+        const parts = attachments.map(({ part }) => part)
+
+        if (
+          messageSize > PARTIAL_BODY_THRESHOLD_BYTES &&
+          parts.every((part): part is string => Boolean(part))
+        ) {
+          return await this.fetchAttachmentParts(client, ref, attachments, parts)
+        }
+
         const fetched = await this.fetchOneRequested(client, ref, { source: true })
         const parsed = await parseMessageSource(fetched.source as Buffer)
-        const wanted = indexes
-          ? indexes.map((index) => ({ index, attachment: parsed.attachments[index] }))
-          : partitionMessageAttachments(parsed).official
 
-        return wanted.map(({ index, attachment }) => {
+        return attachments.map(({ index }) => {
+          const attachment = parsed.attachments[index]
+
           if (!attachment) {
             throw new Error('Allegato non disponibile per questo messaggio.')
           }
@@ -865,6 +1182,44 @@ export class AccountConnection extends EventEmitter {
         lock.release()
       }
     }, `fetch-attachments:${ref.folderPath}:${ref.uid}`)
+  }
+
+  private async fetchAttachmentParts(
+    client: ImapFlow,
+    ref: MessageRef,
+    attachments: ReadonlyArray<{ index: number }>,
+    parts: ReadonlyArray<string>
+  ): Promise<FetchedAttachment[]> {
+    const fetched = (
+      await this.fetchRequested(client, ref.folderPath, [ref.uid], {
+        bodyParts: parts.flatMap((part) => [partHeaderKey(part), part])
+      })
+    ).get(ref.uid)?.bodyParts
+
+    return Promise.all(
+      attachments.map(async ({ index }, position) => {
+        const part = parts[position]
+        const header = fetched?.get(partHeaderKey(part))
+        const content = fetched?.get(part)
+
+        if (!header || !content) {
+          throw new Error('Allegato non disponibile per questo messaggio.')
+        }
+
+        const [attachment] = (await parseMessageSource(buildPartSource(header, content)))
+          .attachments
+
+        if (!attachment) {
+          throw new Error('Allegato non disponibile per questo messaggio.')
+        }
+
+        return {
+          index,
+          fileName: attachmentFileName(attachment, index),
+          content: Buffer.from(attachment.content)
+        }
+      })
+    )
   }
 
   /**
@@ -1736,6 +2091,11 @@ export class AccountConnection extends EventEmitter {
     } finally {
       this.setFolderBootstrapping(folderPath, false)
     }
+
+    // IMAP spells the inbox INBOX, in any case.
+    if (folderPath.toUpperCase() === 'INBOX') {
+      await this.prefetchRecentBodies(folderPath)
+    }
   }
 
   private setFolderBootstrapping(folderPath: string, bootstrapping: boolean): void {
@@ -2218,8 +2578,8 @@ export class AccountConnection extends EventEmitter {
   // User-initiated operations (click to open, toggle flag, move, delete, send,
   // attachment download, switch active folder). Always 'user' priority — the
   // queue is single-priority by design: we never want a user op to wait behind
-  // another user op that hasn't finished yet, and there's nothing in this
-  // queue that should be deprioritised.
+  // another user op that hasn't finished yet, and anything that can wait
+  // (bodies fetched ahead of time) runs on the sync connection instead.
 
   private enqueuePrimaryCommand(run: () => Promise<void>, label: string): void {
     this.primaryQueue.push({ priority: 'user', label, run })
@@ -2236,55 +2596,63 @@ export class AccountConnection extends EventEmitter {
    * whose credentials were refused fails at once — no reconnect will come.
    */
   private runUserOperation<T>(run: () => Promise<T>, label: string): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      if (this.status === 'error' && this.lastError?.authFailed) {
-        reject(new Error(`Accesso a ${this.account.email} non riuscito: ricollega l'account.`))
+    return this.queuePrimaryOperation(run, label).promise
+  }
+
+  /** `runUserOperation`, with its task to withdraw while it still waits. */
+  private queuePrimaryOperation<T>(
+    run: () => Promise<T>,
+    label: string
+  ): { promise: Promise<T>; task: QueuedTask } {
+    const { promise, resolve, reject } = Promise.withResolvers<T>()
+    let waitTimer: ReturnType<typeof setTimeout> | undefined
+
+    const task: QueuedTask = {
+      priority: 'user',
+      label,
+      run: async () => {
+        clearTimeout(waitTimer)
+
+        try {
+          resolve(await run())
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)))
+        }
+      }
+    }
+
+    if (this.status === 'error' && this.lastError?.authFailed) {
+      reject(new Error(`Accesso a ${this.account.email} non riuscito: ricollega l'account.`))
+      return { promise, task }
+    }
+
+    const checkStillWaiting = (): void => {
+      const index = this.primaryQueue.indexOf(task)
+
+      if (index < 0) {
         return
       }
 
-      let waitTimer: ReturnType<typeof setTimeout> | undefined
-
-      const task: QueuedTask = {
-        priority: 'user',
-        label,
-        run: async () => {
-          clearTimeout(waitTimer)
-
-          try {
-            resolve(await run())
-          } catch (error) {
-            reject(error instanceof Error ? error : new Error(String(error)))
-          }
-        }
+      // Connected but busy with earlier operations: keep its turn.
+      if (this.primaryClient?.usable) {
+        waitTimer = setTimeout(checkStillWaiting, USER_OPERATION_CONNECTION_WAIT_MS)
+        return
       }
 
-      const checkStillWaiting = (): void => {
-        const index = this.primaryQueue.indexOf(task)
-
-        if (index < 0) {
-          return
-        }
-
-        // Connected but busy with earlier operations: keep its turn.
-        if (this.primaryClient?.usable) {
-          waitTimer = setTimeout(checkStillWaiting, USER_OPERATION_CONNECTION_WAIT_MS)
-          return
-        }
-
-        this.primaryQueue.splice(index, 1)
-        reject(
-          new Error(
-            this.status === 'offline'
-              ? 'Nessuna connessione a internet: operazione non eseguita.'
-              : `Il server di ${this.account.email} non risponde: operazione non eseguita.`
-          )
+      this.primaryQueue.splice(index, 1)
+      reject(
+        new Error(
+          this.status === 'offline'
+            ? 'Nessuna connessione a internet: operazione non eseguita.'
+            : `Il server di ${this.account.email} non risponde: operazione non eseguita.`
         )
-      }
+      )
+    }
 
-      waitTimer = setTimeout(checkStillWaiting, USER_OPERATION_CONNECTION_WAIT_MS)
-      this.primaryQueue.push(task)
-      this.startPrimaryWorkerIfNeeded()
-    })
+    waitTimer = setTimeout(checkStillWaiting, USER_OPERATION_CONNECTION_WAIT_MS)
+    this.primaryQueue.push(task)
+    this.startPrimaryWorkerIfNeeded()
+    return { promise, task }
   }
 
   /**
@@ -2390,18 +2758,6 @@ export class AccountConnection extends EventEmitter {
     void this.runSyncWorker()
   }
 
-  private pickNextSyncTask(): QueuedTask | null {
-    // Scan priorities in order and pick the first pending task of that tier,
-    // preserving FIFO within the same priority.
-    for (const priority of PRIORITY_ORDER) {
-      const index = this.syncQueue.findIndex((task) => task.priority === priority)
-      if (index >= 0) {
-        return this.syncQueue.splice(index, 1)[0] ?? null
-      }
-    }
-    return null
-  }
-
   private async runSyncWorker(): Promise<void> {
     try {
       while (this.syncQueue.length > 0) {
@@ -2411,7 +2767,7 @@ export class AccountConnection extends EventEmitter {
           )
           break
         }
-        const task = this.pickNextSyncTask()
+        const task = pickNextTask(this.syncQueue)
         if (!task) {
           break
         }

@@ -52,6 +52,8 @@ const desktopMailApi: DesktopMailApi = {
   listMessages: async (accountId, folderPath, options) =>
     invoke(IPC_CHANNELS.listMessages, accountId, folderPath, options),
   getMessage: async (ref) => invoke(IPC_CHANNELS.getMessage, ref),
+  readMessage: async (ref) => invoke(IPC_CHANNELS.readMessage, ref),
+  prefetchMessages: async (refs) => invoke(IPC_CHANNELS.prefetchMessages, refs),
   moveMessages: async (input) => invoke(IPC_CHANNELS.moveMessages, input),
   deleteMessages: async (refs) => invoke(IPC_CHANNELS.deleteMessages, refs),
   archiveMessages: async (refs) => invoke(IPC_CHANNELS.archiveMessages, refs),

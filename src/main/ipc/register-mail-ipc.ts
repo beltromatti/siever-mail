@@ -121,6 +121,14 @@ export function registerMailIpc(
     return mailService.getMessage(ref as MessageRef)
   })
 
+  registerDataHandler(IPC_CHANNELS.readMessage, async (ref) => {
+    return mailService.readMessage(ref as MessageRef)
+  })
+
+  registerDataHandler(IPC_CHANNELS.prefetchMessages, async (refs) => {
+    await mailService.prefetchMessages(refs as MessageRef[])
+  })
+
   registerDataHandler(IPC_CHANNELS.moveMessages, async (payload) =>
     mailService.moveMessages(payload as MoveMessagesInput)
   )

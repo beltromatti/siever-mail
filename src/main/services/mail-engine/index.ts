@@ -17,7 +17,11 @@ import type { AppDatabase } from '../database'
 import type { GoogleOAuthService } from '../google-oauth'
 import { decryptSecret } from '../secure-storage'
 
-import { AccountConnection, type FetchedAttachment } from './account-connection'
+import {
+  AccountConnection,
+  type BodyLoadIntent,
+  type FetchedAttachment
+} from './account-connection'
 import type { AccountWithSecret } from './mail-transport'
 import { NotificationManager } from './notifications'
 
@@ -166,14 +170,24 @@ export class MailEngine {
     await connection.forceSyncFolder(folderPath)
   }
 
-  async fetchMessageDetail(ref: MessageRef): Promise<FetchedMessageDetail> {
+  /** See `AccountConnection.loadMessageBody`. */
+  async loadMessageBody(
+    ref: MessageRef,
+    size: number,
+    intent: 'use' | 'prefetch'
+  ): Promise<FetchedMessageDetail>
+  async loadMessageBody(
+    ref: MessageRef,
+    size: number,
+    intent: BodyLoadIntent
+  ): Promise<FetchedMessageDetail | null>
+  async loadMessageBody(
+    ref: MessageRef,
+    size: number,
+    intent: BodyLoadIntent
+  ): Promise<FetchedMessageDetail | null> {
     const connection = await this.requestConnection(ref.accountId)
-    return connection.fetchMessageDetail(ref)
-  }
-
-  async fetchRawSource(ref: MessageRef): Promise<Buffer> {
-    const connection = await this.requestConnection(ref.accountId)
-    return connection.fetchRawSource(ref)
+    return connection.loadMessageBody(ref, size, intent)
   }
 
   /**
@@ -298,10 +312,11 @@ export class MailEngine {
 
   async fetchAttachments(
     ref: MessageRef,
-    indexes?: ReadonlyArray<number>
+    attachments: ReadonlyArray<{ index: number; part?: string }>,
+    messageSize: number
   ): Promise<FetchedAttachment[]> {
     const connection = await this.requestConnection(ref.accountId)
-    return connection.fetchAttachments(ref, indexes)
+    return connection.fetchAttachments(ref, attachments, messageSize)
   }
 
   async computeUnifiedInboxSummary(): Promise<UnifiedInboxSummary> {

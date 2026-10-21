@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   Archive,
-  ArrowRight,
   CheckCheck,
   ChevronDown,
   Download,
@@ -45,7 +44,12 @@ interface MessageViewerProps {
   /** Where "Sposta" can put the message: the other folders of its account. */
   moveTargets: MailFolder[]
   message: MailMessageDetail | null
-  loading?: boolean
+  /**
+   * Where the body is. While it downloads, the pane already shows what the
+   * list knows — sender, subject, date — and the actions, which wait for it.
+   */
+  bodyStatus: 'ready' | 'loading' | 'failed'
+  onRetryBody: () => void
   isExpanded: boolean
   /**
    * How many messages are selected. Above one the pane shows a summary
@@ -464,7 +468,8 @@ function EmailHtmlFrame({
 export function MessageViewer({
   moveTargets,
   message,
-  loading,
+  bodyStatus,
+  onRetryBody,
   isExpanded,
   selectedCount,
   onReply,
@@ -607,7 +612,7 @@ export function MessageViewer({
   }
 
   if (!message) {
-    if (loading) {
+    if (bodyStatus === 'loading') {
       return (
         <div className="glass-panel flex h-full min-h-0 flex-col items-center justify-center rounded-lg p-8 text-center">
           <LoaderCircle className="text-primary size-5 animate-spin" />
@@ -785,11 +790,6 @@ export function MessageViewer({
               {message.attachments.length || ''}
             </span>
           )}
-          {loading && (
-            <span className="text-primary inline-flex shrink-0 items-center gap-1 whitespace-nowrap">
-              <ArrowRight className="size-3 animate-pulse" /> Aggiornamento…
-            </span>
-          )}
           {zoom !== READER_ZOOM_RESET && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -861,7 +861,28 @@ export function MessageViewer({
             </div>
           )}
 
-          {hasHtmlBody && message.html ? (
+          {bodyStatus === 'loading' ? (
+            <div
+              className="text-muted-foreground flex items-center gap-2 py-6 text-xs"
+              role="status"
+            >
+              <LoaderCircle className="text-primary size-4 animate-spin" />
+              Scaricamento del messaggio…
+            </div>
+          ) : bodyStatus === 'failed' ? (
+            <div className="flex flex-col items-start gap-2 py-6 text-xs">
+              <p className="text-muted-foreground">Non è stato possibile scaricare il messaggio.</p>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="h-6.5 px-2 text-[11.5px]"
+                onClick={onRetryBody}
+              >
+                Riprova
+              </Button>
+            </div>
+          ) : hasHtmlBody && message.html ? (
             <EmailHtmlFrame
               key={`${message.accountId}:${message.folderPath}:${message.uid}`}
               html={message.html}

@@ -2431,6 +2431,44 @@ export class AppDatabase {
     return this.prisma.message.count({ where })
   }
 
+  /** Among a folder's `limit` newest messages, those whose body is not cached. */
+  async listRecentMessagesWithoutBody(
+    accountId: string,
+    folderPath: string,
+    limit: number
+  ): Promise<Array<{ uid: number; size: number }>> {
+    await this.ready
+
+    const rows = (await this.prisma.$queryRaw`
+      SELECT uid, size FROM (
+        SELECT uid, size, html_body, text_body, date_iso
+        FROM messages
+        WHERE account_id = ${accountId} AND folder_path = ${folderPath}
+        ORDER BY date_iso DESC
+        LIMIT ${limit}
+      )
+      WHERE html_body IS NULL AND text_body IS NULL
+      ORDER BY date_iso DESC
+    `) as Array<{ uid: number | bigint; size: number | bigint }>
+
+    return rows.map((row) => ({ uid: Number(row.uid), size: Number(row.size) }))
+  }
+
+  /** A message's size, and whether its body is cached — without reading the body. */
+  async getMessageBodyState(ref: MessageRef): Promise<{ size: number; hasBody: boolean } | null> {
+    await this.ready
+
+    const rows = (await this.prisma.$queryRaw`
+      SELECT size, (html_body IS NOT NULL OR text_body IS NOT NULL) AS hasBody
+      FROM messages
+      WHERE account_id = ${ref.accountId} AND folder_path = ${ref.folderPath} AND uid = ${ref.uid}
+      LIMIT 1
+    `) as Array<{ size: number | bigint; hasBody: number | bigint }>
+    const row = rows[0]
+
+    return row ? { size: Number(row.size), hasBody: Number(row.hasBody) === 1 } : null
+  }
+
   async getMessage(ref: MessageRef): Promise<MailMessageDetail | null> {
     await this.ready
 
@@ -2478,23 +2516,44 @@ export class AppDatabase {
     }
   }
 
+  /**
+   * Stores a message's body with it. When that changes what the list shows
+   * of the message, returns the row as it is now, for the views to adopt:
+   *   • the paperclip — the envelope-time flag is a heuristic over
+   *     BODYSTRUCTURE that cannot tell a signature logo from a real
+   *     attachment; with the body in hand the answer is exact, so a row
+   *     flagged for nothing more than the sender's logo is corrected;
+   *   • the preview, when the row was still waiting for one.
+   */
   async updateMessageBody(
     ref: MessageRef,
     body: Pick<
       FetchedMessageDetail,
-      'html' | 'text' | 'bcc' | 'replyTo' | 'references' | 'attachments'
+      'html' | 'text' | 'bcc' | 'replyTo' | 'references' | 'attachments' | 'preview'
     >
-  ): Promise<void> {
+  ): Promise<MailMessageSummary | null> {
     await this.ready
 
-    const { html, text, bcc, attachments } = body
-
-    await this.prisma.message.updateMany({
-      where: {
+    const where = {
+      accountId_folderPath_uid: {
         accountId: ref.accountId,
         folderPath: ref.folderPath,
         uid: ref.uid
-      },
+      }
+    }
+    const existing = await this.prisma.message.findUnique({
+      where,
+      select: { hasAttachments: true, previewHydrated: true }
+    })
+
+    if (!existing) {
+      return null
+    }
+
+    const { html, text, bcc, attachments } = body
+    const hasAttachments = attachments.length > 0
+    const row = await this.prisma.message.update({
+      where,
       data: {
         htmlBody: html ?? null,
         textBody: text ?? (html ? null : ''),
@@ -2502,13 +2561,8 @@ export class AppDatabase {
         replyToJson: JSON.stringify(body.replyTo),
         referencesJson: JSON.stringify(body.references),
         attachmentsJson: JSON.stringify(attachments),
-        // Reconcile the list's paperclip against what the body actually
-        // holds. The envelope-time flag is a heuristic over BODYSTRUCTURE —
-        // it cannot tell a signature logo from a real attachment without the
-        // body. Now that we have the body, the answer is exact, so opening a
-        // message quietly corrects a row that was flagged for nothing more
-        // than the sender's logo.
-        hasAttachments: attachments.length > 0,
+        hasAttachments,
+        ...(existing.previewHydrated ? {} : { preview: body.preview, previewHydrated: true }),
         updatedAt: BigInt(Date.now())
       }
     })
@@ -2518,6 +2572,10 @@ export class AppDatabase {
     if (bccSuggestions.length > 0) {
       this.queueContactSuggestions(bccSuggestions)
     }
+
+    return existing.hasAttachments !== hasAttachments || !existing.previewHydrated
+      ? this.mapMessageRowToSummary(row)
+      : null
   }
 
   /**

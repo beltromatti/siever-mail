@@ -12,6 +12,11 @@ export interface MailAttachment {
   contentType: string
   size: number
   cid?: string
+  /**
+   * The IMAP body part holding it ("2", "1.3"), so it can be downloaded by
+   * itself. A message that is nothing but the file has none.
+   */
+  part?: string
 }
 
 export interface MailFolder {

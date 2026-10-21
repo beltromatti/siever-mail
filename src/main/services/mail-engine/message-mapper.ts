@@ -190,7 +190,8 @@ export function mergeSummaryAndParsedIntoDetail(
       fileName: attachmentFileName(attachment, index),
       contentType: attachment.contentType,
       size: attachment.size,
-      cid: attachment.cid || undefined
+      cid: attachment.cid || undefined,
+      part: attachment.partId ?? undefined
     })
   )
 

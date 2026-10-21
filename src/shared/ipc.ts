@@ -51,6 +51,8 @@ export const IPC_CHANNELS = {
   setUnifiedInboxIncludedAccounts: 'folder:set-unified-inbox-included-accounts',
   listMessages: 'message:list',
   getMessage: 'message:get',
+  readMessage: 'message:read',
+  prefetchMessages: 'message:prefetch',
   moveMessages: 'message:move',
   deleteMessages: 'message:delete',
   archiveMessages: 'message:archive',
@@ -120,6 +122,13 @@ export interface DesktopMailApi {
     options?: ListMessagesOptions
   ) => Promise<MailMessageListPage>
   getMessage: (ref: MessageRef) => Promise<MailMessageDetail>
+  /**
+   * The message the reading pane shows. A later call takes the place of one
+   * still waiting its turn, which then settles with null.
+   */
+  readMessage: (ref: MessageRef) => Promise<MailMessageDetail | null>
+  /** Fetches ahead the bodies of the messages likely to be read next. */
+  prefetchMessages: (refs: MessageRef[]) => Promise<void>
   /**
    * Actions on several messages, each folder's in one command. They settle
    * with the messages the server did not take, never with an error for a

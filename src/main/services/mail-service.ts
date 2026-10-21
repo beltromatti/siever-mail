@@ -24,6 +24,7 @@ import type {
   AttachmentRef,
   CopiedAttachment,
   DataStorageBreakdown,
+  FetchedMessageDetail,
   ListMessagesOptions,
   MailAccount,
   MailAccountSignature,
@@ -116,6 +117,8 @@ const messageRefSchema = z.object({
 })
 /** A selection can be the whole folder; past this it is split by the caller. */
 const MAX_MESSAGES_PER_ACTION = 20_000
+/** The messages around the one being read are fetched ahead, a few at a time. */
+const MAX_PREFETCHED_MESSAGES = 8
 const messageRefsSchema = z.array(messageRefSchema).max(MAX_MESSAGES_PER_ACTION)
 const moveMessagesSchema = z.object({
   refs: messageRefsSchema,
@@ -594,18 +597,68 @@ export class MailService {
     return total
   }
 
-  async getMessage(ref: MessageRef): Promise<MailMessageDetail> {
+  /** A message with its body: from the cache, or fetched and kept there. */
+  async getMessage(input: MessageRef): Promise<MailMessageDetail> {
+    const ref = messageRefSchema.parse(input)
+    const { message, size } = await this.cachedMessage(ref)
+
+    if (message) {
+      return message
+    }
+
+    return this.storedDetail(ref, await this.engine.loadMessageBody(ref, size, 'use'))
+  }
+
+  /**
+   * The message the reading pane shows. Null when the pane moved on to
+   * another message before this one's turn came (see `BodyLoadIntent`).
+   */
+  async readMessage(input: MessageRef): Promise<MailMessageDetail | null> {
+    const ref = messageRefSchema.parse(input)
+    const { message, size } = await this.cachedMessage(ref)
+
+    if (message) {
+      return message
+    }
+
+    const fetched = await this.engine.loadMessageBody(ref, size, 'read')
+    return fetched ? this.storedDetail(ref, fetched) : null
+  }
+
+  /**
+   * Fetches ahead the bodies of messages likely to be read next — those
+   * around the one being read — while the connection has nothing else to
+   * do. One that fails is fetched again when it is read.
+   */
+  async prefetchMessages(input: MessageRef[]): Promise<void> {
+    const refs = z.array(messageRefSchema).max(MAX_PREFETCHED_MESSAGES).parse(input)
+
+    for (const ref of refs) {
+      const state = await this.database.getMessageBodyState(ref)
+
+      if (state && !state.hasBody) {
+        this.engine.loadMessageBody(ref, state.size, 'prefetch').catch(() => undefined)
+      }
+    }
+  }
+
+  /** The message if its body is cached, and its size for fetching it otherwise. */
+  private async cachedMessage(
+    ref: MessageRef
+  ): Promise<{ message: MailMessageDetail | null; size: number }> {
     await this.ensureAccountExists(ref.accountId)
 
     const cached = await this.database.getMessage(ref)
-    if (cached && (cached.html !== undefined || cached.text !== undefined)) {
-      return cached
-    }
+    const hasBody = cached && (cached.html !== undefined || cached.text !== undefined)
 
-    const fetched = await this.engine.fetchMessageDetail(ref)
+    return { message: hasBody ? cached : null, size: cached?.size ?? 0 }
+  }
 
-    await this.database.updateMessageBody(ref, fetched)
-
+  /** A fetched body as the cache now holds it with its message. */
+  private async storedDetail(
+    ref: MessageRef,
+    fetched: FetchedMessageDetail
+  ): Promise<MailMessageDetail> {
     return (await this.database.getMessage(ref)) ?? { ...fetched, senderLabel: fetched.senderName }
   }
 
@@ -875,6 +928,7 @@ export class MailService {
       return {
         attachmentId,
         index,
+        part: message.attachments.find((attachment) => attachment.id === attachmentId)?.part,
         directory: attachmentCopyDirectory(
           ref.accountId,
           purpose === 'open' ? identity : [purpose, ...identity]
@@ -894,10 +948,7 @@ export class MailService {
     const missing = requested.filter(({ directory }) => !paths.has(directory))
 
     if (missing.length > 0) {
-      const downloaded = await this.engine.fetchAttachments(
-        ref,
-        missing.map(({ index }) => index)
-      )
+      const downloaded = await this.engine.fetchAttachments(ref, missing, message.size)
 
       for (const [position, attachment] of downloaded.entries()) {
         const { directory } = missing[position]
@@ -959,9 +1010,11 @@ export class MailService {
       return null
     }
 
-    const [attachment] = await this.engine.fetchAttachments(ref, [
-      parseAttachmentIndex(attachmentId)
-    ])
+    const [attachment] = await this.engine.fetchAttachments(
+      ref,
+      [{ index: parseAttachmentIndex(attachmentId), part: listed.part }],
+      message.size
+    )
     await writeFile(choice.filePath, attachment.content)
     await markFromInternet(choice.filePath)
     await this.database.recordRecentFiles([choice.filePath], SAVED_ATTACHMENT_ACTIVITY)
@@ -979,7 +1032,7 @@ export class MailService {
     parentWindow?: BrowserWindow
   ): Promise<SavedAttachments | null> {
     const ref = messageRefSchema.parse(input)
-    await this.requireMessage(ref)
+    const message = await this.requireMessage(ref)
 
     const options = {
       title: 'Salva tutti gli allegati',
@@ -995,7 +1048,14 @@ export class MailService {
       return null
     }
 
-    const attachments = await this.engine.fetchAttachments(ref)
+    const attachments = await this.engine.fetchAttachments(
+      ref,
+      message.attachments.map((attachment) => ({
+        index: parseAttachmentIndex(attachment.id),
+        part: attachment.part
+      })),
+      message.size
+    )
     const filePaths: string[] = []
 
     for (const attachment of attachments) {
