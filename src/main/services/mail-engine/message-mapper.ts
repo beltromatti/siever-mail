@@ -39,6 +39,13 @@ export function mapAddresses(addresses: MessageAddressObject[] | undefined): Mai
     .filter((address): address is MailAddress => Boolean(address))
 }
 
+/** The References header as mailparser reads it: one id, several, or none. */
+function parsedReferences(references: string | string[] | undefined): string[] {
+  return (Array.isArray(references) ? references : references ? [references] : [])
+    .map((reference) => reference.trim())
+    .filter(Boolean)
+}
+
 /** A header mailparser read: one address list, or several when the header repeats. */
 export function mapParsedAddresses(
   field: AddressObject | AddressObject[] | undefined
@@ -203,6 +210,8 @@ export function mergeSummaryAndParsedIntoDetail(
     to: pickAddresses(mapParsedAddresses(parsed.to), mapAddresses(envelope?.to)),
     cc: pickAddresses(mapParsedAddresses(parsed.cc), mapAddresses(envelope?.cc)),
     bcc: pickAddresses(mapParsedAddresses(parsed.bcc), mapAddresses(envelope?.bcc)),
+    replyTo: pickAddresses(mapParsedAddresses(parsed.replyTo), mapAddresses(envelope?.replyTo)),
+    references: parsedReferences(parsed.references),
     date: internalDateToIso(fetched.internalDate),
     preview: extractPreview(parsed, subject),
     // Full body is available here (mergeSummaryAndParsedIntoDetail is called for

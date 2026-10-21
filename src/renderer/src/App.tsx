@@ -65,6 +65,7 @@ import {
   DEFAULT_UI_PREFERENCES,
   MESSAGE_LIST_PAGE_SIZE
 } from '@shared/models'
+import { replyRecipients, replyReferences } from '@shared/reply'
 import { highlightTermsForField, parseSearchQuery } from '@shared/search'
 import type {
   AccountConnectionState,
@@ -2397,26 +2398,39 @@ function App(): React.JSX.Element {
   // A reply or forward goes out from the account that received the message
   // — which, under TUTTI, is not necessarily the one in the sidebar — and
   // knows the message, for its attachments.
-  const openReplyComposer = useCallback(async (): Promise<void> => {
-    if (!selectedMessage) {
-      return
-    }
+  // Every address the user writes from: a reply to all leaves them out, and
+  // a reply to their own message goes to the people it went to.
+  const ownAddresses = useMemo(
+    () => new Set(accounts.map((account) => account.email.trim().toLowerCase())),
+    [accounts]
+  )
 
-    openComposer({
-      kind: 'reply',
-      accountId: selectedMessage.accountId,
-      sourceAccountId: selectedMessage.accountId,
-      to: selectedMessage.from.map((address) => address.address),
-      subject: ensureReplySubject(selectedMessage.subject),
-      quoteHtml: await buildReplyQuoteHtml(selectedMessage),
-      inReplyTo: selectedMessage.messageId,
-      references: selectedMessage.messageId ? [selectedMessage.messageId] : undefined,
-      original: {
-        ref: summaryToMessageRef(selectedMessage),
-        attachments: selectedMessage.attachments
+  const openReplyComposer = useCallback(
+    async (mode: 'sender' | 'all'): Promise<void> => {
+      if (!selectedMessage) {
+        return
       }
-    })
-  }, [openComposer, selectedMessage])
+
+      const recipients = replyRecipients(selectedMessage, ownAddresses, mode)
+
+      openComposer({
+        kind: 'reply',
+        accountId: selectedMessage.accountId,
+        sourceAccountId: selectedMessage.accountId,
+        to: recipients.to.map((address) => address.address),
+        cc: recipients.cc.map((address) => address.address),
+        subject: ensureReplySubject(selectedMessage.subject),
+        quoteHtml: await buildReplyQuoteHtml(selectedMessage),
+        inReplyTo: selectedMessage.messageId,
+        references: replyReferences(selectedMessage),
+        original: {
+          ref: summaryToMessageRef(selectedMessage),
+          attachments: selectedMessage.attachments
+        }
+      })
+    },
+    [openComposer, ownAddresses, selectedMessage]
+  )
 
   const openForwardComposer = useCallback(async (): Promise<void> => {
     if (!selectedMessage) {
@@ -2829,7 +2843,8 @@ function App(): React.JSX.Element {
             loading={loadingMessageDetail}
             isExpanded={isMessageExpanded}
             selectedCount={selection.selectedRefs.length}
-            onReply={() => void openReplyComposer()}
+            onReply={() => void openReplyComposer('sender')}
+            onReplyAll={() => void openReplyComposer('all')}
             onForward={() => void openForwardComposer()}
             onArchive={() =>
               void runSelectionRemovalAction(async (ref) => {

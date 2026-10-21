@@ -74,6 +74,10 @@ export interface MailMessageSummary {
 
 export interface MailMessageDetail extends MailMessageSummary {
   bcc: MailAddress[]
+  /** Where the sender asked replies to go (Reply-To), when not to themselves. */
+  replyTo: MailAddress[]
+  /** The thread before this message (References), oldest first. */
+  references: string[]
   html?: string
   text?: string
   attachments: MailAttachment[]

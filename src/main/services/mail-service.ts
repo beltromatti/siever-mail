@@ -576,13 +576,7 @@ export class MailService {
 
     const fetched = await this.engine.fetchMessageDetail(ref)
 
-    await this.database.updateMessageBody(
-      ref,
-      fetched.html,
-      fetched.text,
-      fetched.bcc,
-      fetched.attachments
-    )
+    await this.database.updateMessageBody(ref, fetched)
 
     return (await this.database.getMessage(ref)) ?? { ...fetched, senderLabel: fetched.senderName }
   }

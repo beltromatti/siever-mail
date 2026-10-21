@@ -16,6 +16,7 @@ import {
   Minimize2,
   Paperclip,
   Reply,
+  ReplyAll,
   Trash2
 } from 'lucide-react'
 
@@ -52,6 +53,7 @@ interface MessageViewerProps {
    */
   selectedCount: number
   onReply: () => void
+  onReplyAll: () => void
   onForward: () => void
   onArchive: () => void
   onDelete: () => void
@@ -464,6 +466,7 @@ export function MessageViewer({
   isExpanded,
   selectedCount,
   onReply,
+  onReplyAll,
   onForward,
   onArchive,
   onDelete,
@@ -624,15 +627,13 @@ export function MessageViewer({
           those words here would stack two identical rows — most visibly in
           the expanded view, where the two sit directly on top of each
           other. This row therefore labels only what the toolbar has no
-          equivalent for, Rispondi and Inoltra, and keeps the rest as icons
-          with tooltips. The labelled toolbar right above is what makes
-          those icons discoverable.
+          equivalent for — Rispondi, Rispondi a tutti and Inoltra, the three
+          Outlook puts first — and keeps the rest as icons with tooltips. The
+          labelled toolbar right above is what makes those icons discoverable.
 
-          The upshot is a row that is ~380px instead of ~664px at every
-          width, so it rarely competes with the subject: the subject is the
-          flexible half and truncates. Only when the pane is dragged narrow
-          enough to leave it under 12rem do the actions wrap below it —
-          a subject cut to its first letters says nothing.
+          The subject is the flexible half and truncates. Only when the pane
+          is dragged narrow enough to leave it under 12rem do the actions wrap
+          below it — a subject cut to its first letters says nothing.
         */}
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <h2 className="min-w-0 flex-[1_1_12rem] truncate text-[14px] leading-6 font-semibold">
@@ -646,6 +647,14 @@ export function MessageViewer({
               onClick={onReply}
             >
               <Reply className="size-3.5" /> Rispondi
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6.5 gap-1.5 px-2 text-[11.5px]"
+              onClick={onReplyAll}
+            >
+              <ReplyAll className="size-3.5" /> Rispondi a tutti
             </Button>
             <Button
               variant="ghost"

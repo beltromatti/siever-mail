@@ -10,6 +10,7 @@ import { upgradeMailFontStacksInHtml } from '@shared/mail-fonts'
 import type {
   DataStorageBreakdown,
   DataStorageSection,
+  FetchedMessageDetail,
   FetchedMessageSummary,
   MailAccount,
   MailAddress,
@@ -2441,6 +2442,8 @@ export class AppDatabase {
       to: parseJsonArray(row.toJson),
       cc: parseJsonArray(row.ccJson),
       bcc: parseJsonArray(row.bccJson),
+      replyTo: parseJsonArray(row.replyToJson),
+      references: parseJsonArray<string>(row.referencesJson),
       date: row.dateIso,
       preview: row.preview,
       previewHydrated: row.previewHydrated,
@@ -2460,12 +2463,14 @@ export class AppDatabase {
 
   async updateMessageBody(
     ref: MessageRef,
-    html: string | undefined,
-    text: string | undefined,
-    bcc: unknown[],
-    attachments: MailAttachment[]
+    body: Pick<
+      FetchedMessageDetail,
+      'html' | 'text' | 'bcc' | 'replyTo' | 'references' | 'attachments'
+    >
   ): Promise<void> {
     await this.ready
+
+    const { html, text, bcc, attachments } = body
 
     await this.prisma.message.updateMany({
       where: {
@@ -2477,6 +2482,8 @@ export class AppDatabase {
         htmlBody: html ?? null,
         textBody: text ?? (html ? null : ''),
         bccJson: JSON.stringify(bcc),
+        replyToJson: JSON.stringify(body.replyTo),
+        referencesJson: JSON.stringify(body.references),
         attachmentsJson: JSON.stringify(attachments),
         // Reconcile the list's paperclip against what the body actually
         // holds. The envelope-time flag is a heuristic over BODYSTRUCTURE —
@@ -2680,6 +2687,8 @@ export class AppDatabase {
         html_body TEXT,
         text_body TEXT,
         attachments_json TEXT NOT NULL DEFAULT '[]',
+        reply_to_json TEXT NOT NULL DEFAULT '[]',
+        references_json TEXT NOT NULL DEFAULT '[]',
         updated_at INTEGER NOT NULL,
         UNIQUE(account_id, folder_path, uid)
       )
@@ -3050,6 +3059,24 @@ export class AppDatabase {
       await this.prisma.$executeRawUnsafe(
         `UPDATE folders
          SET uid_validity = NULL, highest_modseq = NULL, last_known_uid = NULL, last_synced_at = NULL`
+      )
+    }
+
+    // Reply-To and References are read with the body. Bodies cached before
+    // they were kept are dropped, and fetched again when next opened.
+    const missingReplyColumns = ['reply_to_json', 'references_json'].filter(
+      (column) => !columnNames.has(column)
+    )
+
+    if (missingReplyColumns.length > 0) {
+      for (const column of missingReplyColumns) {
+        await this.prisma.$executeRawUnsafe(
+          `ALTER TABLE messages ADD COLUMN ${column} TEXT NOT NULL DEFAULT '[]'`
+        )
+      }
+
+      await this.prisma.$executeRawUnsafe(
+        'UPDATE messages SET html_body = NULL, text_body = NULL WHERE html_body IS NOT NULL OR text_body IS NOT NULL'
       )
     }
   }

@@ -78,6 +78,8 @@ model Message {
   htmlBody        String? @map("html_body")
   textBody        String? @map("text_body")
   attachmentsJson String  @default("[]") @map("attachments_json")
+  replyToJson     String  @default("[]") @map("reply_to_json")
+  referencesJson  String  @default("[]") @map("references_json")
   updatedAt       BigInt  @map("updated_at")
   account         Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
