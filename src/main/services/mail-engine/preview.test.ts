@@ -69,6 +69,17 @@ describe('extractPreview', () => {
     expect(preview).not.toContain('linkedin.com')
   })
 
+  it("drops the picture placeholders Outlook's plain text keeps", () => {
+    const parsed = makeParsed({
+      text: 'Ottimo ! [cid:image002.png@01DD5193.E2867D50] <> Ci vediamo lunedì in cantiere per il sopralluogo.\nAllego anche i visti di conformità cid:0f5655a3-40b6-4f5f-8c2d-820c03642c8e'
+    })
+
+    const preview = extractPreview(parsed, 'R: 962 - Bozza Targhette Contatori')
+    expect(preview).toBe(
+      'Ottimo ! Ci vediamo lunedì in cantiere per il sopralluogo. Allego anche i visti di conformità'
+    )
+  })
+
   it('drops reply-quoted blocks so the latest reply wins', () => {
     const parsed = makeParsed({
       text: [

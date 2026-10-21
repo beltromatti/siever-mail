@@ -49,9 +49,14 @@ const EMPTY_ANCHOR_PATTERN = /\(\s*#+\s*\)/g
 // stray `}` orphan behind.
 const URL_PATTERN = /\b(?:https?:\/\/|www\.)[^\s<>()[\]{}"]+/gi
 
+// `cid:` references (RFC 2392) name a picture inside the message. A plain
+// text part written by Outlook keeps one for every image it held —
+// `[cid:image002.png@01DD5193.E2867D50]` — and they are never prose.
+const CONTENT_ID_REFERENCE_PATTERN = /\[?cid:[^\s\]<>]+\]?/gi
+
 // Empty balanced delimiters left over after URL / label stripping: `( )`,
-// `[ ]`, `{ }`. These are pure visual noise in a preview line.
-const EMPTY_DELIMITER_PAIR_PATTERN = /\(\s*\)|\[\s*\]|\{\s*\}/g
+// `[ ]`, `{ }`, `< >`. These are pure visual noise in a preview line.
+const EMPTY_DELIMITER_PAIR_PATTERN = /\(\s*\)|\[\s*\]|\{\s*\}|<\s*>/g
 
 // A lone `{`, `}`, `"` surrounded by whitespace (or sitting at the string
 // edges) is the residue of a URL-encoded JSON literal whose URL segments were
@@ -315,6 +320,7 @@ function scrubPromotionalNoise(text: string): string {
       // conversions — they survive our HTML stripper because they originate
       // inside the already-plain-text source.
       .replace(EMBEDDED_PROTOCOL_URI_PATTERN, ' ')
+      .replace(CONTENT_ID_REFERENCE_PATTERN, ' ')
       .replace(MARKDOWN_LINK_PATTERN, (_match, label: string) => {
         const cleaned = label.trim()
         if (!cleaned || cleaned === '#') return ' '

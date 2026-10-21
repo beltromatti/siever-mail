@@ -547,6 +547,20 @@ export function primaryAddressLabel(message: MailMessageSummary, mode: PrimaryAd
 }
 
 /**
+ * Who a row's avatar stands for: the sender, or — where rows are about the
+ * recipient — the first person the message went to. Never the "+3" that
+ * follows them in the label.
+ */
+export function avatarLabel(message: MailMessageSummary, mode: PrimaryAddressMode): string {
+  if (mode === 'recipient') {
+    const first = message.to[0] ?? message.cc[0]
+    return first ? first.name?.trim() || first.address : '?'
+  }
+
+  return message.senderLabel
+}
+
+/**
  * The "A" column: the first person the message names and how many others it
  * reached. Copies count — a message sent to one person with four hundred in
  * Cc is not a message to one person.

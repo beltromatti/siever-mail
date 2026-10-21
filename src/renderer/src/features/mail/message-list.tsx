@@ -24,6 +24,7 @@ import type { MessageListViewProps } from './message-list-view'
 import {
   AccountTag,
   AttachmentMark,
+  avatarLabel,
   FlagToggle,
   HighlightedText,
   MessageListControls,
@@ -259,7 +260,7 @@ export function MessageList({
 
                         <Avatar className="border-border/70 mt-0.5 size-7 shrink-0 border">
                           <AvatarFallback className="bg-secondary/80 text-[10px] font-semibold">
-                            {initialsFromName(primaryLabel)}
+                            {initialsFromName(avatarLabel(message, primaryAddressMode))}
                           </AvatarFallback>
                         </Avatar>
 

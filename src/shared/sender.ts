@@ -13,6 +13,37 @@ import type { MailAddress } from './models'
  * from the named ones.
  */
 
+const WRAPPING_QUOTES: ReadonlyArray<readonly [string, string]> = [
+  ["'", "'"],
+  ['"', '"'],
+  ['\u2018', '\u2019'],
+  ['\u201c', '\u201d']
+]
+
+/**
+ * A header display name as people read it. Outlook writes a name the user
+ * typed between apostrophes with them — `'marco conti' <marco@…>` — and
+ * they are punctuation, not part of the name: lists showed them and
+ * avatars read "'C".
+ */
+export function cleanDisplayName(name: string | undefined): string | undefined {
+  let cleaned = name?.replace(/\s+/g, ' ').trim() ?? ''
+
+  for (;;) {
+    const quotes = WRAPPING_QUOTES.find(
+      ([open, close]) => cleaned.length > 1 && cleaned.startsWith(open) && cleaned.endsWith(close)
+    )
+
+    if (!quotes) {
+      break
+    }
+
+    cleaned = cleaned.slice(1, -1).trim()
+  }
+
+  return cleaned || undefined
+}
+
 /** The name this message's header gives its sender, or the address. */
 export function deriveSenderName(from: ReadonlyArray<MailAddress>): string {
   const first = from[0]

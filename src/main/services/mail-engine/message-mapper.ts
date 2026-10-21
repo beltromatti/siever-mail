@@ -2,7 +2,7 @@ import type { FetchMessageObject, MessageAddressObject, MessageStructureObject }
 import type { AddressObject, ParsedMail } from 'mailparser'
 
 import type { FetchedMessageDetail, MailAddress, MailAttachment } from '@shared/models'
-import { deriveSenderKey, deriveSenderName } from '@shared/sender'
+import { cleanDisplayName, deriveSenderKey, deriveSenderName } from '@shared/sender'
 import { EMPTY_SUBJECT_LABEL } from '@shared/subject'
 
 import { extractPreview } from './preview'
@@ -24,7 +24,7 @@ function normalizeAddress(address: MessageAddressObject): MailAddress | null {
   }
 
   return {
-    name: address.name || undefined,
+    name: cleanDisplayName(address.name),
     address: address.address
   }
 }

@@ -1,6 +1,27 @@
 import { describe, expect, it } from 'vitest'
 
-import { isMeaningfulDisplayName, isSameSenderName, senderSortKey } from './sender'
+import {
+  cleanDisplayName,
+  isMeaningfulDisplayName,
+  isSameSenderName,
+  senderSortKey
+} from './sender'
+
+describe('cleanDisplayName', () => {
+  it('takes off the quotes Outlook wraps a typed name in', () => {
+    expect(cleanDisplayName("'marco conti'")).toBe('marco conti')
+    expect(cleanDisplayName('"CARBONETTA Giuseppe (ENGIE Italy)"')).toBe(
+      'CARBONETTA Giuseppe (ENGIE Italy)'
+    )
+    expect(cleanDisplayName("  ' Sara  Poletti '  ")).toBe('Sara Poletti')
+  })
+
+  it('leaves an apostrophe that belongs to the name, and drops an empty name', () => {
+    expect(cleanDisplayName("D'Angelo Marco")).toBe("D'Angelo Marco")
+    expect(cleanDisplayName("''")).toBeUndefined()
+    expect(cleanDisplayName(undefined)).toBeUndefined()
+  })
+})
 
 describe('isMeaningfulDisplayName', () => {
   it('rejects an empty name or one that only repeats the address', () => {
