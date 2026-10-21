@@ -31,6 +31,16 @@ describe('extractPreview', () => {
     expect(preview).not.toContain('<')
   })
 
+  it('drops the conditional comments a text part made from HTML carries', () => {
+    const parsed = makeParsed({
+      text: 'Monitora i dati del tuo Account <!--if !mso><!--> <!--if false><!--> Ti abbiamo inviato questa email perché hai usato Accedi con Google <!--<![endif]-->'
+    })
+
+    expect(extractPreview(parsed, 'Avviso')).toBe(
+      'Monitora i dati del tuo Account Ti abbiamo inviato questa email perché hai usato Accedi con Google'
+    )
+  })
+
   it('reads a text part that is HTML source as HTML', () => {
     const source = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html style="font-size:105%;"><head><meta charset="utf-8"><style>td{padding:0}</style></head>
 <body><table><tr><td>Informazioni del volo</td></tr><tr><td>Milano Malpensa - Malaga, partenza alle 11:50</td></tr></table></body></html>`

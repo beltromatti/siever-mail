@@ -14,6 +14,7 @@ import type {
   ListMessagesOptions,
   MailAccount,
   MessagesChangedEvent,
+  CreateFolderInput,
   UnifiedFolderSummary,
   UnifiedFoldersChangedEvent,
   UnifiedPreferences,
@@ -46,6 +47,8 @@ export const IPC_CHANNELS = {
   setActiveMailboxContext: 'app:set-active-mailbox-context',
   checkMailNow: 'app:check-mail-now',
   listFolders: 'folder:list',
+  listRecentFolders: 'folder:list-recent',
+  createFolder: 'folder:create',
   getUnifiedFolderSummaries: 'folder:get-unified-summaries',
   getUnifiedPreferences: 'folder:get-unified-preferences',
   setUnifiedIncludedAccounts: 'folder:set-unified-included-accounts',
@@ -115,6 +118,9 @@ export interface DesktopMailApi {
   /** Asks every account now whether new mail has arrived. */
   checkMailNow: () => Promise<void>
   listFolders: (accountId: string) => Promise<MailFolder[]>
+  /** An account's recent destinations of "Sposta", the latest first. */
+  listRecentFolders: (accountId: string) => Promise<string[]>
+  createFolder: (input: CreateFolderInput) => Promise<MailFolder>
   getUnifiedFolderSummaries: () => Promise<UnifiedFolderSummary[]>
   getUnifiedPreferences: () => Promise<UnifiedPreferences>
   setUnifiedIncludedAccounts: (accountIds: string[]) => Promise<UnifiedPreferences>

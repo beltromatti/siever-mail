@@ -11,6 +11,7 @@ import type {
   ActiveMailboxContext,
   AttachmentRef,
   ComposeMailInput,
+  CreateFolderInput,
   ListMessagesOptions,
   MessageAttachmentsRef,
   MessageRef,
@@ -94,6 +95,14 @@ export function registerMailIpc(
   registerDataHandler(IPC_CHANNELS.listFolders, async (accountId: string) => {
     return mailService.listFolders(accountId)
   })
+
+  registerDataHandler(IPC_CHANNELS.listRecentFolders, async (accountId: string) =>
+    mailService.listRecentFolders(accountId)
+  )
+
+  registerDataHandler(IPC_CHANNELS.createFolder, async (input) =>
+    mailService.createFolder(input as CreateFolderInput)
+  )
 
   registerDataHandler(IPC_CHANNELS.getUnifiedFolderSummaries, async () => {
     return mailService.getUnifiedFolderSummaries()

@@ -19,20 +19,20 @@ import type {
 
 import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { Button } from '@renderer/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from '@renderer/components/ui/dropdown-menu'
 import { Input } from '@renderer/components/ui/input'
 import { cn } from '@renderer/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import type { MailFolder, MessageListFilter } from '@shared/models'
 
+import { FolderPickerPopover } from './folder-picker'
+
 interface MailToolbarProps {
-  /** Where "Sposta" can put the selection: folders of its own account. */
-  moveTargets: MailFolder[]
+  /** Where "Sposta" can put the selection: the folders of its account. */
+  moveFolders: MailFolder[]
+  /** The folder the whole selection sits in, shown but not offered. */
+  moveExcludedPath: string | null
+  /** The account's recent destinations, the latest first. */
+  recentMovePaths: string[]
   /**
    * Set when the selection spans more than one account, which no folder
    * can take at once: "Sposta" then explains instead of listing folders.
@@ -63,6 +63,7 @@ interface MailToolbarProps {
   onOpenSettings: () => void
   onArchiveClassic: () => void
   onMoveToFolder: (folderPath: string) => void
+  onCreateFolderAndMove: (name: string) => void
   onDelete: () => void
   onToggleSeen: () => void
   onToggleFlagged: () => void
@@ -89,7 +90,9 @@ const FILTER_OPTIONS: ReadonlyArray<{ value: MessageListFilter; label: string }>
  * touch.
  */
 export function MailToolbar({
-  moveTargets,
+  moveFolders,
+  moveExcludedPath,
+  recentMovePaths,
   onMoveAcrossAccounts,
   search,
   onSearchChange,
@@ -108,6 +111,7 @@ export function MailToolbar({
   onOpenSettings,
   onArchiveClassic,
   onMoveToFolder,
+  onCreateFolderAndMove,
   onDelete,
   onToggleSeen,
   onToggleFlagged,
@@ -119,13 +123,14 @@ export function MailToolbar({
   const flagLabel = selectionFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'
 
   return (
-    // Labels on the message actions appear only when the bar is actually
-    // wide enough for them. At the 1180px minimum window the labelled row
-    // ran past the search field, so "Segna non le…" sat clipped mid-word
-    // while Contrassegna and Elimina were pushed out of sight. The query
-    // measures the CONTAINER, not the viewport: the same bar is narrower in
-    // the apple layout than in outlook at the same window size.
-    <div className="glass-panel @container flex h-11 shrink-0 items-center gap-2 rounded-lg px-2">
+    // Labels on the message actions appear only when the actions actually
+    // have room for them. At the 1180px minimum window the labelled row ran
+    // past the search field, so "Segna non le…" sat clipped mid-word while
+    // Contrassegna and Elimina were pushed out of sight; measured on the
+    // whole bar, a selection's counter still clipped "Elimina". The query
+    // measures the actions' own space, whatever the window, the layout, the
+    // counter or an extension's buttons leave them.
+    <div className="glass-panel flex h-11 shrink-0 items-center gap-2 rounded-lg px-2">
       <div className="flex shrink-0 items-center gap-1.5">
         <ActionTooltip label="Nuovo messaggio" commandId="compose">
           <Button size="icon" onClick={onCompose} aria-label="Nuovo messaggio" className="size-8">
@@ -146,12 +151,17 @@ export function MailToolbar({
 
       <div className="bg-border/60 h-5 w-px shrink-0" />
 
-      <div className="min-w-0 flex-1 scrollbar-thin overflow-x-auto overflow-y-hidden">
+      {/* The labels show when the actions' own space can hold them all — the
+          selection counter and an extension's buttons take from it. */}
+      <div className="@container/actions min-w-0 flex-1 scrollbar-thin overflow-x-auto overflow-y-hidden">
         <div className="flex w-max items-center gap-0.5 pr-1">
           {selectedCount > 1 && (
-            <span className="text-primary mr-1 inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold">
+            // The number alone: the list says "N selezionate" right below.
+            <span
+              className="text-primary mr-1 inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold"
+              title={`${selectedCount} messaggi selezionati`}
+            >
               {selectedCount}
-              <span className="hidden @[64rem]:inline">selezionate</span>
               <button
                 type="button"
                 onClick={onClearSelection}
@@ -173,7 +183,7 @@ export function MailToolbar({
               aria-label="Archivia"
             >
               <Archive className="size-3.5" />
-              <span className="hidden @[64rem]:inline">Archivia</span>
+              <span className="hidden @[36rem]/actions:inline">Archivia</span>
             </Button>
           </ActionTooltip>
 
@@ -187,37 +197,42 @@ export function MailToolbar({
                 aria-label="Sposta"
               >
                 <FolderInput className="size-3.5" />
-                <span className="hidden @[64rem]:inline">Sposta</span>
+                <span className="hidden @[36rem]/actions:inline">Sposta</span>
               </Button>
             </ActionTooltip>
           ) : (
-            <DropdownMenu open={moveMenuOpen} onOpenChange={onMoveMenuOpenChange}>
-              <ActionTooltip label="Sposta in una cartella" commandId="move">
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 gap-1.5 px-2 text-[11.5px]"
-                    disabled={!hasSelection || moveTargets.length === 0}
-                    aria-label="Sposta"
-                  >
-                    <FolderInput className="size-3.5" />
-                    <span className="hidden @[64rem]:inline">Sposta</span>
-                  </Button>
-                </DropdownMenuTrigger>
-              </ActionTooltip>
-              <DropdownMenuContent align="start" className="max-h-80 overflow-y-auto">
-                {moveTargets.map((folder) => (
-                  <DropdownMenuItem
-                    key={folder.path}
-                    className="cursor-pointer text-[12px]"
-                    onClick={() => onMoveToFolder(folder.path)}
-                  >
-                    {folder.name}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <FolderPickerPopover
+              open={moveMenuOpen}
+              onOpenChange={onMoveMenuOpenChange}
+              folders={moveFolders}
+              recentPaths={recentMovePaths}
+              excludedPath={moveExcludedPath}
+              onPick={(folderPath) => {
+                onMoveMenuOpenChange(false)
+                onMoveToFolder(folderPath)
+              }}
+              onCreate={(name) => {
+                onMoveMenuOpenChange(false)
+                onCreateFolderAndMove(name)
+              }}
+              wrapTrigger={(trigger) => (
+                <ActionTooltip label="Sposta in una cartella" commandId="move">
+                  {trigger}
+                </ActionTooltip>
+              )}
+              trigger={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1.5 px-2 text-[11.5px]"
+                  disabled={!hasSelection || moveFolders.length === 0}
+                  aria-label="Sposta"
+                >
+                  <FolderInput className="size-3.5" />
+                  <span className="hidden @[36rem]/actions:inline">Sposta</span>
+                </Button>
+              }
+            />
           )}
 
           <ActionTooltip label={toggleSeenLabel} commandId="toggle-read">
@@ -230,7 +245,7 @@ export function MailToolbar({
               aria-label={toggleSeenLabel}
             >
               <MailOpen className="size-3.5" />
-              <span className="hidden @[64rem]:inline">{toggleSeenLabel}</span>
+              <span className="hidden @[36rem]/actions:inline">{toggleSeenLabel}</span>
             </Button>
           </ActionTooltip>
 
@@ -244,7 +259,7 @@ export function MailToolbar({
               aria-label={flagLabel}
             >
               <Flag className={cn('size-3.5', selectionFlagged && 'fill-current')} />
-              <span className="hidden @[64rem]:inline">{flagLabel}</span>
+              <span className="hidden @[36rem]/actions:inline">{flagLabel}</span>
             </Button>
           </ActionTooltip>
 
@@ -258,7 +273,7 @@ export function MailToolbar({
               aria-label="Elimina"
             >
               <Trash2 className="size-3.5" />
-              <span className="hidden @[64rem]:inline">Elimina</span>
+              <span className="hidden @[36rem]/actions:inline">Elimina</span>
             </Button>
           </ActionTooltip>
         </div>

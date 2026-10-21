@@ -21,6 +21,7 @@ import type {
   AddImapAccountInput,
   AppBootstrap,
   ComposeMailInput,
+  CreateFolderInput,
   AttachmentRef,
   CopiedAttachment,
   DataStorageBreakdown,
@@ -123,6 +124,11 @@ const messageRefsSchema = z.array(messageRefSchema).max(MAX_MESSAGES_PER_ACTION)
 const moveMessagesSchema = z.object({
   refs: messageRefsSchema,
   destinationFolderPath: z.string().trim().min(1)
+})
+const createFolderSchema = z.object({
+  accountId: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(200),
+  parentPath: z.string().trim().min(1).optional()
 })
 const setMessagesKeywordSchema = z.object({
   refs: messageRefsSchema,
@@ -695,7 +701,33 @@ export class MailService {
   async moveMessages(input: MoveMessagesInput): Promise<MessagesActionResult> {
     const payload = moveMessagesSchema.parse(input)
     await this.ensureAccountsExist(payload.refs)
-    return this.engine.moveMessages(payload.refs, payload.destinationFolderPath)
+    const result = await this.engine.moveMessages(payload.refs, payload.destinationFolderPath)
+    const failed = new Set(
+      result.failed.map((ref) => `${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`)
+    )
+    const moved = payload.refs.find(
+      (ref) => !failed.has(`${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`)
+    )
+
+    // Where messages were moved by hand comes first next time (see `listRecentFolders`).
+    if (moved) {
+      await this.database.recordRecentFolder(moved.accountId, payload.destinationFolderPath)
+    }
+
+    return result
+  }
+
+  /** An account's recent destinations of "Sposta", the latest first. */
+  async listRecentFolders(accountId: string): Promise<string[]> {
+    await this.ensureAccountExists(accountId)
+    return this.database.listRecentFolders(accountId)
+  }
+
+  /** Creates a folder in an account — inside `parentPath`, or at its top. */
+  async createFolder(input: CreateFolderInput): Promise<MailFolder> {
+    const payload = createFolderSchema.parse(input)
+    await this.ensureAccountExists(payload.accountId)
+    return this.engine.createFolder(payload.accountId, payload.name, payload.parentPath ?? null)
   }
 
   async deleteMessages(refs: MessageRef[]): Promise<MessagesActionResult> {

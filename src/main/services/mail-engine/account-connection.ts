@@ -1163,19 +1163,43 @@ export class AccountConnection extends EventEmitter {
   }
 
   private async createArchiveFolder(): Promise<MailFolder> {
+    return this.createFolder(ARCHIVE_FOLDER_NAME, null)
+  }
+
+  /**
+   * Creates a folder — inside `parentPath`, or at the top of the account —
+   * and resolves with it as the folder list now has it.
+   */
+  async createFolder(name: string, parentPath: string | null): Promise<MailFolder> {
+    const folders = await this.database.listFolders(this.account.id)
+    const parent = parentPath ? folders.find((folder) => folder.path === parentPath) : null
+
+    if (parentPath && !parent?.delimiter) {
+      throw new Error('La cartella in cui crearla non è più sul server.')
+    }
+
+    // A name, not a path: the server's separator in it would nest the folder
+    // where nobody asked.
+    const delimiter = parent?.delimiter ?? folders.find((folder) => folder.delimiter)?.delimiter
+
+    if (delimiter && name.includes(delimiter)) {
+      throw new Error(`Il nome di una cartella non può contenere «${delimiter}».`)
+    }
+
+    const requestedPath = parent ? `${parent.path}${parent.delimiter}${name}` : name
     const path = await this.runUserOperation(async () => {
-      const created = await this.requirePrimary().mailboxCreate(ARCHIVE_FOLDER_NAME)
+      const created = await this.requirePrimary().mailboxCreate(requestedPath)
 
       if (!created?.path) {
-        throw new Error('Il server non ha creato la cartella Archivio.')
+        throw new Error(`Il server non ha creato la cartella «${name}».`)
       }
 
       return created.path
-    }, 'create-archive-folder')
+    }, `create-folder:${requestedPath}`)
     const folder = (await this.refreshFolders()).find((candidate) => candidate.path === path)
 
     if (!folder) {
-      throw new Error('Il server non mostra la cartella Archivio appena creata.')
+      throw new Error(`Il server non mostra la cartella «${name}» appena creata.`)
     }
 
     return folder

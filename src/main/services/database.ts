@@ -146,6 +146,8 @@ const CONTACT_SUGGESTION_QUERY_SCAN_LIMIT = 120
  */
 const SEARCHED_SENDER_LIMIT = 200
 const RECENT_FILES_KEPT = 200
+/** The folders kept per account as recent destinations of "Sposta". */
+const RECENT_FOLDERS_KEPT = 8
 
 function parseJsonArray<T>(value: string): T[] {
   try {
@@ -1236,6 +1238,46 @@ export class AppDatabase {
    * newest entries of the "Allega" menu. The history stays short: it is a
    * convenience, not a record.
    */
+  /** A folder messages were just moved to, first among the account's recent destinations. */
+  async recordRecentFolder(accountId: string, folderPath: string): Promise<void> {
+    await this.ready
+
+    const usedAt = BigInt(Date.now())
+
+    await this.prisma.$transaction([
+      this.prisma.recentFolder.upsert({
+        where: { accountId_folderPath: { accountId, folderPath } },
+        create: { accountId, folderPath, usedAt },
+        update: { usedAt }
+      }),
+      this.prisma.$executeRaw`
+        DELETE FROM recent_folders
+        WHERE account_id = ${accountId}
+          AND folder_path NOT IN (
+            SELECT folder_path FROM recent_folders
+            WHERE account_id = ${accountId}
+            ORDER BY used_at DESC
+            LIMIT ${RECENT_FOLDERS_KEPT}
+          )
+      `
+    ])
+  }
+
+  /** An account's recent destinations of "Sposta", the latest first, among its folders now. */
+  async listRecentFolders(accountId: string): Promise<string[]> {
+    await this.ready
+
+    const rows = (await this.prisma.$queryRaw`
+      SELECT recent.folder_path AS folderPath
+      FROM recent_folders recent
+      JOIN folders folder ON folder.account_id = recent.account_id AND folder.path = recent.folder_path
+      WHERE recent.account_id = ${accountId}
+      ORDER BY recent.used_at DESC
+    `) as Array<{ folderPath: string }>
+
+    return rows.map((row) => row.folderPath)
+  }
+
   async recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void> {
     await this.ready
 
@@ -3063,6 +3105,18 @@ export class AppDatabase {
     `)
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_recent_files_used_at ON recent_files(used_at DESC)'
+    )
+
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS recent_folders (
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        folder_path TEXT NOT NULL,
+        used_at INTEGER NOT NULL,
+        PRIMARY KEY(account_id, folder_path)
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_recent_folders_account_used_at ON recent_folders(account_id, used_at)'
     )
 
     await this.prisma.$executeRawUnsafe(`

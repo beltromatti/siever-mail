@@ -2394,22 +2394,36 @@ function App(): React.JSX.Element {
     }
   }, [moveAccountId, selectedAccountId])
 
-  const moveTargets = useMemo(() => {
-    const accountFolders =
+  // Where "Sposta" can put the selection: the folders of its account, the
+  // one it all sits in shown but not offered.
+  const moveFolders = useMemo(
+    () =>
       moveAccountId === selectedAccountId
         ? folders
         : otherAccountFolders?.accountId === moveAccountId
           ? otherAccountFolders.folders
-          : []
+          : [],
+    [folders, moveAccountId, otherAccountFolders, selectedAccountId]
+  )
+  const moveExcludedPath = useMemo(() => {
     const [firstRef] = selection.selectedRefs
-    // Not offered: the folder the whole selection already sits in.
-    const sharedFolderPath =
-      firstRef && selection.selectedRefs.every((ref) => ref.folderPath === firstRef.folderPath)
-        ? firstRef.folderPath
-        : null
+    return firstRef && selection.selectedRefs.every((ref) => ref.folderPath === firstRef.folderPath)
+      ? firstRef.folderPath
+      : null
+  }, [selection.selectedRefs])
+  const [recentMovePaths, setRecentMovePaths] = useState<string[]>([])
 
-    return accountFolders.filter((folder) => folder.path !== sharedFolderPath)
-  }, [folders, moveAccountId, otherAccountFolders, selectedAccountId, selection.selectedRefs])
+  /** The account's recent destinations, read as "Sposta" opens. */
+  const refreshRecentMovePaths = useCallback((): void => {
+    if (!moveAccountId) {
+      return
+    }
+
+    void window.mailApi
+      .listRecentFolders(moveAccountId)
+      .then(setRecentMovePaths)
+      .catch(() => setRecentMovePaths([]))
+  }, [moveAccountId])
 
   /**
    * "Sposta" on messages of several accounts: no folder can take them all,
@@ -2728,6 +2742,45 @@ function App(): React.JSX.Element {
   // "Sposta" opens from its button or from its chord.
   const [moveMenuOpen, setMoveMenuOpen] = useState(false)
 
+  const changeMoveMenuOpen = useCallback(
+    (open: boolean): void => {
+      if (open) {
+        refreshRecentMovePaths()
+      }
+
+      setMoveMenuOpen(open)
+    },
+    [refreshRecentMovePaths]
+  )
+
+  const moveSelectionTo = useCallback(
+    (destinationFolderPath: string): Promise<void> =>
+      runSelectionRemovalAction(
+        (refs) => window.mailApi.moveMessages({ refs, destinationFolderPath }),
+        'Spostamento email non riuscito.'
+      ),
+    [runSelectionRemovalAction]
+  )
+
+  /** "Crea «…» e sposta qui": the folder at the top of the account, then the move. */
+  const createFolderAndMoveSelection = useCallback(
+    async (name: string): Promise<void> => {
+      if (!moveAccountId) {
+        return
+      }
+
+      try {
+        const created = await window.mailApi.createFolder({ accountId: moveAccountId, name })
+        await moveSelectionTo(created.path)
+      } catch (caughtError) {
+        setViewError(
+          caughtError instanceof Error ? caughtError.message : 'Creazione cartella non riuscita.'
+        )
+      }
+    },
+    [moveAccountId, moveSelectionTo]
+  )
+
   /**
    * Runs a command from the menu bar or its chord. Nothing happens over an
    * open dialog or menu, and a command with nothing to act on — a reply with
@@ -2789,7 +2842,7 @@ function App(): React.JSX.Element {
         if (selectionAccountIds.length > 1) {
           void explainMixedAccountMove()
         } else {
-          setMoveMenuOpen(true)
+          changeMoveMenuOpen(true)
         }
         return true
       case 'toggle-read':
@@ -3392,7 +3445,9 @@ function App(): React.JSX.Element {
           }
           toolbar={
             <MailToolbar
-              moveTargets={moveTargets}
+              moveFolders={moveFolders}
+              moveExcludedPath={moveExcludedPath}
+              recentMovePaths={recentMovePaths}
               onMoveAcrossAccounts={
                 selectionAccountIds.length > 1 ? () => void explainMixedAccountMove() : undefined
               }
@@ -3419,13 +3474,11 @@ function App(): React.JSX.Element {
               onOpenSettings={() => setSettingsOpen(true)}
               onArchiveClassic={() => void archiveSelection()}
               moveMenuOpen={moveMenuOpen}
-              onMoveMenuOpenChange={setMoveMenuOpen}
+              onMoveMenuOpenChange={changeMoveMenuOpen}
               onMoveToFolder={(destinationFolderPath) =>
-                void runSelectionRemovalAction(
-                  (refs) => window.mailApi.moveMessages({ refs, destinationFolderPath }),
-                  'Spostamento email non riuscito.'
-                )
+                void moveSelectionTo(destinationFolderPath)
               }
+              onCreateFolderAndMove={(name) => void createFolderAndMoveSelection(name)}
               onDelete={() => void deleteMessages(selection.selectedRefs)}
               onToggleSeen={() => void setSelectionSeen()}
               onToggleFlagged={() => void setSelectionFlagged()}
@@ -3451,7 +3504,10 @@ function App(): React.JSX.Element {
           }
           reader={
             <MessageViewer
-              moveTargets={moveTargets}
+              moveFolders={moveFolders}
+              moveExcludedPath={moveExcludedPath}
+              recentMovePaths={recentMovePaths}
+              onMovePickerOpen={refreshRecentMovePaths}
               message={messageForViewer}
               bodyStatus={readerBodyStatus}
               onRetryBody={() => {
@@ -3467,11 +3523,9 @@ function App(): React.JSX.Element {
               onArchive={() => void archiveSelection()}
               onDelete={() => void deleteMessages(selection.selectedRefs)}
               onMoveToFolder={(destinationFolderPath) =>
-                void runSelectionRemovalAction(
-                  (refs) => window.mailApi.moveMessages({ refs, destinationFolderPath }),
-                  'Spostamento email non riuscito.'
-                )
+                void moveSelectionTo(destinationFolderPath)
               }
+              onCreateFolderAndMove={(name) => void createFolderAndMoveSelection(name)}
               onToggleExpanded={() => {
                 if (!readingRef) {
                   return

@@ -24,13 +24,8 @@ import { Button } from '@renderer/components/ui/button'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { AddressTokens, summarizeAddresses, type AddressActions } from './address-tokens'
 import { AttachmentChip } from './attachment-chip'
+import { FolderPickerPopover } from './folder-picker'
 import type { AttachmentActions } from './use-attachment-actions'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from '@renderer/components/ui/dropdown-menu'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { Separator } from '@renderer/components/ui/separator'
@@ -41,8 +36,15 @@ import { cn, formatAddress, formatDateLabel, formatDateTimeLabel } from '@render
 import type { MailAttachment, MailFolder, MailMessageDetail } from '@shared/models'
 
 interface MessageViewerProps {
-  /** Where "Sposta" can put the message: the other folders of its account. */
-  moveTargets: MailFolder[]
+  /** Where "Sposta" can put the message: the folders of its account. */
+  moveFolders: MailFolder[]
+  /** The folder the message is in, shown but not offered. */
+  moveExcludedPath: string | null
+  /** The account's recent destinations, the latest first. */
+  recentMovePaths: string[]
+  /** "Sposta" is opening: the recent destinations are read again. */
+  onMovePickerOpen: () => void
+  onCreateFolderAndMove: (name: string) => void
   message: MailMessageDetail | null
   /**
    * Where the body is. While it downloads, the pane already shows what the
@@ -466,7 +468,11 @@ function EmailHtmlFrame({
 }
 
 export function MessageViewer({
-  moveTargets,
+  moveFolders,
+  moveExcludedPath,
+  recentMovePaths,
+  onMovePickerOpen,
+  onCreateFolderAndMove,
   message,
   bodyStatus,
   onRetryBody,
@@ -525,6 +531,7 @@ export function MessageViewer({
     },
     [handleZoomWheel]
   )
+  const [movePickerOpen, setMovePickerOpen] = useState(false)
   // Attachments (and "all") with a download under way: their chip spins and
   // a second click is ignored until it lands.
   const [busyAttachmentIds, setBusyAttachmentIds] = useState<string[]>([])
@@ -713,29 +720,38 @@ export function MessageViewer({
               <Archive className="size-3.5" />
             </IconButton>
 
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+            <FolderPickerPopover
+              open={movePickerOpen}
+              onOpenChange={(open) => {
+                if (open) {
+                  onMovePickerOpen()
+                }
+
+                setMovePickerOpen(open)
+              }}
+              align="end"
+              folders={moveFolders}
+              recentPaths={recentMovePaths}
+              excludedPath={moveExcludedPath}
+              onPick={(folderPath) => {
+                setMovePickerOpen(false)
+                onMoveToFolder(folderPath)
+              }}
+              onCreate={(name) => {
+                setMovePickerOpen(false)
+                onCreateFolderAndMove(name)
+              }}
+              trigger={
                 <IconButton
                   label="Sposta in una cartella"
                   shortcutKeys={moveKeys}
                   className="size-6.5"
-                  disabled={moveTargets.length === 0}
+                  disabled={moveFolders.length === 0}
                 >
                   <FolderInput className="size-3.5" />
                 </IconButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
-                {moveTargets.map((folder) => (
-                  <DropdownMenuItem
-                    key={folder.path}
-                    className="cursor-pointer text-[12px]"
-                    onClick={() => onMoveToFolder(folder.path)}
-                  >
-                    {folder.name}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+              }
+            />
 
             <IconButton
               label={message.isRead ? 'Segna come non letta' : 'Segna come letta'}

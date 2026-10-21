@@ -315,6 +315,13 @@ export interface ActiveMailboxContext {
 }
 
 /** Messages to move, to one folder of their account. */
+export interface CreateFolderInput {
+  accountId: string
+  name: string
+  /** The folder to create it in; the top of the account when absent. */
+  parentPath?: string
+}
+
 export interface MoveMessagesInput {
   refs: MessageRef[]
   destinationFolderPath: string

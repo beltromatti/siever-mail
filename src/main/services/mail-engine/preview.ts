@@ -95,6 +95,7 @@ const EMBEDDED_PROTOCOL_URI_PATTERN = /<(?:mailto|tel|sms|callto|skype):[^>]*>/g
 //   body, table, td { font-family: Arial; … }     — a full selector { rules }
 //   font-family: Arial !important;                 — a bare property line
 // The selector list is bounded at 200 chars to prevent catastrophic backtracks.
+const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->|<!(?:--)?\[?(?:end)?if[^>]*>|<!--[^>]*>/gi
 const CSS_RULE_BLOCK_PATTERN = /[^{}]{0,200}\{[^{}]*\}/g
 const CSS_PROPERTY_LINE_PATTERN = /\b[a-z-]{2,32}\s*:\s*[^;{}\n]{1,120}!important\s*;?/gi
 
@@ -319,6 +320,9 @@ function scrubPromotionalNoise(text: string): string {
       // we let URL/bracket cleaners go before them, `(max-width:480px)` inside
       // the media query prelude would lose its parenthesised anchor.
       .replace(CSS_MEDIA_QUERY_PATTERN, ' ')
+      // Outlook's conditional comments (`<!--[if mso]>`, `<!--if !mso><!-->`)
+      // that a text part made from HTML carries over: never prose.
+      .replace(HTML_COMMENT_PATTERN, ' ')
       .replace(CSS_RULE_BLOCK_PATTERN, ' ')
       .replace(CSS_PROPERTY_LINE_PATTERN, ' ')
       // `<mailto:…>` / `<tel:…>` style pseudo-tags left over by html-to-text

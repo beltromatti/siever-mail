@@ -312,6 +312,16 @@ export class MailEngine {
     return connection.fetchMessageRawSource(ref)
   }
 
+  /** See `AccountConnection.createFolder`. */
+  async createFolder(
+    accountId: string,
+    name: string,
+    parentPath: string | null
+  ): Promise<MailFolder> {
+    const connection = await this.requestConnection(accountId)
+    return connection.createFolder(name, parentPath)
+  }
+
   /** See `AccountConnection.searchMessages`. */
   async searchMessages(
     mailbox: { accountId: string; folderPath: string },

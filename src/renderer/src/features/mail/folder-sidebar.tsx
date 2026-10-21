@@ -1,22 +1,13 @@
 import { useMemo, useState } from 'react'
-import {
-  Archive,
-  ChevronDown,
-  ChevronRight,
-  File,
-  Folder,
-  FolderOpen,
-  Inbox,
-  Send,
-  ShieldAlert,
-  Trash2
-} from 'lucide-react'
+import { ChevronDown, ChevronRight, type Inbox } from 'lucide-react'
 
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { buildFolderTree, folderNodeLabel, type FolderTreeNode } from '@renderer/lib/folder-tree'
 import { cn, formatCount } from '@renderer/lib/utils'
 import { folderRole, folderRoleLabel, unifiedFolderPath, type FolderRole } from '@shared/folders'
 import type { MailFolder, UnifiedFolderSummary } from '@shared/models'
+
+import { folderIcon, ROLE_ICONS } from './folder-icons'
 
 interface FolderSidebarProps {
   /** The account the dropdown above has open, whose folders the tree shows. */
@@ -26,15 +17,6 @@ interface FolderSidebarProps {
   unifiedFolders: UnifiedFolderSummary[]
   selectedFolderPath: string | null
   onSelectFolder: (folderPath: string) => void
-}
-
-const ROLE_ICONS: Readonly<Record<FolderRole, typeof Inbox>> = {
-  '\\Inbox': Inbox,
-  '\\Sent': Send,
-  '\\Drafts': File,
-  '\\Archive': Archive,
-  '\\Junk': ShieldAlert,
-  '\\Trash': Trash2
 }
 
 /**
@@ -203,7 +185,7 @@ export function FolderSidebar({
     return (
       <div key={node.path}>
         <FolderRow
-          icon={role ? ROLE_ICONS[role] : hasChildren && expanded ? FolderOpen : Folder}
+          icon={folderIcon(role, hasChildren && expanded)}
           name={folderNodeLabel(node)}
           messageCount={folder?.messageCount ?? 0}
           unseenCount={folder?.unseenCount ?? 0}
