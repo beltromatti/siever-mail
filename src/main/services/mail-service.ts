@@ -22,6 +22,7 @@ import type {
   AppBootstrap,
   ComposeMailInput,
   CreateFolderInput,
+  MoveMessagesToRoleInput,
   AttachmentRef,
   CopiedAttachment,
   DataStorageBreakdown,
@@ -46,7 +47,7 @@ import type {
   UnifiedFolderSummary,
   UnifiedPreferences
 } from '@shared/models'
-import { unifiedFolderRole } from '@shared/folders'
+import { UNIFIED_FOLDER_ROLES, unifiedFolderRole, type FolderRole } from '@shared/folders'
 import { MESSAGE_LIST_PAGE_SIZE, READER_ZOOM_MAX, READER_ZOOM_MIN } from '@shared/models'
 import { parseSearchQuery } from '@shared/search'
 
@@ -124,6 +125,10 @@ const messageRefsSchema = z.array(messageRefSchema).max(MAX_MESSAGES_PER_ACTION)
 const moveMessagesSchema = z.object({
   refs: messageRefsSchema,
   destinationFolderPath: z.string().trim().min(1)
+})
+const moveMessagesToRoleSchema = z.object({
+  refs: messageRefsSchema,
+  role: z.enum(UNIFIED_FOLDER_ROLES as [FolderRole, ...FolderRole[]])
 })
 const createFolderSchema = z.object({
   accountId: z.string().trim().min(1),
@@ -715,6 +720,13 @@ export class MailService {
     }
 
     return result
+  }
+
+  /** Moves messages, of any account, to each one's folder for a role (see `moveMessagesToRole`). */
+  async moveMessagesToRole(input: MoveMessagesToRoleInput): Promise<MessagesActionResult> {
+    const payload = moveMessagesToRoleSchema.parse(input)
+    await this.ensureAccountsExist(payload.refs)
+    return this.engine.moveMessagesToRole(payload.refs, payload.role)
   }
 
   /** An account's recent destinations of "Sposta", the latest first. */

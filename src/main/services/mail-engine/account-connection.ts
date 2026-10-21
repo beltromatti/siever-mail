@@ -25,7 +25,7 @@ import type {
   MailMessageSummary,
   MessageRef
 } from '@shared/models'
-import { folderForRole } from '@shared/folders'
+import { folderForRole, folderRoleLabel, type FolderRole } from '@shared/folders'
 import { deriveSenderKey, deriveSenderName } from '@shared/sender'
 
 import type { AppDatabase, FolderSyncState } from '../database'
@@ -1124,6 +1124,27 @@ export class AccountConnection extends EventEmitter {
     }, `delete:${folderPath}:${uids.length}`)
 
     return { sourceFolder: folderPath }
+  }
+
+  /**
+   * Moves messages to the account's folder for a role — what dropping them
+   * on a folder of "Tutti gli account" does: each account's own Spam, its own
+   * Archivio (created where there is none, as archiving creates it).
+   * Messages already there stay.
+   */
+  async moveMessagesToRole(folderPath: string, uids: number[], role: FolderRole): Promise<void> {
+    const target =
+      role === '\\Archive'
+        ? await this.resolveArchiveFolder()
+        : folderForRole(await this.database.listFolders(this.account.id), role)
+
+    if (!target) {
+      throw new Error(`${this.account.email} non ha una cartella «${folderRoleLabel(role)}».`)
+    }
+
+    if (target.path !== folderPath) {
+      await this.moveMessages(folderPath, uids, target.path)
+    }
   }
 
   async archiveMessages(

@@ -322,6 +322,12 @@ export interface CreateFolderInput {
   parentPath?: string
 }
 
+/** Messages to move, each to its own account's folder for a role. */
+export interface MoveMessagesToRoleInput {
+  refs: MessageRef[]
+  role: FolderRole
+}
+
 export interface MoveMessagesInput {
   refs: MessageRef[]
   destinationFolderPath: string

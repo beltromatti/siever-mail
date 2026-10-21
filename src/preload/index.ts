@@ -60,6 +60,7 @@ const desktopMailApi: DesktopMailApi = {
   searchOnServer: async (accountId, folderPath, query) =>
     invoke(IPC_CHANNELS.searchOnServer, accountId, folderPath, query),
   moveMessages: async (input) => invoke(IPC_CHANNELS.moveMessages, input),
+  moveMessagesToRole: async (input) => invoke(IPC_CHANNELS.moveMessagesToRole, input),
   deleteMessages: async (refs) => invoke(IPC_CHANNELS.deleteMessages, refs),
   archiveMessages: async (refs) => invoke(IPC_CHANNELS.archiveMessages, refs),
   setMessagesSeen: async (input) => invoke(IPC_CHANNELS.setMessagesSeen, input),

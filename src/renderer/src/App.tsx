@@ -14,7 +14,7 @@ import { toast } from 'sonner'
 import appLogo from '@renderer/assets/logo.png'
 import { AddAccountDialog } from '@renderer/features/accounts/add-account-dialog'
 import { AccountSwitcher } from '@renderer/features/accounts/account-switcher'
-import { FolderSidebar } from '@renderer/features/mail/folder-sidebar'
+import { FolderSidebar, type FolderDropTarget } from '@renderer/features/mail/folder-sidebar'
 import {
   MailComposerDialog,
   type ComposerInitialData
@@ -42,7 +42,14 @@ import { ConfirmDialog, useConfirmDialog } from '@renderer/components/ui/confirm
 import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { cn, formatAppVersion, formatCount } from '@renderer/lib/utils'
-import { folderDisplayName, folderRoleLabel, unifiedFolderRole } from '@shared/folders'
+import {
+  folderDisplayName,
+  folderRole,
+  folderRoleLabel,
+  unifiedFolderRole,
+  type FolderRole
+} from '@shared/folders'
+import { startMessageDrag } from '@renderer/lib/message-drag'
 import { buildMessageSections } from '@renderer/lib/message-sections'
 import {
   CommandShortcutsProvider,
@@ -1588,6 +1595,9 @@ function App(): React.JSX.Element {
     () => folders.find((folder) => folder.path === selectedFolderPath) ?? null,
     [folders, selectedFolderPath]
   )
+  // The kind of folder the view gathers across accounts, when it is one of
+  // "Tutti gli account".
+  const currentUnifiedRole = unifiedFolderRole(selectedFolderPath)
 
   const primaryAddressMode: PrimaryAddressMode = RECIPIENT_ORIENTED_SPECIAL_USES.has(
     currentFolder?.specialUse ?? ''
@@ -2740,6 +2750,69 @@ function App(): React.JSX.Element {
   )
 
   // "Sposta" opens from its button or from its chord.
+  // The messages being dragged towards a folder, while the drag lasts.
+  const [draggedRefs, setDraggedRefs] = useState<MessageRef[] | null>(null)
+
+  /** A row dragged takes the selection it is part of, or goes alone and becomes the selection. */
+  const handleRowDragStart = useCallback(
+    (ref: MessageRef, dataTransfer: DataTransfer): void => {
+      const inSelection = selection.selectedRefs.some((selected) => isSameMessageRef(selected, ref))
+      const refs = inSelection ? selection.selectedRefs : [ref]
+
+      if (!inSelection) {
+        setSelection({ selectedRefs: [ref], cursorRef: ref, anchorRef: ref })
+      }
+
+      startMessageDrag(dataTransfer, refs.length, JSON.stringify(refs))
+      setDraggedRefs(refs)
+    },
+    [selection.selectedRefs]
+  )
+
+  /**
+   * Where dragged messages can land. On a folder of an account: messages of
+   * that account, not all of them there already. On a folder of "Tutti gli
+   * account": any, each to its own account's folder of that kind — unless
+   * they are all in such a folder already.
+   */
+  const messageDrop = useMemo(() => {
+    if (!draggedRefs || draggedRefs.length === 0) {
+      return null
+    }
+
+    const roleOf = (ref: MessageRef): FolderRole | null => {
+      const folder =
+        ref.accountId === selectedAccountId
+          ? folders.find((candidate) => candidate.path === ref.folderPath)
+          : undefined
+      return folder ? folderRole(folder) : currentUnifiedRole
+    }
+
+    return {
+      accepts: (target: FolderDropTarget): boolean =>
+        target.kind === 'role'
+          ? !draggedRefs.every((ref) => roleOf(ref) === target.role)
+          : draggedRefs.every((ref) => ref.accountId === target.accountId) &&
+            !draggedRefs.every((ref) => ref.folderPath === target.folderPath),
+      onDrop: (target: FolderDropTarget): void => {
+        const refs = draggedRefs
+        setDraggedRefs(null)
+
+        void runMessageRemovalAction(
+          refs,
+          target.kind === 'role'
+            ? (moving) => window.mailApi.moveMessagesToRole({ refs: moving, role: target.role })
+            : (moving) =>
+                window.mailApi.moveMessages({
+                  refs: moving,
+                  destinationFolderPath: target.folderPath
+                }),
+          'Spostamento email non riuscito.'
+        )
+      }
+    }
+  }, [currentUnifiedRole, draggedRefs, folders, runMessageRemovalAction, selectedAccountId])
+
   const [moveMenuOpen, setMoveMenuOpen] = useState(false)
 
   const changeMoveMenuOpen = useCallback(
@@ -3267,7 +3340,6 @@ function App(): React.JSX.Element {
 
   // What the view is called where it is named: the folder, or a folder of
   // "Tutti gli account".
-  const currentUnifiedRole = unifiedFolderRole(selectedFolderPath)
   const currentViewLabel = currentUnifiedRole
     ? `${folderRoleLabel(currentUnifiedRole)} · ${ALL_ACCOUNTS_LABEL}`
     : currentFolder
@@ -3351,6 +3423,8 @@ function App(): React.JSX.Element {
     onActivateRow: handleActivateRow,
     onOpenRow: handleOpenRow,
     onRowContextMenu: (ref) => void openMessageContextMenu(ref),
+    onRowDragStart: handleRowDragStart,
+    onRowDragEnd: () => setDraggedRefs(null),
     onToggleFlag: handleToggleRowFlag,
     onSelectSection: handleSelectSection,
     onSelectAll: handleSelectAll,
@@ -3427,6 +3501,7 @@ function App(): React.JSX.Element {
                 folders={folders}
                 unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
                 selectedFolderPath={selectedFolderPath}
+                messageDrop={messageDrop}
                 onSelectFolder={(folderPath) => {
                   setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
 

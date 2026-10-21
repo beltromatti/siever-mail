@@ -57,6 +57,9 @@ export interface MessageListViewProps {
   onOpenRow: (ref: MessageRef) => void
   /** A right click on a row: the menu of what can be done with it. */
   onRowContextMenu: (ref: MessageRef) => void
+  /** A row starts being dragged — with the selection it is part of — towards a folder. */
+  onRowDragStart: (ref: MessageRef, dataTransfer: DataTransfer) => void
+  onRowDragEnd: () => void
   onToggleFlag: (ref: MessageRef, flagged: boolean) => void
   onSelectSection: (section: MessageSection) => void
   onSelectAll: () => void

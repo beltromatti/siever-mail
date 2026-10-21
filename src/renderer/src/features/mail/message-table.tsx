@@ -92,6 +92,8 @@ export function MessageTable({
   onActivateRow,
   onOpenRow,
   onRowContextMenu,
+  onRowDragStart,
+  onRowDragEnd,
   onToggleFlag,
   onSelectSection,
   onSelectAll,
@@ -237,6 +239,9 @@ export function MessageTable({
                   event.preventDefault()
                   onRowContextMenu(messageRef)
                 }}
+                draggable
+                onDragStart={(event) => onRowDragStart(messageRef, event.dataTransfer)}
+                onDragEnd={onRowDragEnd}
                 style={{ height: MESSAGE_TABLE_ROW_HEIGHT_PX }}
                 className={cn(
                   'group border-border/25 grid cursor-default items-center gap-1.5 border-b px-2 text-[11.5px] transition-colors',

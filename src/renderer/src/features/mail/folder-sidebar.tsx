@@ -9,6 +9,10 @@ import type { MailFolder, UnifiedFolderSummary } from '@shared/models'
 
 import { folderIcon, ROLE_ICONS } from './folder-icons'
 
+/** Where dragged messages can land: a folder of an account, or a kind of folder of every account. */
+export type FolderDropTarget =
+  { kind: 'folder'; accountId: string; folderPath: string } | { kind: 'role'; role: FolderRole }
+
 interface FolderSidebarProps {
   /** The account the dropdown above has open, whose folders the tree shows. */
   accountLabel: string
@@ -17,6 +21,11 @@ interface FolderSidebarProps {
   unifiedFolders: UnifiedFolderSummary[]
   selectedFolderPath: string | null
   onSelectFolder: (folderPath: string) => void
+  /** While messages are dragged: which folders take them, and the drop. */
+  messageDrop: {
+    accepts: (target: FolderDropTarget) => boolean
+    onDrop: (target: FolderDropTarget) => void
+  } | null
 }
 
 /**
@@ -58,7 +67,8 @@ function FolderRow({
   active,
   expanded,
   onToggleExpanded,
-  onSelect
+  onSelect,
+  drop
 }: {
   icon: typeof Inbox
   name: string
@@ -72,6 +82,8 @@ function FolderRow({
   onToggleExpanded?: () => void
   /** Undefined for a container the server keeps only to hold other folders. */
   onSelect?: () => void
+  /** Set while messages are dragged and this folder takes them. */
+  drop?: { hovered: boolean; onEnter: () => void; onLeave: () => void; onDrop: () => void }
 }): React.JSX.Element {
   return (
     <div
@@ -79,9 +91,37 @@ function FolderRow({
         'group flex h-6.5 w-full items-center rounded transition-colors',
         active
           ? 'bg-primary/15 text-primary'
-          : 'text-foreground/85 hover:bg-secondary/55 hover:text-foreground'
+          : 'text-foreground/85 hover:bg-secondary/55 hover:text-foreground',
+        drop?.hovered && 'bg-primary/20 text-primary ring-primary/60 ring-1 ring-inset'
       )}
       style={{ paddingLeft: depth * 12 }}
+      onDragOver={
+        drop
+          ? (event) => {
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+            }
+          : undefined
+      }
+      onDragEnter={drop ? () => drop.onEnter() : undefined}
+      onDragLeave={
+        drop
+          ? (event) => {
+              // Leaving for one of its own children is not leaving.
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                drop.onLeave()
+              }
+            }
+          : undefined
+      }
+      onDrop={
+        drop
+          ? (event) => {
+              event.preventDefault()
+              drop.onDrop()
+            }
+          : undefined
+      }
     >
       <span className="flex w-4 shrink-0 justify-center">
         {expanded !== undefined && (
@@ -136,6 +176,8 @@ function FolderRow({
   )
 }
 
+type FolderRowDrop = NonNullable<Parameters<typeof FolderRow>[0]['drop']>
+
 function SectionHeading({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <h2 className="text-muted-foreground truncate px-2 pt-2 pb-1 text-[10px] font-semibold tracking-widest uppercase">
@@ -157,9 +199,26 @@ export function FolderSidebar({
   folders,
   unifiedFolders,
   selectedFolderPath,
-  onSelectFolder
+  onSelectFolder,
+  messageDrop
 }: FolderSidebarProps): React.JSX.Element {
   const tree = useMemo(() => buildFolderTree(folders), [folders])
+  // The folder dragged messages are over, to show where they would land.
+  const [dropHoverKey, setDropHoverKey] = useState<string | null>(null)
+
+  /** A folder's part in a drag: none, unless it takes the messages dragged. */
+  const dropFor = (key: string, target: FolderDropTarget): FolderRowDrop | undefined =>
+    messageDrop?.accepts(target)
+      ? {
+          hovered: dropHoverKey === key,
+          onEnter: () => setDropHoverKey(key),
+          onLeave: () => setDropHoverKey((current) => (current === key ? null : current)),
+          onDrop: () => {
+            setDropHoverKey(null)
+            messageDrop.onDrop(target)
+          }
+        }
+      : undefined
   // Folded branches, for the session: by default the whole tree shows.
   const [collapsedPaths, setCollapsedPaths] = useState<ReadonlySet<string>>(() => new Set())
 
@@ -195,6 +254,15 @@ export function FolderSidebar({
           expanded={hasChildren ? expanded : undefined}
           onToggleExpanded={() => toggleCollapsed(node.path)}
           onSelect={folder ? () => onSelectFolder(folder.path) : undefined}
+          drop={
+            folder
+              ? dropFor(`folder:${folder.path}`, {
+                  kind: 'folder',
+                  accountId: folder.accountId,
+                  folderPath: folder.path
+                })
+              : undefined
+          }
         />
         {hasChildren && expanded && node.children.map((child) => renderNode(child, depth + 1))}
       </div>
@@ -221,6 +289,7 @@ export function FolderSidebar({
                     badge={badgeCount(summary.role, summary.messageCount, summary.unseenCount)}
                     active={selectedFolderPath === path}
                     onSelect={() => onSelectFolder(path)}
+                    drop={dropFor(path, { kind: 'role', role: summary.role })}
                   />
                 )
               })}

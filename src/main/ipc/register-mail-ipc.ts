@@ -16,6 +16,7 @@ import type {
   MessageAttachmentsRef,
   MessageRef,
   MoveMessagesInput,
+  MoveMessagesToRoleInput,
   SetMessagesKeywordInput,
   UiPreferences
 } from '@shared/models'
@@ -147,6 +148,10 @@ export function registerMailIpc(
 
   registerDataHandler(IPC_CHANNELS.moveMessages, async (payload) =>
     mailService.moveMessages(payload as MoveMessagesInput)
+  )
+
+  registerDataHandler(IPC_CHANNELS.moveMessagesToRole, async (input) =>
+    mailService.moveMessagesToRole(input as MoveMessagesToRoleInput)
   )
 
   registerDataHandler(IPC_CHANNELS.deleteMessages, async (refs) =>

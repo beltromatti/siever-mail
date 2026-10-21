@@ -66,6 +66,8 @@ export function MessageList({
   onActivateRow,
   onOpenRow,
   onRowContextMenu,
+  onRowDragStart,
+  onRowDragEnd,
   onToggleFlag,
   onSelectSection,
   onSelectAll,
@@ -156,6 +158,9 @@ export function MessageList({
                   event.preventDefault()
                   onRowContextMenu(messageRef)
                 }}
+                draggable
+                onDragStart={(event) => onRowDragStart(messageRef, event.dataTransfer)}
+                onDragEnd={onRowDragEnd}
                 className={cn(
                   'group border-border/40 relative flex cursor-default gap-2 border-b px-2.5 py-1.5 transition-colors',
                   isSelected ? 'bg-primary/14 hover:bg-primary/18' : 'hover:bg-secondary/45',

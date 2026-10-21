@@ -276,6 +276,16 @@ export class MailEngine {
         }
   }
 
+  /** See `AccountConnection.moveMessagesToRole`; messages of any account. */
+  async moveMessagesToRole(
+    refs: ReadonlyArray<MessageRef>,
+    role: FolderRole
+  ): Promise<MessagesActionResult> {
+    return this.onMessages(refs, (connection, folderPath, uids) =>
+      connection.moveMessagesToRole(folderPath, uids, role)
+    )
+  }
+
   async deleteMessages(refs: ReadonlyArray<MessageRef>): Promise<MessagesActionResult> {
     return this.onMessages(refs, (connection, folderPath, uids) =>
       connection.deleteMessages(folderPath, uids)

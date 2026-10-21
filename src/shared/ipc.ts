@@ -15,6 +15,7 @@ import type {
   MailAccount,
   MessagesChangedEvent,
   CreateFolderInput,
+  MoveMessagesToRoleInput,
   UnifiedFolderSummary,
   UnifiedFoldersChangedEvent,
   UnifiedPreferences,
@@ -59,6 +60,7 @@ export const IPC_CHANNELS = {
   hydratePreviews: 'message:hydrate-previews',
   searchOnServer: 'message:search-on-server',
   moveMessages: 'message:move',
+  moveMessagesToRole: 'message:move-to-role',
   deleteMessages: 'message:delete',
   archiveMessages: 'message:archive',
   setMessagesSeen: 'message:set-seen',
@@ -154,6 +156,8 @@ export interface DesktopMailApi {
    * refusal: the others went through.
    */
   moveMessages: (input: MoveMessagesInput) => Promise<MessagesActionResult>
+  /** Each message to its own account's folder for a role: a drop on "Tutti gli account". */
+  moveMessagesToRole: (input: MoveMessagesToRoleInput) => Promise<MessagesActionResult>
   deleteMessages: (refs: MessageRef[]) => Promise<MessagesActionResult>
   archiveMessages: (refs: MessageRef[]) => Promise<MessagesActionResult>
   setMessagesSeen: (input: SetMessagesKeywordInput) => Promise<MessagesActionResult>
