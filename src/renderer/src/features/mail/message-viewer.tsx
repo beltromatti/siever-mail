@@ -20,6 +20,7 @@ import {
   Trash2
 } from 'lucide-react'
 
+import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { Button } from '@renderer/components/ui/button'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { AddressTokens, summarizeAddresses, type AddressActions } from './address-tokens'
@@ -34,6 +35,7 @@ import {
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { Separator } from '@renderer/components/ui/separator'
+import { useCommandKeys } from '@renderer/lib/command-shortcuts'
 import { buildMessageFrameDocument } from '@renderer/lib/mail-html'
 import { READER_ZOOM_RESET, wheelReaderZoom } from '@renderer/lib/reader-zoom'
 import { cn, formatAddress, formatDateLabel, formatDateTimeLabel } from '@renderer/lib/utils'
@@ -522,6 +524,10 @@ export function MessageViewer({
   // a second click is ignored until it lands.
   const [busyAttachmentIds, setBusyAttachmentIds] = useState<string[]>([])
   const hasHtmlBody = Boolean(message?.html?.trim())
+  const archiveKeys = useCommandKeys('archive')
+  const moveKeys = useCommandKeys('move')
+  const readKeys = useCommandKeys('toggle-read')
+  const flagKeys = useCommandKeys('toggle-flag')
 
   useEffect(() => {
     setBusyAttachmentIds([])
@@ -640,36 +646,47 @@ export function MessageViewer({
             {message.subject}
           </h2>
           <div className="flex shrink-0 flex-wrap items-center gap-1">
-            <Button
-              variant="secondary"
-              size="sm"
-              className="h-6.5 gap-1.5 px-2 text-[11.5px]"
-              onClick={onReply}
-            >
-              <Reply className="size-3.5" /> Rispondi
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6.5 gap-1.5 px-2 text-[11.5px]"
-              onClick={onReplyAll}
-            >
-              <ReplyAll className="size-3.5" /> Rispondi a tutti
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6.5 gap-1.5 px-2 text-[11.5px]"
-              onClick={onForward}
-            >
-              <Forward className="size-3.5" /> Inoltra
-            </Button>
+            <ActionTooltip label="Rispondi al mittente" commandId="reply">
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-6.5 gap-1.5 px-2 text-[11.5px]"
+                onClick={onReply}
+              >
+                <Reply className="size-3.5" /> Rispondi
+              </Button>
+            </ActionTooltip>
+            <ActionTooltip label="Rispondi a tutti i destinatari" commandId="reply-all">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6.5 gap-1.5 px-2 text-[11.5px]"
+                onClick={onReplyAll}
+              >
+                <ReplyAll className="size-3.5" /> Rispondi a tutti
+              </Button>
+            </ActionTooltip>
+            <ActionTooltip label="Inoltra con gli allegati" commandId="forward">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6.5 gap-1.5 px-2 text-[11.5px]"
+                onClick={onForward}
+              >
+                <Forward className="size-3.5" /> Inoltra
+              </Button>
+            </ActionTooltip>
 
             {/* Same divider the toolbar uses, so the labelled pair reads as
                 one group and the icons as another. */}
             <div className="bg-border/60 mx-0.5 h-5 w-px shrink-0" />
 
-            <IconButton label="Archivia" className="size-6.5" onClick={onArchive}>
+            <IconButton
+              label="Archivia"
+              shortcutKeys={archiveKeys}
+              className="size-6.5"
+              onClick={onArchive}
+            >
               <Archive className="size-3.5" />
             </IconButton>
 
@@ -677,6 +694,7 @@ export function MessageViewer({
               <DropdownMenuTrigger asChild>
                 <IconButton
                   label="Sposta in una cartella"
+                  shortcutKeys={moveKeys}
                   className="size-6.5"
                   disabled={moveTargets.length === 0}
                 >
@@ -698,6 +716,7 @@ export function MessageViewer({
 
             <IconButton
               label={message.isRead ? 'Segna come non letta' : 'Segna come letta'}
+              shortcutKeys={readKeys}
               className="size-6.5"
               onClick={() => onToggleSeen(!message.isRead)}
             >
@@ -706,6 +725,7 @@ export function MessageViewer({
 
             <IconButton
               label={message.isFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
+              shortcutKeys={flagKeys}
               className={cn('size-6.5', message.isFlagged && 'text-flagged')}
               onClick={() => onToggleFlagged(!message.isFlagged)}
             >

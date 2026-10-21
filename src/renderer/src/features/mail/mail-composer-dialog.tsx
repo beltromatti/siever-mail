@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Paperclip, RotateCw, Send, X } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { Button } from '@renderer/components/ui/button'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import {
@@ -30,6 +31,7 @@ import {
   splitSignature
 } from '@renderer/features/mail/composer-body'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
+import { commandForKeyEvent, useShortcutOverrides } from '@renderer/lib/command-shortcuts'
 import { htmlToPlainText, splitRecipients } from '@renderer/lib/email'
 import { cn } from '@renderer/lib/utils'
 import { MAIL_COMPOSER_DEFAULT_FONT_FAMILY } from '@shared/mail-fonts'
@@ -281,6 +283,7 @@ export function MailComposerDialog({
   const [activeTokenContext, setActiveTokenContext] = useState<RecipientTokenContext | null>(null)
   const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0)
   const { confirm, dialog: confirmDialog } = useConfirmDialog()
+  const shortcutOverrides = useShortcutOverrides()
   /**
    * Cc and Ccn stay folded away until they are wanted. They were always on
    * screen, which cost two rows of every message to serve the small minority
@@ -962,6 +965,26 @@ export function MailComposerDialog({
     }
   }
 
+  const runComposerCommand = (commandId: string): void => {
+    switch (commandId) {
+      case 'send':
+        void handleSend()
+        return
+      case 'attach':
+        if (account) {
+          void handlePickAttachments()
+        }
+        return
+      case 'show-cc':
+        if (account) {
+          setEditorFocusMode(false)
+          setCcBccRequested(true)
+          window.requestAnimationFrame(() => ccInputRef.current?.focus())
+        }
+        return
+    }
+  }
+
   const handleSend = async (): Promise<void> => {
     if (!account || !canSend) {
       return
@@ -1014,6 +1037,18 @@ export function MailComposerDialog({
               event.preventDefault()
               setEditorFocusMode(false)
             }
+          }}
+          // The composer's commands, from any field — and from the editor,
+          // which hands over the chords it does not use itself.
+          onKeyDown={(event) => {
+            const command = commandForKeyEvent(event.nativeEvent, 'composer', shortcutOverrides)
+
+            if (!command || event.repeat) {
+              return
+            }
+
+            event.preventDefault()
+            runComposerCommand(command.id)
           }}
           onDragEnter={(event) => {
             if (event.dataTransfer.types.includes('Files')) {
@@ -1263,15 +1298,17 @@ export function MailComposerDialog({
                   >
                     Annulla
                   </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => void handleSend()}
-                    disabled={!canSend}
-                    className="h-8 gap-1.5 text-[12px]"
-                  >
-                    <Send className="size-3.5" />
-                    Invia
-                  </Button>
+                  <ActionTooltip label="Invia il messaggio" commandId="send" side="top">
+                    <Button
+                      size="sm"
+                      onClick={() => void handleSend()}
+                      disabled={!canSend}
+                      className="h-8 gap-1.5 text-[12px]"
+                    >
+                      <Send className="size-3.5" />
+                      Invia
+                    </Button>
+                  </ActionTooltip>
                 </div>
               </DialogFooter>
             </>

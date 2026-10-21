@@ -17,6 +17,7 @@ import type {
   ToolbarActionDescriptor
 } from '@app/extension/types'
 
+import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { Button } from '@renderer/components/ui/button'
 import {
   DropdownMenu,
@@ -64,6 +65,9 @@ interface MailToolbarProps {
   onToggleSeen: () => void
   onToggleFlagged: () => void
   onClearSelection: () => void
+  /** "Sposta" opens from its button and from its chord. */
+  moveMenuOpen: boolean
+  onMoveMenuOpenChange: (open: boolean) => void
 }
 
 const FILTER_OPTIONS: ReadonlyArray<{ value: MessageListFilter; label: string }> = [
@@ -104,9 +108,12 @@ export function MailToolbar({
   onDelete,
   onToggleSeen,
   onToggleFlagged,
-  onClearSelection
+  onClearSelection,
+  moveMenuOpen,
+  onMoveMenuOpenChange
 }: MailToolbarProps): React.JSX.Element {
   const hasSelection = selectedCount > 0
+  const flagLabel = selectionFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'
 
   return (
     // Labels on the message actions appear only when the bar is actually
@@ -117,14 +124,11 @@ export function MailToolbar({
     // the apple layout than in outlook at the same window size.
     <div className="glass-panel @container flex h-11 shrink-0 items-center gap-2 rounded-lg px-2">
       <div className="flex shrink-0 items-center gap-1.5">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button size="icon" onClick={onCompose} aria-label="Nuovo messaggio" className="size-8">
-              <MailPlus className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Nuovo messaggio</TooltipContent>
-        </Tooltip>
+        <ActionTooltip label="Nuovo messaggio" commandId="compose">
+          <Button size="icon" onClick={onCompose} aria-label="Nuovo messaggio" className="size-8">
+            <MailPlus className="size-4" />
+          </Button>
+        </ActionTooltip>
 
         {extensionToolbarActions.map((action) => (
           <Fragment key={action.id}>
@@ -156,46 +160,49 @@ export function MailToolbar({
             </span>
           )}
 
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 px-2 text-[11.5px]"
-            disabled={!hasSelection}
-            onClick={onArchiveClassic}
-            title="Archivia"
-            aria-label="Archivia"
-          >
-            <Archive className="size-3.5" />
-            <span className="hidden @[64rem]:inline">Archivia</span>
-          </Button>
-
-          {onMoveAcrossAccounts ? (
+          <ActionTooltip label="Archivia" commandId="archive">
             <Button
               variant="ghost"
               size="sm"
               className="h-7 gap-1.5 px-2 text-[11.5px]"
-              onClick={onMoveAcrossAccounts}
-              title="Sposta"
-              aria-label="Sposta"
+              disabled={!hasSelection}
+              onClick={onArchiveClassic}
+              aria-label="Archivia"
             >
-              <FolderInput className="size-3.5" />
-              <span className="hidden @[64rem]:inline">Sposta</span>
+              <Archive className="size-3.5" />
+              <span className="hidden @[64rem]:inline">Archivia</span>
             </Button>
+          </ActionTooltip>
+
+          {onMoveAcrossAccounts ? (
+            <ActionTooltip label="Sposta in una cartella" commandId="move">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 px-2 text-[11.5px]"
+                onClick={onMoveAcrossAccounts}
+                aria-label="Sposta"
+              >
+                <FolderInput className="size-3.5" />
+                <span className="hidden @[64rem]:inline">Sposta</span>
+              </Button>
+            </ActionTooltip>
           ) : (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 gap-1.5 px-2 text-[11.5px]"
-                  disabled={!hasSelection || moveTargets.length === 0}
-                  title="Sposta"
-                  aria-label="Sposta"
-                >
-                  <FolderInput className="size-3.5" />
-                  <span className="hidden @[64rem]:inline">Sposta</span>
-                </Button>
-              </DropdownMenuTrigger>
+            <DropdownMenu open={moveMenuOpen} onOpenChange={onMoveMenuOpenChange}>
+              <ActionTooltip label="Sposta in una cartella" commandId="move">
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 gap-1.5 px-2 text-[11.5px]"
+                    disabled={!hasSelection || moveTargets.length === 0}
+                    aria-label="Sposta"
+                  >
+                    <FolderInput className="size-3.5" />
+                    <span className="hidden @[64rem]:inline">Sposta</span>
+                  </Button>
+                </DropdownMenuTrigger>
+              </ActionTooltip>
               <DropdownMenuContent align="start" className="max-h-80 overflow-y-auto">
                 {moveTargets.map((folder) => (
                   <DropdownMenuItem
@@ -210,46 +217,47 @@ export function MailToolbar({
             </DropdownMenu>
           )}
 
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 px-2 text-[11.5px]"
-            disabled={!hasSelection}
-            onClick={onToggleSeen}
-            title={toggleSeenLabel}
-            aria-label={toggleSeenLabel}
-          >
-            <MailOpen className="size-3.5" />
-            <span className="hidden @[64rem]:inline">{toggleSeenLabel}</span>
-          </Button>
+          <ActionTooltip label={toggleSeenLabel} commandId="toggle-read">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 px-2 text-[11.5px]"
+              disabled={!hasSelection}
+              onClick={onToggleSeen}
+              aria-label={toggleSeenLabel}
+            >
+              <MailOpen className="size-3.5" />
+              <span className="hidden @[64rem]:inline">{toggleSeenLabel}</span>
+            </Button>
+          </ActionTooltip>
 
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn('h-7 gap-1.5 px-2 text-[11.5px]', selectionFlagged && 'text-flagged')}
-            disabled={!hasSelection}
-            onClick={onToggleFlagged}
-            title={selectionFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
-            aria-label={selectionFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
-          >
-            <Flag className={cn('size-3.5', selectionFlagged && 'fill-current')} />
-            <span className="hidden @[64rem]:inline">
-              {selectionFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
-            </span>
-          </Button>
+          <ActionTooltip label={flagLabel} commandId="toggle-flag">
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn('h-7 gap-1.5 px-2 text-[11.5px]', selectionFlagged && 'text-flagged')}
+              disabled={!hasSelection}
+              onClick={onToggleFlagged}
+              aria-label={flagLabel}
+            >
+              <Flag className={cn('size-3.5', selectionFlagged && 'fill-current')} />
+              <span className="hidden @[64rem]:inline">{flagLabel}</span>
+            </Button>
+          </ActionTooltip>
 
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-destructive hover:bg-destructive/15 hover:text-destructive h-7 gap-1.5 px-2 text-[11.5px]"
-            disabled={!hasSelection}
-            onClick={onDelete}
-            title="Elimina"
-            aria-label="Elimina"
-          >
-            <Trash2 className="size-3.5" />
-            <span className="hidden @[64rem]:inline">Elimina</span>
-          </Button>
+          <ActionTooltip label="Elimina">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-destructive hover:bg-destructive/15 hover:text-destructive h-7 gap-1.5 px-2 text-[11.5px]"
+              disabled={!hasSelection}
+              onClick={onDelete}
+              aria-label="Elimina"
+            >
+              <Trash2 className="size-3.5" />
+              <span className="hidden @[64rem]:inline">Elimina</span>
+            </Button>
+          </ActionTooltip>
         </div>
       </div>
 
@@ -333,20 +341,17 @@ export function MailToolbar({
           </Tooltip>
         </div>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-muted-foreground hover:text-foreground size-8"
-              onClick={onOpenSettings}
-              aria-label="Apri impostazioni"
-            >
-              <Settings className="size-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Impostazioni</TooltipContent>
-        </Tooltip>
+        <ActionTooltip label="Impostazioni" commandId="settings">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-muted-foreground hover:text-foreground size-8"
+            onClick={onOpenSettings}
+            aria-label="Apri impostazioni"
+          >
+            <Settings className="size-4" />
+          </Button>
+        </ActionTooltip>
       </div>
     </div>
   )

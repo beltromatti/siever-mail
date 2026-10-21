@@ -1,14 +1,17 @@
 /**
- * No-op composition for the public build: the host's own fonts, default
- * font and colours, nothing added. `@app/extension/shared` resolves here
- * unless an extension is loaded.
+ * No-op shared module for the public build: the host's own fonts, default
+ * font and colours, and no commands of its own. `@app/extension/shared`
+ * resolves here unless an extension is loaded.
  */
-import type { ExtensionComposition } from './types'
+import type { ExtensionShared } from './types'
 
-const publicComposition: ExtensionComposition = {
-  fonts: [],
-  textColors: [],
-  extraFontStacks: []
+const publicShared: ExtensionShared = {
+  composition: {
+    fonts: [],
+    textColors: [],
+    extraFontStacks: []
+  },
+  commands: []
 }
 
-export default publicComposition
+export default publicShared

@@ -82,6 +82,10 @@ export function registerMailIpc(
     await mailService.removeAccount(accountId)
   })
 
+  registerDataHandler(IPC_CHANNELS.checkMailNow, async () => {
+    mailService.checkMailNow()
+  })
+
   registerDataHandler(IPC_CHANNELS.setActiveMailboxContext, async (context) => {
     await mailService.setActiveMailboxContext((context as ActiveMailboxContext | null) ?? null)
   })

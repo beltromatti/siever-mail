@@ -86,6 +86,13 @@ export class MailEngine {
     }
   }
 
+  /** "Controlla nuova posta": every account looks at once instead of on its next poll. */
+  checkNow(): void {
+    for (const connection of this.connections.values()) {
+      connection.checkNow()
+    }
+  }
+
   private readonly nudgeConnections = (): void => {
     for (const connection of this.connections.values()) {
       connection.nudge()

@@ -43,6 +43,7 @@ export const IPC_CHANNELS = {
   markAccountLastViewed: 'account:mark-last-viewed',
   removeAccount: 'account:remove',
   setActiveMailboxContext: 'app:set-active-mailbox-context',
+  checkMailNow: 'app:check-mail-now',
   listFolders: 'folder:list',
   getUnifiedInboxSummary: 'folder:get-unified-inbox-summary',
   getUnifiedInboxPreferences: 'folder:get-unified-inbox-preferences',
@@ -104,6 +105,8 @@ export interface DesktopMailApi {
   markAccountLastViewed: (accountId: string) => Promise<void>
   removeAccount: (accountId: string) => Promise<void>
   setActiveMailboxContext: (context: ActiveMailboxContext | null) => Promise<void>
+  /** Asks every account now whether new mail has arrived. */
+  checkMailNow: () => Promise<void>
   listFolders: (accountId: string) => Promise<MailFolder[]>
   getUnifiedInboxSummary: () => Promise<UnifiedInboxSummary>
   getUnifiedInboxPreferences: () => Promise<UnifiedInboxPreferences>

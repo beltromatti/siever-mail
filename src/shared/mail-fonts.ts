@@ -16,7 +16,9 @@
  * new text starts in (see `ExtensionComposition`); the public build starts
  * in Arial, the one face every platform actually ships.
  */
-import composition from '@app/extension/shared'
+import extensionShared from '@app/extension/shared'
+
+const composition = extensionShared.composition
 
 export interface MailFontOption {
   label: string

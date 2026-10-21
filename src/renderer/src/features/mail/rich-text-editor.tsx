@@ -36,7 +36,7 @@ import {
 // would be blocked silently and Squire would never reach the iframe window.
 import squireScriptUrl from 'squire-rte/dist/squire.js?url'
 
-import composition from '@app/extension/shared'
+import extensionShared from '@app/extension/shared'
 import type { TextColorOption } from '@app/extension/types'
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -196,6 +196,9 @@ const MAX_FONT_SIZE_PX = 98
 const DEFAULT_EDITOR_LINE_HEIGHT = '1.5'
 const ZERO_WIDTH_SPACE = '\u200B'
 
+/** Chords the page itself answers in the editor: the clipboard and select all. */
+const EDITOR_NATIVE_CHORD_CODES: ReadonlySet<string> = new Set(['KeyA', 'KeyC', 'KeyV', 'KeyX'])
+
 // Squire's `setFontFace` / `setFontSize` / `setTextColor` / `setHighlightColor`
 // each route through `changeFormat`, whose *remove* clause matches `<span>` by
 // `class=<className>`. If we leave the four `classNames` empty (as marketing
@@ -239,7 +242,7 @@ const EDITOR_LINE_HEIGHT_OPTIONS = [
 
 // An extension's own colours come first (see `ExtensionComposition`).
 const TEXT_COLOR_OPTIONS: ReadonlyArray<TextColorOption> = [
-  ...composition.textColors,
+  ...extensionShared.composition.textColors,
   { value: '#1f2937', label: 'Antracite' },
   { value: '#374151', label: 'Ardesia' },
   { value: '#6b7280', label: 'Grigio' },
@@ -1621,18 +1624,35 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
       }
       const fileDragEvents = ['dragenter', 'dragover', 'drop'] as const
 
-      // Key events do not leave an iframe. Escape is the host's — it closes
-      // the composer, or leaves its full-screen editor — so it is handed to
-      // the frame element, from where it travels through the host's DOM as
-      // if it had been pressed there. The editor itself has no use for it.
-      const forwardEscape = (event: KeyboardEvent): void => {
-        if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) {
+      // Key events do not leave an iframe. What the editor leaves alone is
+      // the host's — Escape, which closes the composer or leaves its
+      // full-screen editor, and the chords of its commands (send, attach, …)
+      // — so it is handed to the frame element, from where it travels
+      // through the host's DOM as if it had been pressed there. Squire's own
+      // chords (bold, lists, undo…) arrive here already handled, and the
+      // clipboard and select-all stay with the page.
+      const forwardHostKey = (event: KeyboardEvent): void => {
+        if (event.defaultPrevented || event.isComposing) {
+          return
+        }
+
+        const isEscape = event.key === 'Escape' && !event.metaKey && !event.ctrlKey && !event.altKey
+        const isChord =
+          (event.metaKey || event.ctrlKey || event.altKey) &&
+          !EDITOR_NATIVE_CHORD_CODES.has(event.code)
+
+        if (!isEscape && !isChord) {
           return
         }
 
         const forwarded = new KeyboardEvent('keydown', {
           key: event.key,
           code: event.code,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          shiftKey: event.shiftKey,
+          repeat: event.repeat,
           bubbles: true,
           cancelable: true
         })
@@ -1645,12 +1665,12 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
 
       frameDocument.body.addEventListener('keydown', handlePreSquireKeyDown, true)
       frameDocument.body.addEventListener('beforeinput', handlePreSquireBeforeInput, true)
-      frameDocument.addEventListener('keydown', forwardEscape)
+      frameDocument.addEventListener('keydown', forwardHostKey)
       fileDragEvents.forEach((type) => frameDocument.addEventListener(type, handleFileDrag, true))
       frameCleanupFns.push(() => {
         frameDocument.body.removeEventListener('keydown', handlePreSquireKeyDown, true)
         frameDocument.body.removeEventListener('beforeinput', handlePreSquireBeforeInput, true)
-        frameDocument.removeEventListener('keydown', forwardEscape)
+        frameDocument.removeEventListener('keydown', forwardHostKey)
         fileDragEvents.forEach((type) =>
           frameDocument.removeEventListener(type, handleFileDrag, true)
         )

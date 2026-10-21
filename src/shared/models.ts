@@ -182,11 +182,18 @@ export interface UiPreferences {
    * Outlook and Thunderbird.
    */
   readerDetailsOpen: boolean
+  /**
+   * Chords the user gave commands in place of their defaults, by command id
+   * (see `shared/commands.ts`).
+   */
+  shortcutOverrides: Record<string, string>
 }
 
-/** What the application menu asks the page to do. */
-export type AppMenuCommand =
-  'compose' | 'settings' | 'reader-zoom-in' | 'reader-zoom-out' | 'reader-zoom-reset'
+/**
+ * What the menu bar asks the page to do: the id of one of the commands in
+ * `shared/commands.ts`, the host's or the extension's.
+ */
+export type AppMenuCommand = string
 
 export const READER_ZOOM_MIN = 50
 export const READER_ZOOM_MAX = 200
@@ -206,7 +213,8 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   },
   messageGrouping: DEFAULT_MESSAGE_GROUPING_MODE,
   readerZoom: READER_ZOOM_DEFAULT,
-  readerDetailsOpen: false
+  readerDetailsOpen: false,
+  shortcutOverrides: {}
 }
 
 export interface ListMessagesOptions {

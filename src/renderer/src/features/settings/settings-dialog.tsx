@@ -34,6 +34,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { GROUPING_OPTIONS } from '@renderer/features/mail/message-list-shared'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
+import { ShortcutsSection } from '@renderer/features/settings/shortcuts-section'
 import { cn } from '@renderer/lib/utils'
 import type {
   DataStorageBreakdown,
@@ -43,7 +44,7 @@ import type {
   UiPreferences
 } from '@shared/models'
 
-type SettingsSectionId = 'accounts' | 'preferences' | 'data' | 'signatures' | string
+type SettingsSectionId = 'accounts' | 'preferences' | 'shortcuts' | 'data' | 'signatures' | string
 
 interface SettingsSection {
   id: SettingsSectionId
@@ -83,6 +84,12 @@ const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
     label: 'Preferenze',
     title: 'Preferenze',
     description: "Configura le preferenze generali dell'applicazione."
+  },
+  {
+    id: 'shortcuts',
+    label: 'Scorciatoie',
+    title: 'Scorciatoie da tastiera',
+    description: 'I tasti che eseguono ogni comando, da qualunque punto della finestra.'
   },
   {
     id: 'data',
@@ -968,6 +975,11 @@ export function SettingsDialog({
                   )}
                 </div>
               </div>
+            ) : activeSectionId === 'shortcuts' ? (
+              <ShortcutsSection
+                overrides={uiPreferences.shortcutOverrides}
+                onChange={(shortcutOverrides) => onUiPreferencesChange({ shortcutOverrides })}
+              />
             ) : activeSectionId === 'data' ? (
               <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
                 <div className="border-border bg-card/55 rounded-md border p-3">

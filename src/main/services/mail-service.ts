@@ -73,6 +73,7 @@ import {
   createSmtpTransport,
   verifyImapAccount
 } from './mail-engine/mail-transport'
+import { updateAppMenuShortcuts } from '../app-menu'
 import { applyThemeMode } from '../theme'
 import { listRecentFiles } from './recent-files'
 import { decryptSecret, encryptSecret } from './secure-storage'
@@ -146,7 +147,8 @@ const uiPreferencesSchema = z.object({
   }),
   messageGrouping: z.enum(['none', 'auto', 'sender']),
   readerZoom: z.number().int().min(READER_ZOOM_MIN).max(READER_ZOOM_MAX),
-  readerDetailsOpen: z.boolean()
+  readerDetailsOpen: z.boolean(),
+  shortcutOverrides: z.record(z.string(), z.string())
 })
 
 const unifiedInboxIncludedAccountsSchema = z.array(z.string().trim().min(1))
@@ -300,7 +302,17 @@ export class MailService {
       mailEngine: mailEngineHandle,
       getMainWindow: () =>
         BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null,
-      recordRecentFiles: (paths, activity) => this.database.recordRecentFiles(paths, activity)
+      recordRecentFiles: (paths, activity) => this.database.recordRecentFiles(paths, activity),
+      adoptShortcutOverride: async (commandId, chord) => {
+        const preferences = await this.database.getUiPreferences()
+
+        if (preferences.shortcutOverrides[commandId] === undefined) {
+          await this.database.setUiPreferences({
+            ...preferences,
+            shortcutOverrides: { ...preferences.shortcutOverrides, [commandId]: chord }
+          })
+        }
+      }
     }
 
     await extension.install(context)
@@ -397,6 +409,10 @@ export class MailService {
     await this.database.markAccountLastViewed(accountId)
   }
 
+  checkMailNow(): void {
+    this.engine.checkNow()
+  }
+
   async setActiveMailboxContext(context: ActiveMailboxContext | null): Promise<void> {
     const nextContext = context ? activeMailboxContextSchema.parse(context) : null
     this.engine.setActiveContext(nextContext)
@@ -429,6 +445,7 @@ export class MailService {
   async getUiPreferences(): Promise<UiPreferences> {
     const preferences = await this.database.getUiPreferences()
     applyThemeMode(preferences.themeMode)
+    updateAppMenuShortcuts(preferences.shortcutOverrides)
     return preferences
   }
 

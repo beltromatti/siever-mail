@@ -52,6 +52,27 @@ export interface ExtensionComposition {
   extraFontStacks: ReadonlyArray<string>
 }
 
+/**
+ * A command the extension adds, with the chord it answers to by default.
+ * It acts on the main window's selection; the user can change its chord in
+ * Settings › Scorciatoie like any of the host's, and on macOS it is listed
+ * in the menu bar. The renderer side runs it (`ExtensionRenderer.runCommand`).
+ */
+export interface ExtensionCommandDefinition {
+  /** Namespaced, e.g. `acme.publish`, so it never collides with the host's. */
+  id: string
+  label: string
+  description: string
+  /** Platform-neutral chord, `Mod` being ⌘ on macOS and Ctrl elsewhere. */
+  defaultChord: string
+}
+
+/** What both processes load from `@app/extension/shared`. */
+export interface ExtensionShared {
+  composition: ExtensionComposition
+  commands: ReadonlyArray<ExtensionCommandDefinition>
+}
+
 /* ────────────────────────── main process ────────────────────────── */
 
 export interface ExtensionMain {
@@ -114,6 +135,12 @@ export interface ExtensionMainContext {
    * menu opens are left out.
    */
   recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void>
+  /**
+   * Gives one of the extension's commands a chord the user chose before the
+   * host managed shortcuts, unless they have since chosen one in Settings ›
+   * Scorciatoie. For carrying a chord an extension used to store itself.
+   */
+  adoptShortcutOverride(commandId: string, chord: string): Promise<void>
 }
 
 /**
@@ -198,7 +225,18 @@ export interface ExtensionRenderer {
    * nothing.
    */
   readonly localDataLabel: string
+  /**
+   * Runs one of the commands the extension declares in
+   * `ExtensionShared.commands`, when its chord is pressed or it is chosen
+   * from the menu bar. Returns whether it did anything, so a chord that
+   * did nothing is left to whatever else wants the key. Absent when the
+   * extension declares no commands.
+   */
+  runCommand?(commandId: string, context: ExtensionCommandContext): boolean
 }
+
+/** What an extension command acts on: the same as a toolbar action. */
+export type ExtensionCommandContext = ToolbarActionRenderProps
 
 export interface ToolbarActionDescriptor {
   id: string

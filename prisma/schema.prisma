@@ -128,6 +128,7 @@ model AppPreference {
   messageGrouping                String  @default("auto") @map("message_grouping")
   readerZoom                     Int     @default(100) @map("reader_zoom")
   readerDetailsOpen              Boolean @default(false) @map("reader_details_open")
+  shortcutOverrides              String  @default("{}") @map("shortcut_overrides")
   extensionSignatureRevision     Int     @default(0) @map("extension_signature_revision")
   updatedAt                      BigInt  @map("updated_at")
 

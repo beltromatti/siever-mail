@@ -1,6 +1,7 @@
 import * as React from 'react'
 
 import { Button, type ButtonProps } from '@renderer/components/ui/button'
+import { ShortcutKeys } from '@renderer/components/ui/shortcut-keys'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { cn } from '@renderer/lib/utils'
 
@@ -13,8 +14,10 @@ export interface IconButtonProps extends Omit<ButtonProps, 'aria-label' | 'title
   label: string
   /** Where the bubble opens. Defaults to below, like the toolbar's. */
   tooltipSide?: React.ComponentPropsWithoutRef<typeof TooltipContent>['side']
-  /** Extra line under the label — a keyboard shortcut, or a caveat. */
+  /** Extra line under the label — a caveat. */
   tooltipHint?: string
+  /** The keys that do the same from anywhere (see `useCommandKeys`). */
+  shortcutKeys?: readonly string[] | null
 }
 
 /**
@@ -31,7 +34,10 @@ export interface IconButtonProps extends Omit<ButtonProps, 'aria-label' | 'title
  * and hovering from one control to the next stays instant.
  */
 export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
-  ({ label, tooltipSide = 'bottom', tooltipHint, className, children, ...props }, ref) => (
+  (
+    { label, tooltipSide = 'bottom', tooltipHint, shortcutKeys, className, children, ...props },
+    ref
+  ) => (
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
@@ -46,7 +52,10 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
         </Button>
       </TooltipTrigger>
       <TooltipContent side={tooltipSide}>
-        {label}
+        <span className="flex items-center gap-2">
+          {label}
+          {shortcutKeys && <ShortcutKeys keys={shortcutKeys} />}
+        </span>
         {tooltipHint && (
           <span className="text-muted-foreground block text-[10.5px] font-normal">
             {tooltipHint}

@@ -42,6 +42,11 @@ import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { cn, formatAppVersion } from '@renderer/lib/utils'
 import { buildMessageSections } from '@renderer/lib/message-sections'
+import {
+  CommandShortcutsProvider,
+  commandForKeyEvent,
+  isOverlaySurfaceOpen
+} from '@renderer/lib/command-shortcuts'
 import { inlineMessageStyles } from '@renderer/lib/inline-message-styles'
 import { buildOutgoingMailHtml } from '@renderer/lib/outgoing-mail-html'
 import { READER_ZOOM_RESET, steppedReaderZoom } from '@renderer/lib/reader-zoom'
@@ -65,12 +70,12 @@ import {
   DEFAULT_UI_PREFERENCES,
   MESSAGE_LIST_PAGE_SIZE
 } from '@shared/models'
+import { findCommand, type HostCommandId } from '@shared/commands'
 import { replyRecipients, replyReferences } from '@shared/reply'
 import { highlightTermsForField, parseSearchQuery } from '@shared/search'
 import type {
   AccountConnectionState,
   AppCapabilities,
-  AppMenuCommand,
   ComposeMailInput,
   ListMessagesOptions,
   MailAccount,
@@ -90,17 +95,6 @@ import type {
 const ALL_INBOX_FOLDER_LABEL = 'TUTTI'
 const GMAIL_QUOTE_BLOCK_STYLE = 'margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex'
 const READER_ZOOM_SAVE_DELAY_MS = 400
-
-/** ⌘/Ctrl + key → command. `=` is the unshifted `+` on US keyboards. */
-const APP_SHORTCUT_COMMANDS: Readonly<Record<string, AppMenuCommand>> = {
-  n: 'compose',
-  N: 'compose',
-  ',': 'settings',
-  '+': 'reader-zoom-in',
-  '=': 'reader-zoom-in',
-  '-': 'reader-zoom-out',
-  '0': 'reader-zoom-reset'
-}
 
 /** Folders whose rows are about the recipient rather than the sender. */
 const RECIPIENT_ORIENTED_SPECIAL_USES = new Set(['\\Sent', '\\Drafts'])
@@ -2231,51 +2225,14 @@ function App(): React.JSX.Element {
     setComposerOpen(true)
   }, [])
 
-  /**
-   * Runs a command from the menu bar or its shortcut. Nothing happens over
-   * an open dialog, and the zoom commands need a message to zoom. Returns
-   * whether the command applied, so a shortcut that did nothing is left to
-   * whatever else wants the key.
-   */
-  const runAppCommand = useCallback(
-    (command: AppMenuCommand): boolean => {
-      if (isModalSurfaceOpen) {
-        return false
-      }
-
-      switch (command) {
-        case 'compose':
-          if (!selectedAccountId) {
-            return false
-          }
-
-          openComposer({ kind: 'new', accountId: selectedAccountId })
-          return true
-        case 'settings':
-          setSettingsOpen(true)
-          return true
-        default: {
-          if (!selectedMessage) {
-            return false
-          }
-
-          const current = uiPreferencesRef.current.readerZoom
-          changeReaderZoom(
-            command === 'reader-zoom-reset'
-              ? READER_ZOOM_RESET
-              : steppedReaderZoom(current, command === 'reader-zoom-in' ? 1 : -1)
-          )
-          return true
-        }
-      }
-    },
-    [changeReaderZoom, isModalSurfaceOpen, openComposer, selectedAccountId, selectedMessage]
-  )
-  const runAppCommandRef = useRef(runAppCommand)
+  // Set once the handlers below exist; the menu bar and the keyboard both
+  // reach the commands through it.
+  const runAppCommandRef = useRef<(commandId: string) => boolean>(() => false)
+  const shortcutOverridesRef = useRef(uiPreferences.shortcutOverrides)
 
   useEffect(() => {
-    runAppCommandRef.current = runAppCommand
-  }, [runAppCommand])
+    shortcutOverridesRef.current = uiPreferences.shortcutOverrides
+  }, [uiPreferences.shortcutOverrides])
 
   useEffect(
     () => window.mailApi.onAppMenuCommand((command) => void runAppCommandRef.current(command)),
@@ -2299,22 +2256,17 @@ function App(): React.JSX.Element {
 
       const isCommandModifier = event.metaKey || event.ctrlKey
 
-      // Focus the search field from anywhere, including while typing
-      // somewhere else — the one shortcut that has to win over the guard.
-      if (isCommandModifier && !event.altKey && event.key.toLowerCase() === 'f') {
-        event.preventDefault()
-        searchInputRef.current?.focus()
-        searchInputRef.current?.select()
-        return
-      }
+      // Every command answers to its chord from anywhere in the window,
+      // a field being typed in included — they all need Ctrl/⌘ or Alt, which
+      // typing does not. The menu bar lists the same commands on macOS; on
+      // Windows and Linux, where there is none, this is how they are reached.
+      const command = commandForKeyEvent(event, 'main', shortcutOverridesRef.current)
 
-      // The commands the macOS menu lists, handled here so they work the same
-      // on Windows and Linux, where there is no menu bar.
-      const appCommand =
-        isCommandModifier && !event.altKey ? APP_SHORTCUT_COMMANDS[event.key] : null
+      if (command) {
+        if (!event.repeat && runAppCommandRef.current(command.id)) {
+          event.preventDefault()
+        }
 
-      if (appCommand && runAppCommandRef.current(appCommand)) {
-        event.preventDefault()
         return
       }
 
@@ -2467,6 +2419,130 @@ function App(): React.JSX.Element {
     }),
     [openComposer, selectedAccountId, selectedMessage?.accountId]
   )
+
+  const archiveSelection = useCallback(
+    (): Promise<void> =>
+      runSelectionRemovalAction(async (ref) => {
+        await window.mailApi.archiveMessage(ref)
+      }, 'Archiviazione email non riuscita.'),
+    [runSelectionRemovalAction]
+  )
+
+  // "Sposta" opens from its button or from its chord.
+  const [moveMenuOpen, setMoveMenuOpen] = useState(false)
+
+  /**
+   * Runs a command from the menu bar or its chord. Nothing happens over an
+   * open dialog or menu, and a command with nothing to act on — a reply with
+   * no message open — does nothing. Returns whether it applied, so a chord
+   * that did nothing is left to whatever else wants the key.
+   */
+  const runAppCommand = (commandId: string): boolean => {
+    if (isModalSurfaceOpen || isOverlaySurfaceOpen()) {
+      return false
+    }
+
+    const hasSelection = selection.selectedRefs.length > 0
+
+    if (findCommand(commandId)?.fromExtension) {
+      return (
+        extensionRenderer.runCommand?.(commandId, {
+          selection: extensionSelection,
+          openPrimaryActionDialog: () => setExtensionPrimaryDialogOpen(true),
+          hostHooks: extensionHostHooks
+        }) ?? false
+      )
+    }
+
+    switch (commandId as HostCommandId) {
+      case 'compose':
+        if (!selectedAccountId) {
+          return false
+        }
+
+        openComposer({ kind: 'new', accountId: selectedAccountId })
+        return true
+      case 'reply':
+      case 'reply-all':
+        if (!selectedMessage) {
+          return false
+        }
+
+        void openReplyComposer(commandId === 'reply' ? 'sender' : 'all')
+        return true
+      case 'forward':
+        if (!selectedMessage) {
+          return false
+        }
+
+        void openForwardComposer()
+        return true
+      case 'archive':
+        if (!hasSelection) {
+          return false
+        }
+
+        void archiveSelection()
+        return true
+      case 'move':
+        if (!hasSelection) {
+          return false
+        }
+
+        if (selectionAccountIds.length > 1) {
+          void explainMixedAccountMove()
+        } else {
+          setMoveMenuOpen(true)
+        }
+        return true
+      case 'toggle-read':
+        if (!hasSelection) {
+          return false
+        }
+
+        void setSelectionSeen()
+        return true
+      case 'toggle-flag':
+        if (!hasSelection) {
+          return false
+        }
+
+        void setSelectionFlagged()
+        return true
+      case 'search':
+        searchInputRef.current?.focus()
+        searchInputRef.current?.select()
+        return true
+      case 'check-mail':
+        void window.mailApi.checkMailNow()
+        return true
+      case 'settings':
+        setSettingsOpen(true)
+        return true
+      case 'reader-zoom-in':
+      case 'reader-zoom-out':
+      case 'reader-zoom-reset':
+        if (!selectedMessage) {
+          return false
+        }
+
+        changeReaderZoom(
+          commandId === 'reader-zoom-reset'
+            ? READER_ZOOM_RESET
+            : steppedReaderZoom(
+                uiPreferencesRef.current.readerZoom,
+                commandId === 'reader-zoom-in' ? 1 : -1
+              )
+        )
+        return true
+      default:
+        return false
+    }
+  }
+
+  useEffect(() => {
+    runAppCommandRef.current = runAppCommand
+  })
 
   const handleComposerSendRequested = useCallback(
     (payload: ComposeMailInput, draft: ComposerInitialData): void => {
@@ -2713,245 +2789,243 @@ function App(): React.JSX.Element {
   )
 
   return (
-    <AppFrame
-      windowControlsState={windowControlsState}
-      onMinimizeWindow={handleMinimizeWindow}
-      onToggleMaximizeWindow={handleToggleMaximizeWindow}
-      onCloseWindow={handleCloseWindow}
-    >
-      <WorkspaceLayout
-        mode={uiPreferences.layoutMode}
-        readerExpanded={isMessageExpanded}
-        header={
-          <div className="glass-panel flex items-center gap-2 rounded-lg px-2.5 py-2">
-            <img
-              src={appLogo}
-              alt="Logo SIEVER Mail"
-              className="size-8 shrink-0 select-none"
-              draggable={false}
-            />
-            <div className="min-w-0">
-              <h1 className="display-title truncate text-[15px] leading-tight">SIEVER Mail</h1>
-              <p className="text-muted-foreground flex items-center gap-1.5 text-[10px] leading-tight">
-                <span>{formatAppVersion(__APP_VERSION__)}</span>
-                {syncSummary && <SyncStatusIndicator summary={syncSummary} />}
-              </p>
+    <CommandShortcutsProvider overrides={uiPreferences.shortcutOverrides}>
+      <AppFrame
+        windowControlsState={windowControlsState}
+        onMinimizeWindow={handleMinimizeWindow}
+        onToggleMaximizeWindow={handleToggleMaximizeWindow}
+        onCloseWindow={handleCloseWindow}
+      >
+        <WorkspaceLayout
+          mode={uiPreferences.layoutMode}
+          readerExpanded={isMessageExpanded}
+          header={
+            <div className="glass-panel flex items-center gap-2 rounded-lg px-2.5 py-2">
+              <img
+                src={appLogo}
+                alt="Logo SIEVER Mail"
+                className="size-8 shrink-0 select-none"
+                draggable={false}
+              />
+              <div className="min-w-0">
+                <h1 className="display-title truncate text-[15px] leading-tight">SIEVER Mail</h1>
+                <p className="text-muted-foreground flex items-center gap-1.5 text-[10px] leading-tight">
+                  <span>{formatAppVersion(__APP_VERSION__)}</span>
+                  {syncSummary && <SyncStatusIndicator summary={syncSummary} />}
+                </p>
+              </div>
             </div>
-          </div>
-        }
-        accountSwitcher={
-          <AccountSwitcher
-            accounts={accounts}
-            selectedAccountId={selectedAccountId}
-            removingAccountId={removingAccountId}
-            onSelectAccount={(accountId) => {
-              cancelInFlightWork()
-              setSelectedAccountId(accountId)
-              setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
-              resetMailboxView()
-            }}
-            onRemoveAccount={(accountId) => void removeAccount(accountId)}
-            onAddAccount={() => setAddAccountDialogOpen(true)}
-          />
-        }
-        folders={
-          loadingFolders ? (
-            <div className="glass-panel text-muted-foreground flex h-full items-center gap-2 rounded-lg p-3 text-xs">
-              <LoaderCircle className="size-3.5 animate-spin" /> Caricamento cartelle…
-            </div>
-          ) : (
-            <FolderSidebar
-              folders={folders}
-              allInboxesFolder={allInboxesFolder}
-              selectedFolderPath={selectedFolderPath}
-              onSelectFolder={(folderPath) => {
+          }
+          accountSwitcher={
+            <AccountSwitcher
+              accounts={accounts}
+              selectedAccountId={selectedAccountId}
+              removingAccountId={removingAccountId}
+              onSelectAccount={(accountId) => {
                 cancelInFlightWork()
-                setSelectedFolderPath(folderPath)
+                setSelectedAccountId(accountId)
                 setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
                 resetMailboxView()
               }}
+              onRemoveAccount={(accountId) => void removeAccount(accountId)}
+              onAddAccount={() => setAddAccountDialogOpen(true)}
             />
-          )
-        }
-        toolbar={
-          <MailToolbar
-            moveTargets={moveTargets}
-            onMoveAcrossAccounts={
-              selectionAccountIds.length > 1 ? () => void explainMixedAccountMove() : undefined
-            }
-            search={search}
-            searchInputRef={searchInputRef}
-            onSearchChange={(value) => {
-              setSearch(value)
-              setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
-            }}
-            filter={messageFilter}
-            onFilterChange={(next) => {
-              setMessageFilter(next)
-              setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
-            }}
-            selectedCount={selection.selectedRefs.length}
-            toggleSeenLabel={toggleSeenLabel}
-            selectionFlagged={selectionFlagged}
-            extensionToolbarActions={extensionRenderer.toolbarActions}
-            extensionSelection={extensionSelection}
-            extensionHostHooks={extensionHostHooks}
-            onActivateExtensionPrimaryAction={() => setExtensionPrimaryDialogOpen(true)}
-            onCompose={() => {
-              if (selectedAccountId) {
-                openComposer({ kind: 'new', accountId: selectedAccountId })
+          }
+          folders={
+            loadingFolders ? (
+              <div className="glass-panel text-muted-foreground flex h-full items-center gap-2 rounded-lg p-3 text-xs">
+                <LoaderCircle className="size-3.5 animate-spin" /> Caricamento cartelle…
+              </div>
+            ) : (
+              <FolderSidebar
+                folders={folders}
+                allInboxesFolder={allInboxesFolder}
+                selectedFolderPath={selectedFolderPath}
+                onSelectFolder={(folderPath) => {
+                  cancelInFlightWork()
+                  setSelectedFolderPath(folderPath)
+                  setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
+                  resetMailboxView()
+                }}
+              />
+            )
+          }
+          toolbar={
+            <MailToolbar
+              moveTargets={moveTargets}
+              onMoveAcrossAccounts={
+                selectionAccountIds.length > 1 ? () => void explainMixedAccountMove() : undefined
               }
-            }}
-            onOpenSettings={() => setSettingsOpen(true)}
-            onArchiveClassic={() =>
-              void runSelectionRemovalAction(async (ref) => {
-                await window.mailApi.archiveMessage(ref)
-              }, 'Archiviazione email non riuscita.')
-            }
-            onMoveToFolder={(destinationFolderPath) =>
-              void runSelectionRemovalAction(async (ref) => {
-                await window.mailApi.moveMessage({ ...ref, destinationFolderPath })
-              }, 'Spostamento email non riuscito.')
-            }
-            onDelete={() => void deleteMessages(selection.selectedRefs)}
-            onToggleSeen={() => void setSelectionSeen()}
-            onToggleFlagged={() => void setSelectionFlagged()}
-            onClearSelection={clearSelection}
-          />
-        }
-        messageList={messageListSlot}
-        notice={
-          viewError ? (
-            <div className="border-destructive/35 bg-destructive/10 text-destructive-soft-foreground flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs">
-              <AlertTriangle className="size-3.5 shrink-0" />
-              <span className="min-w-0 flex-1">{viewError}</span>
-              <button
-                type="button"
-                onClick={() => setViewError(null)}
-                aria-label="Chiudi avviso"
-                className="hover:text-foreground shrink-0"
-              >
-                <X className="size-3.5" />
-              </button>
-            </div>
-          ) : null
-        }
-        reader={
-          <MessageViewer
-            moveTargets={moveTargets}
-            message={messageForViewer}
-            loading={loadingMessageDetail}
-            isExpanded={isMessageExpanded}
-            selectedCount={selection.selectedRefs.length}
-            onReply={() => void openReplyComposer('sender')}
-            onReplyAll={() => void openReplyComposer('all')}
-            onForward={() => void openForwardComposer()}
-            onArchive={() =>
-              void runSelectionRemovalAction(async (ref) => {
-                await window.mailApi.archiveMessage(ref)
-              }, 'Archiviazione email non riuscita.')
-            }
-            onDelete={() => void deleteMessages(selection.selectedRefs)}
-            onMoveToFolder={(destinationFolderPath) =>
-              void runSelectionRemovalAction(async (ref) => {
-                await window.mailApi.moveMessage({ ...ref, destinationFolderPath })
-              }, 'Spostamento email non riuscito.')
-            }
-            onToggleExpanded={() => {
-              if (!readingRef) {
-                return
+              search={search}
+              searchInputRef={searchInputRef}
+              onSearchChange={(value) => {
+                setSearch(value)
+                setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
+              }}
+              filter={messageFilter}
+              onFilterChange={(next) => {
+                setMessageFilter(next)
+                setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
+              }}
+              selectedCount={selection.selectedRefs.length}
+              toggleSeenLabel={toggleSeenLabel}
+              selectionFlagged={selectionFlagged}
+              extensionToolbarActions={extensionRenderer.toolbarActions}
+              extensionSelection={extensionSelection}
+              extensionHostHooks={extensionHostHooks}
+              onActivateExtensionPrimaryAction={() => setExtensionPrimaryDialogOpen(true)}
+              onCompose={() => {
+                if (selectedAccountId) {
+                  openComposer({ kind: 'new', accountId: selectedAccountId })
+                }
+              }}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onArchiveClassic={() => void archiveSelection()}
+              moveMenuOpen={moveMenuOpen}
+              onMoveMenuOpenChange={setMoveMenuOpen}
+              onMoveToFolder={(destinationFolderPath) =>
+                void runSelectionRemovalAction(async (ref) => {
+                  await window.mailApi.moveMessage({ ...ref, destinationFolderPath })
+                }, 'Spostamento email non riuscito.')
               }
-
-              setIsMessageExpanded((current) => !current)
-            }}
-            onToggleSeen={(seen) => {
-              if (readingRef) {
-                keepShownReadState([readingRef])
-                void setMessageKeyword(readingRef, '\\Seen', seen)
+              onDelete={() => void deleteMessages(selection.selectedRefs)}
+              onToggleSeen={() => void setSelectionSeen()}
+              onToggleFlagged={() => void setSelectionFlagged()}
+              onClearSelection={clearSelection}
+            />
+          }
+          messageList={messageListSlot}
+          notice={
+            viewError ? (
+              <div className="border-destructive/35 bg-destructive/10 text-destructive-soft-foreground flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs">
+                <AlertTriangle className="size-3.5 shrink-0" />
+                <span className="min-w-0 flex-1">{viewError}</span>
+                <button
+                  type="button"
+                  onClick={() => setViewError(null)}
+                  aria-label="Chiudi avviso"
+                  className="hover:text-foreground shrink-0"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            ) : null
+          }
+          reader={
+            <MessageViewer
+              moveTargets={moveTargets}
+              message={messageForViewer}
+              loading={loadingMessageDetail}
+              isExpanded={isMessageExpanded}
+              selectedCount={selection.selectedRefs.length}
+              onReply={() => void openReplyComposer('sender')}
+              onReplyAll={() => void openReplyComposer('all')}
+              onForward={() => void openForwardComposer()}
+              onArchive={() => void archiveSelection()}
+              onDelete={() => void deleteMessages(selection.selectedRefs)}
+              onMoveToFolder={(destinationFolderPath) =>
+                void runSelectionRemovalAction(async (ref) => {
+                  await window.mailApi.moveMessage({ ...ref, destinationFolderPath })
+                }, 'Spostamento email non riuscito.')
               }
-            }}
-            onToggleFlagged={(flagged) => {
-              if (readingRef) {
-                void setMessageKeyword(readingRef, '\\Flagged', flagged)
+              onToggleExpanded={() => {
+                if (!readingRef) {
+                  return
+                }
+
+                setIsMessageExpanded((current) => !current)
+              }}
+              onToggleSeen={(seen) => {
+                if (readingRef) {
+                  keepShownReadState([readingRef])
+                  void setMessageKeyword(readingRef, '\\Seen', seen)
+                }
+              }}
+              onToggleFlagged={(flagged) => {
+                if (readingRef) {
+                  void setMessageKeyword(readingRef, '\\Flagged', flagged)
+                }
+              }}
+              attachmentActions={attachmentActions}
+              zoom={uiPreferences.readerZoom}
+              onZoomChange={changeReaderZoom}
+              detailsOpen={uiPreferences.readerDetailsOpen}
+              onDetailsOpenChange={(readerDetailsOpen) =>
+                updateUiPreferences({ readerDetailsOpen })
               }
-            }}
-            attachmentActions={attachmentActions}
-            zoom={uiPreferences.readerZoom}
-            onZoomChange={changeReaderZoom}
-            detailsOpen={uiPreferences.readerDetailsOpen}
-            onDetailsOpenChange={(readerDetailsOpen) => updateUiPreferences({ readerDetailsOpen })}
-            addressActions={addressActions}
-          />
-        }
-      />
-
-      <MailComposerDialog
-        open={composerOpen}
-        onOpenChange={setComposerOpen}
-        accounts={accounts}
-        initialData={composerInitial}
-        onSendRequested={handleComposerSendRequested}
-      />
-
-      <ConfirmDialog
-        open={failedSend !== null}
-        title="Invio non riuscito"
-        description={failedSend?.message}
-        details={
-          failedSend && (
-            <div className="border-destructive/35 bg-destructive/10 flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px]">
-              <AlertTriangle className="text-destructive size-3.5 shrink-0" />
-              <span className="min-w-0 truncate">
-                {failedSend.draft.subject
-                  ? `Il messaggio non è partito: «${failedSend.draft.subject}»`
-                  : 'Il messaggio non è partito.'}
-              </span>
-            </div>
-          )
-        }
-        confirmLabel="Riapri e riprova"
-        cancelLabel="Scarta"
-        initialFocus="confirm"
-        onConfirm={() => settleFailedSend(true)}
-        onCancel={() => settleFailedSend(false)}
-      />
-
-      {confirmDialog}
-
-      <AddAccountDialog
-        canUseGoogle={capabilities.googleOAuthReady}
-        onAccountCreated={onAccountCreated}
-        open={addAccountDialogOpen}
-        onOpenChange={setAddAccountDialogOpen}
-        trigger={null}
-      />
-
-      {extensionRenderer.PrimaryActionDialog && (
-        <extensionRenderer.PrimaryActionDialog
-          open={extensionPrimaryDialogOpen}
-          onOpenChange={setExtensionPrimaryDialogOpen}
-          selection={extensionSelection}
-          hostHooks={extensionHostHooks}
+              addressActions={addressActions}
+            />
+          }
         />
-      )}
 
-      <SettingsDialog
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        accounts={accounts}
-        selectedAccountId={selectedAccountId}
-        removingAccountId={removingAccountId}
-        clearingAccountDataId={clearingAccountDataId}
-        clearingDatabaseData={clearingDatabaseData}
-        uiPreferences={uiPreferences}
-        onUiPreferencesChange={updateUiPreferences}
-        onRemoveAccount={(accountId) => void removeAccount(accountId)}
-        onClearAccountData={(accountId) => void clearAccountData(accountId)}
-        onClearDatabaseData={() => void clearAllDataKeepAccounts()}
-        onAddAccount={() => setAddAccountDialogOpen(true)}
-        onUnifiedInboxPreferencesChanged={handleUnifiedInboxPreferencesChanged}
-      />
-    </AppFrame>
+        <MailComposerDialog
+          open={composerOpen}
+          onOpenChange={setComposerOpen}
+          accounts={accounts}
+          initialData={composerInitial}
+          onSendRequested={handleComposerSendRequested}
+        />
+
+        <ConfirmDialog
+          open={failedSend !== null}
+          title="Invio non riuscito"
+          description={failedSend?.message}
+          details={
+            failedSend && (
+              <div className="border-destructive/35 bg-destructive/10 flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px]">
+                <AlertTriangle className="text-destructive size-3.5 shrink-0" />
+                <span className="min-w-0 truncate">
+                  {failedSend.draft.subject
+                    ? `Il messaggio non è partito: «${failedSend.draft.subject}»`
+                    : 'Il messaggio non è partito.'}
+                </span>
+              </div>
+            )
+          }
+          confirmLabel="Riapri e riprova"
+          cancelLabel="Scarta"
+          initialFocus="confirm"
+          onConfirm={() => settleFailedSend(true)}
+          onCancel={() => settleFailedSend(false)}
+        />
+
+        {confirmDialog}
+
+        <AddAccountDialog
+          canUseGoogle={capabilities.googleOAuthReady}
+          onAccountCreated={onAccountCreated}
+          open={addAccountDialogOpen}
+          onOpenChange={setAddAccountDialogOpen}
+          trigger={null}
+        />
+
+        {extensionRenderer.PrimaryActionDialog && (
+          <extensionRenderer.PrimaryActionDialog
+            open={extensionPrimaryDialogOpen}
+            onOpenChange={setExtensionPrimaryDialogOpen}
+            selection={extensionSelection}
+            hostHooks={extensionHostHooks}
+          />
+        )}
+
+        <SettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          accounts={accounts}
+          selectedAccountId={selectedAccountId}
+          removingAccountId={removingAccountId}
+          clearingAccountDataId={clearingAccountDataId}
+          clearingDatabaseData={clearingDatabaseData}
+          uiPreferences={uiPreferences}
+          onUiPreferencesChange={updateUiPreferences}
+          onRemoveAccount={(accountId) => void removeAccount(accountId)}
+          onClearAccountData={(accountId) => void clearAccountData(accountId)}
+          onClearDatabaseData={() => void clearAllDataKeepAccounts()}
+          onAddAccount={() => setAddAccountDialogOpen(true)}
+          onUnifiedInboxPreferencesChanged={handleUnifiedInboxPreferencesChanged}
+        />
+      </AppFrame>
+    </CommandShortcutsProvider>
   )
 }
 

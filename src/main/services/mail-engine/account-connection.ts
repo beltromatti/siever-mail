@@ -276,6 +276,19 @@ export class AccountConnection extends EventEmitter {
     }
   }
 
+  /**
+   * Asks the server about every folder now — "Controlla nuova posta" —
+   * instead of on the next poll. A link that is down retries at once.
+   */
+  checkNow(): void {
+    if (this.primaryClient?.usable && this.syncClient?.usable) {
+      this.enqueueFolderPoll('user')
+      return
+    }
+
+    this.nudge()
+  }
+
   start(): void {
     if (this.running) {
       return

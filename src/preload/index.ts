@@ -43,6 +43,7 @@ const desktopMailApi: DesktopMailApi = {
   markAccountLastViewed: async (accountId) => invoke(IPC_CHANNELS.markAccountLastViewed, accountId),
   removeAccount: async (accountId) => invoke(IPC_CHANNELS.removeAccount, accountId),
   setActiveMailboxContext: async (context) => invoke(IPC_CHANNELS.setActiveMailboxContext, context),
+  checkMailNow: async () => invoke(IPC_CHANNELS.checkMailNow),
   listFolders: async (accountId) => invoke(IPC_CHANNELS.listFolders, accountId),
   getUnifiedInboxSummary: async () => invoke(IPC_CHANNELS.getUnifiedInboxSummary),
   getUnifiedInboxPreferences: async () => invoke(IPC_CHANNELS.getUnifiedInboxPreferences),

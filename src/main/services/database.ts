@@ -6,6 +6,7 @@ import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3'
 
 import extensionMain from '@app/extension/main'
 import { logMainError } from '@main/utils/error-utils'
+import { sanitizeShortcutOverrides } from '@shared/commands'
 import { upgradeMailFontStacksInHtml } from '@shared/mail-fonts'
 import type {
   DataStorageBreakdown,
@@ -133,6 +134,22 @@ function parseJsonArray<T>(value: string): T[] {
     return Array.isArray(parsed) ? (parsed as T[]) : []
   } catch {
     return []
+  }
+}
+
+/** A JSON object stored as text, or an empty one when it is not one. */
+function parseJsonObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string') {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {}
+  } catch {
+    return {}
   }
 }
 
@@ -2741,6 +2758,7 @@ export class AppDatabase {
         message_grouping TEXT NOT NULL DEFAULT 'auto',
         reader_zoom INTEGER NOT NULL DEFAULT 100,
         reader_details_open INTEGER NOT NULL DEFAULT 0,
+        shortcut_overrides TEXT NOT NULL DEFAULT '{}',
         extension_signature_revision INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
       )
@@ -2852,6 +2870,7 @@ export class AppDatabase {
       ['message_grouping', "TEXT NOT NULL DEFAULT 'auto'"],
       ['reader_zoom', 'INTEGER NOT NULL DEFAULT 100'],
       ['reader_details_open', 'INTEGER NOT NULL DEFAULT 0'],
+      ['shortcut_overrides', "TEXT NOT NULL DEFAULT '{}'"],
       ['theme_mode', "TEXT NOT NULL DEFAULT 'system'"],
       ['extension_signature_revision', 'INTEGER NOT NULL DEFAULT 0']
     ]
@@ -2887,7 +2906,8 @@ export class AppDatabase {
              message_list_sort_direction AS sortDirection,
              message_grouping AS grouping,
              reader_zoom AS readerZoom,
-             reader_details_open AS readerDetailsOpen
+             reader_details_open AS readerDetailsOpen,
+             shortcut_overrides AS shortcutOverrides
       FROM app_preferences
       WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
       LIMIT 1
@@ -2900,6 +2920,7 @@ export class AppDatabase {
       grouping?: unknown
       readerZoom?: unknown
       readerDetailsOpen?: unknown
+      shortcutOverrides?: unknown
     }>
 
     const row = rows[0]
@@ -2934,7 +2955,8 @@ export class AppDatabase {
         DEFAULT_MESSAGE_GROUPING_MODE
       ),
       readerZoom: clampReaderZoom(toFiniteNonNegativeNumber(row.readerZoom) || READER_ZOOM_DEFAULT),
-      readerDetailsOpen: toBooleanFlag(row.readerDetailsOpen)
+      readerDetailsOpen: toBooleanFlag(row.readerDetailsOpen),
+      shortcutOverrides: sanitizeShortcutOverrides(parseJsonObject(row.shortcutOverrides))
     }
   }
 
@@ -2951,6 +2973,7 @@ export class AppDatabase {
           message_grouping = ${preferences.messageGrouping},
           reader_zoom = ${preferences.readerZoom},
           reader_details_open = ${preferences.readerDetailsOpen ? 1 : 0},
+          shortcut_overrides = ${JSON.stringify(sanitizeShortcutOverrides(preferences.shortcutOverrides))},
           updated_at = ${Date.now()}
       WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
     `
