@@ -18,6 +18,7 @@ import type {
   MessageRef,
   MoveMessagesInput,
   MoveMessagesToRoleInput,
+  NotificationPreferences,
   RenameFolderInput,
   SetMessagesKeywordInput,
   UiPreferences
@@ -124,6 +125,30 @@ export function registerMailIpc(
   registerDataHandler(IPC_CHANNELS.getUnifiedFolderSummaries, async () => {
     return mailService.getUnifiedFolderSummaries()
   })
+
+  registerDataHandler(IPC_CHANNELS.getNotificationPreferences, async () =>
+    mailService.getNotificationPreferences()
+  )
+
+  registerDataHandler(IPC_CHANNELS.setNotificationPreferences, async (preferences) =>
+    mailService.setNotificationPreferences(preferences as NotificationPreferences)
+  )
+
+  registerHandler(IPC_CHANNELS.getNotificationStatus, async () =>
+    mailService.getNotificationStatus()
+  )
+
+  registerHandler(IPC_CHANNELS.showTestNotification, async () => mailService.showTestNotification())
+
+  registerHandler(IPC_CHANNELS.openNotificationSettings, async () =>
+    mailService.openNotificationSettings()
+  )
+
+  registerHandler(
+    IPC_CHANNELS.setTaskbarBadgeImage,
+    async (dataUrl: string | null, description: string) =>
+      mailService.setTaskbarBadgeImage(dataUrl, description)
+  )
 
   registerDataHandler(IPC_CHANNELS.getUnifiedPreferences, async () => {
     return mailService.getUnifiedPreferences()

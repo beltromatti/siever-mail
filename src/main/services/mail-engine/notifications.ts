@@ -1,110 +1,189 @@
 import { app, BrowserWindow, Notification } from 'electron'
 
 import { logMainError } from '@main/utils/error-utils'
+import { folderRole } from '@shared/folders'
 import { IPC_CHANNELS } from '@shared/ipc'
-import type { MailFolder, MailMessageSummary, MessageRef } from '@shared/models'
+import {
+  DEFAULT_NOTIFICATION_PREFERENCES,
+  type MailFolder,
+  type MailMessageSummary,
+  type MessageRef,
+  type NotificationDelivery,
+  type NotificationPreferences,
+  type NotificationStatus
+} from '@shared/models'
 
 const NOTIFICATION_PREVIEW_MAX_LENGTH = 180
 const NOTIFICATION_SUBJECT_MAX_LENGTH = 80
 const NOTIFICATION_COALESCE_WINDOW_MS = 1500
 const NOTIFICATION_DEDUPE_TTL_MS = 10 * 60 * 1000
+/** Senders a notification of several messages names before "e altri N". */
+const NAMED_SENDERS = 2
+/** How long a test notification is given to be shown or turned down. */
+const TEST_SETTLE_MS = 4_000
 
-// Notifications are only emitted for the true INBOX of each account, mirroring
-// Gmail / Outlook behaviour where archived, sent, drafts, trash, spam and
-// custom labels never raise a desktop alert.
-function isInboxFolder(folder: MailFolder | null): boolean {
-  if (!folder) {
-    return false
-  }
+/** The buttons of a single message's notification, in their order. */
+const MESSAGE_ACTIONS = ['Segna come letta', 'Archivia'] as const
 
-  if (folder.specialUse?.trim().toLowerCase() === '\\inbox') {
-    return true
-  }
-
-  return folder.path.trim().toLowerCase() === 'inbox'
+/** What a notification's buttons do, on the message it announces. */
+export interface NotificationMessageActions {
+  markRead: (ref: MessageRef) => Promise<unknown>
+  archive: (ref: MessageRef) => Promise<unknown>
 }
 
-function makeKey(accountId: string, folderPath: string, uid: number): string {
-  return `${accountId}:${folderPath}:${uid}`
+export interface NotificationAccount {
+  id: string
+  email: string
+}
+
+/**
+ * Why the system turned a notification down, in the user's words where it
+ * is one of the known reasons: macOS's UNErrorCodeNotificationsNotAllowed,
+ * the settings Windows reports.
+ */
+function failureReason(error: string): string {
+  if (/UNErrorDomain error 1\b/.test(error)) {
+    return 'Le notifiche di SIEVER Mail non sono consentite in Impostazioni di Sistema › Notifiche.'
+  }
+
+  if (/Settings prevent the notification/i.test(error)) {
+    return 'Le impostazioni di Windows non consentono le notifiche di SIEVER Mail.'
+  }
+
+  return error
+}
+
+function messageKey(ref: MessageRef): string {
+  return `${ref.accountId}:${ref.folderPath}:${ref.uid}`
 }
 
 function trimText(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value
-  }
-
-  return `${value.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`
+  const text = value.replace(/\s+/g, ' ').trim()
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 1).trimEnd()}…`
 }
 
 function senderLabel(message: MailMessageSummary): string {
-  return message.senderLabel || 'Nuova email'
+  return message.senderLabel || 'Mittente sconosciuto'
+}
+
+/** "Mario Rossi, Anna Bianchi e altri 3": the people a batch is from, each once. */
+function senderList(messages: ReadonlyArray<MailMessageSummary>): string {
+  const senders = [...new Set([...messages].reverse().map(senderLabel))]
+  const named = senders.slice(0, NAMED_SENDERS).join(', ')
+  const others = senders.length - NAMED_SENDERS
+
+  return others <= 0 ? named : `${named} e ${others === 1 ? 'un altro' : `altri ${others}`}`
 }
 
 interface PendingBatch {
   timer: NodeJS.Timeout
+  account: NotificationAccount
   messages: MailMessageSummary[]
 }
 
+interface ShownNotification {
+  notification: Notification
+  /** The messages it announces that are still unread where they arrived. */
+  keys: Set<string>
+}
+
+/**
+ * The desktop alerts for new mail, as Apple Mail and Outlook give them.
+ *
+ *   • Only Posta in arrivo, only unread messages, only accounts not muted —
+ *     archived, sent, spam and the folders the user files into never alert,
+ *     nor does a message read elsewhere before it arrived here.
+ *   • One message: its sender, subject and first lines (or, with the
+ *     preview off, only that mail arrived), and two buttons — "Segna come
+ *     letta" and "Archivia". Several arriving together: one alert naming
+ *     who they are from. A click opens the message.
+ *   • An alert goes away by itself once its messages are read, moved or
+ *     deleted — here or on another device.
+ *
+ * What became of the last one shown is kept (`status`): no system says
+ * beforehand whether it will show the app's notifications, but macOS and
+ * Windows report the one they turned down.
+ */
 export class NotificationManager {
+  private preferences: NotificationPreferences = DEFAULT_NOTIFICATION_PREFERENCES
+  private delivery: NotificationDelivery = { state: 'unknown' }
   private readonly emittedKeys = new Map<string, number>()
   private readonly pendingByAccount = new Map<string, PendingBatch>()
-  private readonly activeNotifications = new Set<Notification>()
+  /** Notifications on screen or in the notification centre, by id. */
+  private readonly shown = new Map<string, ShownNotification>()
+  /** The notification announcing each message, by message key. */
+  private readonly shownIdByMessage = new Map<string, string>()
+  /** Every notification still to be clicked or dismissed: held, or its handlers go with it. */
+  private readonly live = new Set<Notification>()
+
+  constructor(
+    private readonly deps: {
+      actions: NotificationMessageActions
+      onStatusChange: (status: NotificationStatus) => void
+    }
+  ) {}
+
+  setPreferences(preferences: NotificationPreferences): void {
+    this.preferences = preferences
+
+    // Turned off, or an account muted: what it announced goes too.
+    for (const [accountId, batch] of this.pendingByAccount) {
+      if (!this.announces(accountId)) {
+        clearTimeout(batch.timer)
+        this.pendingByAccount.delete(accountId)
+      }
+    }
+  }
+
+  status(): NotificationStatus {
+    return {
+      supported: Notification.isSupported(),
+      delivery: this.delivery,
+      canOpenSystemSettings: process.platform === 'darwin' || process.platform === 'win32'
+    }
+  }
+
+  private announces(accountId: string): boolean {
+    return this.preferences.enabled && !this.preferences.mutedAccountIds.includes(accountId)
+  }
 
   /**
-   * Feed the manager with a batch of message-added events for a given folder.
-   *
-   * `bootstrap` must be true when these UIDs were produced by the first ever sync of
-   * that folder (i.e. the account was just connected or its cache was cleared) — in
-   * that case we silently record the UIDs as "already seen" so we never spam the user
-   * with notifications for emails that pre-existed on the server. Only subsequent,
-   * truly new arrivals (IDLE EXISTS or reconnect catch-up while the user was offline)
-   * fire real notifications.
+   * Messages that came into a folder. `bootstrap` is true for a folder's
+   * first sync — the account just connected, or its cache cleared — whose
+   * messages were already there, and are only remembered as seen.
    */
   enqueue(
-    accountId: string,
-    messages: MailMessageSummary[],
+    account: NotificationAccount,
+    messages: ReadonlyArray<MailMessageSummary>,
     folder: MailFolder | null,
     bootstrap: boolean
   ): void {
-    if (!Notification.isSupported() || messages.length === 0) {
-      return
-    }
-
-    if (!isInboxFolder(folder)) {
+    if (!Notification.isSupported() || !folder || folderRole(folder) !== '\\Inbox') {
       return
     }
 
     const now = Date.now()
-
-    if (bootstrap) {
-      // First-time cache population: mark every UID as seen and skip any toast.
-      for (const message of messages) {
-        this.emittedKeys.set(makeKey(accountId, message.folderPath, message.uid), now)
-      }
-      this.pruneEmittedKeys(now)
-      return
-    }
-
-    const existing = this.pendingByAccount.get(accountId)
-    const batch: MailMessageSummary[] = existing?.messages ?? []
+    const existing = this.pendingByAccount.get(account.id)
+    const batch = existing?.messages ?? []
 
     for (const message of messages) {
-      const key = makeKey(accountId, message.folderPath, message.uid)
+      const key = messageKey(message)
       const emittedAt = this.emittedKeys.get(key)
 
-      if (emittedAt && now - emittedAt < NOTIFICATION_DEDUPE_TTL_MS) {
+      if (emittedAt !== undefined && now - emittedAt < NOTIFICATION_DEDUPE_TTL_MS) {
         continue
       }
 
       this.emittedKeys.set(key, now)
-      batch.push(message)
+
+      if (!bootstrap && !message.isRead && this.announces(account.id)) {
+        batch.push(message)
+      }
     }
 
+    this.pruneEmittedKeys(now)
+
     if (batch.length === 0) {
-      if (existing) {
-        clearTimeout(existing.timer)
-        this.pendingByAccount.delete(accountId)
-      }
       return
     }
 
@@ -113,12 +192,211 @@ export class NotificationManager {
     }
 
     const timer = setTimeout(() => {
-      this.pendingByAccount.delete(accountId)
-      this.flushBatch(accountId, batch)
+      this.pendingByAccount.delete(account.id)
+      this.announce(account, batch)
     }, NOTIFICATION_COALESCE_WINDOW_MS)
 
-    this.pendingByAccount.set(accountId, { timer, messages: batch })
-    this.pruneEmittedKeys(now)
+    this.pendingByAccount.set(account.id, { timer, account, messages: batch })
+  }
+
+  /**
+   * Messages read, moved or deleted, here or elsewhere: an alert that
+   * announced only such messages is taken away.
+   */
+  withdraw(refs: ReadonlyArray<MessageRef>): void {
+    for (const ref of refs) {
+      const key = messageKey(ref)
+      const pending = this.pendingByAccount.get(ref.accountId)
+
+      if (pending) {
+        pending.messages = pending.messages.filter((message) => messageKey(message) !== key)
+      }
+
+      const id = this.shownIdByMessage.get(key)
+      const shown = id === undefined ? undefined : this.shown.get(id)
+      this.shownIdByMessage.delete(key)
+
+      if (shown && id !== undefined) {
+        shown.keys.delete(key)
+
+        if (shown.keys.size === 0) {
+          this.shown.delete(id)
+          shown.notification.close()
+        }
+      }
+    }
+  }
+
+  /** A notification that says notifications work — or lets the system say they do not. */
+  async showTest(): Promise<NotificationStatus> {
+    if (!Notification.isSupported()) {
+      return this.status()
+    }
+
+    await this.present(
+      new Notification({
+        title: 'Le notifiche funzionano',
+        body: 'I nuovi messaggi in Posta in arrivo compariranno così.',
+        silent: !this.preferences.sound
+      }),
+      { onClick: () => this.restoreWindow() },
+      TEST_SETTLE_MS
+    )
+
+    return this.status()
+  }
+
+  /** A word from the app — the first account connected — asked for in its own right. */
+  showNotice(title: string, body: string): void {
+    if (Notification.isSupported() && this.preferences.enabled) {
+      void this.present(new Notification({ title, body, silent: true }), {
+        onClick: () => this.restoreWindow()
+      })
+    }
+  }
+
+  private announce(account: NotificationAccount, batch: MailMessageSummary[]): void {
+    const messages = batch.filter((message) => !message.isRead)
+    const latest = messages.at(-1)
+
+    if (!latest || !this.announces(account.id)) {
+      return
+    }
+
+    const single = messages.length === 1
+    const { showPreview, sound } = this.preferences
+    const subject = trimText(latest.subject || '(nessun oggetto)', NOTIFICATION_SUBJECT_MAX_LENGTH)
+    const preview = trimText(latest.preview, NOTIFICATION_PREVIEW_MAX_LENGTH)
+    // Only macOS shows a subtitle: elsewhere the subject opens the body.
+    const hasSubtitle = process.platform === 'darwin'
+    const id = single ? messageKey(latest) : `${account.id}:batch:${Date.now()}`
+
+    const content = showPreview
+      ? single
+        ? {
+            title: senderLabel(latest),
+            subtitle: hasSubtitle ? subject : undefined,
+            body: hasSubtitle ? preview : [subject, preview].filter(Boolean).join('\n')
+          }
+        : {
+            title: `${messages.length} nuove email`,
+            subtitle: hasSubtitle ? account.email : undefined,
+            body: hasSubtitle
+              ? `Da ${senderList(messages)}`
+              : `${account.email}\nDa ${senderList(messages)}`
+          }
+      : {
+          title: single ? 'Nuova email' : `${messages.length} nuove email`,
+          body: account.email
+        }
+
+    const notification = new Notification({
+      id,
+      groupId: account.id,
+      groupTitle: account.email,
+      ...content,
+      silent: !sound,
+      actions: single
+        ? MESSAGE_ACTIONS.map((text) => ({ type: 'button' as const, text }))
+        : undefined
+    })
+
+    const keys = new Set(messages.map(messageKey))
+    this.shown.set(id, { notification, keys })
+
+    for (const key of keys) {
+      this.shownIdByMessage.set(key, id)
+    }
+
+    void this.present(notification, {
+      onClick: () => this.restoreWindow(latest),
+      onAction: (index) => void this.runAction(index, latest),
+      onGone: () => {
+        if (this.shown.get(id)?.notification === notification) {
+          this.shown.delete(id)
+
+          for (const key of keys) {
+            if (this.shownIdByMessage.get(key) === id) {
+              this.shownIdByMessage.delete(key)
+            }
+          }
+        }
+      }
+    })
+  }
+
+  /**
+   * Shows `notification` and wires it: a click, a button, its going away.
+   * Resolves once the system has shown it or turned it down — or after
+   * `settleMs`, when it says neither.
+   */
+  private present(
+    notification: Notification,
+    handlers: {
+      onClick: () => void
+      onAction?: (index: number) => void
+      onGone?: () => void
+    },
+    settleMs = 0
+  ): Promise<void> {
+    return new Promise((resolve) => {
+      const settle = setTimeout(resolve, settleMs)
+      const done = (): void => {
+        clearTimeout(settle)
+        resolve()
+      }
+      const gone = (): void => {
+        this.live.delete(notification)
+        handlers.onGone?.()
+      }
+      const failed = (error: string): void => {
+        this.setDelivery({ state: 'failed', at: Date.now(), reason: failureReason(error) })
+        logMainError('Desktop notification failed', new Error(error))
+        gone()
+        done()
+      }
+
+      this.live.add(notification)
+      notification.once('show', () => {
+        this.setDelivery({ state: 'shown', at: Date.now() })
+        done()
+      })
+      notification.once('failed', (_event, error) => failed(error))
+      notification.once('click', () => {
+        gone()
+        handlers.onClick()
+      })
+      notification.once('action', (details) => {
+        gone()
+        handlers.onAction?.(details.actionIndex)
+      })
+      notification.once('close', gone)
+
+      try {
+        notification.show()
+      } catch (error) {
+        failed(error instanceof Error ? error.message : String(error))
+      }
+    })
+  }
+
+  private async runAction(index: number, message: MailMessageSummary): Promise<void> {
+    const ref: MessageRef = {
+      accountId: message.accountId,
+      folderPath: message.folderPath,
+      uid: message.uid
+    }
+
+    try {
+      await (index === 0 ? this.deps.actions.markRead(ref) : this.deps.actions.archive(ref))
+    } catch (error) {
+      logMainError('Notification action failed', error, { action: MESSAGE_ACTIONS[index] })
+    }
+  }
+
+  private setDelivery(delivery: NotificationDelivery): void {
+    this.delivery = delivery
+    this.deps.onStatusChange(this.status())
   }
 
   private pruneEmittedKeys(now: number): void {
@@ -128,71 +406,15 @@ export class NotificationManager {
 
     const cutoff = now - NOTIFICATION_DEDUPE_TTL_MS
 
-    for (const [key, ts] of this.emittedKeys) {
-      if (ts < cutoff) {
+    for (const [key, at] of this.emittedKeys) {
+      if (at < cutoff) {
         this.emittedKeys.delete(key)
       }
     }
   }
 
-  private flushBatch(accountId: string, batch: MailMessageSummary[]): void {
-    if (batch.length === 0) {
-      return
-    }
-
-    const freshest = batch[batch.length - 1]
-
-    if (!freshest) {
-      return
-    }
-
-    const targetRef: MessageRef = {
-      accountId: freshest.accountId,
-      folderPath: freshest.folderPath,
-      uid: freshest.uid
-    }
-
-    const title = batch.length === 1 ? senderLabel(freshest) : `${batch.length} nuove email`
-    const subtitle = trimText(freshest.subject, NOTIFICATION_SUBJECT_MAX_LENGTH)
-    const body =
-      batch.length === 1
-        ? trimText(
-            freshest.preview || '(Nessuna anteprima disponibile)',
-            NOTIFICATION_PREVIEW_MAX_LENGTH
-          )
-        : `${senderLabel(freshest)}: ${trimText(freshest.preview || '', NOTIFICATION_PREVIEW_MAX_LENGTH)}`
-
-    const notification = new Notification({
-      title,
-      subtitle,
-      body,
-      silent: false
-    })
-
-    this.activeNotifications.add(notification)
-    const release = (): void => {
-      this.activeNotifications.delete(notification)
-    }
-
-    notification.once('close', release)
-    notification.once('click', () => {
-      release()
-      this.restoreWindowWithMessage(targetRef)
-    })
-
-    try {
-      notification.show()
-    } catch (error) {
-      release()
-      logMainError('Desktop notification failed', error, {
-        accountId,
-        folderPath: targetRef.folderPath,
-        uid: targetRef.uid
-      })
-    }
-  }
-
-  private restoreWindowWithMessage(ref: MessageRef): void {
+  /** Brings the window forward — on `message`, when the alert announced one. */
+  private restoreWindow(message?: MailMessageSummary): void {
     const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())
 
     if (!window) {
@@ -215,6 +437,15 @@ export class NotificationManager {
 
     window.focus()
 
+    if (!message) {
+      return
+    }
+
+    const ref: MessageRef = {
+      accountId: message.accountId,
+      folderPath: message.folderPath,
+      uid: message.uid
+    }
     const dispatch = (): void => {
       window.webContents.send(IPC_CHANNELS.openMessageFromNotification, ref)
     }
@@ -231,6 +462,7 @@ export class NotificationManager {
     for (const batch of this.pendingByAccount.values()) {
       clearTimeout(batch.timer)
     }
+
     this.pendingByAccount.clear()
   }
 }

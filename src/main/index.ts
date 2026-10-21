@@ -10,6 +10,7 @@ import { IPC_CHANNELS } from '@shared/ipc'
 
 import extensionMain from '@app/extension/main'
 
+import { APP_ID } from './app-identity'
 import { loadRuntimeConfig } from './config/env'
 import { installAppMenu } from './app-menu'
 import { installContextMenus } from './context-menu'
@@ -198,6 +199,10 @@ function createMainWindow(): BrowserWindow {
 
   installContextMenus(window)
 
+  // What only the page can draw — the Windows taskbar badge — is drawn anew
+  // each time it loads.
+  window.webContents.on('did-finish-load', () => mailService?.windowLoaded())
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     void window.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -225,7 +230,7 @@ if (hasSingleInstanceLock) {
     startFileLogging()
     applyStoredThemeMode()
     followThemeWithWindowBackgrounds()
-    electronApp.setAppUserModelId('com.siever.siever-mail')
+    electronApp.setAppUserModelId(APP_ID)
 
     if (process.platform === 'darwin') {
       app.dock?.setIcon(icon)

@@ -44,6 +44,8 @@ import type {
   RecentFile,
   SavedAttachments,
   SetMessagesKeywordInput,
+  NotificationPreferences,
+  NotificationStatus,
   UiPreferences,
   UnifiedFolderSummary,
   UnifiedPreferences
@@ -64,6 +66,8 @@ import {
   markFromInternet,
   sha256
 } from './attachment-files'
+import { APP_ID } from '@main/app-identity'
+import { AppBadge } from './app-badge'
 import { AppDatabase, type MessageListView } from './database'
 import { finalizeUpgradeMigration } from './data-migration'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
@@ -184,6 +188,20 @@ const accountSignatureInputSchema = z.object({
   accountId: z.string().trim().min(1),
   html: z.string().max(MAX_ACCOUNT_SIGNATURE_HTML_LENGTH)
 })
+const notificationPreferencesSchema = z.object({
+  enabled: z.boolean(),
+  mutedAccountIds: z.array(z.string().trim().min(1)).max(200),
+  showPreview: z.boolean(),
+  sound: z.boolean(),
+  badge: z.boolean()
+})
+
+/** The system pages where the user allows an app's notifications. */
+const SYSTEM_NOTIFICATION_SETTINGS: Partial<Record<NodeJS.Platform, string>> = {
+  darwin: `x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=${APP_ID}`,
+  win32: 'ms-settings:notifications'
+}
+
 const uiPreferencesSchema = z.object({
   themeMode: z.enum(['system', 'light', 'dark']),
   layoutMode: z.enum(['apple', 'outlook']),
@@ -264,6 +282,7 @@ export class MailService {
   private readonly database: AppDatabase
   private readonly googleOAuthService: GoogleOAuthService
   private readonly engine: MailEngine
+  private readonly badge: AppBadge
   private extension: ExtensionMain | null = null
   private storageReady: Promise<void> | null = null
   // The copy of each attachment last written, and what it held, keyed by its
@@ -276,11 +295,14 @@ export class MailService {
     const dbPath = join(userDataPath, 'siever-mail.sqlite')
     this.database = new AppDatabase(dbPath)
     this.googleOAuthService = new GoogleOAuthService(config)
+    const getMainWindow = (): BrowserWindow | null =>
+      BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null
+    this.badge = new AppBadge(getMainWindow)
     this.engine = new MailEngine({
       database: this.database,
       googleOAuthService: this.googleOAuthService,
-      getMainWindow: () =>
-        BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null
+      getMainWindow,
+      onInboxUnreadChange: (count) => this.badge.setCount(count)
     })
   }
 
@@ -307,7 +329,66 @@ export class MailService {
   }
 
   async start(): Promise<void> {
+    this.applyNotificationPreferences(await this.database.getNotificationPreferences())
+    this.badge.setCount(await this.engine.inboxUnreadCount())
     await this.engine.start()
+  }
+
+  /** The window loaded anew: what only its page can draw is drawn again. */
+  windowLoaded(): void {
+    this.badge.redraw()
+  }
+
+  private applyNotificationPreferences(preferences: NotificationPreferences): void {
+    this.engine.setNotificationPreferences(preferences)
+    this.badge.setEnabled(preferences.badge)
+  }
+
+  async getNotificationPreferences(): Promise<NotificationPreferences> {
+    return this.database.getNotificationPreferences()
+  }
+
+  async setNotificationPreferences(
+    input: NotificationPreferences
+  ): Promise<NotificationPreferences> {
+    const payload = notificationPreferencesSchema.parse(input)
+    const accountIds = new Set((await this.database.getAccounts()).map((account) => account.id))
+    const preferences: NotificationPreferences = {
+      ...payload,
+      mutedAccountIds: [...new Set(payload.mutedAccountIds)].filter((id) => accountIds.has(id))
+    }
+
+    await this.database.setNotificationPreferences(preferences)
+    this.applyNotificationPreferences(preferences)
+    return preferences
+  }
+
+  getNotificationStatus(): NotificationStatus {
+    return this.engine.notificationStatus()
+  }
+
+  showTestNotification(): Promise<NotificationStatus> {
+    return this.engine.showTestNotification()
+  }
+
+  async openNotificationSettings(): Promise<void> {
+    const page = SYSTEM_NOTIFICATION_SETTINGS[process.platform]
+
+    if (!page) {
+      throw new Error('Su questo sistema le notifiche si regolano dalle impostazioni del desktop.')
+    }
+
+    await shell.openExternal(page)
+  }
+
+  setTaskbarBadgeImage(dataUrl: string | null, description: string): void {
+    const image = z
+      .string()
+      .startsWith('data:image/png;base64,')
+      .max(200_000)
+      .nullable()
+      .parse(dataUrl)
+    this.badge.setOverlayImage(image, z.string().max(200).parse(description))
   }
 
   async stop(): Promise<void> {
@@ -399,6 +480,7 @@ export class MailService {
     await this.includeAccountInUnifiedInbox(account.id)
     this.database.learnContacts([{ address: account.email, name: account.displayName }])
     await this.engine.addAccount(account.id)
+    await this.introduceNotifications(account)
     return account
   }
 
@@ -428,7 +510,22 @@ export class MailService {
     await this.includeAccountInUnifiedInbox(account.id)
     this.database.learnContacts([{ address: account.email, name: account.displayName }])
     await this.engine.addAccount(account.id)
+    await this.introduceNotifications(account)
     return account
+  }
+
+  /**
+   * The first account connected says, in a notification, that new mail
+   * will be announced so — which is when macOS asks the user to allow the
+   * app's notifications: in context, not hours later on the first message.
+   */
+  private async introduceNotifications(account: MailAccount): Promise<void> {
+    if ((await this.database.getAccounts()).length === 1) {
+      this.engine.showNotice(
+        'SIEVER Mail è pronta',
+        `Ti avviserà qui quando arriva nuova posta per ${account.email}.`
+      )
+    }
   }
 
   async removeAccount(accountId: string): Promise<void> {

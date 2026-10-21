@@ -102,6 +102,17 @@ const desktopMailApi: DesktopMailApi = {
   onMessagesChanged: (listener) => subscribe(IPC_CHANNELS.messagesChanged, listener),
   onFoldersChanged: (listener) => subscribe(IPC_CHANNELS.foldersChanged, listener),
   onUnifiedFoldersChanged: (listener) => subscribe(IPC_CHANNELS.unifiedFoldersChanged, listener),
+  getNotificationPreferences: async () => invoke(IPC_CHANNELS.getNotificationPreferences),
+  setNotificationPreferences: async (preferences) =>
+    invoke(IPC_CHANNELS.setNotificationPreferences, preferences),
+  getNotificationStatus: async () => invoke(IPC_CHANNELS.getNotificationStatus),
+  showTestNotification: async () => invoke(IPC_CHANNELS.showTestNotification),
+  openNotificationSettings: async () => invoke(IPC_CHANNELS.openNotificationSettings),
+  onNotificationStatusChanged: (listener) =>
+    subscribe(IPC_CHANNELS.notificationStatusChanged, listener),
+  onTaskbarBadgeChanged: (listener) => subscribe(IPC_CHANNELS.taskbarBadgeChanged, listener),
+  setTaskbarBadgeImage: async (dataUrl, description) =>
+    invoke(IPC_CHANNELS.setTaskbarBadgeImage, dataUrl, description),
   onAccountConnectionChanged: (listener) =>
     subscribe(IPC_CHANNELS.accountConnectionChanged, listener),
   onAppMenuCommand: (listener) => subscribe(IPC_CHANNELS.appMenuCommand, listener),

@@ -48,6 +48,7 @@ import { usePromptDialog } from '@renderer/components/ui/prompt-dialog'
 import { FolderPicker } from '@renderer/features/mail/folder-picker'
 import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
+import { useTaskbarBadge } from '@renderer/lib/taskbar-badge'
 import { cn, formatAppVersion, formatCount } from '@renderer/lib/utils'
 import {
   folderDisplayName,
@@ -388,6 +389,7 @@ function AppFrame({
 }
 
 function App(): React.JSX.Element {
+  useTaskbarBadge()
   const {
     accounts,
     capabilities,
@@ -603,18 +605,6 @@ function App(): React.JSX.Element {
 
   const handleCloseWindow = useCallback((): void => {
     void window.mailApi.closeWindow()
-  }, [])
-
-  const requestDesktopNotificationPermission = useCallback((): void => {
-    if (typeof window === 'undefined' || !('Notification' in window)) {
-      return
-    }
-
-    if (window.Notification.permission !== 'default') {
-      return
-    }
-
-    void window.Notification.requestPermission().catch(() => undefined)
   }, [])
 
   const syncSummary = useMemo(() => {
@@ -3390,7 +3380,6 @@ function App(): React.JSX.Element {
   )
 
   const onAccountCreated = (account: MailAccount): void => {
-    requestDesktopNotificationPermission()
     setAccounts((current) => [...current, account])
     setSelectedAccountId(account.id)
     setShowWelcomeGate(false)
@@ -3401,8 +3390,6 @@ function App(): React.JSX.Element {
       return
     }
 
-    requestDesktopNotificationPermission()
-
     setSelectedAccountId((current) => {
       if (current && accounts.some((account) => account.id === current)) {
         return current
@@ -3411,7 +3398,7 @@ function App(): React.JSX.Element {
       return accounts[0]?.id ?? null
     })
     setShowWelcomeGate(false)
-  }, [accounts, requestDesktopNotificationPermission])
+  }, [accounts])
 
   if (bootstrapLoading) {
     return (

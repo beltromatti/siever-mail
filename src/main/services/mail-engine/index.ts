@@ -11,6 +11,8 @@ import type {
   MailFolder,
   MailMessageSummary,
   MessageRef,
+  NotificationPreferences,
+  NotificationStatus,
   UnifiedFolderSummary
 } from '@shared/models'
 import { folderForRole, UNIFIED_FOLDER_ROLES, type FolderRole } from '@shared/folders'
@@ -31,6 +33,8 @@ export interface MailEngineDependencies {
   database: AppDatabase
   googleOAuthService: GoogleOAuthService
   getMainWindow: () => BrowserWindow | null
+  /** The unread messages of every account's Posta in arrivo, whenever a count may have changed. */
+  onInboxUnreadChange: (count: number) => void
 }
 
 // How often to compare the network state with the last one seen. Reading it
@@ -39,7 +43,13 @@ const NETWORK_WATCH_INTERVAL_MS = 3_000
 
 export class MailEngine {
   private readonly connections = new Map<string, AccountConnection>()
-  private readonly notifications = new NotificationManager()
+  private readonly notifications = new NotificationManager({
+    actions: {
+      markRead: (ref) => this.setMessagesSeen([ref], true),
+      archive: (ref) => this.archiveMessages([ref])
+    },
+    onStatusChange: (status) => this.broadcast(IPC_CHANNELS.notificationStatusChanged, status)
+  })
   private activeContext: ActiveMailboxContext | null = null
   private networkWatch: NodeJS.Timeout | null = null
 
@@ -91,6 +101,22 @@ export class MailEngine {
       clearInterval(this.networkWatch)
       this.networkWatch = null
     }
+  }
+
+  setNotificationPreferences(preferences: NotificationPreferences): void {
+    this.notifications.setPreferences(preferences)
+  }
+
+  notificationStatus(): NotificationStatus {
+    return this.notifications.status()
+  }
+
+  showTestNotification(): Promise<NotificationStatus> {
+    return this.notifications.showTest()
+  }
+
+  showNotice(title: string, body: string): void {
+    this.notifications.showNotice(title, body)
   }
 
   /** "Controlla nuova posta": every account looks at once instead of on its next poll. */
@@ -497,9 +523,20 @@ export class MailEngine {
         removedUids: event.removedUids
       })
 
+      // Read, moved or deleted — here or on another device — a message's alert goes.
+      this.notifications.withdraw([
+        ...event.updated.filter((message) => message.isRead),
+        ...event.removedUids.map((uid) => ({ accountId, folderPath: event.folderPath, uid }))
+      ])
+
       if (event.added.length > 0) {
         const folder = await this.deps.database.getFolder(event.accountId, event.folderPath)
-        this.notifications.enqueue(event.accountId, event.added, folder, event.bootstrap)
+        this.notifications.enqueue(
+          { id: accountId, email: account.email },
+          event.added,
+          folder,
+          event.bootstrap
+        )
       }
 
       void this.emitUnifiedFolderSummaries()
@@ -517,13 +554,29 @@ export class MailEngine {
     }
   }
 
+  /** The counts every account's folders changed: "Tutti gli account" and the icon's badge. */
   private async emitUnifiedFolderSummaries(): Promise<void> {
     try {
       const summaries = await this.computeUnifiedFolderSummaries()
       this.broadcast(IPC_CHANNELS.unifiedFoldersChanged, { summaries })
+      this.deps.onInboxUnreadChange(await this.inboxUnreadCount())
     } catch (error) {
       logMainError('Unified folder summaries broadcast failed', error)
     }
+  }
+
+  /** The unread messages of every account's Posta in arrivo, as Apple Mail's badge counts them. */
+  async inboxUnreadCount(): Promise<number> {
+    const accounts = await this.deps.database.getAccounts()
+    const folders = await Promise.all(
+      accounts.map((account) => this.deps.database.listFolders(account.id))
+    )
+
+    return folders.reduce(
+      (total, accountFolders) =>
+        total + (folderForRole(accountFolders, '\\Inbox')?.unseenCount ?? 0),
+      0
+    )
   }
 
   private broadcast(channel: string, payload: unknown): void {

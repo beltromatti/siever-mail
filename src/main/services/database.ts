@@ -28,6 +28,7 @@ import type {
   MessageListSortDirection,
   MessageListSortField,
   MessageRef,
+  NotificationPreferences,
   ThemeMode,
   UiPreferences
 } from '@shared/models'
@@ -37,6 +38,7 @@ import {
   DEFAULT_MESSAGE_GROUPING_MODE,
   DEFAULT_MESSAGE_LIST_SORT_DIRECTION,
   DEFAULT_MESSAGE_LIST_SORT_FIELD,
+  DEFAULT_NOTIFICATION_PREFERENCES,
   DEFAULT_THEME_MODE,
   DEFAULT_UI_PREFERENCES,
   READER_ZOOM_DEFAULT
@@ -633,6 +635,29 @@ function normalizeStorageSectionSizesToTotal(
       sizeBytes: section.sizeBytes
     }))
     .sort((left, right) => right.sizeBytes - left.sizeBytes)
+}
+
+/** The stored notification preferences; what is missing or unreadable takes its default. */
+function parseNotificationPreferences(value: string | null | undefined): NotificationPreferences {
+  let stored: Partial<Record<keyof NotificationPreferences, unknown>> = {}
+
+  try {
+    const parsed = JSON.parse(value ?? '{}') as unknown
+    stored = parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    // A value no release wrote: the defaults stand in for it.
+  }
+
+  const flag = (key: 'enabled' | 'showPreview' | 'sound' | 'badge'): boolean =>
+    typeof stored[key] === 'boolean' ? stored[key] : DEFAULT_NOTIFICATION_PREFERENCES[key]
+
+  return {
+    enabled: flag('enabled'),
+    mutedAccountIds: normalizeAccountIdList(stored.mutedAccountIds),
+    showPreview: flag('showPreview'),
+    sound: flag('sound'),
+    badge: flag('badge')
+  }
 }
 
 /** Someone stored mail names, to learn as a contact (`AppDatabase.learnContacts`). */
@@ -2040,6 +2065,30 @@ export class AppDatabase {
     `
   }
 
+  async getNotificationPreferences(): Promise<NotificationPreferences> {
+    await this.ready
+
+    const rows = await this.prisma.$queryRaw<Array<{ value: string | null }>>`
+      SELECT notification_preferences AS value
+      FROM app_preferences
+      WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
+      LIMIT 1
+    `
+
+    return parseNotificationPreferences(rows[0]?.value)
+  }
+
+  async setNotificationPreferences(preferences: NotificationPreferences): Promise<void> {
+    await this.ready
+
+    await this.prisma.$executeRaw`
+      UPDATE app_preferences
+      SET notification_preferences = ${JSON.stringify(preferences)},
+          updated_at = ${Date.now()}
+      WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
+    `
+  }
+
   async upsertMessageSummaries(
     accountId: string,
     folderPath: string,
@@ -3247,6 +3296,7 @@ export class AppDatabase {
         reader_details_open INTEGER NOT NULL DEFAULT 0,
         shortcut_overrides TEXT NOT NULL DEFAULT '{}',
         extension_signature_revision INTEGER NOT NULL DEFAULT 0,
+        notification_preferences TEXT NOT NULL DEFAULT '{}',
         updated_at INTEGER NOT NULL
       )
     `)
@@ -3364,7 +3414,8 @@ export class AppDatabase {
       ['reader_details_open', 'INTEGER NOT NULL DEFAULT 0'],
       ['shortcut_overrides', "TEXT NOT NULL DEFAULT '{}'"],
       ['theme_mode', "TEXT NOT NULL DEFAULT 'system'"],
-      ['extension_signature_revision', 'INTEGER NOT NULL DEFAULT 0']
+      ['extension_signature_revision', 'INTEGER NOT NULL DEFAULT 0'],
+      ['notification_preferences', "TEXT NOT NULL DEFAULT '{}'"]
     ]
 
     for (const [column, definition] of additions) {

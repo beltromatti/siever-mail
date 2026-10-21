@@ -35,6 +35,7 @@ import { Switch } from '@renderer/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { GROUPING_OPTIONS } from '@renderer/features/mail/message-list-shared'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
+import { NotificationsSection } from '@renderer/features/settings/notifications-section'
 import { ShortcutsSection } from '@renderer/features/settings/shortcuts-section'
 import { cn } from '@renderer/lib/utils'
 import type {
@@ -45,7 +46,8 @@ import type {
   UiPreferences
 } from '@shared/models'
 
-type SettingsSectionId = 'accounts' | 'preferences' | 'shortcuts' | 'data' | 'signatures' | string
+type SettingsSectionId =
+  'accounts' | 'preferences' | 'notifications' | 'shortcuts' | 'data' | 'signatures' | string
 
 interface SettingsSection {
   id: SettingsSectionId
@@ -86,6 +88,12 @@ const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
     label: 'Preferenze',
     title: 'Preferenze',
     description: "Configura le preferenze generali dell'applicazione."
+  },
+  {
+    id: 'notifications',
+    label: 'Notifiche',
+    title: 'Notifiche',
+    description: "Gli avvisi per la nuova posta e il numero di non lette sull'icona."
   },
   {
     id: 'shortcuts',
@@ -880,6 +888,8 @@ export function SettingsDialog({
                   )}
                 </div>
               </div>
+            ) : activeSectionId === 'notifications' ? (
+              <NotificationsSection accounts={accounts} />
             ) : activeSectionId === 'shortcuts' ? (
               <ShortcutsSection
                 overrides={uiPreferences.shortcutOverrides}

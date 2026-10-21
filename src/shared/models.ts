@@ -196,6 +196,43 @@ export interface UiPreferences {
   shortcutOverrides: Record<string, string>
 }
 
+/** How SIEVER Mail announces new mail (Impostazioni › Notifiche). */
+export interface NotificationPreferences {
+  /** An alert on the desktop for each new message in Posta in arrivo. */
+  enabled: boolean
+  /** Accounts whose new mail is not announced. */
+  mutedAccountIds: string[]
+  /** Sender, subject and first lines; without, an alert says only that mail arrived. */
+  showPreview: boolean
+  sound: boolean
+  /** The unread count of Posta in arrivo on the Dock or taskbar icon. */
+  badge: boolean
+}
+
+export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  enabled: true,
+  mutedAccountIds: [],
+  showPreview: true,
+  sound: true,
+  badge: true
+}
+
+/**
+ * Whether the system shows the app's notifications, as far as the app can
+ * tell: no system says beforehand, so it is what became of the last one.
+ */
+export type NotificationDelivery =
+  | { state: 'unknown' }
+  | { state: 'shown'; at: number }
+  | { state: 'failed'; at: number; reason: string }
+
+export interface NotificationStatus {
+  supported: boolean
+  delivery: NotificationDelivery
+  /** Whether the system has a page where the user allows the app's notifications. */
+  canOpenSystemSettings: boolean
+}
+
 /**
  * What the menu bar asks the page to do: the id of one of the commands in
  * `shared/commands.ts`, the host's or the extension's.
