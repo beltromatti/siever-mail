@@ -186,7 +186,7 @@ export function MessageTable({
           <Flag className="size-3" />
         </span>
         {renderColumnHeader(SORTABLE_COLUMNS[0])}
-        {/* Under TUTTI the account a message came to says more than its
+        {/* In Tutti gli account the account a message came to says more than its
             recipients, which are mostly that same account. */}
         <span className="px-1">{accountLabels ? 'Account' : 'A'}</span>
         {renderColumnHeader(SORTABLE_COLUMNS[1])}

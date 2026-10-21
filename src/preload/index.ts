@@ -45,10 +45,10 @@ const desktopMailApi: DesktopMailApi = {
   setActiveMailboxContext: async (context) => invoke(IPC_CHANNELS.setActiveMailboxContext, context),
   checkMailNow: async () => invoke(IPC_CHANNELS.checkMailNow),
   listFolders: async (accountId) => invoke(IPC_CHANNELS.listFolders, accountId),
-  getUnifiedInboxSummary: async () => invoke(IPC_CHANNELS.getUnifiedInboxSummary),
-  getUnifiedInboxPreferences: async () => invoke(IPC_CHANNELS.getUnifiedInboxPreferences),
-  setUnifiedInboxIncludedAccounts: async (accountIds) =>
-    invoke(IPC_CHANNELS.setUnifiedInboxIncludedAccounts, accountIds),
+  getUnifiedFolderSummaries: async () => invoke(IPC_CHANNELS.getUnifiedFolderSummaries),
+  getUnifiedPreferences: async () => invoke(IPC_CHANNELS.getUnifiedPreferences),
+  setUnifiedIncludedAccounts: async (accountIds) =>
+    invoke(IPC_CHANNELS.setUnifiedIncludedAccounts, accountIds),
   listMessages: async (accountId, folderPath, options) =>
     invoke(IPC_CHANNELS.listMessages, accountId, folderPath, options),
   getMessage: async (ref) => invoke(IPC_CHANNELS.getMessage, ref),
@@ -93,7 +93,7 @@ const desktopMailApi: DesktopMailApi = {
     subscribe(IPC_CHANNELS.windowControlsStateChanged, listener),
   onMessagesChanged: (listener) => subscribe(IPC_CHANNELS.messagesChanged, listener),
   onFoldersChanged: (listener) => subscribe(IPC_CHANNELS.foldersChanged, listener),
-  onUnifiedInboxChanged: (listener) => subscribe(IPC_CHANNELS.unifiedInboxChanged, listener),
+  onUnifiedFoldersChanged: (listener) => subscribe(IPC_CHANNELS.unifiedFoldersChanged, listener),
   onAccountConnectionChanged: (listener) =>
     subscribe(IPC_CHANNELS.accountConnectionChanged, listener),
   onAppMenuCommand: (listener) => subscribe(IPC_CHANNELS.appMenuCommand, listener),

@@ -14,9 +14,9 @@ import type {
   ListMessagesOptions,
   MailAccount,
   MessagesChangedEvent,
-  UnifiedInboxChangedEvent,
-  UnifiedInboxPreferences,
-  UnifiedInboxSummary,
+  UnifiedFolderSummary,
+  UnifiedFoldersChangedEvent,
+  UnifiedPreferences,
   WindowControlsState,
   MailFolder,
   MailContactSuggestion,
@@ -46,9 +46,9 @@ export const IPC_CHANNELS = {
   setActiveMailboxContext: 'app:set-active-mailbox-context',
   checkMailNow: 'app:check-mail-now',
   listFolders: 'folder:list',
-  getUnifiedInboxSummary: 'folder:get-unified-inbox-summary',
-  getUnifiedInboxPreferences: 'folder:get-unified-inbox-preferences',
-  setUnifiedInboxIncludedAccounts: 'folder:set-unified-inbox-included-accounts',
+  getUnifiedFolderSummaries: 'folder:get-unified-summaries',
+  getUnifiedPreferences: 'folder:get-unified-preferences',
+  setUnifiedIncludedAccounts: 'folder:set-unified-included-accounts',
   listMessages: 'message:list',
   getMessage: 'message:get',
   readMessage: 'message:read',
@@ -87,7 +87,7 @@ export const IPC_CHANNELS = {
   windowControlsStateChanged: 'window:controls-state-changed',
   messagesChanged: 'engine:messages-changed',
   foldersChanged: 'engine:folders-changed',
-  unifiedInboxChanged: 'engine:unified-inbox-changed',
+  unifiedFoldersChanged: 'engine:unified-folders-changed',
   accountConnectionChanged: 'engine:account-connection-changed',
   appMenuCommand: 'app:menu-command',
   showContextMenu: 'app:show-context-menu',
@@ -115,9 +115,9 @@ export interface DesktopMailApi {
   /** Asks every account now whether new mail has arrived. */
   checkMailNow: () => Promise<void>
   listFolders: (accountId: string) => Promise<MailFolder[]>
-  getUnifiedInboxSummary: () => Promise<UnifiedInboxSummary>
-  getUnifiedInboxPreferences: () => Promise<UnifiedInboxPreferences>
-  setUnifiedInboxIncludedAccounts: (accountIds: string[]) => Promise<UnifiedInboxPreferences>
+  getUnifiedFolderSummaries: () => Promise<UnifiedFolderSummary[]>
+  getUnifiedPreferences: () => Promise<UnifiedPreferences>
+  setUnifiedIncludedAccounts: (accountIds: string[]) => Promise<UnifiedPreferences>
   listMessages: (
     accountId: string,
     folderPath: string,
@@ -185,7 +185,7 @@ export interface DesktopMailApi {
   onWindowControlsStateChanged: (listener: (state: WindowControlsState) => void) => () => void
   onMessagesChanged: (listener: (event: MessagesChangedEvent) => void) => () => void
   onFoldersChanged: (listener: (event: FoldersChangedEvent) => void) => () => void
-  onUnifiedInboxChanged: (listener: (event: UnifiedInboxChangedEvent) => void) => () => void
+  onUnifiedFoldersChanged: (listener: (event: UnifiedFoldersChangedEvent) => void) => () => void
   onAccountConnectionChanged: (listener: (state: AccountConnectionState) => void) => () => void
   onAppMenuCommand: (listener: (command: AppMenuCommand) => void) => () => void
   /**

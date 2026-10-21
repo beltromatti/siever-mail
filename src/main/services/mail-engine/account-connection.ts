@@ -25,6 +25,7 @@ import type {
   MailMessageSummary,
   MessageRef
 } from '@shared/models'
+import { folderForRole } from '@shared/folders'
 import { deriveSenderKey, deriveSenderName } from '@shared/sender'
 
 import type { AppDatabase, FolderSyncState } from '../database'
@@ -66,8 +67,6 @@ import {
 // the preview to a follow-up hydration pass.
 /** The folder archiving creates on a server that has none. */
 const ARCHIVE_FOLDER_NAME = 'Archivio'
-/** Gmail's own folders: "[Gmail]/…", or "[Google Mail]/…" where the brand differs. */
-const GMAIL_SYSTEM_FOLDER_PATTERN = /^\[(?:gmail|google mail)\]/i
 
 const BOOTSTRAP_ENVELOPE_BATCH_SIZE = 1000
 // The first batch of a first sync is the first screen of the list: small,
@@ -1058,7 +1057,7 @@ export class AccountConnection extends EventEmitter {
 
   /**
    * Takes messages that left a folder out of the cache, and tells every view
-   * at once — the list they were in, TUTTI, a search.
+   * at once — the list they were in, Tutti gli account, a search.
    */
   private async forgetMessages(folderPath: string, uids: number[]): Promise<void> {
     await this.database.deleteMessageUids(this.account.id, folderPath, uids)
@@ -1077,7 +1076,7 @@ export class AccountConnection extends EventEmitter {
     uids: number[],
     options: { markAsSeenBeforeMove?: boolean } = {}
   ): Promise<{ sourceFolder: string; destinationFolder?: string }> {
-    const trash = await this.findFolderBySpecialUse(['\\Trash'], ['trash', 'cestino'])
+    const trash = folderForRole(await this.database.listFolders(this.account.id), '\\Trash')
 
     if (!trash || trash.path === folderPath) {
       if (options.markAsSeenBeforeMove) {
@@ -1099,7 +1098,7 @@ export class AccountConnection extends EventEmitter {
     folderPath: string,
     uids: number[]
   ): Promise<{ sourceFolder: string; destinationFolder?: string }> {
-    const trash = await this.findFolderBySpecialUse(['\\Trash'], ['trash', 'cestino'])
+    const trash = folderForRole(await this.database.listFolders(this.account.id), '\\Trash')
 
     if (trash && trash.path !== folderPath) {
       await this.moveMessages(folderPath, uids, trash.path)
@@ -1150,24 +1149,10 @@ export class AccountConnection extends EventEmitter {
    * at once share a single creation.
    */
   private async resolveArchiveFolder(): Promise<MailFolder> {
-    const archive = await this.findFolderBySpecialUse(
-      ['\\Archive'],
-      ['archive', 'archives', 'archivio']
-    )
+    const archive = folderForRole(await this.database.listFolders(this.account.id), '\\Archive')
 
     if (archive) {
       return archive
-    }
-
-    const folders = await this.database.listFolders(this.account.id)
-    const gmailAllMail = folders.find(
-      (folder) =>
-        folder.specialUse?.toLowerCase() === '\\all' &&
-        GMAIL_SYSTEM_FOLDER_PATTERN.test(folder.path)
-    )
-
-    if (gmailAllMail) {
-      return gmailAllMail
     }
 
     this.archiveFolderCreation ??= this.createArchiveFolder().finally(() => {
@@ -1197,10 +1182,7 @@ export class AccountConnection extends EventEmitter {
   }
 
   async appendToSent(rawMessage: Buffer, messageId: string): Promise<string | null> {
-    const sentFolder = await this.findFolderBySpecialUse(
-      ['\\Sent'],
-      ['sent', 'inviate', 'inviata', 'gesendet', 'envoyes', 'enviados']
-    )
+    const sentFolder = folderForRole(await this.database.listFolders(this.account.id), '\\Sent')
 
     if (!sentFolder) {
       return null
@@ -1957,7 +1939,7 @@ export class AccountConnection extends EventEmitter {
     )
   }
 
-  /** The inbox, which notifications and TUTTI follow, and the folder open. */
+  /** The inbox, which notifications and Tutti gli account follow, and the folder open. */
   private isInSight(folderPath: string): boolean {
     return (
       isInboxPath(folderPath) ||
@@ -2762,39 +2744,6 @@ export class AccountConnection extends EventEmitter {
         }
       }, ACTIVE_FOLDER_POLL_INTERVAL_MS)
     }
-  }
-
-  private async findFolderBySpecialUse(
-    specialUses: string[],
-    nameHints: string[]
-  ): Promise<MailFolder | null> {
-    const folders = await this.database.listFolders(this.account.id)
-
-    for (const flag of specialUses) {
-      const found = folders.find(
-        (folder) => folder.specialUse?.toLowerCase() === flag.toLowerCase()
-      )
-      if (found) {
-        return found
-      }
-    }
-
-    const normalize = (value: string): string =>
-      value
-        .toLowerCase()
-        .normalize('NFKD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .trim()
-
-    const hintSet = new Set(nameHints.map(normalize))
-
-    for (const folder of folders) {
-      if (hintSet.has(normalize(folder.name)) || hintSet.has(normalize(folder.path))) {
-        return folder
-      }
-    }
-
-    return null
   }
 
   // ───────────────────────────── Primary queue ─────────────────────────────

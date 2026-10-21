@@ -172,7 +172,7 @@ export function FlagToggle({
 }
 
 /**
- * The account a message came to, on TUTTI's rows. As quiet as the date
+ * The account a message came to, on the rows of Tutti gli account. As quiet as the date
  * beside it, but always there: it is the account a reply or a move acts on.
  */
 export function AccountTag({

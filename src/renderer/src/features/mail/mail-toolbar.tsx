@@ -41,7 +41,7 @@ interface MailToolbarProps {
   search: string
   onSearchChange: (value: string) => void
   searchInputRef: React.RefObject<HTMLInputElement | null>
-  /** Where a search looks: the folder open, or TUTTI. */
+  /** Where a search looks: the folder open, or a folder of Tutti gli account. */
   searchScopeLabel: string
   filter: MessageListFilter
   onFilterChange: (next: MessageListFilter) => void

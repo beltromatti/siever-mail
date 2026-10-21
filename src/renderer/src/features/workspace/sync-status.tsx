@@ -35,7 +35,7 @@ function lastContactSentence(states: AccountConnectionState[]): string {
 
 /**
  * What the header says about the accounts on screen — the selected one, or
- * every account under TUTTI. "Sincronizzato" only while every one of them is
+ * every account in Tutti gli account. "Sincronizzato" only while every one of them is
  * actually connected and has finished downloading: a link being rebuilt, a
  * missing network and a server that stopped answering each say so, the most
  * serious first. Returns null when there is nothing to report on.

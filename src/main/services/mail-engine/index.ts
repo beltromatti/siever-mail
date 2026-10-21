@@ -11,8 +11,9 @@ import type {
   MailFolder,
   MailMessageSummary,
   MessageRef,
-  UnifiedInboxSummary
+  UnifiedFolderSummary
 } from '@shared/models'
+import { folderForRole, UNIFIED_FOLDER_ROLES, type FolderRole } from '@shared/folders'
 
 import type { AppDatabase } from '../database'
 import type { GoogleOAuthService } from '../google-oauth'
@@ -347,42 +348,58 @@ export class MailEngine {
     return connection.fetchAttachments(ref, attachments, messageSize)
   }
 
-  async computeUnifiedInboxSummary(): Promise<UnifiedInboxSummary> {
-    const accounts = await this.deps.database.getAccounts()
-    const includedIds = await this.resolveIncludedAccountIds(accounts.map((account) => account.id))
-    const mailboxes = await this.resolveInboxMailboxes(includedIds)
+  /**
+   * The folders of "Tutti gli account", one per role, each counting its
+   * folders across the accounts included. A role no included account has a
+   * folder for is left out.
+   */
+  async computeUnifiedFolderSummaries(): Promise<UnifiedFolderSummary[]> {
+    const foldersByAccount = await this.includedAccountFolders()
+    const summaries: UnifiedFolderSummary[] = []
 
-    if (mailboxes.length === 0) {
-      return { messageCount: 0, unseenCount: 0 }
-    }
+    for (const role of UNIFIED_FOLDER_ROLES) {
+      const folders = foldersByAccount.flatMap((folders) => {
+        const folder = folderForRole(folders, role)
+        return folder ? [folder] : []
+      })
 
-    let messageCount = 0
-    let unseenCount = 0
-    let latestSync: number | undefined
-
-    for (const mailbox of mailboxes) {
-      const folder = await this.deps.database.getFolder(mailbox.accountId, mailbox.folderPath)
-      if (!folder) {
+      if (folders.length === 0) {
         continue
       }
-      messageCount += folder.messageCount
-      unseenCount += folder.unseenCount
-      if (folder.lastSyncedAt && (!latestSync || folder.lastSyncedAt > latestSync)) {
-        latestSync = folder.lastSyncedAt
-      }
+
+      summaries.push({
+        role,
+        messageCount: folders.reduce((total, folder) => total + folder.messageCount, 0),
+        unseenCount: folders.reduce((total, folder) => total + folder.unseenCount, 0),
+        lastSyncedAt: folders.reduce<number | undefined>(
+          (latest, folder) =>
+            folder.lastSyncedAt !== undefined &&
+            (latest === undefined || folder.lastSyncedAt > latest)
+              ? folder.lastSyncedAt
+              : latest,
+          undefined
+        )
+      })
     }
 
-    return {
-      messageCount,
-      unseenCount,
-      lastSyncedAt: latestSync
-    }
+    return summaries
   }
 
-  async resolveUnifiedInboxMailboxes(): Promise<Array<{ accountId: string; folderPath: string }>> {
+  /** The folders "Tutti gli account" gathers for a role: one per account included. */
+  async resolveUnifiedMailboxes(
+    role: FolderRole
+  ): Promise<Array<{ accountId: string; folderPath: string }>> {
+    return (await this.includedAccountFolders()).flatMap((folders) => {
+      const folder = folderForRole(folders, role)
+      return folder ? [{ accountId: folder.accountId, folderPath: folder.path }] : []
+    })
+  }
+
+  /** Every folder of each account "Tutti gli account" includes, account by account. */
+  private async includedAccountFolders(): Promise<MailFolder[][]> {
     const accounts = await this.deps.database.getAccounts()
     const includedIds = await this.resolveIncludedAccountIds(accounts.map((account) => account.id))
-    return this.resolveInboxMailboxes(includedIds)
+    return Promise.all(includedIds.map((accountId) => this.deps.database.listFolders(accountId)))
   }
 
   private async resolveIncludedAccountIds(allAccountIds: string[]): Promise<string[]> {
@@ -394,30 +411,6 @@ export class MailEngine {
 
     const set = new Set(allAccountIds)
     return configured.filter((id) => set.has(id))
-  }
-
-  private async resolveInboxMailboxes(
-    accountIds: string[]
-  ): Promise<Array<{ accountId: string; folderPath: string }>> {
-    if (accountIds.length === 0) {
-      return []
-    }
-
-    const mailboxes: Array<{ accountId: string; folderPath: string }> = []
-
-    for (const accountId of accountIds) {
-      const folders = await this.deps.database.listFolders(accountId)
-      const inbox =
-        folders.find((folder) => folder.specialUse?.trim().toLowerCase() === '\\inbox') ||
-        folders.find((folder) => folder.path.trim().toLowerCase() === 'inbox') ||
-        null
-
-      if (inbox) {
-        mailboxes.push({ accountId, folderPath: inbox.path })
-      }
-    }
-
-    return mailboxes
   }
 
   private async attachAccount(accountId: string): Promise<void> {
@@ -448,7 +441,7 @@ export class MailEngine {
 
     connection.on('folders', (folders) => {
       this.broadcast(IPC_CHANNELS.foldersChanged, { accountId, folders })
-      void this.emitUnifiedInboxSummary()
+      void this.emitUnifiedFolderSummaries()
     })
 
     connection.on('folder-counts', (update) => {
@@ -460,7 +453,7 @@ export class MailEngine {
         removedUids: [] as number[],
         folder: update
       })
-      void this.emitUnifiedInboxSummary()
+      void this.emitUnifiedFolderSummaries()
     })
 
     connection.on('messages', async (event) => {
@@ -477,7 +470,7 @@ export class MailEngine {
         this.notifications.enqueue(event.accountId, event.added, folder, event.bootstrap)
       }
 
-      void this.emitUnifiedInboxSummary()
+      void this.emitUnifiedFolderSummaries()
     })
 
     this.connections.set(accountId, connection)
@@ -492,12 +485,12 @@ export class MailEngine {
     }
   }
 
-  private async emitUnifiedInboxSummary(): Promise<void> {
+  private async emitUnifiedFolderSummaries(): Promise<void> {
     try {
-      const summary = await this.computeUnifiedInboxSummary()
-      this.broadcast(IPC_CHANNELS.unifiedInboxChanged, { summary })
+      const summaries = await this.computeUnifiedFolderSummaries()
+      this.broadcast(IPC_CHANNELS.unifiedFoldersChanged, { summaries })
     } catch (error) {
-      logMainError('Unified inbox summary broadcast failed', error)
+      logMainError('Unified folder summaries broadcast failed', error)
     }
   }
 

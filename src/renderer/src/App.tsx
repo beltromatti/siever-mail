@@ -42,6 +42,7 @@ import { ConfirmDialog, useConfirmDialog } from '@renderer/components/ui/confirm
 import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { cn, formatAppVersion, formatCount } from '@renderer/lib/utils'
+import { folderDisplayName, folderRoleLabel, unifiedFolderRole } from '@shared/folders'
 import { buildMessageSections } from '@renderer/lib/message-sections'
 import {
   CommandShortcutsProvider,
@@ -49,7 +50,7 @@ import {
   IS_MAC,
   isOverlaySurfaceOpen
 } from '@renderer/lib/command-shortcuts'
-import { buildFolderTree, type FolderTreeNode } from '@renderer/lib/folder-tree'
+import { buildFolderTree, folderNodeLabel, type FolderTreeNode } from '@renderer/lib/folder-tree'
 import { inlineMessageStyles } from '@renderer/lib/inline-message-styles'
 import { buildOutgoingMailHtml } from '@renderer/lib/outgoing-mail-html'
 import { READER_ZOOM_RESET, steppedReaderZoom } from '@renderer/lib/reader-zoom'
@@ -67,7 +68,6 @@ import {
   type SelectionIntent
 } from '@renderer/lib/message-selection'
 import {
-  ALL_INBOX_FOLDER_PATH,
   clampReaderZoom,
   DEFAULT_MESSAGE_LIST_FILTER,
   DEFAULT_UI_PREFERENCES,
@@ -93,11 +93,11 @@ import type {
   MessageListFilter,
   MessageRef,
   UiPreferences,
-  UnifiedInboxSummary,
+  UnifiedFolderSummary,
   WindowControlsState
 } from '@shared/models'
 
-const ALL_INBOX_FOLDER_LABEL = 'TUTTI'
+const ALL_ACCOUNTS_LABEL = 'tutti gli account'
 const GMAIL_QUOTE_BLOCK_STYLE = 'margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex'
 const READER_ZOOM_SAVE_DELAY_MS = 400
 /** The rows around the one being read whose bodies are fetched ahead. */
@@ -247,7 +247,7 @@ function moveAccountToFront(accounts: MailAccount[], accountId: string): MailAcc
 }
 
 /**
- * What TUTTI calls each account on its rows: the display name when no other
+ * What Tutti gli account calls each account on its rows: the display name when no other
  * account in the view shares it, the address otherwise.
  */
 function buildAccountLabels(accounts: MailAccount[]): ReadonlyMap<string, string> {
@@ -448,8 +448,12 @@ function App(): React.JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [extensionPrimaryDialogOpen, setExtensionPrimaryDialogOpen] = useState(false)
   const [showWelcomeGate, setShowWelcomeGate] = useState(true)
-  const [allInboxesSummary, setAllInboxesSummary] = useState<UnifiedInboxSummary | null>(null)
-  // The accounts TUTTI gathers, so its rows can say which one each is from.
+  // The folders of "Tutti gli account", one per role, with their counts.
+  const [unifiedSummaries, setUnifiedSummaries] = useState<UnifiedFolderSummary[]>([])
+  // The folders the list on screen shows (see `MailMessageListPage.mailboxes`):
+  // the sync events about them are the ones it follows.
+  const viewMailboxesRef = useRef<Array<{ accountId: string; folderPath: string }>>([])
+  // The accounts Tutti gli account gathers, so its rows can say which one each is from.
   const [unifiedAccountIds, setUnifiedAccountIds] = useState<readonly string[]>([])
   const [emptyStateIntroStep, setEmptyStateIntroStep] = useState<'logo' | 'text' | 'button'>('logo')
   const [windowControlsState, setWindowControlsState] = useState<WindowControlsState>({
@@ -597,23 +601,21 @@ function App(): React.JSX.Element {
   }, [])
 
   const syncSummary = useMemo(() => {
-    const accountsOnScreen =
-      selectedFolderPath === ALL_INBOX_FOLDER_PATH
-        ? accounts
-        : accounts.filter((account) => account.id === selectedAccountId)
+    const accountsOnScreen = unifiedFolderRole(selectedFolderPath)
+      ? accounts
+      : accounts.filter((account) => account.id === selectedAccountId)
 
     return summarizeSyncStatus(accountsOnScreen, accountConnections)
   }, [accountConnections, accounts, selectedAccountId, selectedFolderPath])
 
-  const refreshUnifiedInboxSummary = useCallback(async (): Promise<void> => {
+  const refreshUnifiedSummaries = useCallback(async (): Promise<void> => {
     if (accounts.length === 0) {
-      setAllInboxesSummary(null)
+      setUnifiedSummaries([])
       return
     }
 
     try {
-      const summary = await window.mailApi.getUnifiedInboxSummary()
-      setAllInboxesSummary(summary)
+      setUnifiedSummaries(await window.mailApi.getUnifiedFolderSummaries())
     } catch {
       return
     }
@@ -621,7 +623,7 @@ function App(): React.JSX.Element {
 
   const refreshUnifiedAccountIds = useCallback(async (): Promise<void> => {
     try {
-      const preferences = await window.mailApi.getUnifiedInboxPreferences()
+      const preferences = await window.mailApi.getUnifiedPreferences()
       setUnifiedAccountIds(preferences.includedAccountIds)
     } catch {
       return
@@ -631,19 +633,6 @@ function App(): React.JSX.Element {
   useEffect(() => {
     void refreshUnifiedAccountIds()
   }, [accounts.length, refreshUnifiedAccountIds])
-
-  const allInboxesFolder = useMemo(() => {
-    if (accounts.length === 0) {
-      return undefined
-    }
-
-    return {
-      path: ALL_INBOX_FOLDER_PATH,
-      name: ALL_INBOX_FOLDER_LABEL,
-      messageCount: allInboxesSummary?.messageCount ?? 0,
-      unseenCount: allInboxesSummary?.unseenCount ?? 0
-    }
-  }, [accounts.length, allInboxesSummary?.messageCount, allInboxesSummary?.unseenCount])
 
   const clearSelection = useCallback((): void => {
     setSelection(EMPTY_MESSAGE_SELECTION)
@@ -683,10 +672,10 @@ function App(): React.JSX.Element {
         }
 
         setFolders(fetchedFolders)
-        void refreshUnifiedInboxSummary()
+        void refreshUnifiedSummaries()
 
         setSelectedFolderPath((currentFolderPath) => {
-          if (currentFolderPath === ALL_INBOX_FOLDER_PATH) {
+          if (unifiedFolderRole(currentFolderPath)) {
             return currentFolderPath
           }
 
@@ -726,7 +715,7 @@ function App(): React.JSX.Element {
         }
       }
     },
-    [refreshUnifiedInboxSummary]
+    [refreshUnifiedSummaries]
   )
 
   const loadMessages = useCallback(
@@ -776,6 +765,7 @@ function App(): React.JSX.Element {
 
         setMessages(fetchedPage.messages)
         setMessageLimit(fetchedPage.limit)
+        viewMailboxesRef.current = fetchedPage.mailboxes
         setTotalMessagesInFolder(fetchedPage.total)
         setListCounts({
           cachedCount: fetchedPage.cachedCount,
@@ -818,8 +808,8 @@ function App(): React.JSX.Element {
           }
         })
 
-        if (folderPath === ALL_INBOX_FOLDER_PATH) {
-          void refreshUnifiedInboxSummary()
+        if (unifiedFolderRole(folderPath)) {
+          void refreshUnifiedSummaries()
         }
 
         return fetchedPage
@@ -847,12 +837,12 @@ function App(): React.JSX.Element {
         }
       }
     },
-    [clearSelection, refreshUnifiedInboxSummary]
+    [clearSelection, refreshUnifiedSummaries]
   )
 
   useEffect(() => {
-    void refreshUnifiedInboxSummary()
-  }, [refreshUnifiedInboxSummary])
+    void refreshUnifiedSummaries()
+  }, [refreshUnifiedSummaries])
 
   const loadMessageDetail = useCallback(async (ref: MessageRef) => {
     const requestId = ++messageDetailRequestIdRef.current
@@ -1059,7 +1049,7 @@ function App(): React.JSX.Element {
       try {
         await window.mailApi.removeAccount(accountId)
         cancelInFlightWork()
-        setAllInboxesSummary(null)
+        setUnifiedSummaries([])
         setSelectedAccountId((current) => (current === accountId ? null : current))
         setAccounts((current) => current.filter((account) => account.id !== accountId))
       } catch (caughtError) {
@@ -1076,6 +1066,7 @@ function App(): React.JSX.Element {
   )
 
   const resetMailboxView = useCallback((): void => {
+    viewMailboxesRef.current = []
     setMessages([])
     setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
     setTotalMessagesInFolder(0)
@@ -1096,7 +1087,7 @@ function App(): React.JSX.Element {
 
       try {
         await window.mailApi.clearAccountData(accountId)
-        setAllInboxesSummary(null)
+        setUnifiedSummaries([])
 
         if (selectedAccountId === accountId) {
           cancelInFlightWork()
@@ -1107,7 +1098,7 @@ function App(): React.JSX.Element {
           const requestId = ++folderRequestIdRef.current
           void loadFolders(accountId, { requestId })
         } else {
-          void refreshUnifiedInboxSummary()
+          void refreshUnifiedSummaries()
         }
       } catch (caughtError) {
         setViewError(
@@ -1124,7 +1115,7 @@ function App(): React.JSX.Element {
       clearingAccountDataId,
       clearingDatabaseData,
       loadFolders,
-      refreshUnifiedInboxSummary,
+      refreshUnifiedSummaries,
       removingAccountId,
       resetMailboxView,
       selectedAccountId
@@ -1143,7 +1134,7 @@ function App(): React.JSX.Element {
       await window.mailApi.clearAllDataKeepAccounts()
 
       cancelInFlightWork()
-      setAllInboxesSummary(null)
+      setUnifiedSummaries([])
       setFolders([])
       setSelectedFolderPath(null)
       resetMailboxView()
@@ -1171,19 +1162,19 @@ function App(): React.JSX.Element {
     selectedAccountId
   ])
 
-  const handleUnifiedInboxPreferencesChanged = useCallback((): void => {
-    void refreshUnifiedInboxSummary()
+  const handleUnifiedPreferencesChanged = useCallback((): void => {
+    void refreshUnifiedSummaries()
     void refreshUnifiedAccountIds()
 
-    if (!selectedAccountId || selectedFolderPath !== ALL_INBOX_FOLDER_PATH) {
+    if (!selectedAccountId || !selectedFolderPath || !unifiedFolderRole(selectedFolderPath)) {
       return
     }
 
-    void refreshCurrentFolder(selectedAccountId, ALL_INBOX_FOLDER_PATH)
+    void refreshCurrentFolder(selectedAccountId, selectedFolderPath)
   }, [
     refreshCurrentFolder,
     refreshUnifiedAccountIds,
-    refreshUnifiedInboxSummary,
+    refreshUnifiedSummaries,
     selectedAccountId,
     selectedFolderPath
   ])
@@ -1360,7 +1351,7 @@ function App(): React.JSX.Element {
   }, [clearSearch, hasActiveSearch, isMessageExpanded, selection.selectedRefs.length])
 
   useEffect(() => {
-    if (!selectedAccountId || !selectedFolderPath || selectedFolderPath === ALL_INBOX_FOLDER_PATH) {
+    if (!selectedAccountId || !selectedFolderPath || unifiedFolderRole(selectedFolderPath)) {
       void window.mailApi.setActiveMailboxContext(null)
       return
     }
@@ -1405,11 +1396,12 @@ function App(): React.JSX.Element {
         return
       }
 
-      // TUTTI shows the inboxes; any other view one folder.
-      const inView =
-        selectedFolderPath === ALL_INBOX_FOLDER_PATH
-          ? event.folderPath.toUpperCase() === 'INBOX'
-          : event.accountId === selectedAccountId && event.folderPath === selectedFolderPath
+      // The folders the list shows: one, or those "Tutti gli account"
+      // gathers for a role.
+      const inView = viewMailboxesRef.current.some(
+        (mailbox) =>
+          mailbox.accountId === event.accountId && mailbox.folderPath === event.folderPath
+      )
 
       if (!inView) {
         return
@@ -1464,8 +1456,8 @@ function App(): React.JSX.Element {
       setFolders(event.folders)
     })
 
-    const unsubscribeUnified = window.mailApi.onUnifiedInboxChanged((event) => {
-      setAllInboxesSummary(event.summary)
+    const unsubscribeUnified = window.mailApi.onUnifiedFoldersChanged((event) => {
+      setUnifiedSummaries(event.summaries)
     })
 
     const unsubscribeConnection = window.mailApi.onAccountConnectionChanged((state) => {
@@ -2354,7 +2346,7 @@ function App(): React.JSX.Element {
   )
 
   // Folders belong to one account, so where a selection can move depends on
-  // whose messages it holds — under TUTTI, not necessarily the account in
+  // whose messages it holds — in Tutti gli account, not necessarily the account in
   // the sidebar.
   const selectionAccountIds = useMemo(
     () => Array.from(new Set(selection.selectedRefs.map((ref) => ref.accountId))),
@@ -2456,7 +2448,7 @@ function App(): React.JSX.Element {
   }, [accounts, confirm, selection.cursorRef?.accountId, selectionAccountIds])
 
   const accountLabels = useMemo(() => {
-    if (selectedFolderPath !== ALL_INBOX_FOLDER_PATH || unifiedAccountIds.length < 2) {
+    if (!unifiedFolderRole(selectedFolderPath) || unifiedAccountIds.length < 2) {
       return null
     }
 
@@ -2623,7 +2615,7 @@ function App(): React.JSX.Element {
   const attachmentActions = useAttachmentActions(readingRef)
 
   // A reply or forward goes out from the account that received the message
-  // — which, under TUTTI, is not necessarily the one in the sidebar — and
+  // — which, in Tutti gli account, is not necessarily the one in the sidebar — and
   // knows the message, for its attachments.
   // Every address the user writes from: a reply to all leaves them out, and
   // a reply to their own message goes to the people it went to.
@@ -2900,7 +2892,7 @@ function App(): React.JSX.Element {
       nodes.map((node) => {
         const own: ContextMenuItem = {
           id: `move:${node.path}`,
-          label: node.name,
+          label: folderNodeLabel(node),
           enabled: node.folder !== null && node.path !== onlyFolder
         }
 
@@ -2908,7 +2900,7 @@ function App(): React.JSX.Element {
           ? own
           : {
               id: `folder:${node.path}`,
-              label: node.name,
+              label: folderNodeLabel(node),
               submenu: [
                 ...(node.folder ? [own, { type: 'separator' } as const] : []),
                 ...moveItems(node.children)
@@ -3216,11 +3208,18 @@ function App(): React.JSX.Element {
     )
   }
 
-  // What the view is called where it is named: the folder, or TUTTI.
-  const currentViewLabel =
-    selectedFolderPath === ALL_INBOX_FOLDER_PATH
-      ? ALL_INBOX_FOLDER_LABEL
-      : (currentFolder?.name ?? 'Conversazioni')
+  const selectedAccountRecord = accounts.find((account) => account.id === selectedAccountId)
+  const selectedAccountLabel =
+    selectedAccountRecord?.displayName || selectedAccountRecord?.email || 'Cartelle'
+
+  // What the view is called where it is named: the folder, or a folder of
+  // "Tutti gli account".
+  const currentUnifiedRole = unifiedFolderRole(selectedFolderPath)
+  const currentViewLabel = currentUnifiedRole
+    ? `${folderRoleLabel(currentUnifiedRole)} · ${ALL_ACCOUNTS_LABEL}`
+    : currentFolder
+      ? folderDisplayName(currentFolder)
+      : 'Conversazioni'
   const filterNouns =
     messageFilter === 'unread'
       ? (['messaggio non letto', 'messaggi non letti'] as const)
@@ -3275,7 +3274,7 @@ function App(): React.JSX.Element {
         : { kind: 'folder', title: `Nessun messaggio in «${currentViewLabel}»`, lines: [] }
 
   const listViewProps: MessageListViewProps = {
-    title: 'Conversazioni',
+    title: currentViewLabel,
     searchQuery: search.trim(),
     onClearSearch: clearSearch,
     messages,
@@ -3371,8 +3370,9 @@ function App(): React.JSX.Element {
               </div>
             ) : (
               <FolderSidebar
+                accountLabel={selectedAccountLabel}
                 folders={folders}
-                allInboxesFolder={allInboxesFolder}
+                unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
                 selectedFolderPath={selectedFolderPath}
                 onSelectFolder={(folderPath) => {
                   setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
@@ -3398,7 +3398,9 @@ function App(): React.JSX.Element {
               }
               search={search}
               searchInputRef={searchInputRef}
-              searchScopeLabel={currentViewLabel}
+              searchScopeLabel={
+                currentUnifiedRole ? folderRoleLabel(currentUnifiedRole) : currentViewLabel
+              }
               onSearchChange={setSearch}
               filter={messageFilter}
               onFilterChange={setMessageFilter}
@@ -3564,7 +3566,7 @@ function App(): React.JSX.Element {
           onClearAccountData={(accountId) => void clearAccountData(accountId)}
           onClearDatabaseData={() => void clearAllDataKeepAccounts()}
           onAddAccount={() => setAddAccountDialogOpen(true)}
-          onUnifiedInboxPreferencesChanged={handleUnifiedInboxPreferencesChanged}
+          onUnifiedPreferencesChanged={handleUnifiedPreferencesChanged}
         />
       </AppFrame>
     </CommandShortcutsProvider>

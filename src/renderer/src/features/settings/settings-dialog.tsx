@@ -31,6 +31,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@renderer/components/ui/select'
+import { Switch } from '@renderer/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { GROUPING_OPTIONS } from '@renderer/features/mail/message-list-shared'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
@@ -69,7 +70,8 @@ interface SettingsDialogProps {
   onClearAccountData: (accountId: string) => void
   onClearDatabaseData: () => void
   onAddAccount: () => void
-  onUnifiedInboxPreferencesChanged: () => void
+  /** The accounts "Tutti gli account" gathers changed. */
+  onUnifiedPreferencesChanged: () => void
 }
 
 const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
@@ -245,7 +247,7 @@ export function SettingsDialog({
   onClearAccountData,
   onClearDatabaseData,
   onAddAccount,
-  onUnifiedInboxPreferencesChanged
+  onUnifiedPreferencesChanged
 }: SettingsDialogProps): React.JSX.Element {
   const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>('accounts')
   const { confirm, dialog: confirmDialog } = useConfirmDialog()
@@ -264,18 +266,10 @@ export function SettingsDialog({
   const [signatureSavingAccountId, setSignatureSavingAccountId] = useState<string | null>(null)
   const [signaturesError, setSignaturesError] = useState<string | null>(null)
   const [signaturesStatusMessage, setSignaturesStatusMessage] = useState<string | null>(null)
-  const [unifiedInboxIncludedAccountIds, setUnifiedInboxIncludedAccountIds] = useState<string[]>([])
-  const [unifiedInboxDraftIncludedAccountIds, setUnifiedInboxDraftIncludedAccountIds] = useState<
-    string[]
-  >([])
-  const [unifiedInboxPreferencesLoading, setUnifiedInboxPreferencesLoading] = useState(false)
-  const [unifiedInboxPreferencesSaving, setUnifiedInboxPreferencesSaving] = useState(false)
-  const [unifiedInboxPreferencesError, setUnifiedInboxPreferencesError] = useState<string | null>(
-    null
-  )
-  const [unifiedInboxPreferencesStatusMessage, setUnifiedInboxPreferencesStatusMessage] = useState<
-    string | null
-  >(null)
+  // The accounts "Tutti gli account" gathers, as stored; null while loading.
+  const [unifiedIncludedAccountIds, setUnifiedIncludedAccountIds] = useState<string[] | null>(null)
+  const [unifiedPreferencesSaving, setUnifiedPreferencesSaving] = useState(false)
+  const [unifiedPreferencesError, setUnifiedPreferencesError] = useState<string | null>(null)
 
   const activeSection =
     SETTINGS_SECTIONS.find((section) => section.id === activeSectionId) ?? SETTINGS_SECTIONS[0]
@@ -286,43 +280,22 @@ export function SettingsDialog({
     }
 
     let disposed = false
-    setUnifiedInboxPreferencesLoading(true)
-    setUnifiedInboxPreferencesError(null)
-    setUnifiedInboxPreferencesStatusMessage(null)
 
     void window.mailApi
-      .getUnifiedInboxPreferences()
+      .getUnifiedPreferences()
       .then((preferences) => {
-        if (disposed) {
-          return
+        if (!disposed) {
+          setUnifiedIncludedAccountIds(preferences.includedAccountIds)
+          setUnifiedPreferencesError(null)
         }
-
-        const accountIdSet = new Set(accounts.map((account) => account.id))
-        const normalizedIncludedAccountIds = Array.from(
-          new Set(
-            preferences.includedAccountIds
-              .map((accountId) => accountId.trim())
-              .filter((accountId) => accountIdSet.has(accountId))
-          )
-        )
-
-        setUnifiedInboxIncludedAccountIds(normalizedIncludedAccountIds)
-        setUnifiedInboxDraftIncludedAccountIds(normalizedIncludedAccountIds)
       })
       .catch((caughtError: unknown) => {
-        if (disposed) {
-          return
-        }
-
-        const message =
-          caughtError instanceof Error && caughtError.message.trim()
-            ? caughtError.message
-            : 'Caricamento preferenze TUTTI non riuscito.'
-        setUnifiedInboxPreferencesError(message)
-      })
-      .finally(() => {
         if (!disposed) {
-          setUnifiedInboxPreferencesLoading(false)
+          setUnifiedPreferencesError(
+            caughtError instanceof Error && caughtError.message.trim()
+              ? caughtError.message
+              : 'Caricamento degli account inclusi non riuscito.'
+          )
         }
       })
 
@@ -560,62 +533,31 @@ export function SettingsDialog({
         }
       })
   }, [dataBreakdown])
-  const normalizedUnifiedInboxIncludedAccountIds = useMemo(
-    () => Array.from(new Set(unifiedInboxIncludedAccountIds)),
-    [unifiedInboxIncludedAccountIds]
-  )
-  const normalizedUnifiedInboxDraftIncludedAccountIds = useMemo(
-    () => Array.from(new Set(unifiedInboxDraftIncludedAccountIds)),
-    [unifiedInboxDraftIncludedAccountIds]
-  )
-  const unifiedInboxPreferencesDirty = useMemo(() => {
-    if (
-      normalizedUnifiedInboxIncludedAccountIds.length !==
-      normalizedUnifiedInboxDraftIncludedAccountIds.length
-    ) {
-      return true
-    }
-
-    const includedAccountIdsSet = new Set(normalizedUnifiedInboxIncludedAccountIds)
-
-    return normalizedUnifiedInboxDraftIncludedAccountIds.some(
-      (accountId) => !includedAccountIdsSet.has(accountId)
-    )
-  }, [normalizedUnifiedInboxDraftIncludedAccountIds, normalizedUnifiedInboxIncludedAccountIds])
-
-  const saveUnifiedInboxPreferences = async (): Promise<void> => {
-    if (
-      unifiedInboxPreferencesSaving ||
-      unifiedInboxPreferencesLoading ||
-      anyAccountMutationInFlight
-    ) {
+  /** Includes or leaves out an account at once, as every other preference applies. */
+  const setAccountIncluded = async (accountId: string, included: boolean): Promise<void> => {
+    if (!unifiedIncludedAccountIds || unifiedPreferencesSaving || anyAccountMutationInFlight) {
       return
     }
 
-    setUnifiedInboxPreferencesError(null)
-    setUnifiedInboxPreferencesStatusMessage(null)
-    setUnifiedInboxPreferencesSaving(true)
+    const next = included
+      ? [...new Set([...unifiedIncludedAccountIds, accountId])]
+      : unifiedIncludedAccountIds.filter((includedId) => includedId !== accountId)
+
+    setUnifiedPreferencesError(null)
+    setUnifiedPreferencesSaving(true)
 
     try {
-      const savedPreferences = await window.mailApi.setUnifiedInboxIncludedAccounts(
-        normalizedUnifiedInboxDraftIncludedAccountIds
-      )
-      const normalizedSavedIncludedAccountIds = Array.from(
-        new Set(savedPreferences.includedAccountIds.map((accountId) => accountId.trim()))
-      )
-
-      setUnifiedInboxIncludedAccountIds(normalizedSavedIncludedAccountIds)
-      setUnifiedInboxDraftIncludedAccountIds(normalizedSavedIncludedAccountIds)
-      setUnifiedInboxPreferencesStatusMessage('Preferenze TUTTI salvate.')
-      onUnifiedInboxPreferencesChanged()
+      const saved = await window.mailApi.setUnifiedIncludedAccounts(next)
+      setUnifiedIncludedAccountIds(saved.includedAccountIds)
+      onUnifiedPreferencesChanged()
     } catch (caughtError) {
-      setUnifiedInboxPreferencesError(
+      setUnifiedPreferencesError(
         caughtError instanceof Error
           ? caughtError.message
-          : 'Salvataggio preferenze TUTTI non riuscito.'
+          : 'Salvataggio degli account inclusi non riuscito.'
       )
     } finally {
-      setUnifiedInboxPreferencesSaving(false)
+      setUnifiedPreferencesSaving(false)
     }
   }
 
@@ -865,112 +807,75 @@ export function SettingsDialog({
 
                 <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
                   <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-                    Cartella TUTTI
+                    Tutti gli account
                   </p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
-                    Seleziona quali account includere nella cartella TUTTI. Le inbox degli account
-                    esclusi non verranno aggregate e non verranno sincronizzate per TUTTI.
+                    Gli account che la sezione «Tutti gli account» della barra laterale riunisce:
+                    per ciascuno la Posta in arrivo, la Posta inviata, le Bozze, l&apos;Archivio, lo
+                    Spam e il Cestino, in un unico elenco. Un account escluso resta consultabile
+                    dalla sua sezione.
                   </p>
 
-                  {accounts.length === 0 ? (
+                  {accounts.length < 2 ? (
                     <div className="border-border text-muted-foreground mt-3 rounded-md border border-dashed px-3 py-3 text-[12px]">
-                      Collega almeno un account per configurare la cartella TUTTI.
+                      La sezione compare quando gli account collegati sono almeno due.
                     </div>
                   ) : (
-                    <div className="mt-3 flex flex-col gap-3">
-                      <div className="space-y-2">
-                        {unifiedInboxPreferencesLoading ? (
-                          <div className="text-muted-foreground flex items-center gap-2 rounded-md border border-dashed px-3 py-3 text-[12px]">
-                            <LoaderCircle className="size-4 animate-spin" />
-                            Caricamento preferenze TUTTI...
-                          </div>
-                        ) : (
-                          accounts.map((account) => {
-                            const included = normalizedUnifiedInboxDraftIncludedAccountIds.includes(
-                              account.id
-                            )
+                    <div className="mt-3 flex flex-col gap-2">
+                      {unifiedIncludedAccountIds === null && !unifiedPreferencesError ? (
+                        <div className="text-muted-foreground flex items-center gap-2 rounded-md border border-dashed px-3 py-3 text-[12px]">
+                          <LoaderCircle className="size-4 animate-spin" />
+                          Caricamento degli account inclusi…
+                        </div>
+                      ) : (
+                        accounts.map((account) => {
+                          const included = unifiedIncludedAccountIds?.includes(account.id) ?? false
+                          const switchId = `unified-account-${account.id}`
 
-                            return (
-                              <div
-                                key={`unified-inbox-preference-${account.id}`}
-                                className="border-border/70 bg-card/45 flex items-center justify-between gap-3 rounded-md border px-3 py-2"
-                              >
-                                <div className="min-w-0">
-                                  <p className="truncate text-[12px] font-medium">
-                                    {account.displayName || account.email}
-                                  </p>
-                                  <p className="text-muted-foreground truncate text-[11px]">
-                                    {account.email}
-                                  </p>
-                                </div>
+                          return (
+                            <label
+                              key={switchId}
+                              htmlFor={switchId}
+                              className="border-border/70 bg-card/45 flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2"
+                            >
+                              <span className="min-w-0">
+                                <span className="block truncate text-[12px] font-medium">
+                                  {account.displayName || account.email}
+                                </span>
+                                <span className="text-muted-foreground block truncate text-[11px]">
+                                  {account.email}
+                                </span>
+                              </span>
 
-                                <Button
-                                  type="button"
-                                  variant={included ? 'default' : 'outline'}
-                                  size="sm"
-                                  className="shrink-0"
-                                  disabled={
-                                    unifiedInboxPreferencesSaving || anyAccountMutationInFlight
-                                  }
-                                  onClick={() => {
-                                    setUnifiedInboxDraftIncludedAccountIds((current) => {
-                                      if (current.includes(account.id)) {
-                                        return current.filter(
-                                          (includedAccountId) => includedAccountId !== account.id
-                                        )
-                                      }
+                              <Switch
+                                id={switchId}
+                                checked={included}
+                                disabled={
+                                  unifiedIncludedAccountIds === null ||
+                                  unifiedPreferencesSaving ||
+                                  anyAccountMutationInFlight
+                                }
+                                onCheckedChange={(checked) =>
+                                  void setAccountIncluded(account.id, checked)
+                                }
+                                aria-label={`Includi ${account.email} in Tutti gli account`}
+                              />
+                            </label>
+                          )
+                        })
+                      )}
 
-                                      return [...current, account.id]
-                                    })
-                                  }}
-                                >
-                                  {included ? 'Incluso' : 'Escluso'}
-                                </Button>
-                              </div>
-                            )
-                          })
-                        )}
-                      </div>
-
-                      {normalizedUnifiedInboxDraftIncludedAccountIds.length === 0 && (
+                      {unifiedIncludedAccountIds?.length === 0 && (
                         <div className="text-muted-foreground rounded-md border border-dashed px-3 py-2 text-[12px]">
-                          Nessun account incluso: la cartella TUTTI risultera vuota.
+                          Nessun account incluso: la sezione «Tutti gli account» non compare.
                         </div>
                       )}
 
-                      {unifiedInboxPreferencesError && (
+                      {unifiedPreferencesError && (
                         <div className="text-destructive-soft-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
-                          {unifiedInboxPreferencesError}
+                          {unifiedPreferencesError}
                         </div>
                       )}
-
-                      {unifiedInboxPreferencesStatusMessage && !unifiedInboxPreferencesError && (
-                        <div className="border-border bg-card/55 text-muted-foreground rounded-md border px-3 py-2 text-[12px]">
-                          {unifiedInboxPreferencesStatusMessage}
-                        </div>
-                      )}
-
-                      <div>
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="gap-2"
-                          onClick={() => void saveUnifiedInboxPreferences()}
-                          disabled={
-                            unifiedInboxPreferencesLoading ||
-                            unifiedInboxPreferencesSaving ||
-                            anyAccountMutationInFlight ||
-                            !unifiedInboxPreferencesDirty
-                          }
-                        >
-                          {unifiedInboxPreferencesSaving ? (
-                            <LoaderCircle className="size-4 animate-spin" />
-                          ) : (
-                            <Save className="size-4" />
-                          )}
-                          Salva preferenze
-                        </Button>
-                      </div>
                     </div>
                   )}
                 </div>

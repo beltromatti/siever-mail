@@ -1,3 +1,4 @@
+import { folderDisplayName } from '@shared/folders'
 import type { MailFolder } from '@shared/models'
 
 /**
@@ -116,4 +117,9 @@ export function flattenFolderTree(
   depth = 0
 ): Array<{ node: FolderTreeNode; depth: number }> {
   return nodes.flatMap((node) => [{ node, depth }, ...flattenFolderTree(node.children, depth + 1)])
+}
+
+/** What a node is called: its folder as the app names folders, or a container's own name. */
+export function folderNodeLabel(node: FolderTreeNode): string {
+  return node.folder ? folderDisplayName(node.folder) : node.name
 }

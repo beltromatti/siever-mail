@@ -1,3 +1,5 @@
+import type { FolderRole } from './folders'
+
 export type AccountType = 'gmail' | 'imap'
 export type AuthType = 'password' | 'oauth'
 
@@ -243,15 +245,17 @@ export interface ListMessagesOptions {
 }
 
 export const MESSAGE_LIST_PAGE_SIZE = 100
-export const ALL_INBOX_FOLDER_PATH = '__all_inboxes__'
 
-export interface UnifiedInboxSummary {
+/** One folder of "Tutti gli account": a role, across the accounts included. */
+export interface UnifiedFolderSummary {
+  role: FolderRole
   messageCount: number
   unseenCount: number
   lastSyncedAt?: number
 }
 
-export interface UnifiedInboxPreferences {
+/** The accounts "Tutti gli account" gathers. */
+export interface UnifiedPreferences {
   includedAccountIds: string[]
 }
 
@@ -265,6 +269,8 @@ export interface MailMessageListPage {
   cachedCount: number
   /** The messages the server holds in the folder, some maybe still on their way. */
   serverCount: number
+  /** The folders the list shows: one, or those "Tutti gli account" gathers for a role. */
+  mailboxes: Array<{ accountId: string; folderPath: string }>
 }
 
 export interface MailAccount {
@@ -482,6 +488,6 @@ export interface FoldersChangedEvent {
   folders: MailFolder[]
 }
 
-export interface UnifiedInboxChangedEvent {
-  summary: UnifiedInboxSummary
+export interface UnifiedFoldersChangedEvent {
+  summaries: UnifiedFolderSummary[]
 }

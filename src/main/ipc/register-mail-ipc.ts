@@ -95,20 +95,17 @@ export function registerMailIpc(
     return mailService.listFolders(accountId)
   })
 
-  registerDataHandler(IPC_CHANNELS.getUnifiedInboxSummary, async () => {
-    return mailService.getUnifiedInboxSummary()
+  registerDataHandler(IPC_CHANNELS.getUnifiedFolderSummaries, async () => {
+    return mailService.getUnifiedFolderSummaries()
   })
 
-  registerDataHandler(IPC_CHANNELS.getUnifiedInboxPreferences, async () => {
-    return mailService.getUnifiedInboxPreferences()
+  registerDataHandler(IPC_CHANNELS.getUnifiedPreferences, async () => {
+    return mailService.getUnifiedPreferences()
   })
 
-  registerDataHandler(
-    IPC_CHANNELS.setUnifiedInboxIncludedAccounts,
-    async (accountIds: string[]) => {
-      return mailService.setUnifiedInboxIncludedAccounts(accountIds)
-    }
-  )
+  registerDataHandler(IPC_CHANNELS.setUnifiedIncludedAccounts, async (accountIds: string[]) => {
+    return mailService.setUnifiedIncludedAccounts(accountIds)
+  })
 
   registerHandler(
     IPC_CHANNELS.listMessages,

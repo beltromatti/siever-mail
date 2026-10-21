@@ -41,7 +41,7 @@ export interface MessageListViewProps {
   /** Sent and Drafts are about the recipient, not the sender. */
   primaryAddressMode: PrimaryAddressMode
   /**
-   * Under TUTTI, the account each message came to, by account id; `null`
+   * In Tutti gli account, the account each message came to, by account id; `null`
    * when the view holds one account's mail.
    */
   accountLabels: ReadonlyMap<string, string> | null

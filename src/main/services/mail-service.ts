@@ -42,15 +42,11 @@ import type {
   SavedAttachments,
   SetMessagesKeywordInput,
   UiPreferences,
-  UnifiedInboxPreferences,
-  UnifiedInboxSummary
+  UnifiedFolderSummary,
+  UnifiedPreferences
 } from '@shared/models'
-import {
-  ALL_INBOX_FOLDER_PATH,
-  MESSAGE_LIST_PAGE_SIZE,
-  READER_ZOOM_MAX,
-  READER_ZOOM_MIN
-} from '@shared/models'
+import { unifiedFolderRole } from '@shared/folders'
+import { MESSAGE_LIST_PAGE_SIZE, READER_ZOOM_MAX, READER_ZOOM_MIN } from '@shared/models'
 import { parseSearchQuery } from '@shared/search'
 
 import {
@@ -447,8 +443,8 @@ export class MailService {
     return folders
   }
 
-  async getUnifiedInboxSummary(): Promise<UnifiedInboxSummary> {
-    return this.engine.computeUnifiedInboxSummary()
+  async getUnifiedFolderSummaries(): Promise<UnifiedFolderSummary[]> {
+    return this.engine.computeUnifiedFolderSummaries()
   }
 
   getAccountConnectionStates(): AccountConnectionState[] {
@@ -478,7 +474,7 @@ export class MailService {
     return this.getUiPreferences()
   }
 
-  async getUnifiedInboxPreferences(): Promise<UnifiedInboxPreferences> {
+  async getUnifiedPreferences(): Promise<UnifiedPreferences> {
     const accounts = await this.database.getAccounts()
     const includedAccountIds = await this.resolveEffectiveUnifiedInboxAccountIds(accounts)
 
@@ -487,7 +483,7 @@ export class MailService {
     }
   }
 
-  async setUnifiedInboxIncludedAccounts(accountIds: string[]): Promise<UnifiedInboxPreferences> {
+  async setUnifiedIncludedAccounts(accountIds: string[]): Promise<UnifiedPreferences> {
     const payload = unifiedInboxIncludedAccountsSchema.parse(accountIds)
     const accounts = await this.database.getAccounts()
     const accountIdSet = new Set(accounts.map((account) => account.id))
@@ -507,7 +503,7 @@ export class MailService {
   }
 
   /**
-   * A page of a folder's list — or TUTTI's — from the top: `limit` rows,
+   * A page of a folder's list — or one of Tutti gli account — from the top: `limit` rows,
    * more when `includeRef` sits further down, so the message the user had
    * selected stays in the list under a new order or filter.
    */
@@ -516,7 +512,6 @@ export class MailService {
     folderPath: string,
     options?: ListMessagesOptions
   ): Promise<MailMessageListPage> {
-    const unified = folderPath === ALL_INBOX_FOLDER_PATH
     const mailboxes = await this.listMailboxes(accountId, folderPath)
     const view: MessageListView = {
       query: options?.query?.trim() || undefined,
@@ -530,7 +525,15 @@ export class MailService {
     let limit = normalizeMessageListLimit(options?.limit)
 
     if (mailboxes.length === 0) {
-      return { messages: [], total: 0, hasMore: false, limit, cachedCount: 0, serverCount: 0 }
+      return {
+        messages: [],
+        total: 0,
+        hasMore: false,
+        limit,
+        cachedCount: 0,
+        serverCount: 0,
+        mailboxes
+      }
     }
 
     const includeRef = options?.includeRef ? messageRefSchema.parse(options.includeRef) : null
@@ -549,10 +552,13 @@ export class MailService {
     const available = narrowed
       ? await this.database.countMessagesInMailboxes(mailboxes, view)
       : cachedCount
-    const synced = unified
-      ? await this.engine.computeUnifiedInboxSummary()
-      : await this.database.getFolder(accountId, folderPath)
-    const serverCount = synced?.messageCount ?? 0
+    const folders = await Promise.all(
+      mailboxes.map((mailbox) => this.database.getFolder(mailbox.accountId, mailbox.folderPath))
+    )
+    const serverCount = folders.reduce((total, folder) => total + (folder?.messageCount ?? 0), 0)
+    const syncTimes = folders.flatMap((folder) =>
+      folder?.lastSyncedAt !== undefined ? [folder.lastSyncedAt] : []
+    )
 
     return {
       messages,
@@ -564,19 +570,22 @@ export class MailService {
       // count includes messages still on their way.
       hasMore: available > messages.length,
       limit,
-      folderLastSyncedAt: synced?.lastSyncedAt,
+      folderLastSyncedAt: syncTimes.length > 0 ? Math.max(...syncTimes) : undefined,
       cachedCount,
-      serverCount
+      serverCount,
+      mailboxes
     }
   }
 
-  /** The mailboxes a list shows: one folder, or TUTTI's inboxes. */
+  /** The mailboxes a list shows: one folder, or those "Tutti gli account" gathers for a role. */
   private async listMailboxes(
     accountId: string,
     folderPath: string
   ): Promise<Array<{ accountId: string; folderPath: string }>> {
-    if (folderPath === ALL_INBOX_FOLDER_PATH) {
-      return this.engine.resolveUnifiedInboxMailboxes()
+    const role = unifiedFolderRole(folderPath)
+
+    if (role) {
+      return this.engine.resolveUnifiedMailboxes(role)
     }
 
     await this.ensureAccountExists(accountId)
