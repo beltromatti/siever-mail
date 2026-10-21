@@ -1,7 +1,14 @@
 import { EventEmitter } from 'node:events'
 
 import { net } from 'electron'
-import { ImapFlow, type ExistsEvent, type ExpungeEvent, type FlagsEvent } from 'imapflow'
+import {
+  ImapFlow,
+  type ExistsEvent,
+  type ExpungeEvent,
+  type FetchMessageObject,
+  type FetchQueryObject,
+  type FlagsEvent
+} from 'imapflow'
 import type { ParsedMail } from 'mailparser'
 
 import { extractErrorDetails, logMainError } from '@main/utils/error-utils'
@@ -26,6 +33,7 @@ import {
   mapAddresses,
   mapFetchedToDetail
 } from './message-mapper'
+import { collectFetchResults, formatUidSet } from './fetch-results'
 import { extractPreview } from './preview'
 import {
   attachmentFileName,
@@ -401,24 +409,15 @@ export class AccountConnection extends EventEmitter {
       const lock = await client.getMailboxLock(ref.folderPath)
 
       try {
-        const fetched = await client.fetchOne(
-          String(ref.uid),
-          {
-            uid: true,
-            threadId: true,
-            envelope: true,
-            flags: true,
-            internalDate: true,
-            size: true,
-            bodyStructure: true,
-            source: true
-          },
-          { uid: true }
-        )
-
-        if (!fetched) {
-          throw new Error('Messaggio non disponibile sul server.')
-        }
+        const fetched = await this.fetchOneRequested(client, ref, {
+          threadId: true,
+          envelope: true,
+          flags: true,
+          internalDate: true,
+          size: true,
+          bodyStructure: true,
+          source: true
+        })
 
         return mapFetchedToDetail(this.account.id, ref.folderPath, fetched)
       } finally {
@@ -433,17 +432,8 @@ export class AccountConnection extends EventEmitter {
       const lock = await client.getMailboxLock(ref.folderPath)
 
       try {
-        const fetched = await client.fetchOne(
-          String(ref.uid),
-          { uid: true, source: true },
-          { uid: true }
-        )
-
-        if (!fetched || !fetched.source) {
-          throw new Error('Messaggio non disponibile sul server.')
-        }
-
-        return fetched.source
+        const fetched = await this.fetchOneRequested(client, ref, { source: true })
+        return fetched.source as Buffer
       } finally {
         lock.release()
       }
@@ -686,19 +676,15 @@ export class AccountConnection extends EventEmitter {
       const lock = await client.getMailboxLock(ref.folderPath)
 
       try {
-        const fetched = await client.fetchOne(
-          String(ref.uid),
-          { uid: true, envelope: true, internalDate: true, source: true },
-          { uid: true }
-        )
-
-        if (!fetched || !fetched.source) {
-          throw new Error('Messaggio non disponibile sul server.')
-        }
-
-        const parsed = await parseMessageSource(fetched.source)
+        const fetched = await this.fetchOneRequested(client, ref, {
+          envelope: true,
+          internalDate: true,
+          source: true
+        })
+        const source = fetched.source as Buffer
+        const parsed = await parseMessageSource(source)
         return {
-          source: fetched.source,
+          source,
           parsed,
           internalDate: internalDateToIso(fetched.internalDate)
         }
@@ -723,17 +709,8 @@ export class AccountConnection extends EventEmitter {
       const lock = await client.getMailboxLock(ref.folderPath)
 
       try {
-        const fetched = await client.fetchOne(
-          String(ref.uid),
-          { uid: true, source: true },
-          { uid: true }
-        )
-
-        if (!fetched || !fetched.source) {
-          throw new Error('Messaggio non disponibile sul server.')
-        }
-
-        const parsed = await parseMessageSource(fetched.source)
+        const fetched = await this.fetchOneRequested(client, ref, { source: true })
+        const parsed = await parseMessageSource(fetched.source as Buffer)
         const wanted = indexes
           ? indexes.map((index) => ({ index, attachment: parsed.attachments[index] }))
           : partitionMessageAttachments(parsed).official
@@ -753,6 +730,80 @@ export class AccountConnection extends EventEmitter {
         lock.release()
       }
     }, `fetch-attachments:${ref.folderPath}:${ref.uid}`)
+  }
+
+  /**
+   * Fetches `query` for the messages `uids` of the mailbox `client` has
+   * open, and keeps only the answers about them (see `collectFetchResults`).
+   * What the server volunteered about other messages is their new flags,
+   * and is applied as such.
+   */
+  private async fetchRequested(
+    client: ImapFlow,
+    folderPath: string,
+    uids: ReadonlyArray<number>,
+    query: FetchQueryObject
+  ): Promise<Map<number, FetchMessageObject>> {
+    if (uids.length === 0) {
+      return new Map()
+    }
+
+    const answers = await client.fetchAll(formatUidSet(uids), { ...query, uid: true }, { uid: true })
+    const { requested, unsolicited } = collectFetchResults(answers, new Set(uids))
+    await this.applyUnsolicitedFlags(folderPath, unsolicited)
+    return requested
+  }
+
+  /** One message's `query`, which must bring its source back: the message is gone otherwise. */
+  private async fetchOneRequested(
+    client: ImapFlow,
+    ref: MessageRef,
+    query: FetchQueryObject
+  ): Promise<FetchMessageObject> {
+    const fetched = (await this.fetchRequested(client, ref.folderPath, [ref.uid], query)).get(
+      ref.uid
+    )
+
+    if (!fetched?.source) {
+      throw new Error('Messaggio non disponibile sul server.')
+    }
+
+    return fetched
+  }
+
+  private async applyUnsolicitedFlags(
+    folderPath: string,
+    answers: ReadonlyArray<FetchMessageObject>
+  ): Promise<void> {
+    const updated: MailMessageSummary[] = []
+
+    for (const answer of answers) {
+      if (typeof answer.uid !== 'number' || !answer.flags) {
+        continue
+      }
+
+      const summary = await this.database.replaceMessageFlags(
+        this.account.id,
+        folderPath,
+        answer.uid,
+        [...answer.flags]
+      )
+
+      if (summary) {
+        updated.push(summary)
+      }
+    }
+
+    if (updated.length > 0) {
+      this.emit('messages', {
+        accountId: this.account.id,
+        folderPath,
+        added: [],
+        updated,
+        removedUids: [],
+        bootstrap: false
+      })
+    }
   }
 
   private setStatus(status: AccountConnectionStatus, error?: unknown): void {
@@ -1644,20 +1695,18 @@ export class AccountConnection extends EventEmitter {
     const client = this.requireSync()
     const updates: MailMessageSummary[] = []
 
+    // Only the flags are read: what CHANGEDSINCE reports is a change of
+    // flags, and an envelope never changes.
     for await (const message of client.fetch(
       { all: true },
-      {
-        uid: true,
-        flags: true,
-        threadId: true,
-        envelope: true,
-        internalDate: true,
-        size: true,
-        bodyStructure: true
-      },
+      { uid: true, flags: true },
       { uid: true, changedSince: sinceModseq }
     )) {
-      const flags = [...(message.flags ?? new Set<string>())]
+      if (typeof message.uid !== 'number' || !message.flags) {
+        continue
+      }
+
+      const flags = [...message.flags]
       const updatedSummary = await this.database.replaceMessageFlags(
         this.account.id,
         folderPath,
@@ -1687,14 +1736,6 @@ export class AccountConnection extends EventEmitter {
     uids: number[],
     options: { includeBody: boolean }
   ): Promise<FetchedMessageSummary[]> {
-    if (uids.length === 0) {
-      return []
-    }
-
-    const client = this.requireSync()
-    const uidSequence = uids.join(',')
-    const summaries: FetchedMessageSummary[] = []
-
     // Shared fetch request — the only difference between bootstrap and
     // incremental mode is whether we ask IMAP for the first 32 KB of source in
     // the same round-trip. For bootstrap (large batches of thousands of msgs)
@@ -1702,24 +1743,29 @@ export class AccountConnection extends EventEmitter {
     // populates as fast as possible. For incremental (handful of new msgs)
     // we include it and extract the preview right here, so the row lands in
     // the DB with previewHydrated=true and notifications fire with snippet.
-    const fetchOptions: Parameters<typeof client.fetchAll>[1] = {
-      uid: true,
+    const fetchedMessages = await this.fetchRequested(this.requireSync(), folderPath, uids, {
       threadId: true,
       envelope: true,
       flags: true,
       internalDate: true,
       size: true,
-      bodyStructure: true
-    }
-    if (options.includeBody) {
-      fetchOptions.source = { start: 0, maxLength: PREVIEW_SOURCE_MAX_BYTES }
-    }
-    const fetchedMessages = await client.fetchAll(uidSequence, fetchOptions, { uid: true })
+      bodyStructure: true,
+      ...(options.includeBody ? { source: { start: 0, maxLength: PREVIEW_SOURCE_MAX_BYTES } } : {})
+    })
+    const summaries: FetchedMessageSummary[] = []
 
-    for (const fetched of fetchedMessages) {
+    for (const fetched of fetchedMessages.values()) {
       const envelope = fetched.envelope
+
+      // A message is never stored from less than its envelope: without it
+      // there is no sender, subject or date to show. It is fetched again by
+      // the next sync of the folder.
+      if (!envelope) {
+        continue
+      }
+
       const flags = [...(fetched.flags ?? new Set<string>())]
-      const subject = formatSubject(envelope?.subject)
+      const subject = formatSubject(envelope.subject)
 
       let preview = ''
       let previewHydrated = false
@@ -1736,18 +1782,18 @@ export class AccountConnection extends EventEmitter {
         }
       }
 
-      const from = mapAddresses(envelope?.from)
+      const from = mapAddresses(envelope.from)
 
       summaries.push({
         accountId: this.account.id,
         folderPath,
         uid: fetched.uid,
         threadId: fetched.threadId,
-        messageId: envelope?.messageId,
+        messageId: envelope.messageId,
         subject,
         from,
-        to: mapAddresses(envelope?.to),
-        cc: mapAddresses(envelope?.cc),
+        to: mapAddresses(envelope.to),
+        cc: mapAddresses(envelope.cc),
         date: internalDateToIso(fetched.internalDate),
         preview,
         previewHydrated,
@@ -1765,35 +1811,24 @@ export class AccountConnection extends EventEmitter {
   }
 
   private async fetchPreviewsForUids(
-    _folderPath: string,
+    folderPath: string,
     uids: number[]
   ): Promise<Array<{ uid: number; preview: string }>> {
-    if (uids.length === 0) {
-      return []
-    }
-
-    const client = this.requireSync()
-    const uidSequence = uids.join(',')
-    const results: Array<{ uid: number; preview: string }> = []
-
     // Partial-body fetch: we grab enough bytes to cover the headers + a usable
     // body prefix. The preview extractor handles truncation and marketing-email
-    // boilerplate, so 8KB is plenty for a meaningful snippet.
-    const fetchedMessages = await client.fetchAll(
-      uidSequence,
-      {
-        uid: true,
-        envelope: true,
-        source: {
-          start: 0,
-          maxLength: PREVIEW_SOURCE_MAX_BYTES
-        }
-      },
-      { uid: true }
-    )
+    // boilerplate.
+    const fetchedMessages = await this.fetchRequested(this.requireSync(), folderPath, uids, {
+      envelope: true,
+      source: { start: 0, maxLength: PREVIEW_SOURCE_MAX_BYTES }
+    })
+    const results: Array<{ uid: number; preview: string }> = []
 
-    for (const fetched of fetchedMessages) {
-      const subject = formatSubject(fetched.envelope?.subject)
+    for (const fetched of fetchedMessages.values()) {
+      if (!fetched.envelope) {
+        continue
+      }
+
+      const subject = formatSubject(fetched.envelope.subject)
       let preview = subject
 
       if (fetched.source) {
@@ -1930,6 +1965,13 @@ export class AccountConnection extends EventEmitter {
           uidValidity: true,
           highestModseq: true
         })
+
+        // `false`: the server has no such folder any more. The next folder
+        // list drops it.
+        if (!status) {
+          continue
+        }
+
         answered = true
 
         const state = await this.database.getFolderSyncState(this.account.id, folder.path)

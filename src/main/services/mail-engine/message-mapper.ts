@@ -1,5 +1,5 @@
 import type { FetchMessageObject, MessageAddressObject, MessageStructureObject } from 'imapflow'
-import type { ParsedMail } from 'mailparser'
+import type { AddressObject, ParsedMail } from 'mailparser'
 
 import type { FetchedMessageDetail, MailAddress, MailAttachment } from '@shared/models'
 import { deriveSenderKey, deriveSenderName } from '@shared/sender'
@@ -37,6 +37,12 @@ export function mapAddresses(addresses: MessageAddressObject[] | undefined): Mai
   return addresses
     .map(normalizeAddress)
     .filter((address): address is MailAddress => Boolean(address))
+}
+
+/** A header mailparser read: one address list, or several when the header repeats. */
+export function mapParsedAddresses(field: AddressObject | AddressObject[] | undefined): MailAddress[] {
+  const lists = Array.isArray(field) ? field : field ? [field] : []
+  return mapAddresses(lists.flatMap((list) => list.value) as MessageAddressObject[])
 }
 
 export function pickAddresses(primary: MailAddress[], fallback: MailAddress[]): MailAddress[] {
@@ -183,7 +189,7 @@ export function mergeSummaryAndParsedIntoDetail(
   const html = rawHtml ? inlineCidReferences(rawHtml, parsed) : undefined
 
   const from = pickAddresses(
-    mapAddresses(parsed.from?.value as MessageAddressObject[] | undefined),
+    mapParsedAddresses(parsed.from),
     mapAddresses(envelope?.from)
   )
 
@@ -196,15 +202,15 @@ export function mergeSummaryAndParsedIntoDetail(
     subject,
     from,
     to: pickAddresses(
-      mapAddresses(parsed.to?.value as MessageAddressObject[] | undefined),
+      mapParsedAddresses(parsed.to),
       mapAddresses(envelope?.to)
     ),
     cc: pickAddresses(
-      mapAddresses(parsed.cc?.value as MessageAddressObject[] | undefined),
+      mapParsedAddresses(parsed.cc),
       mapAddresses(envelope?.cc)
     ),
     bcc: pickAddresses(
-      mapAddresses(parsed.bcc?.value as MessageAddressObject[] | undefined),
+      mapParsedAddresses(parsed.bcc),
       mapAddresses(envelope?.bcc)
     ),
     date: internalDateToIso(fetched.internalDate),
