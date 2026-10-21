@@ -31,6 +31,14 @@ describe('extractPreview', () => {
     expect(preview).not.toContain('<')
   })
 
+  it('reads a text part that is HTML source as HTML', () => {
+    const source = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html style="font-size:105%;"><head><meta charset="utf-8"><style>td{padding:0}</style></head>
+<body><table><tr><td>Informazioni del volo</td></tr><tr><td>Milano Malpensa - Malaga, partenza alle 11:50</td></tr></table></body></html>`
+    const preview = extractPreview(makeParsed({ text: source, html: source }), 'Itinerario')
+
+    expect(preview).toBe('Informazioni del volo Milano Malpensa - Malaga, partenza alle 11:50')
+  })
+
   it('falls back to the HTML body when the text part is just a tracking URL', () => {
     const parsed = makeParsed({
       text: 'https://n.xceed.me/z/v22zu54c01m204?uid=abc&txnid=def',

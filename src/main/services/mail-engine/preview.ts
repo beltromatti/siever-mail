@@ -449,8 +449,13 @@ function looksLikeTemplateBoilerplate(text: string): boolean {
   return TEMPLATE_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(head))
 }
 
+// Some senders put the HTML source itself in the text part — Ryanair's
+// itineraries do. Read as prose, its preview is `<!DOCTYPE html PUBLIC…`.
+const MARKUP_DOCUMENT_PATTERN = /^\s*<(?:!doctype\s+html|html|head|body|table|div)\b/i
+
 function pickBestCandidate(parsed: ParsedMail): string {
-  const textSource = typeof parsed.text === 'string' ? parsed.text : ''
+  const rawText = typeof parsed.text === 'string' ? parsed.text : ''
+  const textSource = MARKUP_DOCUMENT_PATTERN.test(rawText) ? stripHtmlForPreview(rawText) : rawText
   const textCandidate = textSource ? cleanCandidate(textSource) : ''
   const textWordCount = countMeaningfulWords(textCandidate)
   const textIsBoilerplate = Boolean(textSource) && looksLikeTemplateBoilerplate(textSource)

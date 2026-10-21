@@ -2523,7 +2523,8 @@ export class AppDatabase {
    *     BODYSTRUCTURE that cannot tell a signature logo from a real
    *     attachment; with the body in hand the answer is exact, so a row
    *     flagged for nothing more than the sender's logo is corrected;
-   *   • the preview, when the row was still waiting for one.
+   *   • the preview — read from the whole body rather than from its first
+   *     32 KB, it replaces one the list made with less.
    */
   async updateMessageBody(
     ref: MessageRef,
@@ -2543,14 +2544,14 @@ export class AppDatabase {
     }
     const existing = await this.prisma.message.findUnique({
       where,
-      select: { hasAttachments: true, previewHydrated: true }
+      select: { hasAttachments: true, preview: true, previewHydrated: true }
     })
 
     if (!existing) {
       return null
     }
 
-    const { html, text, bcc, attachments } = body
+    const { html, text, bcc, attachments, preview } = body
     const hasAttachments = attachments.length > 0
     const row = await this.prisma.message.update({
       where,
@@ -2562,7 +2563,8 @@ export class AppDatabase {
         referencesJson: JSON.stringify(body.references),
         attachmentsJson: JSON.stringify(attachments),
         hasAttachments,
-        ...(existing.previewHydrated ? {} : { preview: body.preview, previewHydrated: true }),
+        preview,
+        previewHydrated: true,
         updatedAt: BigInt(Date.now())
       }
     })
@@ -2573,7 +2575,9 @@ export class AppDatabase {
       this.queueContactSuggestions(bccSuggestions)
     }
 
-    return existing.hasAttachments !== hasAttachments || !existing.previewHydrated
+    return existing.hasAttachments !== hasAttachments ||
+      existing.preview !== preview ||
+      !existing.previewHydrated
       ? this.mapMessageRowToSummary(row)
       : null
   }
