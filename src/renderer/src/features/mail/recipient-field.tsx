@@ -334,7 +334,8 @@ export function RecipientField({
       return
     }
 
-    if (event.key === 'Enter' && query) {
+    // With a modifier, Invio is the composer's (Mod+Invio sends).
+    if (event.key === 'Enter' && query && !event.metaKey && !event.ctrlKey) {
       event.preventDefault()
       void resolveTyped()
       return

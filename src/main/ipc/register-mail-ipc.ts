@@ -250,6 +250,10 @@ export function registerMailIpc(
     mailService.revealFile(filePath)
   })
 
+  registerDataHandler(IPC_CHANNELS.openFile, async (filePath: string) =>
+    mailService.openFile(filePath)
+  )
+
   registerDataHandler(IPC_CHANNELS.listRecentFiles, async () => mailService.listRecentFiles())
 
   registerDataHandler(IPC_CHANNELS.describeFiles, async (paths: string[]) => {

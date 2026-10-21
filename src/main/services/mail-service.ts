@@ -1179,6 +1179,24 @@ export class MailService {
     shell.showItemInFolder(z.string().min(1).parse(filePath))
   }
 
+  /**
+   * Opens a file the composer attaches — the user's own, or the copy a
+   * forward carries — with the application the system uses for its type,
+   * as Outlook opens an attachment of a message being written: what is
+   * saved in it before sending is what goes out. Files that start programs
+   * are not opened from here, as from a message.
+   */
+  async openFile(filePath: string): Promise<OpenAttachmentResult> {
+    const [file] = await this.describeFiles([filePath])
+
+    if (isExecutableAttachment(file.name)) {
+      return { status: 'blocked' }
+    }
+
+    const failure = await shell.openPath(file.path)
+    return failure ? { status: 'no-application' } : { status: 'opened' }
+  }
+
   async listRecentFiles(): Promise<RecentFile[]> {
     return listRecentFiles(
       await this.database.listRecentFiles(RECENT_FILES_OFFERED * 3),

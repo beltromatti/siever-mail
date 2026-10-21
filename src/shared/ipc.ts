@@ -84,6 +84,7 @@ export const IPC_CHANNELS = {
   copyMessageAttachments: 'attachment:copy',
   clearAttachmentCache: 'attachment:clear-cache',
   revealFile: 'file:reveal',
+  openFile: 'file:open',
   listRecentFiles: 'file:list-recent',
   describeFiles: 'file:describe',
   openExternalUrl: 'app:open-external-url',
@@ -188,6 +189,8 @@ export interface DesktopMailApi {
   copyMessageAttachments: (input: MessageAttachmentsRef) => Promise<CopiedAttachment[]>
   clearAttachmentCache: () => Promise<void>
   revealFile: (filePath: string) => Promise<void>
+  /** Opens a file the composer attaches with the application the system uses for its type. */
+  openFile: (filePath: string) => Promise<OpenAttachmentResult>
   listRecentFiles: () => Promise<RecentFile[]>
   /** Files dropped on or picked for the composer, checked and sized. */
   describeFiles: (paths: string[]) => Promise<PickedAttachment[]>

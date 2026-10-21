@@ -34,7 +34,7 @@ import { RecipientField, type RecipientFieldKey } from '@renderer/features/mail/
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
 import { commandForKeyEvent, useShortcutOverrides } from '@renderer/lib/command-shortcuts'
 import { htmlToPlainText } from '@renderer/lib/email'
-import { cn } from '@renderer/lib/utils'
+import { cn, revealInFolderLabel } from '@renderer/lib/utils'
 import {
   addressKey,
   isValidEmailAddress,
@@ -597,6 +597,62 @@ export function MailComposerDialog({
     setAttachments((current) => current.filter((item) => attachmentKey(item) !== key))
   }
 
+  /** Opens a file being sent, to check it or change it before it goes. */
+  const openAttachment = async (attachment: ComposerAttachment): Promise<void> => {
+    const { path, name } = attachment
+
+    if (!path) {
+      return
+    }
+
+    const reveal = {
+      label: revealInFolderLabel(),
+      onClick: () => void window.mailApi.revealFile(path)
+    }
+
+    try {
+      const result = await window.mailApi.openFile(path)
+
+      if (result.status === 'blocked') {
+        toast(`${name} non si apre da qui`, {
+          description: 'I file che avviano programmi si aprono solo dalla loro cartella.',
+          action: reveal
+        })
+      } else if (result.status === 'no-application') {
+        toast(`Nessuna applicazione apre ${name}`, {
+          description: "Su questo computer non c'è un programma per questo tipo di file.",
+          action: reveal
+        })
+      }
+    } catch (error) {
+      toast.error(`Impossibile aprire ${name}`, {
+        description: error instanceof Error ? error.message : undefined
+      })
+    }
+  }
+
+  const showAttachmentMenu = async (attachment: ComposerAttachment): Promise<void> => {
+    const key = attachmentKey(attachment)
+    const { path } = attachment
+    const chosen = await window.mailApi.showContextMenu([
+      { id: 'open', label: 'Apri', enabled: Boolean(path) },
+      { id: 'reveal', label: revealInFolderLabel(), enabled: Boolean(path) },
+      ...(attachment.failed ? [{ id: 'retry', label: 'Riprova a scaricarlo' }] : []),
+      { type: 'separator' },
+      { id: 'remove', label: 'Rimuovi' }
+    ])
+
+    if (chosen === 'open') {
+      void openAttachment(attachment)
+    } else if (chosen === 'reveal' && path) {
+      void window.mailApi.revealFile(path)
+    } else if (chosen === 'retry') {
+      retryAttachment(key)
+    } else if (chosen === 'remove') {
+      removeAttachment(key)
+    }
+  }
+
   const handlePickAttachments = async (): Promise<void> => {
     try {
       addAttachments(await window.mailApi.pickAttachments())
@@ -944,12 +1000,14 @@ export function MailComposerDialog({
                         sizeBytes={attachment.size}
                         busy={isPendingOriginal(attachment)}
                         failed={attachment.failed}
+                        onOpen={attachment.path ? () => void openAttachment(attachment) : undefined}
+                        onContextMenu={() => void showAttachmentMenu(attachment)}
                         openHint={
                           attachment.failed
                             ? 'non scaricato dal messaggio originale'
                             : isPendingOriginal(attachment)
                               ? 'scaricamento dal messaggio originale…'
-                              : undefined
+                              : 'Clic per aprire'
                         }
                         trailing={
                           <>
