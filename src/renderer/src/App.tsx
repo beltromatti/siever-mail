@@ -14,7 +14,11 @@ import { toast } from 'sonner'
 import appLogo from '@renderer/assets/logo.png'
 import { AddAccountDialog } from '@renderer/features/accounts/add-account-dialog'
 import { AccountSwitcher } from '@renderer/features/accounts/account-switcher'
-import { FolderSidebar, type FolderDropTarget } from '@renderer/features/mail/folder-sidebar'
+import {
+  FolderSidebar,
+  type FolderDropTarget,
+  type FolderMenuTarget
+} from '@renderer/features/mail/folder-sidebar'
 import {
   MailComposerDialog,
   type ComposerInitialData
@@ -39,6 +43,9 @@ import { useAttachmentActions } from '@renderer/features/mail/use-attachment-act
 import { SettingsDialog } from '@renderer/features/settings/settings-dialog'
 import { Button } from '@renderer/components/ui/button'
 import { ConfirmDialog, useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
+import { Dialog, DialogContent, DialogTitle } from '@renderer/components/ui/dialog'
+import { usePromptDialog } from '@renderer/components/ui/prompt-dialog'
+import { FolderPicker } from '@renderer/features/mail/folder-picker'
 import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { cn, formatAppVersion, formatCount } from '@renderer/lib/utils'
@@ -46,10 +53,12 @@ import {
   folderDisplayName,
   folderRole,
   folderRoleLabel,
+  unifiedFolderPath,
   unifiedFolderRole,
   type FolderRole
 } from '@shared/folders'
 import { startMessageDrag } from '@renderer/lib/message-drag'
+import { foldSearchText } from '@shared/search'
 import { buildMessageSections } from '@renderer/lib/message-sections'
 import {
   CommandShortcutsProvider,
@@ -451,6 +460,7 @@ function App(): React.JSX.Element {
   >([])
   const failedSendIdRef = useRef(0)
   const { confirm, dialog: confirmDialog, open: confirmOpen } = useConfirmDialog()
+  const { prompt, dialog: promptDialog, open: promptOpen } = usePromptDialog()
   const [addAccountDialogOpen, setAddAccountDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [extensionPrimaryDialogOpen, setExtensionPrimaryDialogOpen] = useState(false)
@@ -2495,10 +2505,191 @@ function App(): React.JSX.Element {
   // The failed send offered back right now, once no composer is open.
   const failedSend = composerOpen ? null : (failedSends[0] ?? null)
 
+  /** Opens a folder — of the account, or of "Tutti gli account" — showing all its messages. */
+  const selectFolder = useCallback(
+    (folderPath: string): void => {
+      setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
+
+      // The folder already open stays as it is: emptying it here left the
+      // list blank, with nothing to load it again.
+      if (folderPath === selectedFolderPath) {
+        return
+      }
+
+      cancelInFlightWork()
+      setSelectedFolderPath(folderPath)
+      resetMailboxView()
+    },
+    [cancelInFlightWork, resetMailboxView, selectedFolderPath]
+  )
+
+  const [goToFolderOpen, setGoToFolderOpen] = useState(false)
+
+  /** What can be done with a folder from its right click, native as every menu of the app. */
+  const openFolderContextMenu = useCallback(
+    async (target: FolderMenuTarget): Promise<void> => {
+      const accountId = target.kind === 'folder' ? target.folder.accountId : selectedAccountId
+
+      if (!accountId) {
+        return
+      }
+
+      const account = accounts.find((candidate) => candidate.id === accountId)
+      const folderPath =
+        target.kind === 'folder'
+          ? target.folder.path
+          : target.kind === 'role'
+            ? unifiedFolderPath(target.summary.role)
+            : null
+      const parent =
+        target.kind === 'folder'
+          ? { path: target.folder.path, name: folderDisplayName(target.folder) }
+          : target.kind === 'container'
+            ? { path: target.path, name: target.name }
+            : null
+      const unseenCount =
+        target.kind === 'folder'
+          ? target.folder.unseenCount
+          : target.kind === 'role'
+            ? target.summary.unseenCount
+            : 0
+
+      const chosen = await window.mailApi.showContextMenu([
+        ...(folderPath ? [{ id: 'open', label: 'Apri' }, { type: 'separator' } as const] : []),
+        ...(folderPath
+          ? [
+              { id: 'read', label: 'Segna tutti come letti', enabled: unseenCount > 0 },
+              { type: 'separator' } as const
+            ]
+          : []),
+        ...(target.kind === 'role'
+          ? []
+          : [
+              {
+                id: 'create',
+                label: parent ? `Nuova cartella in «${parent.name}»…` : 'Nuova cartella…'
+              }
+            ]),
+        ...(target.kind === 'folder'
+          ? [
+              {
+                id: 'rename',
+                label: 'Rinomina…',
+                // A folder with a role is the server's, under the name it gives it.
+                enabled: folderRole(target.folder) === null
+              }
+            ]
+          : [])
+      ])
+
+      // Names the server would nest, or that a sibling already has.
+      const validateName =
+        (siblingsOf: string | null, keep?: string) =>
+        (name: string): string | null => {
+          const delimiter = folders.find((folder) => folder.delimiter)?.delimiter
+
+          if (delimiter && name.includes(delimiter)) {
+            return `Il nome di una cartella non può contenere «${delimiter}».`
+          }
+
+          const taken = folders.some((folder) => {
+            const separator = folder.delimiter ? folder.path.lastIndexOf(folder.delimiter) : -1
+            const folderParent = separator >= 0 ? folder.path.slice(0, separator) : null
+            return (
+              folderParent === siblingsOf &&
+              folder.path !== keep &&
+              foldSearchText(folder.name) === foldSearchText(name)
+            )
+          })
+
+          return taken ? 'Esiste già una cartella con questo nome qui.' : null
+        }
+
+      try {
+        switch (chosen) {
+          case 'open':
+            if (folderPath) {
+              selectFolder(folderPath)
+            }
+            return
+          case 'read':
+            if (folderPath) {
+              await window.mailApi.markFolderRead(accountId, folderPath)
+
+              if (folderPath === selectedFolderPath) {
+                setMessages((current) =>
+                  current.map((message) =>
+                    message.isRead ? message : { ...message, isRead: true }
+                  )
+                )
+              }
+            }
+            return
+          case 'create': {
+            const name = await prompt({
+              title: 'Nuova cartella',
+              description: parent
+                ? `Dentro «${parent.name}».`
+                : `Nell'account ${account?.email ?? ''}.`,
+              label: 'Nome della cartella',
+              confirmLabel: 'Crea',
+              validate: validateName(parent?.path ?? null)
+            })
+
+            if (name) {
+              await window.mailApi.createFolder({ accountId, name, parentPath: parent?.path })
+            }
+            return
+          }
+          case 'rename': {
+            if (target.kind !== 'folder') {
+              return
+            }
+
+            const { folder } = target
+            const separator = folder.delimiter ? folder.path.lastIndexOf(folder.delimiter) : -1
+            const name = await prompt({
+              title: `Rinomina «${folder.name}»`,
+              label: 'Nuovo nome',
+              initialValue: folder.name,
+              confirmLabel: 'Rinomina',
+              validate: validateName(
+                separator >= 0 ? folder.path.slice(0, separator) : null,
+                folder.path
+              )
+            })
+
+            if (name && name !== folder.name) {
+              const renamed = await window.mailApi.renameFolder({
+                accountId,
+                folderPath: folder.path,
+                name
+              })
+
+              if (selectedFolderPath === folder.path) {
+                selectFolder(renamed.path)
+              }
+            }
+            return
+          }
+        }
+      } catch (caughtError) {
+        setViewError(
+          caughtError instanceof Error
+            ? caughtError.message
+            : 'Operazione sulla cartella non riuscita.'
+        )
+      }
+    },
+    [accounts, folders, prompt, selectFolder, selectedAccountId, selectedFolderPath]
+  )
+
   const isModalSurfaceOpen =
     composerOpen ||
     failedSend !== null ||
     confirmOpen ||
+    promptOpen ||
+    goToFolderOpen ||
     addAccountDialogOpen ||
     settingsOpen ||
     extensionPrimaryDialogOpen
@@ -2938,6 +3129,26 @@ function App(): React.JSX.Element {
         return true
       case 'check-mail':
         void window.mailApi.checkMailNow()
+        return true
+      case 'go-inbox': {
+        const inboxPath =
+          accounts.length > 1
+            ? unifiedFolderPath('\\Inbox')
+            : folders.find((folder) => folderRole(folder) === '\\Inbox')?.path
+
+        if (!inboxPath) {
+          return false
+        }
+
+        selectFolder(inboxPath)
+        return true
+      }
+      case 'go-to-folder':
+        if (folders.length === 0) {
+          return false
+        }
+
+        setGoToFolderOpen(true)
         return true
       case 'settings':
         setSettingsOpen(true)
@@ -3502,19 +3713,8 @@ function App(): React.JSX.Element {
                 unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
                 selectedFolderPath={selectedFolderPath}
                 messageDrop={messageDrop}
-                onSelectFolder={(folderPath) => {
-                  setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
-
-                  // The folder already open stays as it is: emptying it here
-                  // left the list blank, with nothing to load it again.
-                  if (folderPath === selectedFolderPath) {
-                    return
-                  }
-
-                  cancelInFlightWork()
-                  setSelectedFolderPath(folderPath)
-                  resetMailboxView()
-                }}
+                onSelectFolder={selectFolder}
+                onFolderContextMenu={(target) => void openFolderContextMenu(target)}
               />
             )
           }
@@ -3663,6 +3863,21 @@ function App(): React.JSX.Element {
         />
 
         {confirmDialog}
+        {promptDialog}
+        <Dialog open={goToFolderOpen} onOpenChange={setGoToFolderOpen}>
+          <DialogContent hideClose className="w-auto gap-0 p-0" aria-describedby={undefined}>
+            <DialogTitle className="sr-only">Vai a una cartella</DialogTitle>
+            <FolderPicker
+              folders={folders}
+              recentPaths={[]}
+              excludedPath={selectedFolderPath}
+              onPick={(folderPath) => {
+                setGoToFolderOpen(false)
+                selectFolder(folderPath)
+              }}
+            />
+          </DialogContent>
+        </Dialog>
 
         <AddAccountDialog
           canUseGoogle={capabilities.googleOAuthReady}

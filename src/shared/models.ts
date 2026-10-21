@@ -322,6 +322,13 @@ export interface CreateFolderInput {
   parentPath?: string
 }
 
+export interface RenameFolderInput {
+  accountId: string
+  folderPath: string
+  /** The new name: the folder stays where it is. */
+  name: string
+}
+
 /** Messages to move, each to its own account's folder for a role. */
 export interface MoveMessagesToRoleInput {
   refs: MessageRef[]

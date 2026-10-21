@@ -13,6 +13,15 @@ import { folderIcon, ROLE_ICONS } from './folder-icons'
 export type FolderDropTarget =
   { kind: 'folder'; accountId: string; folderPath: string } | { kind: 'role'; role: FolderRole }
 
+/** What a right click in the sidebar is on. */
+export type FolderMenuTarget =
+  | { kind: 'folder'; folder: MailFolder }
+  /** A parent the server keeps only to hold other folders. */
+  | { kind: 'container'; accountId: string; path: string; name: string }
+  | { kind: 'role'; summary: UnifiedFolderSummary }
+  /** The account's section, for a folder at its top. */
+  | { kind: 'account' }
+
 interface FolderSidebarProps {
   /** The account the dropdown above has open, whose folders the tree shows. */
   accountLabel: string
@@ -21,6 +30,7 @@ interface FolderSidebarProps {
   unifiedFolders: UnifiedFolderSummary[]
   selectedFolderPath: string | null
   onSelectFolder: (folderPath: string) => void
+  onFolderContextMenu: (target: FolderMenuTarget) => void
   /** While messages are dragged: which folders take them, and the drop. */
   messageDrop: {
     accepts: (target: FolderDropTarget) => boolean
@@ -68,7 +78,8 @@ function FolderRow({
   expanded,
   onToggleExpanded,
   onSelect,
-  drop
+  drop,
+  onContextMenu
 }: {
   icon: typeof Inbox
   name: string
@@ -84,6 +95,7 @@ function FolderRow({
   onSelect?: () => void
   /** Set while messages are dragged and this folder takes them. */
   drop?: { hovered: boolean; onEnter: () => void; onLeave: () => void; onDrop: () => void }
+  onContextMenu: () => void
 }): React.JSX.Element {
   return (
     <div
@@ -95,6 +107,10 @@ function FolderRow({
         drop?.hovered && 'bg-primary/20 text-primary ring-primary/60 ring-1 ring-inset'
       )}
       style={{ paddingLeft: depth * 12 }}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        onContextMenu()
+      }}
       onDragOver={
         drop
           ? (event) => {
@@ -200,6 +216,7 @@ export function FolderSidebar({
   unifiedFolders,
   selectedFolderPath,
   onSelectFolder,
+  onFolderContextMenu,
   messageDrop
 }: FolderSidebarProps): React.JSX.Element {
   const tree = useMemo(() => buildFolderTree(folders), [folders])
@@ -254,6 +271,18 @@ export function FolderSidebar({
           expanded={hasChildren ? expanded : undefined}
           onToggleExpanded={() => toggleCollapsed(node.path)}
           onSelect={folder ? () => onSelectFolder(folder.path) : undefined}
+          onContextMenu={() =>
+            onFolderContextMenu(
+              folder
+                ? { kind: 'folder', folder }
+                : {
+                    kind: 'container',
+                    accountId: folders[0]?.accountId ?? '',
+                    path: node.path,
+                    name: folderNodeLabel(node)
+                  }
+            )
+          }
           drop={
             folder
               ? dropFor(`folder:${folder.path}`, {
@@ -290,6 +319,7 @@ export function FolderSidebar({
                     active={selectedFolderPath === path}
                     onSelect={() => onSelectFolder(path)}
                     drop={dropFor(path, { kind: 'role', role: summary.role })}
+                    onContextMenu={() => onFolderContextMenu({ kind: 'role', summary })}
                   />
                 )
               })}
@@ -297,7 +327,14 @@ export function FolderSidebar({
           )}
 
           <section aria-label={accountLabel}>
-            <SectionHeading>{accountLabel}</SectionHeading>
+            <div
+              onContextMenu={(event) => {
+                event.preventDefault()
+                onFolderContextMenu({ kind: 'account' })
+              }}
+            >
+              <SectionHeading>{accountLabel}</SectionHeading>
+            </div>
             {tree.map((node) => renderNode(node, 0))}
           </section>
         </div>

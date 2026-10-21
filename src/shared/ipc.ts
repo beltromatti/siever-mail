@@ -16,6 +16,7 @@ import type {
   MessagesChangedEvent,
   CreateFolderInput,
   MoveMessagesToRoleInput,
+  RenameFolderInput,
   UnifiedFolderSummary,
   UnifiedFoldersChangedEvent,
   UnifiedPreferences,
@@ -50,6 +51,8 @@ export const IPC_CHANNELS = {
   listFolders: 'folder:list',
   listRecentFolders: 'folder:list-recent',
   createFolder: 'folder:create',
+  renameFolder: 'folder:rename',
+  markFolderRead: 'folder:mark-read',
   getUnifiedFolderSummaries: 'folder:get-unified-summaries',
   getUnifiedPreferences: 'folder:get-unified-preferences',
   setUnifiedIncludedAccounts: 'folder:set-unified-included-accounts',
@@ -123,6 +126,9 @@ export interface DesktopMailApi {
   /** An account's recent destinations of "Sposta", the latest first. */
   listRecentFolders: (accountId: string) => Promise<string[]>
   createFolder: (input: CreateFolderInput) => Promise<MailFolder>
+  renameFolder: (input: RenameFolderInput) => Promise<MailFolder>
+  /** Every message of a folder read — or of every folder a "Tutti gli account" one gathers. */
+  markFolderRead: (accountId: string, folderPath: string) => Promise<void>
   getUnifiedFolderSummaries: () => Promise<UnifiedFolderSummary[]>
   getUnifiedPreferences: () => Promise<UnifiedPreferences>
   setUnifiedIncludedAccounts: (accountIds: string[]) => Promise<UnifiedPreferences>

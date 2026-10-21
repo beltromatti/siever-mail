@@ -17,6 +17,7 @@ import type {
   MessageRef,
   MoveMessagesInput,
   MoveMessagesToRoleInput,
+  RenameFolderInput,
   SetMessagesKeywordInput,
   UiPreferences
 } from '@shared/models'
@@ -103,6 +104,14 @@ export function registerMailIpc(
 
   registerDataHandler(IPC_CHANNELS.createFolder, async (input) =>
     mailService.createFolder(input as CreateFolderInput)
+  )
+
+  registerDataHandler(IPC_CHANNELS.renameFolder, async (input) =>
+    mailService.renameFolder(input as RenameFolderInput)
+  )
+
+  registerDataHandler(IPC_CHANNELS.markFolderRead, async (accountId: string, folderPath: string) =>
+    mailService.markFolderRead(accountId, folderPath)
   )
 
   registerDataHandler(IPC_CHANNELS.getUnifiedFolderSummaries, async () => {

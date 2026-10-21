@@ -47,6 +47,9 @@ const desktopMailApi: DesktopMailApi = {
   listFolders: async (accountId) => invoke(IPC_CHANNELS.listFolders, accountId),
   listRecentFolders: async (accountId) => invoke(IPC_CHANNELS.listRecentFolders, accountId),
   createFolder: async (input) => invoke(IPC_CHANNELS.createFolder, input),
+  renameFolder: async (input) => invoke(IPC_CHANNELS.renameFolder, input),
+  markFolderRead: async (accountId, folderPath) =>
+    invoke(IPC_CHANNELS.markFolderRead, accountId, folderPath),
   getUnifiedFolderSummaries: async () => invoke(IPC_CHANNELS.getUnifiedFolderSummaries),
   getUnifiedPreferences: async () => invoke(IPC_CHANNELS.getUnifiedPreferences),
   setUnifiedIncludedAccounts: async (accountIds) =>

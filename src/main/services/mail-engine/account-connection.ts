@@ -1187,6 +1187,66 @@ export class AccountConnection extends EventEmitter {
     return this.createFolder(ARCHIVE_FOLDER_NAME, null)
   }
 
+  /** Marks every message of a folder read, on the server and here, in one command. */
+  async markFolderRead(folderPath: string): Promise<void> {
+    await this.runUserOperation(async () => {
+      const client = this.requirePrimary()
+      const lock = await client.getMailboxLock(folderPath)
+
+      try {
+        const mailbox = client.mailbox
+
+        if (mailbox && typeof mailbox !== 'boolean' && mailbox.exists > 0) {
+          await client.messageFlagsAdd('1:*', ['\\Seen'])
+        }
+      } finally {
+        lock.release()
+      }
+
+      await this.database.markFolderRead(this.account.id, folderPath)
+    }, `mark-folder-read:${folderPath}`)
+
+    this.incrementalSyncFolder(folderPath, 'active-sync')
+  }
+
+  /**
+   * Gives a folder another name, where it is. Its messages come back under
+   * the new name with the next sync; the subfolders move with it.
+   */
+  async renameFolder(folderPath: string, name: string): Promise<MailFolder> {
+    const folders = await this.database.listFolders(this.account.id)
+    const folder = folders.find((candidate) => candidate.path === folderPath)
+
+    if (!folder) {
+      throw new Error('La cartella non è più sul server.')
+    }
+
+    if (folder.delimiter && name.includes(folder.delimiter)) {
+      throw new Error(`Il nome di una cartella non può contenere «${folder.delimiter}».`)
+    }
+
+    const separatorIndex = folder.delimiter ? folderPath.lastIndexOf(folder.delimiter) : -1
+    const requestedPath =
+      separatorIndex >= 0 ? `${folderPath.slice(0, separatorIndex + 1)}${name}` : name
+    const path = await this.runUserOperation(async () => {
+      const renamed = await this.requirePrimary().mailboxRename(folderPath, requestedPath)
+
+      if (!renamed?.newPath) {
+        throw new Error(`Il server non ha rinominato la cartella in «${name}».`)
+      }
+
+      return renamed.newPath
+    }, `rename-folder:${folderPath}`)
+    const renamed = (await this.refreshFolders()).find((candidate) => candidate.path === path)
+
+    if (!renamed) {
+      throw new Error(`Il server non mostra la cartella «${name}».`)
+    }
+
+    this.incrementalSyncFolder(path, 'active-sync')
+    return renamed
+  }
+
   /**
    * Creates a folder — inside `parentPath`, or at the top of the account —
    * and resolves with it as the folder list now has it.

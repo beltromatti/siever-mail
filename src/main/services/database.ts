@@ -2839,6 +2839,27 @@ export class AppDatabase {
       : null
   }
 
+  /** Every message of a folder read, its other flags kept: one statement, however many. */
+  async markFolderRead(accountId: string, folderPath: string): Promise<void> {
+    await this.ready
+
+    const seen = '\\Seen'
+
+    await this.prisma.$executeRaw`
+      UPDATE messages
+      SET is_read = 1,
+          flags_json = json_insert(flags_json, '$[#]', ${seen}),
+          updated_at = ${BigInt(Date.now())}
+      WHERE account_id = ${accountId}
+        AND folder_path = ${folderPath}
+        AND NOT EXISTS (SELECT 1 FROM json_each(flags_json) WHERE value = ${seen})
+    `
+    await this.prisma.$executeRaw`
+      UPDATE folders SET unseen_count = 0
+      WHERE account_id = ${accountId} AND path = ${folderPath}
+    `
+  }
+
   /**
    * Adds or removes one IMAP keyword on several messages of one folder,
    * leaving their other flags alone, in one transaction. Returns the rows as

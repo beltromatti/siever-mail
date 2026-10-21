@@ -322,6 +322,18 @@ export class MailEngine {
     return connection.fetchMessageRawSource(ref)
   }
 
+  /** See `AccountConnection.markFolderRead`. */
+  async markFolderRead(mailbox: { accountId: string; folderPath: string }): Promise<void> {
+    const connection = await this.requestConnection(mailbox.accountId)
+    await connection.markFolderRead(mailbox.folderPath)
+  }
+
+  /** See `AccountConnection.renameFolder`. */
+  async renameFolder(accountId: string, folderPath: string, name: string): Promise<MailFolder> {
+    const connection = await this.requestConnection(accountId)
+    return connection.renameFolder(folderPath, name)
+  }
+
   /** See `AccountConnection.createFolder`. */
   async createFolder(
     accountId: string,

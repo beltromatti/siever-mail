@@ -118,6 +118,24 @@ const HOST_COMMANDS = [
     editable: true
   },
   {
+    id: 'go-inbox',
+    label: 'Vai alla Posta in arrivo',
+    description: "Apre la Posta in arrivo: di tutti gli account, o dell'unico.",
+    group: 'navigation',
+    scope: 'main',
+    defaultChord: 'Mod+Digit1',
+    editable: true
+  },
+  {
+    id: 'go-to-folder',
+    label: 'Vai a una cartella…',
+    description: "Cerca una cartella dell'account e la apre.",
+    group: 'navigation',
+    scope: 'main',
+    defaultChord: 'Mod+Shift+KeyG',
+    editable: true
+  },
+  {
     id: 'check-mail',
     label: 'Controlla nuova posta',
     description: 'Chiede subito a ogni account se è arrivato qualcosa.',

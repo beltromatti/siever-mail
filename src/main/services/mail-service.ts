@@ -23,6 +23,7 @@ import type {
   ComposeMailInput,
   CreateFolderInput,
   MoveMessagesToRoleInput,
+  RenameFolderInput,
   AttachmentRef,
   CopiedAttachment,
   DataStorageBreakdown,
@@ -129,6 +130,11 @@ const moveMessagesSchema = z.object({
 const moveMessagesToRoleSchema = z.object({
   refs: messageRefsSchema,
   role: z.enum(UNIFIED_FOLDER_ROLES as [FolderRole, ...FolderRole[]])
+})
+const renameFolderSchema = z.object({
+  accountId: z.string().trim().min(1),
+  folderPath: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(200)
 })
 const createFolderSchema = z.object({
   accountId: z.string().trim().min(1),
@@ -733,6 +739,23 @@ export class MailService {
   async listRecentFolders(accountId: string): Promise<string[]> {
     await this.ensureAccountExists(accountId)
     return this.database.listRecentFolders(accountId)
+  }
+
+  /** Marks every message of a folder read — or of every folder a "Tutti gli account" one gathers. */
+  async markFolderRead(accountId: string, folderPath: string): Promise<void> {
+    const mailboxes = await this.listMailboxes(
+      z.string().trim().min(1).parse(accountId),
+      z.string().trim().min(1).parse(folderPath)
+    )
+
+    await Promise.all(mailboxes.map((mailbox) => this.engine.markFolderRead(mailbox)))
+  }
+
+  /** Gives a folder of an account another name, where it is. */
+  async renameFolder(input: RenameFolderInput): Promise<MailFolder> {
+    const payload = renameFolderSchema.parse(input)
+    await this.ensureAccountExists(payload.accountId)
+    return this.engine.renameFolder(payload.accountId, payload.folderPath, payload.name)
   }
 
   /** Creates a folder in an account — inside `parentPath`, or at its top. */
