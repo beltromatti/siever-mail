@@ -88,6 +88,7 @@ import {
   clampReaderZoom,
   DEFAULT_MESSAGE_LIST_FILTER,
   DEFAULT_UI_PREFERENCES,
+  MAX_MESSAGES_PER_ACTION,
   MESSAGE_LIST_PAGE_SIZE
 } from '@shared/models'
 import { commandChord, COMMANDS, findCommand, type HostCommandId } from '@shared/commands'
@@ -1687,6 +1688,54 @@ function App(): React.JSX.Element {
   const handleSelectAll = useCallback((): void => {
     setSelection((current) => selectAllMessages(current, orderedMessageRefs))
   }, [orderedMessageRefs])
+
+  const [selectingWholeView, setSelectingWholeView] = useState(false)
+
+  /**
+   * Selects the whole view — the folder, or what the search and filter
+   * leave of it — not only the rows loaded so far: they are loaded, up to
+   * what one action takes, and selected.
+   */
+  const selectWholeView = useCallback(async (): Promise<void> => {
+    if (!selectedAccountId || !selectedFolderPath || selectingWholeView) {
+      return
+    }
+
+    setSelectingWholeView(true)
+
+    try {
+      const requestId = ++messageRequestIdRef.current
+      const page = await loadMessages(selectedAccountId, selectedFolderPath, {
+        limit: Math.min(totalMessagesInFolder, MAX_MESSAGES_PER_ACTION),
+        query: search.trim() || undefined,
+        sort: uiPreferences.messageListSort,
+        grouping: uiPreferences.messageGrouping,
+        filter: messageFilter,
+        serverMatches,
+        withPanelLoader: false,
+        requestId
+      })
+
+      if (page) {
+        setSelection((current) =>
+          selectAllMessages(current, page.messages.map(summaryToMessageRef))
+        )
+      }
+    } finally {
+      setSelectingWholeView(false)
+    }
+  }, [
+    loadMessages,
+    messageFilter,
+    search,
+    selectedAccountId,
+    selectedFolderPath,
+    selectingWholeView,
+    serverMatches,
+    totalMessagesInFolder,
+    uiPreferences.messageGrouping,
+    uiPreferences.messageListSort
+  ])
 
   /**
    * Selecting a whole section is what makes grouping useful for filing mail
@@ -3744,6 +3793,17 @@ function App(): React.JSX.Element {
               }}
               isExpanded={isMessageExpanded}
               selectedCount={selection.selectedRefs.length}
+              wholeViewSelection={
+                hasMoreMessages &&
+                selection.selectedRefs.length > 1 &&
+                selection.selectedRefs.length === messages.length
+                  ? {
+                      total: totalMessagesInFolder,
+                      selecting: selectingWholeView,
+                      onSelect: () => void selectWholeView()
+                    }
+                  : undefined
+              }
               onReply={() => void openReplyComposer('sender')}
               onReplyAll={() => void openReplyComposer('all')}
               onForward={() => void openForwardComposer()}

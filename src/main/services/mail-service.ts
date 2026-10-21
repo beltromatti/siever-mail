@@ -52,7 +52,12 @@ import type {
 } from '@shared/models'
 import { isValidEmailAddress } from '@shared/email-address'
 import { UNIFIED_FOLDER_ROLES, unifiedFolderRole, type FolderRole } from '@shared/folders'
-import { MESSAGE_LIST_PAGE_SIZE, READER_ZOOM_MAX, READER_ZOOM_MIN } from '@shared/models'
+import {
+  MAX_MESSAGES_PER_ACTION,
+  MESSAGE_LIST_PAGE_SIZE,
+  READER_ZOOM_MAX,
+  READER_ZOOM_MIN
+} from '@shared/models'
 import { parseSearchQuery } from '@shared/search'
 
 import {
@@ -137,8 +142,6 @@ const messageRefSchema = z.object({
   folderPath: z.string().trim().min(1),
   uid: z.number().int().positive()
 })
-/** A selection can be the whole folder; past this it is split by the caller. */
-const MAX_MESSAGES_PER_ACTION = 20_000
 /** The messages around the one being read are fetched ahead, a few at a time. */
 const MAX_PREFETCHED_MESSAGES = 8
 /** Previews asked for at once: the rows a list can hold. */

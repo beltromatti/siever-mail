@@ -282,6 +282,8 @@ export interface ListMessagesOptions {
 }
 
 export const MESSAGE_LIST_PAGE_SIZE = 100
+/** Messages one action takes: a selection can be a whole folder, up to this. */
+export const MAX_MESSAGES_PER_ACTION = 20_000
 
 /** One folder of "Tutti gli account": a role, across the accounts included. */
 export interface UnifiedFolderSummary {

@@ -33,7 +33,12 @@ import { useCommandKeys } from '@renderer/lib/command-shortcuts'
 import { buildMessageFrameDocument } from '@renderer/lib/mail-html'
 import { READER_ZOOM_RESET, wheelReaderZoom } from '@renderer/lib/reader-zoom'
 import { cn, formatAddress, formatDateLabel, formatDateTimeLabel } from '@renderer/lib/utils'
-import type { MailAttachment, MailFolder, MailMessageDetail } from '@shared/models'
+import {
+  MAX_MESSAGES_PER_ACTION,
+  type MailAttachment,
+  type MailFolder,
+  type MailMessageDetail
+} from '@shared/models'
 
 interface MessageViewerProps {
   /** Where "Sposta" can put the message: the folders of its account. */
@@ -60,6 +65,15 @@ interface MessageViewerProps {
    * bulk actions belong to.
    */
   selectedCount: number
+  /**
+   * When every row loaded is selected but the view holds more: how many it
+   * holds, and the way to select those too, as Gmail offers it.
+   */
+  wholeViewSelection?: {
+    total: number
+    selecting: boolean
+    onSelect: () => void
+  }
   onReply: () => void
   onReplyAll: () => void
   onForward: () => void
@@ -478,6 +492,7 @@ export function MessageViewer({
   onRetryBody,
   isExpanded,
   selectedCount,
+  wholeViewSelection,
   onReply,
   onReplyAll,
   onForward,
@@ -609,11 +624,34 @@ export function MessageViewer({
         <div className="bg-primary/12 text-primary rounded-full p-3">
           <CheckCheck className="size-6" />
         </div>
-        <p className="mt-4 text-base font-semibold">{selectedCount} messaggi selezionati</p>
+        <p className="mt-4 text-base font-semibold">
+          {selectedCount.toLocaleString('it-IT')} messaggi selezionati
+        </p>
         <p className="text-muted-foreground mt-1.5 max-w-sm text-xs">
           Usa la barra in alto per archiviare, spostare, contrassegnare o eliminare l&apos;intera
           selezione in un colpo solo.
         </p>
+        {wholeViewSelection && (
+          <div className="border-border bg-card/60 mt-5 flex max-w-sm flex-col items-center gap-2 rounded-md border px-4 py-3">
+            <p className="text-muted-foreground text-xs">
+              Sono selezionati i messaggi caricati: qui ce ne sono{' '}
+              {wholeViewSelection.total.toLocaleString('it-IT')}.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={wholeViewSelection.selecting}
+              onClick={wholeViewSelection.onSelect}
+            >
+              {wholeViewSelection.selecting && <LoaderCircle className="size-3.5 animate-spin" />}
+              {wholeViewSelection.total > MAX_MESSAGES_PER_ACTION
+                ? `Seleziona i primi ${MAX_MESSAGES_PER_ACTION.toLocaleString('it-IT')}`
+                : `Seleziona tutti i ${wholeViewSelection.total.toLocaleString('it-IT')}`}
+            </Button>
+          </div>
+        )}
       </div>
     )
   }
