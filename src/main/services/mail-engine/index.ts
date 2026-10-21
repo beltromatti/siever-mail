@@ -4,6 +4,7 @@ import { logMainError } from '@main/utils/error-utils'
 import { IPC_CHANNELS } from '@shared/ipc'
 import type {
   AccountConnectionState,
+  MessagesActionResult,
   ActiveMailboxContext,
   FetchedMessageDetail,
   MailFolder,
@@ -175,37 +176,100 @@ export class MailEngine {
     return connection.fetchRawSource(ref)
   }
 
-  async toggleSeen(ref: MessageRef, seen: boolean): Promise<void> {
-    const connection = await this.requestConnection(ref.accountId)
-    await connection.toggleSeen(ref, seen)
+  /**
+   * Runs an action on messages grouped the way IMAP acts on them — one
+   * folder of one account per command — every group at once. A group the
+   * server refused is reported with its messages; the others stand.
+   */
+  private async onMessages(
+    refs: ReadonlyArray<MessageRef>,
+    action: (connection: AccountConnection, folderPath: string, uids: number[]) => Promise<unknown>
+  ): Promise<MessagesActionResult> {
+    const groups = new Map<string, MessageRef[]>()
+
+    for (const ref of refs) {
+      const key = `${ref.accountId}\u0000${ref.folderPath}`
+      groups.set(key, [...(groups.get(key) ?? []), ref])
+    }
+
+    const batches = [...groups.values()]
+    const outcomes = await Promise.allSettled(
+      batches.map(async (batch) => {
+        const connection = await this.requestConnection(batch[0].accountId)
+        await action(
+          connection,
+          batch[0].folderPath,
+          batch.map((ref) => ref.uid)
+        )
+      })
+    )
+    const failed: MessageRef[] = []
+    let error: string | undefined
+
+    outcomes.forEach((outcome, index) => {
+      if (outcome.status === 'rejected') {
+        failed.push(...batches[index])
+        error ??= outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)
+      }
+    })
+
+    return { failed, error }
   }
 
-  async toggleFlagged(ref: MessageRef, flagged: boolean): Promise<void> {
-    const connection = await this.requestConnection(ref.accountId)
-    await connection.toggleFlagged(ref, flagged)
+  async setMessagesSeen(
+    refs: ReadonlyArray<MessageRef>,
+    seen: boolean
+  ): Promise<MessagesActionResult> {
+    return this.onMessages(refs, (connection, folderPath, uids) =>
+      connection.setSeen(folderPath, uids, seen)
+    )
   }
 
-  async moveMessage(
-    ref: MessageRef,
-    destinationFolderPath: string,
-    options: { markAsSeenBeforeMove?: boolean } = {}
-  ): Promise<void> {
-    const connection = await this.requestConnection(ref.accountId)
-    await connection.moveMessage(ref, destinationFolderPath, options)
+  async setMessagesFlagged(
+    refs: ReadonlyArray<MessageRef>,
+    flagged: boolean
+  ): Promise<MessagesActionResult> {
+    return this.onMessages(refs, (connection, folderPath, uids) =>
+      connection.setFlagged(folderPath, uids, flagged)
+    )
   }
 
-  async deleteMessage(
-    ref: MessageRef
-  ): Promise<{ sourceFolder: string; destinationFolder?: string }> {
-    const connection = await this.requestConnection(ref.accountId)
-    return connection.deleteMessage(ref)
+  /**
+   * Moves messages to a folder of their account. A folder belongs to one
+   * account, so messages of any other are refused with the reason.
+   */
+  async moveMessages(
+    refs: ReadonlyArray<MessageRef>,
+    destinationFolderPath: string
+  ): Promise<MessagesActionResult> {
+    const accountId = refs[0]?.accountId
+    const foreign = refs.filter((ref) => ref.accountId !== accountId)
+    const result = await this.onMessages(
+      refs.filter((ref) => ref.accountId === accountId),
+      (connection, folderPath, uids) =>
+        connection.moveMessages(folderPath, uids, destinationFolderPath)
+    )
+
+    return foreign.length === 0
+      ? result
+      : {
+          failed: [...result.failed, ...foreign],
+          error:
+            result.error ??
+            'Ogni cartella appartiene a un solo account: i messaggi di altri account non sono stati spostati.'
+        }
   }
 
-  async archiveMessage(
-    ref: MessageRef
-  ): Promise<{ sourceFolder: string; destinationFolder: string }> {
-    const connection = await this.requestConnection(ref.accountId)
-    return connection.archiveMessage(ref)
+  async deleteMessages(refs: ReadonlyArray<MessageRef>): Promise<MessagesActionResult> {
+    return this.onMessages(refs, (connection, folderPath, uids) =>
+      connection.deleteMessages(folderPath, uids)
+    )
+  }
+
+  async archiveMessages(refs: ReadonlyArray<MessageRef>): Promise<MessagesActionResult> {
+    return this.onMessages(refs, (connection, folderPath, uids) =>
+      connection.archiveMessages(folderPath, uids)
+    )
   }
 
   async moveMessageToTrash(
@@ -213,7 +277,7 @@ export class MailEngine {
     options: { markAsSeenBeforeMove?: boolean } = {}
   ): Promise<{ sourceFolder: string; destinationFolder?: string }> {
     const connection = await this.requestConnection(ref.accountId)
-    return connection.moveMessageToTrash(ref, options)
+    return connection.moveMessagesToTrash(ref.folderPath, [ref.uid], options)
   }
 
   async appendToSent(

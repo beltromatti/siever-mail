@@ -24,13 +24,13 @@ import type {
   MailMessageListPage,
   MessageAttachmentsRef,
   MessageRef,
-  MoveMessageInput,
+  MessagesActionResult,
+  MoveMessagesInput,
   OpenAttachmentResult,
   PickedAttachment,
   RecentFile,
   SavedAttachments,
-  ToggleFlaggedInput,
-  ToggleSeenInput,
+  SetMessagesKeywordInput,
   UiPreferences
 } from './models'
 
@@ -51,11 +51,11 @@ export const IPC_CHANNELS = {
   setUnifiedInboxIncludedAccounts: 'folder:set-unified-inbox-included-accounts',
   listMessages: 'message:list',
   getMessage: 'message:get',
-  moveMessage: 'message:move',
-  deleteMessage: 'message:delete',
-  archiveMessage: 'message:archive',
-  toggleSeen: 'message:toggle-seen',
-  toggleFlagged: 'message:toggle-flagged',
+  moveMessages: 'message:move',
+  deleteMessages: 'message:delete',
+  archiveMessages: 'message:archive',
+  setMessagesSeen: 'message:set-seen',
+  setMessagesFlagged: 'message:set-flagged',
   sendMail: 'message:send',
   pickAttachments: 'compose:pick-attachments',
   suggestContacts: 'contact:suggest',
@@ -120,11 +120,16 @@ export interface DesktopMailApi {
     options?: ListMessagesOptions
   ) => Promise<MailMessageListPage>
   getMessage: (ref: MessageRef) => Promise<MailMessageDetail>
-  moveMessage: (input: MoveMessageInput) => Promise<void>
-  deleteMessage: (ref: MessageRef) => Promise<void>
-  archiveMessage: (ref: MessageRef) => Promise<void>
-  toggleSeen: (input: ToggleSeenInput) => Promise<void>
-  toggleFlagged: (input: ToggleFlaggedInput) => Promise<void>
+  /**
+   * Actions on several messages, each folder's in one command. They settle
+   * with the messages the server did not take, never with an error for a
+   * refusal: the others went through.
+   */
+  moveMessages: (input: MoveMessagesInput) => Promise<MessagesActionResult>
+  deleteMessages: (refs: MessageRef[]) => Promise<MessagesActionResult>
+  archiveMessages: (refs: MessageRef[]) => Promise<MessagesActionResult>
+  setMessagesSeen: (input: SetMessagesKeywordInput) => Promise<MessagesActionResult>
+  setMessagesFlagged: (input: SetMessagesKeywordInput) => Promise<MessagesActionResult>
   sendMail: (input: ComposeMailInput) => Promise<void>
   suggestContacts: (query: string, limit?: number) => Promise<MailContactSuggestion[]>
   listAccountSignatures: () => Promise<MailAccountSignature[]>

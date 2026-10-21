@@ -2520,74 +2520,107 @@ export class AppDatabase {
     }
   }
 
-  async deleteMessage(ref: MessageRef): Promise<void> {
+  /**
+   * Adds or removes one IMAP keyword on several messages of one folder,
+   * leaving their other flags alone, in one transaction. Returns the rows as
+   * they are now, for the views to adopt.
+   */
+  async setMessagesFlag(
+    accountId: string,
+    folderPath: string,
+    uids: number[],
+    flag: string,
+    present: boolean
+  ): Promise<MailMessageSummary[]> {
     await this.ready
 
-    await this.prisma.message.deleteMany({
-      where: {
-        accountId: ref.accountId,
-        folderPath: ref.folderPath,
-        uid: ref.uid
-      }
+    const rows = await this.prisma.message.findMany({
+      where: { accountId, folderPath, uid: { in: uids } },
+      select: { uid: true, flagsJson: true }
     })
-  }
+    const now = BigInt(Date.now())
 
-  async updateMessageReadState(ref: MessageRef, seen: boolean): Promise<void> {
-    await this.ready
+    await this.prisma.$transaction(
+      rows.map((row) => {
+        const current = parseJsonArray<string>(row.flagsJson).filter(
+          (value) => typeof value === 'string'
+        )
+        const flags = present
+          ? Array.from(new Set([...current, flag]))
+          : current.filter((value) => value !== flag)
 
-    await this.prisma.message.updateMany({
-      where: {
-        accountId: ref.accountId,
-        folderPath: ref.folderPath,
-        uid: ref.uid
-      },
-      data: {
-        isRead: seen,
-        updatedAt: BigInt(Date.now())
-      }
+        return this.prisma.message.updateMany({
+          where: { accountId, folderPath, uid: row.uid },
+          data: {
+            flagsJson: JSON.stringify(flags),
+            isRead: flags.includes('\\Seen'),
+            isFlagged: flags.includes('\\Flagged'),
+            updatedAt: now
+          }
+        })
+      })
+    )
+
+    const updated = await this.prisma.message.findMany({
+      where: { accountId, folderPath, uid: { in: uids } }
     })
+
+    return updated.map((row) => this.mapMessageRowToSummary(row))
   }
 
   /**
-   * Adds or removes a single IMAP keyword, leaving every other flag on the
-   * row alone.
-   *
-   * This used to take the full flag array and overwrite the column with
-   * it, and its callers passed `['\\Seen']` or `[]` — so marking a message
-   * read silently dropped its `\\Flagged` keyword locally until the next
-   * full resync put it back. Toggling one keyword at a time is the only
-   * shape that composes safely.
+   * Carries messages a MOVE took to another folder of the account along in
+   * the cache, under the UIDs the server gave them there (COPYUID, RFC 4315):
+   * they show in the destination at once, with the bodies already
+   * downloaded, instead of disappearing until its next sync fetches them
+   * again. A row a sync already brought in under the new UID gives way.
+   * Returns the rows as they are now in the destination.
    */
-  async setMessageFlag(
-    ref: MessageRef,
-    flag: string,
-    present: boolean
-  ): Promise<MailMessageSummary | null> {
+  async relocateMessages(
+    accountId: string,
+    sourceFolderPath: string,
+    destinationFolderPath: string,
+    uidMap: ReadonlyMap<number, number>
+  ): Promise<MailMessageSummary[]> {
     await this.ready
 
-    const existing = await this.prisma.message.findUnique({
-      where: {
-        accountId_folderPath_uid: {
-          accountId: ref.accountId,
-          folderPath: ref.folderPath,
-          uid: ref.uid
-        }
-      },
-      select: { flagsJson: true }
-    })
-
-    if (!existing) {
-      return null
+    if (uidMap.size === 0) {
+      return []
     }
 
-    const currentFlags = parseJsonArray<string>(existing.flagsJson).filter(
-      (value) => typeof value === 'string'
-    )
-    const nextFlags = present
-      ? Array.from(new Set([...currentFlags, flag]))
-      : currentFlags.filter((value) => value !== flag)
+    const pairs = [...uidMap]
+    const now = BigInt(Date.now())
 
-    return this.replaceMessageFlags(ref.accountId, ref.folderPath, ref.uid, nextFlags)
+    await this.prisma.$transaction([
+      this.prisma.message.deleteMany({
+        where: {
+          accountId,
+          folderPath: destinationFolderPath,
+          uid: { in: pairs.map(([, destinationUid]) => destinationUid) }
+        }
+      }),
+      ...pairs.map(([sourceUid, destinationUid]) =>
+        this.prisma.message.updateMany({
+          where: { accountId, folderPath: sourceFolderPath, uid: sourceUid },
+          data: {
+            id: this.makeMessagePrimaryId(accountId, destinationFolderPath, destinationUid),
+            folderPath: destinationFolderPath,
+            uid: destinationUid,
+            updatedAt: now
+          }
+        })
+      )
+    ])
+
+    const rows = await this.prisma.message.findMany({
+      where: {
+        accountId,
+        folderPath: destinationFolderPath,
+        uid: { in: pairs.map(([, destinationUid]) => destinationUid) }
+      }
+    })
+
+    return rows.map((row) => this.mapMessageRowToSummary(row))
   }
 
   /**

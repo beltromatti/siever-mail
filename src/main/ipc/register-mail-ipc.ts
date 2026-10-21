@@ -14,9 +14,8 @@ import type {
   ListMessagesOptions,
   MessageAttachmentsRef,
   MessageRef,
-  MoveMessageInput,
-  ToggleFlaggedInput,
-  ToggleSeenInput,
+  MoveMessagesInput,
+  SetMessagesKeywordInput,
   UiPreferences
 } from '@shared/models'
 
@@ -122,25 +121,25 @@ export function registerMailIpc(
     return mailService.getMessage(ref as MessageRef)
   })
 
-  registerDataHandler(IPC_CHANNELS.moveMessage, async (payload) => {
-    await mailService.moveMessage(payload as MoveMessageInput)
-  })
+  registerDataHandler(IPC_CHANNELS.moveMessages, async (payload) =>
+    mailService.moveMessages(payload as MoveMessagesInput)
+  )
 
-  registerDataHandler(IPC_CHANNELS.deleteMessage, async (ref) => {
-    await mailService.deleteMessage(ref as MessageRef)
-  })
+  registerDataHandler(IPC_CHANNELS.deleteMessages, async (refs) =>
+    mailService.deleteMessages(refs as MessageRef[])
+  )
 
-  registerDataHandler(IPC_CHANNELS.archiveMessage, async (ref) => {
-    await mailService.archiveMessage(ref as MessageRef)
-  })
+  registerDataHandler(IPC_CHANNELS.archiveMessages, async (refs) =>
+    mailService.archiveMessages(refs as MessageRef[])
+  )
 
-  registerDataHandler(IPC_CHANNELS.toggleSeen, async (payload) => {
-    await mailService.toggleSeen(payload as ToggleSeenInput)
-  })
+  registerDataHandler(IPC_CHANNELS.setMessagesSeen, async (payload) =>
+    mailService.setMessagesSeen(payload as SetMessagesKeywordInput)
+  )
 
-  registerDataHandler(IPC_CHANNELS.toggleFlagged, async (payload) => {
-    await mailService.toggleFlagged(payload as ToggleFlaggedInput)
-  })
+  registerDataHandler(IPC_CHANNELS.setMessagesFlagged, async (payload) =>
+    mailService.setMessagesFlagged(payload as SetMessagesKeywordInput)
+  )
 
   registerDataHandler(IPC_CHANNELS.sendMail, async (payload) => {
     await mailService.sendMail(payload as ComposeMailInput)

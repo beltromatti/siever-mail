@@ -291,16 +291,27 @@ export interface ActiveMailboxContext {
   folderPath: string
 }
 
-export interface MoveMessageInput extends MessageRef {
+/** Messages to move, to one folder of their account. */
+export interface MoveMessagesInput {
+  refs: MessageRef[]
   destinationFolderPath: string
 }
 
-export interface ToggleSeenInput extends MessageRef {
-  seen: boolean
+/** Messages to mark read or unread, or to flag or unflag. */
+export interface SetMessagesKeywordInput {
+  refs: MessageRef[]
+  present: boolean
 }
 
-export interface ToggleFlaggedInput extends MessageRef {
-  flagged: boolean
+/**
+ * How an action on several messages went. Each folder's messages go in one
+ * command, so a refusal covers a folder's worth; the rest stand.
+ */
+export interface MessagesActionResult {
+  /** The messages the server did not take. */
+  failed: MessageRef[]
+  /** Why, in the user's words, when something failed. */
+  error?: string
 }
 
 export interface ComposeAttachmentInput {

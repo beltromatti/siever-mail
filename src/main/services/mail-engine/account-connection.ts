@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import { net } from 'electron'
 import {
   ImapFlow,
+  type CopyResponseObject,
   type ExistsEvent,
   type ExpungeEvent,
   type FetchMessageObject,
@@ -151,32 +152,61 @@ type AccountConnectionEvents = {
 }
 
 /**
- * Moves one message in the selected mailbox, and throws when the server did
- * not. imapflow reports a refused MOVE (a folder that does not exist, a full
- * quota) as `false` instead of an error, which let the message vanish here
- * while it stayed where it was. And on a server without MOVE its own
- * copy-then-delete deletes the original even when the copy was refused, so
- * that path is spelled out here, in order, checking each step.
+ * How many UIDs one command names. The set is written in ranges, but a
+ * scattered selection can still make a long line, and servers cap those.
  */
-async function moveOnServer(client: ImapFlow, uid: number, destination: string): Promise<void> {
-  const range = String(uid)
+const UID_COMMAND_CHUNK = 500
 
-  if (client.capabilities.has('MOVE')) {
-    if (!(await client.messageMove(range, destination, { uid: true }))) {
-      throw new Error(`Il server non ha spostato il messaggio in «${destination}».`)
-    }
-    return
+function chunk<T>(items: ReadonlyArray<T>, size: number): T[][] {
+  const chunks: T[][] = []
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size))
   }
 
-  if (!(await client.messageCopy(range, destination, { uid: true }))) {
-    throw new Error(`Il server non ha copiato il messaggio in «${destination}».`)
+  return chunks
+}
+
+/**
+ * Moves messages of the selected mailbox, and throws when the server did
+ * not. imapflow reports a refused MOVE (a folder that does not exist, a
+ * full quota) as `false` instead of an error, which let messages vanish
+ * here while they stayed where they were. And on a server without MOVE its
+ * own copy-then-delete deletes the originals even when the copy was
+ * refused, so that path is spelled out here, in order, checking each step.
+ *
+ * Resolves with what a server with UIDPLUS says about the destination: its
+ * UIDVALIDITY and the UID each message has there.
+ */
+async function moveOnServer(
+  client: ImapFlow,
+  uids: number[],
+  destination: string
+): Promise<CopyResponseObject> {
+  const range = formatUidSet(uids)
+
+  if (client.capabilities.has('MOVE')) {
+    const moved = await client.messageMove(range, destination, { uid: true })
+
+    if (!moved) {
+      throw new Error(`Il server non ha spostato i messaggi in «${destination}».`)
+    }
+    return moved
+  }
+
+  const copied = await client.messageCopy(range, destination, { uid: true })
+
+  if (!copied) {
+    throw new Error(`Il server non ha copiato i messaggi in «${destination}».`)
   }
 
   if (!(await client.messageDelete(range, { uid: true }))) {
     throw new Error(
-      `Il messaggio è stato copiato in «${destination}» ma il server non lo ha rimosso dalla cartella di origine.`
+      `I messaggi sono stati copiati in «${destination}» ma il server non li ha rimossi dalla cartella di origine.`
     )
   }
+
+  return copied
 }
 
 export class AccountConnection extends EventEmitter {
@@ -453,8 +483,9 @@ export class AccountConnection extends EventEmitter {
     }, `fetch-source:${ref.folderPath}:${ref.uid}`)
   }
 
-  async toggleSeen(ref: MessageRef, seen: boolean): Promise<void> {
-    await this.setKeyword(ref, '\\Seen', seen, 'toggle-seen')
+  /** Marks messages of one folder read or unread, in one command. */
+  async setSeen(folderPath: string, uids: number[], seen: boolean): Promise<void> {
+    await this.setKeyword(folderPath, uids, '\\Seen', seen, 'set-seen')
   }
 
   /**
@@ -462,8 +493,8 @@ export class AccountConnection extends EventEmitter {
    * Outlook and iOS Mail. It is server-side state, so the change shows up
    * on every other client of the account without any extra plumbing.
    */
-  async toggleFlagged(ref: MessageRef, flagged: boolean): Promise<void> {
-    await this.setKeyword(ref, '\\Flagged', flagged, 'toggle-flagged')
+  async setFlagged(folderPath: string, uids: number[], flagged: boolean): Promise<void> {
+    await this.setKeyword(folderPath, uids, '\\Flagged', flagged, 'set-flagged')
   }
 
   /**
@@ -473,118 +504,209 @@ export class AccountConnection extends EventEmitter {
    * wipe its flag until the next resync.
    */
   private async setKeyword(
-    ref: MessageRef,
+    folderPath: string,
+    uids: number[],
     keyword: string,
     present: boolean,
     operationLabel: string
   ): Promise<void> {
     await this.runUserOperation(async () => {
       const client = this.requirePrimary()
-      const lock = await client.getMailboxLock(ref.folderPath)
+      const lock = await client.getMailboxLock(folderPath)
 
       try {
-        const stored = present
-          ? await client.messageFlagsAdd(String(ref.uid), [keyword], { uid: true })
-          : await client.messageFlagsRemove(String(ref.uid), [keyword], { uid: true })
+        for (const part of chunk(uids, UID_COMMAND_CHUNK)) {
+          const range = formatUidSet(part)
+          const stored = present
+            ? await client.messageFlagsAdd(range, [keyword], { uid: true })
+            : await client.messageFlagsRemove(range, [keyword], { uid: true })
 
-        if (!stored) {
-          throw new Error('Il server non ha aggiornato il messaggio.')
+          if (!stored) {
+            throw new Error('Il server non ha aggiornato i messaggi.')
+          }
         }
       } finally {
         lock.release()
       }
 
-      await this.database.setMessageFlag(ref, keyword, present)
-    }, `${operationLabel}:${ref.folderPath}:${ref.uid}`)
-  }
+      const updated = await this.database.setMessagesFlag(
+        this.account.id,
+        folderPath,
+        uids,
+        keyword,
+        present
+      )
 
-  async moveMessage(
-    ref: MessageRef,
-    destinationFolderPath: string,
-    options: { markAsSeenBeforeMove?: boolean } = {}
-  ): Promise<void> {
-    await this.runUserOperation(async () => {
-      const client = this.requirePrimary()
-      const lock = await client.getMailboxLock(ref.folderPath)
-
-      try {
-        if (options.markAsSeenBeforeMove) {
-          await client.messageFlagsAdd(String(ref.uid), ['\\Seen'], { uid: true })
-        }
-
-        await moveOnServer(client, ref.uid, destinationFolderPath)
-      } finally {
-        lock.release()
+      if (updated.length > 0) {
+        this.emit('messages', {
+          accountId: this.account.id,
+          folderPath,
+          added: [],
+          updated,
+          removedUids: [],
+          bootstrap: false
+        })
       }
-
-      await this.database.deleteMessage(ref)
-      this.incrementalSyncFolder(ref.folderPath, 'background')
-      this.incrementalSyncFolder(destinationFolderPath, 'background')
-    }, `move:${ref.folderPath}:${ref.uid}`)
-  }
-
-  async moveMessageToTrash(
-    ref: MessageRef,
-    options: { markAsSeenBeforeMove?: boolean } = {}
-  ): Promise<{ sourceFolder: string; destinationFolder?: string }> {
-    const trash = await this.findFolderBySpecialUse(['\\Trash'], ['trash', 'cestino'])
-
-    if (!trash || trash.path === ref.folderPath) {
-      if (options.markAsSeenBeforeMove) {
-        await this.toggleSeen(ref, true)
-      }
-
-      return { sourceFolder: ref.folderPath, destinationFolder: trash?.path }
-    }
-
-    await this.moveMessage(ref, trash.path, options)
-    return { sourceFolder: ref.folderPath, destinationFolder: trash.path }
+    }, `${operationLabel}:${folderPath}:${uids.length}`)
   }
 
   /**
-   * Deleting moves a message to the Trash; one already there, or on an
-   * account without a Trash, is deleted for good — as every client does.
+   * Moves messages of one folder to another of the account, in one command.
+   * They show in the destination at once, under the UIDs the server gave
+   * them there, with whatever of them was already downloaded.
    */
-  async deleteMessage(
-    ref: MessageRef
-  ): Promise<{ sourceFolder: string; destinationFolder?: string }> {
-    const trash = await this.findFolderBySpecialUse(['\\Trash'], ['trash', 'cestino'])
-
-    if (trash && trash.path !== ref.folderPath) {
-      await this.moveMessage(ref, trash.path)
-      return { sourceFolder: ref.folderPath, destinationFolder: trash.path }
+  async moveMessages(
+    folderPath: string,
+    uids: number[],
+    destinationFolderPath: string,
+    options: { markAsSeenBeforeMove?: boolean } = {}
+  ): Promise<void> {
+    if (destinationFolderPath === folderPath) {
+      return
     }
 
     await this.runUserOperation(async () => {
       const client = this.requirePrimary()
-      const lock = await client.getMailboxLock(ref.folderPath)
+      const lock = await client.getMailboxLock(folderPath)
+      const uidMap = new Map<number, number>()
+      let destinationUidValidity: bigint | undefined
 
       try {
-        if (!(await client.messageDelete(String(ref.uid), { uid: true }))) {
-          throw new Error('Il server non ha eliminato il messaggio.')
+        for (const part of chunk(uids, UID_COMMAND_CHUNK)) {
+          if (options.markAsSeenBeforeMove) {
+            await client.messageFlagsAdd(formatUidSet(part), ['\\Seen'], { uid: true })
+            await this.database.setMessagesFlag(this.account.id, folderPath, part, '\\Seen', true)
+          }
+
+          const moved = await moveOnServer(client, part, destinationFolderPath)
+          destinationUidValidity = moved.uidValidity
+          moved.uidMap?.forEach((destinationUid, sourceUid) =>
+            uidMap.set(sourceUid, destinationUid)
+          )
         }
       } finally {
         lock.release()
       }
 
-      await this.database.deleteMessage(ref)
-      this.incrementalSyncFolder(ref.folderPath, 'background')
-    }, `delete:${ref.folderPath}:${ref.uid}`)
+      // The UIDs are only worth keeping under the UIDVALIDITY the cache knows
+      // the destination by; otherwise its next sync starts it over anyway.
+      const destinationState = await this.database.getFolderSyncState(
+        this.account.id,
+        destinationFolderPath
+      )
+      const relocated =
+        destinationUidValidity !== undefined &&
+        destinationState?.uidValidity === destinationUidValidity
+          ? await this.database.relocateMessages(
+              this.account.id,
+              folderPath,
+              destinationFolderPath,
+              uidMap
+            )
+          : []
 
-    return { sourceFolder: ref.folderPath }
+      await this.forgetMessages(folderPath, uids)
+
+      if (relocated.length > 0) {
+        // Not new mail: no notification, now or when the destination syncs.
+        this.emit('messages', {
+          accountId: this.account.id,
+          folderPath: destinationFolderPath,
+          added: relocated,
+          updated: [],
+          removedUids: [],
+          bootstrap: true
+        })
+      }
+
+      this.incrementalSyncFolder(folderPath, 'background')
+      this.incrementalSyncFolder(destinationFolderPath, 'background')
+    }, `move:${folderPath}:${uids.length}`)
   }
 
-  async archiveMessage(
-    ref: MessageRef
+  /**
+   * Takes messages that left a folder out of the cache, and tells every view
+   * at once — the list they were in, TUTTI, a search.
+   */
+  private async forgetMessages(folderPath: string, uids: number[]): Promise<void> {
+    await this.database.deleteMessageUids(this.account.id, folderPath, uids)
+    this.emit('messages', {
+      accountId: this.account.id,
+      folderPath,
+      added: [],
+      updated: [],
+      removedUids: uids,
+      bootstrap: false
+    })
+  }
+
+  async moveMessagesToTrash(
+    folderPath: string,
+    uids: number[],
+    options: { markAsSeenBeforeMove?: boolean } = {}
+  ): Promise<{ sourceFolder: string; destinationFolder?: string }> {
+    const trash = await this.findFolderBySpecialUse(['\\Trash'], ['trash', 'cestino'])
+
+    if (!trash || trash.path === folderPath) {
+      if (options.markAsSeenBeforeMove) {
+        await this.setSeen(folderPath, uids, true)
+      }
+
+      return { sourceFolder: folderPath, destinationFolder: trash?.path }
+    }
+
+    await this.moveMessages(folderPath, uids, trash.path, options)
+    return { sourceFolder: folderPath, destinationFolder: trash.path }
+  }
+
+  /**
+   * Deleting moves messages to the Trash; ones already there, or on an
+   * account without a Trash, are deleted for good — as every client does.
+   */
+  async deleteMessages(
+    folderPath: string,
+    uids: number[]
+  ): Promise<{ sourceFolder: string; destinationFolder?: string }> {
+    const trash = await this.findFolderBySpecialUse(['\\Trash'], ['trash', 'cestino'])
+
+    if (trash && trash.path !== folderPath) {
+      await this.moveMessages(folderPath, uids, trash.path)
+      return { sourceFolder: folderPath, destinationFolder: trash.path }
+    }
+
+    await this.runUserOperation(async () => {
+      const client = this.requirePrimary()
+      const lock = await client.getMailboxLock(folderPath)
+
+      try {
+        for (const part of chunk(uids, UID_COMMAND_CHUNK)) {
+          if (!(await client.messageDelete(formatUidSet(part), { uid: true }))) {
+            throw new Error('Il server non ha eliminato i messaggi.')
+          }
+        }
+      } finally {
+        lock.release()
+      }
+
+      await this.forgetMessages(folderPath, uids)
+      this.incrementalSyncFolder(folderPath, 'background')
+    }, `delete:${folderPath}:${uids.length}`)
+
+    return { sourceFolder: folderPath }
+  }
+
+  async archiveMessages(
+    folderPath: string,
+    uids: number[]
   ): Promise<{ sourceFolder: string; destinationFolder: string }> {
     const archiveFolder = await this.resolveArchiveFolder()
 
-    if (archiveFolder.path === ref.folderPath) {
-      throw new Error("Il messaggio è già nell'archivio.")
+    if (archiveFolder.path === folderPath) {
+      throw new Error("I messaggi sono già nell'archivio.")
     }
 
-    await this.moveMessage(ref, archiveFolder.path)
-    return { sourceFolder: ref.folderPath, destinationFolder: archiveFolder.path }
+    await this.moveMessages(folderPath, uids, archiveFolder.path)
+    return { sourceFolder: folderPath, destinationFolder: archiveFolder.path }
   }
 
   /**

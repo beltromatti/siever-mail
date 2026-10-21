@@ -87,6 +87,7 @@ import type {
   MailMessageListPage,
   MailMessageListSort,
   MailMessageSummary,
+  MessagesActionResult,
   MessageGroupingMode,
   MessageListFilter,
   MessageRef,
@@ -1707,10 +1708,15 @@ function App(): React.JSX.Element {
     [removeMessageOptimistically, rollbackRemovedMessage, settleRemoval]
   )
 
+  /**
+   * Takes messages out of the list at once and asks the server for all of
+   * them in one call — each folder's in one command. What it refuses comes
+   * back where it was, and the reason is shown.
+   */
   const runMessageRemovalAction = useCallback(
     async (
       refs: ReadonlyArray<MessageRef>,
-      action: (ref: MessageRef) => Promise<void>,
+      action: (refs: MessageRef[]) => Promise<MessagesActionResult>,
       fallbackErrorMessage: string
     ): Promise<void> => {
       const targetRefs = uniqueMessageRefs(refs)
@@ -1720,43 +1726,45 @@ function App(): React.JSX.Element {
       }
 
       setViewError(null)
-      const results = await Promise.all(
-        targetRefs.map(async (ref) => {
-          try {
-            await runOptimisticMessageRemoval(
-              ref,
-              async () => {
-                await action(ref)
-              },
-              fallbackErrorMessage,
-              { suppressError: true }
-            )
-            return { ok: true as const, error: null }
-          } catch (caughtError) {
-            return { ok: false as const, error: caughtError }
-          }
-        })
-      )
+      const snapshots = targetRefs.map((ref) => ({
+        ref,
+        snapshot: removeMessageOptimistically(ref)
+      }))
+      let result: MessagesActionResult
 
-      const failures = results.filter((result) => !result.ok)
-      const firstFailure = failures[0]
-
-      if (failures.length === 0) {
-        return
+      try {
+        result = await action(targetRefs)
+      } catch (caughtError) {
+        result = {
+          failed: targetRefs,
+          error: caughtError instanceof Error ? caughtError.message : undefined
+        }
       }
 
-      const firstErrorMessage =
-        firstFailure?.error instanceof Error && firstFailure.error.message.trim()
-          ? firstFailure.error.message
-          : fallbackErrorMessage
+      const failedKeys = new Set(result.failed.map(messageRefKey))
 
-      setViewError(
-        failures.length === 1
-          ? firstErrorMessage
-          : `${firstErrorMessage} (${failures.length} operazioni non riuscite)`
-      )
+      // Back in their places, earliest first, so each index still holds.
+      snapshots
+        .filter(({ ref, snapshot }) => snapshot && failedKeys.has(messageRefKey(ref)))
+        .sort(
+          (left, right) => (left.snapshot?.removedIndex ?? 0) - (right.snapshot?.removedIndex ?? 0)
+        )
+        .forEach(({ snapshot }) => snapshot && rollbackRemovedMessage(snapshot))
+
+      for (const { ref } of snapshots) {
+        settleRemoval(ref, !failedKeys.has(messageRefKey(ref)))
+      }
+
+      if (failedKeys.size > 0) {
+        const message = result.error?.trim() || fallbackErrorMessage
+        setViewError(
+          failedKeys.size === 1
+            ? message
+            : `${message} (${failedKeys.size} messaggi restano dov'erano)`
+        )
+      }
     },
-    [runOptimisticMessageRemoval]
+    [removeMessageOptimistically, rollbackRemovedMessage, settleRemoval]
   )
 
   const selectedSummaries = useMemo(() => {
@@ -1835,8 +1843,9 @@ function App(): React.JSX.Element {
    * silently dropped `\Flagged` whenever a message was marked read.
    */
   const applyOptimisticFlagState = useCallback(
-    (ref: MessageRef, keyword: '\\Seen' | '\\Flagged', present: boolean): void => {
-      const patchSummary = (message: MailMessageSummary): MailMessageSummary => ({
+    (refs: ReadonlyArray<MessageRef>, keyword: '\\Seen' | '\\Flagged', present: boolean): void => {
+      const keys = new Set(refs.map(messageRefKey))
+      const patchSummary = <T extends MailMessageSummary>(message: T): T => ({
         ...message,
         isRead: keyword === '\\Seen' ? present : message.isRead,
         isFlagged: keyword === '\\Flagged' ? present : message.isFlagged,
@@ -1845,17 +1854,15 @@ function App(): React.JSX.Element {
 
       setMessages((current) =>
         current.map((message) =>
-          isSameMessageRef(summaryToMessageRef(message), ref) ? patchSummary(message) : message
+          keys.has(messageRefKey(summaryToMessageRef(message))) ? patchSummary(message) : message
         )
       )
 
-      setSelectedMessage((current) => {
-        if (!current || !isSameMessageRef(current, ref)) {
-          return current
-        }
-
-        return { ...current, ...patchSummary(current) }
-      })
+      setSelectedMessage((current) =>
+        current && keys.has(messageRefKey(summaryToMessageRef(current)))
+          ? patchSummary(current)
+          : current
+      )
     },
     []
   )
@@ -1879,37 +1886,56 @@ function App(): React.JSX.Element {
     [messages, selectedMessage]
   )
 
-  const setMessageKeyword = useCallback(
-    async (ref: MessageRef, keyword: '\\Seen' | '\\Flagged', present: boolean): Promise<void> => {
-      const previous = getMessageKeywordState(ref, keyword)
+  /**
+   * Marks messages read or unread, flagged or not: on screen at once, on the
+   * server in one call. What the server refuses goes back as it was.
+   */
+  const setMessagesKeyword = useCallback(
+    async (
+      refs: ReadonlyArray<MessageRef>,
+      keyword: '\\Seen' | '\\Flagged',
+      present: boolean
+    ): Promise<void> => {
+      const changing = uniqueMessageRefs(refs).filter(
+        (ref) => getMessageKeywordState(ref, keyword) !== present
+      )
 
-      if (previous === present) {
+      if (changing.length === 0) {
         return
       }
 
       const executionId = ++toggleFlagExecutionIdRef.current
       setViewError(null)
-      applyOptimisticFlagState(ref, keyword, present)
+      applyOptimisticFlagState(changing, keyword, present)
+
+      let result: MessagesActionResult
 
       try {
-        if (keyword === '\\Seen') {
-          await window.mailApi.toggleSeen({ ...ref, seen: present })
-        } else {
-          await window.mailApi.toggleFlagged({ ...ref, flagged: present })
-        }
+        result =
+          keyword === '\\Seen'
+            ? await window.mailApi.setMessagesSeen({ refs: changing, present })
+            : await window.mailApi.setMessagesFlagged({ refs: changing, present })
       } catch (caughtError) {
-        if (executionId === toggleFlagExecutionIdRef.current) {
-          applyOptimisticFlagState(ref, keyword, previous)
+        result = {
+          failed: changing,
+          error: caughtError instanceof Error ? caughtError.message : undefined
         }
-
-        setViewError(
-          caughtError instanceof Error
-            ? caughtError.message
-            : keyword === '\\Seen'
-              ? 'Aggiornamento stato letto/non letto non riuscito.'
-              : 'Aggiornamento contrassegno non riuscito.'
-        )
       }
+
+      if (result.failed.length === 0) {
+        return
+      }
+
+      if (executionId === toggleFlagExecutionIdRef.current) {
+        applyOptimisticFlagState(result.failed, keyword, !present)
+      }
+
+      setViewError(
+        result.error?.trim() ||
+          (keyword === '\\Seen'
+            ? 'Aggiornamento stato letto/non letto non riuscito.'
+            : 'Aggiornamento contrassegno non riuscito.')
+      )
     },
     [applyOptimisticFlagState, getMessageKeywordState]
   )
@@ -1959,14 +1985,23 @@ function App(): React.JSX.Element {
       const executionId = ++toggleFlagExecutionIdRef.current
 
       if (summary) {
-        applyOptimisticFlagState(ref, '\\Seen', true)
+        applyOptimisticFlagState([ref], '\\Seen', true)
       }
 
-      void window.mailApi.toggleSeen({ ...ref, seen: true }).catch(() => {
+      const rollback = (): void => {
         if (summary && executionId === toggleFlagExecutionIdRef.current) {
-          applyOptimisticFlagState(ref, '\\Seen', false)
+          applyOptimisticFlagState([ref], '\\Seen', false)
         }
-      })
+      }
+
+      void window.mailApi
+        .setMessagesSeen({ refs: [ref], present: true })
+        .then((result) => {
+          if (result.failed.length > 0) {
+            rollback()
+          }
+        })
+        .catch(rollback)
     }
 
     const previous = shownMessageRef.current
@@ -2014,31 +2049,24 @@ function App(): React.JSX.Element {
 
   const handleToggleRowFlag = useCallback(
     (ref: MessageRef, flagged: boolean): void => {
-      void setMessageKeyword(ref, '\\Flagged', flagged)
+      void setMessagesKeyword([ref], '\\Flagged', flagged)
     },
-    [setMessageKeyword]
+    [setMessagesKeyword]
   )
 
   const setSelectionSeen = useCallback(async (): Promise<void> => {
     const targetSeenState = shouldMarkSelectionAsRead
     keepShownReadState(selection.selectedRefs)
-
-    for (const ref of selection.selectedRefs) {
-      await setMessageKeyword(ref, '\\Seen', targetSeenState)
-    }
-  }, [keepShownReadState, selection.selectedRefs, setMessageKeyword, shouldMarkSelectionAsRead])
+    await setMessagesKeyword(selection.selectedRefs, '\\Seen', targetSeenState)
+  }, [keepShownReadState, selection.selectedRefs, setMessagesKeyword, shouldMarkSelectionAsRead])
 
   const setSelectionFlagged = useCallback(async (): Promise<void> => {
-    const targetFlaggedState = !selectionFlagged
-
-    for (const ref of selection.selectedRefs) {
-      await setMessageKeyword(ref, '\\Flagged', targetFlaggedState)
-    }
-  }, [selection.selectedRefs, selectionFlagged, setMessageKeyword])
+    await setMessagesKeyword(selection.selectedRefs, '\\Flagged', !selectionFlagged)
+  }, [selection.selectedRefs, selectionFlagged, setMessagesKeyword])
 
   const runSelectionRemovalAction = useCallback(
     async (
-      action: (ref: MessageRef) => Promise<void>,
+      action: (refs: MessageRef[]) => Promise<MessagesActionResult>,
       fallbackErrorMessage: string
     ): Promise<void> => {
       await runMessageRemovalAction(selection.selectedRefs, action, fallbackErrorMessage)
@@ -2075,9 +2103,7 @@ function App(): React.JSX.Element {
 
       await runMessageRemovalAction(
         refs,
-        async (ref) => {
-          await window.mailApi.deleteMessage(ref)
-        },
+        (targets) => window.mailApi.deleteMessages(targets),
         'Eliminazione email non riuscita.'
       )
     },
@@ -2436,9 +2462,10 @@ function App(): React.JSX.Element {
 
   const archiveSelection = useCallback(
     (): Promise<void> =>
-      runSelectionRemovalAction(async (ref) => {
-        await window.mailApi.archiveMessage(ref)
-      }, 'Archiviazione email non riuscita.'),
+      runSelectionRemovalAction(
+        (refs) => window.mailApi.archiveMessages(refs),
+        'Archiviazione email non riuscita.'
+      ),
     [runSelectionRemovalAction]
   )
 
@@ -2685,9 +2712,7 @@ function App(): React.JSX.Element {
       const destinationFolderPath = chosen.slice('move:'.length)
       await runMessageRemovalAction(
         targets,
-        async (target) => {
-          await window.mailApi.moveMessage({ ...target, destinationFolderPath })
-        },
+        (refs) => window.mailApi.moveMessages({ refs, destinationFolderPath }),
         'Spostamento email non riuscito.'
       )
       return
@@ -3076,9 +3101,10 @@ function App(): React.JSX.Element {
               moveMenuOpen={moveMenuOpen}
               onMoveMenuOpenChange={setMoveMenuOpen}
               onMoveToFolder={(destinationFolderPath) =>
-                void runSelectionRemovalAction(async (ref) => {
-                  await window.mailApi.moveMessage({ ...ref, destinationFolderPath })
-                }, 'Spostamento email non riuscito.')
+                void runSelectionRemovalAction(
+                  (refs) => window.mailApi.moveMessages({ refs, destinationFolderPath }),
+                  'Spostamento email non riuscito.'
+                )
               }
               onDelete={() => void deleteMessages(selection.selectedRefs)}
               onToggleSeen={() => void setSelectionSeen()}
@@ -3116,9 +3142,10 @@ function App(): React.JSX.Element {
               onArchive={() => void archiveSelection()}
               onDelete={() => void deleteMessages(selection.selectedRefs)}
               onMoveToFolder={(destinationFolderPath) =>
-                void runSelectionRemovalAction(async (ref) => {
-                  await window.mailApi.moveMessage({ ...ref, destinationFolderPath })
-                }, 'Spostamento email non riuscito.')
+                void runSelectionRemovalAction(
+                  (refs) => window.mailApi.moveMessages({ refs, destinationFolderPath }),
+                  'Spostamento email non riuscito.'
+                )
               }
               onToggleExpanded={() => {
                 if (!readingRef) {
@@ -3130,12 +3157,12 @@ function App(): React.JSX.Element {
               onToggleSeen={(seen) => {
                 if (readingRef) {
                   keepShownReadState([readingRef])
-                  void setMessageKeyword(readingRef, '\\Seen', seen)
+                  void setMessagesKeyword([readingRef], '\\Seen', seen)
                 }
               }}
               onToggleFlagged={(flagged) => {
                 if (readingRef) {
-                  void setMessageKeyword(readingRef, '\\Flagged', flagged)
+                  void setMessagesKeyword([readingRef], '\\Flagged', flagged)
                 }
               }}
               attachmentActions={attachmentActions}

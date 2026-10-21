@@ -33,13 +33,13 @@ import type {
   MailMessageListPage,
   MessageAttachmentsRef,
   MessageRef,
-  MoveMessageInput,
+  MessagesActionResult,
+  MoveMessagesInput,
   OpenAttachmentResult,
   PickedAttachment,
   RecentFile,
   SavedAttachments,
-  ToggleFlaggedInput,
-  ToggleSeenInput,
+  SetMessagesKeywordInput,
   UiPreferences,
   UnifiedInboxPreferences,
   UnifiedInboxSummary
@@ -113,6 +113,17 @@ const messageRefSchema = z.object({
   accountId: z.string().trim().min(1),
   folderPath: z.string().trim().min(1),
   uid: z.number().int().positive()
+})
+/** A selection can be the whole folder; past this it is split by the caller. */
+const MAX_MESSAGES_PER_ACTION = 20_000
+const messageRefsSchema = z.array(messageRefSchema).max(MAX_MESSAGES_PER_ACTION)
+const moveMessagesSchema = z.object({
+  refs: messageRefsSchema,
+  destinationFolderPath: z.string().trim().min(1)
+})
+const setMessagesKeywordSchema = z.object({
+  refs: messageRefsSchema,
+  present: z.boolean()
 })
 const attachmentRefSchema = z.object({
   ref: messageRefSchema,
@@ -598,38 +609,40 @@ export class MailService {
     return (await this.database.getMessage(ref)) ?? { ...fetched, senderLabel: fetched.senderName }
   }
 
-  async moveMessage(input: MoveMessageInput): Promise<void> {
-    await this.ensureAccountExists(input.accountId)
-    await this.engine.moveMessage(
-      { accountId: input.accountId, folderPath: input.folderPath, uid: input.uid },
-      input.destinationFolderPath
-    )
+  async moveMessages(input: MoveMessagesInput): Promise<MessagesActionResult> {
+    const payload = moveMessagesSchema.parse(input)
+    await this.ensureAccountsExist(payload.refs)
+    return this.engine.moveMessages(payload.refs, payload.destinationFolderPath)
   }
 
-  async deleteMessage(ref: MessageRef): Promise<void> {
-    await this.ensureAccountExists(ref.accountId)
-    await this.engine.deleteMessage(ref)
+  async deleteMessages(refs: MessageRef[]): Promise<MessagesActionResult> {
+    const payload = messageRefsSchema.parse(refs)
+    await this.ensureAccountsExist(payload)
+    return this.engine.deleteMessages(payload)
   }
 
-  async archiveMessage(ref: MessageRef): Promise<void> {
-    await this.ensureAccountExists(ref.accountId)
-    await this.engine.archiveMessage(ref)
+  async archiveMessages(refs: MessageRef[]): Promise<MessagesActionResult> {
+    const payload = messageRefsSchema.parse(refs)
+    await this.ensureAccountsExist(payload)
+    return this.engine.archiveMessages(payload)
   }
 
-  async toggleSeen(input: ToggleSeenInput): Promise<void> {
-    await this.ensureAccountExists(input.accountId)
-    await this.engine.toggleSeen(
-      { accountId: input.accountId, folderPath: input.folderPath, uid: input.uid },
-      input.seen
-    )
+  async setMessagesSeen(input: SetMessagesKeywordInput): Promise<MessagesActionResult> {
+    const payload = setMessagesKeywordSchema.parse(input)
+    await this.ensureAccountsExist(payload.refs)
+    return this.engine.setMessagesSeen(payload.refs, payload.present)
   }
 
-  async toggleFlagged(input: ToggleFlaggedInput): Promise<void> {
-    await this.ensureAccountExists(input.accountId)
-    await this.engine.toggleFlagged(
-      { accountId: input.accountId, folderPath: input.folderPath, uid: input.uid },
-      input.flagged
-    )
+  async setMessagesFlagged(input: SetMessagesKeywordInput): Promise<MessagesActionResult> {
+    const payload = setMessagesKeywordSchema.parse(input)
+    await this.ensureAccountsExist(payload.refs)
+    return this.engine.setMessagesFlagged(payload.refs, payload.present)
+  }
+
+  private async ensureAccountsExist(refs: ReadonlyArray<MessageRef>): Promise<void> {
+    for (const accountId of new Set(refs.map((ref) => ref.accountId))) {
+      await this.ensureAccountExists(accountId)
+    }
   }
 
   async sendMail(input: ComposeMailInput): Promise<void> {
