@@ -45,25 +45,27 @@ open-source software released under the Apache License 2.0.
 ## Highlights
 
 - **Multi-account by design** — IMAP/SMTP (SSL/TLS or STARTTLS) and Gmail
-  OAuth side by side, with a unified inbox (TUTTI) that tags each message
-  with its account and acts on it from that account: replies, forwards and
-  moves never cross over unasked.
-- **Snappy native feel** — keyboard navigation and selection the way
-  Finder and Explorer do it, precise truncation, no jank on resize, an
-  Italian menu bar on macOS.
-- **Light, dark or the system's** — one set of colour tokens, two palettes;
-  "Sistema" follows the computer as it switches.
-- **Two layouts, one product** — an _Apple_ arrangement (folders, list and
-  reading pane side by side) and an _Outlook_ one (dense sortable table on
-  top, message underneath). Same features in both, and in both the divider
-  between list and message can be dragged; it snaps back to the default.
+  OAuth side by side. "Tutti gli account" gathers the inbox, sent mail,
+  drafts, archive, spam and trash of every account, whatever each server
+  calls them, and each account shows its folders as a tree. Every message
+  is acted on from its own account: replies, forwards and moves never
+  cross over unasked.
+- **Fast where it is felt** — a message opens at once, the next ones are
+  read ahead, a large one shows before its attachments arrive; a new
+  account shows its first screen in a moment; the list is endless and
+  keeps the selected message in view. Changes are found with one command
+  per check, and only what changed is downloaded.
 - **Built for triage** — sort by date, sender, subject or size, group
-  automatically or by sender, filter to unread or flagged, select a whole
-  group with one click and act on it in bulk. A sender's spellings of one
-  name share a group ("A. Beltrami - SIEVER" and "A.beltrami-SIEVER"),
-  while the different people a shared address relays keep theirs. Search
-  finds a sender by typing part of the name; `da:` `a:` `oggetto:` narrow a
-  term to one field.
+  automatically or by sender, filter to unread or flagged, select a group,
+  the rows loaded or the whole folder, and act on it in one command.
+  Drag messages onto a folder, or find one with "Sposta" as you type; a
+  folder can be created on the way. Search ignores case and accents,
+  narrows with `da:` `a:` `oggetto:`, searches the full text on the server
+  too, and says where it looked.
+- **A composer that knows people** — recipients are chips, checked before
+  sending, pasted lists split into people, names resolved from the
+  contacts. Suggestions put the people you write to first and leave out
+  the typos. Attachments open from the composer to be checked.
 - **Mail that arrives as it was written** — the composer shows a message
   exactly as it will be received, and sending writes that layout onto the
   message so Outlook's Word engine and every other client keep it.
@@ -72,6 +74,18 @@ open-source software released under the Apache License 2.0.
   onto the composer. A forward carries the original's attachments and a
   reply offers them. Signature logos and quoted pictures stay part of the
   message instead of posing as attachments.
+- **Notifications worth having** — new mail with sender, subject and
+  preview, buttons to mark it read or archive it, alerts that go away once
+  the mail is read anywhere, and the unread count on the Dock or taskbar
+  icon. All of it set in Settings → Notifiche.
+- **Your keyboard, your menus** — every command has a shortcut, changeable
+  in Settings → Scorciatoie, and right clicks open native menus on
+  messages, folders, people, attachments, links and text.
+- **Network folders that just work** — a share a restart left unmounted is
+  mounted again (macOS) or reconnected (Windows) when it is needed.
+- **Light, dark or the system's** — one set of colour tokens, two palettes;
+  "Sistema" follows the computer as it switches. Two layouts, _Apple_ and
+  _Outlook_, with the same features.
 - **Sync you can trust** — changes are pushed by the server, reconnection is
   automatic, and "Sincronizzato" is only shown when it is true. An
   operation the server refuses is reported, never pretended.
@@ -161,6 +175,9 @@ usable as a daily-driver mail client; the surface area is being polished
 release after release. The data layout may change between versions while
 the 1.x baseline settles — the upgrade-safe migration is designed exactly
 for that.
+
+It runs on macOS 13 Ventura or later (Apple silicon and Intel), Windows 10
+and 11 (64-bit) and Linux desktops.
 
 ## License
 
