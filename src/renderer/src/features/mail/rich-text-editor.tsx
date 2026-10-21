@@ -483,12 +483,7 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 type ContextualStyleProperty =
-  | 'fontFamily'
-  | 'fontSize'
-  | 'color'
-  | 'backgroundColor'
-  | 'lineHeight'
-  | 'textAlign'
+  'fontFamily' | 'fontSize' | 'color' | 'backgroundColor' | 'lineHeight' | 'textAlign'
 
 // Strip the private style-marker classes from a serialized HTML string so the
 // outgoing email body stays inline-style-only. We only touch SPAN classes that

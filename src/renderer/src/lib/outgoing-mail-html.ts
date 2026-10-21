@@ -1,4 +1,5 @@
-import { buildMailFrameDocument, sanitizeMailHtml } from './mail-html'
+import { buildMailFrameDocument } from './mail-html'
+import { withOffscreenFrame } from './offscreen-frame'
 
 /**
  * The HTML a message leaves with: exactly what the composer showed, with
@@ -144,97 +145,66 @@ function freezeImage(image: HTMLImageElement, box: DOMRect): void {
   }
 }
 
-function loadFrame(frame: HTMLIFrameElement, html: string): Promise<Document> {
-  return new Promise((resolve, reject) => {
-    frame.addEventListener(
-      'load',
-      () => {
-        const document = frame.contentDocument
-        if (document) {
-          resolve(document)
-        } else {
-          reject(new Error("Impossibile preparare il messaggio per l'invio."))
-        }
-      },
-      { once: true }
-    )
-    frame.srcdoc = html
-  })
-}
-
 /**
  * Builds the HTML to send from the composer's body. The frame is laid out
  * at the composer's width, so percentages and images resolve to what the
  * user was looking at.
  */
 export async function buildOutgoingMailHtml(bodyHtml: string, layoutWidth = 920): Promise<string> {
-  const frame = document.createElement('iframe')
-  frame.setAttribute('sandbox', 'allow-same-origin')
-  frame.setAttribute('aria-hidden', 'true')
-  frame.tabIndex = -1
-  frame.style.cssText = `position:fixed;left:-100000px;top:0;width:${layoutWidth}px;height:10px;border:0;visibility:hidden;pointer-events:none`
-  document.body.appendChild(frame)
+  return withOffscreenFrame(
+    buildMailFrameDocument({ bodyHtml }),
+    layoutWidth,
+    async (frameDocument) => {
+      const view = frameDocument.defaultView
 
-  try {
-    // A quoted message's own <style> blocks travel in the head, where they
-    // shaped what the composer showed.
-    const { bodyHtml: sanitizedBody, headHtml } = sanitizeMailHtml(bodyHtml)
-    const frameDocument = await loadFrame(
-      frame,
-      buildMailFrameDocument({ bodyHtml: sanitizedBody, headHtml })
-    )
-    const view = frameDocument.defaultView
+      if (!view) {
+        throw new Error("Impossibile preparare il messaggio per l'invio.")
+      }
 
-    if (!view) {
-      throw new Error("Impossibile preparare il messaggio per l'invio.")
-    }
+      // Images the message carries (pasted, signature logos) are measured
+      // once decoded. Remote pictures in a quoted message already declare
+      // their size, and are not worth holding the send for.
+      await Promise.all(
+        Array.from(frameDocument.images)
+          .filter((image) => !image.complete && image.src.startsWith('data:'))
+          .map((image) => image.decode().catch(() => undefined))
+      )
 
-    // Images the message carries (pasted, signature logos) are measured once
-    // decoded. Remote pictures in a quoted message already declare their
-    // size, and are not worth holding the send for.
-    await Promise.all(
-      Array.from(frameDocument.images)
-        .filter((image) => !image.complete && image.src.startsWith('data:'))
-        .map((image) => image.decode().catch(() => undefined))
-    )
+      const body = frameDocument.body
 
-    const body = frameDocument.body
+      const elements = Array.from(body.querySelectorAll<HTMLElement>('*')).filter(
+        (element) => !SKIPPED_TAGS.has(element.tagName)
+      )
+      const images = Array.from(frameDocument.images).map((image) => ({
+        image,
+        box: image.getBoundingClientRect()
+      }))
+      const rendered = elements.map((element) => readRenderedStyle(element, view))
 
-    const elements = Array.from(body.querySelectorAll<HTMLElement>('*')).filter(
-      (element) => !SKIPPED_TAGS.has(element.tagName)
-    )
-    const images = Array.from(frameDocument.images).map((image) => ({
-      image,
-      box: image.getBoundingClientRect()
-    }))
-    const rendered = elements.map((element) => readRenderedStyle(element, view))
+      elements.forEach((element, index) => freezeElement(element, rendered[index]))
+      images.forEach(({ image, box }) => freezeImage(image, box))
 
-    elements.forEach((element, index) => freezeElement(element, rendered[index]))
-    images.forEach(({ image, box }) => freezeImage(image, box))
+      // Text sitting directly in the body inherits from this wrapper, the
+      // one element every client carries styles through.
+      const bodyStyle = view.getComputedStyle(body)
+      const wrapperStyle = [
+        `font-family: ${bodyStyle.fontFamily}`,
+        `font-size: ${bodyStyle.fontSize}`,
+        `line-height: ${bodyStyle.lineHeight}`,
+        `color: ${bodyStyle.color}`
+      ].join('; ')
 
-    // Text sitting directly in the body inherits from this wrapper, the
-    // one element every client carries styles through.
-    const bodyStyle = view.getComputedStyle(body)
-    const wrapperStyle = [
-      `font-family: ${bodyStyle.fontFamily}`,
-      `font-size: ${bodyStyle.fontSize}`,
-      `line-height: ${bodyStyle.lineHeight}`,
-      `color: ${bodyStyle.color}`
-    ].join('; ')
-
-    return `<!DOCTYPE html>
+      return `<!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!--[if mso]><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->
-${headHtml}
 </head>
 <body style="margin: 0; padding: 0; -webkit-text-size-adjust: 100%;">
 <div style="${wrapperStyle.replaceAll('"', "'")}">${body.innerHTML}</div>
 </body>
 </html>`
-  } finally {
-    frame.remove()
-  }
+    }
+  )
 }

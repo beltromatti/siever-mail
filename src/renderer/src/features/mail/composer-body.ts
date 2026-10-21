@@ -164,7 +164,8 @@ export function replaceComposerSignature(
     return html
   }
 
-  const previous = previousSignatureHtml === undefined ? null : splitSignature(previousSignatureHtml)
+  const previous =
+    previousSignatureHtml === undefined ? null : splitSignature(previousSignatureHtml)
 
   if (
     current &&

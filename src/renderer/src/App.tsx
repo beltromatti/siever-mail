@@ -42,6 +42,7 @@ import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { cn, formatAppVersion } from '@renderer/lib/utils'
 import { buildMessageSections } from '@renderer/lib/message-sections'
+import { inlineMessageStyles } from '@renderer/lib/inline-message-styles'
 import { buildOutgoingMailHtml } from '@renderer/lib/outgoing-mail-html'
 import { READER_ZOOM_RESET, steppedReaderZoom } from '@renderer/lib/reader-zoom'
 import {
@@ -151,17 +152,26 @@ function formatQuotedDate(dateIso: string): string {
   }).format(date)
 }
 
-function buildReplyQuoteHtml(message: MailMessageDetail): string {
+/**
+ * The message as the reader shows it, ready to quote: its style sheets
+ * written onto its elements (see `inlineMessageStyles`), so the composer
+ * shows it as it was read and it goes out that way.
+ */
+async function quotedMessageBody(message: MailMessageDetail): Promise<string> {
+  return message.html ? inlineMessageStyles(message.html) : htmlFromText(message.text || '')
+}
+
+async function buildReplyQuoteHtml(message: MailMessageDetail): Promise<string> {
   const sender = message.from[0]
   const senderLabel = sender ? formatQuotedAddress(sender) : 'Mittente sconosciuto'
   const attributionLine = `Il giorno ${formatQuotedDate(message.date)} ${senderLabel} ha scritto:`
-  const quotedBody = message.html ? message.html : htmlFromText(message.text || '')
+  const quotedBody = await quotedMessageBody(message)
 
   return `<div class="gmail_quote"><div dir="ltr" class="gmail_attr">${attributionLine}<br></div><blockquote class="gmail_quote" type="cite" style="${GMAIL_QUOTE_BLOCK_STYLE}">${quotedBody}</blockquote></div>`
 }
 
-function buildForwardQuoteHtml(message: MailMessageDetail): string {
-  const quotedBody = message.html ? message.html : htmlFromText(message.text || '')
+async function buildForwardQuoteHtml(message: MailMessageDetail): Promise<string> {
+  const quotedBody = await quotedMessageBody(message)
   const fromHeader = message.from.length > 0 ? formatQuotedAddressList(message.from) : 'N/D'
   const toHeader = message.to.length > 0 ? formatQuotedAddressList(message.to) : 'N/D'
   const ccHeader = message.cc.length > 0 ? `<br>Cc: ${formatQuotedAddressList(message.cc)}` : ''
@@ -2387,7 +2397,7 @@ function App(): React.JSX.Element {
   // A reply or forward goes out from the account that received the message
   // — which, under TUTTI, is not necessarily the one in the sidebar — and
   // knows the message, for its attachments.
-  const openReplyComposer = useCallback((): void => {
+  const openReplyComposer = useCallback(async (): Promise<void> => {
     if (!selectedMessage) {
       return
     }
@@ -2398,7 +2408,7 @@ function App(): React.JSX.Element {
       sourceAccountId: selectedMessage.accountId,
       to: selectedMessage.from.map((address) => address.address),
       subject: ensureReplySubject(selectedMessage.subject),
-      quoteHtml: buildReplyQuoteHtml(selectedMessage),
+      quoteHtml: await buildReplyQuoteHtml(selectedMessage),
       inReplyTo: selectedMessage.messageId,
       references: selectedMessage.messageId ? [selectedMessage.messageId] : undefined,
       original: {
@@ -2408,7 +2418,7 @@ function App(): React.JSX.Element {
     })
   }, [openComposer, selectedMessage])
 
-  const openForwardComposer = useCallback((): void => {
+  const openForwardComposer = useCallback(async (): Promise<void> => {
     if (!selectedMessage) {
       return
     }
@@ -2418,7 +2428,7 @@ function App(): React.JSX.Element {
       accountId: selectedMessage.accountId,
       sourceAccountId: selectedMessage.accountId,
       subject: ensureForwardSubject(selectedMessage.subject),
-      quoteHtml: buildForwardQuoteHtml(selectedMessage),
+      quoteHtml: await buildForwardQuoteHtml(selectedMessage),
       original: {
         ref: summaryToMessageRef(selectedMessage),
         attachments: selectedMessage.attachments
@@ -2819,8 +2829,8 @@ function App(): React.JSX.Element {
             loading={loadingMessageDetail}
             isExpanded={isMessageExpanded}
             selectedCount={selection.selectedRefs.length}
-            onReply={openReplyComposer}
-            onForward={openForwardComposer}
+            onReply={() => void openReplyComposer()}
+            onForward={() => void openForwardComposer()}
             onArchive={() =>
               void runSelectionRemovalAction(async (ref) => {
                 await window.mailApi.archiveMessage(ref)

@@ -182,11 +182,7 @@ export interface UiPreferences {
 
 /** What the application menu asks the page to do. */
 export type AppMenuCommand =
-  | 'compose'
-  | 'settings'
-  | 'reader-zoom-in'
-  | 'reader-zoom-out'
-  | 'reader-zoom-reset'
+  'compose' | 'settings' | 'reader-zoom-in' | 'reader-zoom-out' | 'reader-zoom-reset'
 
 export const READER_ZOOM_MIN = 50
 export const READER_ZOOM_MAX = 200
@@ -341,9 +337,7 @@ export interface CopiedAttachment extends PickedAttachment {
  * means nothing on this computer opens that type.
  */
 export type OpenAttachmentResult =
-  | { status: 'opened' }
-  | { status: 'blocked' }
-  | { status: 'no-application' }
+  { status: 'opened' } | { status: 'blocked' } | { status: 'no-application' }
 
 export interface SavedAttachments {
   directory: string
@@ -411,12 +405,7 @@ export interface WindowControlsState {
  *   • 'disconnected' — the account's engine is stopped.
  */
 export type AccountConnectionStatus =
-  | 'connecting'
-  | 'connected'
-  | 'reconnecting'
-  | 'offline'
-  | 'error'
-  | 'disconnected'
+  'connecting' | 'connected' | 'reconnecting' | 'offline' | 'error' | 'disconnected'
 
 export interface AccountConnectionState {
   accountId: string

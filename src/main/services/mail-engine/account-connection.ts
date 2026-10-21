@@ -748,7 +748,11 @@ export class AccountConnection extends EventEmitter {
       return new Map()
     }
 
-    const answers = await client.fetchAll(formatUidSet(uids), { ...query, uid: true }, { uid: true })
+    const answers = await client.fetchAll(
+      formatUidSet(uids),
+      { ...query, uid: true },
+      { uid: true }
+    )
     const { requested, unsolicited } = collectFetchResults(answers, new Set(uids))
     await this.applyUnsolicitedFlags(folderPath, unsolicited)
     return requested

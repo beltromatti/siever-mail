@@ -90,6 +90,9 @@ function createTray(): Tray {
 
 const RENDERER_ENTRY_PATH = join(__dirname, '../renderer/index.html')
 
+/** What a frame inside the page may hold: the document the app wrote into it. */
+const SUBFRAME_DOCUMENT_URLS: ReadonlySet<string> = new Set(['about:srcdoc', 'about:blank'])
+
 /**
  * The window only ever shows the app's own page. Any other file — one
  * dropped on the window, a `file:` link in a message — would replace the
@@ -174,6 +177,16 @@ function createMainWindow(): BrowserWindow {
 
   window.webContents.on('will-navigate', (event, navigationUrl) => {
     if (!isAllowedNavigation(navigationUrl)) {
+      event.preventDefault()
+    }
+  })
+
+  // The frames inside the page — a message being read or written — show the
+  // document the app gave them and nothing else: a refresh, a form or a link
+  // inside a message never takes the frame somewhere. Links open in the
+  // browser through the reader instead.
+  window.webContents.on('will-frame-navigate', (event) => {
+    if (!event.isMainFrame && !SUBFRAME_DOCUMENT_URLS.has(event.url)) {
       event.preventDefault()
     }
   })

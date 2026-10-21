@@ -40,7 +40,9 @@ export function mapAddresses(addresses: MessageAddressObject[] | undefined): Mai
 }
 
 /** A header mailparser read: one address list, or several when the header repeats. */
-export function mapParsedAddresses(field: AddressObject | AddressObject[] | undefined): MailAddress[] {
+export function mapParsedAddresses(
+  field: AddressObject | AddressObject[] | undefined
+): MailAddress[] {
   const lists = Array.isArray(field) ? field : field ? [field] : []
   return mapAddresses(lists.flatMap((list) => list.value) as MessageAddressObject[])
 }
@@ -188,10 +190,7 @@ export function mergeSummaryAndParsedIntoDetail(
   const rawHtml = typeof parsed.html === 'string' ? parsed.html : undefined
   const html = rawHtml ? inlineCidReferences(rawHtml, parsed) : undefined
 
-  const from = pickAddresses(
-    mapParsedAddresses(parsed.from),
-    mapAddresses(envelope?.from)
-  )
+  const from = pickAddresses(mapParsedAddresses(parsed.from), mapAddresses(envelope?.from))
 
   return {
     accountId,
@@ -201,18 +200,9 @@ export function mergeSummaryAndParsedIntoDetail(
     messageId: envelope?.messageId,
     subject,
     from,
-    to: pickAddresses(
-      mapParsedAddresses(parsed.to),
-      mapAddresses(envelope?.to)
-    ),
-    cc: pickAddresses(
-      mapParsedAddresses(parsed.cc),
-      mapAddresses(envelope?.cc)
-    ),
-    bcc: pickAddresses(
-      mapParsedAddresses(parsed.bcc),
-      mapAddresses(envelope?.bcc)
-    ),
+    to: pickAddresses(mapParsedAddresses(parsed.to), mapAddresses(envelope?.to)),
+    cc: pickAddresses(mapParsedAddresses(parsed.cc), mapAddresses(envelope?.cc)),
+    bcc: pickAddresses(mapParsedAddresses(parsed.bcc), mapAddresses(envelope?.bcc)),
     date: internalDateToIso(fetched.internalDate),
     preview: extractPreview(parsed, subject),
     // Full body is available here (mergeSummaryAndParsedIntoDetail is called for

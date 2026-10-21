@@ -33,7 +33,7 @@ import {
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { Separator } from '@renderer/components/ui/separator'
-import { buildMailFrameDocument, sanitizeMailHtml } from '@renderer/lib/mail-html'
+import { buildMessageFrameDocument } from '@renderer/lib/mail-html'
 import { READER_ZOOM_RESET, wheelReaderZoom } from '@renderer/lib/reader-zoom'
 import { cn, formatAddress, formatDateLabel, formatDateTimeLabel } from '@renderer/lib/utils'
 import type { MailAttachment, MailFolder, MailMessageDetail } from '@shared/models'
@@ -184,12 +184,7 @@ function EmailHtmlFrame({
       measureRef.current()
     }
   }, [zoom])
-  const normalizedMessageHtml = sanitizeMailHtml(html)
-  const frameDocument = buildMailFrameDocument({
-    bodyHtml: normalizedMessageHtml.bodyHtml,
-    headHtml: normalizedMessageHtml.headHtml,
-    editable: false
-  })
+  const frameDocument = buildMessageFrameDocument(html)
 
   useEffect(() => {
     const iframe = iframeRef.current as MessageContentFrameElement | null
