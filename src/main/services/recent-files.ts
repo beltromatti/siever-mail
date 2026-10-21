@@ -27,6 +27,7 @@ import { app, shell } from 'electron'
 import type { RecentFile } from '@shared/models'
 
 import { isExecutableAttachment } from './attachment-files'
+import { unmountedShareMountPoints, volumeMountPointOf } from './network-volumes'
 
 export interface RecentFileCandidate {
   path: string
@@ -264,15 +265,25 @@ export function isUserFile(
 /**
  * A file still worth offering: it exists and it is a file. A path whose
  * check outlives the deadline — a share that is slow to answer — stays in
- * the list; attaching it checks again.
+ * the list, as does one on a share a restart left unmounted: attaching it
+ * mounts the share and checks again.
  */
-async function describeCandidate(candidate: RecentFileCandidate): Promise<RecentFile | null> {
+async function describeCandidate(
+  candidate: RecentFileCandidate,
+  unmountedShares: ReadonlySet<string>
+): Promise<RecentFile | null> {
   const summary: RecentFile = {
     path: candidate.path,
     name: basename(candidate.path),
     folder: dirname(candidate.path),
     activity: candidate.activity,
     usedAt: candidate.usedAt
+  }
+
+  const mountPoint = volumeMountPointOf(candidate.path)
+
+  if (mountPoint && unmountedShares.has(mountPoint)) {
+    return summary
   }
 
   return withDeadline(
@@ -320,8 +331,13 @@ export async function listRecentFiles(
   const ordered = mergeRecentCandidates(appHistory, await listSystemRecentFiles()).filter(
     (candidate) => isUserFile(candidate.path, folders)
   )
+  const unmountedShares = await withDeadline(
+    unmountedShareMountPoints(),
+    FILE_CHECK_DEADLINE_MS,
+    new Set<string>()
+  )
   const described = await Promise.all(
-    ordered.slice(0, limit * 2).map((candidate) => describeCandidate(candidate))
+    ordered.slice(0, limit * 2).map((candidate) => describeCandidate(candidate, unmountedShares))
   )
 
   return described.filter((file): file is RecentFile => file !== null).slice(0, limit)

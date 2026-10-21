@@ -82,6 +82,7 @@ import {
 } from './mail-engine/mail-transport'
 import { updateAppMenuShortcuts } from '../app-menu'
 import { applyThemeMode } from '../theme'
+import { ensurePathReachable, rememberMountedShares } from './network-volumes'
 import { isUserFile, listRecentFiles, privateFolders } from './recent-files'
 import { decryptSecret, encryptSecret } from './secure-storage'
 
@@ -329,6 +330,9 @@ export class MailService {
   }
 
   async start(): Promise<void> {
+    void rememberMountedShares().catch((error: unknown) =>
+      logMainError('Reading the mounted network shares failed', error)
+    )
     this.applyNotificationPreferences(await this.database.getNotificationPreferences())
     this.badge.setCount(await this.engine.inboxUnreadCount())
     await this.engine.start()
@@ -418,8 +422,9 @@ export class MailService {
     }
 
     const mailEngineHandle: ExtensionMailEngineHandle = {
-      fetchMessageRawSource: (ref) => this.engine.fetchMessageRawSource(ref),
-      moveMessageToTrash: (ref, options) => this.engine.moveMessageToTrash(ref, options)
+      fetchMessageRawSources: (refs, onMessage) =>
+        this.engine.fetchMessageRawSources(refs, onMessage),
+      moveMessagesToTrash: (refs, options) => this.engine.moveMessagesToTrash(refs, options)
     }
 
     const context: ExtensionMainContext = {
@@ -1323,6 +1328,8 @@ export class MailService {
 
     return Promise.all(
       paths.map(async (filePath) => {
+        // A file on a share the restart left unmounted is still there.
+        await ensurePathReachable(filePath)
         const stats = await stat(filePath).catch(() => null)
 
         if (!stats) {

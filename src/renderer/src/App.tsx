@@ -1879,41 +1879,6 @@ function App(): React.JSX.Element {
     )
   }, [])
 
-  const runOptimisticMessageRemoval = useCallback(
-    async <T,>(
-      ref: MessageRef,
-      operation: () => Promise<T>,
-      fallbackErrorMessage: string,
-      options?: { suppressError?: boolean }
-    ): Promise<T> => {
-      const snapshot = removeMessageOptimistically(ref)
-      setViewError(null)
-
-      try {
-        const result = await operation()
-        settleRemoval(ref, true)
-        return result
-      } catch (caughtError) {
-        if (snapshot) {
-          rollbackRemovedMessage(snapshot)
-        }
-
-        settleRemoval(ref, false)
-
-        if (!options?.suppressError) {
-          setViewError(
-            caughtError instanceof Error && caughtError.message.trim()
-              ? caughtError.message
-              : fallbackErrorMessage
-          )
-        }
-
-        throw caughtError
-      }
-    },
-    [removeMessageOptimistically, rollbackRemovedMessage, settleRemoval]
-  )
-
   /**
    * Takes messages out of the list at once and asks the server for all of
    * them in one call — each folder's in one command. What it refuses comes
@@ -2049,10 +2014,10 @@ function App(): React.JSX.Element {
 
   const extensionHostHooks = useMemo<ExtensionHostHooks>(
     () => ({
-      optimisticallyRemoveMessage: (ref, work, fallbackErrorMessage) =>
-        runOptimisticMessageRemoval(ref, work, fallbackErrorMessage)
+      optimisticallyRemoveMessages: (refs, action, fallbackErrorMessage) =>
+        runMessageRemovalAction(refs, action, fallbackErrorMessage)
     }),
-    [runOptimisticMessageRemoval]
+    [runMessageRemovalAction]
   )
 
   /**

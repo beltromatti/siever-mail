@@ -24,7 +24,8 @@ import { decryptSecret } from '../secure-storage'
 import {
   AccountConnection,
   type BodyLoadIntent,
-  type FetchedAttachment
+  type FetchedAttachment,
+  type RawMessage
 } from './account-connection'
 import type { AccountWithSecret } from './mail-transport'
 import { NotificationManager } from './notifications'
@@ -324,12 +325,14 @@ export class MailEngine {
     )
   }
 
-  async moveMessageToTrash(
-    ref: MessageRef,
+  /** Moves messages, of any account, to each one's Trash — read first, when asked. */
+  async moveMessagesToTrash(
+    refs: ReadonlyArray<MessageRef>,
     options: { markAsSeenBeforeMove?: boolean } = {}
-  ): Promise<{ sourceFolder: string; destinationFolder?: string }> {
-    const connection = await this.requestConnection(ref.accountId)
-    return connection.moveMessagesToTrash(ref.folderPath, [ref.uid], options)
+  ): Promise<MessagesActionResult> {
+    return this.onMessages(refs, (connection, folderPath, uids) =>
+      connection.moveMessagesToTrash(folderPath, uids, options)
+    )
   }
 
   async appendToSent(
@@ -341,11 +344,37 @@ export class MailEngine {
     return connection.appendToSent(rawMessage, messageId)
   }
 
-  async fetchMessageRawSource(
-    ref: MessageRef
-  ): Promise<Awaited<ReturnType<AccountConnection['fetchMessageRawSource']>>> {
-    const connection = await this.requestConnection(ref.accountId)
-    return connection.fetchMessageRawSource(ref)
+  /**
+   * The raw sources of `refs`, of any account and folder, each handed to
+   * `onMessage` as it arrives (see `AccountConnection.fetchRawSources`).
+   * Resolves with the messages no longer on their server.
+   */
+  async fetchMessageRawSources(
+    refs: ReadonlyArray<MessageRef>,
+    onMessage: (ref: MessageRef, message: RawMessage) => Promise<void>
+  ): Promise<{ missing: MessageRef[] }> {
+    const groups = new Map<string, MessageRef[]>()
+
+    for (const ref of refs) {
+      const key = `${ref.accountId}\u0000${ref.folderPath}`
+      groups.set(key, [...(groups.get(key) ?? []), ref])
+    }
+
+    const missing: MessageRef[] = []
+
+    for (const group of groups.values()) {
+      const { accountId, folderPath } = group[0]
+      const connection = await this.requestConnection(accountId)
+      const lost = await connection.fetchRawSources(
+        folderPath,
+        group.map((ref) => ref.uid),
+        (uid, message) => onMessage({ accountId, folderPath, uid }, message)
+      )
+
+      missing.push(...lost.map((uid) => ({ accountId, folderPath, uid })))
+    }
+
+    return { missing }
   }
 
   /** See `AccountConnection.markFolderRead`. */

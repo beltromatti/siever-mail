@@ -58,6 +58,7 @@ mac:
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    - NSNetworkVolumesUsageDescription: SIEVER Mail archivia i messaggi e allega i file dalle cartelle di rete dell'azienda.
   notarize: false
 dmg:
   artifactName: ${name}-${version}.${ext}

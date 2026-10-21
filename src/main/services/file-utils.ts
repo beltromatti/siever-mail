@@ -108,35 +108,39 @@ export async function resolveUniqueFilePath(
   fileName: string,
   maxFileNameLength?: number
 ): Promise<string> {
-  const extensionIndex = fileName.lastIndexOf('.')
-  const baseName = extensionIndex > 0 ? fileName.slice(0, extensionIndex) : fileName
-  const extension = extensionIndex > 0 ? fileName.slice(extensionIndex) : ''
-  const normalizeCandidateName = (suffixLabel: string): string => {
-    if (!maxFileNameLength || maxFileNameLength < 1) {
-      return `${baseName}${suffixLabel}${extension}`
-    }
-
-    const maxBaseLength = Math.max(1, maxFileNameLength - extension.length - suffixLabel.length)
-    const truncatedBaseName = normalizeTruncatedBaseName(baseName.slice(0, maxBaseLength), 'file')
-
-    return `${truncatedBaseName}${suffixLabel}${extension}`
-  }
-
-  let candidatePath = join(directoryPath, normalizeCandidateName(''))
+  let candidatePath = join(directoryPath, candidateFileName(fileName, '', maxFileNameLength))
   let suffixIndex = 1
 
   while (await pathExists(candidatePath)) {
-    const suffixLabel = ` (${suffixIndex})`
-    candidatePath = join(directoryPath, normalizeCandidateName(suffixLabel))
+    candidatePath = join(
+      directoryPath,
+      candidateFileName(fileName, ` (${suffixIndex})`, maxFileNameLength)
+    )
     suffixIndex += 1
   }
 
   return candidatePath
 }
 
+/** `fileName` with `suffix` before its extension, its base cut to fit `maxFileNameLength`. */
+function candidateFileName(fileName: string, suffix: string, maxFileNameLength?: number): string {
+  const extensionIndex = fileName.lastIndexOf('.')
+  const baseName = extensionIndex > 0 ? fileName.slice(0, extensionIndex) : fileName
+  const extension = extensionIndex > 0 ? fileName.slice(extensionIndex) : ''
+
+  if (!maxFileNameLength || maxFileNameLength < 1) {
+    return `${baseName}${suffix}${extension}`
+  }
+
+  const maxBaseLength = Math.max(1, maxFileNameLength - extension.length - suffix.length)
+  return `${normalizeTruncatedBaseName(baseName.slice(0, maxBaseLength), 'file')}${suffix}${extension}`
+}
+
 /**
- * Writes `content` to a non-colliding path inside `directoryPath`, picking
- * a unique file name. Returns the path that ended up on disk.
+ * Writes `content` as a new file in `directoryPath`, under `fileName` or —
+ * when that is taken — the first free "name (N)", and returns the path
+ * written. Each name is claimed by an exclusive create, so writers working
+ * in parallel in one folder never overwrite each other.
  */
 export async function writeUniqueFile(
   directoryPath: string,
@@ -150,11 +154,24 @@ export async function writeUniqueFile(
   const safeFileName = options?.maxFileNameLength
     ? truncateFileName(fileName, options.maxFileNameLength, options.fallbackFileName ?? 'file')
     : sanitizePathSegment(fileName, options?.fallbackFileName ?? 'file')
-  const targetFilePath = await resolveUniqueFilePath(
-    directoryPath,
-    safeFileName,
-    options?.maxFileNameLength
-  )
-  await writeFile(targetFilePath, content)
-  return targetFilePath
+
+  for (let attempt = 0; ; attempt += 1) {
+    const targetFilePath = join(
+      directoryPath,
+      candidateFileName(
+        safeFileName,
+        attempt === 0 ? '' : ` (${attempt})`,
+        options?.maxFileNameLength
+      )
+    )
+
+    try {
+      await writeFile(targetFilePath, content, { flag: 'wx' })
+      return targetFilePath
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error
+      }
+    }
+  }
 }

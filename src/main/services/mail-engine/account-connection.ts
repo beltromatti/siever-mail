@@ -207,6 +207,20 @@ type AccountConnectionEvents = {
  * scattered selection can still make a long line, and servers cap those.
  */
 const UID_COMMAND_CHUNK = 500
+/** Messages whose raw source one command fetches: a handful, however large each may be. */
+const RAW_SOURCE_BATCH_SIZE = 8
+
+/** A message as the server stores it, with a parsed view of it. */
+export interface RawMessage {
+  source: Buffer
+  /**
+   * The parse leaves `cid:` references in the HTML alone, so the sender's
+   * attachments can be told apart from the images the body shows (see
+   * `partitionMessageAttachments`).
+   */
+  parsed: ParsedMail
+  internalDate: string
+}
 
 /**
  * How many messages of the selected mailbox are unread. A server with
@@ -1320,32 +1334,60 @@ export class AccountConnection extends EventEmitter {
     return sentFolder.path
   }
 
-  async fetchMessageRawSource(ref: MessageRef): Promise<{
-    source: Buffer
-    parsed: ParsedMail
-    internalDate: string
-  }> {
-    return this.runUserOperation(async () => {
-      const client = this.requirePrimary()
-      const lock = await client.getMailboxLock(ref.folderPath)
+  /**
+   * The raw sources of `uids`, for filing them elsewhere: fetched a few at
+   * a time — one command a batch, each its own user operation, so reading
+   * mail goes on in between — and handed to `onMessage` while the next
+   * batch downloads. Resolves with the UIDs the server no longer has; a
+   * rejection of `onMessage` stops the rest.
+   */
+  async fetchRawSources(
+    folderPath: string,
+    uids: ReadonlyArray<number>,
+    onMessage: (uid: number, message: RawMessage) => Promise<void>
+  ): Promise<number[]> {
+    const missing: number[] = []
+    let handing: Promise<unknown> = Promise.resolve()
 
-      try {
-        const fetched = await this.fetchOneRequested(client, ref, {
-          envelope: true,
-          internalDate: true,
-          source: true
-        })
-        const source = fetched.source as Buffer
-        const parsed = await parseMessageSource(source)
-        return {
-          source,
-          parsed,
-          internalDate: internalDateToIso(fetched.internalDate)
+    for (const batch of chunk(uids, RAW_SOURCE_BATCH_SIZE)) {
+      const fetched = await this.runUserOperation(async () => {
+        const client = this.requirePrimary()
+        const lock = await client.getMailboxLock(folderPath)
+
+        try {
+          return await this.fetchRequested(client, folderPath, batch, {
+            internalDate: true,
+            source: true
+          })
+        } finally {
+          lock.release()
         }
-      } finally {
-        lock.release()
-      }
-    }, `fetch-archive:${ref.folderPath}:${ref.uid}`)
+      }, `fetch-raw:${folderPath}:${batch.length}`)
+
+      await handing
+      handing = Promise.all(
+        batch.map(async (uid) => {
+          const message = fetched.get(uid)
+
+          if (!message?.source) {
+            missing.push(uid)
+            return
+          }
+
+          await onMessage(uid, {
+            source: message.source,
+            parsed: await parseMessageSource(message.source),
+            internalDate: internalDateToIso(message.internalDate)
+          })
+        })
+      )
+      // Awaited with the next batch; marked handled meanwhile, so a failure
+      // waits for it instead of surfacing as unhandled.
+      handing.catch(() => undefined)
+    }
+
+    await handing
+    return missing
   }
 
   /**

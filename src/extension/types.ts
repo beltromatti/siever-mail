@@ -22,7 +22,7 @@ import type { ParsedMail } from 'mailparser'
 import type { ComponentType, ReactNode } from 'react'
 
 import type { MailFontOption } from '@shared/mail-fonts'
-import type { MailMessageSummary, MessageRef } from '@shared/models'
+import type { MailMessageSummary, MessageRef, MessagesActionResult } from '@shared/models'
 
 /* ────────────────────────── both processes ────────────────────────── */
 
@@ -157,38 +157,39 @@ export interface ExtensionDatabaseHandle {
 }
 
 /**
- * Minimal mail-engine surface offered to extensions. Lets the extension
- * fetch a message's raw RFC 822 source (plus a parsed envelope) and
- * dispose of the source message via the host's IMAP plumbing without
- * coupling to its internals. Extensions only depend on this contract.
+ * Minimal mail-engine surface offered to extensions: the raw messages, for
+ * filing them elsewhere, and the way to put them in the Trash after. The
+ * extension depends on this contract only, never on the engine itself.
  */
 export interface ExtensionMailEngineHandle {
   /**
-   * Raw RFC 822 source plus a parsed view of it.
+   * The raw RFC 822 source of each message of `refs`, with a parsed view
+   * of it, handed to `onMessage` as it arrives: a few messages download at
+   * a time, in one command, while the ones before are handled. Resolves
+   * with the messages no longer on their server; a rejection of
+   * `onMessage` stops the rest, so it should settle each message itself.
    *
-   * The parse deliberately leaves `cid:` references in the HTML alone rather
-   * than rewriting them into inline `data:` URIs, so a consumer can tell the
-   * sender's attachments apart from the images the body renders and
-   * reconstruct the message faithfully. Use `partitionMessageAttachments`
-   * from `@main/services/mail-engine/message-parts` to make that split.
+   * The parse leaves `cid:` references in the HTML alone rather than
+   * rewriting them into `data:` URIs, so the sender's attachments can be
+   * told apart from the images the body renders (see
+   * `partitionMessageAttachments` in `@main/services/mail-engine/message-parts`).
    */
-  fetchMessageRawSource(ref: MessageRef): Promise<{
-    source: Buffer
-    parsed: ParsedMail
-    internalDate: string
-  }>
+  fetchMessageRawSources(
+    refs: ReadonlyArray<MessageRef>,
+    onMessage: (
+      ref: MessageRef,
+      message: { source: Buffer; parsed: ParsedMail; internalDate: string }
+    ) => Promise<void>
+  ): Promise<{ missing: MessageRef[] }>
   /**
-   * Moves the message to the account's trash folder, optionally marking
-   * it as seen first. Used by archive/cleanup flows that consume the
-   * source message after persisting it elsewhere. Resolves with the IMAP
-   * source/destination folder names so the caller can log or surface the
-   * outcome; rejects if the engine cannot reach the account or perform
-   * the move.
+   * Moves messages to their account's Trash, in one command per folder,
+   * read first when asked: what a flow that filed them elsewhere does with
+   * the originals. Resolves with the ones that could not be moved.
    */
-  moveMessageToTrash(
-    ref: MessageRef,
+  moveMessagesToTrash(
+    refs: ReadonlyArray<MessageRef>,
     options?: { markAsSeenBeforeMove?: boolean }
-  ): Promise<{ sourceFolder: string; destinationFolder?: string }>
+  ): Promise<MessagesActionResult>
 }
 
 /* ────────────────────────── renderer ────────────────────────── */
@@ -283,23 +284,20 @@ export interface PrimaryActionDialogProps {
 }
 
 /**
- * Host-provided helpers handed to extension renderers so they can
- * leverage the host's optimistic-UI machinery without re-implementing
- * it. Currently exposes a single primitive — the message-removal
- * wrapper — used by archive / delete / move-style flows. Future
- * additions are expected to be additive.
+ * Host-provided helpers handed to extension renderers so they can lean on
+ * the host's optimistic-UI machinery instead of re-implementing it.
  */
 export interface ExtensionHostHooks {
   /**
-   * Wraps an IPC mutation with optimistic removal of the message from
-   * the visible list. Re-inserts the message if `work()` rejects so the
-   * UI stays in sync with the truth.
+   * Takes `refs` out of the visible list at once and runs `action` on
+   * them: the ones it reports failed come back where they were, and its
+   * error is shown — as the host's own Archivia and Elimina do.
    */
-  optimisticallyRemoveMessage<T>(
-    ref: MessageRef,
-    work: () => Promise<T>,
+  optimisticallyRemoveMessages(
+    refs: ReadonlyArray<MessageRef>,
+    action: (refs: MessageRef[]) => Promise<MessagesActionResult>,
     fallbackErrorMessage: string
-  ): Promise<T>
+  ): Promise<void>
 }
 
 /* ────────────────────────── preload ────────────────────────── */
