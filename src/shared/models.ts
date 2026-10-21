@@ -416,7 +416,7 @@ export interface RecentFile {
   name: string
   /** The folder it sits in — what tells two files with one name apart. */
   folder: string
-  /** What the user last did with it: "Allegato a un messaggio", "Aperto di recente"… */
+  /** What the user last did with it: "Allegato a un messaggio", "Usato di recente"… */
   activity: string
   usedAt: number
 }

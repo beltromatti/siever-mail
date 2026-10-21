@@ -78,7 +78,7 @@ import {
 } from './mail-engine/mail-transport'
 import { updateAppMenuShortcuts } from '../app-menu'
 import { applyThemeMode } from '../theme'
-import { listRecentFiles } from './recent-files'
+import { isUserFile, listRecentFiles, privateFolders } from './recent-files'
 import { decryptSecret, encryptSecret } from './secure-storage'
 
 const imapAccountSchema = z.object({
@@ -349,7 +349,7 @@ export class MailService {
       mailEngine: mailEngineHandle,
       getMainWindow: () =>
         BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null,
-      recordRecentFiles: (paths, activity) => this.database.recordRecentFiles(paths, activity),
+      recordRecentFiles: (paths, activity) => this.recordRecentFiles(paths, activity),
       adoptShortcutOverride: async (commandId, chord) => {
         const preferences = await this.database.getUiPreferences()
 
@@ -826,7 +826,7 @@ export class MailService {
       void this.database
         .recordContactsWritten([...payload.to, ...payload.cc, ...payload.bcc])
         .catch((error: unknown) => logMainError('Counting the recipients failed', error))
-      await this.database.recordRecentFiles(
+      await this.recordRecentFiles(
         payload.attachments.map((attachment) => attachment.path),
         SENT_ATTACHMENT_ACTIVITY
       )
@@ -1120,7 +1120,7 @@ export class MailService {
     )
     await writeFile(choice.filePath, attachment.content)
     await markFromInternet(choice.filePath)
-    await this.database.recordRecentFiles([choice.filePath], SAVED_ATTACHMENT_ACTIVITY)
+    await this.recordRecentFiles([choice.filePath], SAVED_ATTACHMENT_ACTIVITY)
 
     return choice.filePath
   }
@@ -1171,7 +1171,7 @@ export class MailService {
       filePaths.push(filePath)
     }
 
-    await this.database.recordRecentFiles(filePaths, SAVED_ATTACHMENT_ACTIVITY)
+    await this.recordRecentFiles(filePaths, SAVED_ATTACHMENT_ACTIVITY)
     return { directory, filePaths }
   }
 
@@ -1195,6 +1195,18 @@ export class MailService {
 
     const failure = await shell.openPath(file.path)
     return failure ? { status: 'no-application' } : { status: 'opened' }
+  }
+
+  /**
+   * Remembers the files the user handled, for "Allega" to offer back — not
+   * the copies the app keeps for itself, such as a forward's attachments.
+   */
+  private async recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void> {
+    const folders = privateFolders()
+    await this.database.recordRecentFiles(
+      paths.filter((path) => isUserFile(path, folders)),
+      activity
+    )
   }
 
   async listRecentFiles(): Promise<RecentFile[]> {

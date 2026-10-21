@@ -4,18 +4,21 @@
  * opening, newest first.
  *
  *   • Windows — the Recent Items folder Explorer keeps, one shortcut per
- *     file opened anywhere, network shares included.
+ *     file opened or saved anywhere, network shares included.
  *   • macOS — Spotlight's last-used date. It only covers indexed volumes,
  *     which rules out most network shares; files used through SIEVER Mail
  *     fill that gap.
  *   • Linux — the desktop's shared `recently-used.xbel`.
  *
- * Every system lookup runs against a deadline: a slow index or an
- * unreachable share must never hold the menu up.
+ * What the system remembers is kept between lookups and looked up again in
+ * the background: a slow index or an unreachable share never holds the
+ * menu up, and never empties it either — it shows what was last found.
+ * Copies a program keeps for itself — an attachment opened from a message,
+ * a temporary file — are not the user's files, and are left out.
  */
 import { execFile } from 'node:child_process'
 import { readdir, readFile, stat } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -31,8 +34,11 @@ export interface RecentFileCandidate {
   usedAt: number
 }
 
-const SYSTEM_ACTIVITY = 'Aperto di recente'
+/** Opened or saved: the system does not tell which. */
+const SYSTEM_ACTIVITY = 'Usato di recente'
 const SYSTEM_LOOKUP_DEADLINE_MS = 1_500
+/** What the system remembers is looked up again past this age. */
+const SYSTEM_RECENTS_FRESH_MS = 3_000
 const FILE_CHECK_DEADLINE_MS = 800
 const SYSTEM_CANDIDATES_SCANNED = 60
 const MAC_RECENT_DAYS = 30
@@ -117,10 +123,7 @@ function listMacRecentFiles(): Promise<RecentFileCandidate[]> {
               .replace(' ', '')
           )
 
-          // Spotlight also remembers files inside hidden folders and caches.
-          return Number.isFinite(usedAt) && !path.includes('/.')
-            ? [{ path, activity: SYSTEM_ACTIVITY, usedAt }]
-            : []
+          return Number.isFinite(usedAt) ? [{ path, activity: SYSTEM_ACTIVITY, usedAt }] : []
         })
 
         resolve(
@@ -155,7 +158,7 @@ async function listLinuxRecentFiles(): Promise<RecentFileCandidate[]> {
     .slice(0, SYSTEM_CANDIDATES_SCANNED)
 }
 
-function listSystemRecentFiles(): Promise<RecentFileCandidate[]> {
+function lookUpSystemRecentFiles(): Promise<RecentFileCandidate[]> {
   switch (process.platform) {
     case 'win32':
       return listWindowsRecentFiles()
@@ -166,16 +169,104 @@ function listSystemRecentFiles(): Promise<RecentFileCandidate[]> {
   }
 }
 
+let systemRecents: { candidates: RecentFileCandidate[]; at: number } | null = null
+let systemLookup: Promise<RecentFileCandidate[]> | null = null
+
+/** Looks the system's recent files up again, once at a time; a failed lookup keeps the last list. */
+function refreshSystemRecentFiles(): Promise<RecentFileCandidate[]> {
+  systemLookup ??= lookUpSystemRecentFiles()
+    .then(
+      (candidates) => {
+        systemRecents = { candidates, at: Date.now() }
+        return candidates
+      },
+      () => systemRecents?.candidates ?? []
+    )
+    .finally(() => {
+      systemLookup = null
+    })
+
+  return systemLookup
+}
+
 /**
- * A file still worth offering: it exists, it is a file, and it is not
- * something that runs. A path whose check outlives the deadline — a share
- * that is slow to answer — stays in the list; attaching it checks again.
+ * What the system remembers: as found a moment ago, or looked up again —
+ * waiting for that no longer than the deadline, after which the last list
+ * stands in and the lookup goes on for the next time.
  */
-async function describeCandidate(candidate: RecentFileCandidate): Promise<RecentFile | null> {
-  if (isExecutableAttachment(candidate.path)) {
-    return null
+function listSystemRecentFiles(): Promise<RecentFileCandidate[]> {
+  if (systemRecents && Date.now() - systemRecents.at < SYSTEM_RECENTS_FRESH_MS) {
+    return Promise.resolve(systemRecents.candidates)
   }
 
+  return withDeadline(
+    refreshSystemRecentFiles(),
+    SYSTEM_LOOKUP_DEADLINE_MS,
+    systemRecents?.candidates ?? []
+  )
+}
+
+/** Folders holding the copies programs keep for themselves, and what in them is the user's. */
+export interface PrivateFolders {
+  roots: ReadonlyArray<string>
+  exceptions: ReadonlyArray<string>
+}
+
+export function privateFolders(): PrivateFolders {
+  const home = homedir()
+  const roots = [app.getPath('userData'), app.getPath('temp'), tmpdir()]
+
+  switch (process.platform) {
+    // Roaming, Local and LocalLow: Outlook's attachment copies, every temp folder.
+    case 'win32':
+      return { roots: [...roots, join(home, 'AppData')], exceptions: [] }
+    // iCloud Drive and the cloud providers (OneDrive, Dropbox) live under Library.
+    case 'darwin':
+      return {
+        roots: [...roots, join(home, 'Library'), '/private/var/folders'],
+        exceptions: [
+          join(home, 'Library', 'Mobile Documents'),
+          join(home, 'Library', 'CloudStorage')
+        ]
+      }
+    default:
+      return { roots, exceptions: [] }
+  }
+}
+
+function isInside(path: string, folder: string, caseSensitive: boolean): boolean {
+  const [child, parent] = caseSensitive
+    ? [path, folder.replace(/[\\/]+$/, '')]
+    : [path.toLowerCase(), folder.toLowerCase().replace(/[\\/]+$/, '')]
+
+  return child.startsWith(parent) && (child[parent.length] === '/' || child[parent.length] === '\\')
+}
+
+/**
+ * Whether `path` is a file of the user's: not something that runs, not in
+ * a hidden folder, not a copy a program keeps for itself — an attachment
+ * opened from a message lands in such a copy, and offering it back offered
+ * a file that disappears with the cache.
+ */
+export function isUserFile(
+  path: string,
+  folders: PrivateFolders,
+  caseSensitive = process.platform === 'linux'
+): boolean {
+  return (
+    !isExecutableAttachment(path) &&
+    !path.split(/[\\/]/).some((part) => part.startsWith('.') && part !== '.' && part !== '..') &&
+    (!folders.roots.some((root) => isInside(path, root, caseSensitive)) ||
+      folders.exceptions.some((folder) => isInside(path, folder, caseSensitive)))
+  )
+}
+
+/**
+ * A file still worth offering: it exists and it is a file. A path whose
+ * check outlives the deadline — a share that is slow to answer — stays in
+ * the list; attaching it checks again.
+ */
+async function describeCandidate(candidate: RecentFileCandidate): Promise<RecentFile | null> {
   const summary: RecentFile = {
     path: candidate.path,
     name: basename(candidate.path),
@@ -225,12 +316,10 @@ export async function listRecentFiles(
   appHistory: ReadonlyArray<RecentFileCandidate>,
   limit: number
 ): Promise<RecentFile[]> {
-  const systemRecents = await withDeadline(
-    listSystemRecentFiles(),
-    SYSTEM_LOOKUP_DEADLINE_MS,
-    [] as RecentFileCandidate[]
+  const folders = privateFolders()
+  const ordered = mergeRecentCandidates(appHistory, await listSystemRecentFiles()).filter(
+    (candidate) => isUserFile(candidate.path, folders)
   )
-  const ordered = mergeRecentCandidates(appHistory, systemRecents)
   const described = await Promise.all(
     ordered.slice(0, limit * 2).map((candidate) => describeCandidate(candidate))
   )

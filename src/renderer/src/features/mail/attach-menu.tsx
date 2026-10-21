@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, FolderOpen, LoaderCircle, Paperclip } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
@@ -19,6 +19,12 @@ const TIME_FORMAT = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: 
 const WEEKDAY_FORMAT = new Intl.DateTimeFormat('it-IT', { weekday: 'long' })
 const DATE_FORMAT = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
 const DAY_MS = 24 * 60 * 60 * 1000
+/**
+ * A newer list that arrives within this long of the menu opening replaces
+ * the one shown; later, the user is aiming at a row, and it waits for the
+ * next opening.
+ */
+const LIST_SETTLES_MS = 400
 
 function startOfDay(time: number): number {
   const date = new Date(time)
@@ -51,14 +57,21 @@ export interface AttachMenuProps {
   onBrowse: () => void
 }
 
+/** The last folder of a path: "619 IKEA" for ".../Pratiche/619 IKEA". */
+function folderName(folder: string): string {
+  return folder.split(/[\\/]/).filter(Boolean).at(-1) ?? folder
+}
+
 /**
  * "Allega": the files the user most likely wants — the attachments of the
  * message they are answering or forwarding, then the ones they just had
  * open, sent or saved, from anywhere on the computer or the network — with
  * the system picker one row below for everything else.
  *
- * The list is fetched when the composer opens, so the menu is ready the
- * moment it is clicked, and refreshed on every open.
+ * The list is fetched when the composer opens and again whenever the user
+ * comes back to the window — from saving the file they now want to attach —
+ * so the menu is ready the moment it is clicked; an open menu never
+ * reorders under the pointer (`LIST_SETTLES_MS`).
  */
 export function AttachMenu({
   disabled,
@@ -68,21 +81,46 @@ export function AttachMenu({
   onBrowse
 }: AttachMenuProps): React.JSX.Element {
   const [recentFiles, setRecentFiles] = useState<RecentFile[] | null>(null)
+  /** When the menu opened, or null while it is closed. */
+  const openedAtRef = useRef<number | null>(null)
+  const shownRef = useRef(false)
+  const waitingRef = useRef<RecentFile[] | null>(null)
 
   const refresh = useCallback(() => {
+    const show = (files: RecentFile[]): void => {
+      const openedAt = openedAtRef.current
+
+      if (shownRef.current && openedAt !== null && Date.now() - openedAt > LIST_SETTLES_MS) {
+        waitingRef.current = files
+        return
+      }
+
+      shownRef.current = true
+      setRecentFiles(files)
+    }
+
     void window.mailApi
       .listRecentFiles()
-      .then(setRecentFiles)
-      .catch(() => setRecentFiles([]))
+      .then(show)
+      .catch(() => show([]))
   }, [])
 
-  useEffect(refresh, [refresh])
+  useEffect(() => {
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [refresh])
 
   return (
     <DropdownMenu
       onOpenChange={(open) => {
+        openedAtRef.current = open ? Date.now() : null
+
         if (open) {
           refresh()
+        } else if (waitingRef.current) {
+          setRecentFiles(waitingRef.current)
+          waitingRef.current = null
         }
       }}
     >
@@ -164,7 +202,7 @@ export function AttachMenu({
               <span className="flex min-w-0 flex-col">
                 <span className="truncate text-[12px] font-medium">{file.name}</span>
                 <span className="text-muted-foreground truncate text-[10.5px]">
-                  {file.activity} · {formatUsedAt(file.usedAt)}
+                  {file.activity} · {formatUsedAt(file.usedAt)} · in {folderName(file.folder)}
                 </span>
               </span>
             </DropdownMenuItem>
