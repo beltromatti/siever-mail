@@ -2853,6 +2853,8 @@ function App(): React.JSX.Element {
             attachmentActions={attachmentActions}
             zoom={uiPreferences.readerZoom}
             onZoomChange={changeReaderZoom}
+            detailsOpen={uiPreferences.readerDetailsOpen}
+            onDetailsOpenChange={(readerDetailsOpen) => updateUiPreferences({ readerDetailsOpen })}
             addressActions={addressActions}
           />
         }

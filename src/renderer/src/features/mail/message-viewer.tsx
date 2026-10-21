@@ -65,6 +65,9 @@ interface MessageViewerProps {
   /** Message body zoom, in percent (see `UiPreferences.readerZoom`). */
   zoom: number
   onZoomChange: (zoom: number) => void
+  /** Whether "Dettagli" is open: one choice for every message. */
+  detailsOpen: boolean
+  onDetailsOpenChange: (open: boolean) => void
 }
 
 const ALL_ATTACHMENTS_TASK_ID = '__all__'
@@ -476,7 +479,9 @@ export function MessageViewer({
   attachmentActions,
   addressActions,
   zoom,
-  onZoomChange
+  onZoomChange,
+  detailsOpen,
+  onDetailsOpenChange
 }: MessageViewerProps): React.JSX.Element {
   // Wheel events can arrive many times a frame during a pinch; each one
   // builds on the zoom the previous one set, not on a stale render's.
@@ -518,15 +523,10 @@ export function MessageViewer({
   // Attachments (and "all") with a download under way: their chip spins and
   // a second click is ignored until it lands.
   const [busyAttachmentIds, setBusyAttachmentIds] = useState<string[]>([])
-  // Envelope details stay collapsed by default and reset with the message:
-  // leaving them open would silently steal the height back from the body on
-  // the next mail the user opens.
-  const [detailsOpen, setDetailsOpen] = useState(false)
   const hasHtmlBody = Boolean(message?.html?.trim())
 
   useEffect(() => {
     setBusyAttachmentIds([])
-    setDetailsOpen(false)
   }, [message?.accountId, message?.folderPath, message?.uid])
 
   const runAttachmentTask = async (busyId: string, task: () => Promise<void>): Promise<void> => {
@@ -770,7 +770,7 @@ export function MessageViewer({
           )}
           <button
             type="button"
-            onClick={() => setDetailsOpen((current) => !current)}
+            onClick={() => onDetailsOpenChange(!detailsOpen)}
             aria-expanded={detailsOpen}
             className={cn(
               'hover:text-foreground focus-visible:ring-ring/70 inline-flex shrink-0 items-center gap-0.5 rounded-sm whitespace-nowrap outline-none focus-visible:ring-2',

@@ -145,7 +145,10 @@ export function MessageList({
   const selectedCount = selection.selectedRefs.length
 
   return (
-    <div className="glass-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg">
+    // Rows are things to pick, not text to copy: a Shift or Ctrl click
+    // selects messages, as in Outlook and Finder, never a run of words
+    // across them.
+    <div className="glass-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg select-none">
       <header className="border-border/60 flex h-11 shrink-0 items-center justify-between gap-2 border-b px-2.5">
         <div className="min-w-0">
           <MessageListTitle

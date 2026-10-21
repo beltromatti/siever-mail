@@ -145,7 +145,8 @@ const uiPreferencesSchema = z.object({
     direction: z.enum(['asc', 'desc'])
   }),
   messageGrouping: z.enum(['none', 'auto', 'sender']),
-  readerZoom: z.number().int().min(READER_ZOOM_MIN).max(READER_ZOOM_MAX)
+  readerZoom: z.number().int().min(READER_ZOOM_MIN).max(READER_ZOOM_MAX),
+  readerDetailsOpen: z.boolean()
 })
 
 const unifiedInboxIncludedAccountsSchema = z.array(z.string().trim().min(1))

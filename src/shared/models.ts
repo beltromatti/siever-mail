@@ -172,6 +172,12 @@ export interface UiPreferences {
    * only, never the app around it, and applies to every message.
    */
   readerZoom: number
+  /**
+   * Whether the reading pane shows every sender and recipient under
+   * "Dettagli". The choice stays from one message to the next, as in
+   * Outlook and Thunderbird.
+   */
+  readerDetailsOpen: boolean
 }
 
 /** What the application menu asks the page to do. */
@@ -199,7 +205,8 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
     direction: DEFAULT_MESSAGE_LIST_SORT_DIRECTION
   },
   messageGrouping: DEFAULT_MESSAGE_GROUPING_MODE,
-  readerZoom: READER_ZOOM_DEFAULT
+  readerZoom: READER_ZOOM_DEFAULT,
+  readerDetailsOpen: false
 }
 
 export interface ListMessagesOptions {

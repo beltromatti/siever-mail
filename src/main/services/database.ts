@@ -2731,6 +2731,7 @@ export class AppDatabase {
         message_list_sort_direction TEXT NOT NULL DEFAULT 'desc',
         message_grouping TEXT NOT NULL DEFAULT 'auto',
         reader_zoom INTEGER NOT NULL DEFAULT 100,
+        reader_details_open INTEGER NOT NULL DEFAULT 0,
         extension_signature_revision INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
       )
@@ -2841,6 +2842,7 @@ export class AppDatabase {
       ['message_list_sort_direction', "TEXT NOT NULL DEFAULT 'desc'"],
       ['message_grouping', "TEXT NOT NULL DEFAULT 'auto'"],
       ['reader_zoom', 'INTEGER NOT NULL DEFAULT 100'],
+      ['reader_details_open', 'INTEGER NOT NULL DEFAULT 0'],
       ['theme_mode', "TEXT NOT NULL DEFAULT 'system'"],
       ['extension_signature_revision', 'INTEGER NOT NULL DEFAULT 0']
     ]
@@ -2875,7 +2877,8 @@ export class AppDatabase {
              message_list_sort_field AS sortField,
              message_list_sort_direction AS sortDirection,
              message_grouping AS grouping,
-             reader_zoom AS readerZoom
+             reader_zoom AS readerZoom,
+             reader_details_open AS readerDetailsOpen
       FROM app_preferences
       WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
       LIMIT 1
@@ -2887,6 +2890,7 @@ export class AppDatabase {
       sortDirection?: unknown
       grouping?: unknown
       readerZoom?: unknown
+      readerDetailsOpen?: unknown
     }>
 
     const row = rows[0]
@@ -2920,7 +2924,8 @@ export class AppDatabase {
         MESSAGE_GROUPING_MODES,
         DEFAULT_MESSAGE_GROUPING_MODE
       ),
-      readerZoom: clampReaderZoom(toFiniteNonNegativeNumber(row.readerZoom) || READER_ZOOM_DEFAULT)
+      readerZoom: clampReaderZoom(toFiniteNonNegativeNumber(row.readerZoom) || READER_ZOOM_DEFAULT),
+      readerDetailsOpen: toBooleanFlag(row.readerDetailsOpen)
     }
   }
 
@@ -2936,6 +2941,7 @@ export class AppDatabase {
           message_list_sort_direction = ${preferences.messageListSort.direction},
           message_grouping = ${preferences.messageGrouping},
           reader_zoom = ${preferences.readerZoom},
+          reader_details_open = ${preferences.readerDetailsOpen ? 1 : 0},
           updated_at = ${Date.now()}
       WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
     `
