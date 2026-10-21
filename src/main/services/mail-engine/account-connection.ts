@@ -1229,7 +1229,10 @@ export class AccountConnection extends EventEmitter {
       path: mailbox.path,
       name: mailbox.name,
       delimiter: mailbox.delimiter,
-      specialUse: mailbox.specialUse,
+      // Gmail marks "Importanti" with \Important (RFC 8457), which imapflow
+      // does not count among the special uses.
+      specialUse:
+        mailbox.specialUse ?? (mailbox.flags.has('\\Important') ? '\\Important' : undefined),
       messageCount: mailbox.status?.messages ?? 0,
       unseenCount: mailbox.status?.unseen ?? 0
     }))

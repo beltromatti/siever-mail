@@ -87,6 +87,7 @@ export function MessageTable({
   onLoadMoreMessages,
   onActivateRow,
   onOpenRow,
+  onRowContextMenu,
   onToggleFlag,
   onSelectSection,
   onSelectAll,
@@ -272,6 +273,10 @@ export function MessageTable({
                           onActivateRow(messageRef, resolveSelectionIntent(event))
                         }
                         onDoubleClick={() => onOpenRow(messageRef)}
+                        onContextMenu={(event) => {
+                          event.preventDefault()
+                          onRowContextMenu(messageRef)
+                        }}
                         style={{ height: MESSAGE_TABLE_ROW_HEIGHT_PX }}
                         className={cn(
                           'group border-border/25 grid cursor-default items-center gap-1.5 border-b px-2 text-[11.5px] transition-colors',

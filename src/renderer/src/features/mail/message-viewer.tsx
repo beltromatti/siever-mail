@@ -567,6 +567,24 @@ export function MessageViewer({
     }
   }
 
+  const showAttachmentMenu = async (attachment: MailAttachment): Promise<void> => {
+    const chosen = await window.mailApi.showContextMenu([
+      { id: 'open', label: 'Apri' },
+      { id: 'save', label: 'Salva con nome…' },
+      ...(message && message.attachments.length > 1
+        ? [{ id: 'save-all', label: `Salva tutti gli allegati (${message.attachments.length})` }]
+        : [])
+    ])
+
+    if (chosen === 'open') {
+      openAttachment(attachment)
+    } else if (chosen === 'save') {
+      saveAttachment(attachment)
+    } else if (chosen === 'save-all') {
+      saveAllAttachments()
+    }
+  }
+
   const saveAllAttachments = (): void => {
     if (attachmentActions) {
       void runAttachmentTask(ALL_ATTACHMENTS_TASK_ID, () => attachmentActions.saveAll())
@@ -900,6 +918,7 @@ export function MessageViewer({
                         busy={busy}
                         onOpen={() => openAttachment(attachment)}
                         openHint="Clic per aprire"
+                        onContextMenu={() => void showAttachmentMenu(attachment)}
                         trailing={
                           <IconButton
                             label="Salva con nome…"

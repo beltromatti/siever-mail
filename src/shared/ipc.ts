@@ -1,3 +1,4 @@
+import type { ContextMenuItem, ContextMenuRequest } from './context-menu'
 import type {
   AccountConnectionState,
   AddImapAccountInput,
@@ -84,7 +85,9 @@ export const IPC_CHANNELS = {
   foldersChanged: 'engine:folders-changed',
   unifiedInboxChanged: 'engine:unified-inbox-changed',
   accountConnectionChanged: 'engine:account-connection-changed',
-  appMenuCommand: 'app:menu-command'
+  appMenuCommand: 'app:menu-command',
+  showContextMenu: 'app:show-context-menu',
+  contextMenuRequest: 'app:context-menu-request'
 } as const
 
 export interface DesktopMailApi {
@@ -158,4 +161,11 @@ export interface DesktopMailApi {
   onUnifiedInboxChanged: (listener: (event: UnifiedInboxChangedEvent) => void) => () => void
   onAccountConnectionChanged: (listener: (state: AccountConnectionState) => void) => () => void
   onAppMenuCommand: (listener: (command: AppMenuCommand) => void) => () => void
+  /**
+   * Shows a context menu the page composed, as a native one, and settles
+   * with the id of the item chosen — null when it was dismissed.
+   */
+  showContextMenu: (items: ContextMenuItem[]) => Promise<string | null>
+  /** What a text, link or image menu asks the page to do. */
+  onContextMenuRequest: (listener: (request: ContextMenuRequest) => void) => () => void
 }

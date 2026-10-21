@@ -56,6 +56,7 @@ export function MessageList({
   onLoadMoreMessages,
   onActivateRow,
   onOpenRow,
+  onRowContextMenu,
   onToggleFlag,
   onSelectSection,
   onSelectAll,
@@ -243,6 +244,10 @@ export function MessageList({
                           onActivateRow(messageRef, resolveSelectionIntent(event))
                         }
                         onDoubleClick={() => onOpenRow(messageRef)}
+                        onContextMenu={(event) => {
+                          event.preventDefault()
+                          onRowContextMenu(messageRef)
+                        }}
                         className={cn(
                           'group border-border/40 relative flex cursor-default gap-2 border-b px-2.5 py-1.5 transition-colors',
                           isSelected

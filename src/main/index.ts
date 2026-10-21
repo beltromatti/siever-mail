@@ -11,6 +11,7 @@ import extensionMain from '@app/extension/main'
 
 import { loadRuntimeConfig } from './config/env'
 import { installAppMenu } from './app-menu'
+import { installContextMenus } from './context-menu'
 import { registerMailIpc } from './ipc/register-mail-ipc'
 import { prepareUpgradeMigration } from './services/data-migration'
 import { MailService } from './services/mail-service'
@@ -190,6 +191,8 @@ function createMainWindow(): BrowserWindow {
       event.preventDefault()
     }
   })
+
+  installContextMenus(window)
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     void window.loadURL(process.env['ELECTRON_RENDERER_URL'])

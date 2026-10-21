@@ -45,8 +45,10 @@ import { buildMessageSections } from '@renderer/lib/message-sections'
 import {
   CommandShortcutsProvider,
   commandForKeyEvent,
+  IS_MAC,
   isOverlaySurfaceOpen
 } from '@renderer/lib/command-shortcuts'
+import { buildFolderTree, type FolderTreeNode } from '@renderer/lib/folder-tree'
 import { inlineMessageStyles } from '@renderer/lib/inline-message-styles'
 import { buildOutgoingMailHtml } from '@renderer/lib/outgoing-mail-html'
 import { READER_ZOOM_RESET, steppedReaderZoom } from '@renderer/lib/reader-zoom'
@@ -70,7 +72,8 @@ import {
   DEFAULT_UI_PREFERENCES,
   MESSAGE_LIST_PAGE_SIZE
 } from '@shared/models'
-import { findCommand, type HostCommandId } from '@shared/commands'
+import { commandChord, COMMANDS, findCommand, type HostCommandId } from '@shared/commands'
+import type { ContextMenuItem, ContextMenuRequest } from '@shared/context-menu'
 import { replyRecipients, replyReferences } from '@shared/reply'
 import { highlightTermsForField, parseSearchQuery } from '@shared/search'
 import type {
@@ -2239,6 +2242,14 @@ function App(): React.JSX.Element {
     []
   )
 
+  // What a right click on text or a link asks of the window.
+  const contextMenuRequestRef = useRef<(request: ContextMenuRequest) => void>(() => undefined)
+
+  useEffect(
+    () => window.mailApi.onContextMenuRequest((request) => contextMenuRequestRef.current(request)),
+    []
+  )
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (isModalSurfaceOpen) {
@@ -2358,49 +2369,52 @@ function App(): React.JSX.Element {
   )
 
   const openReplyComposer = useCallback(
-    async (mode: 'sender' | 'all'): Promise<void> => {
-      if (!selectedMessage) {
+    async (mode: 'sender' | 'all', message = selectedMessage): Promise<void> => {
+      if (!message) {
         return
       }
 
-      const recipients = replyRecipients(selectedMessage, ownAddresses, mode)
+      const recipients = replyRecipients(message, ownAddresses, mode)
 
       openComposer({
         kind: 'reply',
-        accountId: selectedMessage.accountId,
-        sourceAccountId: selectedMessage.accountId,
+        accountId: message.accountId,
+        sourceAccountId: message.accountId,
         to: recipients.to.map((address) => address.address),
         cc: recipients.cc.map((address) => address.address),
-        subject: ensureReplySubject(selectedMessage.subject),
-        quoteHtml: await buildReplyQuoteHtml(selectedMessage),
-        inReplyTo: selectedMessage.messageId,
-        references: replyReferences(selectedMessage),
+        subject: ensureReplySubject(message.subject),
+        quoteHtml: await buildReplyQuoteHtml(message),
+        inReplyTo: message.messageId,
+        references: replyReferences(message),
         original: {
-          ref: summaryToMessageRef(selectedMessage),
-          attachments: selectedMessage.attachments
+          ref: summaryToMessageRef(message),
+          attachments: message.attachments
         }
       })
     },
     [openComposer, ownAddresses, selectedMessage]
   )
 
-  const openForwardComposer = useCallback(async (): Promise<void> => {
-    if (!selectedMessage) {
-      return
-    }
-
-    openComposer({
-      kind: 'forward',
-      accountId: selectedMessage.accountId,
-      sourceAccountId: selectedMessage.accountId,
-      subject: ensureForwardSubject(selectedMessage.subject),
-      quoteHtml: await buildForwardQuoteHtml(selectedMessage),
-      original: {
-        ref: summaryToMessageRef(selectedMessage),
-        attachments: selectedMessage.attachments
+  const openForwardComposer = useCallback(
+    async (message = selectedMessage): Promise<void> => {
+      if (!message) {
+        return
       }
-    })
-  }, [openComposer, selectedMessage])
+
+      openComposer({
+        kind: 'forward',
+        accountId: message.accountId,
+        sourceAccountId: message.accountId,
+        subject: ensureForwardSubject(message.subject),
+        quoteHtml: await buildForwardQuoteHtml(message),
+        original: {
+          ref: summaryToMessageRef(message),
+          attachments: message.attachments
+        }
+      })
+    },
+    [openComposer, selectedMessage]
+  )
 
   const addressActions = useMemo<AddressActions>(
     () => ({
@@ -2542,7 +2556,184 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     runAppCommandRef.current = runAppCommand
+    contextMenuRequestRef.current = (request) => {
+      if (request.kind === 'search') {
+        // Several words are looked for as the phrase they were.
+        const text = request.text.replaceAll('"', '').slice(0, 120)
+        setSearch(text.includes(' ') ? `"${text}"` : text)
+        setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
+        return
+      }
+
+      // Writing to someone from a message starts from the account that got it.
+      const accountId = selectedMessage?.accountId ?? selectedAccountId
+
+      if (accountId && !isModalSurfaceOpen) {
+        openComposer({ kind: 'new', accountId, to: [request.address] })
+      }
+    }
   })
+
+  /**
+   * The menu of a message in the list, as Outlook has it. A right click on
+   * a message outside the selection selects it first, as in Outlook and
+   * Finder; on one of several selected, the menu acts on all of them. The
+   * commands carry the chords they answer to.
+   */
+  const openMessageContextMenu = async (ref: MessageRef): Promise<void> => {
+    const inSelection = selection.selectedRefs.some((selected) => isSameMessageRef(selected, ref))
+    const targets = inSelection ? selection.selectedRefs : [ref]
+
+    if (!inSelection) {
+      setSelection({ selectedRefs: [ref], cursorRef: ref, anchorRef: ref })
+    }
+
+    const summaries = messages.filter((message) =>
+      targets.some((target) => isSameMessageRef(summaryToMessageRef(message), target))
+    )
+    const single = targets.length === 1 ? (summaries[0] ?? null) : null
+    const targetAccountIds = Array.from(new Set(targets.map((target) => target.accountId)))
+    const moveAccountFolders =
+      targetAccountIds.length !== 1
+        ? []
+        : targetAccountIds[0] === selectedAccountId
+          ? folders
+          : await window.mailApi.listFolders(targetAccountIds[0]).catch(() => [])
+    const sourcePaths = new Set(targets.map((target) => target.folderPath))
+    const onlyFolder = sourcePaths.size === 1 ? [...sourcePaths][0] : null
+    const overrides = uiPreferencesRef.current.shortcutOverrides
+    const chordOf = (commandId: string): string | undefined => {
+      const command = findCommand(commandId)
+      return command ? commandChord(command, overrides) : undefined
+    }
+    const moveItems = (nodes: ReadonlyArray<FolderTreeNode>): ContextMenuItem[] =>
+      nodes.map((node) => {
+        const own: ContextMenuItem = {
+          id: `move:${node.path}`,
+          label: node.name,
+          enabled: node.folder !== null && node.path !== onlyFolder
+        }
+
+        return node.children.length === 0
+          ? own
+          : {
+              id: `folder:${node.path}`,
+              label: node.name,
+              submenu: [
+                ...(node.folder ? [own, { type: 'separator' } as const] : []),
+                ...moveItems(node.children)
+              ]
+            }
+      })
+    const moveTree = buildFolderTree(moveAccountFolders)
+    const sender = single?.from[0]
+
+    const chosen = await window.mailApi.showContextMenu([
+      ...(single ? [{ id: 'open', label: 'Apri', chord: 'Enter' }] : []),
+      { type: 'separator' },
+      ...(single
+        ? [
+            { id: 'reply', label: 'Rispondi', chord: chordOf('reply') },
+            { id: 'reply-all', label: 'Rispondi a tutti', chord: chordOf('reply-all') },
+            { id: 'forward', label: 'Inoltra', chord: chordOf('forward') },
+            { type: 'separator' } as const
+          ]
+        : []),
+      {
+        id: 'toggle-read',
+        label: summaries.some((message) => !message.isRead)
+          ? 'Segna come letto'
+          : 'Segna come non letto',
+        chord: chordOf('toggle-read')
+      },
+      {
+        id: 'toggle-flag',
+        label:
+          summaries.length > 0 && summaries.every((message) => message.isFlagged)
+            ? 'Rimuovi contrassegno'
+            : 'Contrassegna',
+        chord: chordOf('toggle-flag')
+      },
+      { type: 'separator' },
+      { id: 'archive', label: 'Archivia', chord: chordOf('archive') },
+      targetAccountIds.length === 1 && moveTree.length > 0
+        ? { id: 'move', label: 'Sposta in', submenu: moveItems(moveTree) }
+        : { id: 'move', label: 'Sposta in', enabled: false },
+      ...COMMANDS.filter((command) => command.fromExtension).map((command) => ({
+        id: `command:${command.id}`,
+        label: command.label,
+        chord: chordOf(command.id)
+      })),
+      { type: 'separator' },
+      ...(sender
+        ? [
+            {
+              id: 'sender-messages',
+              label: `Mostra i messaggi di ${single?.senderLabel || sender.address}`
+            },
+            { type: 'separator' } as const
+          ]
+        : []),
+      { id: 'delete', label: 'Elimina', chord: IS_MAC ? 'Backspace' : 'Delete' }
+    ])
+
+    if (!chosen) {
+      return
+    }
+
+    if (chosen.startsWith('move:')) {
+      const destinationFolderPath = chosen.slice('move:'.length)
+      await runMessageRemovalAction(
+        targets,
+        async (target) => {
+          await window.mailApi.moveMessage({ ...target, destinationFolderPath })
+        },
+        'Spostamento email non riuscito.'
+      )
+      return
+    }
+
+    if (chosen.startsWith('command:')) {
+      runAppCommandRef.current(chosen.slice('command:'.length))
+      return
+    }
+
+    switch (chosen) {
+      case 'open':
+        handleOpenRow(ref)
+        return
+      case 'reply':
+      case 'reply-all':
+      case 'forward': {
+        // The message may not have loaded into the reading pane yet.
+        const detail =
+          selectedMessage && isSameMessageRef(selectedMessage, ref)
+            ? selectedMessage
+            : await window.mailApi.getMessage(ref)
+
+        if (chosen === 'forward') {
+          await openForwardComposer(detail)
+        } else {
+          await openReplyComposer(chosen === 'reply' ? 'sender' : 'all', detail)
+        }
+        return
+      }
+      case 'toggle-read':
+      case 'toggle-flag':
+      case 'archive':
+        runAppCommandRef.current(chosen)
+        return
+      case 'sender-messages':
+        if (sender) {
+          setSearch(`da:${sender.address}`)
+          setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
+        }
+        return
+      case 'delete':
+        await deleteMessages(targets)
+        return
+    }
+  }
 
   const handleComposerSendRequested = useCallback(
     (payload: ComposeMailInput, draft: ComposerInitialData): void => {
@@ -2766,6 +2957,7 @@ function App(): React.JSX.Element {
     onLoadMoreMessages: () => void loadMoreMessages(),
     onActivateRow: handleActivateRow,
     onOpenRow: handleOpenRow,
+    onRowContextMenu: (ref) => void openMessageContextMenu(ref),
     onToggleFlag: handleToggleRowFlag,
     onSelectSection: handleSelectSection,
     onSelectAll: handleSelectAll,

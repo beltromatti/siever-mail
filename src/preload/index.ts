@@ -91,7 +91,9 @@ const desktopMailApi: DesktopMailApi = {
   onUnifiedInboxChanged: (listener) => subscribe(IPC_CHANNELS.unifiedInboxChanged, listener),
   onAccountConnectionChanged: (listener) =>
     subscribe(IPC_CHANNELS.accountConnectionChanged, listener),
-  onAppMenuCommand: (listener) => subscribe(IPC_CHANNELS.appMenuCommand, listener)
+  onAppMenuCommand: (listener) => subscribe(IPC_CHANNELS.appMenuCommand, listener),
+  showContextMenu: async (items) => invoke(IPC_CHANNELS.showContextMenu, items),
+  onContextMenuRequest: (listener) => subscribe(IPC_CHANNELS.contextMenuRequest, listener)
 }
 
 // Merge any extension-provided bridge methods (the IPC channels an

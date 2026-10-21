@@ -76,6 +76,24 @@ function AddressToken({
       .catch(() => toast.error('Copia non riuscita'))
   }
 
+  // The same actions on a right click, as a native menu.
+  const showNativeMenu = async (): Promise<void> => {
+    const chosen = await window.mailApi.showContextMenu([
+      ...(actions?.onCompose ? [{ id: 'compose', label: 'Scrivi un messaggio' }] : []),
+      ...(actions?.onSearch ? [{ id: 'search', label: 'Cerca i suoi messaggi' }] : []),
+      { type: 'separator' },
+      { id: 'copy', label: 'Copia indirizzo' }
+    ])
+
+    if (chosen === 'compose') {
+      actions?.onCompose?.(address)
+    } else if (chosen === 'search') {
+      actions?.onSearch?.(address)
+    } else if (chosen === 'copy') {
+      copyAddress()
+    }
+  }
+
   return (
     <DropdownMenu>
       <Tooltip>
@@ -83,6 +101,10 @@ function AddressToken({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
+              onContextMenu={(event) => {
+                event.preventDefault()
+                void showNativeMenu()
+              }}
               className="bg-secondary/55 hover:bg-secondary text-foreground focus-visible:ring-ring/70 data-[state=open]:bg-secondary inline-flex h-5 max-w-full items-center rounded px-1.5 text-[11px] leading-none outline-none focus-visible:ring-2"
             >
               <span className="truncate">{name}</span>

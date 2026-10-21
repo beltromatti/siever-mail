@@ -1,8 +1,10 @@
 import { app, ipcMain, shell, type BrowserWindow } from 'electron'
 
+import { popupPageContextMenu } from '@main/context-menu'
 import type { MailService } from '@main/services/mail-service'
 import { normalizeExternalHttpUrl } from '@main/utils/external-url'
 import { logMainError, sanitizeForLog } from '@main/utils/error-utils'
+import type { ContextMenuItem } from '@shared/context-menu'
 import { IPC_CHANNELS } from '@shared/ipc'
 import type {
   AddImapAccountInput,
@@ -233,6 +235,16 @@ export function registerMailIpc(
       maximized: Boolean(window && !window.isDestroyed() && window.isMaximized()),
       dragTopRegionEnabled: isWindows || process.platform === 'darwin'
     }
+  })
+
+  registerHandler(IPC_CHANNELS.showContextMenu, async (items: ContextMenuItem[]) => {
+    const window = getMainWindow()
+
+    if (!window || window.isDestroyed() || !Array.isArray(items)) {
+      return null
+    }
+
+    return popupPageContextMenu(window, items)
   })
 
   registerHandler(IPC_CHANNELS.minimizeWindow, async () => {

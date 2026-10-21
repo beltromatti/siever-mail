@@ -46,6 +46,8 @@ export interface MessageListViewProps {
   onLoadMoreMessages: () => void
   onActivateRow: (ref: MessageRef, intent: SelectionIntent) => void
   onOpenRow: (ref: MessageRef) => void
+  /** A right click on a row: the menu of what can be done with it. */
+  onRowContextMenu: (ref: MessageRef) => void
   onToggleFlag: (ref: MessageRef, flagged: boolean) => void
   onSelectSection: (section: MessageSection) => void
   onSelectAll: () => void

@@ -66,6 +66,8 @@ export interface AttachmentChipProps {
   busy?: boolean
   /** The file could not be had; the chip says so until it is retried or removed. */
   failed?: boolean
+  /** A right click: the menu of what can be done with the file. */
+  onContextMenu?: () => void
   className?: string
 }
 
@@ -90,6 +92,7 @@ export function AttachmentChip({
   trailing,
   busy = false,
   failed = false,
+  onContextMenu,
   className
 }: AttachmentChipProps): React.JSX.Element {
   const size = formatByteSize(sizeBytes)
@@ -118,6 +121,14 @@ export function AttachmentChip({
   // trailing control (save, remove) keeps a bubble of its own.
   return (
     <span
+      onContextMenu={
+        onContextMenu
+          ? (event) => {
+              event.preventDefault()
+              onContextMenu()
+            }
+          : undefined
+      }
       className={cn(
         'border-border/70 bg-card/60 inline-flex h-6.5 max-w-full items-center gap-1 rounded-md border pr-1 pl-2 transition-colors',
         interactive && 'hover:border-border hover:bg-card',
