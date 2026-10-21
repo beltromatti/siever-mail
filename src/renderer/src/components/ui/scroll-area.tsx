@@ -5,8 +5,11 @@ import { cn } from '@renderer/lib/utils'
 
 const ScrollArea = React.forwardRef<
   React.ComponentRef<typeof ScrollAreaPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root> & {
+    /** The element that scrolls, for whatever drives the scroll itself (a virtualised list). */
+    viewportRef?: React.Ref<HTMLDivElement>
+  }
+>(({ className, children, viewportRef, ...props }, ref) => (
   <ScrollAreaPrimitive.Root
     ref={ref}
     className={cn('relative overflow-hidden', className)}
@@ -21,7 +24,10 @@ const ScrollArea = React.forwardRef<
       wrapper back to `block` restores normal width constraints; consumers
       that genuinely need horizontal overflow scroll their own container.
     */}
-    <ScrollAreaPrimitive.Viewport className="size-full rounded-[inherit] [&>div]:block!">
+    <ScrollAreaPrimitive.Viewport
+      ref={viewportRef}
+      className="size-full rounded-[inherit] [&>div]:block!"
+    >
       {children}
     </ScrollAreaPrimitive.Viewport>
     <ScrollBar />

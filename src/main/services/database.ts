@@ -41,10 +41,17 @@ import {
   DEFAULT_UI_PREFERENCES,
   READER_ZOOM_DEFAULT
 } from '@shared/models'
-import { parseSearchQuery, type SearchTerm, type SearchTermGroup } from '@shared/search'
+import {
+  foldSearchText,
+  parseSearchQuery,
+  type SearchTerm,
+  type SearchTermGroup
+} from '@shared/search'
 import { isMeaningfulDisplayName, isSameSenderName, senderSortKey } from '@shared/sender'
 import { SIGNATURE_HTML_FORMAT, upgradeLegacySignatureHtml } from '@shared/signature-html'
 import { subjectSortKey } from '@shared/subject'
+
+import { plainTextOfHtml } from './mail-engine/preview'
 
 /**
  * SQLite hands INTEGER columns back as `bigint` or `number` depending on
@@ -91,6 +98,16 @@ const THEME_MODES: ReadonlyArray<ThemeMode> = ['system', 'light', 'dark']
 
 export interface StoredMailAccount extends MailAccount {
   encryptedSecret: string
+}
+
+/** What a message list shows of its mailboxes, and in which order. */
+export interface MessageListView {
+  query?: string
+  sort?: MailMessageListSort
+  grouping?: MessageGroupingMode
+  filter?: MessageListFilter
+  /** Messages a server search found for `query`, matches like the cache's own. */
+  serverMatches?: ReadonlyArray<MessageRef>
 }
 
 export interface FolderSyncState {
@@ -205,6 +222,81 @@ function toFiniteNonNegativeNumber(value: unknown): number {
   return 0
 }
 
+/**
+ * The columns a list row is made of. Lists read only these: a row's cached
+ * body can weigh hundreds of kilobytes, and a page of a hundred rows read
+ * them all for nothing.
+ */
+const MESSAGE_SUMMARY_SELECT = {
+  accountId: true,
+  folderPath: true,
+  uid: true,
+  threadId: true,
+  messageId: true,
+  subject: true,
+  fromJson: true,
+  toJson: true,
+  ccJson: true,
+  dateIso: true,
+  preview: true,
+  previewHydrated: true,
+  flagsJson: true,
+  isRead: true,
+  isFlagged: true,
+  senderName: true,
+  senderKey: true,
+  senderLabel: true,
+  hasAttachments: true,
+  size: true
+} as const satisfies Prisma.MessageSelect
+
+/** Rows re-filed for search per transaction (see `refreshSearchText`). */
+const SEARCH_REFRESH_PAGE_SIZE = 1_000
+
+const SEARCH_COLUMNS = [
+  'search_from',
+  'search_to',
+  'search_subject',
+  'search_preview',
+  'search_body'
+] as const
+
+function addressesSearchText(addresses: ReadonlyArray<MailAddress>): string {
+  return foldSearchText(
+    addresses.map((address) => `${address.name ?? ''} ${address.address}`).join(' ')
+  )
+}
+
+/**
+ * What searches compare a message by, field by field, folded the way the
+ * search terms are (see `foldSearchText`): "citta" finds "Città", a name
+ * finds the people it names and not the JSON the addresses are stored as,
+ * a word finds the text of a body and not its HTML tags. The sender is also
+ * found by the name the list files them under, which can come from another
+ * of their messages.
+ */
+function messageSearchText(message: {
+  subject: string
+  from: ReadonlyArray<MailAddress>
+  to: ReadonlyArray<MailAddress>
+  cc: ReadonlyArray<MailAddress>
+  bcc?: ReadonlyArray<MailAddress>
+  senderLabel: string
+  preview: string
+}): { searchFrom: string; searchTo: string; searchSubject: string; searchPreview: string } {
+  return {
+    searchFrom: `${foldSearchText(message.senderLabel)} ${addressesSearchText(message.from)}`,
+    searchTo: addressesSearchText([...message.to, ...message.cc, ...(message.bcc ?? [])]),
+    searchSubject: foldSearchText(message.subject),
+    searchPreview: foldSearchText(message.preview)
+  }
+}
+
+/** The text of a body as searches compare it: its words, not its markup. */
+function bodySearchText(body: { html?: string; text?: string }): string {
+  return foldSearchText(body.html ? plainTextOfHtml(body.html) : (body.text ?? ''))
+}
+
 function normalizeMessageSearchQuery(query?: string): string | null {
   const normalized = (query || '').trim()
   return normalized ? normalized : null
@@ -221,23 +313,20 @@ function buildSingleTermWhere(term: SearchTerm): Prisma.MessageWhereInput {
 
   switch (term.scope) {
     case 'from':
-      return { fromJson: { contains: value } }
+      return { searchFrom: { contains: value } }
     case 'to':
-      return { OR: [{ toJson: { contains: value } }, { ccJson: { contains: value } }] }
+      return { searchTo: { contains: value } }
     case 'subject':
-      return { subject: { contains: value } }
+      return { searchSubject: { contains: value } }
     case 'any':
     default:
       return {
         OR: [
-          { subject: { contains: value } },
-          { preview: { contains: value } },
-          { fromJson: { contains: value } },
-          { toJson: { contains: value } },
-          { ccJson: { contains: value } },
-          { bccJson: { contains: value } },
-          { textBody: { contains: value } },
-          { htmlBody: { contains: value } }
+          { searchSubject: { contains: value } },
+          { searchFrom: { contains: value } },
+          { searchTo: { contains: value } },
+          { searchPreview: { contains: value } },
+          { searchBody: { contains: value } }
         ]
       }
   }
@@ -270,14 +359,19 @@ function buildGroupWhere(group: SearchTermGroup): Prisma.MessageWhereInput | nul
  */
 function buildMessageConstraints(
   query?: string,
-  filter?: MessageListFilter
+  filter?: MessageListFilter,
+  serverMatches: ReadonlyArray<MessageRef> = []
 ): Prisma.MessageWhereInput[] {
   const constraints: Prisma.MessageWhereInput[] = []
   const searchWhere = buildMessageSearchWhere(query)
   const filterWhere = buildMessageFilterWhere(filter)
 
   if (searchWhere) {
-    constraints.push(searchWhere)
+    constraints.push(
+      serverMatches.length > 0
+        ? { OR: [searchWhere, ...buildServerMatchesWhere(serverMatches)] }
+        : searchWhere
+    )
   }
 
   if (filterWhere) {
@@ -285,6 +379,28 @@ function buildMessageConstraints(
   }
 
   return constraints
+}
+
+/** Messages a server search found, folder by folder. */
+function buildServerMatchesWhere(matches: ReadonlyArray<MessageRef>): Prisma.MessageWhereInput[] {
+  const uidsByMailbox = new Map<string, { accountId: string; folderPath: string; uids: number[] }>()
+
+  for (const match of matches) {
+    const key = `${match.accountId}\u0000${match.folderPath}`
+    const mailbox = uidsByMailbox.get(key) ?? {
+      accountId: match.accountId,
+      folderPath: match.folderPath,
+      uids: []
+    }
+    mailbox.uids.push(match.uid)
+    uidsByMailbox.set(key, mailbox)
+  }
+
+  return [...uidsByMailbox.values()].map(({ accountId, folderPath, uids }) => ({
+    accountId,
+    folderPath,
+    uid: { in: uids }
+  }))
 }
 
 function buildMessageSearchWhere(query?: string): Prisma.MessageWhereInput | null {
@@ -403,7 +519,7 @@ function buildSenderMatchWhere(query?: string): Prisma.MessageWhereInput | null 
     return null
   }
 
-  return { OR: senderTerms.map((term) => ({ fromJson: { contains: term.value } })) }
+  return { OR: senderTerms.map((term) => ({ searchFrom: { contains: term.value } })) }
 }
 
 /** The name a message's own header gives its sender, when it gives a real one. */
@@ -421,7 +537,7 @@ function headerSenderName(message: FetchedMessageSummary): string | undefined {
  *   1 — one sender's spellings of a name share a label;
  *   2 — subjects sort by their first letter or digit, those without one first.
  */
-const SORT_FILING_VERSION = 2
+const SORT_FILING_VERSION = 3
 
 interface StoredSignatureRow {
   accountId: string
@@ -1879,6 +1995,7 @@ export class AppDatabase {
           htmlBody: null,
           textBody: null,
           attachmentsJson: '[]',
+          ...messageSearchText({ ...message, senderLabel }),
           updatedAt: now
         }
         // Never overwrite an already-hydrated preview with an envelope-only write.
@@ -1886,6 +2003,7 @@ export class AppDatabase {
         // with `previewHydrated: false, preview: ''`), so if the row already has
         // a good preview we keep it. This keeps the per-row state monotonic.
         const keepExistingPreview = existing?.previewHydrated === true && !message.previewHydrated
+        const preview = keepExistingPreview ? existing!.preview : message.preview
         const update = {
           threadId: message.threadId ?? null,
           messageId: message.messageId ?? null,
@@ -1895,7 +2013,7 @@ export class AppDatabase {
           toJson: JSON.stringify(message.to),
           ccJson: JSON.stringify(message.cc),
           dateIso: message.date,
-          preview: keepExistingPreview ? existing!.preview : message.preview,
+          preview,
           previewHydrated: keepExistingPreview ? true : message.previewHydrated,
           flagsJson: JSON.stringify(message.flags),
           isRead: message.isRead,
@@ -1906,6 +2024,7 @@ export class AppDatabase {
           senderSort,
           hasAttachments: message.hasAttachments,
           size: message.size,
+          ...messageSearchText({ ...message, senderLabel, preview }),
           updatedAt: now
         }
 
@@ -2013,27 +2132,49 @@ export class AppDatabase {
       }
     }
 
-    const relabels = [...labelsByKey]
+    const relabeled = [...labelsByKey]
       .map(([key, uses]) => [key, latestLabelUse(uses)?.label] as const)
       .filter(
         (entry): entry is readonly [string, string] =>
           entry[1] !== undefined && entry[1] !== storedLatest.get(entry[0])
       )
-      .map(
-        ([key, label]) => this.prisma.$executeRaw`
+    const relabels = relabeled.map(
+      ([key, label]) => this.prisma.$executeRaw`
           UPDATE messages
           SET sender_label = ${label}, sender_sort = ${senderSortKey(label)}
           WHERE sender_key = ${key}
             AND LOWER(TRIM(sender_name)) = sender_key
             AND sender_label <> ${label}
         `
-      )
+    )
 
     if (relabels.length > 0) {
       await this.prisma.$transaction(relabels)
+      await this.refreshSenderSearchText(relabeled.map(([key]) => key))
     }
 
     return labels
+  }
+
+  /** A sender found by the name the list now files them under (see `messageSearchText`). */
+  private async refreshSenderSearchText(senderKeys: ReadonlyArray<string>): Promise<void> {
+    const rows = await this.prisma.message.findMany({
+      where: { senderKey: { in: [...senderKeys] } },
+      select: { id: true, fromJson: true, senderLabel: true, searchFrom: true }
+    })
+    const updates = rows.flatMap((row) => {
+      const searchFrom = `${foldSearchText(row.senderLabel)} ${addressesSearchText(
+        parseJsonArray<MailAddress>(row.fromJson)
+      )}`
+
+      return searchFrom === row.searchFrom
+        ? []
+        : [this.prisma.message.update({ where: { id: row.id }, data: { searchFrom } })]
+    })
+
+    if (updates.length > 0) {
+      await this.prisma.$transaction(updates)
+    }
   }
 
   /**
@@ -2126,7 +2267,69 @@ export class AppDatabase {
       await this.prisma.$transaction(keyUpdates)
     }
 
+    await this.refreshSearchText()
     await this.prisma.$executeRawUnsafe(`PRAGMA user_version = ${SORT_FILING_VERSION}`)
+  }
+
+  /**
+   * Works out every stored row's search text again (see
+   * `messageSearchText`), a page at a time: a mailbox of a hundred thousand
+   * rows is never held in memory at once.
+   */
+  private async refreshSearchText(): Promise<void> {
+    let after = ''
+
+    for (;;) {
+      const rows = await this.prisma.message.findMany({
+        where: { id: { gt: after } },
+        orderBy: { id: 'asc' },
+        take: SEARCH_REFRESH_PAGE_SIZE,
+        select: {
+          id: true,
+          subject: true,
+          fromJson: true,
+          toJson: true,
+          ccJson: true,
+          bccJson: true,
+          senderLabel: true,
+          preview: true,
+          htmlBody: true,
+          textBody: true
+        }
+      })
+
+      if (rows.length === 0) {
+        return
+      }
+
+      await this.prisma.$transaction(
+        rows.map((row) =>
+          this.prisma.message.update({
+            where: { id: row.id },
+            data: {
+              ...messageSearchText({
+                subject: row.subject,
+                from: parseJsonArray<MailAddress>(row.fromJson),
+                to: parseJsonArray<MailAddress>(row.toJson),
+                cc: parseJsonArray<MailAddress>(row.ccJson),
+                bcc: parseJsonArray<MailAddress>(row.bccJson),
+                senderLabel: row.senderLabel,
+                preview: row.preview
+              }),
+              searchBody:
+                row.htmlBody !== null || row.textBody !== null
+                  ? bodySearchText({
+                      html: row.htmlBody ?? undefined,
+                      text: row.textBody ?? undefined
+                    })
+                  : ''
+            }
+          })
+        )
+      )
+
+      after = rows[rows.length - 1].id
+    }
   }
 
   async updateMessagePreviews(
@@ -2149,6 +2352,7 @@ export class AppDatabase {
           data: {
             preview: entry.preview,
             previewHydrated: true,
+            searchPreview: foldSearchText(entry.preview),
             updatedAt: now
           }
         })
@@ -2157,7 +2361,8 @@ export class AppDatabase {
 
     const uids = updates.map((entry) => entry.uid)
     const rows = await this.prisma.message.findMany({
-      where: { accountId, folderPath, uid: { in: uids } }
+      where: { accountId, folderPath, uid: { in: uids } },
+      select: MESSAGE_SUMMARY_SELECT
     })
 
     return rows.map((row) => this.mapMessageRowToSummary(row))
@@ -2221,68 +2426,36 @@ export class AppDatabase {
     }
   }
 
-  async listMessages(
-    accountId: string,
-    folderPath: string,
-    limit: number,
-    query?: string,
-    sort?: MailMessageListSort,
-    grouping?: MessageGroupingMode,
-    filter?: MessageListFilter
-  ): Promise<MailMessageSummary[]> {
-    await this.ready
-
-    const normalizedLimit = Math.max(1, Math.floor(limit))
-    const constraints = buildMessageConstraints(query, filter)
-    const where: Prisma.MessageWhereInput =
-      constraints.length > 0
-        ? { accountId, folderPath, AND: constraints }
-        : { accountId, folderPath }
-
-    const rows = await this.findMessagePage(
-      where,
-      buildMessageOrderBy(sort, grouping),
-      normalizedLimit,
-      ordersBySender(sort, grouping) ? buildSenderMatchWhere(query) : null
-    )
-
-    return rows.map((row) => this.mapMessageRowToSummary(row))
-  }
-
   /**
-   * One page of `where` in `orderBy` order — except that the messages from
-   * the senders `senderMatch` names come first. Two queries rather than a
-   * CASE in the ORDER BY: Prisma cannot order on an expression, and the
-   * list pages by growing `take`, so the split never shifts between pages.
+   * `find` run over `where` — except that the messages from the senders
+   * `senderMatch` names come first. Two queries rather than a CASE in the
+   * ORDER BY: Prisma cannot order on an expression, and the list pages by
+   * growing `take`, so the split never shifts between pages. Without `take`,
+   * every message.
    */
-  private async findMessagePage(
+  private async inSearchOrder<Row>(
     where: Prisma.MessageWhereInput,
-    orderBy: Prisma.MessageOrderByWithRelationInput[],
-    take: number,
-    senderMatch: Prisma.MessageWhereInput | null
-  ): Promise<Prisma.MessageGetPayload<object>[]> {
+    senderMatch: Prisma.MessageWhereInput | null,
+    take: number | undefined,
+    find: (where: Prisma.MessageWhereInput, take: number | undefined) => Promise<Row[]>
+  ): Promise<Row[]> {
     const senders = senderMatch ? await this.findSearchedSenders(where, senderMatch) : []
 
     if (senders.length === 0) {
-      return this.prisma.message.findMany({ where, orderBy, take })
+      return find(where, take)
     }
 
     const leading: Prisma.MessageWhereInput = { senderSort: { in: senders } }
-    const first = await this.prisma.message.findMany({
-      where: { AND: [where, leading] },
-      orderBy,
-      take
-    })
+    const first = await find({ AND: [where, leading] }, take)
 
-    if (first.length >= take) {
+    if (take !== undefined && first.length >= take) {
       return first
     }
 
-    const rest = await this.prisma.message.findMany({
-      where: { AND: [where, { NOT: leading }] },
-      orderBy,
-      take: take - first.length
-    })
+    const rest = await find(
+      { AND: [where, { NOT: leading }] },
+      take === undefined ? undefined : take - first.length
+    )
 
     return [...first, ...rest]
   }
@@ -2305,23 +2478,6 @@ export class AppDatabase {
     })
 
     return rows.length > SEARCHED_SENDER_LIMIT ? [] : rows.map((row) => row.senderSort)
-  }
-
-  async countMessages(
-    accountId: string,
-    folderPath: string,
-    query?: string,
-    filter?: MessageListFilter
-  ): Promise<number> {
-    await this.ready
-
-    const constraints = buildMessageConstraints(query, filter)
-    const where: Prisma.MessageWhereInput =
-      constraints.length > 0
-        ? { accountId, folderPath, AND: constraints }
-        : { accountId, folderPath }
-
-    return this.prisma.message.count({ where })
   }
 
   async listAllMessageUids(accountId: string, folderPath: string): Promise<number[]> {
@@ -2357,13 +2513,49 @@ export class AppDatabase {
     }
   }
 
+  /** What a message list of some mailboxes asks the cache, in the order it shows it. */
+  private messageListQuery(
+    mailboxes: ReadonlyArray<{ accountId: string; folderPath: string }>,
+    view: MessageListView
+  ): {
+    where: Prisma.MessageWhereInput
+    orderBy: Prisma.MessageOrderByWithRelationInput[]
+    senderMatch: Prisma.MessageWhereInput | null
+  } {
+    const mailboxWhere =
+      mailboxes.length === 1
+        ? { accountId: mailboxes[0].accountId, folderPath: mailboxes[0].folderPath }
+        : {
+            OR: mailboxes.map((mailbox) => ({
+              accountId: mailbox.accountId,
+              folderPath: mailbox.folderPath
+            }))
+          }
+    const constraints = buildMessageConstraints(view.query, view.filter, view.serverMatches)
+
+    return {
+      where: constraints.length > 0 ? { ...mailboxWhere, AND: constraints } : mailboxWhere,
+      // The unified inbox spans multiple (accountId, folderPath) pairs, so
+      // we need extra tiebreakers between the user-picked sort field and
+      // the deterministic uid: without them, two messages from different
+      // mailboxes with the same `dateIso` (or same subject/sender) would
+      // shuffle on every refresh.
+      orderBy: [
+        ...buildMessageOrderBy(view.sort, view.grouping),
+        { accountId: 'asc' as Prisma.SortOrder },
+        { folderPath: 'asc' as Prisma.SortOrder }
+      ],
+      senderMatch: ordersBySender(view.sort, view.grouping)
+        ? buildSenderMatchWhere(view.query)
+        : null
+    }
+  }
+
+  /** The first `limit` messages of a list of some mailboxes. */
   async listMessagesInMailboxes(
-    mailboxes: Array<{ accountId: string; folderPath: string }>,
+    mailboxes: ReadonlyArray<{ accountId: string; folderPath: string }>,
     limit: number,
-    query?: string,
-    sort?: MailMessageListSort,
-    grouping?: MessageGroupingMode,
-    filter?: MessageListFilter
+    view: MessageListView
   ): Promise<MailMessageSummary[]> {
     await this.ready
 
@@ -2371,45 +2563,62 @@ export class AppDatabase {
       return []
     }
 
-    const normalizedLimit = Math.max(1, Math.floor(limit))
-    const mailboxWhere =
-      mailboxes.length === 1
-        ? { accountId: mailboxes[0]?.accountId || '', folderPath: mailboxes[0]?.folderPath || '' }
-        : {
-            OR: mailboxes.map((mailbox) => ({
-              accountId: mailbox.accountId,
-              folderPath: mailbox.folderPath
-            }))
-          }
-    const constraints = buildMessageConstraints(query, filter)
-    const where: Prisma.MessageWhereInput =
-      constraints.length > 0 ? { ...mailboxWhere, AND: constraints } : mailboxWhere
-
-    // The unified inbox spans multiple (accountId, folderPath) pairs, so
-    // we need extra tiebreakers between the user-picked sort field and
-    // the deterministic uid: without them, two messages from different
-    // mailboxes with the same `dateIso` (or same subject/sender) would
-    // shuffle on every refresh.
-    const orderBy = [
-      ...buildMessageOrderBy(sort, grouping),
-      { accountId: 'asc' as Prisma.SortOrder },
-      { folderPath: 'asc' as Prisma.SortOrder }
-    ]
-
-    const rows = await this.findMessagePage(
+    const { where, orderBy, senderMatch } = this.messageListQuery(mailboxes, view)
+    const rows = await this.inSearchOrder(
       where,
-      orderBy,
-      normalizedLimit,
-      ordersBySender(sort, grouping) ? buildSenderMatchWhere(query) : null
+      senderMatch,
+      Math.max(1, Math.floor(limit)),
+      (pageWhere, take) =>
+        this.prisma.message.findMany({
+          where: pageWhere,
+          orderBy,
+          take,
+          select: MESSAGE_SUMMARY_SELECT
+        })
     )
 
     return rows.map((row) => this.mapMessageRowToSummary(row))
   }
 
+  /**
+   * Where a message sits in a list of some mailboxes, counting from 0; -1
+   * when the list does not hold it. Reads keys only, so finding a message
+   * thousands of rows down costs one light query.
+   */
+  async findMessagePosition(
+    mailboxes: ReadonlyArray<{ accountId: string; folderPath: string }>,
+    view: MessageListView,
+    ref: MessageRef
+  ): Promise<number> {
+    await this.ready
+
+    if (
+      !mailboxes.some(
+        (mailbox) => mailbox.accountId === ref.accountId && mailbox.folderPath === ref.folderPath
+      )
+    ) {
+      return -1
+    }
+
+    const { where, orderBy, senderMatch } = this.messageListQuery(mailboxes, view)
+    const keys = await this.inSearchOrder(where, senderMatch, undefined, (pageWhere, take) =>
+      this.prisma.message.findMany({
+        where: pageWhere,
+        orderBy,
+        take,
+        select: { accountId: true, folderPath: true, uid: true }
+      })
+    )
+
+    return keys.findIndex(
+      (key) =>
+        key.uid === ref.uid && key.accountId === ref.accountId && key.folderPath === ref.folderPath
+    )
+  }
+
   async countMessagesInMailboxes(
-    mailboxes: Array<{ accountId: string; folderPath: string }>,
-    query?: string,
-    filter?: MessageListFilter
+    mailboxes: ReadonlyArray<{ accountId: string; folderPath: string }>,
+    view: Pick<MessageListView, 'query' | 'filter' | 'serverMatches'>
   ): Promise<number> {
     await this.ready
 
@@ -2417,20 +2626,7 @@ export class AppDatabase {
       return 0
     }
 
-    const mailboxWhere =
-      mailboxes.length === 1
-        ? { accountId: mailboxes[0]?.accountId || '', folderPath: mailboxes[0]?.folderPath || '' }
-        : {
-            OR: mailboxes.map((mailbox) => ({
-              accountId: mailbox.accountId,
-              folderPath: mailbox.folderPath
-            }))
-          }
-    const constraints = buildMessageConstraints(query, filter)
-    const where: Prisma.MessageWhereInput =
-      constraints.length > 0 ? { ...mailboxWhere, AND: constraints } : mailboxWhere
-
-    return this.prisma.message.count({ where })
+    return this.prisma.message.count({ where: this.messageListQuery(mailboxes, view).where })
   }
 
   /** Among a folder's `limit` newest messages, those whose body is not cached. */
@@ -2544,19 +2740,32 @@ export class AppDatabase {
         uid: ref.uid
       }
     }
-    const existing = await this.prisma.message.findUnique({
+    const stored = await this.prisma.message.findUnique({
       where,
-      select: { hasAttachments: true, preview: true, previewHydrated: true }
+      select: {
+        hasAttachments: true,
+        preview: true,
+        previewHydrated: true,
+        toJson: true,
+        ccJson: true
+      }
     })
 
-    if (!existing) {
+    if (!stored) {
       return null
+    }
+
+    const existing = {
+      ...stored,
+      to: parseJsonArray<MailAddress>(stored.toJson),
+      cc: parseJsonArray<MailAddress>(stored.ccJson)
     }
 
     const { html, text, bcc, attachments, preview } = body
     const hasAttachments = attachments.length > 0
     const row = await this.prisma.message.update({
       where,
+      select: MESSAGE_SUMMARY_SELECT,
       data: {
         htmlBody: html ?? null,
         textBody: text ?? (html ? null : ''),
@@ -2567,6 +2776,10 @@ export class AppDatabase {
         hasAttachments,
         preview,
         previewHydrated: true,
+        searchPreview: foldSearchText(preview),
+        searchBody: bodySearchText(body),
+        // The Bcc a sent message carries only shows with its body.
+        searchTo: addressesSearchText([...existing.to, ...existing.cc, ...bcc]),
         updatedAt: BigInt(Date.now())
       }
     })
@@ -2626,7 +2839,8 @@ export class AppDatabase {
     )
 
     const updated = await this.prisma.message.findMany({
-      where: { accountId, folderPath, uid: { in: uids } }
+      where: { accountId, folderPath, uid: { in: uids } },
+      select: MESSAGE_SUMMARY_SELECT
     })
 
     return updated.map((row) => this.mapMessageRowToSummary(row))
@@ -2681,7 +2895,8 @@ export class AppDatabase {
         accountId,
         folderPath: destinationFolderPath,
         uid: { in: pairs.map(([, destinationUid]) => destinationUid) }
-      }
+      },
+      select: MESSAGE_SUMMARY_SELECT
     })
 
     return rows.map((row) => this.mapMessageRowToSummary(row))
@@ -2712,7 +2927,8 @@ export class AppDatabase {
     const row = await this.prisma.message.findUnique({
       where: {
         accountId_folderPath_uid: { accountId, folderPath, uid }
-      }
+      },
+      select: MESSAGE_SUMMARY_SELECT
     })
 
     if (!row) {
@@ -2804,6 +3020,11 @@ export class AppDatabase {
         attachments_json TEXT NOT NULL DEFAULT '[]',
         reply_to_json TEXT NOT NULL DEFAULT '[]',
         references_json TEXT NOT NULL DEFAULT '[]',
+        search_from TEXT NOT NULL DEFAULT '',
+        search_to TEXT NOT NULL DEFAULT '',
+        search_subject TEXT NOT NULL DEFAULT '',
+        search_preview TEXT NOT NULL DEFAULT '',
+        search_body TEXT NOT NULL DEFAULT '',
         updated_at INTEGER NOT NULL,
         UNIQUE(account_id, folder_path, uid)
       )
@@ -3203,6 +3424,16 @@ export class AppDatabase {
       await this.prisma.$executeRawUnsafe(
         'UPDATE messages SET html_body = NULL, text_body = NULL WHERE html_body IS NOT NULL OR text_body IS NOT NULL'
       )
+    }
+
+    // What searches compare (see `messageSearchText`). The rows stored
+    // before get theirs when they are re-filed (`refileIfOutdated`).
+    for (const column of SEARCH_COLUMNS) {
+      if (!columnNames.has(column)) {
+        await this.prisma.$executeRawUnsafe(
+          `ALTER TABLE messages ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`
+        )
+      }
     }
   }
 

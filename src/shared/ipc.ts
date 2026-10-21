@@ -54,6 +54,7 @@ export const IPC_CHANNELS = {
   readMessage: 'message:read',
   prefetchMessages: 'message:prefetch',
   hydratePreviews: 'message:hydrate-previews',
+  searchOnServer: 'message:search-on-server',
   moveMessages: 'message:move',
   deleteMessages: 'message:delete',
   archiveMessages: 'message:archive',
@@ -132,6 +133,15 @@ export interface DesktopMailApi {
   prefetchMessages: (refs: MessageRef[]) => Promise<void>
   /** Fetches the previews of rows in view that have none yet. */
   hydratePreviews: (refs: MessageRef[]) => Promise<void>
+  /**
+   * What the servers find for a search of a list, in the whole text of the
+   * messages. Null when a later search took this one's place.
+   */
+  searchOnServer: (
+    accountId: string,
+    folderPath: string,
+    query: string
+  ) => Promise<MessageRef[] | null>
   /**
    * Actions on several messages, each folder's in one command. They settle
    * with the messages the server did not take, never with an error for a

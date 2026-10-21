@@ -41,6 +41,8 @@ interface MailToolbarProps {
   search: string
   onSearchChange: (value: string) => void
   searchInputRef: React.RefObject<HTMLInputElement | null>
+  /** Where a search looks: the folder open, or TUTTI. */
+  searchScopeLabel: string
   filter: MessageListFilter
   onFilterChange: (next: MessageListFilter) => void
   /** How many messages the actions below will apply to. */
@@ -92,6 +94,7 @@ export function MailToolbar({
   search,
   onSearchChange,
   searchInputRef,
+  searchScopeLabel,
   filter,
   onFilterChange,
   selectedCount,
@@ -293,7 +296,8 @@ export function MailToolbar({
               </span>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="max-w-72 font-normal">
-              Cerca in tutti i campi. Usa <b>da:</b> <b>a:</b> <b>oggetto:</b> per restringere a un
+              Cerca in tutti i messaggi di «{searchScopeLabel}», testo compreso, senza badare a
+              maiuscole e accenti. Usa <b>da:</b> <b>a:</b> <b>oggetto:</b> per restringere a un
               campo, <b>OR</b> per alternative.
             </TooltipContent>
           </Tooltip>
@@ -315,8 +319,8 @@ export function MailToolbar({
                 event.currentTarget.blur()
               }
             }}
-            placeholder="Cerca email"
-            aria-label="Cerca email"
+            placeholder={`Cerca in ${searchScopeLabel}`}
+            aria-label={`Cerca in ${searchScopeLabel}`}
             spellCheck={false}
             autoComplete="off"
             className={cn('h-8 pr-7 pl-7 text-[12px]', search && 'border-primary/60 bg-primary/8')}

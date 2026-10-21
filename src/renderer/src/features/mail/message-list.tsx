@@ -9,16 +9,17 @@
  * the attachment marker in particular is now visible at every density, which
  * it was not before.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useMemo } from 'react'
 
 import { Avatar, AvatarFallback } from '@renderer/components/ui/avatar'
-import { Button } from '@renderer/components/ui/button'
-import { ScrollArea } from '@renderer/components/ui/scroll-area'
-import { Spinner } from '@renderer/components/ui/spinner'
 import { initialsFromName } from '@renderer/lib/email'
-import { messageRefKey, summaryToMessageRef } from '@renderer/lib/message-selection'
+import {
+  messageRefKey,
+  resolveSelectionIntent,
+  summaryToMessageRef
+} from '@renderer/lib/message-selection'
 import { cn, formatCount, formatDateLabel } from '@renderer/lib/utils'
-import { MESSAGE_LIST_PAGE_SIZE } from '@shared/models'
+import type { MailMessageSummary } from '@shared/models'
 
 import type { MessageListViewProps } from './message-list-view'
 import {
@@ -33,7 +34,12 @@ import {
   primaryAddressLabel,
   UnreadDot
 } from './message-list-shared'
-import { resolveSelectionIntent } from '@renderer/lib/message-selection'
+import { MessageListEmpty } from './message-list-empty'
+import { VirtualMessageRows } from './virtual-message-rows'
+
+/** A row as tall as it renders at the default text size; each row is measured. */
+const MESSAGE_ROW_HEIGHT_ESTIMATE_PX = 69
+const SECTION_HEADING_HEIGHT_PX = 28
 
 export function MessageList({
   title,
@@ -41,7 +47,8 @@ export function MessageList({
   onClearSearch,
   messages,
   sections,
-  totalCount,
+  countLabel,
+  emptyState,
   selection,
   highlightTerms,
   sort,
@@ -54,6 +61,8 @@ export function MessageList({
   canLoadMoreMessages,
   loadingMoreMessages,
   onLoadMoreMessages,
+  revealCursorToken,
+  onRowsInView,
   onActivateRow,
   onOpenRow,
   onRowContextMenu,
@@ -62,88 +71,12 @@ export function MessageList({
   onSelectAll,
   onClearSelection
 }: MessageListViewProps): React.JSX.Element {
-  const [collapsedSectionKeys, setCollapsedSectionKeys] = useState<ReadonlySet<string>>(
-    () => new Set()
-  )
-  const scrollRootRef = useRef<HTMLDivElement | null>(null)
-  const lastScrollTopRef = useRef(0)
-  const previousInvertRef = useRef(invertVisualOrder)
-
   const selectedKeys = useMemo(
     () => new Set(selection.selectedRefs.map(messageRefKey)),
     [selection.selectedRefs]
   )
   const cursorKey = selection.cursorRef ? messageRefKey(selection.cursorRef) : null
 
-  function findViewport(): HTMLElement | null {
-    return (
-      scrollRootRef.current?.querySelector<HTMLElement>('[data-radix-scroll-area-viewport]') ?? null
-    )
-  }
-
-  // Track the scroll position so the mirror below knows where the user was
-  // *before* the direction flip — reading it afterwards is too late, Chromium
-  // has already adjusted for the new flow direction.
-  useEffect(() => {
-    const viewport = findViewport()
-
-    if (!viewport) {
-      return
-    }
-
-    const onScroll = (): void => {
-      lastScrollTopRef.current = viewport.scrollTop
-    }
-
-    lastScrollTopRef.current = viewport.scrollTop
-    viewport.addEventListener('scroll', onScroll, { passive: true })
-
-    return () => {
-      viewport.removeEventListener('scroll', onScroll)
-    }
-  }, [])
-
-  // Mirror the scroll position when the inversion preference flips, so the
-  // same messages stay in view across the swap.
-  useLayoutEffect(() => {
-    if (previousInvertRef.current === invertVisualOrder) {
-      return
-    }
-
-    previousInvertRef.current = invertVisualOrder
-    const viewport = findViewport()
-
-    if (!viewport) {
-      return
-    }
-
-    const { scrollHeight, clientHeight } = viewport
-
-    if (scrollHeight <= clientHeight) {
-      return
-    }
-
-    const maxScrollTop = scrollHeight - clientHeight
-    const mirrored = Math.min(maxScrollTop, Math.max(0, maxScrollTop - lastScrollTopRef.current))
-    viewport.scrollTop = mirrored
-    lastScrollTopRef.current = mirrored
-  }, [invertVisualOrder])
-
-  // Keep the keyboard cursor on screen while arrowing through a long folder.
-  useEffect(() => {
-    if (!cursorKey) {
-      return
-    }
-
-    scrollRootRef.current
-      ?.querySelector(`[data-message-key="${CSS.escape(cursorKey)}"]`)
-      ?.scrollIntoView({ block: 'nearest' })
-  }, [cursorKey])
-
-  const resultsLabel =
-    totalCount > messages.length
-      ? `${messages.length} di ${totalCount} messaggi`
-      : formatCount(messages.length, 'messaggio', 'messaggi')
   const selectedCount = selection.selectedRefs.length
 
   return (
@@ -160,7 +93,9 @@ export function MessageList({
             className="text-[13px]"
           />
           <p className="text-muted-foreground text-[10px] leading-tight">
-            {selectedCount > 1 ? `${selectedCount} selezionate` : resultsLabel}
+            {selectedCount > 1
+              ? formatCount(selectedCount, 'selezionata', 'selezionate')
+              : countLabel}
           </p>
         </div>
 
@@ -176,185 +111,127 @@ export function MessageList({
         />
       </header>
 
-      <ScrollArea ref={scrollRootRef} className="min-h-0 min-w-0 flex-1">
-        {/*
-          Inverted order is `flex-col-reverse` on this container plus a
-          reversed row list inside each section — nothing else. The sections
-          array used to be reversed here as well, and the two reversals
-          cancelled out: rows ran oldest-to-newest inside each group while
-          the groups themselves stayed newest-first, so "Oggi" sat on top of
-          an otherwise chat-style list and the arrow keys jumped the wrong
-          way at every group boundary. With one reversal the whole list is
-          the exact mirror of the standard order, headings stay above their
-          own rows, and the load-more row lands at the top where the older
-          mail it fetches belongs.
-        */}
-        <div className={cn('flex min-w-0 flex-col', invertVisualOrder && 'flex-col-reverse')}>
-          {sections.map((section) => {
-            const collapsed = collapsedSectionKeys.has(section.key)
-            const sectionRefs = section.messages.map(summaryToMessageRef)
-            const allSelected =
-              sectionRefs.length > 0 &&
-              sectionRefs.every((ref) => selectedKeys.has(messageRefKey(ref)))
-            const sectionMessages = invertVisualOrder
-              ? [...section.messages].reverse()
-              : section.messages
+      {messages.length === 0 && emptyState ? (
+        <MessageListEmpty state={emptyState} />
+      ) : (
+        <VirtualMessageRows
+          sections={sections}
+          invert={invertVisualOrder}
+          cursorKey={cursorKey}
+          revealCursorToken={revealCursorToken}
+          canLoadMore={canLoadMoreMessages}
+          loadingMore={loadingMoreMessages}
+          onLoadMore={onLoadMoreMessages}
+          onRowsInView={onRowsInView}
+          rowHeightEstimate={MESSAGE_ROW_HEIGHT_ESTIMATE_PX}
+          headingHeight={SECTION_HEADING_HEIGHT_PX}
+          renderHeading={(section, collapsed, toggleCollapsed) => (
+            <MessageSectionHeading
+              section={section}
+              collapsed={collapsed}
+              allSelected={section.messages.every((message) =>
+                selectedKeys.has(messageRefKey(summaryToMessageRef(message)))
+              )}
+              onToggleCollapsed={toggleCollapsed}
+              onSelectSection={() => onSelectSection(section)}
+            />
+          )}
+          renderRow={(message: MailMessageSummary) => {
+            const messageRef = summaryToMessageRef(message)
+            const key = messageRefKey(messageRef)
+            const isSelected = selectedKeys.has(key)
+            const isCursor = key === cursorKey
+            const primaryLabel = primaryAddressLabel(message, primaryAddressMode)
+            const accountLabel = accountLabels?.get(message.accountId)
 
             return (
-              <section key={section.key} className="min-w-0">
-                {section.label && (
-                  <MessageSectionHeading
-                    section={section}
-                    collapsed={collapsed}
-                    allSelected={allSelected}
-                    onToggleCollapsed={() =>
-                      setCollapsedSectionKeys((current) => {
-                        const next = new Set(current)
-
-                        if (next.has(section.key)) {
-                          next.delete(section.key)
-                        } else {
-                          next.add(section.key)
-                        }
-
-                        return next
-                      })
-                    }
-                    onSelectSection={() => onSelectSection(section)}
-                  />
+              <div
+                data-message-key={key}
+                role="option"
+                aria-selected={isSelected}
+                tabIndex={-1}
+                onClick={(event) => onActivateRow(messageRef, resolveSelectionIntent(event))}
+                onDoubleClick={() => onOpenRow(messageRef)}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  onRowContextMenu(messageRef)
+                }}
+                className={cn(
+                  'group border-border/40 relative flex cursor-default gap-2 border-b px-2.5 py-1.5 transition-colors',
+                  isSelected ? 'bg-primary/14 hover:bg-primary/18' : 'hover:bg-secondary/45',
+                  // The cursor is drawn as an inset ring, never as a fill: a
+                  // row can be "current but not selected" after a Ctrl-click
+                  // that removed it, and the two states have to look different.
+                  isCursor && !isSelected && 'ring-primary/45 ring-1 ring-inset',
+                  isCursor && isSelected && 'ring-primary/60 ring-1 ring-inset'
                 )}
-
-                {!collapsed &&
-                  sectionMessages.map((message) => {
-                    const messageRef = summaryToMessageRef(message)
-                    const key = messageRefKey(messageRef)
-                    const isSelected = selectedKeys.has(key)
-                    const isCursor = key === cursorKey
-                    const primaryLabel = primaryAddressLabel(message, primaryAddressMode)
-                    const accountLabel = accountLabels?.get(message.accountId)
-
-                    return (
-                      <div
-                        key={key}
-                        data-message-key={key}
-                        role="option"
-                        aria-selected={isSelected}
-                        tabIndex={-1}
-                        onClick={(event) =>
-                          onActivateRow(messageRef, resolveSelectionIntent(event))
-                        }
-                        onDoubleClick={() => onOpenRow(messageRef)}
-                        onContextMenu={(event) => {
-                          event.preventDefault()
-                          onRowContextMenu(messageRef)
-                        }}
-                        className={cn(
-                          'group border-border/40 relative flex cursor-default gap-2 border-b px-2.5 py-1.5 transition-colors',
-                          isSelected
-                            ? 'bg-primary/14 hover:bg-primary/18'
-                            : 'hover:bg-secondary/45',
-                          // The cursor is drawn as an inset ring, never as a
-                          // fill: a row can be "current but not selected"
-                          // after a Ctrl-click that removed it, and the two
-                          // states have to look different.
-                          isCursor && !isSelected && 'ring-primary/45 ring-1 ring-inset',
-                          isCursor && isSelected && 'ring-primary/60 ring-1 ring-inset'
-                        )}
-                      >
-                        <UnreadDot unread={!message.isRead} />
-
-                        <Avatar className="border-border/70 mt-0.5 size-7 shrink-0 border">
-                          <AvatarFallback className="bg-secondary/80 text-[10px] font-semibold">
-                            {initialsFromName(avatarLabel(message, primaryAddressMode))}
-                          </AvatarFallback>
-                        </Avatar>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="flex min-w-0 items-baseline gap-2">
-                            <p
-                              className={cn(
-                                'min-w-0 flex-1 truncate text-[12.5px] leading-5',
-                                message.isRead ? 'font-medium' : 'font-bold'
-                              )}
-                            >
-                              <HighlightedText
-                                text={primaryLabel}
-                                terms={
-                                  primaryAddressMode === 'sender'
-                                    ? highlightTerms.sender
-                                    : highlightTerms.recipients
-                                }
-                              />
-                            </p>
-
-                            {accountLabel && (
-                              <AccountTag label={accountLabel} className="max-w-[40%] shrink-0" />
-                            )}
-
-                            <span className="text-muted-foreground shrink-0 text-[10.5px] tabular-nums">
-                              {formatDateLabel(message.date)}
-                            </span>
-                          </div>
-
-                          <div className="flex min-w-0 items-center gap-1.5">
-                            <p
-                              className={cn(
-                                'min-w-0 flex-1 truncate text-[12px] leading-5',
-                                message.isRead
-                                  ? 'text-foreground/80'
-                                  : 'text-foreground font-semibold'
-                              )}
-                            >
-                              <HighlightedText
-                                text={message.subject}
-                                terms={highlightTerms.subject}
-                              />
-                            </p>
-                            <AttachmentMark present={message.hasAttachments} />
-                            <FlagToggle
-                              flagged={message.isFlagged}
-                              onToggle={() => onToggleFlag(messageRef, !message.isFlagged)}
-                            />
-                          </div>
-
-                          {message.previewHydrated ? (
-                            <p className="text-muted-foreground min-w-0 truncate text-[11px] leading-4">
-                              <HighlightedText text={message.preview} terms={highlightTerms.body} />
-                            </p>
-                          ) : (
-                            <p className="text-muted-foreground/55 min-w-0 truncate text-[11px] leading-4 italic">
-                              Caricamento anteprima…
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
-              </section>
-            )
-          })}
-
-          {canLoadMoreMessages && (
-            <div className="p-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 w-full text-[11px]"
-                disabled={loadingMoreMessages}
-                onClick={onLoadMoreMessages}
               >
-                {loadingMoreMessages ? (
-                  <>
-                    <Spinner className="size-3.5" /> Caricamento…
-                  </>
-                ) : (
-                  `Carica altre ${MESSAGE_LIST_PAGE_SIZE} email`
-                )}
-              </Button>
-            </div>
-          )}
-        </div>
-      </ScrollArea>
+                <UnreadDot unread={!message.isRead} />
+
+                <Avatar className="border-border/70 mt-0.5 size-7 shrink-0 border">
+                  <AvatarFallback className="bg-secondary/80 text-[10px] font-semibold">
+                    {initialsFromName(avatarLabel(message, primaryAddressMode))}
+                  </AvatarFallback>
+                </Avatar>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-baseline gap-2">
+                    <p
+                      className={cn(
+                        'min-w-0 flex-1 truncate text-[12.5px] leading-5',
+                        message.isRead ? 'font-medium' : 'font-bold'
+                      )}
+                    >
+                      <HighlightedText
+                        text={primaryLabel}
+                        terms={
+                          primaryAddressMode === 'sender'
+                            ? highlightTerms.sender
+                            : highlightTerms.recipients
+                        }
+                      />
+                    </p>
+
+                    {accountLabel && (
+                      <AccountTag label={accountLabel} className="max-w-[40%] shrink-0" />
+                    )}
+
+                    <span className="text-muted-foreground shrink-0 text-[10.5px] tabular-nums">
+                      {formatDateLabel(message.date)}
+                    </span>
+                  </div>
+
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <p
+                      className={cn(
+                        'min-w-0 flex-1 truncate text-[12px] leading-5',
+                        message.isRead ? 'text-foreground/80' : 'text-foreground font-semibold'
+                      )}
+                    >
+                      <HighlightedText text={message.subject} terms={highlightTerms.subject} />
+                    </p>
+                    <AttachmentMark present={message.hasAttachments} />
+                    <FlagToggle
+                      flagged={message.isFlagged}
+                      onToggle={() => onToggleFlag(messageRef, !message.isFlagged)}
+                    />
+                  </div>
+
+                  {message.previewHydrated ? (
+                    <p className="text-muted-foreground min-w-0 truncate text-[11px] leading-4">
+                      <HighlightedText text={message.preview} terms={highlightTerms.body} />
+                    </p>
+                  ) : (
+                    <p className="text-muted-foreground/55 min-w-0 truncate text-[11px] leading-4 italic">
+                      Caricamento anteprima…
+                    </p>
+                  )}
+                </div>
+              </div>
+            )
+          }}
+        />
+      )}
     </div>
   )
 }

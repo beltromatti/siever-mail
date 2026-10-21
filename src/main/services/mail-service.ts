@@ -51,6 +51,7 @@ import {
   READER_ZOOM_MAX,
   READER_ZOOM_MIN
 } from '@shared/models'
+import { parseSearchQuery } from '@shared/search'
 
 import {
   accountAttachmentCacheDirectory,
@@ -63,11 +64,12 @@ import {
   markFromInternet,
   sha256
 } from './attachment-files'
-import { AppDatabase } from './database'
+import { AppDatabase, type MessageListView } from './database'
 import { finalizeUpgradeMigration } from './data-migration'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
 import { GoogleOAuthService } from './google-oauth'
 import { MailEngine } from './mail-engine'
+import { imapSearchGroups } from './mail-engine/server-search'
 import {
   buildRawOutgoingMessage,
   createOutgoingMessagePayload,
@@ -504,99 +506,109 @@ export class MailService {
     }
   }
 
+  /**
+   * A page of a folder's list — or TUTTI's — from the top: `limit` rows,
+   * more when `includeRef` sits further down, so the message the user had
+   * selected stays in the list under a new order or filter.
+   */
   async listMessages(
     accountId: string,
     folderPath: string,
     options?: ListMessagesOptions
   ): Promise<MailMessageListPage> {
-    if (folderPath === ALL_INBOX_FOLDER_PATH) {
-      return this.listAllInboxMessages(options)
+    const unified = folderPath === ALL_INBOX_FOLDER_PATH
+    const mailboxes = await this.listMailboxes(accountId, folderPath)
+    const view: MessageListView = {
+      query: options?.query?.trim() || undefined,
+      sort: options?.sort,
+      grouping: options?.grouping,
+      filter: options?.filter,
+      serverMatches: options?.serverMatches
+        ? messageRefsSchema.parse(options.serverMatches)
+        : undefined
     }
-
-    await this.ensureAccountExists(accountId)
-
-    const limit = normalizeMessageListLimit(options?.limit)
-    const query = options?.query?.trim()
-    const sort = options?.sort
-    const grouping = options?.grouping
-    const filter = options?.filter
-    const messages = await this.database.listMessages(
-      accountId,
-      folderPath,
-      limit,
-      query,
-      sort,
-      grouping,
-      filter
-    )
-    const totalInQuery = await this.database.countMessages(accountId, folderPath, query, filter)
-    const folder = await this.database.getFolder(accountId, folderPath)
-    // A narrowed view reports what it actually holds; only the unfiltered
-    // folder can lean on the server-side message count, which knows about
-    // rows the local cache has not pulled down yet.
-    const isNarrowed = Boolean(query) || (filter && filter !== 'all')
-    const folderTotal = isNarrowed ? totalInQuery : (folder?.messageCount ?? totalInQuery)
-    const total = Math.max(totalInQuery, folderTotal)
-
-    return {
-      messages,
-      total,
-      hasMore: total > messages.length,
-      limit,
-      folderLastSyncedAt: folder?.lastSyncedAt
-    }
-  }
-
-  private async listAllInboxMessages(options?: ListMessagesOptions): Promise<MailMessageListPage> {
-    const limit = normalizeMessageListLimit(options?.limit)
-    const query = options?.query?.trim()
-    const sort = options?.sort
-    const filter = options?.filter
-    const mailboxes = await this.engine.resolveUnifiedInboxMailboxes()
+    let limit = normalizeMessageListLimit(options?.limit)
 
     if (mailboxes.length === 0) {
-      return {
-        messages: [],
-        total: 0,
-        hasMore: false,
-        limit
+      return { messages: [], total: 0, hasMore: false, limit, cachedCount: 0, serverCount: 0 }
+    }
+
+    const includeRef = options?.includeRef ? messageRefSchema.parse(options.includeRef) : null
+
+    if (includeRef) {
+      const position = await this.database.findMessagePosition(mailboxes, view, includeRef)
+
+      if (position >= limit) {
+        limit = (Math.floor(position / MESSAGE_LIST_PAGE_SIZE) + 2) * MESSAGE_LIST_PAGE_SIZE
       }
     }
 
-    const messages = await this.database.listMessagesInMailboxes(
-      mailboxes,
-      limit,
-      query,
-      sort,
-      options?.grouping,
-      filter
-    )
-    const isNarrowed = Boolean(query) || (filter && filter !== 'all')
-    const totalInQuery = isNarrowed
-      ? await this.database.countMessagesInMailboxes(mailboxes, query, filter)
-      : await this.computeUnifiedMessageCount(mailboxes)
-    const summary = await this.engine.computeUnifiedInboxSummary()
-    const folderTotal = isNarrowed ? totalInQuery : summary.messageCount
-    const total = Math.max(totalInQuery, folderTotal)
+    const messages = await this.database.listMessagesInMailboxes(mailboxes, limit, view)
+    const narrowed = Boolean(view.query) || (view.filter !== undefined && view.filter !== 'all')
+    const cachedCount = await this.database.countMessagesInMailboxes(mailboxes, {})
+    const available = narrowed
+      ? await this.database.countMessagesInMailboxes(mailboxes, view)
+      : cachedCount
+    const synced = unified
+      ? await this.engine.computeUnifiedInboxSummary()
+      : await this.database.getFolder(accountId, folderPath)
+    const serverCount = synced?.messageCount ?? 0
 
     return {
       messages,
-      total,
-      hasMore: total > messages.length,
+      // A narrowed view reports what it actually holds; only the whole
+      // folder can lean on the server's count, which knows about rows the
+      // local cache has not pulled down yet.
+      total: narrowed ? available : Math.max(available, serverCount),
+      // What more there is to show is what the cache holds: the server's
+      // count includes messages still on their way.
+      hasMore: available > messages.length,
       limit,
-      folderLastSyncedAt: summary.lastSyncedAt
+      folderLastSyncedAt: synced?.lastSyncedAt,
+      cachedCount,
+      serverCount
     }
   }
 
-  private async computeUnifiedMessageCount(
-    mailboxes: Array<{ accountId: string; folderPath: string }>
-  ): Promise<number> {
-    let total = 0
-    for (const mailbox of mailboxes) {
-      const folder = await this.database.getFolder(mailbox.accountId, mailbox.folderPath)
-      total += folder?.messageCount ?? 0
+  /** The mailboxes a list shows: one folder, or TUTTI's inboxes. */
+  private async listMailboxes(
+    accountId: string,
+    folderPath: string
+  ): Promise<Array<{ accountId: string; folderPath: string }>> {
+    if (folderPath === ALL_INBOX_FOLDER_PATH) {
+      return this.engine.resolveUnifiedInboxMailboxes()
     }
-    return total
+
+    await this.ensureAccountExists(accountId)
+    return [{ accountId, folderPath }]
+  }
+
+  /**
+   * What the servers find for a search of a list — in the whole text of
+   * the messages, which the cache holds only for those downloaded — to be
+   * listed with the cache's own matches (`ListMessagesOptions.serverMatches`).
+   * Null when a later search took this one's place.
+   */
+  async searchOnServer(
+    accountId: string,
+    folderPath: string,
+    query: string
+  ): Promise<MessageRef[] | null> {
+    const groups = imapSearchGroups(parseSearchQuery(z.string().max(500).parse(query)))
+
+    if (groups.length === 0) {
+      return []
+    }
+
+    const mailboxes = await this.listMailboxes(accountId, folderPath)
+    const found = await Promise.all(
+      mailboxes.map(async (mailbox) => {
+        const uids = await this.engine.searchMessages(mailbox, groups)
+        return uids === null ? null : uids.map((uid) => ({ ...mailbox, uid }))
+      })
+    )
+
+    return found.some((refs) => refs === null) ? null : found.flatMap((refs) => refs ?? [])
   }
 
   /** A message with its body: from the cache, or fetched and kept there. */

@@ -1,4 +1,5 @@
 import { BrowserWindow, net, powerMonitor } from 'electron'
+import type { SearchObject } from 'imapflow'
 
 import { logMainError } from '@main/utils/error-utils'
 import { IPC_CHANNELS } from '@shared/ipc'
@@ -308,6 +309,15 @@ export class MailEngine {
   ): Promise<Awaited<ReturnType<AccountConnection['fetchMessageRawSource']>>> {
     const connection = await this.requestConnection(ref.accountId)
     return connection.fetchMessageRawSource(ref)
+  }
+
+  /** See `AccountConnection.searchMessages`. */
+  async searchMessages(
+    mailbox: { accountId: string; folderPath: string },
+    groups: ReadonlyArray<SearchObject>
+  ): Promise<number[] | null> {
+    const connection = await this.requestConnection(mailbox.accountId)
+    return connection.searchMessages(mailbox.folderPath, groups)
   }
 
   /** See `AccountConnection.hydratePreviews`; messages of any account and folder. */

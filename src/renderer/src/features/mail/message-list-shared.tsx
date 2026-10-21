@@ -226,10 +226,7 @@ export function MessageSectionHeading({
 }): React.JSX.Element {
   return (
     <div
-      className={cn(
-        'list-section-heading sticky top-0 z-10 flex items-center gap-1.5 px-1',
-        dense ? 'h-6' : 'h-7'
-      )}
+      className={cn('list-section-heading flex items-center gap-1.5 px-1', dense ? 'h-6' : 'h-7')}
     >
       <Tooltip>
         <TooltipTrigger asChild>

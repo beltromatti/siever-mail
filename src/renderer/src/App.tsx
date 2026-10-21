@@ -21,6 +21,7 @@ import {
 } from '@renderer/features/mail/mail-composer-dialog'
 import { MessageList } from '@renderer/features/mail/message-list'
 import { MessageTable } from '@renderer/features/mail/message-table'
+import type { MessageListEmptyState } from '@renderer/features/mail/message-list-empty'
 import type { MessageListViewProps } from '@renderer/features/mail/message-list-view'
 import {
   EMPTY_MESSAGE_HIGHLIGHT_TERMS,
@@ -40,7 +41,7 @@ import { Button } from '@renderer/components/ui/button'
 import { ConfirmDialog, useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
-import { cn, formatAppVersion } from '@renderer/lib/utils'
+import { cn, formatAppVersion, formatCount } from '@renderer/lib/utils'
 import { buildMessageSections } from '@renderer/lib/message-sections'
 import {
   CommandShortcutsProvider,
@@ -101,11 +102,30 @@ const GMAIL_QUOTE_BLOCK_STYLE = 'margin:0 0 0 .8ex;border-left:1px #ccc solid;pa
 const READER_ZOOM_SAVE_DELAY_MS = 400
 /** The rows around the one being read whose bodies are fetched ahead. */
 const PREFETCHED_NEIGHBOUR_OFFSETS = [1, -1, 2, -2]
+/** How long sync events gather before the list is read again for them. */
+const LIST_REFRESH_COALESCE_MS = 300
+/** How long a search rests before the servers are asked too: not at every keystroke. */
+const SERVER_SEARCH_DELAY_MS = 450
 /** How long a message stays in the pane before its neighbours are fetched: skimming past fetches nothing. */
 const PREFETCH_DWELL_MS = 300
 
 /** Folders whose rows are about the recipient rather than the sender. */
 const RECIPIENT_ORIENTED_SPECIAL_USES = new Set(['\\Sent', '\\Drafts'])
+
+/**
+ * Where a search that found nothing looked, in so many words — the answer
+ * to "is that all, or were there more to load?".
+ */
+function searchedScopeLine(count: number, viewLabel: string, withServer: boolean): string {
+  const where =
+    count === 1
+      ? `nell'unico messaggio di «${viewLabel}»`
+      : `in tutti i ${count.toLocaleString('it-IT')} messaggi di «${viewLabel}»`
+
+  return withServer
+    ? `Cercato ${where}: mittente, destinatari, oggetto e testo.`
+    : `Cercato ${where} scaricati su questo computer: la ricerca nel testo sul server non è riuscita.`
+}
 
 function htmlFromText(text: string): string {
   return text
@@ -367,6 +387,9 @@ function App(): React.JSX.Element {
   const [messages, setMessages] = useState<MailMessageSummary[]>([])
   const [messageLimit, setMessageLimit] = useState(MESSAGE_LIST_PAGE_SIZE)
   const [totalMessagesInFolder, setTotalMessagesInFolder] = useState(0)
+  // How many messages the cache holds of the view, and the server: what a
+  // search looked through, and what is still on its way.
+  const [listCounts, setListCounts] = useState({ cachedCount: 0, serverCount: 0 })
   const [hasMoreMessages, setHasMoreMessages] = useState(false)
   const [accountConnections, setAccountConnections] = useState<
     Record<string, AccountConnectionState>
@@ -376,6 +399,16 @@ function App(): React.JSX.Element {
   // Ctrl-click that removes the cursor's row from the selection has to move
   // both in the same commit or the UI shows a state that never existed.
   const [selection, setSelection] = useState<MessageSelectionState>(EMPTY_MESSAGE_SELECTION)
+  // Read at event time by the key handler and by list loads, which must not
+  // re-run because the selection moved.
+  const selectionRef = useRef(selection)
+  // Bumped when the list should bring the selection into view: a folder,
+  // order, grouping or filter just shown.
+  const [revealCursorToken, setRevealCursorToken] = useState(0)
+
+  useEffect(() => {
+    selectionRef.current = selection
+  }, [selection])
   const [selectedMessage, setSelectedMessage] = useState<MailMessageDetail | null>(null)
   const [isMessageExpanded, setIsMessageExpanded] = useState(false)
   const [search, setSearch] = useState('')
@@ -723,7 +756,9 @@ function App(): React.JSX.Element {
           query: options?.query,
           sort: options?.sort,
           grouping: options?.grouping,
-          filter: options?.filter
+          filter: options?.filter,
+          includeRef: options?.includeRef,
+          serverMatches: options?.serverMatches
         })
 
         if (requestId !== messageRequestIdRef.current) {
@@ -742,6 +777,10 @@ function App(): React.JSX.Element {
         setMessages(fetchedPage.messages)
         setMessageLimit(fetchedPage.limit)
         setTotalMessagesInFolder(fetchedPage.total)
+        setListCounts({
+          cachedCount: fetchedPage.cachedCount,
+          serverCount: fetchedPage.serverCount
+        })
         setHasMoreMessages(fetchedPage.hasMore)
 
         setSelection((current) => {
@@ -853,6 +892,57 @@ function App(): React.JSX.Element {
    * stable identity so the IMAP listener stops re-subscribing on every
    * preference change.
    */
+  // A search also asks the servers, which know the text of every message —
+  // the cache holds only those downloaded. The answer is kept per view and
+  // query; until it comes, the search is "on the server too".
+  const [serverSearchResult, setServerSearchResult] = useState<{
+    viewKey: string
+    query: string
+    outcome: 'done' | 'failed'
+    matches: MessageRef[]
+  } | null>(null)
+  const activeSearchQuery = search.trim()
+  const searchViewKey =
+    selectedAccountId && selectedFolderPath ? `${selectedAccountId}\u0000${selectedFolderPath}` : ''
+  const currentServerSearch =
+    serverSearchResult &&
+    serverSearchResult.viewKey === searchViewKey &&
+    serverSearchResult.query === activeSearchQuery
+      ? serverSearchResult
+      : null
+  const serverSearchStatus: 'idle' | 'searching' | 'done' | 'failed' = !activeSearchQuery
+    ? 'idle'
+    : (currentServerSearch?.outcome ?? 'searching')
+  const serverMatches =
+    currentServerSearch?.outcome === 'done' ? currentServerSearch.matches : undefined
+
+  useEffect(() => {
+    if (!activeSearchQuery || !selectedAccountId || !selectedFolderPath) {
+      return
+    }
+
+    const viewKey = `${selectedAccountId}\u0000${selectedFolderPath}`
+    const timer = setTimeout(() => {
+      window.mailApi.searchOnServer(selectedAccountId, selectedFolderPath, activeSearchQuery).then(
+        (matches) => {
+          // Null: a later search took this one's place.
+          if (matches) {
+            setServerSearchResult({ viewKey, query: activeSearchQuery, outcome: 'done', matches })
+          }
+        },
+        () =>
+          setServerSearchResult({
+            viewKey,
+            query: activeSearchQuery,
+            outcome: 'failed',
+            matches: []
+          })
+      )
+    }, SERVER_SEARCH_DELAY_MS)
+
+    return () => clearTimeout(timer)
+  }, [activeSearchQuery, selectedAccountId, selectedFolderPath])
+
   const listOptionsRef = useRef<ListMessagesOptions>({
     limit: MESSAGE_LIST_PAGE_SIZE,
     sort: uiPreferences.messageListSort,
@@ -866,12 +956,14 @@ function App(): React.JSX.Element {
       query: search.trim() || undefined,
       sort: uiPreferences.messageListSort,
       grouping: uiPreferences.messageGrouping,
-      filter: messageFilter
+      filter: messageFilter,
+      serverMatches
     }
   }, [
     messageFilter,
     messageLimit,
     search,
+    serverMatches,
     uiPreferences.messageGrouping,
     uiPreferences.messageListSort
   ])
@@ -892,6 +984,54 @@ function App(): React.JSX.Element {
       })
     },
     [loadMessages]
+  )
+
+  // The view a deferred refresh reads, as it is when the refresh runs.
+  const currentViewRef = useRef<{ accountId: string; folderPath: string } | null>(null)
+
+  useEffect(() => {
+    currentViewRef.current =
+      selectedAccountId && selectedFolderPath
+        ? { accountId: selectedAccountId, folderPath: selectedFolderPath }
+        : null
+  }, [selectedAccountId, selectedFolderPath])
+
+  const listRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /**
+   * Reads the list again shortly, once for a burst of sync events: a first
+   * sync lands hundreds of batches, and each used to reload the whole list.
+   * A view being loaded meanwhile is let finish — the refresh comes after.
+   */
+  const scheduleListRefresh = useCallback((): void => {
+    if (listRefreshTimerRef.current !== null) {
+      return
+    }
+
+    const run = (): void => {
+      if (loadingMessagesRequestIdRef.current !== null) {
+        listRefreshTimerRef.current = setTimeout(run, LIST_REFRESH_COALESCE_MS)
+        return
+      }
+
+      listRefreshTimerRef.current = null
+      const view = currentViewRef.current
+
+      if (view) {
+        void refreshCurrentFolder(view.accountId, view.folderPath)
+      }
+    }
+
+    listRefreshTimerRef.current = setTimeout(run, LIST_REFRESH_COALESCE_MS)
+  }, [refreshCurrentFolder])
+
+  useEffect(
+    () => () => {
+      if (listRefreshTimerRef.current !== null) {
+        clearTimeout(listRefreshTimerRef.current)
+      }
+    },
+    []
   )
 
   const removeAccount = useCallback(
@@ -1101,27 +1241,40 @@ function App(): React.JSX.Element {
       return
     }
 
+    // A new view starts from its first page — further down when that is
+    // where the message the user had selected now sits.
     const requestId = ++messageRequestIdRef.current
     void loadMessages(selectedAccountId, selectedFolderPath, {
-      limit: messageLimit,
+      limit: MESSAGE_LIST_PAGE_SIZE,
       query: search.trim() || undefined,
       sort: uiPreferences.messageListSort,
       grouping: uiPreferences.messageGrouping,
       filter: messageFilter,
+      includeRef: selectionRef.current.cursorRef ?? undefined,
+      serverMatches,
       withPanelLoader: true,
       requestId
+    }).then((page) => {
+      if (page) {
+        setRevealCursorToken((token) => token + 1)
+      }
     })
   }, [
     loadMessages,
     messageFilter,
-    messageLimit,
     resetMailboxView,
     search,
     selectedAccountId,
     selectedFolderPath,
+    serverMatches,
     uiPreferences.messageGrouping,
     uiPreferences.messageListSort
   ])
+
+  // The mirrored order keeps the selection in view too.
+  useEffect(() => {
+    setRevealCursorToken((token) => token + 1)
+  }, [uiPreferences.invertMessageListOrder])
 
   // The reading pane follows a selection of exactly one. Above that the pane
   // shows a summary instead, so there is nothing to fetch.
@@ -1144,7 +1297,6 @@ function App(): React.JSX.Element {
 
   const clearSearch = useCallback((): void => {
     setSearch('')
-    setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
   }, [])
 
   // Escape steps back one level at a time: the expanded reader collapses, a
@@ -1253,23 +1405,55 @@ function App(): React.JSX.Element {
         return
       }
 
-      const hasMessageDelta =
-        event.added.length > 0 || event.updated.length > 0 || event.removedUids.length > 0
+      // TUTTI shows the inboxes; any other view one folder.
+      const inView =
+        selectedFolderPath === ALL_INBOX_FOLDER_PATH
+          ? event.folderPath.toUpperCase() === 'INBOX'
+          : event.accountId === selectedAccountId && event.folderPath === selectedFolderPath
 
-      if (selectedFolderPath === ALL_INBOX_FOLDER_PATH) {
-        if (!hasMessageDelta) {
-          return
-        }
-
-        void refreshCurrentFolder(selectedAccountId, ALL_INBOX_FOLDER_PATH)
+      if (!inView) {
         return
       }
 
-      if (event.accountId !== selectedAccountId || event.folderPath !== selectedFolderPath) {
-        return
+      // Changes to rows on screen apply in place — a flag, a preview, a
+      // message gone — however many rows the list holds. New mail needs its
+      // place in the order, and the counts their update: one read of the
+      // list does both, for every event of a burst.
+      if (event.updated.length > 0 || event.removedUids.length > 0) {
+        const updates = new Map(
+          event.updated.map((message) => [messageRefKey(summaryToMessageRef(message)), message])
+        )
+        const removedUids = new Set(event.removedUids)
+
+        setMessages((current) => {
+          let changed = false
+          const next = current.flatMap((message) => {
+            if (
+              removedUids.has(message.uid) &&
+              message.accountId === event.accountId &&
+              message.folderPath === event.folderPath
+            ) {
+              changed = true
+              return []
+            }
+
+            const update = updates.get(messageRefKey(summaryToMessageRef(message)))
+
+            if (update) {
+              changed = true
+              return [update]
+            }
+
+            return [message]
+          })
+
+          return changed ? next : current
+        })
       }
 
-      void refreshCurrentFolder(selectedAccountId, selectedFolderPath)
+      if (event.added.length > 0 || event.removedUids.length > 0) {
+        scheduleListRefresh()
+      }
     })
 
     const unsubscribeFolders = window.mailApi.onFoldersChanged((event) => {
@@ -1328,7 +1512,7 @@ function App(): React.JSX.Element {
       unsubscribeUnified()
       unsubscribeConnection()
     }
-  }, [refreshCurrentFolder, selectedAccountId, selectedFolderPath])
+  }, [scheduleListRefresh, selectedAccountId, selectedFolderPath])
 
   useEffect(() => {
     return window.mailApi.onOpenMessageFromNotification((ref) => {
@@ -1336,7 +1520,6 @@ function App(): React.JSX.Element {
       setShowWelcomeGate(false)
       cancelInFlightWork()
       setViewError(null)
-      setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
       setTotalMessagesInFolder(0)
       setHasMoreMessages(false)
       setSelection({ selectedRefs: [ref], cursorRef: ref, anchorRef: ref })
@@ -1399,15 +1582,15 @@ function App(): React.JSX.Element {
 
   const orderedMessageRefs = useMemo(() => messages.map(summaryToMessageRef), [messages])
 
-  // Rows without a preview yet — older than those a sync fills in ahead —
-  // ask for theirs; one already on its way is not fetched twice.
-  useEffect(() => {
-    const missing = messages.filter((message) => !message.previewHydrated).map(summaryToMessageRef)
+  // Rows in view without a preview yet — older than those a sync fills in
+  // ahead — ask for theirs; one already on its way is not fetched twice.
+  const hydratePreviewsInView = useCallback((inView: MailMessageSummary[]): void => {
+    const missing = inView.filter((message) => !message.previewHydrated).map(summaryToMessageRef)
 
     if (missing.length > 0) {
       void window.mailApi.hydratePreviews(missing).catch(() => undefined)
     }
-  }, [messages])
+  }, [])
 
   const currentFolder = useMemo(
     () => folders.find((folder) => folder.path === selectedFolderPath) ?? null,
@@ -1459,6 +1642,7 @@ function App(): React.JSX.Element {
         sort: uiPreferences.messageListSort,
         grouping: uiPreferences.messageGrouping,
         filter: messageFilter,
+        serverMatches,
         withPanelLoader: false,
         requestId
       })
@@ -1475,9 +1659,21 @@ function App(): React.JSX.Element {
     search,
     selectedAccountId,
     selectedFolderPath,
+    serverMatches,
     uiPreferences.messageGrouping,
     uiPreferences.messageListSort
   ])
+
+  // One identity for the list, which asks for the next page from an effect.
+  const loadMoreMessagesRef = useRef(loadMoreMessages)
+
+  useEffect(() => {
+    loadMoreMessagesRef.current = loadMoreMessages
+  }, [loadMoreMessages])
+
+  const loadMoreMessagesHandler = useCallback((): void => {
+    void loadMoreMessagesRef.current()
+  }, [])
 
   const handleActivateRow = useCallback(
     (ref: MessageRef, intent: SelectionIntent): void => {
@@ -2270,16 +2466,11 @@ function App(): React.JSX.Element {
   // Refs the global key handler reads at event time. Keeping them in refs
   // avoids rebinding the window listener on every selection change.
   const orderedMessageRefsRef = useRef(orderedMessageRefs)
-  const selectionRef = useRef(selection)
   const invertVisualOrderRef = useRef(uiPreferences.invertMessageListOrder)
 
   useEffect(() => {
     orderedMessageRefsRef.current = orderedMessageRefs
   }, [orderedMessageRefs])
-
-  useEffect(() => {
-    selectionRef.current = selection
-  }, [selection])
 
   useEffect(() => {
     invertVisualOrderRef.current = uiPreferences.invertMessageListOrder
@@ -2528,7 +2719,6 @@ function App(): React.JSX.Element {
       },
       onSearch: (address) => {
         setSearch(address.address)
-        setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
       }
     }),
     [openComposer, readingRef?.accountId, selectedAccountId]
@@ -2662,7 +2852,6 @@ function App(): React.JSX.Element {
         // Several words are looked for as the phrase they were.
         const text = request.text.replaceAll('"', '').slice(0, 120)
         setSearch(text.includes(' ') ? `"${text}"` : text)
-        setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
         return
       }
 
@@ -2818,7 +3007,6 @@ function App(): React.JSX.Element {
       case 'sender-messages':
         if (sender) {
           setSearch(`da:${sender.address}`)
-          setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
         }
         return
       case 'delete':
@@ -3028,13 +3216,72 @@ function App(): React.JSX.Element {
     )
   }
 
+  // What the view is called where it is named: the folder, or TUTTI.
+  const currentViewLabel =
+    selectedFolderPath === ALL_INBOX_FOLDER_PATH
+      ? ALL_INBOX_FOLDER_LABEL
+      : (currentFolder?.name ?? 'Conversazioni')
+  const filterNouns =
+    messageFilter === 'unread'
+      ? (['messaggio non letto', 'messaggi non letti'] as const)
+      : messageFilter === 'flagged'
+        ? (['messaggio contrassegnato', 'messaggi contrassegnati'] as const)
+        : (['messaggio', 'messaggi'] as const)
+  const listCountLabel = activeSearchQuery
+    ? formatCount(totalMessagesInFolder, 'risultato', 'risultati') +
+      (serverSearchStatus === 'searching' ? ' · cerco anche nel testo…' : '')
+    : formatCount(totalMessagesInFolder, filterNouns[0], filterNouns[1])
+  const notYetSynced = Math.max(0, listCounts.serverCount - listCounts.cachedCount)
+  const listEmptyState: MessageListEmptyState | null = loadingMessages
+    ? null
+    : activeSearchQuery
+      ? serverSearchStatus === 'searching'
+        ? {
+            kind: 'search',
+            title: `Cerco «${activeSearchQuery}»…`,
+            lines: [
+              `Nessun riscontro tra mittenti, destinatari, oggetti e anteprime di «${currentViewLabel}»: sto cercando nel testo completo dei messaggi sul server.`
+            ]
+          }
+        : {
+            kind: 'search',
+            title: `Nessun messaggio trovato per «${activeSearchQuery}»`,
+            lines: [
+              searchedScopeLine(
+                listCounts.cachedCount,
+                currentViewLabel,
+                serverSearchStatus === 'done'
+              ),
+              ...(messageFilter !== 'all'
+                ? [`Solo tra i ${filterNouns[1]}: il filtro in alto è attivo.`]
+                : []),
+              ...(notYetSynced > 0
+                ? [
+                    notYetSynced === 1
+                      ? 'Un messaggio della cartella è ancora in arrivo dal server e non è compreso.'
+                      : `${notYetSynced.toLocaleString('it-IT')} messaggi della cartella sono ancora in arrivo dal server e non sono compresi.`
+                  ]
+                : [])
+            ],
+            action: { label: 'Esci dalla ricerca', onClick: clearSearch }
+          }
+      : messageFilter !== 'all'
+        ? {
+            kind: 'filter',
+            title: `Nessun ${filterNouns[0]} in «${currentViewLabel}»`,
+            lines: [],
+            action: { label: 'Mostra tutti', onClick: () => setMessageFilter('all') }
+          }
+        : { kind: 'folder', title: `Nessun messaggio in «${currentViewLabel}»`, lines: [] }
+
   const listViewProps: MessageListViewProps = {
     title: 'Conversazioni',
     searchQuery: search.trim(),
     onClearSearch: clearSearch,
     messages,
     sections: messageSections,
-    totalCount: totalMessagesInFolder,
+    countLabel: listCountLabel,
+    emptyState: listEmptyState,
     selection,
     highlightTerms,
     sort: uiPreferences.messageListSort,
@@ -3044,9 +3291,11 @@ function App(): React.JSX.Element {
     invertVisualOrder: uiPreferences.invertMessageListOrder,
     primaryAddressMode,
     accountLabels,
-    canLoadMoreMessages: hasMoreMessages && messages.length >= MESSAGE_LIST_PAGE_SIZE,
+    canLoadMoreMessages: hasMoreMessages,
     loadingMoreMessages,
-    onLoadMoreMessages: () => void loadMoreMessages(),
+    onLoadMoreMessages: loadMoreMessagesHandler,
+    revealCursorToken,
+    onRowsInView: hydratePreviewsInView,
     onActivateRow: handleActivateRow,
     onOpenRow: handleOpenRow,
     onRowContextMenu: (ref) => void openMessageContextMenu(ref),
@@ -3149,15 +3398,10 @@ function App(): React.JSX.Element {
               }
               search={search}
               searchInputRef={searchInputRef}
-              onSearchChange={(value) => {
-                setSearch(value)
-                setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
-              }}
+              searchScopeLabel={currentViewLabel}
+              onSearchChange={setSearch}
               filter={messageFilter}
-              onFilterChange={(next) => {
-                setMessageFilter(next)
-                setMessageLimit(MESSAGE_LIST_PAGE_SIZE)
-              }}
+              onFilterChange={setMessageFilter}
               selectedCount={selection.selectedRefs.length}
               toggleSeenLabel={toggleSeenLabel}
               selectionFlagged={selectionFlagged}

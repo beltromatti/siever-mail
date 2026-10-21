@@ -7,6 +7,7 @@ import type {
   MessageRef
 } from '@shared/models'
 
+import type { MessageListEmptyState } from './message-list-empty'
 import type { MessageHighlightTerms, PrimaryAddressMode } from './message-list-shared'
 
 /**
@@ -22,7 +23,10 @@ export interface MessageListViewProps {
   onClearSearch: () => void
   messages: MailMessageSummary[]
   sections: MessageSection[]
-  totalCount: number
+  /** What the list holds, said under its title: "9.796 messaggi", "12 risultati". */
+  countLabel: string
+  /** What the list says when it holds nothing; null while it is still loading. */
+  emptyState: MessageListEmptyState | null
   selection: MessageSelectionState
   highlightTerms: MessageHighlightTerms
   sort: MailMessageListSort
@@ -41,9 +45,14 @@ export interface MessageListViewProps {
    * when the view holds one account's mail.
    */
   accountLabels: ReadonlyMap<string, string> | null
+  /** Whether the cache holds more rows than are loaded: the next page loads as the end nears. */
   canLoadMoreMessages: boolean
   loadingMoreMessages: boolean
   onLoadMoreMessages: () => void
+  /** Changes when the list should bring the selection into view (see `VirtualMessageRows`). */
+  revealCursorToken: number
+  /** The messages whose rows are on screen, once a scroll settles. */
+  onRowsInView: (messages: MailMessageSummary[]) => void
   onActivateRow: (ref: MessageRef, intent: SelectionIntent) => void
   onOpenRow: (ref: MessageRef) => void
   /** A right click on a row: the menu of what can be done with it. */

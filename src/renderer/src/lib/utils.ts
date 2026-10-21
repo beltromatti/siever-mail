@@ -6,8 +6,9 @@ export function cn(...inputs: ClassValue[]): string {
 }
 
 /** "1 messaggio", "3 messaggi": a count with its noun in the right number. */
+/** "1 messaggio", "9.795 messaggi". */
 export function formatCount(count: number, singular: string, plural: string): string {
-  return `${count} ${count === 1 ? singular : plural}`
+  return `${count.toLocaleString('it-IT')} ${count === 1 ? singular : plural}`
 }
 
 export function formatAppVersion(rawVersion: string): string {

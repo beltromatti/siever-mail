@@ -10,6 +10,7 @@ import {
   type FetchQueryObject,
   type FlagsEvent,
   type ListResponse,
+  type SearchObject,
   type StatusObject
 } from 'imapflow'
 import type { ParsedMail } from 'mailparser'
@@ -39,6 +40,7 @@ import {
 } from './message-mapper'
 import { collectFetchResults, formatUidSet } from './fetch-results'
 import { extractPreview } from './preview'
+import { intersectUids, SERVER_SEARCH_MATCH_LIMIT } from './server-search'
 import { attachmentFileName, parseMessageSource } from './message-parts'
 import {
   PARTIAL_BODY_THRESHOLD_BYTES,
@@ -339,6 +341,8 @@ export class AccountConnection extends EventEmitter {
   // Previews queued or being fetched, by folder and UID: asked again, they
   // are not fetched twice.
   private readonly hydratingPreviews = new Set<string>()
+  // A server search waiting its turn (see `searchMessages`).
+  private waitingSearch: { task: QueuedTask; settle: (uids: null) => void } | null = null
   private status: AccountConnectionStatus = 'disconnected'
   private lastError: { message: string; authFailed: boolean } | null = null
   private lastContactAt: number | undefined
@@ -837,6 +841,77 @@ export class AccountConnection extends EventEmitter {
         const omitted = attachment.part ? plan.omittedParts.get(attachment.part) : undefined
         return omitted ? { ...attachment, size: decodedPartSize(omitted) } : attachment
       })
+    }
+  }
+
+  /**
+   * The messages of a folder the server finds for a search (see
+   * `imapSearchGroups`) — over their whole text, which the cache holds only
+   * for the messages downloaded — the newest first, at most
+   * `SERVER_SEARCH_MATCH_LIMIT`. On the sync connection, so reading mail
+   * never waits behind it. A search still waiting when the next one comes
+   * gives way and resolves null: the user has typed on.
+   */
+  searchMessages(
+    folderPath: string,
+    groups: ReadonlyArray<SearchObject>
+  ): Promise<number[] | null> {
+    const { promise, resolve, reject } = Promise.withResolvers<number[] | null>()
+
+    if (this.waitingSearch) {
+      const index = this.syncQueue.indexOf(this.waitingSearch.task)
+
+      if (index >= 0) {
+        this.syncQueue.splice(index, 1)
+        this.waitingSearch.settle(null)
+      }
+    }
+
+    const task: QueuedTask = {
+      priority: 'user',
+      label: `search:${folderPath}`,
+      run: async () => {
+        if (this.waitingSearch?.task === task) {
+          this.waitingSearch = null
+        }
+
+        try {
+          resolve(await this.runSearch(folderPath, groups))
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)))
+        }
+      }
+    }
+
+    this.waitingSearch = { task, settle: resolve }
+    this.syncQueue.push(task)
+    this.startSyncWorkerIfNeeded()
+    return promise
+  }
+
+  private async runSearch(
+    folderPath: string,
+    groups: ReadonlyArray<SearchObject>
+  ): Promise<number[]> {
+    const client = this.requireSync()
+    const lock = await client.getMailboxLock(folderPath)
+
+    try {
+      let matches: number[] | null = null
+
+      for (const criteria of groups) {
+        const found = await client.search(criteria, { uid: true })
+        const uids = Array.isArray(found) ? found : []
+        matches = matches === null ? uids : intersectUids(matches, uids)
+
+        if (matches.length === 0) {
+          break
+        }
+      }
+
+      return (matches ?? []).sort((left, right) => right - left).slice(0, SERVER_SEARCH_MATCH_LIMIT)
+    } finally {
+      lock.release()
     }
   }
 

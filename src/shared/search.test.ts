@@ -2,13 +2,17 @@ import { describe, expect, it } from 'vitest'
 
 import {
   findHighlightRanges,
+  foldSearchText,
   highlightTermsForField,
   parseSearchQuery,
   type SearchTerm
 } from './search'
 
-function flatten(query: string): SearchTerm[][] {
-  return parseSearchQuery(query).groups.map((group) => group.terms)
+/** The terms by what they match: what they were typed as is checked on its own. */
+function flatten(query: string): Array<Array<Omit<SearchTerm, 'text'>>> {
+  return parseSearchQuery(query).groups.map((group) =>
+    group.terms.map(({ value, scope }) => ({ value, scope }))
+  )
 }
 
 describe('parseSearchQuery', () => {
@@ -78,8 +82,8 @@ describe('parseSearchQuery', () => {
   it('de-duplicates terms while keeping distinct scopes apart', () => {
     const parsed = parseSearchQuery('rossi rossi da:rossi')
     expect(parsed.terms).toEqual([
-      { value: 'rossi', scope: 'any' },
-      { value: 'rossi', scope: 'from' }
+      { value: 'rossi', text: 'rossi', scope: 'any' },
+      { value: 'rossi', text: 'rossi', scope: 'from' }
     ])
   })
 })
@@ -115,5 +119,31 @@ describe('findHighlightRanges', () => {
   it('returns nothing without terms or matches', () => {
     expect(findHighlightRanges('ciao', [])).toEqual([])
     expect(findHighlightRanges('ciao', ['zzz'])).toEqual([])
+  })
+})
+
+describe('accent- and case-insensitive search', () => {
+  it('folds the terms as the stored text is folded', () => {
+    expect(foldSearchText('Città È Perché')).toBe('citta e perche')
+    expect(parseSearchQuery('Città da:Nicolò').terms).toEqual([
+      { value: 'citta', text: 'Città', scope: 'any' },
+      { value: 'nicolo', text: 'Nicolò', scope: 'from' }
+    ])
+  })
+
+  it('highlights the characters as written for a term typed without accents', () => {
+    const text = 'Riunione in città, è confermata'
+
+    expect(findHighlightRanges(text, ['citta', 'e conf'])).toEqual([
+      { start: 12, end: 17 },
+      { start: 19, end: 25 }
+    ])
+    expect(text.slice(12, 17)).toBe('città')
+  })
+
+  it('maps a match back across characters that fold to more than one', () => {
+    const text = 'ﬁle oﬃce'
+
+    expect(findHighlightRanges(text, ['office'])).toEqual([{ start: 4, end: 8 }])
   })
 })

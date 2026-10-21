@@ -232,6 +232,14 @@ export interface ListMessagesOptions {
    */
   grouping?: MessageGroupingMode
   filter?: MessageListFilter
+  /** A message the page must hold however far down the order puts it (see `listMessages`). */
+  includeRef?: MessageRef
+  /**
+   * What the servers found for `query` (see `searchOnServer`): matches in
+   * the text of messages whose body the cache does not hold, listed with
+   * the cache's own.
+   */
+  serverMatches?: MessageRef[]
 }
 
 export const MESSAGE_LIST_PAGE_SIZE = 100
@@ -253,6 +261,10 @@ export interface MailMessageListPage {
   hasMore: boolean
   limit: number
   folderLastSyncedAt?: number
+  /** The messages the cache holds of the folder — those a search of it looks through. */
+  cachedCount: number
+  /** The messages the server holds in the folder, some maybe still on their way. */
+  serverCount: number
 }
 
 export interface MailAccount {

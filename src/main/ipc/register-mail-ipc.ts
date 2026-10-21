@@ -133,6 +133,12 @@ export function registerMailIpc(
     await mailService.hydratePreviews(refs as MessageRef[])
   })
 
+  registerDataHandler(
+    IPC_CHANNELS.searchOnServer,
+    async (accountId: string, folderPath: string, query: string) =>
+      mailService.searchOnServer(accountId, folderPath, query)
+  )
+
   registerDataHandler(IPC_CHANNELS.moveMessages, async (payload) =>
     mailService.moveMessages(payload as MoveMessagesInput)
   )

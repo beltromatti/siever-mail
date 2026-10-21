@@ -41,8 +41,10 @@ export type SearchFieldScope = 'any' | 'from' | 'to' | 'subject'
 export type SearchHighlightField = 'sender' | 'recipients' | 'subject' | 'body'
 
 export interface SearchTerm {
-  /** Literal substring to match, lowercased. */
+  /** Literal substring to match, folded (see `foldSearchText`). */
   value: string
+  /** The term as typed, for a server that folds text its own way. */
+  text: string
   scope: SearchFieldScope
 }
 
@@ -197,8 +199,20 @@ function tokenizeRawQuery(query: string): RawToken[] {
   return tokens
 }
 
+/**
+ * Text as searches compare it: case, accents and typographic forms folded
+ * away, so "citta" finds "Città", "È" finds "è" and "office" finds "oﬃce" —
+ * the way people type a search, and the way Outlook and Gmail match it. The
+ * message side is folded the same way when it is stored (see
+ * `messageSearchText` in the database).
+ */
+export function foldSearchText(value: string): string {
+  return value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+}
+
 function toSearchTerm(token: RawToken): SearchTerm {
-  return { value: token.value.trim().toLowerCase(), scope: token.scope }
+  const text = token.value.trim()
+  return { value: foldSearchText(text), text, scope: token.scope }
 }
 
 function isOrKeyword(token: RawToken): boolean {
@@ -294,7 +308,9 @@ export function escapeRegExpLiteral(value: string): string {
 
 /**
  * Returns the (start, end) character ranges in `text` that should be
- * highlighted, given the de-duplicated lowercased highlight terms. The
+ * highlighted, given the de-duplicated folded highlight terms. Matching is
+ * done on the folded text, as the search matched the message, and mapped
+ * back to the characters as written: searching "citta" paints "Città". The
  * matches are merged so overlapping/touching ranges produce a single
  * highlight span — that way the renderer can iterate the result and emit
  * one `<mark>` per range without worrying about nesting.
@@ -309,7 +325,26 @@ export function findHighlightRanges(
     return []
   }
 
-  const lowercased = text.toLowerCase()
+  // Each folded character remembers where its character starts in `text`:
+  // folding drops accents and can change a character's length ("ﬁ" is "fi").
+  let folded = ''
+  const origins: number[] = []
+
+  for (let index = 0; index < text.length;) {
+    const character = String.fromCodePoint(text.codePointAt(index) as number)
+    const foldedCharacter = foldSearchText(character)
+
+    folded += foldedCharacter
+    for (let count = 0; count < foldedCharacter.length; count += 1) {
+      origins.push(index)
+    }
+
+    index += character.length
+  }
+
+  const toOriginal = (foldedIndex: number): number =>
+    foldedIndex < origins.length ? origins[foldedIndex] : text.length
+
   const ranges: Array<{ start: number; end: number }> = []
 
   for (const term of highlightTerms) {
@@ -319,12 +354,12 @@ export function findHighlightRanges(
 
     let cursor = 0
 
-    while (cursor < lowercased.length) {
-      const matchIndex = lowercased.indexOf(term, cursor)
+    while (cursor < folded.length) {
+      const matchIndex = folded.indexOf(term, cursor)
       if (matchIndex === -1) {
         break
       }
-      ranges.push({ start: matchIndex, end: matchIndex + term.length })
+      ranges.push({ start: toOriginal(matchIndex), end: toOriginal(matchIndex + term.length) })
       cursor = matchIndex + term.length
     }
   }

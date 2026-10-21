@@ -303,6 +303,11 @@ function stripHtmlForPreview(html: string): string {
   return decodeBasicEntities(stripped)
 }
 
+/** The words of an HTML document, without its markup, styles or scripts. */
+export function plainTextOfHtml(html: string): string {
+  return stripHtmlForPreview(html)
+}
+
 function scrubPromotionalNoise(text: string): string {
   return (
     text

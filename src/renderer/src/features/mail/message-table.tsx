@@ -12,12 +12,9 @@
  * menu — the dropdown in the header bar stays for the fields that have no
  * column of their own.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo } from 'react'
 import { ArrowDown, ArrowUp, Flag, Paperclip } from 'lucide-react'
 
-import { Button } from '@renderer/components/ui/button'
-import { ScrollArea } from '@renderer/components/ui/scroll-area'
-import { Spinner } from '@renderer/components/ui/spinner'
 import {
   messageRefKey,
   resolveSelectionIntent,
@@ -26,11 +23,13 @@ import {
 import { cn, formatByteSize, formatCount, formatDateTimeLabel } from '@renderer/lib/utils'
 import {
   defaultSortDirection,
-  MESSAGE_LIST_PAGE_SIZE,
+  type MailMessageSummary,
   type MessageListSortField
 } from '@shared/models'
 
 import { MESSAGE_TABLE_ROW_HEIGHT_PX } from './message-list-metrics'
+import { MessageListEmpty } from './message-list-empty'
+import { VirtualMessageRows } from './virtual-message-rows'
 
 import type { MessageListViewProps } from './message-list-view'
 import {
@@ -59,6 +58,8 @@ interface SortableColumn {
   align?: 'right'
 }
 
+const SECTION_HEADING_HEIGHT_PX = 24
+
 const SORTABLE_COLUMNS: ReadonlyArray<SortableColumn> = [
   { field: 'sender', label: 'Da' },
   { field: 'subject', label: 'Oggetto' },
@@ -72,7 +73,8 @@ export function MessageTable({
   onClearSearch,
   messages,
   sections,
-  totalCount,
+  countLabel,
+  emptyState,
   selection,
   highlightTerms,
   sort,
@@ -85,6 +87,8 @@ export function MessageTable({
   canLoadMoreMessages,
   loadingMoreMessages,
   onLoadMoreMessages,
+  revealCursorToken,
+  onRowsInView,
   onActivateRow,
   onOpenRow,
   onRowContextMenu,
@@ -93,32 +97,13 @@ export function MessageTable({
   onSelectAll,
   onClearSelection
 }: MessageListViewProps): React.JSX.Element {
-  const [collapsedSectionKeys, setCollapsedSectionKeys] = useState<ReadonlySet<string>>(
-    () => new Set()
-  )
-  const scrollRootRef = useRef<HTMLDivElement | null>(null)
-
   const selectedKeys = useMemo(
     () => new Set(selection.selectedRefs.map(messageRefKey)),
     [selection.selectedRefs]
   )
   const cursorKey = selection.cursorRef ? messageRefKey(selection.cursorRef) : null
 
-  useEffect(() => {
-    if (!cursorKey) {
-      return
-    }
-
-    scrollRootRef.current
-      ?.querySelector(`[data-message-key="${CSS.escape(cursorKey)}"]`)
-      ?.scrollIntoView({ block: 'nearest' })
-  }, [cursorKey])
-
   const selectedCount = selection.selectedRefs.length
-  const resultsLabel =
-    totalCount > messages.length
-      ? `${messages.length} di ${totalCount} messaggi`
-      : formatCount(messages.length, 'messaggio', 'messaggi')
 
   const toggleColumnSort = (field: MessageListSortField): void => {
     if (sort.field === field) {
@@ -169,7 +154,9 @@ export function MessageTable({
             className="text-[12px]"
           />
           <span className="text-muted-foreground shrink-0 text-[10px]">
-            {selectedCount > 1 ? `${selectedCount} selezionate` : resultsLabel}
+            {selectedCount > 1
+              ? formatCount(selectedCount, 'selezionata', 'selezionate')
+              : countLabel}
           </span>
         </div>
 
@@ -207,185 +194,131 @@ export function MessageTable({
         {renderColumnHeader(SORTABLE_COLUMNS[3])}
       </div>
 
-      <ScrollArea ref={scrollRootRef} className="min-h-0 min-w-0 flex-1">
-        {/*
-          Inverted order is `flex-col-reverse` on this container plus a
-          reversed row list inside each section — nothing else. The sections
-          array used to be reversed here as well, and the two reversals
-          cancelled out: rows ran oldest-to-newest inside each group while
-          the groups themselves stayed newest-first, so "Oggi" sat on top of
-          an otherwise chat-style list and the arrow keys jumped the wrong
-          way at every group boundary. With one reversal the whole list is
-          the exact mirror of the standard order, headings stay above their
-          own rows, and the load-more row lands at the top where the older
-          mail it fetches belongs.
-        */}
-        <div className={cn('flex min-w-0 flex-col', invertVisualOrder && 'flex-col-reverse')}>
-          {sections.map((section) => {
-            const collapsed = collapsedSectionKeys.has(section.key)
-            const sectionRefs = section.messages.map(summaryToMessageRef)
-            const allSelected =
-              sectionRefs.length > 0 &&
-              sectionRefs.every((ref) => selectedKeys.has(messageRefKey(ref)))
-            const sectionMessages = invertVisualOrder
-              ? [...section.messages].reverse()
-              : section.messages
+      {messages.length === 0 && emptyState ? (
+        <MessageListEmpty state={emptyState} />
+      ) : (
+        <VirtualMessageRows
+          sections={sections}
+          invert={invertVisualOrder}
+          cursorKey={cursorKey}
+          revealCursorToken={revealCursorToken}
+          canLoadMore={canLoadMoreMessages}
+          loadingMore={loadingMoreMessages}
+          onLoadMore={onLoadMoreMessages}
+          onRowsInView={onRowsInView}
+          rowHeightEstimate={MESSAGE_TABLE_ROW_HEIGHT_PX}
+          headingHeight={SECTION_HEADING_HEIGHT_PX}
+          renderHeading={(section, collapsed, toggleCollapsed) => (
+            <MessageSectionHeading
+              section={section}
+              collapsed={collapsed}
+              allSelected={section.messages.every((message) =>
+                selectedKeys.has(messageRefKey(summaryToMessageRef(message)))
+              )}
+              dense
+              onToggleCollapsed={toggleCollapsed}
+              onSelectSection={() => onSelectSection(section)}
+            />
+          )}
+          renderRow={(message: MailMessageSummary) => {
+            const messageRef = summaryToMessageRef(message)
+            const key = messageRefKey(messageRef)
+            const isSelected = selectedKeys.has(key)
+            const isCursor = key === cursorKey
 
             return (
-              <section key={section.key} className="min-w-0">
-                {section.label && (
-                  <MessageSectionHeading
-                    section={section}
-                    collapsed={collapsed}
-                    allSelected={allSelected}
-                    dense
-                    onToggleCollapsed={() =>
-                      setCollapsedSectionKeys((current) => {
-                        const next = new Set(current)
-
-                        if (next.has(section.key)) {
-                          next.delete(section.key)
-                        } else {
-                          next.add(section.key)
-                        }
-
-                        return next
-                      })
-                    }
-                    onSelectSection={() => onSelectSection(section)}
-                  />
+              <div
+                data-message-key={key}
+                role="row"
+                aria-selected={isSelected}
+                onClick={(event) => onActivateRow(messageRef, resolveSelectionIntent(event))}
+                onDoubleClick={() => onOpenRow(messageRef)}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  onRowContextMenu(messageRef)
+                }}
+                style={{ height: MESSAGE_TABLE_ROW_HEIGHT_PX }}
+                className={cn(
+                  'group border-border/25 grid cursor-default items-center gap-1.5 border-b px-2 text-[11.5px] transition-colors',
+                  TABLE_GRID_TEMPLATE,
+                  isSelected ? 'bg-primary/16 hover:bg-primary/20' : 'hover:bg-secondary/40',
+                  isCursor && 'ring-primary/55 ring-1 ring-inset',
+                  !message.isRead && !isSelected && 'text-foreground'
                 )}
-
-                {!collapsed &&
-                  sectionMessages.map((message) => {
-                    const messageRef = summaryToMessageRef(message)
-                    const key = messageRefKey(messageRef)
-                    const isSelected = selectedKeys.has(key)
-                    const isCursor = key === cursorKey
-
-                    return (
-                      <div
-                        key={key}
-                        data-message-key={key}
-                        role="row"
-                        aria-selected={isSelected}
-                        onClick={(event) =>
-                          onActivateRow(messageRef, resolveSelectionIntent(event))
-                        }
-                        onDoubleClick={() => onOpenRow(messageRef)}
-                        onContextMenu={(event) => {
-                          event.preventDefault()
-                          onRowContextMenu(messageRef)
-                        }}
-                        style={{ height: MESSAGE_TABLE_ROW_HEIGHT_PX }}
-                        className={cn(
-                          'group border-border/25 grid cursor-default items-center gap-1.5 border-b px-2 text-[11.5px] transition-colors',
-                          TABLE_GRID_TEMPLATE,
-                          isSelected
-                            ? 'bg-primary/16 hover:bg-primary/20'
-                            : 'hover:bg-secondary/40',
-                          isCursor && 'ring-primary/55 ring-1 ring-inset',
-                          !message.isRead && !isSelected && 'text-foreground'
-                        )}
-                      >
-                        <UnreadDot unread={!message.isRead} />
-
-                        <span className="flex justify-center">
-                          {message.hasAttachments && (
-                            <Paperclip className="text-muted-foreground size-3" />
-                          )}
-                        </span>
-
-                        <span className="flex justify-center">
-                          <FlagToggle
-                            flagged={message.isFlagged}
-                            onToggle={() => onToggleFlag(messageRef, !message.isFlagged)}
-                          />
-                        </span>
-
-                        <span
-                          className={cn(
-                            'min-w-0 truncate px-1',
-                            message.isRead ? 'font-normal' : 'font-bold'
-                          )}
-                          title={primaryAddressLabel(message, primaryAddressMode)}
-                        >
-                          <HighlightedText
-                            text={primaryAddressLabel(message, primaryAddressMode)}
-                            terms={
-                              primaryAddressMode === 'sender'
-                                ? highlightTerms.sender
-                                : highlightTerms.recipients
-                            }
-                          />
-                        </span>
-
-                        {accountLabels ? (
-                          <span className="min-w-0 px-1">
-                            <AccountTag label={accountLabels.get(message.accountId) ?? ''} />
-                          </span>
-                        ) : (
-                          <span
-                            className="text-muted-foreground min-w-0 truncate px-1"
-                            title={recipientsLabel(message)}
-                          >
-                            <HighlightedText
-                              text={recipientsLabel(message)}
-                              terms={highlightTerms.recipients}
-                            />
-                          </span>
-                        )}
-
-                        <span
-                          className={cn(
-                            'min-w-0 truncate px-1',
-                            message.isRead ? 'text-foreground/85' : 'font-semibold'
-                          )}
-                          title={message.subject}
-                        >
-                          <HighlightedText text={message.subject} terms={highlightTerms.subject} />
-                        </span>
-
-                        <span
-                          className={cn(
-                            'truncate px-1 text-[10.5px] tabular-nums',
-                            message.isRead ? 'text-muted-foreground' : 'text-foreground/90'
-                          )}
-                        >
-                          {formatDateTimeLabel(message.date)}
-                        </span>
-
-                        <span className="text-muted-foreground truncate px-1 text-right text-[10.5px] tabular-nums">
-                          {formatByteSize(message.size)}
-                        </span>
-                      </div>
-                    )
-                  })}
-              </section>
-            )
-          })}
-
-          {canLoadMoreMessages && (
-            <div className="p-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 w-full text-[11px]"
-                disabled={loadingMoreMessages}
-                onClick={onLoadMoreMessages}
               >
-                {loadingMoreMessages ? (
-                  <>
-                    <Spinner className="size-3.5" /> Caricamento…
-                  </>
+                <UnreadDot unread={!message.isRead} />
+
+                <span className="flex justify-center">
+                  {message.hasAttachments && <Paperclip className="text-muted-foreground size-3" />}
+                </span>
+
+                <span className="flex justify-center">
+                  <FlagToggle
+                    flagged={message.isFlagged}
+                    onToggle={() => onToggleFlag(messageRef, !message.isFlagged)}
+                  />
+                </span>
+
+                <span
+                  className={cn(
+                    'min-w-0 truncate px-1',
+                    message.isRead ? 'font-normal' : 'font-bold'
+                  )}
+                  title={primaryAddressLabel(message, primaryAddressMode)}
+                >
+                  <HighlightedText
+                    text={primaryAddressLabel(message, primaryAddressMode)}
+                    terms={
+                      primaryAddressMode === 'sender'
+                        ? highlightTerms.sender
+                        : highlightTerms.recipients
+                    }
+                  />
+                </span>
+
+                {accountLabels ? (
+                  <span className="min-w-0 px-1">
+                    <AccountTag label={accountLabels.get(message.accountId) ?? ''} />
+                  </span>
                 ) : (
-                  `Carica altre ${MESSAGE_LIST_PAGE_SIZE} email`
+                  <span
+                    className="text-muted-foreground min-w-0 truncate px-1"
+                    title={recipientsLabel(message)}
+                  >
+                    <HighlightedText
+                      text={recipientsLabel(message)}
+                      terms={highlightTerms.recipients}
+                    />
+                  </span>
                 )}
-              </Button>
-            </div>
-          )}
-        </div>
-      </ScrollArea>
+
+                <span
+                  className={cn(
+                    'min-w-0 truncate px-1',
+                    message.isRead ? 'text-foreground/85' : 'font-semibold'
+                  )}
+                  title={message.subject}
+                >
+                  <HighlightedText text={message.subject} terms={highlightTerms.subject} />
+                </span>
+
+                <span
+                  className={cn(
+                    'truncate px-1 text-[10.5px] tabular-nums',
+                    message.isRead ? 'text-muted-foreground' : 'text-foreground/90'
+                  )}
+                >
+                  {formatDateTimeLabel(message.date)}
+                </span>
+
+                <span className="text-muted-foreground truncate px-1 text-right text-[10.5px] tabular-nums">
+                  {formatByteSize(message.size)}
+                </span>
+              </div>
+            )
+          }}
+        />
+      )}
     </div>
   )
 }
