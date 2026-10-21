@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
-import { app, BrowserWindow, Menu, Tray, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, Menu, Tray, nativeImage, session, shell } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { config as loadDotenv } from 'dotenv'
 import { z } from 'zod'
@@ -95,6 +95,23 @@ function createTray(): Tray {
 }
 
 const RENDERER_ENTRY_PATH = join(__dirname, '../renderer/index.html')
+
+/**
+ * The web permissions the app's page uses: writing to the clipboard
+ * (Copia indirizzo). Electron grants every permission unless told
+ * otherwise; a message never runs scripts, but nothing in the window
+ * should reach the camera, the microphone or the location.
+ */
+const GRANTED_WEB_PERMISSIONS: ReadonlySet<string> = new Set(['clipboard-sanitized-write'])
+
+function restrictWebPermissions(): void {
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) =>
+    callback(GRANTED_WEB_PERMISSIONS.has(permission))
+  )
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) =>
+    GRANTED_WEB_PERMISSIONS.has(permission)
+  )
+}
 
 /** What a frame inside the page may hold: the document the app wrote into it. */
 const SUBFRAME_DOCUMENT_URLS: ReadonlySet<string> = new Set(['about:srcdoc', 'about:blank'])
@@ -228,6 +245,7 @@ app.on('second-instance', () => {
 if (hasSingleInstanceLock) {
   void app.whenReady().then(() => {
     startFileLogging()
+    restrictWebPermissions()
     applyStoredThemeMode()
     followThemeWithWindowBackgrounds()
     electronApp.setAppUserModelId(APP_ID)

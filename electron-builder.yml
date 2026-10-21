@@ -53,11 +53,15 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # Electron 44's Chromium needs macOS 13 (Ventura): an older Mac is told so
+  # by the system instead of getting an app that does not start.
+  minimumSystemVersion: '13.0'
+  # What the system says when SIEVER Mail first reaches each place: the
+  # folders attachments are saved to and attached from, the company's shares.
   extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    - NSDesktopFolderUsageDescription: SIEVER Mail salva gli allegati e allega i file che tieni sulla Scrivania.
+    - NSDocumentsFolderUsageDescription: SIEVER Mail salva gli allegati e allega i file della cartella Documenti.
+    - NSDownloadsFolderUsageDescription: SIEVER Mail salva gli allegati e allega i file della cartella Download.
     - NSNetworkVolumesUsageDescription: SIEVER Mail archivia i messaggi e allega i file dalle cartelle di rete dell'azienda.
   notarize: false
 dmg:
