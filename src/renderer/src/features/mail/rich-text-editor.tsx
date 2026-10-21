@@ -69,9 +69,9 @@ interface RichTextEditorProps {
   expandToContainer?: boolean
   defaultFontFamily?: string
   /**
-   * Put the caret at the very top of the body once the editor is ready.
-   * Used for replies and forwards, where the recipient is already known and
-   * the next thing the user does is write.
+   * Put the caret at the very top of the body, once, when this turns true
+   * with the editor ready. The host turns it on once the body it opens with
+   * is in place — for a reply, where the next thing the user does is write.
    */
   autoFocusBody?: boolean
   /**
@@ -1626,12 +1626,36 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
       }
       const fileDragEvents = ['dragenter', 'dragover', 'drop'] as const
 
+      // Key events do not leave an iframe. Escape is the host's — it closes
+      // the composer, or leaves its full-screen editor — so it is handed to
+      // the frame element, from where it travels through the host's DOM as
+      // if it had been pressed there. The editor itself has no use for it.
+      const forwardEscape = (event: KeyboardEvent): void => {
+        if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) {
+          return
+        }
+
+        const forwarded = new KeyboardEvent('keydown', {
+          key: event.key,
+          code: event.code,
+          bubbles: true,
+          cancelable: true
+        })
+        iframe.dispatchEvent(forwarded)
+
+        if (forwarded.defaultPrevented) {
+          event.preventDefault()
+        }
+      }
+
       frameDocument.body.addEventListener('keydown', handlePreSquireKeyDown, true)
       frameDocument.body.addEventListener('beforeinput', handlePreSquireBeforeInput, true)
+      frameDocument.addEventListener('keydown', forwardEscape)
       fileDragEvents.forEach((type) => frameDocument.addEventListener(type, handleFileDrag, true))
       frameCleanupFns.push(() => {
         frameDocument.body.removeEventListener('keydown', handlePreSquireKeyDown, true)
         frameDocument.body.removeEventListener('beforeinput', handlePreSquireBeforeInput, true)
+        frameDocument.removeEventListener('keydown', forwardEscape)
         fileDragEvents.forEach((type) =>
           frameDocument.removeEventListener(type, handleFileDrag, true)
         )
@@ -2105,20 +2129,24 @@ export function RichTextEditor({
    * word. Placing it at the start of the body puts it above the quote and
    * the signature, which is where the reply belongs.
    *
-   * Waits for `ready` because the body is empty until Squire has set the
-   * initial HTML, and for the external value to land, or the caret would be
-   * placed in a document that is about to be replaced.
+   * Once per editor, when the host says the body is ready: placing it on
+   * every change of the value — every keystroke — put each letter in front
+   * of the one before, so a reply came out backwards.
    */
+  const autoFocusedRef = useRef(false)
+
   useEffect(() => {
-    if (!autoFocusBody || !ready || disabled) {
+    if (!autoFocusBody || !ready || disabled || !editor || autoFocusedRef.current) {
       return
     }
 
     const frameDocument = iframeRef.current?.contentDocument
 
-    if (!editor || !frameDocument?.body.firstChild) {
+    if (!frameDocument?.body.firstChild) {
       return
     }
+
+    autoFocusedRef.current = true
 
     // Inside the first line rather than before it, so the toolbar shows the
     // face and colour the first keystroke will have — a signature's leading
@@ -2132,7 +2160,7 @@ export function RichTextEditor({
     })
 
     return () => window.cancelAnimationFrame(frame)
-  }, [autoFocusBody, disabled, editor, iframeRef, ready, value])
+  }, [autoFocusBody, disabled, editor, iframeRef, ready])
 
   // The font-size input shows `active.fontSizePx` directly when not focused
   // and the user's `fontSizeDraft` while typing — see the input's `value`

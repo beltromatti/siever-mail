@@ -129,9 +129,19 @@ function findSignatureBlock(root: HTMLElement): Element | null {
   )
 }
 
+/** What a signature says, as a reader sees it: its words and its pictures. */
+function signatureFingerprint(element: Element): string {
+  const words = (element.textContent ?? '').replace(INVISIBLE_CHARACTERS, ' ').replace(/\s+/g, ' ')
+  return `${words.trim()}|${element.querySelectorAll(VISIBLE_MEDIA_SELECTOR).length}`
+}
+
 /**
  * Puts another account's signature where the current one is, when the
  * sending account changes.
+ *
+ * The signature is text like the rest of the message, and the user may
+ * have written in it. A block that no longer says what `previousSignatureHtml`
+ * said is theirs now and stays as it is; one they left alone is swapped.
  *
  * A body the user has not written in yet is simply laid out again, so the
  * lines above the signature take on the new account's style too. Otherwise
@@ -144,12 +154,23 @@ function findSignatureBlock(root: HTMLElement): Element | null {
 export function replaceComposerSignature(
   html: string,
   signatureHtml: string | null,
-  insertIfMissing: boolean
+  insertIfMissing: boolean,
+  previousSignatureHtml?: string | null
 ): string {
   const root = parseBody(html)
   const current = findSignatureBlock(root)
 
   if (!current && !insertIfMissing) {
+    return html
+  }
+
+  const previous = previousSignatureHtml === undefined ? null : splitSignature(previousSignatureHtml)
+
+  if (
+    current &&
+    previous &&
+    signatureFingerprint(current) !== signatureFingerprint(parseBody(previous.core))
+  ) {
     return html
   }
 

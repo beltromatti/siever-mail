@@ -95,6 +95,17 @@ describe('replaceComposerSignature', () => {
     expect(replaceComposerSignature(html, '<div>Luca</div>', false)).toBe(html)
   })
 
+  it('keeps a signature the user wrote in, and swaps one they left alone', () => {
+    const edited = body.replace('<div>Mario</div>', '<div>Mario, a presto</div>')
+
+    expect(replaceComposerSignature(edited, '<div>Luca</div>', false, '<div>Mario</div>')).toBe(
+      edited
+    )
+    expect(replaceComposerSignature(body, '<div>Luca</div>', false, '<div>Mario</div>')).toBe(
+      `<div>Buongiorno,</div>${EMPTY_LINE}<div class="gmail_signature"><div>Luca</div></div>${EMPTY_LINE}${QUOTE}`
+    )
+  })
+
   it('removes the signature when the new account has none', () => {
     expect(replaceComposerSignature(body, null, false)).toBe(
       `<div>Buongiorno,</div>${EMPTY_LINE}${EMPTY_LINE}${QUOTE}`

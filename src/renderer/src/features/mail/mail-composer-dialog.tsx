@@ -300,6 +300,9 @@ export function MailComposerDialog({
   // missing at the next account switch, the user deleted it, and the next
   // account's signature is not forced back in.
   const bodyHadSignatureRef = useRef(false)
+  // The signature the body was given, so an account switch can tell a
+  // signature the user wrote in from one they left alone.
+  const insertedSignatureRef = useRef<string | null>(null)
 
   const account = accounts.find((candidate) => candidate.id === accountId) ?? null
   // The "Da" row: with more than one account, and whenever the one a
@@ -444,6 +447,7 @@ export function MailComposerDialog({
     // A reopened draft already holds whatever the user left of the signature.
     if (initialData.html !== undefined) {
       bodyHadSignatureRef.current = true
+      insertedSignatureRef.current = null
       return
     }
 
@@ -453,6 +457,7 @@ export function MailComposerDialog({
       }
 
       bodyHadSignatureRef.current = splitSignature(signatureHtml) !== null
+      insertedSignatureRef.current = signatureHtml
       setForm(buildInitialState(initialData, signatureHtml))
       setBodyReady(true)
     }
@@ -569,9 +574,16 @@ export function MailComposerDialog({
       }
 
       const insertIfMissing = !bodyHadSignatureRef.current
+      const previousSignature = insertedSignatureRef.current
       bodyHadSignatureRef.current = splitSignature(signatureHtml) !== null
+      insertedSignatureRef.current = signatureHtml
       setForm((current) => {
-        const html = replaceComposerSignature(current.html, signatureHtml, insertIfMissing)
+        const html = replaceComposerSignature(
+          current.html,
+          signatureHtml,
+          insertIfMissing,
+          previousSignature
+        )
         return html === current.html ? current : { ...current, html, text: htmlToPlainText(html) }
       })
     } catch (error) {
@@ -995,6 +1007,14 @@ export function MailComposerDialog({
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
           hideClose={editorFocusMode}
+          // Escape leaves the full-screen editor first, as its toggle does;
+          // only then does it ask to close the message.
+          onEscapeKeyDown={(event) => {
+            if (editorFocusMode) {
+              event.preventDefault()
+              setEditorFocusMode(false)
+            }
+          }}
           onDragEnter={(event) => {
             if (event.dataTransfer.types.includes('Files')) {
               event.preventDefault()
@@ -1162,8 +1182,9 @@ export function MailComposerDialog({
                   expanded={editorFocusMode}
                   expandToContainer
                   // A reply already knows who it is going to, so the next
-                  // thing the user does is write. A new message does not.
-                  autoFocusBody={Boolean(initialData?.to?.length)}
+                  // thing the user does is write — once its body is in. A
+                  // new message does not.
+                  autoFocusBody={Boolean(initialData?.to?.length) && bodyReady}
                   onFileDragEnter={beginFileDrag}
                   onExpandedChange={(expanded) => {
                     setEditorFocusMode(expanded)
