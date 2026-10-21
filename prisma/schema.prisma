@@ -41,6 +41,7 @@ model Folder {
   uidValidity    String? @map("uid_validity")
   highestModseq  String? @map("highest_modseq")
   lastKnownUid   Int?    @map("last_known_uid")
+  uidNext        Int?    @map("uid_next")
   lastSyncedAt   BigInt? @map("last_synced_at")
   updatedAt      BigInt  @map("updated_at")
   account        Account @relation(fields: [accountId], references: [id], onDelete: Cascade)

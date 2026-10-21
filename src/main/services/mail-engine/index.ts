@@ -310,6 +310,24 @@ export class MailEngine {
     return connection.fetchMessageRawSource(ref)
   }
 
+  /** See `AccountConnection.hydratePreviews`; messages of any account and folder. */
+  async hydratePreviews(refs: ReadonlyArray<MessageRef>): Promise<void> {
+    const groups = new Map<string, MessageRef[]>()
+
+    for (const ref of refs) {
+      const key = `${ref.accountId}\u0000${ref.folderPath}`
+      groups.set(key, [...(groups.get(key) ?? []), ref])
+    }
+
+    for (const group of groups.values()) {
+      const connection = await this.requestConnection(group[0].accountId)
+      connection.hydratePreviews(
+        group[0].folderPath,
+        group.map((ref) => ref.uid)
+      )
+    }
+  }
+
   async fetchAttachments(
     ref: MessageRef,
     attachments: ReadonlyArray<{ index: number; part?: string }>,

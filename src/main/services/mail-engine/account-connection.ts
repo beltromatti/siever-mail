@@ -8,7 +8,9 @@ import {
   type ExpungeEvent,
   type FetchMessageObject,
   type FetchQueryObject,
-  type FlagsEvent
+  type FlagsEvent,
+  type ListResponse,
+  type StatusObject
 } from 'imapflow'
 import type { ParsedMail } from 'mailparser'
 
@@ -24,7 +26,7 @@ import type {
 } from '@shared/models'
 import { deriveSenderKey, deriveSenderName } from '@shared/sender'
 
-import type { AppDatabase } from '../database'
+import type { AppDatabase, FolderSyncState } from '../database'
 import type { GoogleOAuthService } from '../google-oauth'
 
 import {
@@ -66,6 +68,10 @@ const ARCHIVE_FOLDER_NAME = 'Archivio'
 const GMAIL_SYSTEM_FOLDER_PATTERN = /^\[(?:gmail|google mail)\]/i
 
 const BOOTSTRAP_ENVELOPE_BATCH_SIZE = 1000
+// The first batch of a first sync is the first screen of the list: small,
+// so its rows show in a moment, and its previews are fetched right after it,
+// before the thousands of envelopes behind.
+const BOOTSTRAP_FIRST_PAGE_SIZE = 100
 // Incremental batches: envelope + first PREVIEW_SOURCE_MAX_BYTES of source,
 // all in one FETCH. This is the path taken for every folder AFTER its initial
 // bootstrap has completed — IDLE-pushed new messages, periodic catchups,
@@ -79,6 +85,14 @@ const INCREMENTAL_BATCH_SIZE = 250
 // mid-way and the app restarted). Matches INCREMENTAL_BATCH_SIZE because the
 // IMAP cost per message is the same shape.
 const HYDRATION_BATCH_SIZE = 250
+// The previews filled in ahead, per folder: the newest messages, the ones
+// read. An older one is fetched when its row comes into view
+// (`hydratePreviews`) — previews cost 32 KB of source each, and filling in
+// a 10,000-message inbox ahead downloaded some 300 MB.
+const EAGER_HYDRATION_LIMIT = 300
+// Previews asked for by rows in view go in batches this size, at the
+// priority of what the user looks at.
+const VISIBLE_HYDRATION_BATCH_SIZE = 50
 // 32 KB leaves a 2-3× margin over the <head><style> block of the heaviest
 // marketing senders (Breasy, Wizz Air and similar run 10-20 KB of @media
 // queries before <body>), so the preview extractor always has real prose to
@@ -150,6 +164,7 @@ const USER_OPERATION_CONNECTION_WAIT_MS = 20_000
 interface FolderSyncPlan {
   uidValidity: bigint
   highestModseq: bigint | undefined
+  uidNext: number
   exists: number
   previousLastKnownUid: number
   isBootstrap: boolean
@@ -191,6 +206,36 @@ type AccountConnectionEvents = {
  * scattered selection can still make a long line, and servers cap those.
  */
 const UID_COMMAND_CHUNK = 500
+
+/**
+ * How many messages of the selected mailbox are unread. A server with
+ * ESEARCH counts them; otherwise it lists them — every UID of thousands of
+ * unread messages, at each sync of the folder, only to be counted.
+ */
+async function countUnseen(client: ImapFlow): Promise<number> {
+  const result = await client.search({ seen: false }, { uid: true, returnOptions: ['COUNT'] })
+
+  if (Array.isArray(result)) {
+    return result.length
+  }
+
+  return result ? (result.count ?? 0) : 0
+}
+
+/** IMAP spells the inbox INBOX, in any case. */
+function isInboxPath(folderPath: string): boolean {
+  return folderPath.toUpperCase() === 'INBOX'
+}
+
+/**
+ * The folders that can hold mail. A \\Noselect mailbox is only a parent in
+ * the hierarchy ("[Gmail]"); its children are listed by themselves.
+ */
+function selectableMailboxes(mailboxes: ReadonlyArray<ListResponse>): ListResponse[] {
+  return mailboxes.filter(
+    (mailbox) => !mailbox.flags.has('\\Noselect') && !mailbox.flags.has('\\NonExistent')
+  )
+}
 
 /** Takes the queue's next task: the first of the highest priority waiting. */
 function pickNextTask(queue: QueuedTask[]): QueuedTask | null {
@@ -291,6 +336,9 @@ export class AccountConnection extends EventEmitter {
   private readonly bodyLoads = new Map<string, BodyLoad>()
   // The reading pane's fetch while it waits its turn (see `BodyLoadIntent`).
   private waitingRead: BodyLoad | null = null
+  // Previews queued or being fetched, by folder and UID: asked again, they
+  // are not fetched twice.
+  private readonly hydratingPreviews = new Set<string>()
   private status: AccountConnectionStatus = 'disconnected'
   private lastError: { message: string; authFailed: boolean } | null = null
   private lastContactAt: number | undefined
@@ -404,7 +452,8 @@ export class AccountConnection extends EventEmitter {
     this.enqueueSyncCommand(
       async () => {
         if (this.syncClient?.usable) {
-          await this.pollFolderStatuses()
+          await this.reviewFolders({ connecting: false })
+          this.refreshUnwatchedActiveFolderSoon()
         }
       },
       FOLDER_POLL_TASK_LABEL,
@@ -1621,27 +1670,7 @@ export class AccountConnection extends EventEmitter {
   }
 
   private async bootstrapAfterConnect(): Promise<void> {
-    const folders = await this.syncFolderList()
-
-    // Order folders so INBOX is scheduled first, then the rest in their natural order.
-    // All folder syncs enter the command queue at 'background' priority: INBOX therefore
-    // fills first by queue order, while user clicks, IDLE deltas and active-folder
-    // selections interleave at higher priorities as they arrive.
-    const ordered = folders.slice().sort((a, b) => {
-      const aIsInbox = a.specialUse === INBOX_SPECIAL_USE ? 0 : 1
-      const bIsInbox = b.specialUse === INBOX_SPECIAL_USE ? 0 : 1
-      return aIsInbox - bIsInbox
-    })
-
-    for (const folder of ordered) {
-      this.enqueueSyncCommand(
-        async () => {
-          await this.runFolderSync(folder.path, 'background')
-        },
-        `bootstrap-sync:${folder.path}`,
-        'background'
-      )
-    }
+    await this.reviewFolders({ connecting: true })
 
     // Put IDLE on the user's active folder (or INBOX) on the PRIMARY client as
     // soon as it comes up — this is how we catch new-message events in real
@@ -1683,9 +1712,12 @@ export class AccountConnection extends EventEmitter {
   }
 
   private async syncFolderList(): Promise<MailFolder[]> {
-    const client = this.requireSync()
+    return this.storeFolderList(selectableMailboxes(await this.listMailboxes()))
+  }
 
-    const mailboxes = await client.list({
+  /** The account's folders, each with its status — one command on a server with LIST-STATUS. */
+  private async listMailboxes(): Promise<ListResponse[]> {
+    const mailboxes = await this.requireSync().list({
       statusQuery: {
         messages: true,
         unseen: true,
@@ -1695,12 +1727,35 @@ export class AccountConnection extends EventEmitter {
       }
     })
 
-    // A \\Noselect mailbox is only a parent in the hierarchy ("[Gmail]"):
-    // it can hold no mail, and in a flat folder list it is a dead entry.
-    const selectableMailboxes = mailboxes.filter(
-      (mailbox) => !mailbox.flags.has('\\Noselect') && !mailbox.flags.has('\\NonExistent')
+    this.markContact()
+    return mailboxes
+  }
+
+  /** Stores the folder list the server gave, and tells the views. */
+  private async storeFolderList(mailboxes: ReadonlyArray<ListResponse>): Promise<MailFolder[]> {
+    await this.database.replaceFolders(
+      this.account.id,
+      mailboxes.map((mailbox) => this.folderOf(mailbox))
     )
-    const fetchedFolders: MailFolder[] = selectableMailboxes.map((mailbox) => ({
+    // Read back rather than emit the server's order: the sidebar must list
+    // folders the same way whether it loaded them or was told they changed.
+    const folders = await this.database.listFolders(this.account.id)
+    this.emit('folders', folders)
+
+    for (const mailbox of mailboxes) {
+      if (typeof mailbox.status?.uidValidity !== 'undefined') {
+        await this.checkAndResetIfUidValidityChanged(
+          mailbox.path,
+          mailbox.status.uidValidity as bigint
+        )
+      }
+    }
+
+    return folders
+  }
+
+  private folderOf(mailbox: ListResponse): MailFolder {
+    return {
       id: `${this.account.id}:${mailbox.path}`,
       accountId: this.account.id,
       path: mailbox.path,
@@ -1712,24 +1767,128 @@ export class AccountConnection extends EventEmitter {
         mailbox.specialUse ?? (mailbox.flags.has('\\Important') ? '\\Important' : undefined),
       messageCount: mailbox.status?.messages ?? 0,
       unseenCount: mailbox.status?.unseen ?? 0
-    }))
+    }
+  }
 
-    await this.database.replaceFolders(this.account.id, fetchedFolders)
-    // Read back rather than emit the server's order: the sidebar must list
-    // folders the same way whether it loaded them or was told they changed.
-    const folders = await this.database.listFolders(this.account.id)
-    this.emit('folders', folders)
+  /**
+   * Compares every folder with what the server reports of it — one LIST,
+   * one command for the whole account where the server has LIST-STATUS —
+   * and syncs those that changed: on connecting, at each poll, when the
+   * user checks for mail. The others only take the counts the server gave.
+   */
+  private async reviewFolders({ connecting }: { connecting: boolean }): Promise<void> {
+    const known = new Map(
+      (await this.database.listFolders(this.account.id)).map((folder) => [folder.path, folder])
+    )
+    const mailboxes = selectableMailboxes(await this.listMailboxes())
+    const folders = mailboxes.map((mailbox) => this.folderOf(mailbox))
 
-    for (const mailbox of selectableMailboxes) {
-      if (typeof mailbox.status?.uidValidity !== 'undefined') {
-        await this.checkAndResetIfUidValidityChanged(
-          mailbox.path,
-          mailbox.status.uidValidity as bigint
+    // A folder created, removed or renamed elsewhere shows up here.
+    if (
+      connecting ||
+      folders.length !== known.size ||
+      folders.some((folder) => {
+        const stored = known.get(folder.path)
+        return (
+          !stored ||
+          stored.name !== folder.name ||
+          stored.specialUse !== folder.specialUse ||
+          stored.delimiter !== folder.delimiter
         )
-      }
+      })
+    ) {
+      await this.storeFolderList(mailboxes)
     }
 
-    return folders
+    // The inbox first: it is what the user looks at.
+    const ordered = [...mailboxes].sort(
+      (left, right) => Number(!isInboxPath(left.path)) - Number(!isInboxPath(right.path))
+    )
+
+    for (const mailbox of ordered) {
+      const status = mailbox.status
+      const folder = known.get(mailbox.path)
+
+      // The server could not say: the next review asks again.
+      if (!status) {
+        continue
+      }
+
+      const state = await this.database.getFolderSyncState(this.account.id, mailbox.path)
+
+      if (!folder || this.folderChanged(folder, status, state)) {
+        this.incrementalSyncFolder(
+          mailbox.path,
+          this.isInSight(mailbox.path) ? 'active-sync' : 'background'
+        )
+        continue
+      }
+
+      // Previews a sync stopped short of filling, the last time.
+      if (connecting) {
+        this.enqueueHydrationSchedule(mailbox.path)
+      }
+
+      if (
+        typeof status.messages === 'number' &&
+        typeof status.unseen === 'number' &&
+        (status.messages !== folder.messageCount || status.unseen !== folder.unseenCount)
+      ) {
+        await this.database.updateFolderCounts(
+          this.account.id,
+          mailbox.path,
+          status.messages,
+          status.unseen
+        )
+        this.emit('folder-counts', {
+          accountId: this.account.id,
+          folderPath: mailbox.path,
+          messageCount: status.messages,
+          unseenCount: status.unseen
+        })
+      }
+    }
+  }
+
+  /**
+   * Whether a folder's mail changed since it was last synced: never synced,
+   * another UIDVALIDITY, another count, a higher UIDNEXT. A change of
+   * HIGHESTMODSEQ alone is a change of flags — caught up at once for the
+   * folders in sight, and for any other when it is opened. Gmail keeps that
+   * number for the whole account, so every folder reports a change at every
+   * change anywhere: syncing them all for it read every folder at every poll.
+   */
+  private folderChanged(
+    folder: MailFolder,
+    status: StatusObject,
+    state: FolderSyncState | null
+  ): boolean {
+    if (!state?.lastSyncedAt) {
+      return true
+    }
+
+    if (
+      (typeof status.uidValidity === 'bigint' && status.uidValidity !== state.uidValidity) ||
+      (typeof status.messages === 'number' && status.messages !== folder.messageCount) ||
+      (typeof status.uidNext === 'number' && status.uidNext !== state.uidNext)
+    ) {
+      return true
+    }
+
+    return (
+      typeof status.highestModseq === 'bigint' &&
+      status.highestModseq !== state.highestModseq &&
+      this.isInSight(folder.path)
+    )
+  }
+
+  /** The inbox, which notifications and TUTTI follow, and the folder open. */
+  private isInSight(folderPath: string): boolean {
+    return (
+      isInboxPath(folderPath) ||
+      (this.lastActiveContext?.accountId === this.account.id &&
+        this.lastActiveContext.folderPath === folderPath)
+    )
   }
 
   private async checkAndResetIfUidValidityChanged(
@@ -1753,19 +1912,31 @@ export class AccountConnection extends EventEmitter {
     }
   }
 
+  /**
+   * Queues a sync of a folder on the sync connection. One already waiting
+   * covers this one too — it reads the folder when its turn comes — and
+   * takes the higher priority of the two.
+   */
   private incrementalSyncFolder(folderPath: string, priority: TaskPriority): void {
-    // Public entry: schedules the folder-sync orchestrator on the sync queue so
-    // it runs on syncClient and plays nicely with priority scheduling. Caller
-    // does NOT await individual batches — state + counts + preview updates
-    // are emitted progressively as the envelope / finalize / hydration phases
-    // land.
-    this.enqueueSyncCommand(
-      async () => {
-        await this.runFolderSync(folderPath, priority)
-      },
-      `sync:${folderPath}`,
-      priority
-    )
+    const label = `sync:${folderPath}`
+    const waiting = this.syncQueue.find((task) => task.label === label)
+
+    if (waiting) {
+      if (PRIORITY_ORDER.indexOf(priority) < PRIORITY_ORDER.indexOf(waiting.priority)) {
+        waiting.priority = priority
+      }
+      return
+    }
+
+    // The sync runs at the priority its task has by then.
+    const task: QueuedTask = {
+      priority,
+      label,
+      run: () => this.runFolderSync(folderPath, task.priority)
+    }
+
+    this.syncQueue.push(task)
+    this.startSyncWorkerIfNeeded()
   }
 
   private async runFolderSync(folderPath: string, priority: TaskPriority): Promise<void> {
@@ -1790,13 +1961,15 @@ export class AccountConnection extends EventEmitter {
     // never been sync'd before on this install OR a previous bootstrap was
     // interrupted before the finalize task could run):
     //
-    //   * BOOTSTRAP mode — envelope-only batches (no body). The UI populates
-    //     almost instantly with subject+sender+date and a "Caricamento
-    //     anteprima…" placeholder in place of the preview. A separate
-    //     HydSched task enqueued below later fills each row's preview in the
-    //     background. This is the only way to keep first-sync fast when there
-    //     are thousands of messages — fetching 8 MB of bodies per batch would
-    //     block the list for minutes.
+    //   * BOOTSTRAP mode — envelope-only batches (no body), the newest
+    //     BOOTSTRAP_FIRST_PAGE_SIZE first: the first screen of the list
+    //     shows in a moment with subject+sender+date and a "Caricamento
+    //     anteprima…" placeholder, and its previews are fetched right after
+    //     it, ahead of the thousands of envelopes behind. A separate
+    //     HydSched task enqueued below later fills in the newest others
+    //     (see EAGER_HYDRATION_LIMIT). This is the only way to keep
+    //     first-sync fast when there are thousands of messages — fetching
+    //     8 MB of bodies per batch would block the list for minutes.
     //
     //   * INCREMENTAL mode — envelope + first PREVIEW_SOURCE_MAX_BYTES of
     //     source in the SAME FETCH. Every row lands with preview ready. This
@@ -1806,41 +1979,54 @@ export class AccountConnection extends EventEmitter {
     //
     // Smaller batch sizes for incremental because each message carries ~32 KB
     // of body — a 250-batch is ~8 MB on the wire and lands in a second or two.
+    // A first sync's thousands of envelopes behind its first screen wait for
+    // whatever the user opens meanwhile.
+    const bulkPriority: TaskPriority = plan.isBootstrap ? 'background' : priority
+
     if (plan.newUids.length > 0) {
       if (plan.isBootstrap) {
         this.setFolderBootstrapping(folderPath, true)
       }
 
       const sortedUids = [...plan.newUids].sort((a, b) => b - a)
-      const batchSize = plan.isBootstrap ? BOOTSTRAP_ENVELOPE_BATCH_SIZE : INCREMENTAL_BATCH_SIZE
-      for (let index = 0; index < sortedUids.length; index += batchSize) {
-        const batch = sortedUids.slice(index, index + batchSize)
-        const batchNumber = Math.floor(index / batchSize) + 1
+      const batches = plan.isBootstrap
+        ? [
+            sortedUids.slice(0, BOOTSTRAP_FIRST_PAGE_SIZE),
+            ...chunk(sortedUids.slice(BOOTSTRAP_FIRST_PAGE_SIZE), BOOTSTRAP_ENVELOPE_BATCH_SIZE)
+          ]
+        : chunk(sortedUids, INCREMENTAL_BATCH_SIZE)
+
+      batches.forEach((batch, index) => {
         const label = plan.isBootstrap
-          ? `envelope-batch:${folderPath}:${batchNumber}`
-          : `incremental-batch:${folderPath}:${batchNumber}`
+          ? `envelope-batch:${folderPath}:${index + 1}`
+          : `incremental-batch:${folderPath}:${index + 1}`
+
         this.enqueueSyncCommand(
           async () => {
-            await this.processSyncBatch(
-              folderPath,
-              batch,
-              plan.isBootstrap ? 'bootstrap' : 'incremental'
-            )
+            await this.processSyncBatch(folderPath, batch, {
+              previews: !plan.isBootstrap,
+              arrivals: !plan.isBootstrap
+            })
           },
           label,
-          priority
+          index === 0 ? priority : bulkPriority
         )
-      }
+
+        if (plan.isBootstrap && index === 0) {
+          this.queueHydration(folderPath, batch, priority, VISIBLE_HYDRATION_BATCH_SIZE)
+        }
+      })
     }
 
     // Finalize: reconciliation + folder state + counts. Runs after all
-    // envelope batches at the same priority thanks to FIFO-within-priority.
+    // envelope batches at the priority of the last thanks to
+    // FIFO-within-priority.
     this.enqueueSyncCommand(
       async () => {
         await this.finalizeFolderSync(folderPath, plan)
       },
       `sync-finalize:${folderPath}`,
-      priority
+      plan.newUids.length > BOOTSTRAP_FIRST_PAGE_SIZE ? bulkPriority : priority
     )
 
     // PHASE 2 — preview hydration. After envelopes are persisted, we fetch a
@@ -1853,24 +2039,28 @@ export class AccountConnection extends EventEmitter {
     // clicked folder's envelope phase is the real-world stall the user
     // reported. 'active-sync' must be reserved for what unblocks the UI
     // (envelope + finalize), not for background cosmetics (preview text).
-    //
-    // De-dup: runFolderSync runs twice when setActiveContext fires the same
-    // folder as bootstrap (startup auto-selects INBOX -> an active-sync Orch;
-    // bootstrap also enqueues a bg Orch). Without this guard each orchestrator
-    // would enqueue another hydrate-schedule, and each would re-fetch the
-    // still-unhydrated UIDs on top of the already-scheduled batches — doubling
-    // the hydration work.
-    const hydrateScheduleLabel = `hydrate-schedule:${folderPath}`
-    const alreadyScheduled = this.syncQueue.some((task) => task.label === hydrateScheduleLabel)
-    if (!alreadyScheduled) {
-      this.enqueueSyncCommand(
-        async () => {
-          await this.scheduleHydrationForFolder(folderPath)
-        },
-        hydrateScheduleLabel,
-        'background'
-      )
+    this.enqueueHydrationSchedule(folderPath)
+  }
+
+  /**
+   * Queues the fill-in of a folder's missing previews, unless a schedule is
+   * waiting already: each sync of the folder asks for it. Previews already
+   * queued are not queued twice (see `queueHydration`).
+   */
+  private enqueueHydrationSchedule(folderPath: string): void {
+    const label = `hydrate-schedule:${folderPath}`
+
+    if (this.syncQueue.some((task) => task.label === label)) {
+      return
     }
+
+    this.enqueueSyncCommand(
+      async () => {
+        await this.scheduleHydrationForFolder(folderPath)
+      },
+      label,
+      'background'
+    )
   }
 
   private async prepareFolderSyncPlan(folderPath: string): Promise<FolderSyncPlan | null> {
@@ -1879,9 +2069,18 @@ export class AccountConnection extends EventEmitter {
     }
 
     const client = this.syncClient
+    const alreadyOpen = typeof client.mailbox !== 'boolean' && client.mailbox?.path === folderPath
     const lock = await client.getMailboxLock(folderPath)
 
     try {
+      // A folder this connection had open already reports what it last
+      // heard of it, which can be seconds behind what the server pushed to
+      // the IDLE connection — a move elsewhere then stayed in the list
+      // until the next poll. A NOOP brings the pending news in first.
+      if (alreadyOpen) {
+        await client.noop()
+      }
+
       const mailbox = client.mailbox
       if (!mailbox || typeof mailbox === 'boolean' || mailbox.path !== folderPath) {
         return null
@@ -1889,6 +2088,7 @@ export class AccountConnection extends EventEmitter {
 
       const serverUidValidity = mailbox.uidValidity as bigint
       const serverHighestModseq = mailbox.highestModseq
+      const serverUidNext = mailbox.uidNext
       const exists = mailbox.exists
 
       const state = await this.database.getFolderSyncState(this.account.id, folderPath)
@@ -1905,6 +2105,7 @@ export class AccountConnection extends EventEmitter {
         return {
           uidValidity: serverUidValidity,
           highestModseq: serverHighestModseq,
+          uidNext: serverUidNext,
           exists: 0,
           previousLastKnownUid,
           isBootstrap,
@@ -1959,6 +2160,7 @@ export class AccountConnection extends EventEmitter {
       return {
         uidValidity: serverUidValidity,
         highestModseq: serverHighestModseq,
+        uidNext: serverUidNext,
         exists,
         previousLastKnownUid,
         isBootstrap,
@@ -1972,18 +2174,16 @@ export class AccountConnection extends EventEmitter {
 
   /**
    * Fetches and stores one batch of a folder's messages:
-   *   • `bootstrap` — the first sync: envelopes only (previews come later),
-   *     and no notification for mail that was already there;
-   *   • `incremental` — new arrivals: envelope and preview in one FETCH, so
-   *     a notification can carry the snippet at once;
-   *   • `recovery` — messages the server has but the cache lost (see
-   *     `reconcileLocalAgainstServer`): with previews, but no notification,
-   *     since they are not new.
+   *   • with their previews in the same FETCH, or as envelopes alone — the
+   *     bulk of a first sync, whose previews are filled in afterwards;
+   *   • as new arrivals, which notifications announce, or as mail that was
+   *     already there: the first sync of a folder, and messages the server
+   *     has but the cache lost (see `reconcileLocalAgainstServer`).
    */
   private async processSyncBatch(
     folderPath: string,
     batch: number[],
-    mode: 'bootstrap' | 'incremental' | 'recovery'
+    { previews, arrivals }: { previews: boolean; arrivals: boolean }
   ): Promise<void> {
     if (!this.syncClient?.usable) {
       return
@@ -1991,11 +2191,10 @@ export class AccountConnection extends EventEmitter {
 
     const client = this.syncClient
     const lock = await client.getMailboxLock(folderPath)
-    const bootstrap = mode === 'bootstrap'
 
     try {
       const summaries = await this.fetchSummariesForUids(folderPath, batch, {
-        includeBody: !bootstrap
+        includeBody: previews
       })
       if (summaries.length === 0) {
         return
@@ -2014,7 +2213,7 @@ export class AccountConnection extends EventEmitter {
           added: result.added,
           updated: result.updated,
           removedUids: [],
-          bootstrap: mode !== 'incremental'
+          bootstrap: !arrivals
         })
       }
     } finally {
@@ -2027,22 +2226,49 @@ export class AccountConnection extends EventEmitter {
       this.account.id,
       folderPath
     )
-    if (unhydratedUids.length === 0) {
-      return
-    }
 
-    // Always 'background': hydration is cosmetic preview fill-in, it must never
+    // 'background': hydration is cosmetic preview fill-in, it must never
     // outrank any folder's envelope/finalize phase — which is what actually
     // unblocks the UI. See the commentary on the caller in runFolderSync.
-    for (let index = 0; index < unhydratedUids.length; index += HYDRATION_BATCH_SIZE) {
-      const batch = unhydratedUids.slice(index, index + HYDRATION_BATCH_SIZE)
-      const batchNumber = Math.floor(index / HYDRATION_BATCH_SIZE) + 1
+    this.queueHydration(
+      folderPath,
+      unhydratedUids.slice(0, EAGER_HYDRATION_LIMIT),
+      'background',
+      HYDRATION_BATCH_SIZE
+    )
+  }
+
+  /**
+   * Fills in the previews of rows in view that have none yet — rows older
+   * than those filled in ahead — at the priority of what the user looks at.
+   */
+  hydratePreviews(folderPath: string, uids: ReadonlyArray<number>): void {
+    this.queueHydration(folderPath, uids, 'active-sync', VISIBLE_HYDRATION_BATCH_SIZE)
+  }
+
+  /** Queues the previews of `uids` not queued already, in batches of `batchSize`. */
+  private queueHydration(
+    folderPath: string,
+    uids: ReadonlyArray<number>,
+    priority: TaskPriority,
+    batchSize: number
+  ): void {
+    const key = (uid: number): string => `${folderPath}\u0000${uid}`
+    const wanted = uids.filter((uid) => !this.hydratingPreviews.has(key(uid)))
+
+    for (const batch of chunk(wanted, batchSize)) {
+      batch.forEach((uid) => this.hydratingPreviews.add(key(uid)))
+
       this.enqueueSyncCommand(
         async () => {
-          await this.processHydrationBatch(folderPath, batch)
+          try {
+            await this.processHydrationBatch(folderPath, batch)
+          } finally {
+            batch.forEach((uid) => this.hydratingPreviews.delete(key(uid)))
+          }
         },
-        `hydrate-batch:${folderPath}:${batchNumber}`,
-        'background'
+        `hydrate-batch:${folderPath}:${batch[0]}`,
+        priority
       )
     }
   }
@@ -2092,8 +2318,7 @@ export class AccountConnection extends EventEmitter {
       this.setFolderBootstrapping(folderPath, false)
     }
 
-    // IMAP spells the inbox INBOX, in any case.
-    if (folderPath.toUpperCase() === 'INBOX') {
+    if (isInboxPath(folderPath)) {
       await this.prefetchRecentBodies(folderPath)
     }
   }
@@ -2141,11 +2366,11 @@ export class AccountConnection extends EventEmitter {
         uidValidity: plan.uidValidity,
         highestModseq: plan.highestModseq,
         lastKnownUid: maxKnownUid,
+        uidNext: plan.uidNext,
         lastSyncedAt: syncedAt
       })
 
-      const unseenCountSearch = await client.search({ seen: false }, { uid: true })
-      const unseenCount = Array.isArray(unseenCountSearch) ? unseenCountSearch.length : 0
+      const unseenCount = await countUnseen(client)
 
       await this.database.updateFolderCounts(this.account.id, folderPath, plan.exists, unseenCount)
       this.markContact()
@@ -2181,6 +2406,7 @@ export class AccountConnection extends EventEmitter {
       uidValidity: plan.uidValidity,
       highestModseq: plan.highestModseq,
       lastKnownUid: 0,
+      uidNext: plan.uidNext,
       lastSyncedAt: syncedAt
     })
     await this.database.updateFolderCounts(this.account.id, folderPath, 0, 0)
@@ -2379,7 +2605,7 @@ export class AccountConnection extends EventEmitter {
       const batch = missingUids.slice(index, index + INCREMENTAL_BATCH_SIZE)
       this.enqueueSyncCommand(
         async () => {
-          await this.processSyncBatch(folderPath, batch, 'recovery')
+          await this.processSyncBatch(folderPath, batch, { previews: true, arrivals: false })
         },
         `recovery-batch:${folderPath}:${index / INCREMENTAL_BATCH_SIZE + 1}`,
         'background'
@@ -2440,93 +2666,15 @@ export class AccountConnection extends EventEmitter {
     }
   }
 
-  private async pollFolderStatuses(): Promise<void> {
-    if (!this.syncClient?.usable) {
-      return
-    }
-
-    const syncClient = this.syncClient
-    const folders = await this.database.listFolders(this.account.id)
+  /**
+   * The folder open, when IDLE watches another one, is looked at again well
+   * before the next poll: IDLE pushes changes to one folder only.
+   */
+  private refreshUnwatchedActiveFolderSoon(): void {
     const idleFolderPath =
       this.primaryClient?.mailbox && typeof this.primaryClient.mailbox !== 'boolean'
         ? this.primaryClient.mailbox.path
         : null
-
-    let anySyncRun = false
-    let answered = false
-
-    // The folder IDLE watches is polled too. IDLE pushes its changes in real
-    // time, and when it does the sweep finds nothing to do; when a push
-    // gets lost — a server that drops notifications, a link that died
-    // without either side noticing — this is what still brings the mail in.
-    for (const folder of folders) {
-      try {
-        const status = await syncClient.status(folder.path, {
-          messages: true,
-          unseen: true,
-          uidValidity: true,
-          highestModseq: true
-        })
-
-        // `false`: the server has no such folder any more. The next folder
-        // list drops it.
-        if (!status) {
-          continue
-        }
-
-        answered = true
-
-        const state = await this.database.getFolderSyncState(this.account.id, folder.path)
-        const hasChanges =
-          (typeof status.highestModseq === 'bigint' &&
-            (!state?.highestModseq || state.highestModseq !== status.highestModseq)) ||
-          (typeof status.messages === 'number' && status.messages !== folder.messageCount) ||
-          (typeof status.uidValidity === 'bigint' && state?.uidValidity !== status.uidValidity)
-
-        if (hasChanges) {
-          this.incrementalSyncFolder(folder.path, 'background')
-          anySyncRun = true
-        } else if (
-          typeof status.messages === 'number' &&
-          typeof status.unseen === 'number' &&
-          (status.messages !== folder.messageCount || status.unseen !== folder.unseenCount)
-        ) {
-          await this.database.updateFolderCounts(
-            this.account.id,
-            folder.path,
-            status.messages,
-            status.unseen
-          )
-          this.emit('folder-counts', {
-            accountId: this.account.id,
-            folderPath: folder.path,
-            messageCount: status.messages,
-            unseenCount: status.unseen
-          })
-        }
-      } catch (error) {
-        logMainError('Folder STATUS poll failed', error, {
-          accountId: this.account.id,
-          folderPath: folder.path
-        })
-      }
-    }
-
-    if (answered) {
-      this.markContact()
-    }
-
-    // Nudge IDLE back to the preferred mailbox if the user switched folders in
-    // the meantime. Harmless no-op otherwise.
-    if (anySyncRun) {
-      this.enqueuePrimaryCommand(async () => {
-        await this.selectIdleMailbox()
-      }, 'idle-refresh')
-    }
-
-    // If the user is browsing a non-idling folder right now, refresh it more
-    // aggressively than the normal poll interval so incoming changes appear
-    // instantly. This fires on the sync queue.
     const activePath =
       this.lastActiveContext?.accountId === this.account.id
         ? this.lastActiveContext.folderPath

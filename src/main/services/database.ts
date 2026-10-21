@@ -97,6 +97,8 @@ export interface FolderSyncState {
   uidValidity?: bigint
   highestModseq?: bigint
   lastKnownUid?: number
+  /** The server's UIDNEXT when the folder was last synced: a higher one means mail came in. */
+  uidNext?: number
   lastSyncedAt?: number
 }
 
@@ -1401,7 +1403,7 @@ export class AppDatabase {
     await this.ready
 
     const rows = (await this.prisma.$queryRaw`
-      SELECT uid_validity AS uidValidity, highest_modseq AS highestModseq, last_known_uid AS lastKnownUid, last_synced_at AS lastSyncedAt
+      SELECT uid_validity AS uidValidity, highest_modseq AS highestModseq, last_known_uid AS lastKnownUid, uid_next AS uidNext, last_synced_at AS lastSyncedAt
       FROM folders
       WHERE account_id = ${accountId} AND path = ${folderPath}
       LIMIT 1
@@ -1409,6 +1411,7 @@ export class AppDatabase {
       uidValidity: string | null
       highestModseq: string | null
       lastKnownUid: number | null
+      uidNext: number | null
       lastSyncedAt: bigint | null
     }>
 
@@ -1422,6 +1425,7 @@ export class AppDatabase {
       uidValidity: fromBigIntString(row.uidValidity),
       highestModseq: fromBigIntString(row.highestModseq),
       lastKnownUid: row.lastKnownUid ?? undefined,
+      uidNext: row.uidNext ?? undefined,
       lastSyncedAt: row.lastSyncedAt ? toNumber(row.lastSyncedAt) : undefined
     }
   }
@@ -1429,18 +1433,14 @@ export class AppDatabase {
   async updateFolderSyncState(
     accountId: string,
     folderPath: string,
-    state: {
-      uidValidity?: bigint
-      highestModseq?: bigint
-      lastKnownUid?: number
-      lastSyncedAt?: number
-    }
+    state: FolderSyncState
   ): Promise<void> {
     await this.ready
 
     const uidValidity = toBigIntStringOrNull(state.uidValidity)
     const highestModseq = toBigIntStringOrNull(state.highestModseq)
     const lastKnownUid = state.lastKnownUid ?? null
+    const uidNext = state.uidNext ?? null
     const lastSyncedAt = typeof state.lastSyncedAt === 'number' ? BigInt(state.lastSyncedAt) : null
     const now = BigInt(Date.now())
 
@@ -1449,6 +1449,7 @@ export class AppDatabase {
       SET uid_validity = COALESCE(${uidValidity}, uid_validity),
           highest_modseq = COALESCE(${highestModseq}, highest_modseq),
           last_known_uid = COALESCE(${lastKnownUid}, last_known_uid),
+          uid_next = COALESCE(${uidNext}, uid_next),
           last_synced_at = COALESCE(${lastSyncedAt}, last_synced_at),
           updated_at = ${now}
       WHERE account_id = ${accountId} AND path = ${folderPath}
@@ -1469,6 +1470,7 @@ export class AppDatabase {
         SET uid_validity = NULL,
             highest_modseq = NULL,
             last_known_uid = NULL,
+            uid_next = NULL,
             last_synced_at = NULL,
             updated_at = ${now}
         WHERE account_id = ${accountId} AND path = ${folderPath}
@@ -2763,6 +2765,7 @@ export class AppDatabase {
         uid_validity TEXT,
         highest_modseq TEXT,
         last_known_uid INTEGER,
+        uid_next INTEGER,
         last_synced_at INTEGER,
         updated_at INTEGER NOT NULL,
         UNIQUE(account_id, path)
@@ -3095,6 +3098,10 @@ export class AppDatabase {
     if (!columnNames.has('last_known_uid')) {
       await this.prisma.$executeRawUnsafe('ALTER TABLE folders ADD COLUMN last_known_uid INTEGER')
     }
+
+    if (!columnNames.has('uid_next')) {
+      await this.prisma.$executeRawUnsafe('ALTER TABLE folders ADD COLUMN uid_next INTEGER')
+    }
   }
 
   private async ensureMessageColumns(): Promise<void> {
@@ -3176,7 +3183,7 @@ export class AppDatabase {
       await this.prisma.$executeRawUnsafe('DELETE FROM messages')
       await this.prisma.$executeRawUnsafe(
         `UPDATE folders
-         SET uid_validity = NULL, highest_modseq = NULL, last_known_uid = NULL, last_synced_at = NULL`
+         SET uid_validity = NULL, highest_modseq = NULL, last_known_uid = NULL, uid_next = NULL, last_synced_at = NULL`
       )
     }
 

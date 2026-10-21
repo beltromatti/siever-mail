@@ -129,6 +129,10 @@ export function registerMailIpc(
     await mailService.prefetchMessages(refs as MessageRef[])
   })
 
+  registerDataHandler(IPC_CHANNELS.hydratePreviews, async (refs) => {
+    await mailService.hydratePreviews(refs as MessageRef[])
+  })
+
   registerDataHandler(IPC_CHANNELS.moveMessages, async (payload) =>
     mailService.moveMessages(payload as MoveMessagesInput)
   )

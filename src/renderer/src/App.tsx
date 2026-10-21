@@ -1399,6 +1399,16 @@ function App(): React.JSX.Element {
 
   const orderedMessageRefs = useMemo(() => messages.map(summaryToMessageRef), [messages])
 
+  // Rows without a preview yet — older than those a sync fills in ahead —
+  // ask for theirs; one already on its way is not fetched twice.
+  useEffect(() => {
+    const missing = messages.filter((message) => !message.previewHydrated).map(summaryToMessageRef)
+
+    if (missing.length > 0) {
+      void window.mailApi.hydratePreviews(missing).catch(() => undefined)
+    }
+  }, [messages])
+
   const currentFolder = useMemo(
     () => folders.find((folder) => folder.path === selectedFolderPath) ?? null,
     [folders, selectedFolderPath]

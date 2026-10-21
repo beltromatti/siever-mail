@@ -53,6 +53,7 @@ export const IPC_CHANNELS = {
   getMessage: 'message:get',
   readMessage: 'message:read',
   prefetchMessages: 'message:prefetch',
+  hydratePreviews: 'message:hydrate-previews',
   moveMessages: 'message:move',
   deleteMessages: 'message:delete',
   archiveMessages: 'message:archive',
@@ -129,6 +130,8 @@ export interface DesktopMailApi {
   readMessage: (ref: MessageRef) => Promise<MailMessageDetail | null>
   /** Fetches ahead the bodies of the messages likely to be read next. */
   prefetchMessages: (refs: MessageRef[]) => Promise<void>
+  /** Fetches the previews of rows in view that have none yet. */
+  hydratePreviews: (refs: MessageRef[]) => Promise<void>
   /**
    * Actions on several messages, each folder's in one command. They settle
    * with the messages the server did not take, never with an error for a

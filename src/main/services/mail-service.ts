@@ -119,6 +119,8 @@ const messageRefSchema = z.object({
 const MAX_MESSAGES_PER_ACTION = 20_000
 /** The messages around the one being read are fetched ahead, a few at a time. */
 const MAX_PREFETCHED_MESSAGES = 8
+/** Previews asked for at once: the rows a list can hold. */
+const MAX_HYDRATED_PREVIEWS = 2_000
 const messageRefsSchema = z.array(messageRefSchema).max(MAX_MESSAGES_PER_ACTION)
 const moveMessagesSchema = z.object({
   refs: messageRefsSchema,
@@ -640,6 +642,13 @@ export class MailService {
         this.engine.loadMessageBody(ref, state.size, 'prefetch').catch(() => undefined)
       }
     }
+  }
+
+  /** Fetches the previews of rows in view that have none yet. */
+  async hydratePreviews(input: MessageRef[]): Promise<void> {
+    const refs = z.array(messageRefSchema).max(MAX_HYDRATED_PREVIEWS).parse(input)
+    await this.ensureAccountsExist(refs)
+    await this.engine.hydratePreviews(refs)
   }
 
   /** The message if its body is cached, and its size for fetching it otherwise. */
