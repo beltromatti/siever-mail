@@ -11,6 +11,9 @@ import { upgradeMailFontStacksInHtml } from '@shared/mail-fonts'
 import type {
   DataStorageBreakdown,
   DataStorageSection,
+  DraftAttachment,
+  DraftContent,
+  DraftKind,
   FetchedMessageDetail,
   FetchedMessageSummary,
   MailAccount,
@@ -660,6 +663,77 @@ function parseNotificationPreferences(value: string | null | undefined): Notific
   }
 }
 
+/** A draft as the app keeps it: its content, and where its server copy is. */
+export interface StoredDraftRecord {
+  content: DraftContent
+  revision: number
+  serverRevision: number
+  server: { accountId: string; folderPath: string; uid: number | null } | null
+  serverSavedAt: number | null
+  docked: boolean
+}
+
+function mapDraftRow(row: {
+  id: string
+  accountId: string
+  kind: string
+  sourceAccountId: string | null
+  toJson: string
+  ccJson: string
+  bccJson: string
+  subject: string
+  html: string
+  inReplyTo: string | null
+  referencesJson: string
+  originalJson: string | null
+  attachmentsJson: string
+  revision: number
+  serverRevision: number
+  serverAccountId: string | null
+  serverFolder: string | null
+  serverUid: number | null
+  serverSavedAt: bigint | null
+  docked: boolean
+}): StoredDraftRecord {
+  const kind: DraftKind = row.kind === 'reply' || row.kind === 'forward' ? row.kind : 'new'
+  let original: DraftContent['original']
+
+  try {
+    original = row.originalJson
+      ? (JSON.parse(row.originalJson) as DraftContent['original'])
+      : undefined
+  } catch {
+    // A value no release wrote: the draft is kept without it.
+    original = undefined
+  }
+
+  return {
+    content: {
+      id: row.id,
+      kind,
+      accountId: row.accountId,
+      sourceAccountId: row.sourceAccountId ?? undefined,
+      to: parseJsonArray<MailAddress>(row.toJson),
+      cc: parseJsonArray<MailAddress>(row.ccJson),
+      bcc: parseJsonArray<MailAddress>(row.bccJson),
+      subject: row.subject,
+      html: row.html,
+      inReplyTo: row.inReplyTo ?? undefined,
+      references: parseJsonArray<string>(row.referencesJson),
+      original,
+      attachments: parseJsonArray<DraftAttachment>(row.attachmentsJson)
+    },
+    revision: row.revision,
+    serverRevision: row.serverRevision,
+    server:
+      row.serverAccountId && row.serverFolder
+        ? { accountId: row.serverAccountId, folderPath: row.serverFolder, uid: row.serverUid }
+        : null,
+    serverSavedAt: row.serverSavedAt === null ? null : toNumber(row.serverSavedAt),
+    docked: row.docked
+  }
+}
+
 /** Someone stored mail names, to learn as a contact (`AppDatabase.learnContacts`). */
 export interface LearnedContact {
   address: string
@@ -1222,6 +1296,7 @@ export class AppDatabase {
       this.prisma.contact.deleteMany(),
       this.prisma.recentFile.deleteMany(),
       this.prisma.recentFolder.deleteMany(),
+      this.prisma.draft.deleteMany(),
       this.prisma.$executeRaw`DELETE FROM account_signatures`,
       // Reset the singleton row of app preferences (unified inbox toggle)
       // back to its empty state; how the app looks stays as chosen.
@@ -1245,6 +1320,159 @@ export class AppDatabase {
    * convenience, not a record.
    */
   /** A folder messages were just moved to, first among the account's recent destinations. */
+  /**
+   * Keeps a draft as it is now, as one more save of it — the next the
+   * server is to get — open in the composer.
+   */
+  async saveDraft(content: DraftContent): Promise<StoredDraftRecord> {
+    await this.ready
+
+    const now = BigInt(Date.now())
+    const fields = {
+      accountId: content.accountId,
+      kind: content.kind,
+      sourceAccountId: content.sourceAccountId ?? null,
+      toJson: JSON.stringify(content.to),
+      ccJson: JSON.stringify(content.cc),
+      bccJson: JSON.stringify(content.bcc),
+      subject: content.subject,
+      html: content.html,
+      inReplyTo: content.inReplyTo ?? null,
+      referencesJson: JSON.stringify(content.references ?? []),
+      originalJson: content.original ? JSON.stringify(content.original) : null,
+      attachmentsJson: JSON.stringify(content.attachments),
+      docked: true,
+      updatedAt: now
+    }
+    const row = await this.prisma.draft.upsert({
+      where: { id: content.id },
+      create: { id: content.id, ...fields, revision: 1, createdAt: now },
+      update: { ...fields, revision: { increment: 1 } }
+    })
+
+    return mapDraftRow(row)
+  }
+
+  /**
+   * A draft as the server has it, taken as the one the app keeps — opened
+   * from Bozze — with the copy it came from as its own.
+   */
+  async adoptServerDraft(
+    content: DraftContent,
+    server: { accountId: string; folderPath: string; uid: number }
+  ): Promise<StoredDraftRecord> {
+    await this.ready
+
+    const now = BigInt(Date.now())
+    const fields = {
+      accountId: content.accountId,
+      kind: content.kind,
+      sourceAccountId: content.sourceAccountId ?? null,
+      toJson: JSON.stringify(content.to),
+      ccJson: JSON.stringify(content.cc),
+      bccJson: JSON.stringify(content.bcc),
+      subject: content.subject,
+      html: content.html,
+      inReplyTo: content.inReplyTo ?? null,
+      referencesJson: JSON.stringify(content.references ?? []),
+      originalJson: content.original ? JSON.stringify(content.original) : null,
+      attachmentsJson: JSON.stringify(content.attachments),
+      revision: 1,
+      serverRevision: 1,
+      serverAccountId: server.accountId,
+      serverFolder: server.folderPath,
+      serverUid: server.uid,
+      serverSavedAt: now,
+      docked: true,
+      updatedAt: now
+    }
+    const row = await this.prisma.draft.upsert({
+      where: { id: content.id },
+      create: { id: content.id, ...fields, createdAt: now },
+      update: fields
+    })
+
+    return mapDraftRow(row)
+  }
+
+  async getDraft(id: string): Promise<StoredDraftRecord | null> {
+    await this.ready
+
+    const row = await this.prisma.draft.findUnique({ where: { id } })
+    return row ? mapDraftRow(row) : null
+  }
+
+  /** The draft whose server copy is `uid` of `folderPath`, if the app keeps it. */
+  async findDraftByServerCopy(
+    accountId: string,
+    folderPath: string,
+    uid: number
+  ): Promise<StoredDraftRecord | null> {
+    await this.ready
+
+    const row = await this.prisma.draft.findFirst({
+      where: { serverAccountId: accountId, serverFolder: folderPath, serverUid: uid }
+    })
+    return row ? mapDraftRow(row) : null
+  }
+
+  /** The drafts to reopen at launch: left open, or not on the server as they are. */
+  async listDockedDrafts(): Promise<StoredDraftRecord[]> {
+    await this.ready
+
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM drafts WHERE docked = 1 OR revision > server_revision ORDER BY created_at
+    `
+    const drafts = await this.prisma.draft.findMany({
+      where: { id: { in: rows.map((row) => row.id) } },
+      orderBy: { createdAt: 'asc' }
+    })
+
+    return drafts.map(mapDraftRow)
+  }
+
+  /** The drafts whose latest save the server does not have yet. */
+  async listUnfiledDraftIds(): Promise<string[]> {
+    await this.ready
+
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM drafts WHERE revision > server_revision
+    `
+    return rows.map((row) => row.id)
+  }
+
+  /** The server has `revision` of the draft, as `uid` of `folderPath` (null: not known). */
+  async markDraftFiled(
+    id: string,
+    filed: { revision: number; accountId: string; folderPath: string; uid: number | null }
+  ): Promise<StoredDraftRecord | null> {
+    await this.ready
+
+    const now = BigInt(Date.now())
+    await this.prisma.draft.updateMany({
+      where: { id },
+      data: {
+        serverRevision: filed.revision,
+        serverAccountId: filed.accountId,
+        serverFolder: filed.folderPath,
+        serverUid: filed.uid,
+        serverSavedAt: now
+      }
+    })
+
+    return this.getDraft(id)
+  }
+
+  async setDraftDocked(id: string, docked: boolean): Promise<void> {
+    await this.ready
+    await this.prisma.draft.updateMany({ where: { id }, data: { docked } })
+  }
+
+  async deleteDraft(id: string): Promise<void> {
+    await this.ready
+    await this.prisma.draft.deleteMany({ where: { id } })
+  }
+
   async recordRecentFolder(accountId: string, folderPath: string): Promise<void> {
     await this.ready
 
@@ -3280,6 +3508,36 @@ export class AppDatabase {
     `)
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_recent_folders_account_used_at ON recent_folders(account_id, used_at)'
+    )
+
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS drafts (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        source_account_id TEXT,
+        to_json TEXT NOT NULL DEFAULT '[]',
+        cc_json TEXT NOT NULL DEFAULT '[]',
+        bcc_json TEXT NOT NULL DEFAULT '[]',
+        subject TEXT NOT NULL DEFAULT '',
+        html TEXT NOT NULL DEFAULT '',
+        in_reply_to TEXT,
+        references_json TEXT NOT NULL DEFAULT '[]',
+        original_json TEXT,
+        attachments_json TEXT NOT NULL DEFAULT '[]',
+        revision INTEGER NOT NULL DEFAULT 0,
+        server_revision INTEGER NOT NULL DEFAULT 0,
+        server_account_id TEXT,
+        server_folder TEXT,
+        server_uid INTEGER,
+        server_saved_at INTEGER,
+        docked INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_drafts_account ON drafts(account_id)'
     )
 
     await this.prisma.$executeRawUnsafe(`

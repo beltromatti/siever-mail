@@ -74,6 +74,8 @@ async function findSuggestions(
 
 interface RecipientFieldProps {
   field: RecipientFieldKey
+  /** The input's id, unique among the composers open at once. */
+  inputId: string
   recipients: ReadonlyArray<MailAddress>
   /** Changes the recipients from the latest ones: a name found later must not undo an edit. */
   onRecipientsChange: (update: (recipients: MailAddress[]) => MailAddress[]) => void
@@ -104,6 +106,7 @@ interface RecipientFieldProps {
  */
 export function RecipientField({
   field,
+  inputId,
   recipients,
   onRecipientsChange,
   draft,
@@ -130,7 +133,6 @@ export function RecipientField({
   const query = draft.trim()
   const listOpen = focused && query.length > 0 && result.suggestions.length > 0
   const label = RECIPIENT_FIELD_LABELS[field]
-  const inputId = `compose-${field}`
 
   useEffect(() => {
     if (!focused || !query) {

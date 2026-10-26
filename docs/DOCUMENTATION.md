@@ -67,6 +67,7 @@ src/
 │   │   ├── database.ts        Prisma client, raw DDL, queries
 │   │   ├── data-migration.ts  upgrade lifecycle
 │   │   ├── mail-engine/       connections, sync, sending, parsing, notifications
+│   │   ├── drafts.ts          drafts: kept here as they are typed, filed in Bozze
 │   │   ├── contact-ranking.ts which contacts the composer suggests, in what order
 │   │   ├── attachment-files.ts  attachment copies (opened, forwarded) on disk
 │   │   ├── recent-files.ts    the OS's recent documents, for "Allega"
@@ -102,6 +103,7 @@ so an older file is brought forward in place.
 | `folders`            | Folder metadata and sync cursors (UIDVALIDITY, HIGHESTMODSEQ, UIDNEXT, last UID). _Cache._                                                                                                                                                   |
 | `messages`           | Envelopes, previews, flags, body cache. Denormalised `sender_label` / `sender_sort` / `subject_sort` let the database sort and group by sender or subject, and the folded `search_*` columns let it search without case or accents. _Cache._ |
 | `contacts`           | Everyone stored mail names, for the composer's suggestions: `usage_count` / `last_used_at` count the mail written to them, `last_received_at` the newest they sent, `hidden_at` a contact taken out of the suggestions.                      |
+| `drafts`             | The messages being written: recipients, subject, body, files, the thread they answer; `revision` / `server_revision` say whether Bozze has the draft as it is, `server_*` where its copy is, `docked` that a composer holds it.              |
 | `account_signatures` | One signature per account, with the version of the page it was written for (`html_format`) and the edition of the extension's content it has (`extension_revision`).                                                                         |
 | `recent_files`       | Files the user attached, saved or an extension filed away, offered first in "Allega".                                                                                                                                                        |
 | `recent_folders`     | The folders each account's messages were last moved to, offered first by "Sposta".                                                                                                                                                           |
@@ -186,7 +188,9 @@ newest messages of the inbox are downloaded ahead in the background.
 **Moves** keep the rows: a server with UIDPLUS answers with the new UIDs
 (`COPYUID`) and the rows are relocated, so a message moved is in its new
 folder at once. Actions on a selection send one command per folder, in
-chunks of 500 UIDs.
+chunks of 500 UIDs. The UIDs that leave a folder are remembered for the
+session: a sync that read one off the server just before it went does not
+put it back in the list (a UID is never given twice under one UIDVALIDITY).
 
 **Search** runs locally on the folded `search_*` columns, and — for what
 those cannot see, the full text — as `IMAP SEARCH` on the server, one per
@@ -212,7 +216,11 @@ What the user asks for is reported truthfully:
   already shown. An account whose login was refused fails at once.
 - Sending goes over SMTP; for IMAP accounts a copy is filed in the Sent
   folder afterwards, in the background (Gmail files its own). A sent
-  message is never reported as failed because that copy is late.
+  message is never reported as failed because that copy is late. The SMTP
+  socket is opened by Node, trying the server's IPv6 and IPv4 addresses in
+  turn (Happy Eyeballs), as imapflow's are: nodemailer alone picks one at
+  random, and an IPv6 address on a network without IPv6 held a message for
+  the whole connection timeout.
 - "Elimina" moves a message to the Trash; in the Trash, or on an account
   without one, it deletes for good, after asking.
 - "Archivia" moves a message to the account's archive folder (`\Archive`,
@@ -392,6 +400,12 @@ Settings (Sistema, Chiaro, Scuro) becomes Electron's `themeSource`, which is
 what that media query reports. Components only use the tokens. Message
 bodies stay on a white page in both themes, as they were written.
 
+The interface is set in Mona Sans (OFL), bundled with the app as a variable
+font (`@fontsource-variable/mona-sans`, weights 200–900, widths 75–125 %),
+so it looks the same on every machine: `--font-sans` for everything,
+`--font-display` with `.display-title` — the same family at 110 % width —
+for titles.
+
 ## Mail content
 
 ### Reading
@@ -406,7 +420,7 @@ to load says so, with "Riprova".
 
 ### Writing
 
-The composer (`features/mail/mail-composer-dialog.tsx`) runs Squire in an
+The composer (`features/mail/mail-composer.tsx`) runs Squire in an
 iframe on the same page as the reader, so what is written looks as it will
 arrive. A body starts with lines to write on, the signature in a
 `gmail_signature` block and, for a reply or forward, the quote after a blank
@@ -449,6 +463,45 @@ same mailbox at a domain one letter off). A suggestion can be taken out
 with its ×; writing to the address again brings it back. A database from an
 earlier version has its contacts learned again once, when the table gains
 these columns.
+
+### Drafts
+
+Whatever is being written is a draft from the first change (`drafts.ts`):
+the composer hands it to the main process 0.7 s after the last keystroke,
+which keeps it in `drafts` — a crash, a quit or a lost connection costs
+nothing — and 5 s later files it in the account's Bozze (created when the
+account has none), with `\Draft \Seen`, so Gmail, Outlook and the phone
+have it. Each server save appends the new version and deletes the one it
+replaces for good — on Gmail by moving it to the Trash and expunging it
+there, which is how Gmail deletes. Every version has its own Message-ID
+(Gmail drops a message whose id it has seen) and the draft's id in
+`X-Siever-Draft-Id`, which is how a draft opened from Bozze is known again.
+A save the server refused is tried again every 30 s; quitting files what
+is waiting for up to 4 s, and the next launch files the rest. The footer
+says where the draft is: saving, "Salvata in Bozze alle 18:22", or why the
+server has not got it yet.
+
+A composer opened and left untouched leaves nothing behind; a body changes
+only when what it reads as changes, not when the editor touches its DOM.
+
+In Bozze — of this app or any other client — a double click, Invio or
+"Continua a scrivere" (in place of Rispondi and Inoltra) opens the draft:
+the copy kept here if it is newer or open, otherwise the server's,
+parsed with its recipients, Ccn, thread, files (written to
+`userData/drafts/<id>/`) and inline pictures.
+
+Several messages are written at once. One is in front, modal; the others
+wait in the dock, bars in the bottom right corner, as Gmail keeps them,
+each with its subject and who it goes to, those that do not fit folded
+into "+N". A composer put aside (Esc, a click beside it, "–") is never
+taken down: coming back finds the caret, the undo history and a
+half-typed recipient where they were. × closes it and keeps the draft in
+Bozze ("Apri" brings it back); the bin throws it away — its copy goes to
+the Trash — with "Annulla" for 10 s. Sending deletes the draft once the
+message has gone; if it fails, the draft waits in Bozze as it was sent.
+The drafts left open come back to the dock at the next launch. While a
+message is in front, notices come in at the top, off its Invia; otherwise
+they rise above the dock.
 
 ### Attachments
 

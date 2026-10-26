@@ -44,13 +44,17 @@ import type {
   RecentFile,
   SavedAttachments,
   SetMessagesKeywordInput,
+  DraftContent,
+  DraftStatus,
   NotificationPreferences,
   NotificationStatus,
+  StoredDraft,
   UiPreferences,
   UnifiedFolderSummary,
   UnifiedPreferences
 } from '@shared/models'
 import { isValidEmailAddress } from '@shared/email-address'
+import { IPC_CHANNELS } from '@shared/ipc'
 import { UNIFIED_FOLDER_ROLES, unifiedFolderRole, type FolderRole } from '@shared/folders'
 import {
   MAX_MESSAGES_PER_ACTION,
@@ -73,6 +77,7 @@ import {
 } from './attachment-files'
 import { APP_ID } from '@main/app-identity'
 import { AppBadge } from './app-badge'
+import { DraftService } from './drafts'
 import { AppDatabase, type MessageListView } from './database'
 import { finalizeUpgradeMigration } from './data-migration'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
@@ -118,6 +123,7 @@ const recipientSchema = z.object({
 const composeSchema = z
   .object({
     accountId: z.string().trim().min(1),
+    draftId: z.string().uuid().optional(),
     to: z.array(recipientSchema),
     cc: z.array(recipientSchema),
     bcc: z.array(recipientSchema),
@@ -198,6 +204,49 @@ const notificationPreferencesSchema = z.object({
   showPreview: z.boolean(),
   sound: z.boolean(),
   badge: z.boolean()
+})
+
+/** Recipients a draft keeps, as typed — valid addresses or not. */
+const MAX_DRAFT_RECIPIENTS = 2_000
+/** Long enough for the drafts being written to reach Bozze; never long enough to hold the quit up. */
+const DRAFT_FLUSH_ON_QUIT_MS = 4_000
+
+const draftAddressSchema = z.object({
+  name: z.string().max(256).optional(),
+  address: z.string().trim().min(1).max(320)
+})
+
+const draftContentSchema = z.object({
+  id: z.string().uuid(),
+  kind: z.enum(['new', 'reply', 'forward']),
+  accountId: z.string().trim().min(1),
+  sourceAccountId: z.string().trim().min(1).optional(),
+  to: z.array(draftAddressSchema).max(MAX_DRAFT_RECIPIENTS),
+  cc: z.array(draftAddressSchema).max(MAX_DRAFT_RECIPIENTS),
+  bcc: z.array(draftAddressSchema).max(MAX_DRAFT_RECIPIENTS),
+  subject: z.string().max(2_000),
+  html: z.string(),
+  inReplyTo: z.string().optional(),
+  references: z.array(z.string()).optional(),
+  original: z
+    .object({
+      ref: z.object({
+        accountId: z.string().trim().min(1),
+        folderPath: z.string().trim().min(1),
+        uid: z.number().int().positive()
+      }),
+      attachments: z.array(z.looseObject({ id: z.string(), fileName: z.string() }))
+    })
+    .optional(),
+  attachments: z.array(
+    z.object({
+      name: z.string(),
+      size: z.number().nonnegative(),
+      path: z.string().min(1).optional(),
+      originalId: z.string().optional(),
+      failed: z.boolean().optional()
+    })
+  )
 })
 
 /** The system pages where the user allows an app's notifications. */
@@ -287,6 +336,7 @@ export class MailService {
   private readonly googleOAuthService: GoogleOAuthService
   private readonly engine: MailEngine
   private readonly badge: AppBadge
+  private readonly drafts: DraftService
   private extension: ExtensionMain | null = null
   private storageReady: Promise<void> | null = null
   // The copy of each attachment last written, and what it held, keyed by its
@@ -307,6 +357,21 @@ export class MailService {
       googleOAuthService: this.googleOAuthService,
       getMainWindow,
       onInboxUnreadChange: (count) => this.badge.setCount(count)
+    })
+    this.drafts = new DraftService({
+      database: this.database,
+      engine: this.engine,
+      getAccount: async (accountId) => {
+        const stored = await this.database.getStoredAccountById(accountId)
+        return stored ? { ...stored, secret: decryptSecret(stored.encryptedSecret) } : null
+      },
+      onStatus: (status) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed()) {
+            window.webContents.send(IPC_CHANNELS.draftStatusChanged, status)
+          }
+        }
+      }
     })
   }
 
@@ -339,6 +404,7 @@ export class MailService {
     this.applyNotificationPreferences(await this.database.getNotificationPreferences())
     this.badge.setCount(await this.engine.inboxUnreadCount())
     await this.engine.start()
+    await this.drafts.resume()
   }
 
   /** The window loaded anew: what only its page can draw is drawn again. */
@@ -405,6 +471,10 @@ export class MailService {
       logMainError('Extension teardown failed', error)
     }
 
+    // What is being written reaches Bozze before the connections close.
+    await this.drafts
+      .flushAll(DRAFT_FLUSH_ON_QUIT_MS)
+      .catch((error: unknown) => logMainError('Filing drafts on quit failed', error))
     await this.engine.stop()
     this.database.close()
   }
@@ -925,7 +995,20 @@ export class MailService {
     const transport = await createSmtpTransport(account, this.googleOAuthService)
 
     try {
-      const result = await transport.sendMail(outgoing)
+      const result = await transport.sendMail(outgoing).catch((error: unknown) => {
+        // Not sent: the draft, as it was when sending, waits in Bozze.
+        if (payload.draftId) {
+          void this.drafts.flush(payload.draftId)
+        }
+
+        throw error
+      })
+
+      if (payload.draftId) {
+        void this.drafts
+          .sent(payload.draftId)
+          .catch((error: unknown) => logMainError('Deleting the sent draft failed', error))
+      }
 
       // The message has gone: counting who it went to must not turn that into a failure.
       void this.database
@@ -964,6 +1047,35 @@ export class MailService {
       : CONTACT_SUGGESTION_LIMIT_DEFAULT
 
     return this.database.listContactSuggestions(normalizedQuery, normalizedLimit)
+  }
+
+  /** See `DraftService.save`. */
+  async saveDraft(input: DraftContent): Promise<DraftStatus> {
+    const content = draftContentSchema.parse(input) as DraftContent
+    await this.ensureAccountExists(content.accountId)
+    return this.drafts.save(content)
+  }
+
+  flushDraft(id: string): Promise<DraftStatus> {
+    return this.drafts.flush(z.string().uuid().parse(id))
+  }
+
+  closeDraft(id: string): Promise<DraftStatus> {
+    return this.drafts.close(z.string().uuid().parse(id))
+  }
+
+  discardDraft(id: string): Promise<void> {
+    return this.drafts.discard(z.string().uuid().parse(id))
+  }
+
+  listDockedDrafts(): Promise<StoredDraft[]> {
+    return this.drafts.listDocked()
+  }
+
+  async openDraftMessage(input: MessageRef): Promise<StoredDraft> {
+    const ref = messageRefSchema.parse(input)
+    await this.ensureAccountExists(ref.accountId)
+    return this.drafts.openMessage(ref)
   }
 
   /** Takes an address out of the composer's suggestions. */

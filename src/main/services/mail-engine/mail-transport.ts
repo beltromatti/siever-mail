@@ -61,6 +61,12 @@ export interface OutgoingMessagePayload {
     contentType?: string
     contentDisposition?: 'inline' | 'attachment'
   }>
+  /** Set for a draft's versions; a message sent gets one of its own. */
+  messageId?: string
+  date?: Date
+  headers?: Record<string, string>
+  /** A draft keeps its Bcc header; a message sent never carries it. */
+  keepBcc?: boolean
 }
 
 function parseInlineMediaDataUrl(dataUrl: string): { mimeType: string; content: Buffer } | null {
@@ -415,10 +421,12 @@ export function createOutgoingMessagePayload(
 }
 
 export async function buildRawOutgoingMessage(payload: OutgoingMessagePayload): Promise<Buffer> {
-  const composer = new MailComposer(payload)
+  const message = new MailComposer(payload).compile()
+  // nodemailer reads it off the built message, as its own file transports set it.
+  message.keepBcc = payload.keepBcc ?? false
 
   return new Promise<Buffer>((resolveBuild, rejectBuild) => {
-    composer.compile().build((error, rawMessage) => {
+    message.build((error, rawMessage) => {
       if (error) {
         rejectBuild(error)
         return

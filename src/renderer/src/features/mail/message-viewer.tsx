@@ -14,6 +14,7 @@ import {
   MailPlus,
   Minimize2,
   Paperclip,
+  PenLine,
   Reply,
   ReplyAll,
   Trash2
@@ -77,6 +78,8 @@ interface MessageViewerProps {
   onReply: () => void
   onReplyAll: () => void
   onForward: () => void
+  /** The message is a draft: it is written on, in place of being answered. */
+  onContinueDraft?: () => void
   onArchive: () => void
   onDelete: () => void
   onMoveToFolder: (folderPath: string) => void
@@ -120,9 +123,10 @@ function addressesToLabel(addresses: { name?: string; address: string }[]): stri
 /**
  * Who the message went to, in one short phrase. A message that names nobody
  * in To or Cc reached this mailbox as a blind copy or through a list, which
- * is worth saying rather than printing an empty "A".
+ * is worth saying rather than printing an empty "A" — unless it is a draft,
+ * which has nobody to go to yet.
  */
-function recipientsSummary(message: MailMessageDetail): string {
+function recipientsSummary(message: MailMessageDetail, isDraft: boolean): string {
   const copies =
     message.cc.length === 1
       ? `Cc ${summarizeAddresses(message.cc)}`
@@ -139,7 +143,7 @@ function recipientsSummary(message: MailMessageDetail): string {
     return `Cc ${summarizeAddresses(message.cc)}`
   }
 
-  return 'Destinatari non divulgati'
+  return isDraft ? 'Nessun destinatario' : 'Destinatari non divulgati'
 }
 
 function DetailsLabel({
@@ -496,6 +500,7 @@ export function MessageViewer({
   onReply,
   onReplyAll,
   onForward,
+  onContinueDraft,
   onArchive,
   onDelete,
   onMoveToFolder,
@@ -714,36 +719,51 @@ export function MessageViewer({
             {message.subject}
           </h2>
           <div className="flex shrink-0 flex-wrap items-center gap-1">
-            <ActionTooltip label="Rispondi al mittente" commandId="reply">
-              <Button
-                variant="secondary"
-                size="sm"
-                className="h-6.5 gap-1.5 px-2 text-[11.5px]"
-                onClick={onReply}
-              >
-                <Reply className="size-3.5" /> Rispondi
-              </Button>
-            </ActionTooltip>
-            <ActionTooltip label="Rispondi a tutti i destinatari" commandId="reply-all">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6.5 gap-1.5 px-2 text-[11.5px]"
-                onClick={onReplyAll}
-              >
-                <ReplyAll className="size-3.5" /> Rispondi a tutti
-              </Button>
-            </ActionTooltip>
-            <ActionTooltip label="Inoltra con gli allegati" commandId="forward">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6.5 gap-1.5 px-2 text-[11.5px]"
-                onClick={onForward}
-              >
-                <Forward className="size-3.5" /> Inoltra
-              </Button>
-            </ActionTooltip>
+            {onContinueDraft ? (
+              <ActionTooltip label="Riprendi la bozza nell’editor">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-6.5 gap-1.5 px-2 text-[11.5px]"
+                  onClick={onContinueDraft}
+                >
+                  <PenLine className="size-3.5" /> Continua a scrivere
+                </Button>
+              </ActionTooltip>
+            ) : (
+              <>
+                <ActionTooltip label="Rispondi al mittente" commandId="reply">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="h-6.5 gap-1.5 px-2 text-[11.5px]"
+                    onClick={onReply}
+                  >
+                    <Reply className="size-3.5" /> Rispondi
+                  </Button>
+                </ActionTooltip>
+                <ActionTooltip label="Rispondi a tutti i destinatari" commandId="reply-all">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6.5 gap-1.5 px-2 text-[11.5px]"
+                    onClick={onReplyAll}
+                  >
+                    <ReplyAll className="size-3.5" /> Rispondi a tutti
+                  </Button>
+                </ActionTooltip>
+                <ActionTooltip label="Inoltra con gli allegati" commandId="forward">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6.5 gap-1.5 px-2 text-[11.5px]"
+                    onClick={onForward}
+                  >
+                    <Forward className="size-3.5" /> Inoltra
+                  </Button>
+                </ActionTooltip>
+              </>
+            )}
 
             {/* Same divider the toolbar uses, so the labelled pair reads as
                 one group and the icons as another. */}
@@ -835,7 +855,9 @@ export function MessageViewer({
           <span className="shrink-0 opacity-50">·</span>
           {/* The first person and a count, never the whole list: the full
               list lives under Dettagli, one token per person. */}
-          <span className="min-w-0 shrink truncate">{recipientsSummary(message)}</span>
+          <span className="min-w-0 shrink truncate">
+            {recipientsSummary(message, Boolean(onContinueDraft))}
+          </span>
           <span className="shrink-0 opacity-50">·</span>
           <span className="shrink-0 whitespace-nowrap">{formatDateLabel(message.date)}</span>
           {message.hasAttachments && (

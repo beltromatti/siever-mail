@@ -8,6 +8,9 @@ import type {
   AppBootstrap,
   ComposeMailInput,
   CopiedAttachment,
+  DraftContent,
+  DraftStatus,
+  StoredDraft,
   FoldersChangedEvent,
   MailAccountSignature,
   DataStorageBreakdown,
@@ -73,6 +76,13 @@ export const IPC_CHANNELS = {
   sendMail: 'message:send',
   pickAttachments: 'compose:pick-attachments',
   suggestContacts: 'contact:suggest',
+  saveDraft: 'draft:save',
+  flushDraft: 'draft:flush',
+  closeDraft: 'draft:close',
+  discardDraft: 'draft:discard',
+  listDockedDrafts: 'draft:list-docked',
+  openDraftMessage: 'draft:open-message',
+  draftStatusChanged: 'draft:status-changed',
   forgetContact: 'contact:forget',
   listAccountSignatures: 'signature:list-account',
   getAccountSignature: 'signature:get-account',
@@ -182,6 +192,19 @@ export interface DesktopMailApi {
   setMessagesFlagged: (input: SetMessagesKeywordInput) => Promise<MessagesActionResult>
   sendMail: (input: ComposeMailInput) => Promise<void>
   suggestContacts: (query: string, limit?: number) => Promise<MailContactSuggestion[]>
+  /** Keeps the draft as it is now and files it in Bozze once typing settles. */
+  saveDraft: (content: DraftContent) => Promise<DraftStatus>
+  /** Files the draft in Bozze now, when it is not there as it is. */
+  flushDraft: (id: string) => Promise<DraftStatus>
+  /** The draft leaves the composer: filed in Bozze, and no longer reopened at launch. */
+  closeDraft: (id: string) => Promise<DraftStatus>
+  /** Throws the draft away: its copy in Bozze goes to the Trash. */
+  discardDraft: (id: string) => Promise<void>
+  /** The drafts the app left open, or not yet filed on the server, when it last closed. */
+  listDockedDrafts: () => Promise<StoredDraft[]>
+  /** A message in Bozze, opened to be written on. */
+  openDraftMessage: (ref: MessageRef) => Promise<StoredDraft>
+  onDraftStatusChanged: (listener: (status: DraftStatus) => void) => () => void
   /** Takes an address out of the suggestions, until the user writes to it again. */
   forgetContact: (address: string) => Promise<void>
   listAccountSignatures: () => Promise<MailAccountSignature[]>

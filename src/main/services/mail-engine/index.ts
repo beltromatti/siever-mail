@@ -325,6 +325,24 @@ export class MailEngine {
     )
   }
 
+  /** See `AccountConnection.saveDraft`. */
+  async saveDraft(
+    accountId: string,
+    raw: Buffer,
+    messageId: string,
+    replace: { folderPath: string; uid: number } | null
+  ): Promise<{ folderPath: string; uid: number | null }> {
+    const connection = await this.requestConnection(accountId)
+    return connection.saveDraft(raw, messageId, replace)
+  }
+
+  /** Deletes messages, of any account, for good (see `AccountConnection.purgeMessages`). */
+  async purgeMessages(refs: ReadonlyArray<MessageRef>): Promise<MessagesActionResult> {
+    return this.onMessages(refs, (connection, folderPath, uids) =>
+      connection.purgeMessages(folderPath, uids)
+    )
+  }
+
   /** Moves messages, of any account, to each one's Trash — read first, when asked. */
   async moveMessagesToTrash(
     refs: ReadonlyArray<MessageRef>,

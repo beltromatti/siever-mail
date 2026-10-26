@@ -1490,6 +1490,16 @@ function refreshEmptyState(body: HTMLElement): void {
   }
 }
 
+/**
+ * The body as the editor hands it out: the authoring defaults written on
+ * the blocks Squire made, its own marker classes taken off.
+ */
+function readEditorHtml(editor: SquireInstance, defaultFontFamily: string | null): string {
+  const root = editor.getRoot()
+  writeAuthoringDefaults(root, authoringBlockDeclarations(defaultFontFamily))
+  return stripEditorMarkerClassesFromHtml(editor.getHTML(), root.ownerDocument)
+}
+
 function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
   const { iframeRef, initialHtml, placeholder, defaultFontFamily, disabled, onChange } = options
   const [ready, setReady] = useState(false)
@@ -1501,6 +1511,11 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
   // the controlled-component pattern stable: Squire reformats on setHTML so
   // round-trip equality is unreliable, but the prop reference is stable.
   const lastSyncedHtmlRef = useRef<string | null>(null)
+  // The body as last handed out, or as it read right after a value was put
+  // in. Only a body that reads differently is a change: Squire reports any
+  // mutation of the body as `input` — an attribute set on it, a block it
+  // normalises — and those leave what the user wrote as it was.
+  const contentHtmlRef = useRef<string | null>(null)
   const isApplyingExternalValueRef = useRef(false)
   const defaultFontFamilyRef = useRef(defaultFontFamily)
 
@@ -1547,6 +1562,7 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
         editorRef.current = null
       }
       lastSyncedHtmlRef.current = null
+      contentHtmlRef.current = null
       setReady(false)
     }
 
@@ -1711,6 +1727,7 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
       isApplyingExternalValueRef.current = true
       editor.modifyDocument(() => {
         editor.setHTML(initialHtml)
+        contentHtmlRef.current = readEditorHtml(editor, defaultFontFamilyRef.current)
       })
       isApplyingExternalValueRef.current = false
       lastSyncedHtmlRef.current = initialHtml
@@ -1723,19 +1740,15 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
         // authoring defaults here, in the live document, where the caret
         // stays put. Left to the value the parent hands back, they would be
         // added by a setHTML that throws the caret to the top of the body.
-        writeAuthoringDefaults(
-          editor.getRoot(),
-          authoringBlockDeclarations(defaultFontFamilyRef.current)
-        )
-        const rawHtml = editor.getHTML()
-        const html = stripEditorMarkerClassesFromHtml(rawHtml, frameDocument)
+        const html = readEditorHtml(editor, defaultFontFamilyRef.current)
 
         refreshEmptyState(frameDocument.body)
 
-        if (html === lastSyncedHtmlRef.current) {
+        if (html === contentHtmlRef.current) {
           return
         }
 
+        contentHtmlRef.current = html
         lastSyncedHtmlRef.current = html
         onChangeRef.current(html)
       }
@@ -1792,6 +1805,7 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
     isApplyingExternalValueRef.current = true
     editor.modifyDocument(() => {
       editor.setHTML(initialHtml)
+      contentHtmlRef.current = readEditorHtml(editor, defaultFontFamilyRef.current)
     })
     isApplyingExternalValueRef.current = false
     refreshEmptyState(editor.getRoot())

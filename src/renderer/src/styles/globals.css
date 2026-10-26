@@ -52,6 +52,8 @@
   --scrollbar-thumb: 218 16% 30%;
   --scrollbar-thumb-hover: 217 14% 46%;
   --flagged: 0 72% 56%;
+  /* A caution that is not an error: a draft kept here, not yet on the server. */
+  --warning: 38 92% 58%;
   --canvas-start: 228 41% 9%;
   --canvas-end: 220 45% 7%;
   --canvas-glow: 0.16;
@@ -97,6 +99,7 @@
     --scrollbar-thumb: 220 10% 76%;
     --scrollbar-thumb-hover: 220 10% 60%;
     --flagged: 0 70% 48%;
+    --warning: 30 90% 38%;
     --canvas-start: 220 30% 97%;
     --canvas-end: 220 22% 92%;
     --canvas-glow: 0.1;
@@ -153,6 +156,7 @@
   --color-scrollbar-thumb: hsl(var(--scrollbar-thumb));
   --color-scrollbar-thumb-hover: hsl(var(--scrollbar-thumb-hover));
   --color-flagged: hsl(var(--flagged));
+  --color-warning: hsl(var(--warning));
   --color-scrim: hsl(var(--scrim));
 }
 
@@ -286,6 +290,18 @@
   .list-section-heading {
     background-color: hsl(var(--card) / 0.94);
     backdrop-filter: blur(10px);
+  }
+
+  /* A bar of the compose dock arriving: the message it stands for shrank into it. */
+  .dock-enter {
+    animation: dock-enter 180ms ease-out;
+  }
+
+  @keyframes dock-enter {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.97);
+    }
   }
 
   .display-title {

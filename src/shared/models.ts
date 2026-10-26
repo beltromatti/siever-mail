@@ -401,8 +401,69 @@ export interface ComposeAttachmentInput {
   name?: string
 }
 
+export type DraftKind = 'new' | 'reply' | 'forward'
+
+/**
+ * An attachment of a message being written: a file on disk, or one of the
+ * original message's attachments, which has no file until its copy is made
+ * (and says so if that failed).
+ */
+export interface DraftAttachment {
+  name: string
+  size: number
+  /** The file that goes out. */
+  path?: string
+  /** Its id among the original message's attachments, when it is one of them. */
+  originalId?: string
+  failed?: boolean
+}
+
+/**
+ * A message being written, as the composer holds it: kept by the app as it
+ * is typed and filed in the account's Bozze (see `saveDraft`).
+ */
+export interface DraftContent {
+  id: string
+  kind: DraftKind
+  /** The account it goes out from. */
+  accountId: string
+  /** The account that received the message a reply or forward is about. */
+  sourceAccountId?: string
+  to: MailAddress[]
+  cc: MailAddress[]
+  bcc: MailAddress[]
+  subject: string
+  html: string
+  inReplyTo?: string
+  references?: string[]
+  /** The message a reply or forward is about, and its attachments. */
+  original?: { ref: MessageRef; attachments: MailAttachment[] }
+  attachments: DraftAttachment[]
+}
+
+/**
+ * Where a draft stands: kept on this computer and waiting to be filed on
+ * the server (`pending`), being filed (`saving`), filed as it is now
+ * (`saved`), or not filed because the server refused (`error`, retried).
+ */
+export interface DraftStatus {
+  id: string
+  state: 'pending' | 'saving' | 'saved' | 'error'
+  /** When the server last got the draft as it is now. */
+  savedAt?: number
+  /** Why it is not on the server yet, in the user's words. */
+  message?: string
+}
+
+export interface StoredDraft {
+  content: DraftContent
+  status: DraftStatus
+}
+
 export interface ComposeMailInput {
   accountId: string
+  /** The draft the message was written as: deleted once it has gone. */
+  draftId?: string
   to: MailAddress[]
   cc: MailAddress[]
   bcc: MailAddress[]

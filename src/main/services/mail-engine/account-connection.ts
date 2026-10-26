@@ -67,6 +67,8 @@ import {
 // the preview to a follow-up hydration pass.
 /** The folder archiving creates on a server that has none. */
 const ARCHIVE_FOLDER_NAME = 'Archivio'
+/** The Bozze created for an account without one; servers know the name as \Drafts. */
+const DRAFTS_FOLDER_NAME = 'Bozze'
 
 const BOOTSTRAP_ENVELOPE_BATCH_SIZE = 1000
 // The first batch of a first sync is the first screen of the list: small,
@@ -354,6 +356,13 @@ export class AccountConnection extends EventEmitter {
   // Previews queued or being fetched, by folder and UID: asked again, they
   // are not fetched twice.
   private readonly hydratingPreviews = new Set<string>()
+  /**
+   * The UIDs taken out of each folder this session — moved, deleted, a
+   * draft superseded or sent. A sync that read one off the server just
+   * before it went would otherwise put it back in the list after it left;
+   * a UID is never given again under the same UIDVALIDITY.
+   */
+  private readonly removedUids = new Map<string, Set<number>>()
   // A server search waiting its turn (see `searchMessages`).
   private waitingSearch: { task: QueuedTask; settle: (uids: null) => void } | null = null
   private status: AccountConnectionStatus = 'disconnected'
@@ -1074,6 +1083,10 @@ export class AccountConnection extends EventEmitter {
    * at once — the list they were in, Tutti gli account, a search.
    */
   private async forgetMessages(folderPath: string, uids: number[]): Promise<void> {
+    const removed = this.removedUids.get(folderPath) ?? new Set<number>()
+    uids.forEach((uid) => removed.add(uid))
+    this.removedUids.set(folderPath, removed)
+
     await this.database.deleteMessageUids(this.account.id, folderPath, uids)
     this.emit('messages', {
       accountId: this.account.id,
@@ -1083,6 +1096,106 @@ export class AccountConnection extends EventEmitter {
       removedUids: uids,
       bootstrap: false
     })
+  }
+
+  /**
+   * Files a version of a draft in the account's Bozze — created when the
+   * account has none — and deletes the version it replaces for good: a
+   * superseded draft is nobody's message. Resolves with where the new
+   * version is; its UID is what the server reports, or what a search for
+   * its Message-ID finds, or null.
+   */
+  async saveDraft(
+    raw: Buffer,
+    messageId: string,
+    replace: { folderPath: string; uid: number } | null
+  ): Promise<{ folderPath: string; uid: number | null }> {
+    const drafts =
+      folderForRole(await this.database.listFolders(this.account.id), '\\Drafts') ??
+      (await this.createFolder(DRAFTS_FOLDER_NAME, null))
+
+    const saved = await this.runUserOperation(async () => {
+      const client = this.requirePrimary()
+      const appended = await client.append(drafts.path, raw, ['\\Draft', '\\Seen'], new Date())
+
+      if (!appended) {
+        throw new Error('Il server non ha salvato la bozza.')
+      }
+
+      let uid = appended.uid ?? null
+
+      if (uid === null) {
+        const lock = await client.getMailboxLock(drafts.path)
+
+        try {
+          const found = await client.search({ header: { 'message-id': messageId } }, { uid: true })
+          uid = Array.isArray(found) && found.length > 0 ? Math.max(...found) : null
+        } finally {
+          lock.release()
+        }
+      }
+
+      if (replace && !(replace.folderPath === drafts.path && replace.uid === uid)) {
+        await this.purgeOnServer(client, replace.folderPath, [replace.uid])
+      }
+
+      return { folderPath: drafts.path, uid }
+    }, `save-draft:${drafts.path}`)
+
+    this.incrementalSyncFolder(drafts.path, 'active-sync')
+    return saved
+  }
+
+  /** Deletes messages for good, as `purgeOnServer` does — superseded drafts, a draft sent. */
+  async purgeMessages(folderPath: string, uids: number[]): Promise<void> {
+    await this.runUserOperation(
+      () => this.purgeOnServer(this.requirePrimary(), folderPath, uids),
+      `purge:${folderPath}:${uids.length}`
+    )
+  }
+
+  /**
+   * Deletes `uids` of `folderPath` for good. Gmail keeps in "Tutti i
+   * messaggi" what is expunged from any other folder, so there they go to
+   * the Trash first and are expunged from it, as Gmail's own deletion does.
+   */
+  private async purgeOnServer(client: ImapFlow, folderPath: string, uids: number[]): Promise<void> {
+    const trash = folderForRole(await this.database.listFolders(this.account.id), '\\Trash')
+    let target = { folderPath, uids }
+
+    if (client.capabilities.has('X-GM-EXT-1') && trash && trash.path !== folderPath) {
+      const lock = await client.getMailboxLock(folderPath)
+      let moved: CopyResponseObject
+
+      try {
+        moved = await moveOnServer(client, uids, trash.path)
+      } finally {
+        lock.release()
+      }
+
+      await this.forgetMessages(folderPath, uids)
+      target = {
+        folderPath: trash.path,
+        uids: uids.flatMap((uid) => moved.uidMap?.get(uid) ?? [])
+      }
+    }
+
+    // Without the UIDs the Trash gave them, they stay there until it empties.
+    if (target.uids.length === 0) {
+      return
+    }
+
+    const lock = await client.getMailboxLock(target.folderPath)
+
+    try {
+      if (!(await client.messageDelete(formatUidSet(target.uids), { uid: true }))) {
+        throw new Error('Il server non ha eliminato la versione precedente della bozza.')
+      }
+    } finally {
+      lock.release()
+    }
+
+    await this.forgetMessages(target.folderPath, target.uids)
   }
 
   async moveMessagesToTrash(
@@ -2109,6 +2222,7 @@ export class AccountConnection extends EventEmitter {
     }
 
     if (state.uidValidity !== serverUidValidity) {
+      this.removedUids.delete(folderPath)
       await this.database.resetFolderSyncState(this.account.id, folderPath)
       await this.database.updateFolderSyncState(this.account.id, folderPath, {
         uidValidity: serverUidValidity
@@ -2297,6 +2411,7 @@ export class AccountConnection extends EventEmitter {
 
       const state = await this.database.getFolderSyncState(this.account.id, folderPath)
       if (state?.uidValidity && state.uidValidity !== serverUidValidity) {
+        this.removedUids.delete(folderPath)
         await this.database.resetFolderSyncState(this.account.id, folderPath)
       }
 
@@ -2409,13 +2524,24 @@ export class AccountConnection extends EventEmitter {
         folderPath,
         summaries
       )
+      // Read before they left the folder, written after: they stay out.
+      const removed = this.removedUids.get(folderPath)
+      const stays = (message: { uid: number }): boolean => !removed?.has(message.uid)
+      const gone = summaries.filter((summary) => !stays(summary)).map((summary) => summary.uid)
 
-      if (result.added.length > 0 || result.updated.length > 0) {
+      if (gone.length > 0) {
+        await this.database.deleteMessageUids(this.account.id, folderPath, gone)
+      }
+
+      const added = result.added.filter(stays)
+      const updated = result.updated.filter(stays)
+
+      if (added.length > 0 || updated.length > 0) {
         this.emit('messages', {
           accountId: this.account.id,
           folderPath,
-          added: result.added,
-          updated: result.updated,
+          added,
+          updated,
           removedUids: [],
           bootstrap: !arrivals
         })

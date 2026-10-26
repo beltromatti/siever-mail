@@ -26,6 +26,7 @@ model Account {
   folders         Folder[]
   messages        Message[]
   recentFolders   RecentFolder[]
+  drafts          Draft[]
 
   @@map("accounts")
 }
@@ -132,6 +133,43 @@ model RecentFolder {
   @@id([accountId, folderPath])
   @@index([accountId, usedAt], map: "idx_recent_folders_account_used_at")
   @@map("recent_folders")
+}
+
+/// Messages being written: kept here as they are typed, so nothing is lost
+/// to a crash or a lost connection, and filed in the account's Bozze as they
+/// settle (see `DraftService`).
+model Draft {
+  id              String  @id
+  accountId       String  @map("account_id")
+  /// new, reply or forward.
+  kind            String
+  sourceAccountId String? @map("source_account_id")
+  toJson          String  @default("[]") @map("to_json")
+  ccJson          String  @default("[]") @map("cc_json")
+  bccJson         String  @default("[]") @map("bcc_json")
+  subject         String  @default("")
+  html            String  @default("")
+  inReplyTo       String? @map("in_reply_to")
+  referencesJson  String  @default("[]") @map("references_json")
+  /// The message a reply or forward is about, with its attachments.
+  originalJson    String? @map("original_json")
+  attachmentsJson String  @default("[]") @map("attachments_json")
+  /// Saves made so far, and the one the server's copy holds.
+  revision        Int     @default(0)
+  serverRevision  Int     @default(0) @map("server_revision")
+  /// Where the server's copy is: its account, folder and UID.
+  serverAccountId String? @map("server_account_id")
+  serverFolder    String? @map("server_folder")
+  serverUid       Int?    @map("server_uid")
+  serverSavedAt   BigInt? @map("server_saved_at")
+  /// Open in a composer, or parked in the dock, as the app last left it.
+  docked          Boolean @default(false)
+  createdAt       BigInt  @map("created_at")
+  updatedAt       BigInt  @map("updated_at")
+  account         Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId], map: "idx_drafts_account")
+  @@map("drafts")
 }
 
 model RecentFile {

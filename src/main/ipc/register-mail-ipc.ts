@@ -13,6 +13,7 @@ import type {
   AttachmentRef,
   ComposeMailInput,
   CreateFolderInput,
+  DraftContent,
   ListMessagesOptions,
   MessageAttachmentsRef,
   MessageRef,
@@ -221,6 +222,22 @@ export function registerMailIpc(
 
   registerDataHandler(IPC_CHANNELS.forgetContact, async (address: string) =>
     mailService.forgetContact(address)
+  )
+
+  registerDataHandler(IPC_CHANNELS.saveDraft, async (content) =>
+    mailService.saveDraft(content as DraftContent)
+  )
+
+  registerDataHandler(IPC_CHANNELS.flushDraft, async (id: string) => mailService.flushDraft(id))
+
+  registerDataHandler(IPC_CHANNELS.closeDraft, async (id: string) => mailService.closeDraft(id))
+
+  registerDataHandler(IPC_CHANNELS.discardDraft, async (id: string) => mailService.discardDraft(id))
+
+  registerDataHandler(IPC_CHANNELS.listDockedDrafts, async () => mailService.listDockedDrafts())
+
+  registerDataHandler(IPC_CHANNELS.openDraftMessage, async (ref) =>
+    mailService.openDraftMessage(ref as MessageRef)
   )
 
   registerDataHandler(IPC_CHANNELS.listAccountSignatures, async () => {

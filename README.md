@@ -66,6 +66,11 @@ open-source software released under the Apache License 2.0.
   sending, pasted lists split into people, names resolved from the
   contacts. Suggestions put the people you write to first and leave out
   the typos. Attachments open from the composer to be checked.
+- **Drafts that never get lost** — what you write is kept as you type and
+  filed in the account's Bozze, so Gmail, Outlook and the phone have it;
+  drafts from any client open here to be finished. Write several messages
+  at once: the ones put aside wait in the bottom right corner, each exactly
+  as you left it.
 - **Mail that arrives as it was written** — the composer shows a message
   exactly as it will be received, and sending writes that layout onto the
   message so Outlook's Word engine and every other client keep it.

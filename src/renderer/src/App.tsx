@@ -20,9 +20,15 @@ import {
   type FolderMenuTarget
 } from '@renderer/features/mail/folder-sidebar'
 import {
-  MailComposerDialog,
-  type ComposerInitialData
-} from '@renderer/features/mail/mail-composer-dialog'
+  MailComposer,
+  draftToInitialData,
+  type ComposerInitialData,
+  type ComposerOutcome,
+  type ComposerSession,
+  type ComposerSummary,
+  type MailComposerHandle
+} from '@renderer/features/mail/mail-composer'
+import { COMPOSE_DOCK_HEIGHT, ComposeDock } from '@renderer/features/mail/compose-dock'
 import { MessageList } from '@renderer/features/mail/message-list'
 import { MessageTable } from '@renderer/features/mail/message-table'
 import type { MessageListEmptyState } from '@renderer/features/mail/message-list-empty'
@@ -99,6 +105,7 @@ import type {
   AccountConnectionState,
   AppCapabilities,
   ComposeMailInput,
+  DraftStatus,
   ListMessagesOptions,
   MailAccount,
   MailFolder,
@@ -116,6 +123,10 @@ import type {
 } from '@shared/models'
 
 const ALL_ACCOUNTS_LABEL = 'tutti gli account'
+/** How long a notice offering "Annulla" stays, as Gmail leaves its own. */
+const UNDO_TOAST_DURATION_MS = 10_000
+/** A draft that takes longer than this to open says it is opening. */
+const DRAFT_OPEN_FEEDBACK_DELAY_MS = 300
 const GMAIL_QUOTE_BLOCK_STYLE = 'margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex'
 const READER_ZOOM_SAVE_DELAY_MS = 400
 /** The rows around the one being read whose bodies are fetched ahead. */
@@ -335,13 +346,22 @@ function AppFrame({
   windowControlsState,
   onMinimizeWindow,
   onToggleMaximizeWindow,
-  onCloseWindow
+  onCloseWindow,
+  inert = false,
+  dock,
+  dockVisible = false
 }: {
   children: ReactNode
   windowControlsState: WindowControlsState
   onMinimizeWindow: () => void
   onToggleMaximizeWindow: () => void
   onCloseWindow: () => void
+  /** A message is being written in front: the app behind takes neither focus nor clicks. */
+  inert?: boolean
+  /** The messages being written that are put aside, outside what `inert` stills. */
+  dock?: ReactNode
+  /** Whether the dock shows: the notices rise above it. */
+  dockVisible?: boolean
 }): React.JSX.Element {
   return (
     <TooltipProvider delayDuration={140} skipDelayDuration={300}>
@@ -382,9 +402,17 @@ function AppFrame({
             </button>
           </div>
         )}
-        <div className="h-full min-h-0">{children}</div>
+        <div className="h-full min-h-0" inert={inert}>
+          {children}
+        </div>
       </div>
-      <Toaster />
+      {dock}
+      {/* In front of a message being written, notices come in at the top: at
+          the bottom they would sit on its Invia. */}
+      <Toaster
+        position={inert ? 'top-center' : 'bottom-right'}
+        offset={!inert && dockVisible ? { bottom: 16 + COMPOSE_DOCK_HEIGHT, right: 16 } : 16}
+      />
     </TooltipProvider>
   )
 }
@@ -454,8 +482,12 @@ function App(): React.JSX.Element {
   const pendingNotificationMessageRef = useRef<MessageRef | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
 
-  const [composerOpen, setComposerOpen] = useState(false)
-  const [composerInitial, setComposerInitial] = useState<ComposerInitialData | undefined>(undefined)
+  /** The messages being written: one in front at most, the others parked in the dock. */
+  const [composeSessions, setComposeSessions] = useState<ComposerSession[]>([])
+  const [activeComposeId, setActiveComposeId] = useState<string | null>(null)
+  const [composeSummaries, setComposeSummaries] = useState<Record<string, ComposerSummary>>({})
+  const composerHandlesRef = useRef(new Map<string, MailComposerHandle>())
+  const composerOpen = activeComposeId !== null
   // Sends that failed, oldest first. Each is offered back once no composer
   // is open, so retrying never replaces a message being written.
   const [failedSends, setFailedSends] = useState<
@@ -1601,10 +1633,26 @@ function App(): React.JSX.Element {
   const currentUnifiedRole = unifiedFolderRole(selectedFolderPath)
 
   const primaryAddressMode: PrimaryAddressMode = RECIPIENT_ORIENTED_SPECIAL_USES.has(
-    currentFolder?.specialUse ?? ''
+    (currentFolder ? folderRole(currentFolder) : currentUnifiedRole) ?? ''
   )
     ? 'recipient'
     : 'sender'
+
+  /** A draft is written on, not read: opening one brings it back into a composer. */
+  const isDraftMessage = useCallback(
+    (message: Pick<MailMessageSummary, 'accountId' | 'folderPath' | 'flags'>): boolean => {
+      if (message.flags.includes('\\Draft')) {
+        return true
+      }
+
+      const folder =
+        message.accountId === selectedAccountId
+          ? folders.find((candidate) => candidate.path === message.folderPath)
+          : undefined
+      return (folder ? folderRole(folder) : currentUnifiedRole) === '\\Drafts'
+    },
+    [currentUnifiedRole, folders, selectedAccountId]
+  )
 
   // Panel-level loader state. Two distinct reasons to show a loader instead
   // of the message list:
@@ -2173,12 +2221,6 @@ function App(): React.JSX.Element {
     [applyOptimisticFlagState, getMessageKeywordState]
   )
 
-  // Opening marks the message read once its body shows (`followShownMessage`).
-  const handleOpenRow = useCallback((ref: MessageRef): void => {
-    setSelection({ selectedRefs: [ref], cursorRef: ref, anchorRef: ref })
-    setIsMessageExpanded(true)
-  }, [])
-
   /**
    * Read state follows Outlook's default, which Apple Mail, Thunderbird and
    * Gmail agree with where it matters:
@@ -2698,10 +2740,204 @@ function App(): React.JSX.Element {
     settingsOpen ||
     extensionPrimaryDialogOpen
 
-  const openComposer = useCallback((data: ComposerInitialData): void => {
-    setComposerInitial(data)
-    setComposerOpen(true)
+  /**
+   * Brings a message to write in front — a new one, or a draft: one already
+   * being written comes forward as it was left. Whatever was in front goes
+   * to the dock.
+   */
+  const openComposer = useCallback(
+    (data: ComposerInitialData, draft?: { status?: DraftStatus }): void => {
+      const id = data.draftId ?? crypto.randomUUID()
+
+      setComposeSessions((current) =>
+        current.some((session) => session.id === id)
+          ? current
+          : [
+              ...current,
+              {
+                id,
+                initialData: { ...data, draftId: id },
+                existing: data.draftId !== undefined,
+                status: draft?.status
+              }
+            ]
+      )
+      setActiveComposeId(id)
+    },
+    []
+  )
+
+  const removeComposeSession = useCallback((id: string): void => {
+    composerHandlesRef.current.delete(id)
+    setComposeSessions((current) => current.filter((session) => session.id !== id))
+    setComposeSummaries((current) =>
+      Object.fromEntries(Object.entries(current).filter(([key]) => key !== id))
+    )
+    setActiveComposeId((current) => (current === id ? null : current))
   }, [])
+
+  const updateComposeSummary = useCallback((id: string, summary: ComposerSummary): void => {
+    setComposeSummaries((current) => ({ ...current, [id]: summary }))
+  }, [])
+
+  /** Says what became of a message being written, and offers the way back. */
+  const handleComposerClosed = useCallback(
+    (id: string, outcome: ComposerOutcome): void => {
+      removeComposeSession(id)
+
+      if (outcome.kind === 'saved') {
+        const { content } = outcome
+        toast.success('Bozza salvata in Bozze', {
+          description: content.subject.trim() || '(senza oggetto)',
+          action: {
+            label: 'Apri',
+            onClick: () => openComposer(draftToInitialData(content))
+          }
+        })
+        return
+      }
+
+      if (outcome.kind !== 'discarded' || !outcome.content) {
+        return
+      }
+
+      const { content } = outcome
+      window.mailApi.discardDraft(id).catch((error: unknown) =>
+        toast.error('Bozza non eliminata', {
+          description: error instanceof Error ? error.message : undefined
+        })
+      )
+      toast('Bozza eliminata', {
+        description: content.subject.trim() || '(senza oggetto)',
+        duration: UNDO_TOAST_DURATION_MS,
+        action: {
+          label: 'Annulla',
+          onClick: () => {
+            // Written again as it was, and back in front.
+            window.mailApi
+              .saveDraft(content)
+              .then((status) => openComposer(draftToInitialData(content), { status }))
+              .catch((error: unknown) =>
+                toast.error('Bozza non ripristinata', {
+                  description: error instanceof Error ? error.message : undefined
+                })
+              )
+          }
+        }
+      })
+    },
+    [openComposer, removeComposeSession]
+  )
+
+  /** A draft in Bozze — of this app or any other client — opened to be written on. */
+  const continueDraft = useCallback(
+    async (ref: MessageRef): Promise<void> => {
+      // One the app does not keep yet comes from the server: a wait worth showing.
+      let loadingToast: string | number | null = null
+      const slow = window.setTimeout(() => {
+        loadingToast = toast.loading('Apertura della bozza…')
+      }, DRAFT_OPEN_FEEDBACK_DELAY_MS)
+
+      try {
+        const draft = await window.mailApi.openDraftMessage(ref)
+        openComposer(draftToInitialData(draft.content), { status: draft.status })
+      } catch (error) {
+        toast.error('Bozza non apribile', {
+          description: error instanceof Error ? error.message : undefined
+        })
+      } finally {
+        window.clearTimeout(slow)
+
+        if (loadingToast !== null) {
+          toast.dismiss(loadingToast)
+        }
+      }
+    },
+    [openComposer]
+  )
+
+  // Opening marks the message read once its body shows (`followShownMessage`);
+  // a draft opens in a composer, to be written on.
+  const handleOpenRow = useCallback(
+    (ref: MessageRef): void => {
+      const summary = messages.find((message) => isSameMessageRef(message, ref))
+
+      if (summary && isDraftMessage(summary)) {
+        void continueDraft(ref)
+        return
+      }
+
+      setSelection({ selectedRefs: [ref], cursorRef: ref, anchorRef: ref })
+      setIsMessageExpanded(true)
+    },
+    [continueDraft, isDraftMessage, messages]
+  )
+
+  // The drafts left open — or not yet in Bozze — when the app last closed come back to the dock.
+  useEffect(() => {
+    if (bootstrapLoading) {
+      return
+    }
+
+    let current = true
+
+    window.mailApi
+      .listDockedDrafts()
+      .then((drafts) => {
+        if (!current || drafts.length === 0) {
+          return
+        }
+
+        setComposeSessions((sessions) => [
+          ...sessions,
+          ...drafts
+            .filter((draft) => !sessions.some((session) => session.id === draft.content.id))
+            .map((draft) => ({
+              id: draft.content.id,
+              initialData: draftToInitialData(draft.content),
+              existing: true,
+              status: draft.status
+            }))
+        ])
+      })
+      .catch(() => undefined)
+
+    return () => {
+      current = false
+    }
+  }, [bootstrapLoading])
+
+  // A draft no composer holds any more that the server refused is said once:
+  // it is safe here, and goes to Bozze by itself later.
+  const reportedDraftFailuresRef = useRef(new Set<string>())
+  const composeSessionIdsRef = useRef(new Set<string>())
+
+  useEffect(() => {
+    composeSessionIdsRef.current = new Set(composeSessions.map((session) => session.id))
+  }, [composeSessions])
+
+  useEffect(
+    () =>
+      window.mailApi.onDraftStatusChanged((status) => {
+        const reported = reportedDraftFailuresRef.current
+
+        if (status.state !== 'error') {
+          reported.delete(status.id)
+          return
+        }
+
+        if (composeSessionIdsRef.current.has(status.id) || reported.has(status.id)) {
+          return
+        }
+
+        reported.add(status.id)
+        toast.warning('Bozza non ancora in Bozze', {
+          description:
+            `È al sicuro su questo computer e ci andrà appena possibile. ${status.message ?? ''}`.trim()
+        })
+      }),
+    []
+  )
 
   // Set once the handlers below exist; the menu bar and the keyboard both
   // reach the commands through it.
@@ -2874,6 +3110,12 @@ function App(): React.JSX.Element {
         return
       }
 
+      // A draft is not answered: it is written on.
+      if (isDraftMessage(message)) {
+        await continueDraft(summaryToMessageRef(message))
+        return
+      }
+
       const recipients = replyRecipients(message, ownAddresses, mode)
 
       openComposer({
@@ -2892,7 +3134,7 @@ function App(): React.JSX.Element {
         }
       })
     },
-    [messageDetailFor, openComposer, ownAddresses, readingRef]
+    [continueDraft, isDraftMessage, messageDetailFor, openComposer, ownAddresses, readingRef]
   )
 
   const openForwardComposer = useCallback(
@@ -2900,6 +3142,11 @@ function App(): React.JSX.Element {
       const message = ref ? await messageDetailFor(ref) : null
 
       if (!message) {
+        return
+      }
+
+      if (isDraftMessage(message)) {
+        await continueDraft(summaryToMessageRef(message))
         return
       }
 
@@ -2915,7 +3162,7 @@ function App(): React.JSX.Element {
         }
       })
     },
-    [messageDetailFor, openComposer, readingRef]
+    [continueDraft, isDraftMessage, messageDetailFor, openComposer, readingRef]
   )
 
   const addressActions = useMemo<AddressActions>(
@@ -3250,11 +3497,14 @@ function App(): React.JSX.Element {
       })
     const moveTree = buildFolderTree(moveAccountFolders)
     const sender = single?.from[0]
+    const singleDraft = single !== null && isDraftMessage(single)
 
     const chosen = await window.mailApi.showContextMenu([
-      ...(single ? [{ id: 'open', label: 'Apri', chord: 'Enter' }] : []),
-      { type: 'separator' },
       ...(single
+        ? [{ id: 'open', label: singleDraft ? 'Continua a scrivere' : 'Apri', chord: 'Enter' }]
+        : []),
+      { type: 'separator' },
+      ...(single && !singleDraft
         ? [
             { id: 'reply', label: 'Rispondi', chord: chordOf('reply') },
             { id: 'reply-all', label: 'Rispondi a tutti', chord: chordOf('reply-all') },
@@ -3350,7 +3600,9 @@ function App(): React.JSX.Element {
 
   const handleComposerSendRequested = useCallback(
     (payload: ComposeMailInput, draft: ComposerInitialData): void => {
-      setComposerOpen(false)
+      if (draft.draftId) {
+        removeComposeSession(draft.draftId)
+      }
 
       void (async () => {
         const sendingToast = toast.loading('Invio in corso…')
@@ -3375,7 +3627,7 @@ function App(): React.JSX.Element {
         }
       })()
     },
-    []
+    [removeComposeSession]
   )
 
   const settleFailedSend = useCallback(
@@ -3388,6 +3640,9 @@ function App(): React.JSX.Element {
 
       if (retry) {
         openComposer(failedSend.draft)
+      } else if (failedSend.draft.draftId) {
+        // Not reopened now: it waits in Bozze, not in the dock.
+        void window.mailApi.closeDraft(failedSend.draft.draftId).catch(() => undefined)
       }
     },
     [failedSend, openComposer]
@@ -3666,6 +3921,22 @@ function App(): React.JSX.Element {
         onMinimizeWindow={handleMinimizeWindow}
         onToggleMaximizeWindow={handleToggleMaximizeWindow}
         onCloseWindow={handleCloseWindow}
+        inert={composerOpen}
+        dockVisible={!composerOpen && composeSessions.length > 0}
+        dock={
+          <ComposeDock
+            entries={composeSessions
+              .filter((session) => session.id !== activeComposeId)
+              .map((session) => ({
+                id: session.id,
+                kind: session.initialData.kind,
+                summary: composeSummaries[session.id] ?? null
+              }))}
+            hidden={composerOpen}
+            onRestore={setActiveComposeId}
+            onClose={(id) => void composerHandlesRef.current.get(id)?.close()}
+          />
+        }
       >
         <WorkspaceLayout
           mode={uiPreferences.layoutMode}
@@ -3807,6 +4078,11 @@ function App(): React.JSX.Element {
               onReply={() => void openReplyComposer('sender')}
               onReplyAll={() => void openReplyComposer('all')}
               onForward={() => void openForwardComposer()}
+              onContinueDraft={
+                readingRef && messageForViewer && isDraftMessage(messageForViewer)
+                  ? () => void continueDraft(readingRef)
+                  : undefined
+              }
               onArchive={() => void archiveSelection()}
               onDelete={() => void deleteMessages(selection.selectedRefs)}
               onMoveToFolder={(destinationFolderPath) =>
@@ -3843,13 +4119,27 @@ function App(): React.JSX.Element {
           }
         />
 
-        <MailComposerDialog
-          open={composerOpen}
-          onOpenChange={setComposerOpen}
-          accounts={accounts}
-          initialData={composerInitial}
-          onSendRequested={handleComposerSendRequested}
-        />
+        {composeSessions.map((session) => (
+          <MailComposer
+            key={session.id}
+            ref={(handle) => {
+              if (handle) {
+                composerHandlesRef.current.set(session.id, handle)
+              } else {
+                composerHandlesRef.current.delete(session.id)
+              }
+            }}
+            session={session}
+            open={session.id === activeComposeId}
+            accounts={accounts}
+            onMinimize={() =>
+              setActiveComposeId((current) => (current === session.id ? null : current))
+            }
+            onClosed={(outcome) => handleComposerClosed(session.id, outcome)}
+            onSendRequested={handleComposerSendRequested}
+            onSummaryChange={(summary) => updateComposeSummary(session.id, summary)}
+          />
+        ))}
 
         <ConfirmDialog
           open={failedSend !== null}
@@ -3868,7 +4158,7 @@ function App(): React.JSX.Element {
             )
           }
           confirmLabel="Riapri e riprova"
-          cancelLabel="Scarta"
+          cancelLabel="Lascia in Bozze"
           initialFocus="confirm"
           onConfirm={() => settleFailedSend(true)}
           onCancel={() => settleFailedSend(false)}

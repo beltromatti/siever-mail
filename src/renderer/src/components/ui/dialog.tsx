@@ -43,7 +43,7 @@ interface DialogDragOffset {
  * Deliberately no resizing — dialog bodies are laid out for their natural
  * width and would break.
  */
-function useDialogDrag(enabled: boolean): {
+export function useDialogDrag(enabled: boolean): {
   offset: DialogDragOffset
   isDragging: boolean
   panelRef: React.RefObject<HTMLDivElement | null>
