@@ -1,5 +1,6 @@
 import { basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { connect as connectSocket, type Socket } from 'node:net'
 
 import { ImapFlow } from 'imapflow'
 import nodemailer from 'nodemailer'
@@ -27,6 +28,8 @@ export const IMAP_GREETING_TIMEOUT_MS = 20_000
 // rebuilt instead of hanging.
 export const IMAP_SOCKET_TIMEOUT_MS = 2 * 60_000
 export const IMAP_MAX_IDLE_TIME_MS = 28 * 60_000
+/** How long reaching the SMTP server may take, all its addresses tried. */
+const SMTP_CONNECTION_TIMEOUT_MS = 20_000
 
 const INLINE_MEDIA_DATA_URL_PATTERN = /<img\b([^>]*?)\bsrc=(['"])(data:[^'"]+)\2([^>]*)>/gi
 const INLINE_MEDIA_MIME_TYPE_PATTERN = /^image\/[a-z0-9.+-]+$/i
@@ -216,6 +219,68 @@ function smtpEncryption(secure: boolean): { secure: boolean; requireTLS?: true }
   return secure ? { secure } : { secure, requireTLS: true }
 }
 
+/**
+ * The connection a message goes out on, opened by Node rather than by
+ * nodemailer. Nodemailer connects to one of the server's addresses picked
+ * at random, IPv6 ones too wherever the machine has an IPv6 interface — and
+ * the link-local one nearly every Mac and PC has is enough — so on a
+ * network without IPv6 a message could wait out the whole connection
+ * timeout before going. Node tries the addresses in turn, IPv6 and IPv4
+ * interleaved (Happy Eyeballs, RFC 8305), as it does for imapflow's IMAP
+ * connections; nodemailer speaks TLS and SMTP over the socket it is given.
+ */
+function openSmtpSocket(
+  options: { host: string; port: number },
+  callback: (error: Error | null, socketOptions?: { connection: Socket }) => void
+): void {
+  let settled = false
+  const socket = connectSocket({ host: options.host, port: options.port, autoSelectFamily: true })
+  const settle = (error: Error | null): void => {
+    if (settled) {
+      return
+    }
+
+    settled = true
+    clearTimeout(timer)
+
+    if (error) {
+      socket.destroy()
+      callback(error)
+    } else {
+      callback(null, { connection: socket })
+    }
+  }
+  const timer = setTimeout(
+    () =>
+      settle(
+        Object.assign(new Error(`Nessuna risposta da ${options.host}:${options.port}.`), {
+          code: 'ETIMEDOUT'
+        })
+      ),
+    SMTP_CONNECTION_TIMEOUT_MS
+  )
+
+  // Stays on once connected: an error nodemailer no longer listens for —
+  // the plain socket under TLS — is not left to bring the app down.
+  socket.on('error', (error) => settle(error))
+  socket.once('connect', () => settle(null))
+}
+
+/** How every SMTP connection is made: see `openSmtpSocket`. */
+function smtpConnection(
+  host: string,
+  port: number,
+  secure: boolean
+): {
+  host: string
+  port: number
+  secure: boolean
+  requireTLS?: true
+  getSocket: typeof openSmtpSocket
+} {
+  return { host, port, ...smtpEncryption(secure), getSocket: openSmtpSocket }
+}
+
 export async function verifyImapAccount(
   input: AddImapAccountInput,
   googleOAuthService: GoogleOAuthService
@@ -254,9 +319,7 @@ export async function verifyImapAccount(
   }
 
   const transport = nodemailer.createTransport({
-    host: input.smtpHost,
-    port: input.smtpPort,
-    ...smtpEncryption(input.smtpSecure),
+    ...smtpConnection(input.smtpHost, input.smtpPort, input.smtpSecure),
     auth: {
       user: input.username,
       pass: input.password
@@ -303,9 +366,7 @@ export async function createSmtpTransport(
 ): Promise<nodemailer.Transporter> {
   if (account.authType === 'password') {
     return nodemailer.createTransport({
-      host: account.smtpHost,
-      port: account.smtpPort,
-      ...smtpEncryption(account.smtpSecure),
+      ...smtpConnection(account.smtpHost, account.smtpPort, account.smtpSecure),
       auth: {
         user: account.username,
         pass: account.secret
@@ -316,9 +377,7 @@ export async function createSmtpTransport(
   const accessToken = await googleOAuthService.getAccessToken(account.secret)
 
   return nodemailer.createTransport({
-    host: account.smtpHost,
-    port: account.smtpPort,
-    ...smtpEncryption(account.smtpSecure),
+    ...smtpConnection(account.smtpHost, account.smtpPort, account.smtpSecure),
     auth: {
       type: 'OAuth2',
       user: account.username,
