@@ -333,6 +333,24 @@ function ensureDockerDaemon() {
   )
 }
 
+/**
+ * The compiler the Linux containers build native modules with. better-sqlite3
+ * publishes no prebuilt binary for Electron 44, so it is compiled against
+ * Electron's headers, and Debian 12's own toolchain cannot read them: GCC 12
+ * rejects `class [[deprecated]] __attribute__((visibility)) Name` in V8's
+ * headers, and its clang 14 finds no `std::source_location`. Clang 18 from
+ * apt.llvm.org can. A newer image would bring a newer compiler too, but its
+ * glibc would leave the AppImage unable to start where Debian 12's runs: the
+ * module built here asks for glibc 2.34 and the libstdc++ of GCC 11.
+ */
+const LINUX_TOOLCHAIN_SETUP = [
+  'apt-get update -qq',
+  'apt-get install -y -qq --no-install-recommends lsb-release software-properties-common gnupg wget',
+  'wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh',
+  'bash /tmp/llvm.sh 18',
+  'export CC=clang-18 CXX=clang++-18'
+]
+
 function buildLinuxTarget(target, releaseRoot, packageName, envInjections) {
   const recoveredArtifactPath = recoverArtifact(
     target.outputDir,
@@ -352,6 +370,7 @@ function buildLinuxTarget(target, releaseRoot, packageName, envInjections) {
   const nodeModulesVolume = `${packageName}-${target.id}-node-modules`
   const npmCacheVolume = `${packageName}-${target.id}-npm-cache`
   const containerCommand = [
+    ...LINUX_TOOLCHAIN_SETUP,
     // `npm ci`, not `npm install --package-lock=false`. The Linux targets
     // install into a named Docker volume, and resolving a tree from
     // package.json alone crashed npm 10.9.x inside both images
@@ -511,7 +530,7 @@ function defineLinuxTargets(packageName, releaseTag, tempBuildRoot) {
       depArch: 'x64',
       outputDir: join(tempBuildRoot, 'linux-x64'),
       artifactFileName: `${packageName}-${releaseTag}-linux-x64.AppImage`,
-      dockerImage: 'electronuserland/builder:22'
+      dockerImage: 'node:22-bookworm'
     },
     'linux-arm64': {
       id: 'linux-arm64',
