@@ -109,8 +109,12 @@
 }
 
 @theme inline {
-  --font-sans: 'Sora', 'Avenir Next', 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
-  --font-display: 'Space Grotesk', 'Avenir Next', 'Segoe UI Variable Display', sans-serif;
+  /*
+   * Mona Sans, bundled (see main.tsx): crisp at the list's 11–13px, and
+   * one family for every voice — titles take its wider cut (.display-title).
+   */
+  --font-sans: 'Mona Sans Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Mona Sans Variable', ui-sans-serif, system-ui, sans-serif;
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -287,7 +291,8 @@
   .display-title {
     font-family: var(--font-display);
     font-weight: 700;
-    letter-spacing: -0.02em;
+    font-stretch: 110%;
+    letter-spacing: -0.01em;
   }
 
   .text-balance {

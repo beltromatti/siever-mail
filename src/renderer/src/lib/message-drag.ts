@@ -19,7 +19,7 @@ export function startMessageDrag(dataTransfer: DataTransfer, count: number, payl
     'left:-200px',
     'padding:4px 10px',
     'border-radius:9999px',
-    'font:600 12px system-ui,sans-serif',
+    'font:600 12px var(--font-sans)',
     'background:hsl(var(--primary))',
     'color:hsl(var(--primary-foreground))'
   ].join(';')
