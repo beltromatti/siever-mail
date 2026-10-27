@@ -11,6 +11,7 @@ import { IPC_CHANNELS } from '@shared/ipc'
 import extensionMain from '@app/extension/main'
 
 import { APP_ID } from './app-identity'
+import { setAppWindow } from './app-window'
 import { loadRuntimeConfig } from './config/env'
 import { installAppMenu } from './app-menu'
 import { installContextMenus } from './context-menu'
@@ -227,6 +228,7 @@ function createMainWindow(): BrowserWindow {
     void window.loadFile(RENDERER_ENTRY_PATH)
   }
 
+  setAppWindow(window)
   return window
 }
 

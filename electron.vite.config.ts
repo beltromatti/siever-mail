@@ -73,11 +73,31 @@ export default defineConfig({
   },
   preload: {
     resolve: { alias: preloadAliases },
-    define
+    define,
+    build: {
+      // Two sandboxed preloads: a sandbox cannot load a chunk they would
+      // share, so each is built whole.
+      isolatedEntries: true,
+      rollupOptions: {
+        input: {
+          index: resolve('src/preload/index.ts'),
+          'pdf-pages': resolve('src/preload/pdf-pages.ts')
+        }
+      }
+    }
   },
   renderer: {
     resolve: { alias: rendererAliases },
     define,
-    plugins: [react()]
+    plugins: [react()],
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/renderer/index.html'),
+          // The hidden page that draws a scanned PDF's pages (see src/shared/pdf-pages.ts).
+          'pdf-pages': resolve('src/renderer/pdf-pages.html')
+        }
+      }
+    }
   }
 })

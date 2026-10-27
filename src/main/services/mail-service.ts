@@ -78,6 +78,7 @@ import {
   sha256
 } from './attachment-files'
 import { APP_ID } from '@main/app-identity'
+import { getAppWindow } from '@main/app-window'
 import { SegretarioService } from '@main/ai/segretario-service'
 import type { SegretarioMailPort } from '@main/ai/agent/tool-types'
 import { AppBadge } from './app-badge'
@@ -355,13 +356,11 @@ export class MailService {
     const dbPath = join(userDataPath, 'siever-mail.sqlite')
     this.database = new AppDatabase(dbPath)
     this.googleOAuthService = new GoogleOAuthService(config)
-    const getMainWindow = (): BrowserWindow | null =>
-      BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null
-    this.badge = new AppBadge(getMainWindow)
+    this.badge = new AppBadge(getAppWindow)
     this.engine = new MailEngine({
       database: this.database,
       googleOAuthService: this.googleOAuthService,
-      getMainWindow,
+      getMainWindow: getAppWindow,
       onInboxUnreadChange: (count) => this.badge.setCount(count)
     })
     this.drafts = new DraftService({
@@ -371,19 +370,14 @@ export class MailService {
         const stored = await this.database.getStoredAccountById(accountId)
         return stored ? { ...stored, secret: decryptSecret(stored.encryptedSecret) } : null
       },
-      onStatus: (status) => {
-        for (const window of BrowserWindow.getAllWindows()) {
-          if (!window.isDestroyed()) {
-            window.webContents.send(IPC_CHANNELS.draftStatusChanged, status)
-          }
-        }
-      }
+      onStatus: (status) =>
+        getAppWindow()?.webContents.send(IPC_CHANNELS.draftStatusChanged, status)
     })
     this.segretario = new SegretarioService({
       database: this.database,
       mail: this.segretarioMailPort(),
       fetch: (input, init) => net.fetch(input, init),
-      send: (channel, payload) => getMainWindow()?.webContents.send(channel, payload)
+      send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload)
     })
   }
 
@@ -613,8 +607,7 @@ export class MailService {
       userDataDirectoryPath: app.getPath('userData'),
       database: databaseHandle,
       mailEngine: mailEngineHandle,
-      getMainWindow: () =>
-        BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ?? null,
+      getMainWindow: getAppWindow,
       recordRecentFiles: (paths, activity) => this.recordRecentFiles(paths, activity),
       adoptShortcutOverride: async (commandId, chord) => {
         const preferences = await this.database.getUiPreferences()

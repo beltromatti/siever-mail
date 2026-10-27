@@ -4,12 +4,13 @@ import { strFromU8, unzipSync } from 'fflate'
 import { NodeHtmlMarkdown } from 'node-html-markdown'
 
 import { parseMessageSource } from '../services/mail-engine/message-parts'
+import { renderPdfPages } from './pdf-pages'
 
 /**
  * What a document says, for the Segretario to read: an attachment, a file
  * on the computer or on a share. Text comes out of what can be read as
  * text — PDF, Word, Excel and CSV, PowerPoint, OpenDocument, HTML, mail;
- * a picture is handed to the model as a picture.
+ * a picture is handed to the model as a picture, and so is a scanned page.
  */
 export type ExtractedContent =
   | {
@@ -19,8 +20,14 @@ export type ExtractedContent =
       totalChars: number
       /** Where the next part starts, when the text was cut. */
       nextOffset: number | null
-      /** PDF pages, when the file has them. */
-      pages?: number
+    }
+  | {
+      kind: 'pdf'
+      totalPages: number
+      /** The pages read, in order: a page's text, or the page drawn as a picture where it is a scan. */
+      pages: Array<{ page: number; text: string } | { page: number; dataUrl: string }>
+      /** The page the document goes on from, when there is more. */
+      nextPage: number | null
     }
   | { kind: 'image'; mimeType: string; dataUrl: string }
   | { kind: 'unreadable'; reason: string }
@@ -29,6 +36,12 @@ export type ExtractedContent =
 export const EXTRACT_PAGE_CHARS = 40_000
 /** A picture larger than this is described, not sent. */
 const IMAGE_MAX_BYTES = 5 * 1024 * 1024
+/** A PDF page with less text than this is a scan, or a picture: it is looked at instead. */
+const PDF_TEXT_PAGE_MIN_CHARS = 20
+/** Scanned pages looked at in one read: each is a picture the model reads. */
+const PDF_PICTURES_PER_READ = 5
+/** How wide a scanned page is drawn: small print stays legible. */
+const PDF_PICTURE_WIDTH = 1600
 /** Rows of a sheet read at most. */
 const SHEET_MAX_ROWS = 2_000
 
@@ -56,7 +69,7 @@ const PLAIN_TEXT_EXTENSIONS = new Set([
 const htmlToMarkdown = new NodeHtmlMarkdown({ keepDataImages: false, maxConsecutiveNewlines: 2 })
 
 /** The part of `text` from `offset`, at most a page of it. */
-function page(text: string, offset: number, pages?: number): ExtractedContent {
+function page(text: string, offset: number): ExtractedContent {
   const start = Math.max(0, Math.min(offset, text.length))
   const end = Math.min(text.length, start + EXTRACT_PAGE_CHARS)
 
@@ -64,8 +77,7 @@ function page(text: string, offset: number, pages?: number): ExtractedContent {
     kind: 'text',
     text: text.slice(start, end),
     totalChars: text.length,
-    nextOffset: end < text.length ? end : null,
-    ...(pages !== undefined ? { pages } : {})
+    nextOffset: end < text.length ? end : null
   }
 }
 
@@ -80,7 +92,7 @@ export async function extractContent(
   const offset = options.offset ?? 0
 
   if (extension === '.pdf' || type === 'application/pdf') {
-    return extractPdf(data, offset, options.page)
+    return extractPdf(data, options.page ?? 1)
   }
 
   if (IMAGE_TYPES[extension] || type.startsWith('image/')) {
@@ -147,29 +159,78 @@ export async function extractContent(
   return { kind: 'unreadable', reason: `Non so leggere i file ${extension || 'di questo tipo'}.` }
 }
 
-async function extractPdf(
-  data: Buffer,
-  offset: number,
-  fromPage: number | undefined
-): Promise<ExtractedContent> {
+/**
+ * A PDF from `fromPage`, as many pages as one read holds: each page's
+ * text, or — where a page has none, a scan — the page drawn as a picture.
+ * A document of typed pages and a signed, scanned last one reads whole.
+ */
+async function extractPdf(data: Buffer, fromPage: number): Promise<ExtractedContent> {
   const { extractText, getDocumentProxy } = await import('unpdf')
-  const document = await getDocumentProxy(new Uint8Array(data))
-  const { totalPages, text } = await extractText(document, { mergePages: false })
-  const first = Math.max(1, Math.min(fromPage ?? 1, totalPages))
-  const pages = text
-    .slice(first - 1)
-    .map((content, index) => `— Pagina ${first + index} —\n${content.trim()}`)
-    .join('\n\n')
+  const { totalPages, text } = await extractText(await getDocumentProxy(new Uint8Array(data)), {
+    mergePages: false
+  })
+  const first = Math.max(1, Math.min(Math.trunc(fromPage), totalPages))
+  const read: Array<{ page: number; text: string } | { page: number; picture: true }> = []
+  let chars = 0
+  let pictures = 0
+  let next: number | null = null
 
-  if (text.every((content) => content.trim().length < 20)) {
-    return {
-      kind: 'unreadable',
-      reason:
-        'Il PDF non contiene testo selezionabile: è probabilmente una scansione, da guardare come immagine.'
+  for (let page = first; page <= totalPages; page++) {
+    const pageText = text[page - 1].trim()
+
+    if (pageText.length >= PDF_TEXT_PAGE_MIN_CHARS) {
+      if (read.length > 0 && chars + pageText.length > EXTRACT_PAGE_CHARS) {
+        next = page
+        break
+      }
+
+      const kept = pageText.slice(0, EXTRACT_PAGE_CHARS)
+      read.push({
+        page,
+        text: kept.length < pageText.length ? `${kept}\n[Pagina accorciata.]` : kept
+      })
+      chars += kept.length
+    } else {
+      if (pictures === PDF_PICTURES_PER_READ) {
+        next = page
+        break
+      }
+
+      read.push({ page, picture: true })
+      pictures++
     }
   }
 
-  return page(pages, offset, totalPages)
+  const drawn = new Map(
+    pictures > 0
+      ? (
+          await renderPdfPages(
+            new Uint8Array(data),
+            read.flatMap((item) => ('picture' in item ? [item.page] : [])),
+            PDF_PICTURE_WIDTH
+          )
+        ).map((image) => [image.page, `data:image/jpeg;base64,${image.jpeg.toString('base64')}`])
+      : []
+  )
+
+  return {
+    kind: 'pdf',
+    totalPages,
+    pages: read.map((item) => {
+      if (!('picture' in item)) {
+        return item
+      }
+
+      const dataUrl = drawn.get(item.page)
+
+      if (!dataUrl) {
+        throw new Error(`La pagina ${item.page} del PDF non è stata disegnata.`)
+      }
+
+      return { page: item.page, dataUrl }
+    }),
+    nextPage: next
+  }
 }
 
 async function sheetsText(data: Buffer): Promise<string> {

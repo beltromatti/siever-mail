@@ -338,18 +338,19 @@ export const readAttachmentTool: SegretarioTool = {
       await extractContent(file.fileName, contentType ?? attachment.contentType, data, {
         offset: numberArg(args, 'da_carattere'),
         page: numberArg(args, 'pagina')
-      }),
-      `Letto ${file.fileName}`
+      })
     )
   }
 }
 
-/** What an extraction gave, for the model: text with where it goes on, or a picture to look at. */
+/**
+ * What an extraction gave, for the model — text with where it goes on,
+ * pictures to look at — and the step's line for the user.
+ */
 export function describeExtraction(
   handle: string,
   fileName: string,
-  extracted: Awaited<ReturnType<typeof extractContent>>,
-  summary: string
+  extracted: Awaited<ReturnType<typeof extractContent>>
 ): { content: string | ContentPart[]; summary: string; failed?: boolean } {
   switch (extracted.kind) {
     case 'image':
@@ -366,10 +367,50 @@ export function describeExtraction(
         summary: `Non letto ${fileName}`,
         failed: true
       }
+    case 'pdf': {
+      const scanned = extracted.pages.filter((page) => 'dataUrl' in page).length
+      const shown = extracted.pages.map((page) => page.page)
+      const range =
+        shown.length === 0
+          ? null
+          : shown.length === 1
+            ? `pagina ${shown[0]}`
+            : `pagine ${shown[0]}–${shown[shown.length - 1]}`
+      const content: ContentPart[] = [
+        {
+          type: 'text',
+          text: `${handle} ${fileName} · PDF di ${countOf(extracted.totalPages, 'pagina', 'pagine')}${
+            range ? ` · qui ${shown.length === 1 ? 'la' : 'le'} ${range}` : ''
+          }${scanned > 0 ? ' (le pagine scansionate sono immagini da guardare)' : ''}`
+        }
+      ]
+
+      for (const page of extracted.pages) {
+        content.push(
+          'text' in page
+            ? { type: 'text', text: `— Pagina ${page.page} —\n${page.text}` }
+            : { type: 'text', text: `— Pagina ${page.page} (scansione) —` },
+          ...('dataUrl' in page
+            ? [{ type: 'image_url' as const, image_url: { url: page.dataUrl } }]
+            : [])
+        )
+      }
+
+      if (extracted.nextPage !== null) {
+        content.push({ type: 'text', text: `[Continua con pagina=${extracted.nextPage}.]` })
+      }
+
+      return {
+        content,
+        summary: `${scanned > 0 ? 'Guardato' : 'Letto'} ${fileName}${
+          range && extracted.totalPages > 1 ? ` · ${range}` : ''
+        }`
+      }
+    }
     case 'text':
       return {
         content: [
-          `${handle} ${fileName}${extracted.pages ? ` · ${extracted.pages} pagine` : ''} · ${extracted.totalChars} caratteri`,
+          `${handle} ${fileName} · ${extracted.totalChars} caratteri`,
           '',
           extracted.text || '(nessun testo)',
           extracted.nextOffset !== null
@@ -378,7 +419,7 @@ export function describeExtraction(
         ]
           .filter((line) => line !== '')
           .join('\n'),
-        summary
+        summary: `Letto ${fileName}`
       }
   }
 }

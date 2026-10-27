@@ -303,8 +303,7 @@ export const readFileTool: SegretarioTool = {
       await extractContent(basename(path), undefined, await readFile(path), {
         offset: numberArg(args, 'da_carattere'),
         page: numberArg(args, 'pagina')
-      }),
-      `Letto ${basename(path)}`
+      })
     )
 
     return { ...outcome, files: [path] }

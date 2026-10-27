@@ -1,5 +1,6 @@
-import { app, BrowserWindow, Notification } from 'electron'
+import { app, Notification } from 'electron'
 
+import { getAppWindow } from '@main/app-window'
 import { logMainError } from '@main/utils/error-utils'
 import { folderRole } from '@shared/folders'
 import { IPC_CHANNELS } from '@shared/ipc'
@@ -415,7 +416,7 @@ export class NotificationManager {
 
   /** Brings the window forward — on `message`, when the alert announced one. */
   private restoreWindow(message?: MailMessageSummary): void {
-    const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())
+    const window = getAppWindow()
 
     if (!window) {
       return

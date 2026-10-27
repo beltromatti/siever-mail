@@ -23,7 +23,6 @@ class FakeNotification extends EventEmitter {
 
 vi.mock('electron', () => ({
   app: { focus: () => undefined },
-  BrowserWindow: { getAllWindows: () => [] },
   Notification: FakeNotification
 }))
 

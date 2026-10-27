@@ -7,21 +7,21 @@ this page is the map.
 
 ## Stack
 
-| Layer       | Technology                                                                                             |
-| ----------- | ------------------------------------------------------------------------------------------------------ |
-| Shell       | [Electron](https://www.electronjs.org/) 44 (macOS 13+, Windows 10+ x64, Linux)                         |
-| Bundler     | [electron-vite](https://electron-vite.org/) + Vite                                                     |
-| UI          | [React 19](https://react.dev/) + TypeScript, [Tailwind CSS v4](https://tailwindcss.com/), Radix/shadcn |
-| Local store | SQLite through [Prisma 7](https://www.prisma.io/) and its `better-sqlite3` adapter                     |
-| Mail        | [imapflow](https://imapflow.com/) (IMAP), [nodemailer](https://nodemailer.com/) (SMTP), mailparser     |
-| Gmail       | OAuth 2.0 over IMAP/SMTP (XOAUTH2); no Gmail HTTP API                                                  |
-| Editor      | [Squire](https://github.com/fastmail/Squire), inside a sandboxed iframe                                |
-| Lists       | [TanStack Virtual](https://tanstack.com/virtual) for the endless message list                          |
-| HTML safety | [DOMPurify](https://github.com/cure53/DOMPurify)                                                       |
-| Tests       | [Vitest](https://vitest.dev/) (node + jsdom projects)                                                  |
-| Segretario  | The user's own [OpenRouter](https://openrouter.ai/) key; the newest DeepSeek Flash; no server of ours  |
-| Documents   | unpdf (PDF), mammoth (Word), SheetJS (spreadsheets), fflate (OpenDocument, PowerPoint)                 |
-| Markdown    | [Streamdown](https://streamdown.ai/) for what the Segretario writes, as it writes it                   |
+| Layer       | Technology                                                                                              |
+| ----------- | ------------------------------------------------------------------------------------------------------- |
+| Shell       | [Electron](https://www.electronjs.org/) 44 (macOS 13+, Windows 10+ x64, Linux)                          |
+| Bundler     | [electron-vite](https://electron-vite.org/) + Vite                                                      |
+| UI          | [React 19](https://react.dev/) + TypeScript, [Tailwind CSS v4](https://tailwindcss.com/), Radix/shadcn  |
+| Local store | SQLite through [Prisma 7](https://www.prisma.io/) and its `better-sqlite3` adapter                      |
+| Mail        | [imapflow](https://imapflow.com/) (IMAP), [nodemailer](https://nodemailer.com/) (SMTP), mailparser      |
+| Gmail       | OAuth 2.0 over IMAP/SMTP (XOAUTH2); no Gmail HTTP API                                                   |
+| Editor      | [Squire](https://github.com/fastmail/Squire), inside a sandboxed iframe                                 |
+| Lists       | [TanStack Virtual](https://tanstack.com/virtual) for the endless message list                           |
+| HTML safety | [DOMPurify](https://github.com/cure53/DOMPurify)                                                        |
+| Tests       | [Vitest](https://vitest.dev/) (node + jsdom projects)                                                   |
+| Segretario  | The user's own [OpenRouter](https://openrouter.ai/) key; the newest DeepSeek Flash; no server of ours   |
+| Documents   | unpdf (PDF text), PDF.js (scanned pages), mammoth (Word), SheetJS (spreadsheets), fflate (OpenDocument) |
+| Markdown    | [Streamdown](https://streamdown.ai/) for what the Segretario writes, as it writes it                    |
 
 ## Processes and startup
 
@@ -62,6 +62,7 @@ src/
 ├── main/                      Node side
 │   ├── index.ts               lifecycle, window, tray, permissions, startup order
 │   ├── app-identity.ts        the bundle id / AppUserModelID
+│   ├── app-window.ts          the window the user works in, named
 │   ├── app-menu.ts            macOS menu bar (Italian); none elsewhere
 │   ├── context-menu.ts        native menus for text, links, pictures, spelling
 │   ├── theme.ts               Sistema / Chiaro / Scuro → nativeTheme
@@ -74,7 +75,8 @@ src/
 │   │   ├── tools/             what it can do: search, read, write, organise, remember
 │   │   ├── prompts/           its instructions, in Italian, one file each
 │   │   ├── mail-search.ts     the full-text index as the agent asks it
-│   │   └── extraction.ts      the text of PDFs, Office files, spreadsheets, pictures
+│   │   ├── extraction.ts      the text of PDFs, Office files, spreadsheets, pictures
+│   │   └── pdf-pages.ts       scanned PDF pages drawn as pictures, in a hidden window
 │   ├── services/
 │   │   ├── mail-service.ts    façade the IPC layer calls
 │   │   ├── database.ts        Prisma client, raw DDL, queries
@@ -656,13 +658,24 @@ An extension adds its own (see [Extensions](#extensions)).
 account, by folder, sender, date), `leggi_posta` (a message or its whole
 conversation, quoted history left out), `leggi_allegato` and `leggi_file`
 (PDF, Word, spreadsheets, presentations, OpenDocument, mail, text and
-pictures, through `extraction.ts`, page by page), `cerca_file` (by name,
+pictures, through `extraction.ts`, a part at a time), `cerca_file` (by name,
 in the home folder and the mounted volumes), `scrivi_bozza` (the renderer
 opens the composer as for a reply, a forward or a new message, with the
 text written in; the draft is kept and filed in Bozze like the user's
 own), `invia_bozza`, `organizza` (archive, move, read, flag, Trash),
 `memoria` (its notes: read, write, edit, rename, delete) and `mostra`
 (opens a message, a draft or a search on screen).
+
+**Scanned PDFs** are looked at. A PDF is read page by page: a page with
+text gives its text (unpdf), a page without — a scan — is drawn as a JPEG
+1 600 pixels wide and handed to the model as a picture, five at most per
+read. The drawing happens in a hidden, sandboxed window
+(`renderer/pdf-pages.html`, `ai/pdf-pages.ts`) with PDF.js on the
+browser's own canvas and its JBIG2 and JPEG 2000 decoders in WebAssembly,
+so no native module is built for any platform; the window opens with the
+first scan and closes a minute after the last. Because that window exists,
+the app's own window is named (`app-window.ts`): what the interface is
+told, and what a notification brings forward, goes there and nowhere else.
 
 **Memory** is a set of notes the model keeps itself (`ai_memory`): who the
 user is (`tu.md`), how they write (`stile.md`), each account, people,
