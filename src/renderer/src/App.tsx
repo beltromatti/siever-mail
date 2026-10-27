@@ -1151,7 +1151,7 @@ function App(): React.JSX.Element {
       const confirmed = await confirm({
         title: `Disconnettere ${account?.email ?? "l'account"}?`,
         description:
-          'SIEVER Mail smette di ricevere e inviare con questo account e toglie dal computer la sua posta e la sua firma. Sul server non cambia nulla: puoi ricollegarlo quando vuoi.',
+          'SIEVER Mail smette di ricevere e inviare con questo account e toglie dal computer la sua posta, la sua firma e quello che il Segretario aveva annotato su questo account. Sul server non cambia nulla: puoi ricollegarlo quando vuoi.',
         confirmLabel: 'Disconnetti',
         destructive: true
       })
