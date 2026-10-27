@@ -100,11 +100,11 @@ function FolderRow({
   return (
     <div
       className={cn(
-        'group flex h-6.5 w-full items-center rounded transition-colors',
+        'group flex h-7 w-full items-center rounded-[6px] transition-colors',
         active
-          ? 'bg-primary/15 text-primary'
-          : 'text-foreground/85 hover:bg-secondary/55 hover:text-foreground',
-        drop?.hovered && 'bg-primary/20 text-primary ring-primary/60 ring-1 ring-inset'
+          ? 'bg-selected text-foreground'
+          : 'text-muted-foreground hover:bg-hover hover:text-foreground',
+        drop?.hovered && 'bg-selected text-foreground ring-foreground/40 ring-1 ring-inset'
       )}
       style={{ paddingLeft: depth * 12 }}
       onContextMenu={(event) => {
@@ -146,7 +146,7 @@ function FolderRow({
             onClick={onToggleExpanded}
             aria-expanded={expanded}
             aria-label={expanded ? `Comprimi ${name}` : `Espandi ${name}`}
-            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/70 inline-flex size-4 items-center justify-center rounded-sm outline-none focus-visible:ring-2"
+            className="text-faint-foreground hover:text-foreground focus-visible:ring-ring/60 inline-flex size-4 items-center justify-center rounded-sm outline-none focus-visible:ring-2"
           >
             {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
           </button>
@@ -163,16 +163,20 @@ function FolderRow({
               }`
             : name
         }
-        className="focus-visible:ring-ring/70 flex h-full min-w-0 flex-1 items-center gap-2 rounded pr-2 pl-1 text-left outline-none focus-visible:ring-2 disabled:cursor-default"
+        className="focus-visible:ring-ring/60 flex h-full min-w-0 flex-1 items-center gap-2 rounded-[6px] pr-2 pl-0.5 text-left outline-none focus-visible:ring-2 disabled:cursor-default"
       >
         <Icon
-          className={cn('size-3.5 shrink-0', active ? 'text-primary' : 'text-muted-foreground')}
+          className={cn(
+            'size-[15px] shrink-0',
+            active ? 'text-foreground' : 'text-faint-foreground'
+          )}
+          strokeWidth={1.7}
         />
         <span
           className={cn(
-            'min-w-0 flex-1 truncate text-[12px]',
-            unseenCount > 0 && 'font-semibold',
-            !onSelect && 'text-muted-foreground'
+            'min-w-0 flex-1 truncate text-[12.5px] font-medium',
+            unseenCount > 0 && 'text-foreground font-[650]',
+            !onSelect && 'text-faint-foreground'
           )}
         >
           {name}
@@ -180,8 +184,8 @@ function FolderRow({
         {badge > 0 && (
           <span
             className={cn(
-              'shrink-0 rounded px-1 text-[10px] font-semibold tabular-nums',
-              active ? 'text-primary' : 'text-muted-foreground'
+              'shrink-0 text-[11px] tabular-nums',
+              unseenCount > 0 ? 'text-foreground font-semibold' : 'text-faint-foreground'
             )}
           >
             {badge.toLocaleString('it-IT')}
@@ -195,11 +199,7 @@ function FolderRow({
 type FolderRowDrop = NonNullable<Parameters<typeof FolderRow>[0]['drop']>
 
 function SectionHeading({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return (
-    <h2 className="text-muted-foreground truncate px-2 pt-2 pb-1 text-[10px] font-semibold tracking-widest uppercase">
-      {children}
-    </h2>
-  )
+  return <h2 className="eyebrow truncate px-2.5 pt-3.5 pb-1.5">{children}</h2>
 }
 
 /**
@@ -299,11 +299,11 @@ export function FolderSidebar({
   }
 
   return (
-    <div className="glass-panel flex h-full min-h-0 flex-col overflow-hidden rounded-lg">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-px p-1.5 pt-0">
+        <div className="space-y-px px-2 pb-3">
           {unifiedFolders.length > 0 && (
-            <section aria-label="Tutti gli account" className="border-border/60 border-b pb-1.5">
+            <section aria-label="Tutti gli account">
               <SectionHeading>Tutti gli account</SectionHeading>
               {unifiedFolders.map((summary) => {
                 const path = unifiedFolderPath(summary.role)

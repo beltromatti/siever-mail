@@ -9,11 +9,11 @@ export function ShortcutKeys({
   className?: string
 }): React.JSX.Element {
   return (
-    <span className={cn('inline-flex items-center gap-0.5', className)}>
+    <span className={cn('inline-flex items-center gap-[3px]', className)}>
       {keys.map((key, index) => (
         <kbd
           key={`${key}-${index}`}
-          className="border-border/80 bg-background/55 text-foreground/90 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] border px-1 font-sans text-[10px] leading-none font-medium"
+          className="keycap inline-flex h-[17px] min-w-[17px] items-center justify-center rounded-[4px] px-1 font-sans text-[10px] leading-none font-semibold"
         >
           {key}
         </kbd>

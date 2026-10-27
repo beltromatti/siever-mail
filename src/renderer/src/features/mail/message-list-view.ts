@@ -4,6 +4,7 @@ import type {
   MailMessageListSort,
   MailMessageSummary,
   MessageGroupingMode,
+  MessageListFilter,
   MessageRef
 } from '@shared/models'
 
@@ -21,6 +22,19 @@ export interface MessageListViewProps {
   /** The active search, trimmed; empty when there is none. */
   searchQuery: string
   onClearSearch: () => void
+  /** What is typed in the search field, as typed. */
+  search: string
+  onSearchChange: (value: string) => void
+  searchInputRef: React.RefObject<HTMLInputElement | null>
+  /** Where a search looks: the folder open, or a folder of Tutti gli account. */
+  searchScopeLabel: string
+  filter: MessageListFilter
+  onFilterChange: (next: MessageListFilter) => void
+  /**
+   * The list is the pane in the window's top right corner (the outlook
+   * layout): on Windows its header keeps clear of the window's buttons.
+   */
+  atWindowTopRight: boolean
   messages: MailMessageSummary[]
   sections: MessageSection[]
   /** What the list holds, said under its title: "9.796 messaggi", "12 risultati". */

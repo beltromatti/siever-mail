@@ -260,7 +260,7 @@ const DialogContent = React.forwardRef<
             // Settings felt like opening a different program. One set of
             // measurements here, rather than per-dialog overrides, is what
             // keeps the next dialog in line without anyone remembering to.
-            'glass-dialog text-popover-foreground fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100vh-3rem)] w-[min(980px,calc(100vw-2rem))] gap-2.5 rounded-xl p-4 outline-none',
+            'sheet-high fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100vh-3rem)] w-[min(980px,calc(100vw-2rem))] gap-3 rounded-xl p-5 outline-none',
             // One column, as wide as the panel and no wider: an implicit
             // track grows to its widest line, so one long unbreakable line
             // (a subject, an address) pushed the rest out past the edge
@@ -293,7 +293,7 @@ const DialogContent = React.forwardRef<
                 className={cn(
                   'bg-muted-foreground/25 absolute top-1.5 left-1/2 h-1 w-9 -translate-x-1/2 rounded-full transition-colors',
                   isMoved && 'bg-muted-foreground/40',
-                  isDragging && 'bg-primary/60'
+                  isDragging && 'bg-foreground/50'
                 )}
               />
             </div>
@@ -312,9 +312,9 @@ const DialogContent = React.forwardRef<
           {!hideClose && (
             <DialogPrimitive.Close
               disabled={closeDisabled}
-              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/65 absolute top-3.5 right-3.5 z-20 rounded-sm transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
+              className="text-faint-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring/65 absolute top-3.5 right-3.5 z-20 grid size-6 place-items-center rounded-[6px] transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
             >
-              <X className="size-4" />
+              <X className="size-3.5" />
               <span className="sr-only">Chiudi</span>
             </DialogPrimitive.Close>
           )}
@@ -355,7 +355,7 @@ const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn('display-title text-[14px] leading-6 font-bold', className)}
+    className={cn('display-title text-[16px] leading-6', className)}
     {...props}
   />
 ))
@@ -367,7 +367,7 @@ const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn('text-muted-foreground text-[11px] leading-4', className)}
+    className={cn('text-muted-foreground text-[12px] leading-[1.45]', className)}
     {...props}
   />
 ))

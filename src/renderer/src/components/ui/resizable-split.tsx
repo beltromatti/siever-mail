@@ -10,7 +10,7 @@
  *
  * The default has a detent. Dragged within `SNAP_DISTANCE_PX` of it the
  * divider settles there and says so — the grip lengthens and turns to the
- * accent colour — and letting go there hands the size back to
+ * ink — and letting go there hands the size back to
  * `defaultSize`. Arrow keys settle on it too when they step onto or across
  * it; Enter and a double click go straight back.
  */
@@ -26,8 +26,8 @@ import {
 
 import { cn } from '@renderer/lib/utils'
 
-/** The gap between the panes, which the divider fills. */
-const DIVIDER_SIZE_PX = 8
+/** The hairline between the panes, which the divider is. */
+const DIVIDER_SIZE_PX = 1
 
 /** How close to the default a dragged divider is pulled onto it. */
 const SNAP_DISTANCE_PX = 14
@@ -302,7 +302,7 @@ export function ResizableSplit({
         onDoubleClick={() => setSize(null)}
         onKeyDown={onKeyDown}
       >
-        {/* Wider than the gap it sits in: eight pixels are a hard target. */}
+        {/* Far wider than the hairline it is: one pixel is no target. */}
         <span
           aria-hidden
           className={cn('absolute', horizontal ? '-inset-x-1 inset-y-0' : 'inset-x-0 -inset-y-1')}
@@ -311,10 +311,8 @@ export function ResizableSplit({
           aria-hidden
           className={cn(
             'pointer-events-none absolute transition-colors duration-150',
-            horizontal
-              ? 'inset-y-2 left-1/2 w-px -translate-x-1/2'
-              : 'inset-x-2 top-1/2 h-px -translate-y-1/2',
-            dragging ? (snapped ? 'bg-primary/60' : 'bg-border') : 'bg-transparent'
+            horizontal ? 'inset-y-0 left-0 w-px' : 'inset-x-0 top-0 h-px',
+            dragging && snapped ? 'bg-foreground/40' : 'bg-border'
           )}
         />
         <span
@@ -325,7 +323,7 @@ export function ResizableSplit({
             'bg-muted-foreground/45 opacity-0 group-hover:opacity-100',
             'group-focus-visible:bg-ring group-focus-visible:opacity-100',
             dragging && 'bg-muted-foreground/70 opacity-100',
-            dragging && snapped && (horizontal ? 'bg-primary h-14' : 'bg-primary w-14')
+            dragging && snapped && (horizontal ? 'bg-foreground h-14' : 'bg-foreground w-14')
           )}
         />
       </div>

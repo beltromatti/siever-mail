@@ -301,6 +301,19 @@ picked something else meanwhile.
 
 ### Layouts
 
+The window is a row of panes laid edge to edge, a hairline between each:
+the rail (`features/workspace/app-rail.tsx` — the app's places, the
+connection, Settings), the sidebar ("Scrivi", the account, the folders),
+then the message list and the reading pane. Each pane's first band is
+52 px tall and is the window's title bar: dragged like one, with the
+macOS lights over the rail and the sidebar and, on Windows, the app's own
+window buttons in the top right corner, which the pane there keeps clear
+of (`--titlebar-lights`, `--titlebar-controls`). The list's header holds
+its title, count, order and selection controls, the search and the filter;
+the reading pane's holds what can be done to what it shows — reply and
+forward, the extension's actions, archive, move, mark, flag, delete — for
+one message, or in words for a selection.
+
 Two arrangements share every component (`features/workspace/workspace-layout.tsx`):
 _apple_ — folders, list and reader side by side — and _outlook_ — a dense
 sortable table above the reader. Both list shells implement
@@ -397,14 +410,27 @@ and show them through `showContextMenu`.
 `styles/globals.css` defines every colour as a token (HSL triplets), with a
 dark set and a light one under `prefers-color-scheme: light`. The choice in
 Settings (Sistema, Chiaro, Scuro) becomes Electron's `themeSource`, which is
-what that media query reports. Components only use the tokens. Message
-bodies stay on a white page in both themes, as they were written.
+what that media query reports. Components only use the tokens.
+
+The palette is a desk: warm paper in the light theme, warm graphite in the
+dark one, never a dashboard's blue. Ink (`--primary`) draws text, primary
+buttons and the selection; sealing wax (`--seal`) is spent on sending,
+unread mail and what is due; pencil ochre (`--ai`) belongs to the
+Segretario alone. Surfaces carry a faint paper grain, painted once as a
+background image (`.paper`, `--paper-grain`). Buttons have a body — ink,
+seal and raised keys (`button-ink`, `button-seal`, `button-raised`
+utilities), lit from above and giving a little when pressed; shortcuts
+show as keycaps. What floats is a `sheet` / `sheet-high`: one surface, a
+hairline and a shadow. Message bodies stay on a white page in both themes,
+as they were written.
 
 The interface is set in Mona Sans (OFL), bundled with the app as a variable
 font (`@fontsource-variable/mona-sans`, weights 200–900, widths 75–125 %),
 so it looks the same on every machine: `--font-sans` for everything,
 `--font-display` with `.display-title` — the same family at 110 % width —
-for titles.
+for titles. Newsreader (OFL, `@fontsource-variable/newsreader`) is
+`--font-serif`, the Segretario's hand (`.voice`): what it writes reads as
+writing.
 
 ## Mail content
 
@@ -557,7 +583,7 @@ extension code by path. The contract is `src/extension/types.ts`:
 | `ExtensionMain.uninstall()`                 | Optional; called when the app quits.                                                                                                        |
 | `ExtensionMain.defaultAccountSignatureHtml` | Signature given to the first account added. Empty in the public build.                                                                      |
 | `ExtensionMain.accountSignatureRevision`    | Edition of that content; stored signatures on an older one — and accounts without one — are handed, once, to `upgradeAccountSignatureHtml`. |
-| `ExtensionRenderer.toolbarActions`          | Buttons after "Nuovo messaggio", given the selection.                                                                                       |
+| `ExtensionRenderer.toolbarActions`          | Buttons first in the reading pane's header, given the selection.                                                                            |
 | `ExtensionRenderer.settingsTabs`            | Tabs after the host's in Settings.                                                                                                          |
 | `ExtensionRenderer.PrimaryActionDialog`     | A dialog the host mounts and opens on request.                                                                                              |
 | `ExtensionRenderer.fontFaceCss`             | `@font-face` rules for bundled fonts, applied to the app and every message frame.                                                           |

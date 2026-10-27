@@ -20,7 +20,7 @@ import {
   resolveSelectionIntent,
   summaryToMessageRef
 } from '@renderer/lib/message-selection'
-import { cn, formatByteSize, formatCount, formatDateTimeLabel } from '@renderer/lib/utils'
+import { cn, formatByteSize, formatDateTimeLabel } from '@renderer/lib/utils'
 import {
   defaultSortDirection,
   type MailMessageSummary,
@@ -36,13 +36,12 @@ import {
   AccountTag,
   FlagToggle,
   HighlightedText,
-  MessageListControls,
-  MessageListTitle,
   MessageSectionHeading,
   primaryAddressLabel,
   recipientsLabel,
   UnreadDot
 } from './message-list-shared'
+import { MessageListHeader } from './message-list-header'
 
 /**
  * Grid template shared by the header and every row, so the columns line up
@@ -67,45 +66,36 @@ const SORTABLE_COLUMNS: ReadonlyArray<SortableColumn> = [
   { field: 'size', label: 'Dimensione', align: 'right' }
 ]
 
-export function MessageTable({
-  title,
-  searchQuery,
-  onClearSearch,
-  messages,
-  sections,
-  countLabel,
-  emptyState,
-  selection,
-  highlightTerms,
-  sort,
-  onSortChange,
-  grouping,
-  onGroupingChange,
-  invertVisualOrder,
-  primaryAddressMode,
-  accountLabels,
-  canLoadMoreMessages,
-  loadingMoreMessages,
-  onLoadMoreMessages,
-  revealCursorToken,
-  onRowsInView,
-  onActivateRow,
-  onOpenRow,
-  onRowContextMenu,
-  onRowDragStart,
-  onRowDragEnd,
-  onToggleFlag,
-  onSelectSection,
-  onSelectAll,
-  onClearSelection
-}: MessageListViewProps): React.JSX.Element {
+export function MessageTable(props: MessageListViewProps): React.JSX.Element {
+  const {
+    messages,
+    sections,
+    emptyState,
+    selection,
+    highlightTerms,
+    sort,
+    onSortChange,
+    invertVisualOrder,
+    primaryAddressMode,
+    accountLabels,
+    canLoadMoreMessages,
+    loadingMoreMessages,
+    onLoadMoreMessages,
+    revealCursorToken,
+    onRowsInView,
+    onActivateRow,
+    onOpenRow,
+    onRowContextMenu,
+    onRowDragStart,
+    onRowDragEnd,
+    onToggleFlag,
+    onSelectSection
+  } = props
   const selectedKeys = useMemo(
     () => new Set(selection.selectedRefs.map(messageRefKey)),
     [selection.selectedRefs]
   )
   const cursorKey = selection.cursorRef ? messageRefKey(selection.cursorRef) : null
-
-  const selectedCount = selection.selectedRefs.length
 
   const toggleColumnSort = (field: MessageListSortField): void => {
     if (sort.field === field) {
@@ -125,18 +115,18 @@ export function MessageTable({
         type="button"
         onClick={() => toggleColumnSort(column.field)}
         className={cn(
-          'focus-visible:ring-ring/70 hover:text-foreground flex min-w-0 items-center gap-1 rounded-sm px-1 text-left outline-none focus-visible:ring-2',
+          'focus-visible:ring-ring/60 hover:text-foreground flex min-w-0 items-center gap-1 rounded-sm px-1 text-left outline-none focus-visible:ring-2',
           column.align === 'right' && 'justify-end',
-          isActive ? 'text-foreground font-semibold' : 'text-muted-foreground'
+          isActive ? 'text-foreground font-semibold' : 'text-faint-foreground'
         )}
         aria-sort={isActive ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
       >
         <span className="truncate">{column.label}</span>
         {isActive &&
           (sort.direction === 'asc' ? (
-            <ArrowUp className="text-primary size-3 shrink-0" />
+            <ArrowUp className="size-3 shrink-0" />
           ) : (
-            <ArrowDown className="text-primary size-3 shrink-0" />
+            <ArrowDown className="size-3 shrink-0" />
           ))}
       </button>
     )
@@ -146,37 +136,16 @@ export function MessageTable({
     // Rows are things to pick, not text to copy: a Shift or Ctrl click
     // selects messages, as in Outlook and Finder, never a run of words
     // across them.
-    <div className="glass-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg select-none">
-      <header className="border-border/60 flex h-9 shrink-0 items-center justify-between gap-2 border-b px-2.5">
-        <div className="flex min-w-0 items-center gap-2">
-          <MessageListTitle
-            title={title}
-            searchQuery={searchQuery}
-            onClearSearch={onClearSearch}
-            className="text-[12px]"
-          />
-          <span className="text-muted-foreground shrink-0 text-[10px]">
-            {selectedCount > 1
-              ? formatCount(selectedCount, 'selezionata', 'selezionate')
-              : countLabel}
-          </span>
-        </div>
-
-        <MessageListControls
-          sort={sort}
-          onSortChange={onSortChange}
-          grouping={grouping}
-          onGroupingChange={onGroupingChange}
-          selectedCount={selectedCount}
-          onClearSelection={onClearSelection}
-          onSelectAll={onSelectAll}
-          canSelectAll={messages.length > 0}
-        />
-      </header>
+    <div className="paper flex h-full min-h-0 min-w-0 flex-col overflow-hidden select-none">
+      <MessageListHeader
+        {...props}
+        selectedCount={selection.selectedRefs.length}
+        canSelectAll={messages.length > 0}
+      />
 
       <div
         className={cn(
-          'border-border/60 text-muted-foreground grid shrink-0 items-center gap-1.5 border-b px-2 py-1 text-[10px]',
+          'text-faint-foreground grid h-6 shrink-0 items-center gap-1.5 border-b px-2 text-[10.5px] font-[550]',
           TABLE_GRID_TEMPLATE
         )}
       >
@@ -244,17 +213,19 @@ export function MessageTable({
                 onDragEnd={onRowDragEnd}
                 style={{ height: MESSAGE_TABLE_ROW_HEIGHT_PX }}
                 className={cn(
-                  'group border-border/25 grid cursor-default items-center gap-1.5 border-b px-2 text-[11.5px] transition-colors',
+                  'group border-border/60 relative grid cursor-default items-center gap-1.5 border-b px-2 text-[12px] transition-colors',
                   TABLE_GRID_TEMPLATE,
-                  isSelected ? 'bg-primary/16 hover:bg-primary/20' : 'hover:bg-secondary/40',
-                  isCursor && 'ring-primary/55 ring-1 ring-inset',
+                  isSelected ? 'bg-selected' : 'hover:bg-hover',
+                  isCursor &&
+                    "before:absolute before:inset-y-0 before:left-0 before:w-[2px] before:content-['']",
+                  isCursor && (isSelected ? 'before:bg-foreground' : 'before:bg-faint-foreground'),
                   !message.isRead && !isSelected && 'text-foreground'
                 )}
               >
                 <UnreadDot unread={!message.isRead} />
 
                 <span className="flex justify-center">
-                  {message.hasAttachments && <Paperclip className="text-muted-foreground size-3" />}
+                  {message.hasAttachments && <Paperclip className="text-faint-foreground size-3" />}
                 </span>
 
                 <span className="flex justify-center">
@@ -267,7 +238,7 @@ export function MessageTable({
                 <span
                   className={cn(
                     'min-w-0 truncate px-1',
-                    message.isRead ? 'font-normal' : 'font-bold'
+                    message.isRead ? 'font-normal' : 'font-[650]'
                   )}
                   title={primaryAddressLabel(message, primaryAddressMode)}
                 >
@@ -300,7 +271,7 @@ export function MessageTable({
                 <span
                   className={cn(
                     'min-w-0 truncate px-1',
-                    message.isRead ? 'text-foreground/85' : 'font-semibold'
+                    message.isRead ? 'text-foreground/85' : 'font-[600]'
                   )}
                   title={message.subject}
                 >
@@ -309,14 +280,14 @@ export function MessageTable({
 
                 <span
                   className={cn(
-                    'truncate px-1 text-[10.5px] tabular-nums',
-                    message.isRead ? 'text-muted-foreground' : 'text-foreground/90'
+                    'truncate px-1 text-[11px] tabular-nums',
+                    message.isRead ? 'text-faint-foreground' : 'text-foreground/90'
                   )}
                 >
                   {formatDateTimeLabel(message.date)}
                 </span>
 
-                <span className="text-muted-foreground truncate px-1 text-right text-[10.5px] tabular-nums">
+                <span className="text-faint-foreground truncate px-1 text-right text-[11px] tabular-nums">
                   {formatByteSize(message.size)}
                 </span>
               </div>

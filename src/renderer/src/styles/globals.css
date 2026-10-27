@@ -8,6 +8,15 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
+  The palette: paper, ink, sealing wax and pencil.
+
+  Mail is correspondence, so the app is drawn as a desk: warm paper in the
+  light theme, warm graphite in the dark one — never the blue of a generic
+  dashboard. Ink is the primary colour: text, primary buttons, selection.
+  Sealing wax (`--seal`) is spent on few things — sending, which seals a
+  letter, unread mail and what is due. Pencil ochre (`--ai`) is the
+  Segretario's: what it noted, prepared or is working on, nothing else.
+
   Two palettes on one set of tokens. Dark is the default; light takes over
   whenever the page is told the scheme is light. The app never picks
   between them itself: the main process sets Electron's `themeSource` from
@@ -17,117 +26,140 @@
 */
 :root {
   color-scheme: dark;
-  --background: 223 43% 8%;
-  --foreground: 220 33% 96%;
-  --muted: 223 26% 17%;
-  --muted-foreground: 217 14% 70%;
-  --card: 224 37% 11%;
-  --card-foreground: 220 33% 96%;
-  --border: 218 20% 23%;
-  --input: 219 22% 18%;
-  --primary: 198 93% 60%;
-  --primary-foreground: 220 40% 6%;
-  --secondary: 220 24% 20%;
-  --secondary-foreground: 220 33% 96%;
-  --accent: 206 80% 47%;
-  --accent-foreground: 220 33% 96%;
-  --destructive: 0 72% 56%;
-  --destructive-foreground: 0 0% 98%;
+  /* The desk: rail and sidebar. */
+  --background: 30 6% 6.7%;
+  --foreground: 43 16% 91.2%;
+  /* The panes laid on it: list, message, the Segretario. */
+  --card: 40 7% 8.8%;
+  --card-foreground: 43 16% 91.2%;
+  /* What floats above: menus, dialogs, bubbles. */
+  --popover: 30 6% 12.2%;
+  --popover-foreground: 43 16% 91.2%;
+  --muted: 36 7% 13.1%;
+  --muted-foreground: 39 7% 62.7%;
+  /* Third rank of text: times, counts, captions. */
+  --faint-foreground: 39 6% 49%;
+  --border: 36 6% 15.5%;
+  --input: 34 6% 21.8%;
+  --primary: 43 16% 91.2%;
+  --primary-foreground: 30 6% 6.7%;
+  --secondary: 36 7% 13.5%;
+  --secondary-foreground: 43 16% 91.2%;
+  --accent: 36 6% 15.5%;
+  --accent-foreground: 43 16% 91.2%;
+  --hover: 43 16% 91% / 0.05;
+  --selected: 43 16% 91% / 0.085;
+  --seal: 9 65% 46.1%;
+  --seal-highlight: 11 70% 59.6%;
+  --seal-shade: 10 66% 37.3%;
+  --seal-foreground: 20 100% 97.6%;
+  /* Wax as text or a dot on the panes, where the button's fill is too dark. */
+  --seal-text: 11 73% 62.5%;
+  --ai: 39 65% 57.5%;
+  --ai-soft: 37 27% 12.9%;
+  --ai-line: 39 57% 35.5%;
+  --destructive: 7 76% 57.3%;
+  --destructive-foreground: 20 100% 97.6%;
   /* Text on a destructive tint (bg-destructive/10–15): error notices. The
      plain foreground is for solid destructive fills, and on the light
      palette's pale tint it vanishes. */
-  --destructive-soft-foreground: 0 0% 98%;
-  --ring: 199 100% 65%;
-  --popover: 225 37% 9%;
-  --popover-foreground: 220 33% 96%;
+  --destructive-soft-foreground: 7 80% 72%;
+  --ring: 39 7% 62.7%;
   --mail-editor-surface: 42 38% 97%;
   --mail-editor-foreground: 0 0% 6%;
   --mail-editor-muted-foreground: 220 9% 42%;
   --mail-editor-border: 220 16% 84%;
-  --brand-primary: 213 80% 52%;
-  --brand-primary-foreground: 0 0% 100%;
-  --brand-accent: 49 98% 56%;
-  --status-online: 142 70% 48%;
-  --status-offline: 0 72% 56%;
-  --scrollbar-thumb: 218 16% 30%;
-  --scrollbar-thumb-hover: 217 14% 46%;
-  --flagged: 0 72% 56%;
+  --brand-primary: 9 65% 46.1%;
+  --brand-primary-foreground: 20 100% 97.6%;
+  --brand-accent: 39 65% 57.5%;
+  --status-online: 149 36% 53.3%;
+  --status-offline: 7 76% 57.3%;
+  --scrollbar-thumb: 34 6% 24%;
+  --scrollbar-thumb-hover: 37 6% 38%;
+  --flagged: 11 73% 62.5%;
   /* A caution that is not an error: a draft kept here, not yet on the server. */
-  --warning: 38 92% 58%;
-  --canvas-start: 228 41% 9%;
-  --canvas-end: 220 45% 7%;
-  --canvas-glow: 0.16;
-  --shadow: 223 50% 3%;
-  --specular: 0 0% 100% / 0.07;
-  --scrim: 223 43% 8% / 0.3;
-  --dialog-opacity: 0.78;
-  --radius: 0.88rem;
+  --warning: 36 72% 56.5%;
+  --shadow: 0 0% 0%;
+  --specular: 0 0% 100% / 0.06;
+  --scrim: 30 6% 4% / 0.55;
+  --grain-opacity: 0.05;
+  --radius: 0.5rem;
 }
 
 @media (prefers-color-scheme: light) {
   :root {
     color-scheme: light;
-    --background: 220 23% 95%;
-    --foreground: 222 39% 12%;
-    --muted: 220 17% 91%;
-    --muted-foreground: 220 11% 38%;
-    --card: 0 0% 100%;
-    --card-foreground: 222 39% 12%;
-    --border: 220 15% 83%;
-    --input: 220 15% 86%;
-    --primary: 204 88% 40%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 220 16% 91%;
-    --secondary-foreground: 222 39% 12%;
-    --accent: 206 78% 44%;
-    --accent-foreground: 0 0% 100%;
-    --destructive: 0 70% 45%;
-    --destructive-foreground: 0 0% 100%;
-    --destructive-soft-foreground: 0 72% 34%;
-    --ring: 204 88% 44%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222 39% 12%;
+    --background: 43 21% 93.5%;
+    --foreground: 40 5% 10.8%;
+    --card: 45 33% 97.6%;
+    --card-foreground: 40 5% 10.8%;
+    --popover: 40 60% 99%;
+    --popover-foreground: 40 5% 10.8%;
+    --muted: 42 21% 90.6%;
+    --muted-foreground: 38 6% 34.7%;
+    --faint-foreground: 39 6% 47.1%;
+    --border: 42 20% 87.3%;
+    --input: 41 15% 79.2%;
+    --primary: 40 5% 10.8%;
+    --primary-foreground: 45 33% 97.6%;
+    --secondary: 42 22% 91%;
+    --secondary-foreground: 40 5% 10.8%;
+    --accent: 42 19% 89.8%;
+    --accent-foreground: 40 5% 10.8%;
+    --hover: 40 5% 11% / 0.045;
+    --selected: 40 5% 11% / 0.075;
+    --seal: 9 73% 41.8%;
+    --seal-highlight: 11 63% 54.1%;
+    --seal-shade: 10 81% 31.8%;
+    --seal-foreground: 20 100% 97.6%;
+    --seal-text: 9 73% 41.8%;
+    --ai: 39 85% 30.4%;
+    --ai-soft: 44 59% 91.4%;
+    --ai-line: 41 61% 59%;
+    --destructive: 3 62% 43.7%;
+    --destructive-foreground: 20 100% 97.6%;
+    --destructive-soft-foreground: 3 66% 34%;
+    --ring: 38 6% 34.7%;
     --mail-editor-surface: 0 0% 100%;
     --mail-editor-foreground: 0 0% 6%;
     --mail-editor-muted-foreground: 220 9% 42%;
     --mail-editor-border: 220 16% 84%;
-    --brand-primary: 213 80% 50%;
-    --brand-primary-foreground: 0 0% 100%;
-    --brand-accent: 49 98% 56%;
-    --status-online: 142 64% 36%;
-    --status-offline: 0 70% 45%;
-    --scrollbar-thumb: 220 10% 76%;
-    --scrollbar-thumb-hover: 220 10% 60%;
-    --flagged: 0 70% 48%;
-    --warning: 30 90% 38%;
-    --canvas-start: 220 30% 97%;
-    --canvas-end: 220 22% 92%;
-    --canvas-glow: 0.1;
-    --shadow: 222 40% 22%;
-    --specular: 0 0% 100% / 0.7;
-    --scrim: 222 30% 18% / 0.16;
-    /* White glass lets colour behind it through far more than dark glass. */
-    --dialog-opacity: 0.88;
+    --brand-primary: 9 73% 41.8%;
+    --brand-primary-foreground: 20 100% 97.6%;
+    --brand-accent: 39 85% 30.4%;
+    --status-online: 148 44% 32.2%;
+    --status-offline: 3 62% 43.7%;
+    --scrollbar-thumb: 41 12% 78%;
+    --scrollbar-thumb-hover: 40 8% 62%;
+    --flagged: 9 73% 41.8%;
+    --warning: 33 92% 32.9%;
+    --shadow: 40 10% 10%;
+    --specular: 0 0% 100% / 0.75;
+    --scrim: 40 10% 12% / 0.22;
+    --grain-opacity: 0.035;
   }
 }
 
 @theme inline {
   /*
-   * Mona Sans, bundled (see main.tsx): crisp at the list's 11–13px, and
-   * one family for every voice — titles take its wider cut (.display-title).
+   * Mona Sans, bundled (see main.tsx): crisp at the list's 11–13px, and one
+   * family for the interface — titles take its wider cut (.display-title).
+   * Newsreader is the Segretario's hand: what it writes reads as writing.
    */
   --font-sans: 'Mona Sans Variable', ui-sans-serif, system-ui, sans-serif;
   --font-display: 'Mona Sans Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-serif: 'Newsreader Variable', ui-serif, Georgia, serif;
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 3px);
+  --radius-md: calc(var(--radius) - 1px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 8px);
+  --radius-xl: calc(var(--radius) + 4px);
 
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
   --color-muted: hsl(var(--muted));
   --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-faint-foreground: hsl(var(--faint-foreground));
   --color-card: hsl(var(--card));
   --color-card-foreground: hsl(var(--card-foreground));
   --color-border: hsl(var(--border));
@@ -138,6 +170,14 @@
   --color-secondary-foreground: hsl(var(--secondary-foreground));
   --color-accent: hsl(var(--accent));
   --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-hover: hsl(var(--hover));
+  --color-selected: hsl(var(--selected));
+  --color-seal: hsl(var(--seal));
+  --color-seal-foreground: hsl(var(--seal-foreground));
+  --color-seal-text: hsl(var(--seal-text));
+  --color-ai: hsl(var(--ai));
+  --color-ai-soft: hsl(var(--ai-soft));
+  --color-ai-line: hsl(var(--ai-line));
   --color-destructive: hsl(var(--destructive));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
   --color-destructive-soft-foreground: hsl(var(--destructive-soft-foreground));
@@ -166,14 +206,13 @@
   }
 
   /*
-    Keyboard focus is branded everywhere, including on plain <button>s that
+    Keyboard focus is drawn everywhere, including on plain <button>s that
     do not opt into the ring utilities. Without this, Chrome paints its own
-    amber default outline, which looked like a stray warning colour next to
-    the app's blue focus ring. Components that declare `outline-none` plus a
+    amber default outline. Components that declare `outline-none` plus a
     `focus-visible:ring-*` simply override this.
   */
   :focus-visible {
-    outline: 2px solid hsl(var(--ring) / 0.75);
+    outline: 2px solid hsl(var(--ring) / 0.7);
     outline-offset: 2px;
   }
 
@@ -182,14 +221,8 @@
     margin: 0;
     height: 100vh;
     overflow: hidden;
-    background-image:
-      radial-gradient(circle at 20% 10%, hsl(var(--primary) / var(--canvas-glow)), transparent 22%),
-      radial-gradient(
-        circle at 90% 90%,
-        hsl(var(--accent) / calc(var(--canvas-glow) * 0.75)),
-        transparent 26%
-      ),
-      linear-gradient(140deg, hsl(var(--canvas-start)), hsl(var(--canvas-end)) 70%);
+    font-size: 13px;
+    background-image: var(--paper-grain);
   }
 
   #root {
@@ -227,7 +260,7 @@
   ::-webkit-scrollbar-thumb {
     min-height: 32px;
     min-width: 32px;
-    border: 2px solid transparent;
+    border: 3px solid transparent;
     border-radius: 9999px;
     background-color: hsl(var(--scrollbar-thumb));
     background-clip: content-box;
@@ -235,6 +268,150 @@
 
   ::-webkit-scrollbar-thumb:hover {
     background-color: hsl(var(--scrollbar-thumb-hover));
+  }
+}
+
+/*
+  The grain of the paper. Painted once as a background image over each
+  surface's colour, never as a blended overlay: an overlay would have to be
+  composited again on every frame the list scrolls.
+*/
+:root {
+  --paper-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23g)' opacity='0.05'/></svg>");
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --paper-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1  0 0 0 0 0.09  0 0 0 0 0.07  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23g)' opacity='0.035'/></svg>");
+  }
+}
+
+/*
+  Surfaces and controls with a body, as utilities so variants apply to them
+  (`data-[state=active]:button-raised`).
+*/
+
+/* A pane of the workspace: paper laid on the desk. */
+@utility paper {
+  background-color: hsl(var(--card));
+  background-image: var(--paper-grain);
+}
+
+/*
+  What floats above the panes — menus, dialogs, bubbles: one sheet, a
+  hairline and a shadow that says how high it sits.
+*/
+@utility sheet {
+  background-color: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow:
+    0 0 0 1px hsl(var(--input) / 0.9),
+    0 1px 2px hsl(var(--shadow) / 0.08),
+    0 12px 32px -8px hsl(var(--shadow) / 0.28);
+}
+
+@utility sheet-high {
+  background-color: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow:
+    0 0 0 1px hsl(var(--input) / 0.9),
+    0 2px 6px hsl(var(--shadow) / 0.1),
+    0 28px 64px -16px hsl(var(--shadow) / 0.42),
+    inset 0 1px 0 hsl(var(--specular));
+}
+
+/*
+  Buttons with a body. Ink is the ordinary primary action; the seal is the
+  one that sends; the raised key is the secondary. Each is lit from above
+  and gives a little when pressed, like a key.
+*/
+@utility button-ink {
+  color: hsl(var(--primary-foreground));
+  background-color: hsl(var(--primary));
+  background-image: linear-gradient(180deg, hsl(var(--primary) / 0.86), hsl(var(--primary)) 70%);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.16),
+    0 0 0 1px hsl(var(--shadow) / 0.55),
+    0 1px 2px hsl(var(--shadow) / 0.3);
+
+  &:hover {
+    background-image: linear-gradient(
+      180deg,
+      hsl(var(--primary) / 0.78),
+      hsl(var(--primary) / 0.94)
+    );
+  }
+
+  &:active:not(:disabled) {
+    transform: translateY(0.5px);
+    filter: brightness(0.96);
+  }
+}
+
+@utility button-seal {
+  color: hsl(var(--seal-foreground));
+  background-color: hsl(var(--seal));
+  background-image: radial-gradient(
+    140% 170% at 30% 0%,
+    hsl(var(--seal-highlight)),
+    hsl(var(--seal)) 52%,
+    hsl(var(--seal-shade))
+  );
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.26),
+    inset 0 -1px 1px hsl(0 0% 0% / 0.18),
+    0 0 0 1px hsl(var(--seal-shade) / 0.85),
+    0 1px 3px hsl(var(--shadow) / 0.3);
+  text-shadow: 0 -1px 0 hsl(0 0% 0% / 0.18);
+
+  &:hover {
+    filter: brightness(1.06);
+  }
+
+  &:active:not(:disabled) {
+    transform: translateY(0.5px);
+    filter: brightness(0.96);
+  }
+}
+
+@utility button-raised {
+  color: hsl(var(--foreground));
+  background-color: hsl(var(--popover));
+  background-image: linear-gradient(180deg, hsl(var(--popover)), hsl(var(--secondary) / 0.9));
+  box-shadow:
+    inset 0 1px 0 hsl(var(--specular)),
+    0 0 0 1px hsl(var(--input)),
+    0 1px 1px hsl(var(--shadow) / 0.08);
+
+  &:hover {
+    background-image: linear-gradient(180deg, hsl(var(--popover)), hsl(var(--secondary)));
+  }
+
+  &:active:not(:disabled) {
+    transform: translateY(0.5px);
+    filter: brightness(0.96);
+  }
+}
+
+/* A key of the keyboard, for shortcuts wherever they are shown. */
+@utility keycap {
+  color: hsl(var(--muted-foreground));
+  background-image: linear-gradient(180deg, hsl(var(--popover)), hsl(var(--secondary)));
+  box-shadow:
+    0 0 0 1px hsl(var(--input)),
+    0 1px 0 hsl(var(--input));
+}
+
+/* A field to type in: pressed into the paper rather than raised from it. */
+@utility field {
+  background-color: hsl(var(--hover));
+  box-shadow: inset 0 0 0 1px hsl(var(--border));
+
+  &:focus-within {
+    background-color: hsl(var(--popover));
+    box-shadow:
+      inset 0 0 0 1px hsl(var(--input)),
+      0 0 0 3px hsl(var(--ring) / 0.12);
   }
 }
 
@@ -259,37 +436,28 @@
   }
 
   .glass-panel {
-    background-color: hsl(var(--card) / 0.82);
-    backdrop-filter: blur(16px);
-    border: 1px solid hsl(var(--border) / 0.72);
+    background-color: hsl(var(--card));
+    background-image: var(--paper-grain);
+    border: 1px solid hsl(var(--border));
   }
 
-  /*
-    Dialog surface. Deliberately more translucent than .glass-panel: dialogs
-    float over the workspace and the user often needs to keep an eye on what
-    is underneath (a dialog asking for a name that has to be read off the
-    message behind it). Heavy blur plus a
-    specular top edge is what keeps that legible instead of muddy — the
-    "water drop" read, rather than a flat scrim.
-  */
+  /* Dialog surface: a sheet held above the workspace. */
   .glass-dialog {
-    background-color: hsl(var(--popover) / var(--dialog-opacity));
-    backdrop-filter: blur(28px) saturate(140%);
-    border: 1px solid hsl(var(--border) / 0.85);
+    background-color: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
     box-shadow:
-      0 24px 60px -12px hsl(var(--shadow) / 0.55),
-      0 2px 10px -2px hsl(var(--shadow) / 0.35),
-      inset 0 1px 0 0 hsl(var(--specular));
+      0 0 0 1px hsl(var(--input) / 0.9),
+      0 2px 6px hsl(var(--shadow) / 0.1),
+      0 28px 64px -16px hsl(var(--shadow) / 0.42),
+      inset 0 1px 0 hsl(var(--specular));
   }
 
   /*
     Sticky section heading inside a scrolling message list (Oggi / Ieri /
-    one per sender). Opaque enough to hide rows scrolling underneath it
-    while still reading as part of the panel.
+    one per sender): the pane's own paper, so rows slide under it.
   */
   .list-section-heading {
-    background-color: hsl(var(--card) / 0.94);
-    backdrop-filter: blur(10px);
+    background-color: hsl(var(--card));
   }
 
   /* A bar of the compose dock arriving: the message it stands for shrank into it. */
@@ -308,11 +476,31 @@
     font-family: var(--font-display);
     font-weight: 700;
     font-stretch: 110%;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.012em;
+  }
+
+  /* Small capitals over a group: SEGRETARIO, TUTTI GLI ACCOUNT, ENTRO OGGI. */
+  .eyebrow {
+    font-size: 10.5px;
+    font-weight: 650;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: hsl(var(--faint-foreground));
+  }
+
+  /* The Segretario's voice: set like a written note. */
+  .voice {
+    font-family: var(--font-serif);
+    font-variation-settings: 'opsz' 16;
+    letter-spacing: 0;
   }
 
   .text-balance {
     text-wrap: balance;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
   }
 
   /*

@@ -11,10 +11,13 @@
  */
 
 /** Height of one message row in the dense table. */
-export const MESSAGE_TABLE_ROW_HEIGHT_PX = 26
+export const MESSAGE_TABLE_ROW_HEIGHT_PX = 27
 
-/** Panel header: title, counters and the sort / group / select controls. */
-const MESSAGE_TABLE_PANEL_HEADER_PX = 36
+/**
+ * Panel header: the title band (title, count, sort / group / select) and
+ * the search row beneath it, with its hairline.
+ */
+const MESSAGE_TABLE_PANEL_HEADER_PX = 52 + 40 + 1
 
 /** The sortable column header — Da / A / Oggetto / Ricevuto / Dimensione. */
 const MESSAGE_TABLE_COLUMN_HEADER_PX = 24

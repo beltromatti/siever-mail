@@ -23,14 +23,14 @@ export function Toaster(props: ToasterProps): React.JSX.Element {
         {
           '--normal-bg': 'hsl(var(--popover))',
           '--normal-text': 'hsl(var(--popover-foreground))',
-          '--normal-border': 'hsl(var(--border))',
+          '--normal-border': 'hsl(var(--input))',
           '--success-bg': 'hsl(var(--popover))',
           '--success-text': 'hsl(var(--popover-foreground))',
-          '--success-border': 'hsl(var(--border))',
+          '--success-border': 'hsl(var(--input))',
           '--error-bg': 'hsl(var(--popover))',
           '--error-text': 'hsl(var(--destructive))',
           '--error-border': 'hsl(var(--destructive) / 0.45)',
-          '--border-radius': 'calc(var(--radius) - 2px)',
+          '--border-radius': 'var(--radius)',
           // The spinner of a pending toast.
           '--gray11': 'hsl(var(--muted-foreground))',
           fontFamily: 'var(--font-sans)'
@@ -38,12 +38,13 @@ export function Toaster(props: ToasterProps): React.JSX.Element {
       }
       toastOptions={{
         classNames: {
-          toast: 'shadow-xl text-[12px]! gap-2.5!',
+          toast:
+            'text-[12.5px]! gap-2.5! shadow-[0_2px_6px_hsl(var(--shadow)/0.1),0_20px_48px_-12px_hsl(var(--shadow)/0.4)]!',
           title: 'font-medium',
           description: 'text-muted-foreground! text-[11px]!',
           actionButton:
-            'bg-secondary! text-secondary-foreground! hover:bg-secondary/80! h-6! rounded-md! px-2! text-[11px]! font-medium!',
-          icon: 'text-primary in-data-[type=error]:text-destructive'
+            'button-raised! text-foreground! h-6! rounded-[6px]! px-2! text-[11.5px]! font-semibold!',
+          icon: 'text-foreground in-data-[type=error]:text-destructive'
         }
       }}
       {...props}

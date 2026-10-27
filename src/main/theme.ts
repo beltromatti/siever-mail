@@ -19,7 +19,7 @@ import { DEFAULT_THEME_MODE, type ThemeMode } from '@shared/models'
 const THEME_MODE_FILE_NAME = 'theme-mode'
 
 /** The page's `--background` in each palette, painted before it loads. */
-const WINDOW_BACKGROUND = { dark: '#0b0f1d', light: '#eff1f5' } as const
+const WINDOW_BACKGROUND = { dark: '#121110', light: '#f2f0eb' } as const
 
 function themeModeFilePath(): string {
   return join(app.getPath('userData'), THEME_MODE_FILE_NAME)

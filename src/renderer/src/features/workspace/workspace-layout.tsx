@@ -41,7 +41,7 @@ import {
  * unread counts, and it stops growing early — a folder tree gains nothing
  * from extra width.
  */
-const SIDEBAR_WIDTH = 'clamp(196px, 15%, 256px)'
+const SIDEBAR_WIDTH = 'clamp(204px, 15%, 248px)'
 
 /**
  * Message list beside the reading pane. The list is a scanning column, the
@@ -49,7 +49,7 @@ const SIDEBAR_WIDTH = 'clamp(196px, 15%, 256px)'
  * is what a three-line row needs before sender and subject start colliding;
  * the upper bound is where a wider list stops adding information.
  */
-const APPLE_LIST_WIDTH = 'clamp(288px, 27%, 408px)'
+const APPLE_LIST_WIDTH = 'clamp(300px, 29%, 420px)'
 
 /**
  * Same column in expanded reading, where the list is a navigation strip
@@ -88,11 +88,10 @@ const MESSAGE_TABLE_MIN_DRAGGED_ROWS = 3
 
 export interface WorkspaceLayoutProps {
   mode: 'apple' | 'outlook'
-  /** Brand block plus connection badge. */
-  header: ReactNode
-  accountSwitcher: ReactNode
-  folders: ReactNode
-  toolbar: ReactNode
+  /** The column on the window's edge: the app's places, sync, Settings. */
+  rail: ReactNode
+  /** Account, "Scrivi" and the folders. */
+  sidebar: ReactNode
   messageList: ReactNode
   reader: ReactNode
   /** Error banner, rendered above the reader when present. */
@@ -104,56 +103,43 @@ export interface WorkspaceLayoutProps {
   readerExpanded: boolean
 }
 
+/**
+ * The panes lie edge to edge on the desk, a hairline between each, the way
+ * a mail client a professional lives in is drawn — not as cards floating on
+ * a grey canvas, which spends a gutter of every side on nothing.
+ */
 export function WorkspaceLayout({
   mode,
-  header,
-  accountSwitcher,
-  folders,
-  toolbar,
+  rail,
+  sidebar,
   messageList,
   reader,
   notice,
   readerExpanded
 }: WorkspaceLayoutProps): React.JSX.Element {
-  /**
-   * `minmax(0, …)` on every track is what keeps a long subject or a wide
-   * marketing email from pushing a pane past the window instead of
-   * scrolling inside it — CSS grid tracks default to `min-content`, which
-   * refuses to shrink below their content.
-   */
-  const shell = (sideColumn: ReactNode, main: ReactNode): React.JSX.Element => (
-    <div
-      className="grid h-full min-h-0 gap-2"
-      style={{ gridTemplateColumns: `${SIDEBAR_WIDTH} minmax(0, 1fr)` }}
-    >
-      <aside className="flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden">
-        {sideColumn}
-      </aside>
-      <div className="flex min-h-0 min-w-0 flex-col gap-2">{main}</div>
-    </div>
-  )
-
   // Expanded reading keeps the message list reachable: people read in this
   // mode and move through messages and delete without leaving it. Hiding the
   // list here would throw them out of it at every step.
+  //
+  // `minmax(0, …)` on every track is what keeps a long subject or a wide
+  // marketing email from pushing a pane past the window instead of
+  // scrolling inside it — CSS grid tracks default to `min-content`, which
+  // refuses to shrink below their content.
   if (readerExpanded) {
     return (
       <div
-        className="grid h-full min-h-0 gap-2"
-        style={{ gridTemplateColumns: `${EXPANDED_LIST_WIDTH} minmax(0, 1fr)` }}
+        className="grid h-full min-h-0"
+        style={{ gridTemplateColumns: `auto ${EXPANDED_LIST_WIDTH} minmax(0, 1fr)` }}
       >
-        <aside className="grid h-full min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
-          {header}
-          {/*
-            `min-w-0` is not optional here: a grid item defaults to its
-            min-content width, and a message row's min-content is a long
-            unbroken subject. Without it the list panel grew past its track
-            and slid under the reading pane instead of truncating.
-          */}
-          <div className="min-h-0 min-w-0">{messageList}</div>
-        </aside>
-        <div className="flex min-h-0 min-w-0 flex-col gap-2">
-          {toolbar}
+        {rail}
+        {/*
+          `min-w-0` is not optional here: a grid item defaults to its
+          min-content width, and a message row's min-content is a long
+          unbroken subject. Without it the list panel grew past its track
+          and slid under the reading pane instead of truncating.
+        */}
+        <div className="min-h-0 min-w-0 border-r">{messageList}</div>
+        <div className="flex min-h-0 min-w-0 flex-col">
           {notice}
           <div className="min-h-0 flex-1">{reader}</div>
         </div>
@@ -161,56 +147,48 @@ export function WorkspaceLayout({
     )
   }
 
-  const sideColumn = (
-    <>
-      {header}
-      {accountSwitcher}
-      <div className="min-h-0 flex-1">{folders}</div>
-    </>
-  )
-
-  if (mode === 'outlook') {
-    // The column is declared as `minmax(0, 1fr)` for the same reason as the
-    // shell's: an implicit grid column is `auto`, which grows to the widest
-    // unbreakable line inside it. A message addressed to seventeen people
-    // put a single-line recipient list in the reading header, and that line
-    // stretched the table and the message past the right edge of the window.
-    return shell(
-      sideColumn,
-      <>
-        {toolbar}
+  // The column is declared as `minmax(0, 1fr)` for the same reason: an
+  // implicit grid column is `auto`, which grows to the widest unbreakable
+  // line inside it. A message addressed to seventeen people put a
+  // single-line recipient list in the reading header, and that line
+  // stretched the table and the message past the right edge of the window.
+  return (
+    <div
+      className="grid h-full min-h-0"
+      style={{ gridTemplateColumns: `auto ${SIDEBAR_WIDTH} minmax(0, 1fr)` }}
+    >
+      {rail}
+      <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r">
+        {sidebar}
+      </aside>
+      <div className="flex min-h-0 min-w-0 flex-col">
         {notice}
-        <ResizableSplit
-          key="outlook"
-          orientation="vertical"
-          defaultSize={OUTLOOK_TABLE_HEIGHT}
-          minFirst={messageTablePaneHeight(MESSAGE_TABLE_MIN_DRAGGED_ROWS)}
-          minSecond={READER_MIN_HEIGHT}
-          label={RESIZE_LABEL}
-          className="flex-1"
-          first={messageList}
-          second={reader}
-        />
-      </>
-    )
-  }
-
-  return shell(
-    sideColumn,
-    <>
-      {toolbar}
-      {notice}
-      <ResizableSplit
-        key="apple"
-        orientation="horizontal"
-        defaultSize={APPLE_LIST_WIDTH}
-        minFirst={LIST_MIN_WIDTH}
-        minSecond={READER_MIN_WIDTH}
-        label={RESIZE_LABEL}
-        className="flex-1"
-        first={messageList}
-        second={reader}
-      />
-    </>
+        {mode === 'outlook' ? (
+          <ResizableSplit
+            key="outlook"
+            orientation="vertical"
+            defaultSize={OUTLOOK_TABLE_HEIGHT}
+            minFirst={messageTablePaneHeight(MESSAGE_TABLE_MIN_DRAGGED_ROWS)}
+            minSecond={READER_MIN_HEIGHT}
+            label={RESIZE_LABEL}
+            className="flex-1"
+            first={messageList}
+            second={reader}
+          />
+        ) : (
+          <ResizableSplit
+            key="apple"
+            orientation="horizontal"
+            defaultSize={APPLE_LIST_WIDTH}
+            minFirst={LIST_MIN_WIDTH}
+            minSecond={READER_MIN_WIDTH}
+            label={RESIZE_LABEL}
+            className="flex-1"
+            first={messageList}
+            second={reader}
+          />
+        )}
+      </div>
+    </div>
   )
 }

@@ -1,4 +1,6 @@
 import {
+  type CSSProperties,
+  Fragment,
   type ReactNode,
   useCallback,
   useEffect,
@@ -8,7 +10,17 @@ import {
   useState
 } from 'react'
 
-import { AlertTriangle, LoaderCircle, LogIn, Minus, Plus, Square, X } from 'lucide-react'
+import {
+  AlertTriangle,
+  LoaderCircle,
+  LogIn,
+  Mail,
+  Minus,
+  PenLine,
+  Plus,
+  Square,
+  X
+} from 'lucide-react'
 import { toast } from 'sonner'
 
 import appLogo from '@renderer/assets/logo.png'
@@ -38,16 +50,18 @@ import {
   type MessageHighlightTerms,
   type PrimaryAddressMode
 } from '@renderer/features/mail/message-list-shared'
-import { SyncStatusIndicator, summarizeSyncStatus } from '@renderer/features/workspace/sync-status'
+import { summarizeSyncStatus } from '@renderer/features/workspace/sync-status'
+import { AppRail } from '@renderer/features/workspace/app-rail'
 import { WorkspaceLayout } from '@renderer/features/workspace/workspace-layout'
 import extensionRenderer from '@app/extension/renderer'
 import type { ExtensionSelectionContext, ExtensionHostHooks } from '@app/extension/types'
 import { MessageViewer } from '@renderer/features/mail/message-viewer'
 import type { AddressActions } from '@renderer/features/mail/address-tokens'
-import { MailToolbar } from '@renderer/features/mail/mail-toolbar'
 import { useAttachmentActions } from '@renderer/features/mail/use-attachment-actions'
 import { SettingsDialog } from '@renderer/features/settings/settings-dialog'
+import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { Button } from '@renderer/components/ui/button'
+import type { RailItem } from '@renderer/features/workspace/app-rail'
 import { ConfirmDialog, useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { Dialog, DialogContent, DialogTitle } from '@renderer/components/ui/dialog'
 import { usePromptDialog } from '@renderer/components/ui/prompt-dialog'
@@ -341,6 +355,9 @@ function useMailBootstrap(): {
   return { accounts, capabilities, loading, error, setAccounts, reload }
 }
 
+/** The places of the app, in the rail. */
+const RAIL_ITEMS: ReadonlyArray<RailItem> = [{ id: 'mail', label: 'Posta', icon: Mail }]
+
 function AppFrame({
   children,
   windowControlsState,
@@ -349,7 +366,8 @@ function AppFrame({
   onCloseWindow,
   inert = false,
   dock,
-  dockVisible = false
+  dockVisible = false,
+  framed = false
 }: {
   children: ReactNode
   windowControlsState: WindowControlsState
@@ -362,18 +380,27 @@ function AppFrame({
   dock?: ReactNode
   /** Whether the dock shows: the notices rise above it. */
   dockVisible?: boolean
+  /** The workspace: its panes' headers are the title bar the window is dragged by. */
+  framed?: boolean
 }): React.JSX.Element {
+  // Where the window's own chrome sits, for the panes to keep clear of it:
+  // macOS draws its three lights in the top left corner of the rail and the
+  // sidebar; Windows gets the app's own buttons in the top right.
+  const isMac = windowControlsState.dragTopRegionEnabled && !windowControlsState.enabled
+  const chromeInsets = {
+    '--titlebar-band': isMac ? '52px' : '12px',
+    '--titlebar-lights': isMac ? '84px' : '0px',
+    '--titlebar-controls': windowControlsState.enabled ? '120px' : '0px'
+  } as CSSProperties
+
   return (
     <TooltipProvider delayDuration={140} skipDelayDuration={300}>
-      <div className={cn('h-screen overflow-hidden p-2.5', windowControlsState.enabled && 'pt-9')}>
-        {windowControlsState.dragTopRegionEnabled && (
-          <div className="window-drag-edge" aria-hidden />
-        )}
+      <div className="h-screen overflow-hidden" style={chromeInsets}>
         {windowControlsState.enabled && (
-          <div className="window-no-drag border-border bg-card/90 fixed top-0 right-0 z-[10000] flex overflow-hidden rounded-bl-md border-b border-l backdrop-blur">
+          <div className="window-no-drag fixed top-0 right-0 z-[10000] flex">
             <button
               type="button"
-              className="hover:bg-secondary/70 inline-flex h-8 w-10 items-center justify-center transition-colors"
+              className="text-muted-foreground hover:bg-hover hover:text-foreground inline-flex h-8 w-10 items-center justify-center transition-colors"
               onClick={onMinimizeWindow}
               aria-label="Minimizza finestra"
               title="Minimizza"
@@ -382,7 +409,7 @@ function AppFrame({
             </button>
             <button
               type="button"
-              className="hover:bg-secondary/70 inline-flex h-8 w-10 items-center justify-center transition-colors"
+              className="text-muted-foreground hover:bg-hover hover:text-foreground inline-flex h-8 w-10 items-center justify-center transition-colors"
               onClick={onToggleMaximizeWindow}
               aria-label={
                 windowControlsState.maximized ? 'Riduci finestra' : 'Ingrandisci finestra'
@@ -393,7 +420,7 @@ function AppFrame({
             </button>
             <button
               type="button"
-              className="hover:bg-destructive/80 hover:text-destructive-foreground inline-flex h-8 w-10 items-center justify-center transition-colors"
+              className="text-muted-foreground hover:bg-destructive hover:text-destructive-foreground inline-flex h-8 w-10 items-center justify-center transition-colors"
               onClick={onCloseWindow}
               aria-label="Chiudi finestra"
               title="Chiudi"
@@ -403,6 +430,10 @@ function AppFrame({
           </div>
         )}
         <div className="h-full min-h-0" inert={inert}>
+          {/* Screens without panes are dragged by their top edge. */}
+          {!framed && windowControlsState.dragTopRegionEnabled && (
+            <div className="window-drag-edge" aria-hidden />
+          )}
           {children}
         </div>
       </div>
@@ -3869,6 +3900,13 @@ function App(): React.JSX.Element {
     title: currentViewLabel,
     searchQuery: search.trim(),
     onClearSearch: clearSearch,
+    search,
+    onSearchChange: setSearch,
+    searchInputRef,
+    searchScopeLabel: currentUnifiedRole ? folderRoleLabel(currentUnifiedRole) : currentViewLabel,
+    filter: messageFilter,
+    onFilterChange: setMessageFilter,
+    atWindowTopRight: uiPreferences.layoutMode === 'outlook' && !isMessageExpanded,
     messages,
     sections: messageSections,
     countLabel: listCountLabel,
@@ -3922,6 +3960,7 @@ function App(): React.JSX.Element {
         onToggleMaximizeWindow={handleToggleMaximizeWindow}
         onCloseWindow={handleCloseWindow}
         inert={composerOpen}
+        framed
         dockVisible={!composerOpen && composeSessions.length > 0}
         dock={
           <ComposeDock
@@ -3941,101 +3980,76 @@ function App(): React.JSX.Element {
         <WorkspaceLayout
           mode={uiPreferences.layoutMode}
           readerExpanded={isMessageExpanded}
-          header={
-            <div className="glass-panel flex items-center gap-2 rounded-lg px-2.5 py-2">
-              <img
-                src={appLogo}
-                alt="Logo SIEVER Mail"
-                className="size-8 shrink-0 select-none"
-                draggable={false}
-              />
-              <div className="min-w-0">
-                <h1 className="display-title truncate text-[15px] leading-tight">SIEVER Mail</h1>
-                <p className="text-muted-foreground flex items-center gap-1.5 text-[10px] leading-tight">
-                  <span>{formatAppVersion(__APP_VERSION__)}</span>
-                  {syncSummary && <SyncStatusIndicator summary={syncSummary} />}
-                </p>
-              </div>
-            </div>
-          }
-          accountSwitcher={
-            <AccountSwitcher
-              accounts={accounts}
-              selectedAccountId={selectedAccountId}
-              removingAccountId={removingAccountId}
-              onSelectAccount={(accountId) => {
-                cancelInFlightWork()
-                setSelectedAccountId(accountId)
-                setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
-                resetMailboxView()
-              }}
-              onRemoveAccount={(accountId) => void removeAccount(accountId)}
-              onAddAccount={() => setAddAccountDialogOpen(true)}
-            />
-          }
-          folders={
-            loadingFolders ? (
-              <div className="glass-panel text-muted-foreground flex h-full items-center gap-2 rounded-lg p-3 text-xs">
-                <LoaderCircle className="size-3.5 animate-spin" /> Caricamento cartelle…
-              </div>
-            ) : (
-              <FolderSidebar
-                accountLabel={selectedAccountLabel}
-                folders={folders}
-                unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
-                selectedFolderPath={selectedFolderPath}
-                messageDrop={messageDrop}
-                onSelectFolder={selectFolder}
-                onFolderContextMenu={(target) => void openFolderContextMenu(target)}
-              />
-            )
-          }
-          toolbar={
-            <MailToolbar
-              moveFolders={moveFolders}
-              moveExcludedPath={moveExcludedPath}
-              recentMovePaths={recentMovePaths}
-              onMoveAcrossAccounts={
-                selectionAccountIds.length > 1 ? () => void explainMixedAccountMove() : undefined
-              }
-              search={search}
-              searchInputRef={searchInputRef}
-              searchScopeLabel={
-                currentUnifiedRole ? folderRoleLabel(currentUnifiedRole) : currentViewLabel
-              }
-              onSearchChange={setSearch}
-              filter={messageFilter}
-              onFilterChange={setMessageFilter}
-              selectedCount={selection.selectedRefs.length}
-              toggleSeenLabel={toggleSeenLabel}
-              selectionFlagged={selectionFlagged}
-              extensionToolbarActions={extensionRenderer.toolbarActions}
-              extensionSelection={extensionSelection}
-              extensionHostHooks={extensionHostHooks}
-              onActivateExtensionPrimaryAction={() => setExtensionPrimaryDialogOpen(true)}
-              onCompose={() => {
-                if (selectedAccountId) {
-                  openComposer({ kind: 'new', accountId: selectedAccountId })
-                }
-              }}
+          rail={
+            <AppRail
+              items={RAIL_ITEMS}
+              activeItemId="mail"
+              onSelectItem={() => undefined}
+              syncSummary={syncSummary}
               onOpenSettings={() => setSettingsOpen(true)}
-              onArchiveClassic={() => void archiveSelection()}
-              moveMenuOpen={moveMenuOpen}
-              onMoveMenuOpenChange={changeMoveMenuOpen}
-              onMoveToFolder={(destinationFolderPath) =>
-                void moveSelectionTo(destinationFolderPath)
-              }
-              onCreateFolderAndMove={(name) => void createFolderAndMoveSelection(name)}
-              onDelete={() => void deleteMessages(selection.selectedRefs)}
-              onToggleSeen={() => void setSelectionSeen()}
-              onToggleFlagged={() => void setSelectionFlagged()}
-              onClearSelection={clearSelection}
             />
+          }
+          sidebar={
+            <>
+              <div className="window-drag-region flex h-[52px] shrink-0 items-center gap-2 pr-3 pl-[max(12px,calc(var(--titlebar-lights)-52px))]">
+                {!windowControlsState.dragTopRegionEnabled || windowControlsState.enabled ? (
+                  <span className="display-title text-[13.5px]">SIEVER Mail</span>
+                ) : null}
+                <div className="flex-1" />
+                <ActionTooltip label="Nuovo messaggio" commandId="compose">
+                  <Button
+                    size="sm"
+                    className="window-no-drag"
+                    disabled={!selectedAccountId}
+                    onClick={() => {
+                      if (selectedAccountId) {
+                        openComposer({ kind: 'new', accountId: selectedAccountId })
+                      }
+                    }}
+                  >
+                    <PenLine className="size-3.5" />
+                    Scrivi
+                  </Button>
+                </ActionTooltip>
+              </div>
+              <div className="shrink-0 px-2 pb-2">
+                <AccountSwitcher
+                  accounts={accounts}
+                  selectedAccountId={selectedAccountId}
+                  removingAccountId={removingAccountId}
+                  onSelectAccount={(accountId) => {
+                    cancelInFlightWork()
+                    setSelectedAccountId(accountId)
+                    setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
+                    resetMailboxView()
+                  }}
+                  onRemoveAccount={(accountId) => void removeAccount(accountId)}
+                  onAddAccount={() => setAddAccountDialogOpen(true)}
+                />
+              </div>
+              <div className="min-h-0 flex-1">
+                {loadingFolders ? (
+                  <div className="text-faint-foreground flex items-center gap-2 px-4 py-3 text-[12px]">
+                    <LoaderCircle className="size-3.5 animate-spin" /> Caricamento cartelle…
+                  </div>
+                ) : (
+                  <FolderSidebar
+                    accountLabel={selectedAccountLabel}
+                    folders={folders}
+                    unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
+                    selectedFolderPath={selectedFolderPath}
+                    messageDrop={messageDrop}
+                    onSelectFolder={selectFolder}
+                    onFolderContextMenu={(target) => void openFolderContextMenu(target)}
+                  />
+                )}
+              </div>
+            </>
           }
           messageList={messageListSlot}
           notice={
             viewError ? (
-              <div className="border-destructive/35 bg-destructive/10 text-destructive-soft-foreground flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs">
+              <div className="bg-destructive/10 text-destructive-soft-foreground flex shrink-0 items-center gap-2 border-b px-4 py-2 text-[12px]">
                 <AlertTriangle className="size-3.5 shrink-0" />
                 <span className="min-w-0 flex-1">{viewError}</span>
                 <button
@@ -4051,10 +4065,6 @@ function App(): React.JSX.Element {
           }
           reader={
             <MessageViewer
-              moveFolders={moveFolders}
-              moveExcludedPath={moveExcludedPath}
-              recentMovePaths={recentMovePaths}
-              onMovePickerOpen={refreshRecentMovePaths}
               message={messageForViewer}
               bodyStatus={readerBodyStatus}
               onRetryBody={() => {
@@ -4064,6 +4074,7 @@ function App(): React.JSX.Element {
               }}
               isExpanded={isMessageExpanded}
               selectedCount={selection.selectedRefs.length}
+              onClearSelection={clearSelection}
               wholeViewSelection={
                 hasMoreMessages &&
                 selection.selectedRefs.length > 1 &&
@@ -4075,6 +4086,37 @@ function App(): React.JSX.Element {
                     }
                   : undefined
               }
+              atWindowTopRight={isMessageExpanded || uiPreferences.layoutMode === 'apple'}
+              extensionActions={
+                selection.selectedRefs.length > 0 &&
+                extensionRenderer.toolbarActions.map((action) => (
+                  <Fragment key={action.id}>
+                    {action.render({
+                      selection: extensionSelection,
+                      openPrimaryActionDialog: () => setExtensionPrimaryDialogOpen(true),
+                      hostHooks: extensionHostHooks
+                    })}
+                  </Fragment>
+                ))
+              }
+              selectionActions={{
+                moveFolders,
+                moveExcludedPath,
+                recentMovePaths,
+                onMoveAcrossAccounts:
+                  selectionAccountIds.length > 1 ? () => void explainMixedAccountMove() : undefined,
+                moveMenuOpen,
+                onMoveMenuOpenChange: changeMoveMenuOpen,
+                toggleSeenLabel,
+                selectionFlagged,
+                onArchive: () => void archiveSelection(),
+                onMoveToFolder: (destinationFolderPath) =>
+                  void moveSelectionTo(destinationFolderPath),
+                onCreateFolderAndMove: (name) => void createFolderAndMoveSelection(name),
+                onToggleSeen: () => void setSelectionSeen(),
+                onToggleFlagged: () => void setSelectionFlagged(),
+                onDelete: () => void deleteMessages(selection.selectedRefs)
+              }}
               onReply={() => void openReplyComposer('sender')}
               onReplyAll={() => void openReplyComposer('all')}
               onForward={() => void openForwardComposer()}
@@ -4083,29 +4125,12 @@ function App(): React.JSX.Element {
                   ? () => void continueDraft(readingRef)
                   : undefined
               }
-              onArchive={() => void archiveSelection()}
-              onDelete={() => void deleteMessages(selection.selectedRefs)}
-              onMoveToFolder={(destinationFolderPath) =>
-                void moveSelectionTo(destinationFolderPath)
-              }
-              onCreateFolderAndMove={(name) => void createFolderAndMoveSelection(name)}
               onToggleExpanded={() => {
                 if (!readingRef) {
                   return
                 }
 
                 setIsMessageExpanded((current) => !current)
-              }}
-              onToggleSeen={(seen) => {
-                if (readingRef) {
-                  keepShownReadState([readingRef])
-                  void setMessagesKeyword([readingRef], '\\Seen', seen)
-                }
-              }}
-              onToggleFlagged={(flagged) => {
-                if (readingRef) {
-                  void setMessagesKeyword([readingRef], '\\Flagged', flagged)
-                }
               }}
               attachmentActions={attachmentActions}
               zoom={uiPreferences.readerZoom}

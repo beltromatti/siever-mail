@@ -4,9 +4,12 @@ import { createRoot } from 'react-dom/client'
 import extensionRenderer from '@app/extension/renderer'
 
 import App from './App'
-// The app's own face, bundled: Mona Sans, every weight and width.
+// The app's own faces, bundled: Mona Sans for the interface, every weight
+// and width; Newsreader for what the Segretario writes.
 import '@fontsource-variable/mona-sans/standard.css'
 import '@fontsource-variable/mona-sans/standard-italic.css'
+import '@fontsource-variable/newsreader/standard.css'
+import '@fontsource-variable/newsreader/standard-italic.css'
 import './styles/globals.css'
 
 // Fonts an extension bundles are available to the whole app — the editor's

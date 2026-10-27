@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, LoaderCircle, LogOut, Mail, Plus } from 'lucide-react'
+import { ChevronDown, LoaderCircle, LogOut, Plus } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -23,6 +23,23 @@ interface AccountSwitcherProps {
   onAddAccount?: () => void
 }
 
+/**
+ * An account's mark: the first letter of its name, in ink on paper. One
+ * letter in a square reads as a mailbox; two in a circle read as a person.
+ */
+function AccountMonogram({ account }: { account: MailAccount | null }): React.JSX.Element {
+  const letter = (account?.displayName || account?.email || '?').trim().charAt(0).toUpperCase()
+
+  return (
+    <span
+      aria-hidden
+      className="bg-foreground text-background grid size-[24px] shrink-0 place-items-center rounded-[6px] text-[12px] font-bold"
+    >
+      {letter}
+    </span>
+  )
+}
+
 export function AccountSwitcher({
   accounts,
   selectedAccountId,
@@ -39,24 +56,22 @@ export function AccountSwitcher({
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          className="border-border/60 bg-card/50 hover:bg-card/80 h-9 w-full justify-between gap-2 rounded-md border px-2.5 text-left"
+          className="hover:bg-hover h-10 w-full justify-between gap-2 rounded-md px-2 text-left"
         >
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="bg-primary/15 text-primary flex size-5 shrink-0 items-center justify-center rounded">
-              <Mail className="size-3" />
-            </span>
+          <div className="flex min-w-0 items-center gap-2.5">
+            <AccountMonogram account={selectedAccount} />
             <span className="min-w-0">
-              <span className="text-foreground block truncate text-[12px] font-semibold">
+              <span className="text-foreground block truncate text-[12.5px] font-semibold">
                 {selectedAccount ? selectedAccount.displayName : 'Nessun account'}
               </span>
               {selectedAccount && (
-                <span className="text-muted-foreground block truncate text-[10px] leading-tight font-normal">
+                <span className="text-faint-foreground block truncate text-[11px] leading-tight font-normal">
                   {selectedAccount.email}
                 </span>
               )}
             </span>
           </div>
-          <ChevronDown className="text-muted-foreground size-3.5 shrink-0" />
+          <ChevronDown className="text-faint-foreground size-3.5 shrink-0" />
         </Button>
       </DropdownMenuTrigger>
 
@@ -68,24 +83,22 @@ export function AccountSwitcher({
           <DropdownMenuItem
             key={account.id}
             className={cn(
-              'cursor-pointer items-start gap-2 rounded-md px-2 py-1.5',
-              selectedAccountId === account.id && 'bg-secondary/65'
+              'cursor-pointer items-center gap-2.5 px-2 py-1.5',
+              selectedAccountId === account.id && 'bg-selected'
             )}
             onClick={() => onSelectAccount(account.id)}
           >
-            <div className="bg-primary/15 text-primary mt-0.5 rounded p-1">
-              <Mail className="size-3.5" />
-            </div>
+            <AccountMonogram account={account} />
             <div className="min-w-0">
-              <p className="truncate text-[12px] font-semibold">{account.displayName}</p>
-              <p className="text-muted-foreground truncate text-[10.5px]">{account.email}</p>
+              <p className="truncate text-[12.5px] font-semibold">{account.displayName}</p>
+              <p className="text-faint-foreground truncate text-[11px]">{account.email}</p>
             </div>
             {onRemoveAccount && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     type="button"
-                    className="text-muted-foreground hover:text-destructive focus-visible:ring-ring ml-auto inline-flex size-6 shrink-0 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                    className="text-faint-foreground hover:text-destructive focus-visible:ring-ring ml-auto inline-flex size-6 shrink-0 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:outline-none"
                     aria-label={`Disconnetti account ${account.email}`}
                     disabled={Boolean(removingAccountId)}
                     onClick={(event) => {
@@ -114,7 +127,7 @@ export function AccountSwitcher({
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem className="cursor-pointer gap-2 px-3 py-2" onClick={onAddAccount}>
-              <Plus className="text-primary size-4" />
+              <Plus className="size-4" />
               Aggiungi account
             </DropdownMenuItem>
           </>

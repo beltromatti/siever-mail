@@ -95,7 +95,7 @@ export function HighlightedText({
     }
 
     segments.push(
-      <mark key={`hit-${index}`} className="bg-primary/25 text-foreground rounded-[2px] px-px">
+      <mark key={`hit-${index}`} className="bg-warning/25 text-foreground rounded-[2px] px-px">
         {text.slice(range.start, range.end)}
       </mark>
     )
@@ -116,8 +116,8 @@ export function HighlightedText({
  */
 export function UnreadDot({ unread }: { unread: boolean }): React.JSX.Element {
   return (
-    <span className="flex w-2.5 shrink-0 justify-center" aria-hidden={!unread}>
-      {unread && <span className="bg-primary size-[7px] rounded-full" />}
+    <span className="flex w-3.5 shrink-0 justify-center pt-[6px]" aria-hidden={!unread}>
+      {unread && <span className="bg-seal-text size-[6px] rounded-full" />}
       {unread && <span className="sr-only">Non letta</span>}
     </span>
   )
@@ -159,7 +159,7 @@ export function FlagToggle({
             'focus-visible:ring-ring/70 outline-none focus-visible:opacity-100 focus-visible:ring-2',
             flagged
               ? 'text-flagged opacity-100'
-              : 'text-muted-foreground/70 hover:text-foreground opacity-0 group-hover:opacity-100',
+              : 'text-faint-foreground hover:text-foreground opacity-0 group-hover:opacity-100',
             className
           )}
         >
@@ -185,7 +185,7 @@ export function AccountTag({
   return (
     <span
       className={cn(
-        'bg-secondary/80 text-muted-foreground inline-block max-w-full truncate rounded-sm px-1 align-middle text-[10px] leading-4',
+        'bg-hover text-muted-foreground inline-block max-w-full truncate rounded-[4px] px-1 align-middle text-[10.5px] leading-4 font-medium shadow-[inset_0_0_0_1px_hsl(var(--border))]',
         className
       )}
       title={label}
@@ -198,7 +198,7 @@ export function AccountTag({
 export function AttachmentMark({ present }: { present: boolean }): React.JSX.Element {
   return (
     <span className="flex w-4 shrink-0 justify-center" aria-hidden={!present}>
-      {present && <Paperclip className="text-muted-foreground size-3.5" />}
+      {present && <Paperclip className="text-faint-foreground size-3.5" />}
       {present && <span className="sr-only">Contiene allegati</span>}
     </span>
   )
@@ -226,7 +226,10 @@ export function MessageSectionHeading({
 }): React.JSX.Element {
   return (
     <div
-      className={cn('list-section-heading flex items-center gap-1.5 px-1', dense ? 'h-6' : 'h-7')}
+      className={cn(
+        'list-section-heading flex items-center gap-1.5 border-b px-1.5',
+        dense ? 'h-6' : 'h-[30px]'
+      )}
     >
       <Tooltip>
         <TooltipTrigger asChild>
@@ -235,7 +238,7 @@ export function MessageSectionHeading({
             onClick={onToggleCollapsed}
             aria-expanded={!collapsed}
             aria-label={collapsed ? `Espandi ${section.label}` : `Comprimi ${section.label}`}
-            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/70 inline-flex size-4 shrink-0 items-center justify-center rounded-sm outline-none focus-visible:ring-2"
+            className="text-faint-foreground hover:text-foreground focus-visible:ring-ring/60 inline-flex size-4 shrink-0 items-center justify-center rounded-sm outline-none focus-visible:ring-2"
           >
             {collapsed ? (
               <ChevronRight className="size-3.5" />
@@ -257,17 +260,17 @@ export function MessageSectionHeading({
       >
         <span
           className={cn(
-            'truncate text-[11px] font-semibold',
+            'truncate text-[11px] font-[650]',
             // Date buckets ("Oggi", "Questa settimana") suit small caps.
             // Names do not: "MARIO ROSSI" shouts, and the sender's own
             // capitalisation carries information.
             section.kind === 'date' ? 'tracking-[0.06em] uppercase' : 'tracking-normal',
-            allSelected ? 'text-primary' : 'text-foreground/75'
+            allSelected ? 'text-foreground' : 'text-muted-foreground'
           )}
         >
           {section.label}
         </span>
-        <span className="text-muted-foreground/70 shrink-0 text-[10px]">
+        <span className="text-faint-foreground tabular shrink-0 text-[10.5px]">
           {section.messages.length}
           {section.unreadCount > 0
             ? ` · ${formatCount(section.unreadCount, 'non letto', 'non letti')}`
@@ -304,7 +307,7 @@ export function MessageListTitle({
   return (
     <div className="flex min-w-0 items-center gap-1">
       <h2 className={cn('min-w-0 truncate font-semibold', className)} title={searchQuery}>
-        Risultati per <span className="text-primary">«{searchQuery}»</span>
+        Risultati per <span className="text-muted-foreground">«{searchQuery}»</span>
       </h2>
       <Tooltip>
         <TooltipTrigger asChild>
@@ -312,7 +315,7 @@ export function MessageListTitle({
             type="button"
             onClick={onClearSearch}
             aria-label="Esci dalla ricerca"
-            className="text-muted-foreground hover:bg-secondary/60 hover:text-foreground focus-visible:ring-ring/70 inline-flex size-5 shrink-0 items-center justify-center rounded-sm transition-colors outline-none focus-visible:ring-2"
+            className="window-no-drag text-faint-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring/60 inline-flex size-5 shrink-0 items-center justify-center rounded-[4px] transition-colors outline-none focus-visible:ring-2"
           >
             <X className="size-3.5" />
           </button>
@@ -397,7 +400,7 @@ export function MessageListControls({
             <Button
               variant="ghost"
               size="icon"
-              className="text-muted-foreground hover:text-foreground size-7"
+              className="text-faint-foreground hover:text-foreground size-7"
               onClick={onClearSelection}
               aria-label="Annulla selezione"
             >
@@ -414,7 +417,7 @@ export function MessageListControls({
             <Button
               variant="ghost"
               size="icon"
-              className="text-muted-foreground hover:text-foreground size-7"
+              className="text-faint-foreground hover:text-foreground size-7"
               onClick={onSelectAll}
               aria-label="Seleziona tutti i messaggi"
             >
@@ -434,7 +437,7 @@ export function MessageListControls({
                 size="icon"
                 className={cn(
                   'size-7',
-                  grouping === 'none' ? 'text-muted-foreground' : 'text-primary'
+                  grouping === 'none' ? 'text-faint-foreground' : 'text-foreground'
                 )}
                 aria-label={`Raggruppamento: ${activeGroupingOption.label}`}
               >
@@ -469,7 +472,7 @@ export function MessageListControls({
               <Button
                 variant="ghost"
                 size="icon"
-                className="text-muted-foreground hover:text-foreground size-7"
+                className="text-faint-foreground hover:text-foreground size-7"
                 aria-label={`Ordinamento: ${activeSortOption.label} · ${activeDirectionLabel}`}
               >
                 <ArrowUpDown className="size-3.5" />

@@ -1,23 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import type { ReactNode } from 'react'
 import {
-  Archive,
-  CheckCheck,
   ChevronDown,
   Download,
-  Flag,
-  FolderInput,
   Forward,
   LoaderCircle,
   Maximize2,
-  MailOpen,
-  MailPlus,
   Minimize2,
   Paperclip,
   PenLine,
   Reply,
   ReplyAll,
-  Trash2
+  X
 } from 'lucide-react'
 
 import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
@@ -25,32 +20,21 @@ import { Button } from '@renderer/components/ui/button'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { AddressTokens, summarizeAddresses, type AddressActions } from './address-tokens'
 import { AttachmentChip } from './attachment-chip'
-import { FolderPickerPopover } from './folder-picker'
+import { SelectionActions, type SelectionActionsProps } from './selection-actions'
 import type { AttachmentActions } from './use-attachment-actions'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { Separator } from '@renderer/components/ui/separator'
-import { useCommandKeys } from '@renderer/lib/command-shortcuts'
 import { buildMessageFrameDocument } from '@renderer/lib/mail-html'
 import { READER_ZOOM_RESET, wheelReaderZoom } from '@renderer/lib/reader-zoom'
 import { cn, formatAddress, formatDateLabel, formatDateTimeLabel } from '@renderer/lib/utils'
 import {
   MAX_MESSAGES_PER_ACTION,
   type MailAttachment,
-  type MailFolder,
   type MailMessageDetail
 } from '@shared/models'
 
 interface MessageViewerProps {
-  /** Where "Sposta" can put the message: the folders of its account. */
-  moveFolders: MailFolder[]
-  /** The folder the message is in, shown but not offered. */
-  moveExcludedPath: string | null
-  /** The account's recent destinations, the latest first. */
-  recentMovePaths: string[]
-  /** "Sposta" is opening: the recent destinations are read again. */
-  onMovePickerOpen: () => void
-  onCreateFolderAndMove: (name: string) => void
   message: MailMessageDetail | null
   /**
    * Where the body is. While it downloads, the pane already shows what the
@@ -60,12 +44,12 @@ interface MessageViewerProps {
   onRetryBody: () => void
   isExpanded: boolean
   /**
-   * How many messages are selected. Above one the pane shows a summary
-   * instead of a body: reading one message while acting on twelve is a
-   * mismatch every mail client avoids, and it is the state the toolbar's
-   * bulk actions belong to.
+   * How many messages are selected. Above one the pane is the selection's:
+   * a summary instead of a body, and the actions in words — reading one
+   * message while acting on twelve is a mismatch every mail client avoids.
    */
   selectedCount: number
+  onClearSelection: () => void
   /**
    * When every row loaded is selected but the view holds more: how many it
    * holds, and the way to select those too, as Gmail offers it.
@@ -75,17 +59,21 @@ interface MessageViewerProps {
     selecting: boolean
     onSelect: () => void
   }
+  /** What the selection can be given to: archive, move, mark, flag, delete. */
+  selectionActions: SelectionActionsProps
+  /** The active extension's buttons for the selection (ARCHIVIA SIEVER). */
+  extensionActions: ReactNode
+  /**
+   * The pane is in the window's top right corner: on Windows its header
+   * keeps clear of the window's buttons.
+   */
+  atWindowTopRight: boolean
   onReply: () => void
   onReplyAll: () => void
   onForward: () => void
   /** The message is a draft: it is written on, in place of being answered. */
   onContinueDraft?: () => void
-  onArchive: () => void
-  onDelete: () => void
-  onMoveToFolder: (folderPath: string) => void
   onToggleExpanded: () => void
-  onToggleSeen: (seen: boolean) => void
-  onToggleFlagged: (flagged: boolean) => void
   attachmentActions: AttachmentActions | null
   /** What a click on a person in the header can do. */
   addressActions?: AddressActions
@@ -479,34 +467,28 @@ function EmailHtmlFrame({
       title={title}
       sandbox={MESSAGE_FRAME_SANDBOX}
       srcDoc={frameDocument}
-      className="border-border/70 block w-full rounded-lg border bg-white"
+      className="block w-full rounded-md bg-white shadow-[0_0_0_1px_hsl(var(--border)),0_1px_3px_hsl(var(--shadow)/0.06)]"
       style={{ height: `${frameHeight}px` }}
     />
   )
 }
 
 export function MessageViewer({
-  moveFolders,
-  moveExcludedPath,
-  recentMovePaths,
-  onMovePickerOpen,
-  onCreateFolderAndMove,
   message,
   bodyStatus,
   onRetryBody,
   isExpanded,
   selectedCount,
+  onClearSelection,
   wholeViewSelection,
+  selectionActions,
+  extensionActions,
+  atWindowTopRight,
   onReply,
   onReplyAll,
   onForward,
   onContinueDraft,
-  onArchive,
-  onDelete,
-  onMoveToFolder,
   onToggleExpanded,
-  onToggleSeen,
-  onToggleFlagged,
   attachmentActions,
   addressActions,
   zoom,
@@ -551,15 +533,10 @@ export function MessageViewer({
     },
     [handleZoomWheel]
   )
-  const [movePickerOpen, setMovePickerOpen] = useState(false)
   // Attachments (and "all") with a download under way: their chip spins and
   // a second click is ignored until it lands.
   const [busyAttachmentIds, setBusyAttachmentIds] = useState<string[]>([])
   const hasHtmlBody = Boolean(message?.html?.trim())
-  const archiveKeys = useCommandKeys('archive')
-  const moveKeys = useCommandKeys('move')
-  const readKeys = useCommandKeys('toggle-read')
-  const flagKeys = useCommandKeys('toggle-flag')
 
   useEffect(() => {
     setBusyAttachmentIds([])
@@ -623,243 +600,176 @@ export function MessageViewer({
     }
   }
 
+  /*
+    The pane's first band is the window's title bar: dragged like one, and
+    on Windows clear of the window's own buttons. It holds what can be done
+    to what the pane shows — one message, or the selection.
+  */
+  const headerBand = (content: ReactNode): React.JSX.Element => (
+    <div
+      className={cn(
+        'window-drag-region flex h-[52px] shrink-0 items-center gap-1 border-b pl-3',
+        atWindowTopRight ? 'pr-[calc(var(--titlebar-controls)+8px)]' : 'pr-2'
+      )}
+    >
+      {content}
+    </div>
+  )
+
   if (selectedCount > 1) {
     return (
-      <div className="glass-panel flex h-full min-h-0 flex-col items-center justify-center rounded-lg p-8 text-center">
-        <div className="bg-primary/12 text-primary rounded-full p-3">
-          <CheckCheck className="size-6" />
-        </div>
-        <p className="mt-4 text-base font-semibold">
-          {selectedCount.toLocaleString('it-IT')} messaggi selezionati
-        </p>
-        <p className="text-muted-foreground mt-1.5 max-w-sm text-xs">
-          Usa la barra in alto per archiviare, spostare, contrassegnare o eliminare l&apos;intera
-          selezione in un colpo solo.
-        </p>
-        {wholeViewSelection && (
-          <div className="border-border bg-card/60 mt-5 flex max-w-sm flex-col items-center gap-2 rounded-md border px-4 py-3">
-            <p className="text-muted-foreground text-xs">
-              Sono selezionati i messaggi caricati: qui ce ne sono{' '}
-              {wholeViewSelection.total.toLocaleString('it-IT')}.
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              disabled={wholeViewSelection.selecting}
-              onClick={wholeViewSelection.onSelect}
-            >
-              {wholeViewSelection.selecting && <LoaderCircle className="size-3.5 animate-spin" />}
-              {wholeViewSelection.total > MAX_MESSAGES_PER_ACTION
-                ? `Seleziona i primi ${MAX_MESSAGES_PER_ACTION.toLocaleString('it-IT')}`
-                : `Seleziona tutti i ${wholeViewSelection.total.toLocaleString('it-IT')}`}
-            </Button>
-          </div>
+      <div className="paper flex h-full min-h-0 flex-col">
+        {headerBand(
+          <>
+            <div className="window-no-drag flex items-center gap-1">
+              <IconButton
+                label="Annulla selezione"
+                className="text-faint-foreground size-[28px]"
+                onClick={onClearSelection}
+              >
+                <X className="size-[15px]" />
+              </IconButton>
+              <span className="tabular mr-2 text-[12.5px] font-semibold">
+                {selectedCount.toLocaleString('it-IT')} selezionati
+              </span>
+              {extensionActions}
+            </div>
+            <div className="flex-1" />
+            <div className="window-no-drag">
+              <SelectionActions labelled {...selectionActions} />
+            </div>
+          </>
         )}
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center p-8 text-center">
+          <p className="display-title text-[18px]">
+            {selectedCount.toLocaleString('it-IT')} messaggi selezionati
+          </p>
+          <p className="text-muted-foreground mt-1.5 max-w-sm text-[12.5px] leading-[1.5]">
+            I comandi qui sopra archiviano, spostano, contrassegnano o eliminano tutta la selezione
+            in un colpo solo.
+          </p>
+          {wholeViewSelection && (
+            <div className="mt-5 flex max-w-sm flex-col items-center gap-2.5">
+              <p className="text-faint-foreground text-[12px]">
+                Sono selezionati i messaggi caricati: qui ce ne sono{' '}
+                {wholeViewSelection.total.toLocaleString('it-IT')}.
+              </p>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={wholeViewSelection.selecting}
+                onClick={wholeViewSelection.onSelect}
+              >
+                {wholeViewSelection.selecting && <LoaderCircle className="size-3.5 animate-spin" />}
+                {wholeViewSelection.total > MAX_MESSAGES_PER_ACTION
+                  ? `Seleziona i primi ${MAX_MESSAGES_PER_ACTION.toLocaleString('it-IT')}`
+                  : `Seleziona tutti i ${wholeViewSelection.total.toLocaleString('it-IT')}`}
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
     )
   }
 
   if (!message) {
-    if (bodyStatus === 'loading') {
-      return (
-        <div className="glass-panel flex h-full min-h-0 flex-col items-center justify-center rounded-lg p-8 text-center">
-          <LoaderCircle className="text-primary size-5 animate-spin" />
-          <p className="text-muted-foreground mt-3 text-xs">Caricamento email…</p>
-        </div>
-      )
-    }
-
     return (
-      <div className="glass-panel flex h-full min-h-0 flex-col items-center justify-center rounded-lg p-8 text-center">
-        <div className="bg-secondary/65 text-muted-foreground rounded-full p-3">
-          <MailPlus className="size-6" />
+      <div className="paper flex h-full min-h-0 flex-col">
+        {headerBand(null)}
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center p-8 text-center">
+          {bodyStatus === 'loading' ? (
+            <LoaderCircle className="text-faint-foreground size-5 animate-spin" />
+          ) : (
+            <>
+              <p className="text-muted-foreground text-[13px] font-medium">
+                Nessun messaggio selezionato
+              </p>
+              <p className="text-faint-foreground mt-1 max-w-sm text-[12px]">
+                Scegli un messaggio dall&apos;elenco per leggerlo.
+              </p>
+            </>
+          )}
         </div>
-        <p className="mt-4 text-sm font-semibold">Nessun messaggio selezionato</p>
-        <p className="text-muted-foreground mt-1.5 max-w-sm text-xs">
-          Seleziona un&apos;email dalla lista per leggerne il contenuto e gli allegati.
-        </p>
       </div>
     )
   }
 
   return (
-    <div
-      ref={attachPaneZoomWheel}
-      className="glass-panel flex h-full min-h-0 flex-col overflow-hidden rounded-lg"
-    >
-      {/*
-        The header is deliberately tight. In the outlook layout the reading
-        pane is only about half the workspace, and the previous header — a
-        subject line, a row of actions and a four-line Da/A/Cc/Data grid —
-        ate 150px of it before a single line of the message showed. The
-        envelope details now collapse to one line with a "Dettagli"
-        disclosure, the way every mail client handles them, and expand in
-        place when the user actually wants them.
-      */}
-      <div className="border-border/60 flex shrink-0 flex-col gap-1.5 border-b px-3 py-2">
-        {/*
-          Subject and actions share one row, and which actions carry a label
-          follows one rule: the toolbar labels what acts on the selection
-          (archivia, sposta, segna, contrassegna, elimina), so repeating
-          those words here would stack two identical rows — most visibly in
-          the expanded view, where the two sit directly on top of each
-          other. This row therefore labels only what the toolbar has no
-          equivalent for — Rispondi, Rispondi a tutti and Inoltra, the three
-          Outlook puts first — and keeps the rest as icons with tooltips. The
-          labelled toolbar right above is what makes those icons discoverable.
-
-          The subject is the flexible half and truncates. Only when the pane
-          is dragged narrow enough to leave it under 12rem do the actions wrap
-          below it — a subject cut to its first letters says nothing.
-        */}
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-          <h2 className="min-w-0 flex-[1_1_12rem] truncate text-[14px] leading-6 font-semibold">
-            {message.subject}
-          </h2>
-          <div className="flex shrink-0 flex-wrap items-center gap-1">
+    <div ref={attachPaneZoomWheel} className="paper flex h-full min-h-0 flex-col overflow-hidden">
+      {headerBand(
+        <>
+          <div className="window-no-drag flex min-w-0 items-center gap-1">
+            {extensionActions}
             {onContinueDraft ? (
               <ActionTooltip label="Riprendi la bozza nell’editor">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="h-6.5 gap-1.5 px-2 text-[11.5px]"
-                  onClick={onContinueDraft}
-                >
+                <Button variant="secondary" size="sm" onClick={onContinueDraft}>
                   <PenLine className="size-3.5" /> Continua a scrivere
                 </Button>
               </ActionTooltip>
             ) : (
               <>
                 <ActionTooltip label="Rispondi al mittente" commandId="reply">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="h-6.5 gap-1.5 px-2 text-[11.5px]"
-                    onClick={onReply}
-                  >
+                  <Button variant="secondary" size="sm" onClick={onReply}>
                     <Reply className="size-3.5" /> Rispondi
                   </Button>
                 </ActionTooltip>
                 <ActionTooltip label="Rispondi a tutti i destinatari" commandId="reply-all">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6.5 gap-1.5 px-2 text-[11.5px]"
-                    onClick={onReplyAll}
-                  >
+                  <Button variant="ghost" size="sm" onClick={onReplyAll}>
                     <ReplyAll className="size-3.5" /> Rispondi a tutti
                   </Button>
                 </ActionTooltip>
                 <ActionTooltip label="Inoltra con gli allegati" commandId="forward">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6.5 gap-1.5 px-2 text-[11.5px]"
-                    onClick={onForward}
-                  >
+                  <Button variant="ghost" size="sm" onClick={onForward}>
                     <Forward className="size-3.5" /> Inoltra
                   </Button>
                 </ActionTooltip>
               </>
             )}
-
-            {/* Same divider the toolbar uses, so the labelled pair reads as
-                one group and the icons as another. */}
-            <div className="bg-border/60 mx-0.5 h-5 w-px shrink-0" />
-
-            <IconButton
-              label="Archivia"
-              shortcutKeys={archiveKeys}
-              className="size-6.5"
-              onClick={onArchive}
-            >
-              <Archive className="size-3.5" />
-            </IconButton>
-
-            <FolderPickerPopover
-              open={movePickerOpen}
-              onOpenChange={(open) => {
-                if (open) {
-                  onMovePickerOpen()
-                }
-
-                setMovePickerOpen(open)
-              }}
-              align="end"
-              folders={moveFolders}
-              recentPaths={recentMovePaths}
-              excludedPath={moveExcludedPath}
-              onPick={(folderPath) => {
-                setMovePickerOpen(false)
-                onMoveToFolder(folderPath)
-              }}
-              onCreate={(name) => {
-                setMovePickerOpen(false)
-                onCreateFolderAndMove(name)
-              }}
-              trigger={
-                <IconButton
-                  label="Sposta in una cartella"
-                  shortcutKeys={moveKeys}
-                  className="size-6.5"
-                  disabled={moveFolders.length === 0}
-                >
-                  <FolderInput className="size-3.5" />
-                </IconButton>
-              }
-            />
-
-            <IconButton
-              label={message.isRead ? 'Segna come non letta' : 'Segna come letta'}
-              shortcutKeys={readKeys}
-              className="size-6.5"
-              onClick={() => onToggleSeen(!message.isRead)}
-            >
-              <MailOpen className="size-3.5" />
-            </IconButton>
-
-            <IconButton
-              label={message.isFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'}
-              shortcutKeys={flagKeys}
-              className={cn('size-6.5', message.isFlagged && 'text-flagged')}
-              onClick={() => onToggleFlagged(!message.isFlagged)}
-            >
-              <Flag className={cn('size-3.5', message.isFlagged && 'fill-current')} />
-            </IconButton>
-
-            <IconButton
-              label="Elimina"
-              className="text-destructive hover:bg-destructive/15 hover:text-destructive size-6.5"
-              onClick={onDelete}
-            >
-              <Trash2 className="size-3.5" />
-            </IconButton>
-
+          </div>
+          <div className="min-w-2 flex-1" />
+          <div className="window-no-drag flex items-center gap-0.5">
+            <SelectionActions labelled={false} {...selectionActions} />
+            <div className="bg-border mx-1 h-4 w-px" />
             <IconButton
               label={isExpanded ? 'Comprimi vista messaggio' : 'Espandi vista messaggio'}
               tooltipSide="left"
-              className="text-muted-foreground hover:text-foreground ml-1 size-6"
+              className="text-faint-foreground hover:text-foreground size-[28px]"
               onClick={onToggleExpanded}
             >
-              {isExpanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+              {isExpanded ? (
+                <Minimize2 className="size-[14px]" />
+              ) : (
+                <Maximize2 className="size-[14px]" />
+              )}
             </IconButton>
           </div>
-        </div>
+        </>
+      )}
 
-        <div className="text-muted-foreground flex items-baseline gap-1.5 text-[11px]">
-          <span className="text-foreground min-w-0 shrink truncate font-medium">
+      {/*
+        The envelope is deliberately tight: in the outlook layout the
+        reading pane is about half the workspace. One line says who, to whom
+        and when; "Dettagli" opens the rest in place.
+      */}
+      <div className="flex shrink-0 flex-col gap-1.5 px-6 pt-4 pb-3">
+        <h2 className="display-title min-w-0 text-[19px] leading-[1.25] [overflow-wrap:anywhere]">
+          {message.subject || 'Senza oggetto'}
+        </h2>
+        <div className="text-muted-foreground flex items-baseline gap-1.5 text-[12px]">
+          <span className="text-foreground min-w-0 shrink truncate font-semibold">
             {addressesToLabel(message.from)}
           </span>
-          <span className="shrink-0 opacity-50">·</span>
+          <span className="text-faint-foreground shrink-0">·</span>
           {/* The first person and a count, never the whole list: the full
               list lives under Dettagli, one token per person. */}
           <span className="min-w-0 shrink truncate">
             {recipientsSummary(message, Boolean(onContinueDraft))}
           </span>
-          <span className="shrink-0 opacity-50">·</span>
-          <span className="shrink-0 whitespace-nowrap">{formatDateLabel(message.date)}</span>
+          <span className="text-faint-foreground shrink-0">·</span>
+          <span className="tabular shrink-0 whitespace-nowrap">
+            {formatDateLabel(message.date)}
+          </span>
           {message.hasAttachments && (
             <span className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap">
               <Paperclip className="size-3" />
@@ -873,7 +783,7 @@ export function MessageViewer({
                   type="button"
                   onClick={() => onZoomChange(READER_ZOOM_RESET)}
                   aria-label={`Zoom del messaggio ${zoom}%: torna al 100%`}
-                  className="border-border/70 text-foreground hover:bg-secondary/60 focus-visible:ring-ring/70 ml-auto inline-flex h-4.5 shrink-0 items-center rounded-full border px-1.5 text-[10px] font-medium tabular-nums outline-none focus-visible:ring-2"
+                  className="keycap focus-visible:ring-ring/60 tabular ml-auto inline-flex h-[18px] shrink-0 items-center rounded-[4px] px-1.5 text-[10.5px] font-semibold outline-none focus-visible:ring-2"
                 >
                   {zoom}%
                 </button>
@@ -891,7 +801,7 @@ export function MessageViewer({
             onClick={() => onDetailsOpenChange(!detailsOpen)}
             aria-expanded={detailsOpen}
             className={cn(
-              'hover:text-foreground focus-visible:ring-ring/70 inline-flex shrink-0 items-center gap-0.5 rounded-sm whitespace-nowrap outline-none focus-visible:ring-2',
+              'hover:text-foreground focus-visible:ring-ring/60 inline-flex shrink-0 items-center gap-0.5 rounded-sm whitespace-nowrap outline-none focus-visible:ring-2',
               zoom === READER_ZOOM_RESET && 'ml-auto'
             )}
           >
@@ -904,14 +814,14 @@ export function MessageViewer({
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="p-3.5">
+        <div className="px-6 pb-6">
           {detailsOpen && (
             // The envelope details sit at the top of the scrolling area
             // rather than in the fixed header: a distribution list of four
             // hundred people then scrolls past like the rest of the message
             // instead of squeezing the body out of a half-height reading
             // pane.
-            <div className="text-muted-foreground border-border/60 mb-3.5 grid grid-cols-[2.75rem_minmax(0,1fr)] items-baseline gap-x-2 gap-y-1.5 border-b pb-3 text-[11px]">
+            <div className="text-muted-foreground mb-4 grid grid-cols-[2.75rem_minmax(0,1fr)] items-baseline gap-x-2 gap-y-1.5 border-b pb-3 text-[12px]">
               <DetailsLabel count={message.from.length}>Da</DetailsLabel>
               <AddressTokens addresses={message.from} actions={addressActions} />
               {message.to.length > 0 && (
@@ -939,22 +849,16 @@ export function MessageViewer({
 
           {bodyStatus === 'loading' ? (
             <div
-              className="text-muted-foreground flex items-center gap-2 py-6 text-xs"
+              className="text-muted-foreground flex items-center gap-2 py-6 text-[12.5px]"
               role="status"
             >
-              <LoaderCircle className="text-primary size-4 animate-spin" />
+              <LoaderCircle className="text-faint-foreground size-4 animate-spin" />
               Scaricamento del messaggio…
             </div>
           ) : bodyStatus === 'failed' ? (
-            <div className="flex flex-col items-start gap-2 py-6 text-xs">
+            <div className="flex flex-col items-start gap-2 py-6 text-[12.5px]">
               <p className="text-muted-foreground">Non è stato possibile scaricare il messaggio.</p>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="h-6.5 px-2 text-[11.5px]"
-                onClick={onRetryBody}
-              >
+              <Button type="button" variant="secondary" size="sm" onClick={onRetryBody}>
                 Riprova
               </Button>
             </div>
@@ -968,7 +872,7 @@ export function MessageViewer({
             />
           ) : (
             <pre
-              className="text-foreground/90 font-sans text-sm whitespace-pre-wrap"
+              className="text-foreground/90 font-sans text-[13.5px] leading-[1.55] whitespace-pre-wrap"
               style={{ zoom: zoomFactor(zoom) }}
             >
               {message.text || '(Nessun contenuto)'}
@@ -980,7 +884,7 @@ export function MessageViewer({
               <Separator className="my-4" />
               <div className="space-y-1.5">
                 <div className="flex h-6 items-center justify-between gap-2">
-                  <h4 className="text-muted-foreground text-[11px] font-semibold tracking-wide uppercase">
+                  <h4 className="eyebrow">
                     {message.attachments.length === 1
                       ? '1 allegato'
                       : `${message.attachments.length} allegati`}
@@ -990,7 +894,7 @@ export function MessageViewer({
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="text-muted-foreground hover:text-foreground h-6 gap-1.5 px-2 text-[11px]"
+                      className="text-faint-foreground hover:text-foreground"
                       disabled={busyAttachmentIds.includes(ALL_ATTACHMENTS_TASK_ID)}
                       onClick={saveAllAttachments}
                     >
@@ -1020,7 +924,7 @@ export function MessageViewer({
                           <IconButton
                             label="Salva con nome…"
                             tooltipSide="top"
-                            className="text-muted-foreground hover:text-foreground size-5"
+                            className="text-faint-foreground hover:text-foreground size-5"
                             disabled={busy}
                             onClick={() => saveAttachment(attachment)}
                           >
