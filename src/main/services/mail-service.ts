@@ -57,7 +57,17 @@ import type {
 } from '@shared/models'
 import { isValidEmailAddress } from '@shared/email-address'
 import { IPC_CHANNELS } from '@shared/ipc'
-import { UNIFIED_FOLDER_ROLES, unifiedFolderRole, type FolderRole } from '@shared/folders'
+import {
+  folderDisplayRank,
+  folderForRole,
+  folderRole,
+  segretarioView,
+  SEGRETARIO_VIEWS,
+  UNIFIED_FOLDER_ROLES,
+  unifiedFolderRole,
+  type FolderRole,
+  type SegretarioView
+} from '@shared/folders'
 import {
   MAX_MESSAGES_PER_ACTION,
   MESSAGE_LIST_PAGE_SIZE,
@@ -337,6 +347,22 @@ function normalizeAccountSignatureHtml(rawHtml: string): string | null {
   return trimmed
 }
 
+/** The mailboxes some messages are filed in, each once. */
+function mailboxesOf(
+  refs: ReadonlyArray<MessageRef>
+): Array<{ accountId: string; folderPath: string }> {
+  const seen = new Map<string, { accountId: string; folderPath: string }>()
+
+  for (const ref of refs) {
+    seen.set(`${ref.accountId}\u0000${ref.folderPath}`, {
+      accountId: ref.accountId,
+      folderPath: ref.folderPath
+    })
+  }
+
+  return [...seen.values()]
+}
+
 export class MailService {
   private readonly database: AppDatabase
   private readonly googleOAuthService: GoogleOAuthService
@@ -399,6 +425,49 @@ export class MailService {
           ])
         ),
       listFolders: (accountId) => this.database.listFolders(accountId),
+      untriagedThreads: async (sinceIso, limit) => {
+        const threads: Array<{
+          accountId: string
+          threadId: string
+          newest: string
+          messages: Array<{ ref: MessageRef; messageKey: string; dateIso: string }>
+        }> = []
+
+        for (const account of await this.database.getAccounts()) {
+          const folders = await this.database.listFolders(account.id)
+          const paths = (['\\Inbox', '\\Sent'] as const)
+            .map((role) => folderForRole(folders, role)?.path)
+            .filter((path): path is string => path !== undefined)
+          const newest = await this.database.listUntriaged(account.id, paths, sinceIso, limit)
+          const threadIds = [...new Set(newest.map((row) => row.threadId))].slice(0, limit)
+
+          for (const threadId of threadIds) {
+            const rows = await this.database.listUntriaged(
+              account.id,
+              paths,
+              sinceIso,
+              limit,
+              threadId
+            )
+
+            threads.push({
+              accountId: account.id,
+              threadId,
+              newest: rows[0]?.dateIso ?? '',
+              messages: rows.reverse().map((row) => ({
+                ref: { accountId: account.id, folderPath: row.folderPath, uid: row.uid },
+                messageKey: row.messageKey,
+                dateIso: row.dateIso
+              }))
+            })
+          }
+        }
+
+        return threads
+          .sort((a, b) => b.newest.localeCompare(a.newest))
+          .slice(0, limit)
+          .map(({ accountId, threadId, messages }) => ({ accountId, threadId, messages }))
+      },
       recentMailIndexed: async (accountId, days) =>
         this.database.recentMailIndexed(
           accountId,
@@ -754,6 +823,16 @@ export class MailService {
     return folders
   }
 
+  /** How many conversations each view of the Segretario's holds, as its list would show them. */
+  async getSegretarioViewCounts(): Promise<Record<SegretarioView, number>> {
+    const counts = await Promise.all(
+      SEGRETARIO_VIEWS.map(
+        async (view) => [view, (await this.segretarioViewRefs(view)).length] as const
+      )
+    )
+    return Object.fromEntries(counts) as Record<SegretarioView, number>
+  }
+
   async getUnifiedFolderSummaries(): Promise<UnifiedFolderSummary[]> {
     return this.engine.computeUnifiedFolderSummaries()
   }
@@ -823,7 +902,11 @@ export class MailService {
     folderPath: string,
     options?: ListMessagesOptions
   ): Promise<MailMessageListPage> {
-    const mailboxes = await this.listMailboxes(accountId, folderPath)
+    const segretario = segretarioView(folderPath)
+    const onlyRefs = segretario ? await this.segretarioViewRefs(segretario) : undefined
+    const mailboxes = onlyRefs
+      ? mailboxesOf(onlyRefs)
+      : await this.listMailboxes(accountId, folderPath)
     const view: MessageListView = {
       query: options?.query?.trim() || undefined,
       sort: options?.sort,
@@ -831,7 +914,8 @@ export class MailService {
       filter: options?.filter,
       serverMatches: options?.serverMatches
         ? messageRefsSchema.parse(options.serverMatches)
-        : undefined
+        : undefined,
+      onlyRefs
     }
     let limit = normalizeMessageListLimit(options?.limit)
 
@@ -859,14 +943,20 @@ export class MailService {
 
     const messages = await this.database.listMessagesInMailboxes(mailboxes, limit, view)
     const narrowed = Boolean(view.query) || (view.filter !== undefined && view.filter !== 'all')
-    const cachedCount = await this.database.countMessagesInMailboxes(mailboxes, {})
-    const available = narrowed
-      ? await this.database.countMessagesInMailboxes(mailboxes, view)
-      : cachedCount
+    // A view holds what the Segretario's notes chose, nothing still to come from a server.
+    const cachedCount = onlyRefs
+      ? await this.database.countMessagesInMailboxes(mailboxes, { onlyRefs })
+      : await this.database.countMessagesInMailboxes(mailboxes, {})
+    const available =
+      narrowed || onlyRefs
+        ? await this.database.countMessagesInMailboxes(mailboxes, view)
+        : cachedCount
     const folders = await Promise.all(
       mailboxes.map((mailbox) => this.database.getFolder(mailbox.accountId, mailbox.folderPath))
     )
-    const serverCount = folders.reduce((total, folder) => total + (folder?.messageCount ?? 0), 0)
+    const serverCount = onlyRefs
+      ? cachedCount
+      : folders.reduce((total, folder) => total + (folder?.messageCount ?? 0), 0)
     const syncTimes = folders.flatMap((folder) =>
       folder?.lastSyncedAt !== undefined ? [folder.lastSyncedAt] : []
     )
@@ -888,7 +978,52 @@ export class MailService {
     }
   }
 
-  /** The mailboxes a list shows: one folder, or those "Tutti gli account" gathers for a role. */
+  /**
+   * The messages a view of the Segretario's holds: the conversations its
+   * notes chose, across the accounts "Tutti gli account" gathers, each as
+   * one row in the folder the user thinks of it in — never one thrown away.
+   */
+  private async segretarioViewRefs(view: SegretarioView): Promise<MessageRef[]> {
+    const accountIds = [
+      ...new Set(
+        (await this.engine.resolveUnifiedMailboxes('\\Inbox')).map((mailbox) => mailbox.accountId)
+      )
+    ]
+    const chosen = await this.segretario.viewMessages(view, accountIds)
+    const refs: MessageRef[] = []
+
+    for (const accountId of accountIds) {
+      const keys = chosen
+        .filter((item) => item.accountId === accountId)
+        .map((item) => item.messageKey)
+
+      if (keys.length === 0) {
+        continue
+      }
+
+      const folders = await this.database.listFolders(accountId)
+      const best = new Map<string, { folderPath: string; uid: number; rank: number }>()
+
+      for (const row of await this.database.listMessageRowsByKey(accountId, keys)) {
+        const folder = folders.find((candidate) => candidate.path === row.folderPath)
+        const role = folder ? folderRole(folder) : null
+        const rank = folderDisplayRank(folder)
+        const known = best.get(row.messageKey)
+
+        if (role !== '\\Junk' && role !== '\\Trash' && (!known || rank < known.rank)) {
+          best.set(row.messageKey, { folderPath: row.folderPath, uid: row.uid, rank })
+        }
+      }
+
+      for (const { folderPath, uid } of best.values()) {
+        refs.push({ accountId, folderPath, uid })
+      }
+    }
+
+    return refs
+  }
+
+  /** The mailboxes a list shows: one folder, those "Tutti gli account" gathers for a role, or a view's. */
   private async listMailboxes(
     accountId: string,
     folderPath: string
@@ -897,6 +1032,12 @@ export class MailService {
 
     if (role) {
       return this.engine.resolveUnifiedMailboxes(role)
+    }
+
+    const view = segretarioView(folderPath)
+
+    if (view) {
+      return mailboxesOf(await this.segretarioViewRefs(view))
     }
 
     await this.ensureAccountExists(accountId)

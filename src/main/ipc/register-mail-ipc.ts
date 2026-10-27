@@ -123,6 +123,9 @@ export function registerMailIpc(
     mailService.markFolderRead(accountId, folderPath)
   )
 
+  registerDataHandler(IPC_CHANNELS.getSegretarioViewCounts, async () => {
+    return mailService.getSegretarioViewCounts()
+  })
   registerDataHandler(IPC_CHANNELS.getUnifiedFolderSummaries, async () => {
     return mailService.getUnifiedFolderSummaries()
   })

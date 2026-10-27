@@ -36,6 +36,8 @@ import {
 
 interface MessageViewerProps {
   message: MailMessageDetail | null
+  /** The Segretario's word on the conversation, above the message: "Il punto". */
+  brief?: ReactNode
   /**
    * Where the body is. While it downloads, the pane already shows what the
    * list knows — sender, subject, date — and the actions, which wait for it.
@@ -475,6 +477,7 @@ function EmailHtmlFrame({
 
 export function MessageViewer({
   message,
+  brief,
   bodyStatus,
   onRetryBody,
   isExpanded,
@@ -851,6 +854,8 @@ export function MessageViewer({
               <span className="text-foreground min-w-0">{formatDateTimeLabel(message.date)}</span>
             </div>
           )}
+
+          {brief}
 
           {bodyStatus === 'loading' ? (
             <div

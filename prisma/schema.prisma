@@ -348,3 +348,46 @@ model AiDraft {
 
   @@map("ai_drafts")
 }
+
+/// What the Segretario wrote next to a message: the one thing that counts,
+/// where it leaves the user, how much it matters. By the message's stable
+/// key: it outlives moves and a rebuilt cache. User data.
+model AiNote {
+  accountId    String  @map("account_id")
+  messageKey   String  @map("message_key")
+  threadId     String  @map("thread_id")
+  direction    String
+  summary      String
+  state        String
+  priority     String
+  reason       String
+  due          String?
+  messageDate  String  @map("message_date")
+  createdAt    BigInt  @map("created_at")
+  dismissedAt  BigInt? @map("dismissed_at")
+
+  @@id([accountId, messageKey])
+  @@index([accountId, threadId], map: "idx_ai_notes_thread")
+  @@index([state, messageDate], map: "idx_ai_notes_state")
+  @@map("ai_notes")
+}
+
+/// Something open between the user and someone, as the Segretario keeps
+/// count: asked of them, promised, awaited, to do. User data.
+model AiItem {
+  id         Int     @id @default(autoincrement())
+  accountId  String  @map("account_id")
+  threadId   String  @map("thread_id")
+  messageKey String  @map("message_key")
+  kind       String
+  text       String
+  due        String?
+  status     String
+  createdAt  BigInt  @map("created_at")
+  closedAt   BigInt? @map("closed_at")
+  closedBy   String? @map("closed_by")
+
+  @@index([accountId, threadId], map: "idx_ai_items_thread")
+  @@index([status, due], map: "idx_ai_items_status")
+  @@map("ai_items")
+}

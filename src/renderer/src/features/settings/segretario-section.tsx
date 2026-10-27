@@ -12,8 +12,14 @@ import { toast } from 'sonner'
 import { Button } from '@renderer/components/ui/button'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { Input } from '@renderer/components/ui/input'
+import { Switch } from '@renderer/components/ui/switch'
 import { cn } from '@renderer/lib/utils'
-import type { SegretarioKeyState, SegretarioSpending, SegretarioStatus } from '@shared/segretario'
+import type {
+  SegretarioKeyState,
+  SegretarioPreferences,
+  SegretarioSpending,
+  SegretarioStatus
+} from '@shared/segretario'
 
 const KEYS_URL = 'https://openrouter.ai/settings/keys'
 const CREDITS_URL = 'https://openrouter.ai/settings/credits'
@@ -67,6 +73,7 @@ function openExternal(url: string): void {
 export function SegretarioSection(): React.JSX.Element {
   const [status, setStatus] = useState<SegretarioStatus | null>(null)
   const [spending, setSpending] = useState<SegretarioSpending | null>(null)
+  const [preferences, setPreferences] = useState<SegretarioPreferences | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [keyInput, setKeyInput] = useState('')
   const [replacing, setReplacing] = useState(false)
@@ -77,11 +84,16 @@ export function SegretarioSection(): React.JSX.Element {
   useEffect(() => {
     let current = true
 
-    Promise.all([window.segretarioApi.getStatus(), window.segretarioApi.getSpending()])
-      .then(([storedStatus, storedSpending]) => {
+    Promise.all([
+      window.segretarioApi.getStatus(),
+      window.segretarioApi.getSpending(),
+      window.segretarioApi.getPreferences()
+    ])
+      .then(([storedStatus, storedSpending, storedPreferences]) => {
         if (current) {
           setStatus(storedStatus)
           setSpending(storedSpending)
+          setPreferences(storedPreferences)
         }
       })
       .catch((error: unknown) => {
@@ -117,6 +129,18 @@ export function SegretarioSection(): React.JSX.Element {
       setKeyError(errorText(error) ?? 'La chiave non è stata salvata.')
     } finally {
       setBusy(null)
+    }
+  }
+
+  const changeTriage = async (triage: boolean): Promise<void> => {
+    if (!preferences) {
+      return
+    }
+
+    try {
+      setPreferences(await window.segretarioApi.setPreferences({ ...preferences, triage }))
+    } catch (error) {
+      toast.error('Impostazione non salvata', { description: errorText(error) })
     }
   }
 
@@ -373,6 +397,34 @@ export function SegretarioSection(): React.JSX.Element {
           <p className="text-muted-foreground text-[11px]">
             Quello che OpenRouter ha addebitato per il lavoro del Segretario su questo computer.
           </p>
+        </div>
+      )}
+
+      {hasKey && preferences && (
+        <div className="border-border bg-card/55 flex flex-col gap-2 rounded-md border p-3">
+          <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
+            Lavoro in anticipo
+          </p>
+          <label
+            htmlFor="segretario-triage"
+            className="flex cursor-pointer items-center justify-between gap-3"
+          >
+            <span className="min-w-0">
+              <span className="block text-[12px] font-medium">
+                Leggi ogni messaggio che arriva o che mando
+              </span>
+              <span className="text-muted-foreground block text-[11px]">
+                Accanto a ogni messaggio delle ultime due settimane scrive cosa vuole da te, entro
+                quando e quanto conta, e tiene il conto di cosa ti chiedono, cosa hai promesso e
+                cosa aspetti.
+              </span>
+            </span>
+            <Switch
+              id="segretario-triage"
+              checked={preferences.triage}
+              onCheckedChange={(triage) => void changeTriage(triage)}
+            />
+          </label>
         </div>
       )}
 

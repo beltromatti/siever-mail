@@ -25,6 +25,10 @@ const preferencesSchema = z.object({
 
 const memoryPathSchema = z.string().trim().min(1).max(300)
 
+const messageKeysSchema = z
+  .array(z.object({ accountId: z.string().min(1), messageKey: z.string().min(1) }))
+  .max(1000)
+
 const sendOutcomeSchema = z.union([
   z.object({ sent: z.literal(true) }),
   z.object({ sent: z.literal(false), error: z.string().max(2000) })
@@ -80,6 +84,18 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.listLearning, () => segretario.listLearning())
   handle(SEGRETARIO_IPC.relearnAccount, (accountId: unknown) =>
     segretario.relearnAccount(idSchema.parse(accountId))
+  )
+  handle(SEGRETARIO_IPC.getNotes, (messages: unknown) =>
+    segretario.getNotes(messageKeysSchema.parse(messages))
+  )
+  handle(SEGRETARIO_IPC.getThreadBrief, (accountId: unknown, threadId: unknown) =>
+    segretario.getThreadBrief(idSchema.parse(accountId), z.string().min(1).parse(threadId))
+  )
+  handle(SEGRETARIO_IPC.closeCommitment, (id: unknown) =>
+    segretario.closeCommitment(z.number().int().positive().parse(id))
+  )
+  handle(SEGRETARIO_IPC.dismissNote, (accountId: unknown, messageKey: unknown) =>
+    segretario.dismissNote(idSchema.parse(accountId), z.string().min(1).parse(messageKey))
   )
   handle(SEGRETARIO_IPC.draftSent, (draftId: unknown, writtenText: unknown) =>
     segretario.draftSent(idSchema.parse(draftId), z.string().max(200_000).parse(writtenText))

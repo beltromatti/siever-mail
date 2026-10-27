@@ -1,3 +1,4 @@
+import type { SegretarioView } from './folders'
 import type { ContextMenuItem, ContextMenuRequest } from './context-menu'
 import type {
   AccountConnectionState,
@@ -59,6 +60,7 @@ export const IPC_CHANNELS = {
   renameFolder: 'folder:rename',
   markFolderRead: 'folder:mark-read',
   getUnifiedFolderSummaries: 'folder:get-unified-summaries',
+  getSegretarioViewCounts: 'folder:get-segretario-view-counts',
   getUnifiedPreferences: 'folder:get-unified-preferences',
   setUnifiedIncludedAccounts: 'folder:set-unified-included-accounts',
   listMessages: 'message:list',
@@ -153,6 +155,8 @@ export interface DesktopMailApi {
   /** Every message of a folder read — or of every folder a "Tutti gli account" one gathers. */
   markFolderRead: (accountId: string, folderPath: string) => Promise<void>
   getUnifiedFolderSummaries: () => Promise<UnifiedFolderSummary[]>
+  /** How many conversations each view of the Segretario's holds. */
+  getSegretarioViewCounts: () => Promise<Record<SegretarioView, number>>
   getUnifiedPreferences: () => Promise<UnifiedPreferences>
   setUnifiedIncludedAccounts: (accountIds: string[]) => Promise<UnifiedPreferences>
   listMessages: (

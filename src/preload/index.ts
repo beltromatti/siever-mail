@@ -52,6 +52,7 @@ const desktopMailApi: DesktopMailApi = {
   markFolderRead: async (accountId, folderPath) =>
     invoke(IPC_CHANNELS.markFolderRead, accountId, folderPath),
   getUnifiedFolderSummaries: async () => invoke(IPC_CHANNELS.getUnifiedFolderSummaries),
+  getSegretarioViewCounts: async () => invoke(IPC_CHANNELS.getSegretarioViewCounts),
   getUnifiedPreferences: async () => invoke(IPC_CHANNELS.getUnifiedPreferences),
   setUnifiedIncludedAccounts: async (accountIds) =>
     invoke(IPC_CHANNELS.setUnifiedIncludedAccounts, accountIds),
@@ -158,7 +159,14 @@ const segretarioApi: SegretarioApi = {
   onStatusChanged: (listener) => subscribe(SEGRETARIO_IPC.statusChanged, listener),
   onActivityEvent: (listener) => subscribe(SEGRETARIO_IPC.activityEvent, listener),
   onComposeRequest: (listener) => subscribe(SEGRETARIO_IPC.composeRequest, listener),
-  onShowRequest: (listener) => subscribe(SEGRETARIO_IPC.showRequest, listener)
+  onShowRequest: (listener) => subscribe(SEGRETARIO_IPC.showRequest, listener),
+  getNotes: async (messages) => invoke(SEGRETARIO_IPC.getNotes, messages),
+  getThreadBrief: async (accountId, threadId) =>
+    invoke(SEGRETARIO_IPC.getThreadBrief, accountId, threadId),
+  closeCommitment: async (id) => invoke(SEGRETARIO_IPC.closeCommitment, id),
+  dismissNote: async (accountId, messageKey) =>
+    invoke(SEGRETARIO_IPC.dismissNote, accountId, messageKey),
+  onNotesChanged: (listener) => subscribe(SEGRETARIO_IPC.notesChanged, listener)
 }
 
 // Merge any extension-provided bridge methods (the IPC channels an

@@ -64,6 +64,66 @@ export const DEFAULT_SEGRETARIO_PREFERENCES: SegretarioPreferences = {
   learning: null
 }
 
+/* ─────────────────────────── notes on the mail ─────────────────────────── */
+
+/** Where a message leaves the user, as the Segretario read it. */
+export type NoteState = 'da_rispondere' | 'da_fare' | 'in_attesa' | 'informativo' | 'rumore'
+export type NotePriority = 'alta' | 'media' | 'bassa'
+
+/**
+ * What the Segretario wrote next to a message when it arrived (or left):
+ * the one thing that counts, where it leaves the user, how much it matters.
+ * Kept by the message's stable key, whatever folder holds it.
+ */
+export interface MessageNote {
+  accountId: string
+  messageKey: string
+  threadId: string
+  /** Received, or written by the user. */
+  direction: 'in' | 'out'
+  summary: string
+  state: NoteState
+  priority: NotePriority
+  reason: string
+  /** By when, AAAA-MM-GG. */
+  due: string | null
+  messageDate: string
+  /** The user said it is handled. */
+  dismissedAt: number | null
+}
+
+export type CommitmentKind = 'ti_chiedono' | 'hai_promesso' | 'aspetti' | 'da_fare'
+
+/** Something open between the user and someone: asked, promised, awaited, to do. */
+export interface Commitment {
+  id: number
+  accountId: string
+  threadId: string
+  /** The message it came from. */
+  messageKey: string
+  kind: CommitmentKind
+  text: string
+  due: string | null
+  status: 'aperto' | 'chiuso'
+  createdAt: number
+  closedAt: number | null
+  /** Closed by a later message the Segretario read, or by the user. */
+  closedBy: 'segretario' | 'utente' | null
+}
+
+/** A conversation as the reader shows it: its latest note and what is open in it. */
+export interface ThreadBrief {
+  note: MessageNote | null
+  commitments: Commitment[]
+}
+
+/** Notes were written or changed: the views showing these refresh. */
+export interface NotesChange {
+  accountId: string
+  messageKeys: string[]
+  threadIds: string[]
+}
+
 /** A note of the Segretario's memory, as Impostazioni shows it. */
 export interface MemoryNote {
   /** "tu.md", "persone/anna-rossi.md". */
@@ -269,6 +329,11 @@ export const SEGRETARIO_IPC = {
   listLearning: 'segretario:list-learning',
   relearnAccount: 'segretario:relearn-account',
   draftSent: 'segretario:draft-sent',
+  getNotes: 'segretario:get-notes',
+  getThreadBrief: 'segretario:get-thread-brief',
+  closeCommitment: 'segretario:close-commitment',
+  dismissNote: 'segretario:dismiss-note',
+  notesChanged: 'segretario:notes-changed',
   listActivities: 'segretario:list-activities',
   getActivity: 'segretario:get-activity',
   startActivity: 'segretario:start-activity',
@@ -309,6 +374,14 @@ export interface SegretarioApi {
    * it learns from.
    */
   draftSent: (draftId: string, writtenText: string) => Promise<void>
+  /** The notes of these messages, those that have one. */
+  getNotes: (messages: Array<{ accountId: string; messageKey: string }>) => Promise<MessageNote[]>
+  getThreadBrief: (accountId: string, threadId: string) => Promise<ThreadBrief>
+  /** The user closed something open: done, or no longer needed. */
+  closeCommitment: (id: number) => Promise<void>
+  /** The user said a message is handled: it leaves "Da gestire". */
+  dismissNote: (accountId: string, messageKey: string) => Promise<void>
+  onNotesChanged: (listener: (change: NotesChange) => void) => () => void
   listActivities: () => Promise<ActivitySummary[]>
   getActivity: (id: string) => Promise<ActivityDetail | null>
   /** Begins a new activity with what the user asked. */

@@ -57,6 +57,8 @@ import {
   type SegretarioContextChip
 } from '@renderer/features/segretario/segretario-panel'
 import { useSegretario } from '@renderer/features/segretario/use-segretario'
+import { useMessageNotes } from '@renderer/features/segretario/message-notes'
+import { ThreadBriefPanel } from '@renderer/features/segretario/thread-brief'
 import { plainTextToComposerHtml, writtenText } from '@renderer/features/mail/composer-body'
 import { parseRecipients } from '@shared/email-address'
 import type { ApprovalRequest, ComposeSpec, HandleLink, SendOutcome } from '@shared/segretario'
@@ -85,7 +87,12 @@ import {
   folderRoleLabel,
   unifiedFolderPath,
   unifiedFolderRole,
-  type FolderRole
+  isAcrossAccounts,
+  segretarioView,
+  segretarioViewLabel,
+  SEGRETARIO_VIEWS,
+  type FolderRole,
+  type SegretarioView
 } from '@shared/folders'
 import { startMessageDrag } from '@renderer/lib/message-drag'
 import { foldSearchText } from '@shared/search'
@@ -564,6 +571,7 @@ function App(): React.JSX.Element {
   const [segretarioOpen, setSegretarioOpen] = useState(false)
   const segretario = useSegretario(segretarioOpen)
   const assistantInset = useAssistantInset(segretarioOpen)
+  const messageNotes = useMessageNotes(messages)
   // Sends that failed, oldest first. Each is offered back once no composer
   // is open, so retrying never replaces a message being written.
   const [failedSends, setFailedSends] = useState<
@@ -718,7 +726,7 @@ function App(): React.JSX.Element {
   }, [])
 
   const syncSummary = useMemo(() => {
-    const accountsOnScreen = unifiedFolderRole(selectedFolderPath)
+    const accountsOnScreen = isAcrossAccounts(selectedFolderPath)
       ? accounts
       : accounts.filter((account) => account.id === selectedAccountId)
 
@@ -737,6 +745,20 @@ function App(): React.JSX.Element {
       return
     }
   }, [accounts.length])
+
+  // How many conversations each view of the Segretario's holds; null until known.
+  const [segretarioViewCounts, setSegretarioViewCounts] = useState<Record<
+    SegretarioView,
+    number
+  > | null>(null)
+
+  const refreshSegretarioViews = useCallback(async (): Promise<void> => {
+    try {
+      setSegretarioViewCounts(await window.mailApi.getSegretarioViewCounts())
+    } catch {
+      return
+    }
+  }, [])
 
   const refreshUnifiedAccountIds = useCallback(async (): Promise<void> => {
     try {
@@ -792,7 +814,7 @@ function App(): React.JSX.Element {
         void refreshUnifiedSummaries()
 
         setSelectedFolderPath((currentFolderPath) => {
-          if (unifiedFolderRole(currentFolderPath)) {
+          if (isAcrossAccounts(currentFolderPath)) {
             return currentFolderPath
           }
 
@@ -1132,6 +1154,42 @@ function App(): React.JSX.Element {
     listRefreshTimerRef.current = setTimeout(run, LIST_REFRESH_COALESCE_MS)
   }, [refreshCurrentFolder])
 
+  // The Segretario's views follow its notes: their counts, and the list when one is open.
+  const segretarioConfigured = Boolean(
+    segretario.status && segretario.status.keyState !== 'missing'
+  )
+  const viewCountsTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!segretarioConfigured) {
+      return
+    }
+
+    void refreshSegretarioViews()
+
+    const unsubscribe = window.segretarioApi.onNotesChanged(() => {
+      if (segretarioView(currentViewRef.current?.folderPath)) {
+        scheduleListRefresh()
+      }
+
+      if (viewCountsTimerRef.current === null) {
+        viewCountsTimerRef.current = window.setTimeout(() => {
+          viewCountsTimerRef.current = null
+          void refreshSegretarioViews()
+        }, LIST_REFRESH_COALESCE_MS)
+      }
+    })
+
+    return () => {
+      unsubscribe()
+
+      if (viewCountsTimerRef.current !== null) {
+        window.clearTimeout(viewCountsTimerRef.current)
+        viewCountsTimerRef.current = null
+      }
+    }
+  }, [accounts, refreshSegretarioViews, scheduleListRefresh, segretarioConfigured])
+
   useEffect(
     () => () => {
       if (listRefreshTimerRef.current !== null) {
@@ -1282,14 +1340,16 @@ function App(): React.JSX.Element {
   const handleUnifiedPreferencesChanged = useCallback((): void => {
     void refreshUnifiedSummaries()
     void refreshUnifiedAccountIds()
+    void refreshSegretarioViews()
 
-    if (!selectedAccountId || !selectedFolderPath || !unifiedFolderRole(selectedFolderPath)) {
+    if (!selectedAccountId || !selectedFolderPath || !isAcrossAccounts(selectedFolderPath)) {
       return
     }
 
     void refreshCurrentFolder(selectedAccountId, selectedFolderPath)
   }, [
     refreshCurrentFolder,
+    refreshSegretarioViews,
     refreshUnifiedAccountIds,
     refreshUnifiedSummaries,
     selectedAccountId,
@@ -1468,7 +1528,7 @@ function App(): React.JSX.Element {
   }, [clearSearch, hasActiveSearch, isMessageExpanded, selection.selectedRefs.length])
 
   useEffect(() => {
-    if (!selectedAccountId || !selectedFolderPath || unifiedFolderRole(selectedFolderPath)) {
+    if (!selectedAccountId || !selectedFolderPath || isAcrossAccounts(selectedFolderPath)) {
       void window.mailApi.setActiveMailboxContext(null)
       return
     }
@@ -2613,7 +2673,7 @@ function App(): React.JSX.Element {
   }, [accounts, confirm, selection.cursorRef?.accountId, selectionAccountIds])
 
   const accountLabels = useMemo(() => {
-    if (!unifiedFolderRole(selectedFolderPath) || unifiedAccountIds.length < 2) {
+    if (!isAcrossAccounts(selectedFolderPath) || unifiedAccountIds.length < 2) {
       return null
     }
 
@@ -4206,11 +4266,14 @@ function App(): React.JSX.Element {
 
   // What the view is called where it is named: the folder, or a folder of
   // "Tutti gli account".
+  const currentSegretarioView = segretarioView(selectedFolderPath)
   const currentViewLabel = currentUnifiedRole
     ? `${folderRoleLabel(currentUnifiedRole)} · ${ALL_ACCOUNTS_LABEL}`
-    : currentFolder
-      ? folderDisplayName(currentFolder)
-      : 'Conversazioni'
+    : currentSegretarioView
+      ? segretarioViewLabel(currentSegretarioView)
+      : currentFolder
+        ? folderDisplayName(currentFolder)
+        : 'Conversazioni'
   // What the user is looking at goes along with what they ask the Segretario.
   const segretarioContextRefs = selection.selectedRefs.slice(0, SEGRETARIO_CONTEXT_LIMIT)
   const segretarioContext: SegretarioContextChip = {
@@ -4300,6 +4363,7 @@ function App(): React.JSX.Element {
     atWindowTopRight:
       uiPreferences.layoutMode === 'outlook' && !isMessageExpanded && !segretarioOpen,
     messages,
+    notes: messageNotes,
     sections: messageSections,
     countLabel: listCountLabel,
     emptyState: listEmptyState,
@@ -4433,6 +4497,14 @@ function App(): React.JSX.Element {
                   </div>
                 ) : (
                   <FolderSidebar
+                    segretarioViews={
+                      segretarioConfigured && segretarioViewCounts
+                        ? SEGRETARIO_VIEWS.map((view) => ({
+                            view,
+                            count: segretarioViewCounts[view]
+                          }))
+                        : []
+                    }
                     accountLabel={selectedAccountLabel}
                     folders={folders}
                     unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
@@ -4465,6 +4537,16 @@ function App(): React.JSX.Element {
           reader={
             <MessageViewer
               message={messageForViewer}
+              brief={
+                messageForViewer &&
+                selection.selectedRefs.length === 1 && (
+                  <ThreadBriefPanel
+                    key={`${messageForViewer.accountId}:${messageForViewer.threadId}`}
+                    accountId={messageForViewer.accountId}
+                    threadId={messageForViewer.threadId}
+                  />
+                )
+              }
               bodyStatus={readerBodyStatus}
               onRetryBody={() => {
                 if (readingRef) {

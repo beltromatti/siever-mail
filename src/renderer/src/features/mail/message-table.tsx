@@ -20,6 +20,7 @@ import {
   resolveSelectionIntent,
   summaryToMessageRef
 } from '@renderer/lib/message-selection'
+import { NoteLine, noteKey } from '@renderer/features/segretario/message-notes'
 import { cn, formatByteSize, formatDateTimeLabel } from '@renderer/lib/utils'
 import {
   defaultSortDirection,
@@ -69,6 +70,7 @@ const SORTABLE_COLUMNS: ReadonlyArray<SortableColumn> = [
 export function MessageTable(props: MessageListViewProps): React.JSX.Element {
   const {
     messages,
+    notes,
     sections,
     emptyState,
     selection,
@@ -196,6 +198,7 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
             const key = messageRefKey(messageRef)
             const isSelected = selectedKeys.has(key)
             const isCursor = key === cursorKey
+            const note = notes.get(noteKey(message))
 
             return (
               <div
@@ -268,14 +271,18 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
                   </span>
                 )}
 
-                <span
-                  className={cn(
-                    'min-w-0 truncate px-1',
-                    message.isRead ? 'text-foreground/85' : 'font-[600]'
-                  )}
-                  title={message.subject}
-                >
-                  <HighlightedText text={message.subject} terms={highlightTerms.subject} />
+                <span className="flex min-w-0 items-baseline gap-2 px-1">
+                  <span
+                    className={cn(
+                      'min-w-0 shrink truncate',
+                      message.isRead ? 'text-foreground/85' : 'font-[600]'
+                    )}
+                    title={message.subject}
+                  >
+                    <HighlightedText text={message.subject} terms={highlightTerms.subject} />
+                  </span>
+                  {/* The Segretario's word, after the subject, where the table has room. */}
+                  {note && <NoteLine note={note} className="flex-1 basis-0 text-[11.5px]" />}
                 </span>
 
                 <span

@@ -1,13 +1,26 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, type Inbox } from 'lucide-react'
+import { ChevronDown, ChevronRight, Hourglass, ListTodo, type Inbox } from 'lucide-react'
 
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { buildFolderTree, folderNodeLabel, type FolderTreeNode } from '@renderer/lib/folder-tree'
 import { cn, formatCount } from '@renderer/lib/utils'
-import { folderRole, folderRoleLabel, unifiedFolderPath, type FolderRole } from '@shared/folders'
+import {
+  folderRole,
+  folderRoleLabel,
+  segretarioViewLabel,
+  segretarioViewPath,
+  unifiedFolderPath,
+  type FolderRole,
+  type SegretarioView
+} from '@shared/folders'
 import type { MailFolder, UnifiedFolderSummary } from '@shared/models'
 
 import { folderIcon, ROLE_ICONS } from './folder-icons'
+
+const VIEW_ICONS: Readonly<Record<SegretarioView, typeof Inbox>> = {
+  'da-gestire': ListTodo,
+  'in-attesa': Hourglass
+}
 
 /** Where dragged messages can land: a folder of an account, or a kind of folder of every account. */
 export type FolderDropTarget =
@@ -23,6 +36,8 @@ export type FolderMenuTarget =
   | { kind: 'account' }
 
 interface FolderSidebarProps {
+  /** The Segretario's views and how many conversations each holds; none without the Segretario. */
+  segretarioViews: ReadonlyArray<{ view: SegretarioView; count: number }>
   /** The account the dropdown above has open, whose folders the tree shows. */
   accountLabel: string
   folders: MailFolder[]
@@ -95,7 +110,8 @@ function FolderRow({
   onSelect?: () => void
   /** Set while messages are dragged and this folder takes them. */
   drop?: { hovered: boolean; onEnter: () => void; onLeave: () => void; onDrop: () => void }
-  onContextMenu: () => void
+  /** Undefined for a row without a menu of its own: a view of the Segretario's. */
+  onContextMenu?: () => void
 }): React.JSX.Element {
   return (
     <div
@@ -107,10 +123,14 @@ function FolderRow({
         drop?.hovered && 'bg-selected text-foreground ring-foreground/40 ring-1 ring-inset'
       )}
       style={{ paddingLeft: depth * 12 }}
-      onContextMenu={(event) => {
-        event.preventDefault()
-        onContextMenu()
-      }}
+      onContextMenu={
+        onContextMenu
+          ? (event) => {
+              event.preventDefault()
+              onContextMenu()
+            }
+          : undefined
+      }
       onDragOver={
         drop
           ? (event) => {
@@ -211,6 +231,7 @@ function SectionHeading({ children }: { children: React.ReactNode }): React.JSX.
  * others as a tree whose branches fold away.
  */
 export function FolderSidebar({
+  segretarioViews,
   accountLabel,
   folders,
   unifiedFolders,
@@ -302,6 +323,28 @@ export function FolderSidebar({
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-px px-2 pb-3">
+          {segretarioViews.length > 0 && (
+            <section aria-label="Segretario">
+              <SectionHeading>Segretario</SectionHeading>
+              {segretarioViews.map(({ view, count }) => {
+                const path = segretarioViewPath(view)
+
+                return (
+                  <FolderRow
+                    key={path}
+                    icon={VIEW_ICONS[view]}
+                    name={segretarioViewLabel(view)}
+                    messageCount={count}
+                    unseenCount={count}
+                    badge={count}
+                    active={selectedFolderPath === path}
+                    onSelect={() => onSelectFolder(path)}
+                  />
+                )
+              })}
+            </section>
+          )}
+
           {unifiedFolders.length > 0 && (
             <section aria-label="Tutti gli account">
               <SectionHeading>Tutti gli account</SectionHeading>

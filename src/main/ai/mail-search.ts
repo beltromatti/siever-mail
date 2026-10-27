@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from '@prisma/client'
 
 import {
   folderDisplayName,
+  folderDisplayRank,
   folderForRole,
   folderRole,
   folderRoleLabel,
@@ -61,34 +62,6 @@ const ROLE_WORDS: Readonly<Record<string, FolderRole>> = {
 export function folderQueryLabel(folder: string): string {
   const role = ROLE_WORDS[folder.trim().toLowerCase()]
   return role ? folderRoleLabel(role) : folder.trim()
-}
-
-/**
- * Which row of a message to show when several folders hold it — a Gmail
- * message is in "Tutti i messaggi" and in the inbox: the folder the user
- * thinks of it in.
- */
-function folderRank(folder: MailFolder | undefined): number {
-  if (!folder) {
-    return 9
-  }
-
-  switch (folderRole(folder)) {
-    case '\\Inbox':
-      return 0
-    case '\\Sent':
-      return 1
-    case '\\Drafts':
-      return 2
-    case '\\Archive':
-      return 4
-    case '\\Junk':
-      return 7
-    case '\\Trash':
-      return 8
-    default:
-      return folder.specialUse ? 5 : 3
-  }
 }
 
 export interface SearchScope {
@@ -275,7 +248,7 @@ export async function searchMail(
     } else {
       const folders = scope.folders.get(row.accountId) ?? []
       const rank = (path: string): number =>
-        folderRank(folders.find((folder) => folder.path === path))
+        folderDisplayRank(folders.find((folder) => folder.path === path))
 
       if (rank(row.folderPath) < rank(known.folderPath)) {
         byKey.set(key, { ...row, snippet: known.snippet ?? row.snippet })
@@ -390,10 +363,12 @@ export async function threadMessages(
   prisma: PrismaClient,
   accountId: string,
   threadId: string,
-  folders: ReadonlyArray<MailFolder>
+  folders: ReadonlyArray<MailFolder>,
+  /** Only the messages up to this moment (ISO), the conversation as it stood then. */
+  untilIso?: string
 ): Promise<MessageRef[]> {
   const rows = await prisma.message.findMany({
-    where: { accountId, threadId },
+    where: { accountId, threadId, ...(untilIso ? { dateIso: { lte: untilIso } } : {}) },
     select: { folderPath: true, uid: true, messageKey: true, dateIso: true },
     orderBy: { dateIso: 'asc' }
   })
@@ -402,7 +377,7 @@ export async function threadMessages(
   for (const row of rows) {
     const known = byKey.get(row.messageKey)
     const rank = (path: string): number =>
-      folderRank(folders.find((folder) => folder.path === path))
+      folderDisplayRank(folders.find((folder) => folder.path === path))
 
     if (!known || rank(row.folderPath) < rank(known.folderPath)) {
       byKey.set(row.messageKey, row)

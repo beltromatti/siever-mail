@@ -89,6 +89,34 @@ export function folderForRole(
   )
 }
 
+/**
+ * Which row of a message to show when several folders hold it — a Gmail
+ * message is in "Tutti i messaggi" and in the inbox: the folder the user
+ * thinks of it in. Lower comes first.
+ */
+export function folderDisplayRank(folder: MailFolder | undefined): number {
+  if (!folder) {
+    return 9
+  }
+
+  switch (folderRole(folder)) {
+    case '\\Inbox':
+      return 0
+    case '\\Sent':
+      return 1
+    case '\\Drafts':
+      return 2
+    case '\\Archive':
+      return 4
+    case '\\Junk':
+      return 7
+    case '\\Trash':
+      return 8
+    default:
+      return folder.specialUse ? 5 : 3
+  }
+}
+
 const UNIFIED_FOLDER_PREFIX = '__all__:'
 
 /** The path of a folder of "Tutti gli account": one role, across the accounts included. */
@@ -106,4 +134,45 @@ export function unifiedFolderRole(path: string | null | undefined): FolderRole |
   return (UNIFIED_FOLDER_ROLES as ReadonlyArray<string>).includes(role)
     ? (role as FolderRole)
     : null
+}
+
+/**
+ * The Segretario's views: the conversations its notes say ask something of
+ * the user (`da-gestire`), and those where the user waits on someone
+ * (`in-attesa`), across the accounts "Tutti gli account" gathers.
+ */
+export type SegretarioView = 'da-gestire' | 'in-attesa'
+
+export const SEGRETARIO_VIEWS: ReadonlyArray<SegretarioView> = ['da-gestire', 'in-attesa']
+
+const SEGRETARIO_VIEW_PREFIX = '__segretario__:'
+
+export function segretarioViewPath(view: SegretarioView): string {
+  return `${SEGRETARIO_VIEW_PREFIX}${view}`
+}
+
+/** The Segretario's view a path opens, or null. */
+export function segretarioView(path: string | null | undefined): SegretarioView | null {
+  if (!path?.startsWith(SEGRETARIO_VIEW_PREFIX)) {
+    return null
+  }
+
+  const view = path.slice(SEGRETARIO_VIEW_PREFIX.length)
+  return (SEGRETARIO_VIEWS as ReadonlyArray<string>).includes(view)
+    ? (view as SegretarioView)
+    : null
+}
+
+const SEGRETARIO_VIEW_LABELS: Readonly<Record<SegretarioView, string>> = {
+  'da-gestire': 'Da gestire',
+  'in-attesa': 'In attesa'
+}
+
+export function segretarioViewLabel(view: SegretarioView): string {
+  return SEGRETARIO_VIEW_LABELS[view]
+}
+
+/** Whether a path shows mail of several accounts — a folder of Tutti gli account, a view — not one account's folder. */
+export function isAcrossAccounts(path: string | null | undefined): boolean {
+  return unifiedFolderRole(path) !== null || segretarioView(path) !== null
 }

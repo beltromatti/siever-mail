@@ -123,6 +123,8 @@ export interface MessageListView {
   filter?: MessageListFilter
   /** Messages a server search found for `query`, matches like the cache's own. */
   serverMatches?: ReadonlyArray<MessageRef>
+  /** The only messages the list may hold: a view of the Segretario's, chosen by its notes. */
+  onlyRefs?: ReadonlyArray<MessageRef>
 }
 
 export interface FolderSyncState {
@@ -2745,6 +2747,50 @@ export class AppDatabase {
       'CREATE INDEX IF NOT EXISTS idx_ai_lessons_reflection ON ai_lessons(reflection_id)'
     )
     await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_notes (
+        account_id TEXT NOT NULL,
+        message_key TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        state TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        due TEXT,
+        message_date TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        dismissed_at INTEGER,
+        PRIMARY KEY (account_id, message_key)
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_ai_notes_thread ON ai_notes(account_id, thread_id)'
+    )
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_ai_notes_state ON ai_notes(state, message_date)'
+    )
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_items (
+        id INTEGER PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        message_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        text TEXT NOT NULL,
+        due TEXT,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        closed_at INTEGER,
+        closed_by TEXT
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_ai_items_thread ON ai_items(account_id, thread_id)'
+    )
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_ai_items_status ON ai_items(status, due)'
+    )
+    await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS ai_drafts (
         draft_id TEXT PRIMARY KEY,
         activity_id TEXT NOT NULL,
@@ -3284,6 +3330,11 @@ export class AppDatabase {
       indexHitsToken
     )
 
+    if (view.onlyRefs) {
+      const refs = buildServerMatchesWhere(view.onlyRefs)
+      constraints.push(refs.length > 0 ? { OR: refs } : { uid: { in: [] } })
+    }
+
     return {
       where: constraints.length > 0 ? { ...mailboxWhere, AND: constraints } : mailboxWhere,
       // The unified inbox spans multiple (accountId, folderPath) pairs, so
@@ -3377,7 +3428,7 @@ export class AppDatabase {
 
   async countMessagesInMailboxes(
     mailboxes: ReadonlyArray<{ accountId: string; folderPath: string }>,
-    view: Pick<MessageListView, 'query' | 'filter' | 'serverMatches'>
+    view: Pick<MessageListView, 'query' | 'filter' | 'serverMatches' | 'onlyRefs'>
   ): Promise<number> {
     await this.ready
 
@@ -3536,6 +3587,81 @@ export class AppDatabase {
       Number(row?.cached ?? 0) >= Number(row?.onServer ?? 0) &&
       Number(row?.waiting ?? 0) === 0
     )
+  }
+
+  /**
+   * Messages the Segretario has written no note for, in the folders given
+   * (an account's inbox and sent mail), since `sinceIso`, whose text the
+   * index already has: the newest first, each message once.
+   */
+  async listUntriaged(
+    accountId: string,
+    folderPaths: ReadonlyArray<string>,
+    sinceIso: string,
+    limit: number,
+    /** Only this conversation's. */
+    threadId?: string
+  ): Promise<
+    Array<{
+      folderPath: string
+      uid: number
+      messageKey: string
+      threadId: string
+      dateIso: string
+    }>
+  > {
+    await this.ready
+
+    if (folderPaths.length === 0) {
+      return []
+    }
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        folderPath: string
+        uid: number | bigint
+        messageKey: string
+        threadId: string
+        dateIso: string
+      }>
+    >`
+      SELECT m.folder_path AS folderPath, m.uid AS uid, m.message_key AS messageKey,
+        m.thread_id AS threadId, m.date_iso AS dateIso
+      FROM messages m
+      WHERE m.account_id = ${accountId}
+        AND m.folder_path IN (${Prisma.join([...folderPaths])})
+        AND m.date_iso >= ${sinceIso}
+        AND (${threadId ?? null} IS NULL OR m.thread_id = ${threadId ?? null})
+        AND EXISTS (
+          SELECT 1 FROM message_bodies b
+          WHERE b.account_id = m.account_id AND b.message_key = m.message_key
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM ai_notes n
+          WHERE n.account_id = m.account_id AND n.message_key = m.message_key
+        )
+      ORDER BY m.date_iso DESC
+      LIMIT ${limit * 2}
+    `
+    const seen = new Set<string>()
+
+    return rows
+      .filter((row) => !seen.has(row.messageKey) && seen.add(row.messageKey))
+      .slice(0, limit)
+      .map((row) => ({ ...row, uid: Number(row.uid) }))
+  }
+
+  /** Where an account's messages with these keys are filed: every row of each. */
+  async listMessageRowsByKey(
+    accountId: string,
+    messageKeys: ReadonlyArray<string>
+  ): Promise<Array<{ folderPath: string; uid: number; messageKey: string }>> {
+    await this.ready
+
+    return this.prisma.message.findMany({
+      where: { accountId, messageKey: { in: [...messageKeys] } },
+      select: { folderPath: true, uid: true, messageKey: true }
+    })
   }
 
   /** A message's stored body at whatever level, for reading its words. */

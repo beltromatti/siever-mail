@@ -129,6 +129,8 @@ so an older file is brought forward in place.
 | `ai_learning`                | Getting to know each account: the activity that did it, when it began and finished.                                                                                                                                                                                                                                                                                 |
 | `ai_lessons`                 | What the next reflection takes in: how the user corrected a draft of the Segretario's, a draft sent as it was, an account removed.                                                                                                                                                                                                                                  |
 | `ai_drafts`                  | The drafts the Segretario wrote, as it wrote them, to compare with what the user sends.                                                                                                                                                                                                                                                                             |
+| `ai_notes`                   | The Segretario's note on a message, by its key: the one thing that counts, where it leaves the user (to answer, to do, waiting, information, noise), priority, deadline, and when the user marked it handled.                                                                                                                                                       |
+| `ai_items`                   | What is open between the user and someone, by conversation: asked of them, promised, awaited, to do; closed by a later message or by the user.                                                                                                                                                                                                                      |
 | `contacts`                   | Everyone stored mail names, for the composer's suggestions: `usage_count` / `last_used_at` count the mail written to them, `last_received_at` the newest they sent, `hidden_at` a contact taken out of the suggestions.                                                                                                                                             |
 | `drafts`                     | The messages being written: recipients, subject, body, files, the thread they answer; `revision` / `server_revision` say whether Bozze has the draft as it is, `server_*` where its copy is, `docked` that a composer holds it.                                                                                                                                     |
 | `account_signatures`         | One signature per account, with the version of the page it was written for (`html_format`) and the edition of the extension's content it has (`extension_revision`).                                                                                                                                                                                                |
@@ -688,6 +690,26 @@ matters. The two core notes and the index of the others come with every
 activity, with each account's signature; the model reads and updates the
 rest as it works. A note may not carry an activity's short names (`m4`):
 the memory tool sends such a text back.
+
+**Triage.** Every message of the last two weeks, in each account's inbox
+and sent mail, gets a note once its text is indexed: one quick call
+without reasoning, held to a JSON schema (`triage.ts`, `smistamento.md`),
+with the account's note, the notes on the people involved, what is
+already open in the conversation and the conversation up to the message.
+Conversations go newest first, the messages of each in the order they were
+written, so what one opens a later one can close; a network or OpenRouter
+failure ends the round and the next one, 20 seconds later, tries again. The
+note shows in the row in the Segretario's ochre — "Rispondi · entro 30
+ott" and the gist — and at the top of the reader as "Il punto", with what is
+open to tick off and "Segna come gestito". It can be switched off in
+Settings → Segretario.
+
+**Views.** "Da gestire" holds the conversations whose latest note asks a
+reply or an action and was not handled, or where something the user owes
+is open; "In attesa" those where the user waits on someone. Their paths
+(`segretarioViewPath`) open like a folder of "Tutti gli account": the
+main process resolves each conversation to one row, in the folder the user
+thinks of it in, never Spam or the Trash, and the list shows exactly those.
 
 **Learning** is work the Segretario begins itself, once the user has said
 yes (the panel asks; Settings → Cosa so di te switches it):

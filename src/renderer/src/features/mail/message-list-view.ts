@@ -8,6 +8,8 @@ import type {
   MessageRef
 } from '@shared/models'
 
+import type { MessageNote } from '@shared/segretario'
+
 import type { MessageListEmptyState } from './message-list-empty'
 import type { MessageHighlightTerms, PrimaryAddressMode } from './message-list-shared'
 
@@ -36,6 +38,8 @@ export interface MessageListViewProps {
    */
   atWindowTopRight: boolean
   messages: MailMessageSummary[]
+  /** The Segretario's notes of these messages, by account and message key (see `noteKey`). */
+  notes: ReadonlyMap<string, MessageNote>
   sections: MessageSection[]
   /** What the list holds, said under its title: "9.796 messaggi", "12 risultati". */
   countLabel: string

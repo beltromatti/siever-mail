@@ -1,8 +1,18 @@
 import type { PrismaClient } from '@prisma/client'
 
+import { Prisma, type AiItem, type AiNote } from '@prisma/client'
+
+import type { SegretarioView } from '@shared/folders'
+
 import {
   DEFAULT_SEGRETARIO_PREFERENCES,
   type ActivityKind,
+  type Commitment,
+  type CommitmentKind,
+  type MessageNote,
+  type NotePriority,
+  type NoteState,
+  type ThreadBrief,
   type ActivityStatus,
   type ActivitySummary,
   type SegretarioPreferences,
@@ -27,6 +37,41 @@ export interface MemoryDocument {
   content: string
   createdAt: number
   updatedAt: number
+}
+
+/** What the user owes in a conversation, as opposed to what they wait for. */
+const OWED_KINDS: ReadonlyArray<CommitmentKind> = ['ti_chiedono', 'hai_promesso', 'da_fare']
+
+function noteOf(row: AiNote): MessageNote {
+  return {
+    accountId: row.accountId,
+    messageKey: row.messageKey,
+    threadId: row.threadId,
+    direction: row.direction === 'out' ? 'out' : 'in',
+    summary: row.summary,
+    state: row.state as NoteState,
+    priority: row.priority as NotePriority,
+    reason: row.reason,
+    due: row.due,
+    messageDate: row.messageDate,
+    dismissedAt: row.dismissedAt === null ? null : Number(row.dismissedAt)
+  }
+}
+
+function commitmentOf(row: AiItem): Commitment {
+  return {
+    id: row.id,
+    accountId: row.accountId,
+    threadId: row.threadId,
+    messageKey: row.messageKey,
+    kind: row.kind as CommitmentKind,
+    text: row.text,
+    due: row.due,
+    status: row.status === 'chiuso' ? 'chiuso' : 'aperto',
+    createdAt: Number(row.createdAt),
+    closedAt: row.closedAt === null ? null : Number(row.closedAt),
+    closedBy: row.closedBy === 'utente' || row.closedBy === 'segretario' ? row.closedBy : null
+  }
 }
 
 function parseJson<T>(value: string, fallback: T): T {
@@ -432,11 +477,187 @@ export class AiStore {
     await this.prisma.aiDraft.deleteMany({ where: { createdAt: { lt: BigInt(olderThan) } } })
   }
 
+  /* ─────────────────────────── notes on the mail ─────────────────────────── */
+
+  /**
+   * What triage made of a message: its note, the things it opened in the
+   * conversation and those it closed — only ever this conversation's.
+   */
+  async saveTriage(
+    note: Omit<MessageNote, 'dismissedAt'>,
+    opened: ReadonlyArray<{ kind: CommitmentKind; text: string; due: string | null }>,
+    closedIds: ReadonlyArray<number>
+  ): Promise<void> {
+    const now = BigInt(Date.now())
+    const data = { ...note, createdAt: now, dismissedAt: null }
+
+    await this.prisma.$transaction([
+      this.prisma.aiNote.upsert({
+        where: { accountId_messageKey: { accountId: note.accountId, messageKey: note.messageKey } },
+        create: data,
+        update: data
+      }),
+      this.prisma.aiItem.createMany({
+        data: opened.map((item) => ({
+          accountId: note.accountId,
+          threadId: note.threadId,
+          messageKey: note.messageKey,
+          kind: item.kind,
+          text: item.text,
+          due: item.due,
+          status: 'aperto',
+          createdAt: now
+        }))
+      }),
+      this.prisma.aiItem.updateMany({
+        where: {
+          id: { in: [...closedIds] },
+          accountId: note.accountId,
+          threadId: note.threadId,
+          status: 'aperto'
+        },
+        data: { status: 'chiuso', closedAt: now, closedBy: 'segretario' }
+      })
+    ])
+  }
+
+  async getNotes(
+    messages: ReadonlyArray<{ accountId: string; messageKey: string }>
+  ): Promise<MessageNote[]> {
+    const byAccount = new Map<string, string[]>()
+
+    for (const message of messages) {
+      byAccount.set(message.accountId, [
+        ...(byAccount.get(message.accountId) ?? []),
+        message.messageKey
+      ])
+    }
+
+    const rows = await Promise.all(
+      [...byAccount].map(([accountId, keys]) =>
+        this.prisma.aiNote.findMany({ where: { accountId, messageKey: { in: keys } } })
+      )
+    )
+    return rows.flat().map(noteOf)
+  }
+
+  /** A conversation's latest note and what is open in it, then what closed lately. */
+  async threadBrief(accountId: string, threadId: string): Promise<ThreadBrief> {
+    const [note, items] = await Promise.all([
+      this.prisma.aiNote.findFirst({
+        where: { accountId, threadId },
+        orderBy: { messageDate: 'desc' }
+      }),
+      this.prisma.aiItem.findMany({
+        where: { accountId, threadId },
+        orderBy: [{ status: 'asc' }, { createdAt: 'asc' }]
+      })
+    ])
+
+    return { note: note ? noteOf(note) : null, commitments: items.map(commitmentOf) }
+  }
+
+  async openCommitments(accountId: string, threadId: string): Promise<Commitment[]> {
+    const rows = await this.prisma.aiItem.findMany({
+      where: { accountId, threadId, status: 'aperto' },
+      orderBy: { createdAt: 'asc' }
+    })
+    return rows.map(commitmentOf)
+  }
+
+  /** The user closed something open; its conversation, for the views to refresh. */
+  async closeCommitment(id: number): Promise<{ accountId: string; threadId: string } | null> {
+    const row = await this.prisma.aiItem.findUnique({ where: { id } })
+
+    if (!row) {
+      return null
+    }
+
+    await this.prisma.aiItem.update({
+      where: { id },
+      data: { status: 'chiuso', closedAt: BigInt(Date.now()), closedBy: 'utente' }
+    })
+    return { accountId: row.accountId, threadId: row.threadId }
+  }
+
+  /**
+   * The user handled a conversation: its note stops asking, and what the
+   * user owed in it — asked of them, promised, to do — is closed. What they
+   * wait for stays open.
+   */
+  async dismissNote(accountId: string, messageKey: string): Promise<MessageNote | null> {
+    const row = await this.prisma.aiNote.findUnique({
+      where: { accountId_messageKey: { accountId, messageKey } }
+    })
+
+    if (!row) {
+      return null
+    }
+
+    const now = BigInt(Date.now())
+    const [note] = await this.prisma.$transaction([
+      this.prisma.aiNote.update({
+        where: { accountId_messageKey: { accountId, messageKey } },
+        data: { dismissedAt: now }
+      }),
+      this.prisma.aiItem.updateMany({
+        where: {
+          accountId,
+          threadId: row.threadId,
+          status: 'aperto',
+          kind: { in: [...OWED_KINDS] }
+        },
+        data: { status: 'chiuso', closedAt: now, closedBy: 'utente' }
+      })
+    ])
+    return noteOf(note)
+  }
+
+  /**
+   * The conversations a view of the Segretario's holds, by the message of
+   * each its latest note is for: `da-gestire` when that note asks a reply
+   * or an action and was not handled, or something the user owes is open;
+   * `in-attesa` when it waits on someone, or something awaited is open.
+   */
+  async viewMessages(
+    view: SegretarioView,
+    accountIds: ReadonlyArray<string>
+  ): Promise<Array<{ accountId: string; messageKey: string }>> {
+    if (accountIds.length === 0) {
+      return []
+    }
+
+    const states = view === 'da-gestire' ? ['da_rispondere', 'da_fare'] : ['in_attesa']
+    const kinds = view === 'da-gestire' ? [...OWED_KINDS] : ['aspetti']
+
+    return this.prisma.$queryRaw<Array<{ accountId: string; messageKey: string }>>`
+      WITH latest AS (
+        SELECT n.account_id, n.thread_id, n.message_key, n.state, n.dismissed_at
+        FROM ai_notes n
+        WHERE n.account_id IN (${Prisma.join([...accountIds])})
+          AND n.message_date = (
+            SELECT MAX(o.message_date) FROM ai_notes o
+            WHERE o.account_id = n.account_id AND o.thread_id = n.thread_id
+          )
+      )
+      SELECT l.account_id AS accountId, l.message_key AS messageKey
+      FROM latest l
+      WHERE (l.dismissed_at IS NULL AND l.state IN (${Prisma.join(states)}))
+        OR EXISTS (
+          SELECT 1 FROM ai_items i
+          WHERE i.account_id = l.account_id AND i.thread_id = l.thread_id
+            AND i.status = 'aperto' AND i.kind IN (${Prisma.join(kinds)})
+        )
+    `
+  }
+
   /** An account was removed: what the Segretario kept about it alone goes with it. */
   async forgetAccount(accountId: string, accountNotePath: string): Promise<void> {
     await this.prisma.$transaction([
       this.prisma.aiLearning.deleteMany({ where: { accountId } }),
       this.prisma.aiDraft.deleteMany({ where: { accountId } }),
+      this.prisma.aiNote.deleteMany({ where: { accountId } }),
+      this.prisma.aiItem.deleteMany({ where: { accountId } }),
       this.prisma.aiMemory.deleteMany({ where: { path: accountNotePath } })
     ])
   }
@@ -450,7 +671,9 @@ export class AiStore {
       this.prisma.aiUsage.deleteMany(),
       this.prisma.aiLearning.deleteMany(),
       this.prisma.aiLesson.deleteMany(),
-      this.prisma.aiDraft.deleteMany()
+      this.prisma.aiDraft.deleteMany(),
+      this.prisma.aiNote.deleteMany(),
+      this.prisma.aiItem.deleteMany()
     ])
   }
 }

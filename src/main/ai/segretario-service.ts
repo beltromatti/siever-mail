@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto'
 import type { PrismaClient } from '@prisma/client'
 
 import { logMainError } from '@main/utils/error-utils'
-import type { MessageRef } from '@shared/models'
+import type { SegretarioView } from '@shared/folders'
+import type { MailAccount, MailAddress, MessageRef } from '@shared/models'
 import {
   SEGRETARIO_IPC,
   type ActivityDetail,
@@ -17,6 +18,9 @@ import {
   type ComposeSpec,
   type HandleLink,
   type MemoryNote,
+  type MessageNote,
+  type NotesChange,
+  type ThreadBrief,
   type SegretarioContext,
   type SegretarioPreferences,
   type SegretarioSpending,
@@ -52,9 +56,17 @@ import {
   type FetchFunction,
   type ToolCall
 } from './openrouter'
+import { threadMessages } from './mail-search'
 import { fillTemplate, PROMPTS } from './prompts'
+import {
+  parseTriage,
+  TRIAGE_SCHEMA,
+  TRIAGE_WINDOW_DAYS,
+  triageRequest,
+  type TriageMessage
+} from './triage'
 import { SEGRETARIO_TOOLS, toolDefinitions } from './tools'
-import { clip, formatDateTime } from './tools/format'
+import { clip, formatDateTime, withoutQuotedHistory } from './tools/format'
 import { MAX_NOTE_CHARS, memoryIndex, normalizeMemoryPath } from './tools/memory-tool'
 
 /** Model turns one message of the user may take, at most: a safeguard, not a plan. */
@@ -81,6 +93,17 @@ const REFLECTION_INTERVAL_MS = 6 * 60 * 60 * 1000
 const LESSONS_PER_REFLECTION = 20
 /** A draft it wrote and nobody sent is forgotten after this. */
 const DRAFT_RECORD_TTL_MS = 90 * 24 * 60 * 60 * 1000
+/** How often triage looks for messages without a note. */
+const TRIAGE_CHECK_MS = 20_000
+/** Messages taken per look, and read side by side. */
+const TRIAGE_BATCH = 12
+const TRIAGE_CONCURRENCY = 3
+/** A message whose note failed this many times is left alone until the app starts again. */
+const TRIAGE_ATTEMPTS = 2
+/** The messages of a conversation triage reads before the one it annotates. */
+const TRIAGE_EARLIER_MESSAGES = 5
+/** Notes on the people involved that triage reads, at most. */
+const TRIAGE_PEOPLE_NOTES = 3
 /** The core notes the context block carries whole; the others are in the index. */
 const CORE_NOTES = ['tu.md', 'stile.md']
 const STREAM_FLUSH_MS = 60
@@ -140,6 +163,10 @@ export class SegretarioService {
   private readonly opened = Promise.withResolvers<void>()
   private ownWorkTimer: NodeJS.Timeout | null = null
   private consideringOwnWork = false
+  private triageTimer: NodeJS.Timeout | null = null
+  private triaging = false
+  /** Messages whose note failed, by account and key, with the attempts made. */
+  private readonly triageFailures = new Map<string, number>()
 
   constructor(private readonly options: SegretarioServiceOptions) {
     this.client = new OpenRouterClient(options.fetch)
@@ -178,6 +205,7 @@ export class SegretarioService {
       }
     }, KEY_RECHECK_MS)
     this.ownWorkTimer = setInterval(() => void this.considerOwnWork(), OWN_WORK_CHECK_MS)
+    this.triageTimer = setInterval(() => void this.triageRound(), TRIAGE_CHECK_MS)
     this.opened.resolve()
   }
 
@@ -190,6 +218,11 @@ export class SegretarioService {
     if (this.ownWorkTimer) {
       clearInterval(this.ownWorkTimer)
       this.ownWorkTimer = null
+    }
+
+    if (this.triageTimer) {
+      clearInterval(this.triageTimer)
+      this.triageTimer = null
     }
 
     for (const activity of this.running.values()) {
@@ -219,6 +252,7 @@ export class SegretarioService {
 
     if (becameReady) {
       void this.considerOwnWork()
+      void this.triageRound()
     }
 
     return status
@@ -339,6 +373,7 @@ export class SegretarioService {
   async setPreferences(preferences: SegretarioPreferences): Promise<SegretarioPreferences> {
     const stored = await this.requireStore().setPreferences(preferences)
     void this.considerOwnWork()
+    void this.triageRound()
     return stored
   }
 
@@ -482,6 +517,262 @@ export class SegretarioService {
     }
 
     await this.requireStore().clearData()
+  }
+
+  /* ─────────────────────────── notes on the mail ─────────────────────────── */
+
+  getNotes(
+    messages: ReadonlyArray<{ accountId: string; messageKey: string }>
+  ): Promise<MessageNote[]> {
+    return this.requireStore().getNotes(messages)
+  }
+
+  getThreadBrief(accountId: string, threadId: string): Promise<ThreadBrief> {
+    return this.requireStore().threadBrief(accountId, threadId)
+  }
+
+  /** The messages a view of the Segretario's holds, one per conversation (see `AiStore.viewMessages`). */
+  viewMessages(
+    view: SegretarioView,
+    accountIds: ReadonlyArray<string>
+  ): Promise<Array<{ accountId: string; messageKey: string }>> {
+    return this.requireStore().viewMessages(view, accountIds)
+  }
+
+  async closeCommitment(id: number): Promise<void> {
+    const closed = await this.requireStore().closeCommitment(id)
+
+    if (closed) {
+      this.emitNotes({ accountId: closed.accountId, messageKeys: [], threadIds: [closed.threadId] })
+    }
+  }
+
+  async dismissNote(accountId: string, messageKey: string): Promise<void> {
+    const note = await this.requireStore().dismissNote(accountId, messageKey)
+
+    if (note) {
+      this.emitNotes({ accountId, messageKeys: [messageKey], threadIds: [note.threadId] })
+    }
+  }
+
+  private emitNotes(change: NotesChange): void {
+    this.options.send(SEGRETARIO_IPC.notesChanged, change)
+  }
+
+  /**
+   * Writes the note of every message of the last two weeks, received or
+   * sent, that has none and whose text is indexed — the newest first, a
+   * few at a time. Each note is one quick call, without reasoning, held to
+   * the schema the views read.
+   */
+  private async triageRound(): Promise<void> {
+    if (this.triaging || !this.store || this.status.keyState !== 'ready') {
+      return
+    }
+
+    this.triaging = true
+
+    try {
+      const store = this.store
+
+      while ((await store.getPreferences()).triage && this.status.keyState === 'ready') {
+        const since = new Date(Date.now() - TRIAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+        const failing = (accountId: string, messageKey: string): boolean =>
+          (this.triageFailures.get(`${accountId}\u0000${messageKey}`) ?? 0) >= TRIAGE_ATTEMPTS
+        const threads = (
+          await this.options.mail.untriagedThreads(
+            since.toISOString(),
+            TRIAGE_BATCH + this.triageFailures.size
+          )
+        )
+          .map((thread) => ({
+            ...thread,
+            messages: thread.messages.filter(
+              (message) => !failing(thread.accountId, message.messageKey)
+            )
+          }))
+          .filter((thread) => thread.messages.length > 0)
+          .slice(0, TRIAGE_BATCH)
+
+        if (threads.length === 0) {
+          return
+        }
+
+        const key = await this.requireKey()
+        const accounts = await this.options.mail.listAccounts()
+        const notes = await store.listMemory()
+        const queue = [...threads]
+        let reachable = true
+
+        // Conversations side by side; within one, its messages in the order
+        // they were written: what one opens, a later one may close.
+        await Promise.all(
+          Array.from({ length: TRIAGE_CONCURRENCY }, async () => {
+            for (let thread = queue.shift(); thread && reachable; thread = queue.shift()) {
+              for (const message of thread.messages) {
+                reachable = await this.triageOne(
+                  { ...message, threadId: thread.threadId },
+                  key,
+                  accounts,
+                  notes
+                )
+
+                if (!reachable) {
+                  break
+                }
+              }
+            }
+          })
+        )
+
+        // OpenRouter out of reach, or the key refused: the next look tries again.
+        if (!reachable) {
+          return
+        }
+      }
+    } catch (error) {
+      logMainError('Segretario: triage round failed', error)
+    } finally {
+      this.triaging = false
+    }
+  }
+
+  private async triageOne(
+    item: { ref: MessageRef; messageKey: string; threadId: string; dateIso: string },
+    key: string,
+    accounts: ReadonlyArray<MailAccount>,
+    notes: ReadonlyArray<{ path: string; content: string }>
+  ): Promise<boolean> {
+    const failureKey = `${item.ref.accountId}\u0000${item.messageKey}`
+    const account = accounts.find((candidate) => candidate.id === item.ref.accountId)
+
+    if (!account) {
+      return true
+    }
+
+    try {
+      const store = this.requireStore()
+      const mail = this.options.mail
+      const own = new Set(accounts.map((candidate) => candidate.email.toLowerCase()))
+      const target = await mail.readMessage(item.ref)
+      const earlier = (
+        await threadMessages(
+          await mail.searchClient(),
+          account.id,
+          item.threadId,
+          await mail.listFolders(account.id),
+          item.dateIso
+        )
+      ).filter((ref) => !(ref.folderPath === item.ref.folderPath && ref.uid === item.ref.uid))
+      const thread: TriageMessage[] = []
+
+      for (const ref of earlier.slice(-TRIAGE_EARLIER_MESSAGES)) {
+        const message = await mail.readMessage(ref)
+
+        if (message.messageKey !== item.messageKey) {
+          thread.push(triageMessage(message, false))
+        }
+      }
+
+      thread.push(triageMessage(target, true))
+
+      const addresses = new Set(
+        thread
+          .flatMap((message) => [...message.from, ...message.to, ...message.cc])
+          .map((address) => address.address.toLowerCase())
+          .filter((address) => !own.has(address))
+      )
+      const people = notes
+        .filter(
+          (note) =>
+            note.path.startsWith('persone/') &&
+            [...addresses].some((address) => note.content.toLowerCase().includes(address))
+        )
+        .slice(0, TRIAGE_PEOPLE_NOTES)
+      const accountNote = notes.find(
+        (note) => note.path === normalizeMemoryPath(`account/${account.email}`)
+      )
+      const tu = notes.find((note) => note.path === 'tu.md')
+      const open = await store.openCommitments(account.id, item.threadId)
+      const fromUser = target.from.some((address) => own.has(address.address.toLowerCase()))
+
+      const result = await this.client.chat(key, {
+        messages: [
+          {
+            role: 'system',
+            content: tu
+              ? `${PROMPTS.triage}\n\n# Cosa sai dell'utente\n\n${tu.content.trim()}`
+              : PROMPTS.triage
+          },
+          {
+            role: 'user',
+            content: triageRequest({
+              today: new Date(),
+              accountEmail: account.email,
+              accountName: account.displayName,
+              accountNote: accountNote?.content ?? null,
+              fromUser,
+              people,
+              open,
+              thread
+            })
+          }
+        ],
+        reasoningEffort: 'none',
+        maxTokens: 1000,
+        responseSchema: { name: 'nota', schema: TRIAGE_SCHEMA }
+      })
+
+      await this.recordUsage(null, 'smistamento', result)
+      const triage = parseTriage(result.content)
+
+      await store.saveTriage(
+        {
+          accountId: account.id,
+          messageKey: item.messageKey,
+          threadId: item.threadId,
+          direction: fromUser ? 'out' : 'in',
+          summary: triage.summary,
+          state: triage.state,
+          priority: triage.priority,
+          reason: triage.reason,
+          due: triage.due,
+          messageDate: item.dateIso
+        },
+        triage.opened,
+        triage.closed.filter((id) => open.some((commitment) => commitment.id === id))
+      )
+      this.triageFailures.delete(failureKey)
+      this.emitNotes({
+        accountId: account.id,
+        messageKeys: [item.messageKey],
+        threadIds: [item.threadId]
+      })
+      return true
+    } catch (error) {
+      // Not the message's fault: the network, OpenRouter, the key. It waits for the next look.
+      if (error instanceof SegretarioError) {
+        if (error.code === 'no-credit' || error.code === 'invalid-key') {
+          void this.checkKey()
+          return false
+        }
+
+        if (error.retryable) {
+          return false
+        }
+      }
+
+      const attempts = (this.triageFailures.get(failureKey) ?? 0) + 1
+      this.triageFailures.set(failureKey, attempts)
+
+      if (attempts === TRIAGE_ATTEMPTS) {
+        logMainError('Segretario: a message could not be annotated', error, {
+          messageKey: item.messageKey
+        })
+      }
+
+      return true
+    }
   }
 
   /* ──────────────────────────────── its memory ──────────────────────────────── */
@@ -1330,6 +1621,29 @@ function handleLinks(records: ReadonlyArray<HandleRecord> | undefined): HandleLi
 }
 
 /** What the page shows of a stored event; null for those it does not show. */
+/** A message as triage reads it: who, when, what — its own words, without the quoted history. */
+function triageMessage(
+  message: {
+    date: string
+    from: MailAddress[]
+    to: MailAddress[]
+    cc: MailAddress[]
+    subject: string
+    textForReading: string
+  },
+  target: boolean
+): TriageMessage {
+  return {
+    date: message.date,
+    from: message.from,
+    to: message.to,
+    cc: message.cc,
+    subject: message.subject,
+    text: withoutQuotedHistory(message.textForReading).text,
+    target
+  }
+}
+
 /** Text set as a Markdown quote. */
 function quoteBlock(text: string): string {
   return text

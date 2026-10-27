@@ -24,6 +24,22 @@ export interface SegretarioMailPort {
   /** Each account's signature as text, by account id: the user's own, as they sign. */
   accountSignatures(): Promise<Map<string, string>>
   listFolders(accountId: string): Promise<MailFolder[]>
+  /**
+   * The conversations of every account's inbox and sent mail with messages
+   * since `sinceIso` that have no note yet and whose text is indexed: those
+   * with the newest such message first, each with all of them, oldest
+   * first — what one message opens, a later one may close.
+   */
+  untriagedThreads(
+    sinceIso: string,
+    limit: number
+  ): Promise<
+    Array<{
+      accountId: string
+      threadId: string
+      messages: Array<{ ref: MessageRef; messageKey: string; dateIso: string }>
+    }>
+  >
   /** Whether the account's mail has arrived and its last `days` days are indexed: enough to get to know it. */
   recentMailIndexed(accountId: string, days: number): Promise<boolean>
   /** The client the search and the threads read from (see `mail-search.ts`). */
