@@ -5,6 +5,7 @@ import learning from './prompts/conoscerti.md?raw'
 import briefing from './prompts/oggi.md?raw'
 import context from './prompts/contesto.md?raw'
 import reflection from './prompts/riflessione.md?raw'
+import writing from './prompts/scrittura.md?raw'
 import triage from './prompts/smistamento.md?raw'
 import readyDraft from './prompts/risposta-pronta.md?raw'
 import system from './prompts/segretario.md?raw'
@@ -39,6 +40,7 @@ export const PROMPTS = {
   learning: learning.trim(),
   reflection: reflection.trim(),
   triage: triage.trim(),
+  writing: writing.trim(),
   readyDraft: readyDraft.trim(),
   title: title.trim(),
   tools: {

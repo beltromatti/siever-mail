@@ -68,3 +68,81 @@ export function readyDraftRequest(input: {
     `## Come l'utente ha scritto a questa persona\n\n${examples}`
   ].join('\n\n')
 }
+
+/** What the model hands back when asked to write while the user writes: the whole text. */
+export const WRITING_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['testo'],
+  properties: { testo: { type: 'string' } }
+} as const
+
+const writingAnswer = z.object({ testo: z.string().trim() })
+
+export function parseWriting(content: string): string {
+  const text = writingAnswer.parse(JSON.parse(content)).testo
+
+  if (!text) {
+    throw new Error('Non ho scritto niente: dimmi in qualche parola cosa vuoi che scriva.')
+  }
+
+  return text
+}
+
+/**
+ * What the model reads when the user asks it to write or rewrite the
+ * message in the composer: the conversation answered, if any, the message
+ * as it stands, and the request.
+ */
+export function writingRequest(input: {
+  today: Date
+  accountEmail: string
+  accountName: string
+  accountNote: string | null
+  people: ReadonlyArray<{ path: string; content: string }>
+  subject: string
+  to: ReadonlyArray<string>
+  thread: ReadonlyArray<TriageMessage> | null
+  writtenText: string
+  instruction: string
+}): string {
+  const header = [
+    `Oggi è ${new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(input.today)}.`,
+    `L'utente scrive da ${input.accountEmail} (${input.accountName}) a ${input.to.join(', ') || 'nessuno, per ora'}; oggetto: ${input.subject || '(nessuno)'}.`
+  ].join('\n')
+  const context = input.thread
+    ? triageRequest({
+        today: input.today,
+        accountEmail: input.accountEmail,
+        accountName: input.accountName,
+        accountNote: input.accountNote,
+        fromUser: false,
+        people: input.people,
+        open: [],
+        thread: input.thread
+      })
+        .replace(/^Oggi è[^\n]*\n\n[^\n]*\n\n/, '')
+        .replace('▶ IL MESSAGGIO DA ANNOTARE', '▶ IL MESSAGGIO A CUI SI RISPONDE')
+        .replace(/\n*## Cose già aperte in questa conversazione\n\nNessuna\./, '')
+    : [
+        input.accountNote
+          ? `## Cosa sai di questo account\n\n${clip(input.accountNote, 2500).text}`
+          : null,
+        input.people.length > 0
+          ? `## Cosa sai delle persone a cui scrive\n\n${input.people
+              .map((note) => `### ${note.path}\n${clip(note.content, 1500).text}`)
+              .join('\n\n')}`
+          : null
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+
+  return [
+    header,
+    context,
+    `## Il testo scritto finora\n\n${input.writtenText.trim() || '(vuoto)'}`,
+    `## La richiesta dell'utente\n\n${input.instruction.trim()}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}

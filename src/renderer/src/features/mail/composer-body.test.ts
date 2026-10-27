@@ -5,6 +5,7 @@ import {
   hasWrittenContent,
   plainTextToComposerHtml,
   replaceComposerSignature,
+  replaceWrittenPart,
   writtenText,
   splitSignature
 } from './composer-body'
@@ -226,5 +227,29 @@ describe('writtenText', () => {
 
   it('is empty when only the signature and the quote are there', () => {
     expect(writtenText(buildComposerBody('<div>Mario</div>', QUOTE))).toBe('')
+  })
+})
+
+describe('replaceWrittenPart', () => {
+  it('writes in place of the lines above the signature, keeping the signature and the quote', () => {
+    const html = buildComposerBody('<div>Mario</div>', QUOTE, '<div>Prima versione</div>')
+
+    expect(replaceWrittenPart(html, '<div>Seconda</div><div>versione</div>')).toBe(
+      `<div>Seconda</div><div>versione</div>${EMPTY_LINE}<div class="gmail_signature"><div>Mario</div></div>${EMPTY_LINE}${QUOTE}`
+    )
+  })
+
+  it('writes above the quote when there is no signature', () => {
+    const html = buildComposerBody(null, QUOTE, '<div>Va bene.</div>')
+
+    expect(replaceWrittenPart(html, '<div>Perfetto.</div>')).toBe(
+      `<div>Perfetto.</div>${EMPTY_LINE}${QUOTE}`
+    )
+  })
+
+  it('is the whole body when there is neither', () => {
+    expect(replaceWrittenPart('<div>Ciao</div>', '<div>Buongiorno</div>')).toBe(
+      '<div>Buongiorno</div>'
+    )
   })
 })

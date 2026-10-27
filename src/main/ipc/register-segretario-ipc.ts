@@ -25,6 +25,16 @@ const preferencesSchema = z.object({
 
 const memoryPathSchema = z.string().trim().min(1).max(300)
 
+const writingRequestSchema = z.object({
+  draftId: z.string().min(1).max(100),
+  accountId: z.string().min(1),
+  instruction: z.string().trim().min(1, 'Scrivi cosa vuoi che scriva.').max(4000),
+  writtenText: z.string().max(200_000),
+  subject: z.string().max(2000),
+  to: z.array(z.string().max(500)).max(500),
+  replyTo: messageRefSchema.nullable()
+})
+
 const messageKeysSchema = z
   .array(z.object({ accountId: z.string().min(1), messageKey: z.string().min(1) }))
   .max(1000)
@@ -113,6 +123,9 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
     segretario.discardReadyDraft(idSchema.parse(accountId), z.string().min(1).parse(messageKey))
   )
   handle(SEGRETARIO_IPC.getBriefing, () => segretario.getBriefing())
+  handle(SEGRETARIO_IPC.assistWriting, (request: unknown) =>
+    segretario.assistWriting(writingRequestSchema.parse(request))
+  )
   handle(SEGRETARIO_IPC.writeBriefingOpening, () => segretario.writeBriefingOpening())
   handle(SEGRETARIO_IPC.draftSent, (draftId: unknown, writtenText: unknown) =>
     segretario.draftSent(idSchema.parse(draftId), z.string().max(200_000).parse(writtenText))

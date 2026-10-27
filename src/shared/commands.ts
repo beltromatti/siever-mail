@@ -163,6 +163,15 @@ const HOST_COMMANDS = [
     editable: true
   },
   {
+    id: 'segretario-write',
+    label: 'Scrivi con il Segretario',
+    description: 'Chiede al Segretario di scrivere o riscrivere il messaggio che stai scrivendo.',
+    group: 'writing',
+    scope: 'composer',
+    defaultChord: 'Mod+KeyJ',
+    editable: true
+  },
+  {
     id: 'show-cc',
     label: 'Mostra Cc e Ccn',
     description: 'Apre i campi per le copie e le copie nascoste.',

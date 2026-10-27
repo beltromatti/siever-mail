@@ -4725,6 +4725,9 @@ function App(): React.JSX.Element {
             onClosed={(outcome) => handleComposerClosed(session.id, outcome)}
             onSendRequested={handleComposerSendRequested}
             onSummaryChange={(summary) => updateComposeSummary(session.id, summary)}
+            canAskSegretario={
+              segretario.status?.keyState === 'ready' || segretario.status?.keyState === 'unchecked'
+            }
           />
         ))}
 

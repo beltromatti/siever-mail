@@ -153,6 +153,21 @@ export interface Briefing {
   ready: BriefingItem[]
 }
 
+/** What the user asks of the Segretario while writing a message. */
+export interface WritingRequest {
+  /** The draft being written, kept so what the user changes afterwards is learnt from. */
+  draftId: string
+  accountId: string
+  /** "Scrivi la risposta", "più breve", "in inglese"… */
+  instruction: string
+  /** What is written so far, without the signature and the quote. */
+  writtenText: string
+  subject: string
+  to: string[]
+  /** The message answered or forwarded, for its conversation. */
+  replyTo: MessageRef | null
+}
+
 /** Notes were written or changed: the views showing these refresh. */
 export interface NotesChange {
   accountId: string
@@ -373,6 +388,7 @@ export const SEGRETARIO_IPC = {
   discardReadyDraft: 'segretario:discard-ready-draft',
   readyDraftSource: 'segretario:ready-draft-source',
   getBriefing: 'segretario:get-briefing',
+  assistWriting: 'segretario:assist-writing',
   writeBriefingOpening: 'segretario:write-briefing-opening',
   notesChanged: 'segretario:notes-changed',
   listActivities: 'segretario:list-activities',
@@ -429,6 +445,8 @@ export interface SegretarioApi {
   takeUpReadyDraft: (accountId: string, messageKey: string, draftId: string) => Promise<void>
   discardReadyDraft: (accountId: string, messageKey: string) => Promise<void>
   getBriefing: () => Promise<Briefing>
+  /** Writes or rewrites the message being written, as asked: the whole text, ready to send. */
+  assistWriting: (request: WritingRequest) => Promise<{ text: string }>
   /** Writes the day's opening again, from the day as it stands. */
   writeBriefingOpening: () => Promise<Briefing>
   listActivities: () => Promise<ActivitySummary[]>

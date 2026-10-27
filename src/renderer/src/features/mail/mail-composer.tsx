@@ -39,12 +39,16 @@ import { AttachMenu } from '@renderer/features/mail/attach-menu'
 import { AttachmentChip } from '@renderer/features/mail/attachment-chip'
 import {
   buildComposerBody,
+  plainTextToComposerHtml,
   replaceComposerSignature,
-  splitSignature
+  replaceWrittenPart,
+  splitSignature,
+  writtenText
 } from '@renderer/features/mail/composer-body'
 import { ComposerPanel } from '@renderer/features/mail/composer-panel'
 import { RecipientField, type RecipientFieldKey } from '@renderer/features/mail/recipient-field'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
+import { ComposeAssist } from '@renderer/features/segretario/compose-assist'
 import { commandForKeyEvent, useShortcutOverrides } from '@renderer/lib/command-shortcuts'
 import { htmlToPlainText } from '@renderer/lib/email'
 import { cn, revealInFolderLabel } from '@renderer/lib/utils'
@@ -155,6 +159,8 @@ interface MailComposerProps {
   onClosed: (outcome: ComposerOutcome) => void
   onSendRequested: (payload: ComposeMailInput, draft: ComposerInitialData) => void
   onSummaryChange: (summary: ComposerSummary) => void
+  /** The Segretario can be asked to write (⌘J): its key is there. */
+  canAskSegretario: boolean
   ref?: React.Ref<MailComposerHandle>
 }
 
@@ -318,6 +324,7 @@ export function MailComposer({
   onClosed,
   onSendRequested,
   onSummaryChange,
+  canAskSegretario,
   ref
 }: MailComposerProps): React.JSX.Element {
   const { initialData } = session
@@ -868,8 +875,43 @@ export function MailComposer({
     }
   }
 
+  // The Segretario writing here: its popover, and what was written before
+  // its last rewrite, to put back.
+  const [assistOpen, setAssistOpen] = useState(false)
+  const [assistUndo, setAssistUndo] = useState<string | null>(null)
+
+  const askSegretario = async (instruction: string): Promise<void> => {
+    if (!account) {
+      return
+    }
+
+    const previous = form.html
+    const { text } = await window.segretarioApi.assistWriting({
+      draftId: session.id,
+      accountId: account.id,
+      instruction,
+      writtenText: writtenText(form.html),
+      subject: form.subject,
+      to: [...form.to, ...form.cc].map((recipient) => recipient.address),
+      replyTo: initialData.original?.ref ?? null
+    })
+
+    touch()
+    setForm((current) => ({
+      ...current,
+      html: replaceWrittenPart(current.html, plainTextToComposerHtml(text))
+    }))
+    setAssistUndo(previous)
+  }
+
   const runComposerCommand = (commandId: string): void => {
     switch (commandId) {
+      case 'segretario-write':
+        if (account && canAskSegretario) {
+          setEditorFocusMode(false)
+          setAssistOpen(true)
+        }
+        return
       case 'send':
         void handleSend()
         return
@@ -1251,13 +1293,34 @@ export function MailComposer({
           <div
             className={cn('flex items-center justify-between gap-2', editorFocusMode && 'hidden')}
           >
-            <AttachMenu
-              disabled={!account}
-              originals={unattachedOriginals}
-              onAttachOriginals={attachOriginals}
-              onAttachPaths={(paths) => void attachPaths(paths)}
-              onBrowse={() => void handlePickAttachments()}
-            />
+            <div className="flex items-center gap-1">
+              <AttachMenu
+                disabled={!account}
+                originals={unattachedOriginals}
+                onAttachOriginals={attachOriginals}
+                onAttachPaths={(paths) => void attachPaths(paths)}
+                onBrowse={() => void handlePickAttachments()}
+              />
+              {canAskSegretario && (
+                <ComposeAssist
+                  open={assistOpen}
+                  onOpenChange={setAssistOpen}
+                  disabled={!account || !bodyReady}
+                  isReply={initialData.original !== undefined}
+                  hasText={writtenText(form.html).length > 0}
+                  onAsk={askSegretario}
+                  onUndo={
+                    assistUndo === null
+                      ? undefined
+                      : () => {
+                          const restored = assistUndo
+                          setAssistUndo(null)
+                          setForm((current) => ({ ...current, html: restored }))
+                        }
+                  }
+                />
+              )}
+            </div>
             <div className="flex min-w-0 items-center gap-2">
               <DraftStatusLine status={touched || persisted ? status : null} />
               <IconButton

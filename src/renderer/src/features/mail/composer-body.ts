@@ -281,6 +281,34 @@ export function hasWrittenContent(html: string): boolean {
   return hasWrittenOutside(root, findQuote(root))
 }
 
+/**
+ * The body with new lines written in place of the user's: everything above
+ * the signature (or the quote, without one) is replaced by `writtenHtml`
+ * and the empty line that sets the signature apart; the signature, the
+ * quote and what is after them stay as they are.
+ */
+export function replaceWrittenPart(html: string, writtenHtml: string): string {
+  const root = parseBody(html)
+  // The line of the body that holds the signature (or the quote): written
+  // lines are what comes before it.
+  let container: Element | null = findSignatureBlock(root) ?? findQuote(root) ?? null
+
+  while (container && container.parentElement !== root) {
+    container = container.parentElement
+  }
+
+  if (!container) {
+    return writtenHtml
+  }
+
+  while (root.firstChild && root.firstChild !== container) {
+    root.firstChild.remove()
+  }
+
+  container.insertAdjacentHTML('beforebegin', `${writtenHtml}${EMPTY_LINE}`)
+  return root.innerHTML
+}
+
 const LINE_BLOCKS = new Set(['DIV', 'P', 'LI', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'PRE', 'TR'])
 
 /**

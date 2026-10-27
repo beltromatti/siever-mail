@@ -716,6 +716,15 @@ proposal in "Il punto" — "Usa questa risposta" opens it in the composer as
 a reply, recorded like the Segretario's other drafts so the user's edits
 are learnt from; "Scarta" sets it aside. Both can be switched off.
 
+**Writing together.** In the composer, ⌘J (or the "Segretario" button
+beside "Allega") asks it to write the reply, or to rewrite what is written —
+shorter, more formal, corrected, in English, or in the user's own words.
+One call (`scrittura.md`) with the conversation answered, the user's notes
+and style and the people written to; what comes back takes the place of
+the lines above the signature and the quote (`replaceWrittenPart`), with
+"Annulla" to put them back, and is kept as the Segretario's draft so the
+user's later edits are learnt from.
+
 **Oggi** is the page the workspace opens on when the Segretario is set up,
 in the place of the list and the reader (`today-page.tsx`, the layout's
 `page`). It is made of the notes and what is open: what is due today or

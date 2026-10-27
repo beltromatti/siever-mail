@@ -25,6 +25,7 @@ import {
   type NotePriority,
   type NotesChange,
   type ThreadBrief,
+  type WritingRequest,
   type SegretarioContext,
   type SegretarioPreferences,
   type SegretarioSpending,
@@ -61,7 +62,14 @@ import {
   type ToolCall
 } from './openrouter'
 import { searchMail, searchScope, threadMessages } from './mail-search'
-import { parseReadyDraft, READY_DRAFT_SCHEMA, readyDraftRequest } from './ready-drafts'
+import {
+  parseReadyDraft,
+  parseWriting,
+  READY_DRAFT_SCHEMA,
+  readyDraftRequest,
+  WRITING_SCHEMA,
+  writingRequest
+} from './ready-drafts'
 import { fillTemplate, PROMPTS } from './prompts'
 import {
   parseTriage,
@@ -543,6 +551,102 @@ export class SegretarioService {
 
   getThreadBrief(accountId: string, threadId: string): Promise<ThreadBrief> {
     return this.requireStore().threadBrief(accountId, threadId)
+  }
+
+  /* ───────────────────────── writing with the user ───────────────────────── */
+
+  /**
+   * The message being written, written or rewritten as the user asks: from
+   * the conversation answered, what is known of the user, their style and
+   * the people they write to. What comes back is kept as the Segretario's
+   * draft, so what the user changes before sending is learnt from.
+   */
+  async assistWriting(request: WritingRequest): Promise<{ text: string }> {
+    const store = this.requireStore()
+    const key = await this.requireKey()
+    const accounts = await this.options.mail.listAccounts()
+    const account = accounts.find((candidate) => candidate.id === request.accountId)
+
+    if (!account) {
+      throw new Error('L’account da cui scrivi non c’è più.')
+    }
+
+    const notes = await store.listMemory()
+    const own = new Set(accounts.map((candidate) => candidate.email.toLowerCase()))
+    const original = request.replyTo ? await this.options.mail.readMessage(request.replyTo) : null
+    const conversation =
+      request.replyTo && original
+        ? await this.conversationFor(
+            {
+              ref: request.replyTo,
+              messageKey: original.messageKey,
+              threadId: original.threadId,
+              dateIso: original.date
+            },
+            account,
+            own,
+            notes
+          )
+        : null
+    const recipients = request.to.map((address) => address.toLowerCase())
+    const people =
+      conversation?.people ??
+      notes
+        .filter(
+          (note) =>
+            note.path.startsWith('persone/') &&
+            recipients.some((address) => note.content.toLowerCase().includes(address))
+        )
+        .slice(0, TRIAGE_PEOPLE_NOTES)
+    const accountNote = notes.find(
+      (note) => note.path === normalizeMemoryPath(`account/${account.email}`)
+    )
+    const tu = notes.find((note) => note.path === 'tu.md')
+    const style = notes.find((note) => note.path === 'stile.md')
+
+    const result = await this.client.chat(key, {
+      messages: [
+        {
+          role: 'system',
+          content: [
+            PROMPTS.writing,
+            tu ? `# Chi è l'utente\n\n${tu.content.trim()}` : null,
+            style ? `# Come scrive l'utente\n\n${style.content.trim()}` : null
+          ]
+            .filter(Boolean)
+            .join('\n\n')
+        },
+        {
+          role: 'user',
+          content: writingRequest({
+            today: new Date(),
+            accountEmail: account.email,
+            accountName: account.displayName,
+            accountNote: accountNote?.content ?? null,
+            people,
+            subject: request.subject,
+            to: request.to,
+            thread: conversation?.thread ?? null,
+            writtenText: request.writtenText,
+            instruction: request.instruction
+          })
+        }
+      ],
+      reasoningEffort: 'low',
+      maxTokens: 8000,
+      responseSchema: { name: 'testo', schema: WRITING_SCHEMA }
+    })
+
+    await this.recordUsage(null, 'scrittura', result)
+    const text = parseWriting(result.content)
+
+    await store.recordDraft({
+      draftId: request.draftId,
+      activityId: null,
+      accountId: account.id,
+      text
+    })
+    return { text }
   }
 
   /* ──────────────────────────────── the day ──────────────────────────────── */
