@@ -5,11 +5,14 @@ import type {
   ActivitySummary,
   HandleLink,
   SegretarioContext,
+  SegretarioPreferences,
   SegretarioStatus
 } from '@shared/segretario'
 
 export interface SegretarioState {
   status: SegretarioStatus | null
+  /** What it does on its own, as the user set it; null while loading. */
+  preferences: SegretarioPreferences | null
   activities: ActivitySummary[]
   /** The activity on screen, null for a new one. */
   selectedId: string | null
@@ -33,6 +36,8 @@ export interface SegretarioState {
     outcome?: Parameters<typeof window.segretarioApi.resolveApproval>[3]
   ): Promise<void>
   refreshStatus(): Promise<void>
+  /** The user's answer to getting to know them. */
+  setLearning(learning: boolean): Promise<void>
 }
 
 function sortActivities(activities: ActivitySummary[]): ActivitySummary[] {
@@ -59,6 +64,7 @@ function upsertEntry(entries: ActivityEntry[], entry: ActivityEntry): ActivityEn
  */
 export function useSegretario(visible: boolean): SegretarioState {
   const [status, setStatus] = useState<SegretarioStatus | null>(null)
+  const [preferences, setPreferences] = useState<SegretarioPreferences | null>(null)
   const [activities, setActivities] = useState<ActivitySummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [entries, setEntries] = useState<ActivityEntry[] | null>(null)
@@ -72,6 +78,7 @@ export function useSegretario(visible: boolean): SegretarioState {
 
   useEffect(() => {
     void window.segretarioApi.getStatus().then(setStatus)
+    void window.segretarioApi.getPreferences().then(setPreferences)
     void window.segretarioApi.listActivities().then((list) => setActivities(sortActivities(list)))
 
     const offStatus = window.segretarioApi.onStatusChanged(setStatus)
@@ -183,8 +190,17 @@ export function useSegretario(visible: boolean): SegretarioState {
     return map
   }, [entries])
 
+  const setLearning = useCallback(
+    async (learning: boolean): Promise<void> => {
+      const current = preferences ?? (await window.segretarioApi.getPreferences())
+      setPreferences(await window.segretarioApi.setPreferences({ ...current, learning }))
+    },
+    [preferences]
+  )
+
   return {
     status,
+    preferences,
     activities,
     selectedId,
     entries,
@@ -198,6 +214,7 @@ export function useSegretario(visible: boolean): SegretarioState {
     remove: async (id) => window.segretarioApi.removeActivity(id),
     resolveApproval: async (activityId, approvalId, approved, outcome) =>
       window.segretarioApi.resolveApproval(activityId, approvalId, approved, outcome),
-    refreshStatus: async () => setStatus(await window.segretarioApi.checkKey())
+    refreshStatus: async () => setStatus(await window.segretarioApi.checkKey()),
+    setLearning
   }
 }

@@ -118,8 +118,11 @@ export const searchMailTool: SegretarioTool = {
     const looked = [
       'Cercato',
       text ? `«${text}»` : unreadOnly ? 'i non letti' : null,
-      folder ? `in ${folderQueryLabel(folder)}` : account ? null : 'in tutta la posta',
-      account ? `di ${account}` : null,
+      folder
+        ? `in ${folderQueryLabel(folder)}${account ? ` di ${account}` : ''}`
+        : account
+          ? `nella posta di ${account}`
+          : 'in tutta la posta',
       from && to
         ? `dal ${shortDate(from)} al ${shortDate(to)}`
         : from

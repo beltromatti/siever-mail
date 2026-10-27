@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   AlertCircle,
   ArrowUp,
+  ChartColumn,
   Check,
   Eye,
   FileSearch,
@@ -45,6 +46,7 @@ export interface SegretarioContextChip {
 
 const TOOL_ICONS: Readonly<Record<string, typeof Search>> = {
   cerca_posta: Search,
+  panoramica: ChartColumn,
   leggi_posta: MailOpen,
   leggi_allegato: Paperclip,
   cerca_file: FileSearch,
@@ -291,6 +293,18 @@ function Thread({
 
           switch (entry.kind) {
             case 'user':
+              // Work it began itself opens with what it set out to do, in its own hand.
+              if (entry.origin === 'segretario') {
+                return (
+                  <p
+                    key={entry.id}
+                    className="text-ai voice border-ai-line border-l-2 pl-3 text-[13.5px] leading-[1.5] italic"
+                  >
+                    {entry.text}
+                  </p>
+                )
+              }
+
               return (
                 <div key={entry.id} className="mt-1 flex flex-col items-end gap-1">
                   <div className="bg-hover max-w-[88%] rounded-[12px_12px_4px_12px] px-3 py-2 text-[13px] leading-[1.45] whitespace-pre-wrap shadow-[inset_0_0_0_1px_hsl(var(--border))]">
@@ -353,12 +367,53 @@ function Thread({
   )
 }
 
+/**
+ * Getting to know the user means reading what they wrote, on its own: it
+ * asks first, once, and says what it will do and where the notes go.
+ */
+function LearningInvitation({
+  onAnswer
+}: {
+  onAnswer: (learning: boolean) => Promise<void>
+}): React.JSX.Element {
+  const [answering, setAnswering] = useState(false)
+  const answer = (learning: boolean): void => {
+    setAnswering(true)
+    void onAnswer(learning).finally(() => setAnswering(false))
+  }
+
+  return (
+    <div className="sheet flex flex-col gap-2.5 rounded-[10px] p-3.5">
+      <p className="voice text-foreground text-[15px] leading-[1.45]">
+        Posso imparare a conoscerti?
+      </p>
+      <p className="text-muted-foreground text-[12px] leading-[1.5]">
+        Leggo la posta che hai scritto da ogni account, un account alla volta, e prendo appunti su
+        di te, sulle persone che contano e su come scrivi; poi imparo dalle correzioni che fai alle
+        mie bozze. Gli appunti restano su questo computer: li trovi, e li correggi, in Impostazioni
+        → Cosa so di te. Costa pochi centesimi.
+      </p>
+      <div className="flex gap-1.5 pt-0.5">
+        <Button size="sm" disabled={answering} onClick={() => answer(true)}>
+          Sì, impara a conoscermi
+        </Button>
+        <Button variant="ghost" size="sm" disabled={answering} onClick={() => answer(false)}>
+          Non ora
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function Introduction({
   onSuggest,
-  suggestions
+  suggestions,
+  askLearning
 }: {
   onSuggest: (text: string) => void
   suggestions: ReadonlyArray<string>
+  /** Asks whether it may get to know the user, until they answer. */
+  askLearning: ((learning: boolean) => Promise<void>) | null
 }): React.JSX.Element {
   return (
     <div className="flex min-h-0 flex-1 flex-col justify-end gap-4 overflow-y-auto px-5 pb-4">
@@ -366,6 +421,7 @@ function Introduction({
         Sono il tuo segretario. Posso cercare e leggere tutta la tua posta e i tuoi file,
         riassumerti una questione, preparare le risposte nel tuo stile e mettere in ordine.
       </p>
+      {askLearning && <LearningInvitation onAnswer={askLearning} />}
       <div className="flex flex-col items-start gap-1.5">
         {suggestions.map((suggestion) => (
           <button
@@ -547,6 +603,11 @@ export function SegretarioPanel({
         <Introduction
           suggestions={suggestions}
           onSuggest={(suggestion) => void submit(suggestion)}
+          askLearning={
+            state.status?.keyState === 'ready' && state.preferences?.learning === null
+              ? state.setLearning
+              : null
+          }
         />
       )}
 

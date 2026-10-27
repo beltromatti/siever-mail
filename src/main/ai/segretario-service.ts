@@ -8,11 +8,15 @@ import {
   SEGRETARIO_IPC,
   type ActivityDetail,
   type ActivityEntry,
+  type AccountLearning,
   type ActivityEvent,
+  type ActivityKind,
+  type ActivityStatus,
   type ActivitySummary,
   type ComposeResult,
   type ComposeSpec,
   type HandleLink,
+  type MemoryNote,
   type SegretarioContext,
   type SegretarioPreferences,
   type SegretarioSpending,
@@ -50,8 +54,8 @@ import {
 } from './openrouter'
 import { fillTemplate, PROMPTS } from './prompts'
 import { SEGRETARIO_TOOLS, toolDefinitions } from './tools'
-import { formatDateTime } from './tools/format'
-import { memoryIndex } from './tools/memory-tool'
+import { clip, formatDateTime } from './tools/format'
+import { MAX_NOTE_CHARS, memoryIndex, normalizeMemoryPath } from './tools/memory-tool'
 
 /** Model turns one message of the user may take, at most: a safeguard, not a plan. */
 const MAX_STEPS_PER_TURN = 80
@@ -67,6 +71,16 @@ const COMPACT_AT = 140_000
 const COMPOSE_TIMEOUT_MS = 30_000
 /** The key and its credit are looked at again this often while the app runs. */
 const KEY_RECHECK_MS = 20 * 60 * 1000
+/** How often it looks whether there is work to begin on its own. */
+const OWN_WORK_CHECK_MS = 60_000
+/** An account is got to know once this many recent days of its mail are indexed. */
+const LEARNING_READY_DAYS = 90
+/** Reflections come at most this often, and only with something new to learn from. */
+const REFLECTION_INTERVAL_MS = 6 * 60 * 60 * 1000
+/** Corrections a reflection takes in at once; the rest wait for the next. */
+const LESSONS_PER_REFLECTION = 20
+/** A draft it wrote and nobody sent is forgotten after this. */
+const DRAFT_RECORD_TTL_MS = 90 * 24 * 60 * 60 * 1000
 /** The core notes the context block carries whole; the others are in the index. */
 const CORE_NOTES = ['tu.md', 'stile.md']
 const STREAM_FLUSH_MS = 60
@@ -81,6 +95,7 @@ const EMPTY_STATUS: SegretarioStatus = {
 }
 
 interface RunningActivity {
+  kind: ActivityKind
   controller: AbortController
   approvals: Map<
     string,
@@ -123,6 +138,8 @@ export class SegretarioService {
   private readonly toolsByName = new Map(this.tools.map((tool) => [tool.name, tool]))
   private recheckTimer: ReturnType<typeof setInterval> | null = null
   private readonly opened = Promise.withResolvers<void>()
+  private ownWorkTimer: NodeJS.Timeout | null = null
+  private consideringOwnWork = false
 
   constructor(private readonly options: SegretarioServiceOptions) {
     this.client = new OpenRouterClient(options.fetch)
@@ -146,7 +163,10 @@ export class SegretarioService {
         message: 'Interrotto: SIEVER Mail è stato chiuso mentre lavoravo. Scrivimi per riprendere.'
       })
       await store.updateActivity(activity.id, { status: 'failed', unseen: true })
+      await this.afterOwnWork(activity.id, activity.kind, 'failed')
     }
+
+    await store.pruneDrafts(Date.now() - DRAFT_RECORD_TTL_MS)
 
     if (this.status.keyState !== 'missing') {
       void this.checkKey()
@@ -157,6 +177,7 @@ export class SegretarioService {
         void this.checkKey()
       }
     }, KEY_RECHECK_MS)
+    this.ownWorkTimer = setInterval(() => void this.considerOwnWork(), OWN_WORK_CHECK_MS)
     this.opened.resolve()
   }
 
@@ -164,6 +185,11 @@ export class SegretarioService {
     if (this.recheckTimer) {
       clearInterval(this.recheckTimer)
       this.recheckTimer = null
+    }
+
+    if (this.ownWorkTimer) {
+      clearInterval(this.ownWorkTimer)
+      this.ownWorkTimer = null
     }
 
     for (const activity of this.running.values()) {
@@ -186,9 +212,15 @@ export class SegretarioService {
   }
 
   private async setStatus(status: SegretarioStatus): Promise<SegretarioStatus> {
+    const becameReady = status.keyState === 'ready' && this.status.keyState !== 'ready'
     this.status = status
     await this.requireStore().setStoredStatus(status)
     this.options.send(SEGRETARIO_IPC.statusChanged, status)
+
+    if (becameReady) {
+      void this.considerOwnWork()
+    }
+
     return status
   }
 
@@ -304,8 +336,10 @@ export class SegretarioService {
     return this.requireStore().getPreferences()
   }
 
-  setPreferences(preferences: SegretarioPreferences): Promise<SegretarioPreferences> {
-    return this.requireStore().setPreferences(preferences)
+  async setPreferences(preferences: SegretarioPreferences): Promise<SegretarioPreferences> {
+    const stored = await this.requireStore().setPreferences(preferences)
+    void this.considerOwnWork()
+    return stored
   }
 
   /** What the Segretario has cost today and this month, by the local calendar. */
@@ -450,6 +484,321 @@ export class SegretarioService {
     await this.requireStore().clearData()
   }
 
+  /* ──────────────────────────────── its memory ──────────────────────────────── */
+
+  async listMemory(): Promise<MemoryNote[]> {
+    return (await this.requireStore().listMemory()).map((note) => ({
+      path: note.path,
+      content: note.content,
+      updatedAt: note.updatedAt
+    }))
+  }
+
+  /** A note as the user corrected it. */
+  async writeMemory(path: string, content: string): Promise<MemoryNote[]> {
+    if (content.length > MAX_NOTE_CHARS) {
+      throw new Error('La nota è troppo lunga: dividila in più note.')
+    }
+
+    await this.requireStore().writeMemory(normalizeMemoryPath(path), content)
+    return this.listMemory()
+  }
+
+  async deleteMemory(path: string): Promise<MemoryNote[]> {
+    await this.requireStore().deleteMemory(normalizeMemoryPath(path))
+    return this.listMemory()
+  }
+
+  /** Forgets everything it learnt, and begins getting to know every account again. */
+  async forgetEverything(): Promise<void> {
+    const store = this.requireStore()
+
+    for (const running of this.running.values()) {
+      if (running.kind !== 'richiesta') {
+        running.controller.abort()
+      }
+    }
+
+    await store.clearMemory()
+    await store.resetLearning()
+    void this.considerOwnWork()
+  }
+
+  /* ──────────────────────── getting to know the user ──────────────────────── */
+
+  async listLearning(): Promise<AccountLearning[]> {
+    const accounts = await this.options.mail.listAccounts()
+    const rows = new Map(
+      (await this.requireStore().listLearning()).map((row) => [row.accountId, row])
+    )
+
+    return accounts.map((account) => {
+      const row = rows.get(account.id)
+      const state: AccountLearning['state'] = !row
+        ? 'waiting'
+        : row.finishedAt !== null
+          ? 'done'
+          : row.activityId && this.running.has(row.activityId)
+            ? 'running'
+            : 'stopped'
+
+      return {
+        accountId: account.id,
+        email: account.email,
+        state,
+        activityId: row?.activityId ?? null,
+        finishedAt: row?.finishedAt ?? null
+      }
+    })
+  }
+
+  /** Gets to know an account again, from the start. */
+  async relearnAccount(accountId: string): Promise<AccountLearning[]> {
+    const store = this.requireStore()
+    const row = (await store.listLearning()).find((item) => item.accountId === accountId)
+
+    if (row?.activityId) {
+      this.running.get(row.activityId)?.controller.abort()
+    }
+
+    await store.resetLearning(accountId)
+    void this.considerOwnWork()
+    return this.listLearning()
+  }
+
+  /**
+   * A draft went out. When the Segretario had written it, what the user
+   * changed — or that they changed nothing — is kept for the next
+   * reflection.
+   */
+  async draftSent(draftId: string, writtenText: string): Promise<void> {
+    const store = this.requireStore()
+    const draft = await store.takeDraft(draftId)
+
+    if (!draft || (await store.getPreferences()).learning !== true) {
+      return
+    }
+
+    const comparable = (text: string): string =>
+      text
+        .replace(/\*\*/g, '')
+        .replace(/^\s*[-•*]\s+/gm, '- ')
+        .replace(/\s+/g, ' ')
+        .trim()
+
+    if (comparable(draft.text) === comparable(writtenText)) {
+      await store.addLesson('confermata', { accountId: draft.accountId })
+    } else {
+      await store.addLesson('correzione', {
+        accountId: draft.accountId,
+        written: draft.text,
+        sent: writtenText
+      })
+    }
+  }
+
+  /** An account was removed: what was learnt about it alone goes, and the next reflection hears of it. */
+  async forgetAccount(accountId: string, email: string): Promise<void> {
+    const store = this.requireStore()
+    const row = (await store.listLearning()).find((item) => item.accountId === accountId)
+
+    if (row?.activityId) {
+      this.running.get(row.activityId)?.controller.abort()
+    }
+
+    await store.forgetAccount(accountId, normalizeMemoryPath(`account/${email}`))
+
+    if ((await store.getPreferences()).learning === true) {
+      await store.addLesson('account-rimosso', { email })
+    }
+  }
+
+  /* ───────────────────────── work it begins itself ───────────────────────── */
+
+  /**
+   * Begins what it does on its own, one thing at a time, when it may: a key
+   * that answers and the user's yes to learning. First it gets to know each
+   * account whose recent mail is indexed; then, with corrections to learn
+   * from and the user not waiting on it, it reflects.
+   */
+  private async considerOwnWork(): Promise<void> {
+    if (this.consideringOwnWork || !this.store || this.status.keyState !== 'ready') {
+      return
+    }
+
+    this.consideringOwnWork = true
+
+    try {
+      const running = [...this.running.values()].map((activity) => activity.kind)
+
+      if (
+        (await this.store.getPreferences()).learning !== true ||
+        running.includes('conoscerti') ||
+        running.includes('riflessione')
+      ) {
+        return
+      }
+
+      if (!(await this.beginLearning()) && !running.includes('richiesta')) {
+        await this.beginReflection()
+      }
+    } catch (error) {
+      logMainError('Segretario: own work could not begin', error)
+    } finally {
+      this.consideringOwnWork = false
+    }
+  }
+
+  private async beginLearning(): Promise<boolean> {
+    const store = this.requireStore()
+    const accounts = await this.options.mail.listAccounts()
+    const rows = new Map((await store.listLearning()).map((row) => [row.accountId, row]))
+
+    for (const account of accounts) {
+      if (
+        rows.has(account.id) ||
+        !(await this.options.mail.recentMailIndexed(account.id, LEARNING_READY_DAYS))
+      ) {
+        continue
+      }
+
+      const known = accounts.filter(
+        (other) => other.id !== account.id && rows.get(other.id)?.finishedAt
+      )
+      const id = await this.beginOwnActivity(
+        'conoscerti',
+        `Conoscerti · ${account.email}`,
+        `Comincio a conoscerti da ${account.email}: leggo la posta che hai scritto e prendo appunti.`,
+        fillTemplate(PROMPTS.learning, {
+          account: account.email,
+          nome: account.displayName,
+          altri_account:
+            known.length > 0
+              ? `Conosci già ${known.map((other) => other.email).join(', ')}: rileggi le loro note prima di scrivere, perché tutto resti coerente.`
+              : ''
+        })
+      )
+
+      await store.startLearning(account.id, id)
+      void this.runTurn(id)
+      return true
+    }
+
+    return false
+  }
+
+  private async beginReflection(): Promise<void> {
+    const store = this.requireStore()
+    const lessons = (await store.pendingLessons()).slice(0, LESSONS_PER_REFLECTION)
+    const last = await store.lastReflectionAt()
+
+    if (
+      !lessons.some((lesson) => lesson.kind !== 'confermata') ||
+      (last !== null && Date.now() - last < REFLECTION_INTERVAL_MS)
+    ) {
+      return
+    }
+
+    const emails = new Map(
+      (await this.options.mail.listAccounts()).map((account) => [account.id, account.email])
+    )
+    const confirmed = new Map<string, number>()
+    const parts: string[] = []
+
+    for (const lesson of lessons) {
+      const payload = lesson.payload as {
+        accountId?: string
+        email?: string
+        written?: string
+        sent?: string
+      }
+      const from = emails.get(payload.accountId ?? '') ?? 'un account rimosso'
+      const when = formatDateTime(new Date(lesson.createdAt).toISOString())
+
+      switch (lesson.kind) {
+        case 'correzione':
+          parts.push(
+            [
+              `## Bozza da ${from}, mandata ${when}`,
+              'Avevi scritto:',
+              quoteBlock(payload.written ?? ''),
+              "L'utente ha mandato:",
+              quoteBlock(payload.sent ?? '')
+            ].join('\n\n')
+          )
+          break
+        case 'confermata':
+          confirmed.set(from, (confirmed.get(from) ?? 0) + 1)
+          break
+        case 'account-rimosso':
+          parts.push(`## Account rimosso\n\n${payload.email} è stato rimosso ${when}.`)
+          break
+      }
+    }
+
+    for (const [from, count] of confirmed) {
+      parts.push(
+        `## Bozze mandate così com'erano\n\n${count === 1 ? 'Una bozza' : `${count} bozze`} da ${from}.`
+      )
+    }
+
+    const id = await this.beginOwnActivity(
+      'riflessione',
+      'Riflessione',
+      'Rimetto in ordine quello che ho imparato dalle ultime bozze che hai mandato.',
+      fillTemplate(PROMPTS.reflection, { materiale: parts.join('\n\n') })
+    )
+
+    await store.claimLessons(
+      lessons.map((lesson) => lesson.id),
+      id
+    )
+    void this.runTurn(id)
+  }
+
+  /** An activity it began on its own, with the goal it set out with. */
+  private async beginOwnActivity(
+    kind: ActivityKind,
+    title: string,
+    shown: string,
+    goal: string
+  ): Promise<string> {
+    const store = this.requireStore()
+    const id = randomUUID()
+    const summary = await store.createActivity({ id, kind, title, status: 'running' })
+
+    this.emit({ type: 'summary', activity: summary })
+    await store.appendEvent<ContextPayload>(id, 'context', { text: await this.contextBlock() })
+    const event = await store.appendEvent<UserPayload>(id, 'user', {
+      text: shown,
+      forModel: `[${formatDateTime(new Date().toISOString())}]\n\n${goal}`,
+      handles: [],
+      origin: 'segretario'
+    })
+
+    this.emitEntry(id, event)
+    return id
+  }
+
+  /** What follows from the end of work it began itself. */
+  private async afterOwnWork(id: string, kind: ActivityKind, ended: ActivityStatus): Promise<void> {
+    const store = this.requireStore()
+
+    switch (kind) {
+      case 'conoscerti':
+        // Stopped by the user, it waits for them; failed, it begins again later.
+        if (ended !== 'cancelled') {
+          await store.endLearning(id, ended === 'done')
+        }
+        return
+      case 'riflessione':
+        await store.endReflection(id, ended === 'done')
+        return
+      case 'richiesta':
+        return
+    }
+  }
+
   private emit(event: ActivityEvent): void {
     this.options.send(SEGRETARIO_IPC.activityEvent, event)
   }
@@ -477,7 +826,10 @@ export class SegretarioService {
    */
   private async contextBlock(): Promise<string> {
     const store = this.requireStore()
-    const accounts = await this.options.mail.listAccounts()
+    const [accounts, signatures] = await Promise.all([
+      this.options.mail.listAccounts(),
+      this.options.mail.accountSignatures()
+    ])
     const notes = await store.listMemory()
     const now = new Date()
     const accountNotes = notes.filter((note) => note.path.startsWith('account/'))
@@ -495,7 +847,17 @@ export class SegretarioService {
       account:
         accounts.length === 0
           ? '(nessun account)'
-          : accounts.map((account) => `- ${account.email} — ${account.displayName}`).join('\n'),
+          : accounts
+              .map((account) => {
+                const signature = signatures.get(account.id)
+                return [
+                  `- ${account.email} — ${account.displayName}`,
+                  signature
+                    ? `  Firma dell'utente da questo account: «${clip(signature.replace(/\s+/g, ' '), 400).text}»`
+                    : '  Nessuna firma per questo account.'
+                ].join('\n')
+              })
+              .join('\n'),
       indice_memoria: await memoryIndex(store),
       note_principali: core.map((note) => `### ${note.path}\n\n${note.content.trim()}`).join('\n\n')
     })
@@ -598,7 +960,13 @@ export class SegretarioService {
    */
   private async runTurn(id: string): Promise<void> {
     const store = this.requireStore()
-    const activity: RunningActivity = { controller: new AbortController(), approvals: new Map() }
+    const kind = (await store.getActivity(id))?.kind ?? 'richiesta'
+    const activity: RunningActivity = {
+      kind,
+      controller: new AbortController(),
+      approvals: new Map()
+    }
+    let ended: ActivityStatus = 'failed'
     const { signal } = activity.controller
     this.running.set(id, activity)
     await store.updateActivity(id, { status: 'running' })
@@ -666,12 +1034,15 @@ export class SegretarioService {
         }
       }
 
-      await store.updateActivity(id, { status: 'done', unseen: true })
+      // A reflection is quiet work: it is there to read, never waiting to be seen.
+      await store.updateActivity(id, { status: 'done', unseen: kind !== 'riflessione' })
+      ended = 'done'
     } catch (raw) {
       const error = raw instanceof SegretarioError ? raw : null
 
       if (signal.aborted || error?.code === 'cancelled') {
         await store.updateActivity(id, { status: 'cancelled' })
+        ended = 'cancelled'
       } else {
         const message =
           error?.message ??
@@ -699,6 +1070,8 @@ export class SegretarioService {
 
       this.running.delete(id)
       await this.emitSummary(id)
+      await this.afterOwnWork(id, kind, ended)
+      void this.considerOwnWork()
     }
   }
 
@@ -957,6 +1330,15 @@ function handleLinks(records: ReadonlyArray<HandleRecord> | undefined): HandleLi
 }
 
 /** What the page shows of a stored event; null for those it does not show. */
+/** Text set as a Markdown quote. */
+function quoteBlock(text: string): string {
+  return text
+    .trim()
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n')
+}
+
 function entryOf(event: StoredEvent): ActivityEntry | null {
   switch (event.type) {
     case 'user': {
@@ -966,6 +1348,7 @@ function entryOf(event: StoredEvent): ActivityEntry | null {
         id: event.id,
         text: payload.text,
         context: payload.context,
+        ...(payload.origin ? { origin: payload.origin } : {}),
         at: event.createdAt,
         handles: handleLinks(payload.handles)
       }

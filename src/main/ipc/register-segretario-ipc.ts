@@ -20,8 +20,10 @@ const contextSchema = z.object({
 const preferencesSchema = z.object({
   triage: z.boolean(),
   readyDrafts: z.boolean(),
-  learning: z.boolean()
+  learning: z.boolean().nullable()
 })
+
+const memoryPathSchema = z.string().trim().min(1).max(300)
 
 const sendOutcomeSchema = z.union([
   z.object({ sent: z.literal(true) }),
@@ -67,6 +69,21 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.checkKey, () => segretario.checkKey())
   handle(SEGRETARIO_IPC.getPreferences, () => segretario.getPreferences())
   handle(SEGRETARIO_IPC.getSpending, () => segretario.getSpending())
+  handle(SEGRETARIO_IPC.listMemory, () => segretario.listMemory())
+  handle(SEGRETARIO_IPC.writeMemory, (path: unknown, content: unknown) =>
+    segretario.writeMemory(memoryPathSchema.parse(path), z.string().parse(content))
+  )
+  handle(SEGRETARIO_IPC.deleteMemory, (path: unknown) =>
+    segretario.deleteMemory(memoryPathSchema.parse(path))
+  )
+  handle(SEGRETARIO_IPC.forgetEverything, () => segretario.forgetEverything())
+  handle(SEGRETARIO_IPC.listLearning, () => segretario.listLearning())
+  handle(SEGRETARIO_IPC.relearnAccount, (accountId: unknown) =>
+    segretario.relearnAccount(idSchema.parse(accountId))
+  )
+  handle(SEGRETARIO_IPC.draftSent, (draftId: unknown, writtenText: unknown) =>
+    segretario.draftSent(idSchema.parse(draftId), z.string().max(200_000).parse(writtenText))
+  )
   handle(SEGRETARIO_IPC.setPreferences, (preferences: unknown) =>
     segretario.setPreferences(preferencesSchema.parse(preferences))
   )

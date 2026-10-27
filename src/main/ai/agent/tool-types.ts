@@ -21,7 +21,11 @@ import type { HandleRecord, HandleRegistry } from './handles'
  */
 export interface SegretarioMailPort {
   listAccounts(): Promise<MailAccount[]>
+  /** Each account's signature as text, by account id: the user's own, as they sign. */
+  accountSignatures(): Promise<Map<string, string>>
   listFolders(accountId: string): Promise<MailFolder[]>
+  /** Whether the account's mail has arrived and its last `days` days are indexed: enough to get to know it. */
+  recentMailIndexed(accountId: string, days: number): Promise<boolean>
   /** The client the search and the threads read from (see `mail-search.ts`). */
   searchClient(): Promise<PrismaClient>
   /**

@@ -50,14 +50,40 @@ export interface SegretarioPreferences {
   triage: boolean
   /** Prepares replies, in the user's voice, to the messages that need one. */
   readyDrafts: boolean
-  /** Learns from what the user writes and does, quietly, when the app is idle. */
-  learning: boolean
+  /**
+   * Gets to know the user — reads what they wrote from each account — and
+   * keeps learning from how they correct its drafts. Null until the user
+   * has said yes or no: it reads their mail on its own, so it asks first.
+   */
+  learning: boolean | null
 }
 
 export const DEFAULT_SEGRETARIO_PREFERENCES: SegretarioPreferences = {
   triage: true,
   readyDrafts: true,
-  learning: true
+  learning: null
+}
+
+/** A note of the Segretario's memory, as Impostazioni shows it. */
+export interface MemoryNote {
+  /** "tu.md", "persone/anna-rossi.md". */
+  path: string
+  content: string
+  updatedAt: number
+}
+
+/** Where getting to know an account stands. */
+export interface AccountLearning {
+  accountId: string
+  email: string
+  /**
+   * `waiting`: not begun — the user has not agreed, or the account's recent
+   * mail is still being indexed; `running`; `done`; `stopped`: the user
+   * stopped it, and it waits for them to begin it again.
+   */
+  state: 'waiting' | 'running' | 'done' | 'stopped'
+  activityId: string | null
+  finishedAt: number | null
 }
 
 /** What the Segretario has cost, in dollars, as OpenRouter billed each call. */
@@ -163,6 +189,8 @@ export type ActivityEntry =
       id: number
       text: string
       context?: SegretarioContext
+      /** Set when the Segretario began the work on its own: what it set out to do. */
+      origin?: 'segretario'
       at: number
       handles: HandleLink[]
     }
@@ -234,6 +262,13 @@ export const SEGRETARIO_IPC = {
   getPreferences: 'segretario:get-preferences',
   setPreferences: 'segretario:set-preferences',
   getSpending: 'segretario:get-spending',
+  listMemory: 'segretario:list-memory',
+  writeMemory: 'segretario:write-memory',
+  deleteMemory: 'segretario:delete-memory',
+  forgetEverything: 'segretario:forget-everything',
+  listLearning: 'segretario:list-learning',
+  relearnAccount: 'segretario:relearn-account',
+  draftSent: 'segretario:draft-sent',
   listActivities: 'segretario:list-activities',
   getActivity: 'segretario:get-activity',
   startActivity: 'segretario:start-activity',
@@ -259,6 +294,21 @@ export interface SegretarioApi {
   getPreferences: () => Promise<SegretarioPreferences>
   setPreferences: (preferences: SegretarioPreferences) => Promise<SegretarioPreferences>
   getSpending: () => Promise<SegretarioSpending>
+  listMemory: () => Promise<MemoryNote[]>
+  /** Writes a note as the user corrected it. */
+  writeMemory: (path: string, content: string) => Promise<MemoryNote[]>
+  deleteMemory: (path: string) => Promise<MemoryNote[]>
+  /** Empties the memory and starts getting to know every account again. */
+  forgetEverything: () => Promise<void>
+  listLearning: () => Promise<AccountLearning[]>
+  /** Gets to know one account again, from the start. */
+  relearnAccount: (accountId: string) => Promise<AccountLearning[]>
+  /**
+   * A draft went out: what the user wrote in it, without the signature and
+   * the quote. When the Segretario had written it, the difference is what
+   * it learns from.
+   */
+  draftSent: (draftId: string, writtenText: string) => Promise<void>
   listActivities: () => Promise<ActivitySummary[]>
   getActivity: (id: string) => Promise<ActivityDetail | null>
   /** Begins a new activity with what the user asked. */

@@ -126,6 +126,9 @@ so an older file is brought forward in place.
 | `ai_activities`, `ai_events` | The Segretario's work: each activity and the log of everything said and done in it, which the conversation is rebuilt from.                                                                                                                                                                                                                                         |
 | `ai_memory`                  | The Segretario's notes on the user, their accounts, people and matters, as path → text.                                                                                                                                                                                                                                                                             |
 | `ai_usage`                   | Every call to the model: tokens, cache hits and what OpenRouter billed.                                                                                                                                                                                                                                                                                             |
+| `ai_learning`                | Getting to know each account: the activity that did it, when it began and finished.                                                                                                                                                                                                                                                                                 |
+| `ai_lessons`                 | What the next reflection takes in: how the user corrected a draft of the Segretario's, a draft sent as it was, an account removed.                                                                                                                                                                                                                                  |
+| `ai_drafts`                  | The drafts the Segretario wrote, as it wrote them, to compare with what the user sends.                                                                                                                                                                                                                                                                             |
 | `contacts`                   | Everyone stored mail names, for the composer's suggestions: `usage_count` / `last_used_at` count the mail written to them, `last_received_at` the newest they sent, `hidden_at` a contact taken out of the suggestions.                                                                                                                                             |
 | `drafts`                     | The messages being written: recipients, subject, body, files, the thread they answer; `revision` / `server_revision` say whether Bozze has the draft as it is, `server_*` where its copy is, `docked` that a composer holds it.                                                                                                                                     |
 | `account_signatures`         | One signature per account, with the version of the page it was written for (`html_format`) and the edition of the extension's content it has (`extension_revision`).                                                                                                                                                                                                |
@@ -655,7 +658,9 @@ Markdown file in Italian under `src/main/ai/prompts/`, bundled with `?raw`.
 An extension adds its own (see [Extensions](#extensions)).
 
 **Tools** (`src/main/ai/tools/`): `cerca_posta` (the full-text index, every
-account, by folder, sender, date), `leggi_posta` (a message or its whole
+account, by folder, sender, date), `panoramica` (who the user writes to,
+who writes to them and how often they answer, month by month, counted from
+the envelopes, `mail-overview.ts`), `leggi_posta` (a message or its whole
 conversation, quoted history left out), `leggi_allegato` and `leggi_file`
 (PDF, Word, spreadsheets, presentations, OpenDocument, mail, text and
 pictures, through `extraction.ts`, a part at a time), `cerca_file` (by name,
@@ -680,7 +685,30 @@ told, and what a notification brings forward, goes there and nowhere else.
 **Memory** is a set of notes the model keeps itself (`ai_memory`): who the
 user is (`tu.md`), how they write (`stile.md`), each account, people,
 matters. The two core notes and the index of the others come with every
-activity; the model reads and updates the rest as it works.
+activity, with each account's signature; the model reads and updates the
+rest as it works. A note may not carry an activity's short names (`m4`):
+the memory tool sends such a text back.
+
+**Learning** is work the Segretario begins itself, once the user has said
+yes (the panel asks; Settings → Cosa so di te switches it):
+
+- **Conoscerti**, one activity per account (`conoscerti.md`), begins once
+  the account's mail has arrived and its last 90 days are indexed. The
+  model decides how to read — usually `panoramica`, then the sent mail
+  and the conversations that matter — and leaves the account's note,
+  `tu.md`, `stile.md`, people and matters, then tells the user what it
+  understood so they can correct it. An account added later gets its
+  own; one removed takes its note with it, and the next reflection hears
+  of it.
+- **Reflection** (`riflessione.md`): every draft the Segretario writes is
+  kept (`ai_drafts`); when it goes out, the composer reports what the user
+  wrote above the signature (`writtenText`), and the difference becomes a
+  lesson. At most every six hours, with corrections waiting and no request
+  of the user's running, a quiet activity turns them into rules in the
+  notes.
+
+Settings → Cosa so di te shows how far each account has got (with
+"Rifai"), and every note, to read, correct or forget.
 
 ## Extensions
 

@@ -1,7 +1,9 @@
 import extensionMain from '@app/extension/main'
 
 import compaction from './prompts/compattazione.md?raw'
+import learning from './prompts/conoscerti.md?raw'
 import context from './prompts/contesto.md?raw'
+import reflection from './prompts/riflessione.md?raw'
 import system from './prompts/segretario.md?raw'
 import searchFiles from './prompts/strumenti/cerca_file.md?raw'
 import searchMail from './prompts/strumenti/cerca_posta.md?raw'
@@ -12,6 +14,7 @@ import readMail from './prompts/strumenti/leggi_posta.md?raw'
 import memory from './prompts/strumenti/memoria.md?raw'
 import show from './prompts/strumenti/mostra.md?raw'
 import organize from './prompts/strumenti/organizza.md?raw'
+import overview from './prompts/strumenti/panoramica.md?raw'
 import writeDraft from './prompts/strumenti/scrivi_bozza.md?raw'
 import title from './prompts/titolo.md?raw'
 
@@ -29,9 +32,12 @@ export const PROMPTS = {
     .join('\n\n'),
   context: context.trim(),
   compaction: compaction.trim(),
+  learning: learning.trim(),
+  reflection: reflection.trim(),
   title: title.trim(),
   tools: {
     cerca_posta: searchMail.trim(),
+    panoramica: overview.trim(),
     leggi_posta: readMail.trim(),
     leggi_allegato: readAttachment.trim(),
     cerca_file: searchFiles.trim(),

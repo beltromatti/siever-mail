@@ -124,11 +124,19 @@ export const writeDraftTool: SegretarioTool = {
       }
 
       spec.draftId = draftId
+      // The draft it replaces is thrown away: what it said is no longer what was written.
+      await context.store.takeDraft(draftId)
     }
 
     const draftId = await context.page.compose(spec, context.signal)
     const handle = context.handles.name({ kind: 'draft', draftId }, context.newHandles)
     const draft = await context.mail.getDraft(draftId)
+    const accountId = draft?.accountId ?? spec.accountId ?? spec.source?.accountId
+
+    // Kept as written, to learn from what the user changes before sending.
+    if (accountId) {
+      await context.store.recordDraft({ draftId, activityId: context.activityId, accountId, text })
+    }
 
     return {
       content: `Bozza ${handle} pronta${draft ? ` · da ${draft.to.length > 0 ? `a ${draft.to.join(', ')}` : 'senza destinatari'} · oggetto «${draft.subject}»` : ''}. È sulla scrivania dell'utente e in Bozze; per inviarla usa invia_bozza.`,

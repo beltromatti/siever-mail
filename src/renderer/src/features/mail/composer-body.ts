@@ -280,3 +280,72 @@ export function hasWrittenContent(html: string): boolean {
   findSignatureBlock(root)?.remove()
   return hasWrittenOutside(root, findQuote(root))
 }
+
+const LINE_BLOCKS = new Set(['DIV', 'P', 'LI', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'PRE', 'TR'])
+
+/**
+ * What the user wrote in a message, as plain text: the lines above the
+ * signature and the quote, one per block as the editor writes them, an
+ * empty line for an empty one, `- ` before a list item. The Segretario
+ * learns from comparing it with the draft it had written.
+ */
+export function writtenText(html: string): string {
+  const root = parseBody(html)
+  findSignatureBlock(root)?.remove()
+  findQuote(root)?.remove()
+
+  const lines: string[] = []
+  let line = ''
+  const endLine = (): void => {
+    lines.push(line)
+    line = ''
+  }
+  const walk = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      line += node.textContent ?? ''
+      return
+    }
+
+    if (!(node instanceof Element)) {
+      return
+    }
+
+    if (node.tagName === 'BR') {
+      endLine()
+      return
+    }
+
+    const block = LINE_BLOCKS.has(node.tagName)
+
+    if (block && line) {
+      endLine()
+    }
+
+    if (node.tagName === 'LI') {
+      line += '- '
+    }
+
+    node.childNodes.forEach(walk)
+
+    if (block && line) {
+      endLine()
+    }
+  }
+
+  root.childNodes.forEach(walk)
+
+  if (line) {
+    endLine()
+  }
+
+  return lines
+    .map((text) =>
+      text
+        .replace(/\u00a0/g, ' ')
+        .replace(/\u200b/g, '')
+        .trimEnd()
+    )
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}

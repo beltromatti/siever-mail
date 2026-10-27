@@ -1,4 +1,5 @@
 import type { AiStore } from '../ai-store'
+import type { HandleRegistry } from '../agent/handles'
 import { PROMPTS } from '../prompts'
 import {
   numberArg,
@@ -9,7 +10,7 @@ import {
 } from '../agent/tool-types'
 
 /** Notes are short by design: a note this long is a note to split. */
-const MAX_NOTE_CHARS = 20_000
+export const MAX_NOTE_CHARS = 20_000
 
 /**
  * A note's path as kept: relative, with forward slashes, ending in `.md`,
@@ -101,6 +102,7 @@ export const memoryTool: SegretarioTool = {
       case 'scrivi': {
         const text = requireString(args, 'testo')
         checkSize(text)
+        checkShortNames(text, context.handles)
         await context.store.writeMemory(path, text.trimEnd() + '\n')
         return {
           content: existing ? `Nota ${path} riscritta.` : `Nota ${path} creata.`,
@@ -126,6 +128,7 @@ export const memoryTool: SegretarioTool = {
 
         const next = existing.content.replace(before, after)
         checkSize(next)
+        checkShortNames(after, context.handles)
         await context.store.writeMemory(path, next)
         return { content: `Nota ${path} aggiornata.`, summary: `Aggiornata la nota ${path}` }
       }
@@ -136,6 +139,7 @@ export const memoryTool: SegretarioTool = {
         lines.splice(at, 0, ...text.split('\n'))
         const next = lines.join('\n')
         checkSize(next)
+        checkShortNames(text, context.handles)
         await context.store.writeMemory(path, next)
         return { content: `Testo inserito in ${path}.`, summary: `Aggiornata la nota ${path}` }
       }
@@ -170,6 +174,32 @@ function checkSize(text: string): void {
   if (text.length > MAX_NOTE_CHARS) {
     throw new ToolInputError(
       `La nota supererebbe ${MAX_NOTE_CHARS} caratteri: dividila in note più piccole.`
+    )
+  }
+}
+
+/**
+ * A note outlives the activity, its short names do not: m4 is another
+ * message in the next one. A short name of this activity in what is
+ * written is sent back, for the model to say what it stands for.
+ */
+function checkShortNames(text: string, handles: HandleRegistry): void {
+  const used = [
+    ...new Set(
+      [...text.matchAll(/\b([mfb]\d{1,4})\b/g)]
+        .map((match) => match[1])
+        .filter(
+          (name) =>
+            handles.message(name) !== null ||
+            handles.file(name) !== null ||
+            handles.draft(name) !== null
+        )
+    )
+  ]
+
+  if (used.length > 0) {
+    throw new ToolInputError(
+      `Nella nota hai usato ${used.join(', ')}: questi riferimenti valgono solo in questo lavoro. Scrivi invece mittente, oggetto e data del messaggio, o il nome del file.`
     )
   }
 }

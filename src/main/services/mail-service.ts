@@ -88,6 +88,7 @@ import { finalizeUpgradeMigration } from './data-migration'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
 import { GoogleOAuthService } from './google-oauth'
 import { MailEngine } from './mail-engine'
+import { indexedFolderPaths } from './mail-engine/mail-indexer'
 import { imapSearchGroups } from './mail-engine/server-search'
 import {
   buildRawOutgoingMessage,
@@ -390,7 +391,20 @@ export class MailService {
 
     return {
       listAccounts: () => this.database.getAccounts(),
+      accountSignatures: async () =>
+        new Map(
+          (await this.database.listAccountSignatures()).map((signature) => [
+            signature.accountId,
+            markdown.translate(signature.html).trim()
+          ])
+        ),
       listFolders: (accountId) => this.database.listFolders(accountId),
+      recentMailIndexed: async (accountId, days) =>
+        this.database.recentMailIndexed(
+          accountId,
+          indexedFolderPaths(await this.database.listFolders(accountId)),
+          new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+        ),
       searchClient: () => this.database.storeClient(),
       readMessage: async (ref) => {
         await this.ensureAccountExists(ref.accountId)
@@ -707,7 +721,8 @@ export class MailService {
   }
 
   async removeAccount(accountId: string): Promise<void> {
-    await this.ensureAccountExists(accountId)
+    const account = await this.ensureAccountExists(accountId)
+    await this.segretario.forgetAccount(accountId, account.email)
     await this.engine.removeAccount(accountId)
     await this.database.clearAccountData(accountId)
     await this.database.deleteAccount(accountId)

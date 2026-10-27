@@ -36,6 +36,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui
 import { GROUPING_OPTIONS } from '@renderer/features/mail/message-list-shared'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
 import { NotificationsSection } from '@renderer/features/settings/notifications-section'
+import { MemorySection } from '@renderer/features/settings/memory-section'
 import { SegretarioSection } from '@renderer/features/settings/segretario-section'
 import { ShortcutsSection } from '@renderer/features/settings/shortcuts-section'
 import { cn } from '@renderer/lib/utils'
@@ -51,6 +52,7 @@ export type SettingsSectionId =
   | 'accounts'
   | 'preferences'
   | 'segretario'
+  | 'memoria'
   | 'notifications'
   | 'shortcuts'
   | 'data'
@@ -104,6 +106,12 @@ const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
     label: 'Segretario',
     title: 'Segretario',
     description: 'La chiave del modello con cui lavora, il credito e quanto spende.'
+  },
+  {
+    id: 'memoria',
+    label: 'Cosa so di te',
+    title: 'Cosa so di te',
+    description: 'Come il Segretario impara a conoscerti, e le sue note: leggile e correggile.'
   },
   {
     id: 'notifications',
@@ -918,6 +926,8 @@ export function SettingsDialog({
               </div>
             ) : activeSectionId === 'segretario' ? (
               <SegretarioSection />
+            ) : activeSectionId === 'memoria' ? (
+              <MemorySection />
             ) : activeSectionId === 'notifications' ? (
               <NotificationsSection accounts={accounts} />
             ) : activeSectionId === 'shortcuts' ? (

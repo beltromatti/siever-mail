@@ -2724,6 +2724,35 @@ export class AppDatabase {
         read_at INTEGER NOT NULL
       )
     `)
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_learning (
+        account_id TEXT PRIMARY KEY,
+        activity_id TEXT,
+        started_at INTEGER NOT NULL,
+        finished_at INTEGER
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_lessons (
+        id INTEGER PRIMARY KEY,
+        kind TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        reflection_id TEXT
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_ai_lessons_reflection ON ai_lessons(reflection_id)'
+    )
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_drafts (
+        draft_id TEXT PRIMARY KEY,
+        activity_id TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `)
   }
 
   /**
@@ -3466,6 +3495,47 @@ export class AppDatabase {
     `
 
     return { total: Number(row?.total ?? 0), indexed: Number(row?.indexed ?? 0) }
+  }
+
+  /**
+   * Whether an account's recent mail can be read at ease: every message of
+   * the folders the index reads has arrived from the server, and none since
+   * `sinceIso` is still waiting for its text.
+   */
+  async recentMailIndexed(
+    accountId: string,
+    folderPaths: ReadonlyArray<string>,
+    sinceIso: string
+  ): Promise<boolean> {
+    await this.ready
+
+    if (folderPaths.length === 0) {
+      return false
+    }
+
+    const [row] = await this.prisma.$queryRaw<
+      Array<{ onServer: number | bigint; cached: number | bigint; waiting: number | bigint }>
+    >`
+      SELECT
+        (SELECT COALESCE(SUM(message_count), 0) FROM folders
+          WHERE account_id = ${accountId} AND path IN (${Prisma.join([...folderPaths])})) AS onServer,
+        (SELECT COUNT(*) FROM messages
+          WHERE account_id = ${accountId} AND folder_path IN (${Prisma.join([...folderPaths])})) AS cached,
+        (SELECT COUNT(*) FROM messages m
+          WHERE m.account_id = ${accountId}
+            AND m.folder_path IN (${Prisma.join([...folderPaths])})
+            AND m.date_iso >= ${sinceIso}
+            AND NOT EXISTS (
+              SELECT 1 FROM message_bodies b
+              WHERE b.account_id = m.account_id AND b.message_key = m.message_key
+            )) AS waiting
+    `
+
+    return (
+      Number(row?.cached ?? 0) > 0 &&
+      Number(row?.cached ?? 0) >= Number(row?.onServer ?? 0) &&
+      Number(row?.waiting ?? 0) === 0
+    )
   }
 
   /** A message's stored body at whatever level, for reading its words. */

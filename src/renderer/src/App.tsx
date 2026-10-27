@@ -57,7 +57,7 @@ import {
   type SegretarioContextChip
 } from '@renderer/features/segretario/segretario-panel'
 import { useSegretario } from '@renderer/features/segretario/use-segretario'
-import { plainTextToComposerHtml } from '@renderer/features/mail/composer-body'
+import { plainTextToComposerHtml, writtenText } from '@renderer/features/mail/composer-body'
 import { parseRecipients } from '@shared/email-address'
 import type { ApprovalRequest, ComposeSpec, HandleLink, SendOutcome } from '@shared/segretario'
 import { WorkspaceLayout } from '@renderer/features/workspace/workspace-layout'
@@ -3998,6 +3998,13 @@ function App(): React.JSX.Element {
           })
           toast.success('Messaggio inviato', { id: sendingToast })
           settleSegretarioSend(payload.draftId, { sent: true })
+
+          // What the user wrote, for the Segretario to compare with a draft of its own.
+          if (payload.draftId) {
+            void window.segretarioApi
+              .draftSent(payload.draftId, writtenText(payload.html))
+              .catch(() => undefined)
+          }
         } catch (caughtError) {
           toast.dismiss(sendingToast)
           settleSegretarioSend(payload.draftId, {

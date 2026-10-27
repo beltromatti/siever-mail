@@ -303,13 +303,154 @@ export class AiStore {
     })
   }
 
+  async clearMemory(): Promise<void> {
+    await this.prisma.aiMemory.deleteMany()
+  }
+
+  /* ───────────────────────── getting to know the user ───────────────────────── */
+
+  async listLearning(): Promise<
+    Array<{ accountId: string; activityId: string | null; finishedAt: number | null }>
+  > {
+    const rows = await this.prisma.aiLearning.findMany()
+    return rows.map((row) => ({
+      accountId: row.accountId,
+      activityId: row.activityId,
+      finishedAt: row.finishedAt === null ? null : Number(row.finishedAt)
+    }))
+  }
+
+  async startLearning(accountId: string, activityId: string): Promise<void> {
+    const data = { activityId, startedAt: BigInt(Date.now()), finishedAt: null }
+
+    await this.prisma.aiLearning.upsert({
+      where: { accountId },
+      create: { accountId, ...data },
+      update: data
+    })
+  }
+
+  /** The activity that got to know an account ended: done, or to begin again another time. */
+  async endLearning(activityId: string, done: boolean): Promise<void> {
+    if (done) {
+      await this.prisma.aiLearning.updateMany({
+        where: { activityId },
+        data: { finishedAt: BigInt(Date.now()) }
+      })
+    } else {
+      await this.prisma.aiLearning.deleteMany({ where: { activityId, finishedAt: null } })
+    }
+  }
+
+  /** Forgets that an account, or all of them, were got to know. */
+  async resetLearning(accountId?: string): Promise<void> {
+    await this.prisma.aiLearning.deleteMany(accountId ? { where: { accountId } } : undefined)
+  }
+
+  /* ──────────────────────── lessons for the reflection ──────────────────────── */
+
+  async addLesson(kind: string, payload: unknown): Promise<void> {
+    await this.prisma.aiLesson.create({
+      data: { kind, payloadJson: JSON.stringify(payload), createdAt: BigInt(Date.now()) }
+    })
+  }
+
+  /** The lessons no reflection has taken in yet, the oldest first. */
+  async pendingLessons(): Promise<
+    Array<{ id: number; kind: string; payload: unknown; createdAt: number }>
+  > {
+    const rows = await this.prisma.aiLesson.findMany({
+      where: { reflectionId: null },
+      orderBy: { id: 'asc' }
+    })
+    return rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      payload: JSON.parse(row.payloadJson) as unknown,
+      createdAt: Number(row.createdAt)
+    }))
+  }
+
+  async claimLessons(ids: number[], reflectionId: string): Promise<void> {
+    await this.prisma.aiLesson.updateMany({ where: { id: { in: ids } }, data: { reflectionId } })
+  }
+
+  /** A reflection ended: what it took in is kept as learnt, or handed to the next one. */
+  async endReflection(reflectionId: string, done: boolean): Promise<void> {
+    if (done) {
+      await this.prisma.aiLesson.deleteMany({ where: { reflectionId } })
+    } else {
+      await this.prisma.aiLesson.updateMany({
+        where: { reflectionId },
+        data: { reflectionId: null }
+      })
+    }
+  }
+
+  /** When the last reflection began, epoch ms; null if none has. */
+  async lastReflectionAt(): Promise<number | null> {
+    const row = await this.prisma.aiActivity.findFirst({
+      where: { kind: 'riflessione' },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true }
+    })
+    return row ? Number(row.createdAt) : null
+  }
+
+  /* ───────────────────────── the drafts it wrote ───────────────────────── */
+
+  async recordDraft(draft: {
+    draftId: string
+    activityId: string
+    accountId: string
+    text: string
+  }): Promise<void> {
+    const data = { ...draft, createdAt: BigInt(Date.now()) }
+
+    await this.prisma.aiDraft.upsert({
+      where: { draftId: draft.draftId },
+      create: data,
+      update: data
+    })
+  }
+
+  /** A draft the Segretario wrote, taken out of the record: it has been sent or thrown away. */
+  async takeDraft(
+    draftId: string
+  ): Promise<{ activityId: string; accountId: string; text: string } | null> {
+    const row = await this.prisma.aiDraft.findUnique({ where: { draftId } })
+
+    if (!row) {
+      return null
+    }
+
+    await this.prisma.aiDraft.delete({ where: { draftId } })
+    return { activityId: row.activityId, accountId: row.accountId, text: row.text }
+  }
+
+  async pruneDrafts(olderThan: number): Promise<void> {
+    await this.prisma.aiDraft.deleteMany({ where: { createdAt: { lt: BigInt(olderThan) } } })
+  }
+
+  /** An account was removed: what the Segretario kept about it alone goes with it. */
+  async forgetAccount(accountId: string, accountNotePath: string): Promise<void> {
+    await this.prisma.$transaction([
+      this.prisma.aiLearning.deleteMany({ where: { accountId } }),
+      this.prisma.aiDraft.deleteMany({ where: { accountId } }),
+      this.prisma.aiMemory.deleteMany({ where: { path: accountNotePath } })
+    ])
+  }
+
   /** Everything but the key and the settings: what "Elimina tutti i dati" empties. */
   async clearData(): Promise<void> {
     await this.prisma.$transaction([
       this.prisma.aiEvent.deleteMany(),
       this.prisma.aiActivity.deleteMany(),
       this.prisma.aiMemory.deleteMany(),
-      this.prisma.aiUsage.deleteMany()
+      this.prisma.aiUsage.deleteMany(),
+      this.prisma.aiLearning.deleteMany(),
+      this.prisma.aiLesson.deleteMany(),
+      this.prisma.aiDraft.deleteMany()
     ])
   }
 }

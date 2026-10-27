@@ -5,6 +5,7 @@ import {
   hasWrittenContent,
   plainTextToComposerHtml,
   replaceComposerSignature,
+  writtenText,
   splitSignature
 } from './composer-body'
 
@@ -203,5 +204,27 @@ describe('hasWrittenContent', () => {
 
   it('counts a pasted picture as written', () => {
     expect(hasWrittenContent('<div><img src="data:image/png;base64,AA=="></div>')).toBe(true)
+  })
+})
+
+describe('writtenText', () => {
+  it('gives the lines written above the signature and the quote', () => {
+    const html = buildComposerBody(
+      '<div>Mario</div>',
+      QUOTE,
+      plainTextToComposerHtml('Ciao Anna,\n\nci vediamo:\n- lunedì\n- alle 10\nGrazie')
+    )
+
+    expect(writtenText(html)).toBe('Ciao Anna,\n\nci vediamo:\n- lunedì\n- alle 10\nGrazie')
+  })
+
+  it('reads what the editor writes: a line per block, breaks, spaces that do not break', () => {
+    expect(
+      writtenText('<div>Va&nbsp;bene<br>a domani</div><div><br></div><div><b>Mario</b></div>')
+    ).toBe('Va bene\na domani\n\nMario')
+  })
+
+  it('is empty when only the signature and the quote are there', () => {
+    expect(writtenText(buildComposerBody('<div>Mario</div>', QUOTE))).toBe('')
   })
 })

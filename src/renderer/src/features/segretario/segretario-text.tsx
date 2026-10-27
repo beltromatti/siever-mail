@@ -71,6 +71,12 @@ export const SegretarioText = memo(function SegretarioText({
               )
             }
 
+            // A link to anything but the web or a mail address (a note's
+            // path, a made-up scheme) leads nowhere: it reads as text.
+            if (!href || !/^(https?:|mailto:)/i.test(href)) {
+              return <span>{children}</span>
+            }
+
             return (
               <a
                 href={href}

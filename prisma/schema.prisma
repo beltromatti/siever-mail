@@ -311,3 +311,40 @@ model AppPreference {
 
   @@map("app_preferences")
 }
+
+/// Getting to know each account: when the Segretario began, in which
+/// activity, and when it finished. An account without a row is still to know.
+model AiLearning {
+  accountId  String  @id @map("account_id")
+  activityId String? @map("activity_id")
+  startedAt  BigInt  @map("started_at")
+  finishedAt BigInt? @map("finished_at")
+
+  @@map("ai_learning")
+}
+
+/// What the next reflection takes in: how the user corrected a draft the
+/// Segretario wrote, an account removed. `reflection_id` is the reflection
+/// that took it in.
+model AiLesson {
+  id           Int     @id @default(autoincrement())
+  kind         String
+  payloadJson  String  @map("payload_json")
+  createdAt    BigInt  @map("created_at")
+  reflectionId String? @map("reflection_id")
+
+  @@index([reflectionId], map: "idx_ai_lessons_reflection")
+  @@map("ai_lessons")
+}
+
+/// The drafts the Segretario wrote, as it wrote them: what the user sends is
+/// compared with this.
+model AiDraft {
+  draftId    String @id @map("draft_id")
+  activityId String @map("activity_id")
+  accountId  String @map("account_id")
+  text       String
+  createdAt  BigInt @map("created_at")
+
+  @@map("ai_drafts")
+}

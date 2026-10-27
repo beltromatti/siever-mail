@@ -16,6 +16,8 @@ export interface UserPayload {
   /** What the model reads: the moment, what the user is looking at, their words. */
   forModel: string
   handles: HandleRecord[]
+  /** Set when the Segretario began the work on its own: `text` says what it set out to do. */
+  origin?: 'segretario'
 }
 
 export interface AssistantPayload {

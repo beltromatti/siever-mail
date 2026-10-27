@@ -4,6 +4,7 @@ import { writeDraftTool, sendDraftTool } from './draft-tools'
 import { readFileTool, searchFilesTool } from './file-tools'
 import { organizeTool, readAttachmentTool, readMailTool, searchMailTool } from './mail-tools'
 import { memoryTool } from './memory-tool'
+import { overviewTool } from './overview-tool'
 import { showTool } from './show-tool'
 
 /**
@@ -13,6 +14,7 @@ import { showTool } from './show-tool'
  */
 export const SEGRETARIO_TOOLS: ReadonlyArray<SegretarioTool> = [
   searchMailTool,
+  overviewTool,
   readMailTool,
   readAttachmentTool,
   searchFilesTool,
