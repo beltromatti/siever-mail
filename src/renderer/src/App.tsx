@@ -52,13 +52,22 @@ import {
 } from '@renderer/features/mail/message-list-shared'
 import { summarizeSyncStatus } from '@renderer/features/workspace/sync-status'
 import { AppRail } from '@renderer/features/workspace/app-rail'
+import {
+  SegretarioPanel,
+  type SegretarioContextChip
+} from '@renderer/features/segretario/segretario-panel'
+import { useSegretario } from '@renderer/features/segretario/use-segretario'
+import { plainTextToComposerHtml } from '@renderer/features/mail/composer-body'
+import { parseRecipients } from '@shared/email-address'
+import type { ApprovalRequest, ComposeSpec, HandleLink, SendOutcome } from '@shared/segretario'
 import { WorkspaceLayout } from '@renderer/features/workspace/workspace-layout'
+import { useAssistantInset } from '@renderer/features/workspace/assistant-width'
 import extensionRenderer from '@app/extension/renderer'
 import type { ExtensionSelectionContext, ExtensionHostHooks } from '@app/extension/types'
 import { MessageViewer } from '@renderer/features/mail/message-viewer'
 import type { AddressActions } from '@renderer/features/mail/address-tokens'
 import { useAttachmentActions } from '@renderer/features/mail/use-attachment-actions'
-import { SettingsDialog } from '@renderer/features/settings/settings-dialog'
+import { SettingsDialog, type SettingsSectionId } from '@renderer/features/settings/settings-dialog'
 import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { Button } from '@renderer/components/ui/button'
 import type { RailItem } from '@renderer/features/workspace/app-rail'
@@ -122,6 +131,7 @@ import type {
   DraftStatus,
   ListMessagesOptions,
   MailAccount,
+  MailAddress,
   MailFolder,
   MailMessageDetail,
   MailMessageListPage,
@@ -358,6 +368,29 @@ function useMailBootstrap(): {
 /** The places of the app, in the rail. */
 const RAIL_ITEMS: ReadonlyArray<RailItem> = [{ id: 'mail', label: 'Posta', icon: Mail }]
 
+/** The most messages a request to the Segretario carries along. */
+const SEGRETARIO_CONTEXT_LIMIT = 200
+
+const SEGRETARIO_GENERAL_SUGGESTIONS = [
+  'Cosa è arrivato di importante negli ultimi giorni?',
+  'A chi devo ancora rispondere?',
+  'Quali scadenze ho nelle prossime settimane?',
+  'Leggi le email che ho mandato e impara come scrivo'
+] as const
+
+const SEGRETARIO_MESSAGE_SUGGESTIONS = [
+  'Riassumimi la conversazione',
+  'Cosa mi chiede, e per quando?',
+  'Prepara una risposta',
+  'Trova le email e i file collegati'
+] as const
+
+const SEGRETARIO_SELECTION_SUGGESTIONS = [
+  'Riassumimi questi messaggi',
+  'Cosa devo fare con questi?',
+  'Mettili in ordine nelle cartelle giuste'
+] as const
+
 function AppFrame({
   children,
   windowControlsState,
@@ -367,6 +400,7 @@ function AppFrame({
   inert = false,
   dock,
   dockVisible = false,
+  rightInset = 0,
   framed = false
 }: {
   children: ReactNode
@@ -380,6 +414,8 @@ function AppFrame({
   dock?: ReactNode
   /** Whether the dock shows: the notices rise above it. */
   dockVisible?: boolean
+  /** What takes the window's right edge — the Segretario's column — in px: the notices keep clear of it. */
+  rightInset?: number
   /** The workspace: its panes' headers are the title bar the window is dragged by. */
   framed?: boolean
 }): React.JSX.Element {
@@ -442,7 +478,11 @@ function AppFrame({
           the bottom they would sit on its Invia. */}
       <Toaster
         position={inert ? 'top-center' : 'bottom-right'}
-        offset={!inert && dockVisible ? { bottom: 16 + COMPOSE_DOCK_HEIGHT, right: 16 } : 16}
+        offset={
+          inert
+            ? 16
+            : { bottom: 16 + (dockVisible ? COMPOSE_DOCK_HEIGHT : 0), right: 16 + rightInset }
+        }
       />
     </TooltipProvider>
   )
@@ -519,6 +559,11 @@ function App(): React.JSX.Element {
   const [composeSummaries, setComposeSummaries] = useState<Record<string, ComposerSummary>>({})
   const composerHandlesRef = useRef(new Map<string, MailComposerHandle>())
   const composerOpen = activeComposeId !== null
+  /** Sends the Segretario asked for, waiting to hear how they went, by draft. */
+  const segretarioSendWaitersRef = useRef(new Map<string, (outcome: SendOutcome) => void>())
+  const [segretarioOpen, setSegretarioOpen] = useState(false)
+  const segretario = useSegretario(segretarioOpen)
+  const assistantInset = useAssistantInset(segretarioOpen)
   // Sends that failed, oldest first. Each is offered back once no composer
   // is open, so retrying never replaces a message being written.
   const [failedSends, setFailedSends] = useState<
@@ -529,6 +574,7 @@ function App(): React.JSX.Element {
   const { prompt, dialog: promptDialog, open: promptOpen } = usePromptDialog()
   const [addAccountDialogOpen, setAddAccountDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId | null>(null)
   const [extensionPrimaryDialogOpen, setExtensionPrimaryDialogOpen] = useState(false)
   const [showWelcomeGate, setShowWelcomeGate] = useState(true)
   // The folders of "Tutti gli account", one per role, with their counts.
@@ -1577,8 +1623,12 @@ function App(): React.JSX.Element {
     }
   }, [scheduleListRefresh, selectedAccountId, selectedFolderPath])
 
-  useEffect(() => {
-    return window.mailApi.onOpenMessageFromNotification((ref) => {
+  /**
+   * Shows a message in its own folder, selected — from a notification, or a
+   * link the Segretario wrote.
+   */
+  const openMessageRef = useCallback(
+    (ref: MessageRef): void => {
       pendingNotificationMessageRef.current = ref
       setShowWelcomeGate(false)
       cancelInFlightWork()
@@ -1589,10 +1639,14 @@ function App(): React.JSX.Element {
       setSelectedMessage(null)
       setIsMessageExpanded(false)
       setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
+      setSearch('')
       setSelectedAccountId(ref.accountId)
       setSelectedFolderPath(ref.folderPath)
-    })
-  }, [cancelInFlightWork])
+    },
+    [cancelInFlightWork]
+  )
+
+  useEffect(() => window.mailApi.onOpenMessageFromNotification(openMessageRef), [openMessageRef])
 
   useEffect(() => {
     const shouldAnimateWelcome = accounts.length === 0 || showWelcomeGate
@@ -3196,6 +3250,292 @@ function App(): React.JSX.Element {
     [continueDraft, isDraftMessage, messageDetailFor, openComposer, readingRef]
   )
 
+  /** A draft opened by its id: the composer holding it comes forward, or it is taken up again. */
+  const openDraftById = useCallback(
+    async (draftId: string): Promise<void> => {
+      if (composeSessions.some((session) => session.id === draftId)) {
+        setActiveComposeId(draftId)
+        return
+      }
+
+      const stored = await window.mailApi.getStoredDraft(draftId)
+
+      if (stored) {
+        openComposer(draftToInitialData(stored.content), { status: stored.status })
+      } else {
+        toast.error('Bozza non più disponibile', {
+          description: 'È stata inviata o scartata.'
+        })
+      }
+    },
+    [composeSessions, openComposer]
+  )
+
+  /**
+   * What the Segretario asks to write, as the composer opens it — exactly
+   * as the user's own reply, forward or new message: recipients, quote,
+   * thread, the original's files. Its text becomes the written lines.
+   */
+  const composerDataFor = useCallback(
+    async (spec: ComposeSpec): Promise<ComposerInitialData> => {
+      const writtenHtml = plainTextToComposerHtml(spec.text)
+      const addresses = (list: string[] | undefined): MailAddress[] | undefined =>
+        list && list.length > 0 ? parseRecipients(list.join(', ')) : undefined
+      const files =
+        spec.attachments && spec.attachments.length > 0
+          ? await window.mailApi.describeFiles(spec.attachments.map((file) => file.path))
+          : []
+      const added = files.map((file) => ({ name: file.name, size: file.size, path: file.path }))
+
+      if (spec.kind === 'new') {
+        if (!spec.accountId) {
+          throw new Error('Manca l’account da cui scrivere.')
+        }
+
+        return {
+          kind: 'new',
+          accountId: spec.accountId,
+          to: addresses(spec.to) ?? [],
+          cc: addresses(spec.cc),
+          bcc: addresses(spec.bcc),
+          subject: spec.subject ?? '',
+          writtenHtml,
+          attachments: added.length > 0 ? added : undefined
+        }
+      }
+
+      if (!spec.source) {
+        throw new Error('Manca il messaggio a cui rispondere.')
+      }
+
+      const message = await window.mailApi.getMessage(spec.source)
+      const original = { ref: summaryToMessageRef(message), attachments: message.attachments }
+
+      if (spec.kind === 'forward') {
+        return {
+          kind: 'forward',
+          accountId: message.accountId,
+          sourceAccountId: message.accountId,
+          to: addresses(spec.to),
+          cc: addresses(spec.cc),
+          bcc: addresses(spec.bcc),
+          subject: ensureForwardSubject(message.subject),
+          quoteHtml: await buildForwardQuoteHtml(message),
+          original,
+          attachments: [
+            ...message.attachments.map((attachment) => ({
+              name: attachment.fileName,
+              size: attachment.size,
+              originalId: attachment.id
+            })),
+            ...added
+          ],
+          writtenHtml
+        }
+      }
+
+      const recipients = replyRecipients(
+        message,
+        ownAddresses,
+        spec.kind === 'replyAll' ? 'all' : 'sender'
+      )
+
+      return {
+        kind: 'reply',
+        accountId: message.accountId,
+        sourceAccountId: message.accountId,
+        to: addresses(spec.to) ?? recipients.to,
+        cc: addresses(spec.cc) ?? recipients.cc,
+        bcc: addresses(spec.bcc),
+        subject: ensureReplySubject(message.subject),
+        quoteHtml: await buildReplyQuoteHtml(message),
+        inReplyTo: message.messageId,
+        references: replyReferences(message),
+        original,
+        attachments: added.length > 0 ? added : undefined,
+        writtenHtml
+      }
+    },
+    [ownAddresses]
+  )
+
+  // The Segretario writes a draft: it opens in a composer parked in the dock,
+  // is kept and filed in Bozze like any draft, and the Segretario hears its id
+  // once the first save has landed.
+  useEffect(
+    () =>
+      window.segretarioApi.onComposeRequest(({ requestId, spec }) => {
+        void (async () => {
+          try {
+            if (spec.draftId) {
+              removeComposeSession(spec.draftId)
+              await window.mailApi.discardDraft(spec.draftId).catch(() => undefined)
+            }
+
+            const data = await composerDataFor(spec)
+            const id = crypto.randomUUID()
+            const saved = new Promise<void>((resolve, reject) => {
+              const timer = window.setTimeout(() => {
+                off()
+                reject(new Error('La bozza non è stata salvata in tempo.'))
+              }, 15_000)
+              const off = window.mailApi.onDraftStatusChanged((status) => {
+                if (status.id === id) {
+                  window.clearTimeout(timer)
+                  off()
+                  resolve()
+                }
+              })
+            })
+
+            setComposeSessions((current) => [
+              ...current,
+              { id, initialData: { ...data, draftId: id }, existing: false }
+            ])
+            await saved
+            await window.segretarioApi.completeCompose(requestId, { draftId: id })
+          } catch (error) {
+            await window.segretarioApi.completeCompose(requestId, {
+              error: error instanceof Error ? error.message : 'La bozza non si è aperta.'
+            })
+          }
+        })()
+      }),
+    [composerDataFor, removeComposeSession]
+  )
+
+  // The Segretario shows the user something: a message, a search, a draft.
+  useEffect(
+    () =>
+      window.segretarioApi.onShowRequest((request) => {
+        switch (request.kind) {
+          case 'message':
+            openMessageRef(request.ref)
+            return
+          case 'draft':
+            void openDraftById(request.draftId)
+            return
+          case 'search':
+            if (request.accountId || request.folderPath) {
+              cancelInFlightWork()
+              setShowWelcomeGate(false)
+
+              if (request.accountId) {
+                setSelectedAccountId(request.accountId)
+              }
+
+              if (request.folderPath) {
+                setSelectedFolderPath(request.folderPath)
+              }
+            }
+
+            setSearch(request.query)
+            return
+        }
+      }),
+    [cancelInFlightWork, openDraftById, openMessageRef]
+  )
+
+  /** Waits for the composer of a draft to be mounted, to act on it. */
+  const composerHandleFor = useCallback(
+    async (draftId: string): Promise<MailComposerHandle | null> => {
+      for (let waited = 0; waited < 5_000; waited += 50) {
+        const handle = composerHandlesRef.current.get(draftId)
+
+        if (handle) {
+          return handle
+        }
+
+        await new Promise((resolve) => window.setTimeout(resolve, 50))
+      }
+
+      return null
+    },
+    []
+  )
+
+  /**
+   * The user's answer to a confirmation the Segretario asked for. A send
+   * goes out the way any message goes — through its composer, with the
+   * same checks and the same layout — and the Segretario hears how it went.
+   */
+  const answerSegretarioApproval = useCallback(
+    async (activityId: string, approval: ApprovalRequest, approved: boolean): Promise<void> => {
+      const resolve = (outcome?: SendOutcome): Promise<void> =>
+        segretario.resolveApproval(activityId, approval.approvalId, approved, outcome)
+
+      if (!approved || approval.kind !== 'send' || !approval.draft) {
+        await resolve()
+        return
+      }
+
+      const draftId = approval.draft.draftId
+
+      if (!composerHandlesRef.current.has(draftId)) {
+        const stored = await window.mailApi.getStoredDraft(draftId)
+
+        if (!stored) {
+          await resolve({ sent: false, error: 'La bozza non c’è più: è stata inviata o scartata.' })
+          return
+        }
+
+        setComposeSessions((current) =>
+          current.some((session) => session.id === draftId)
+            ? current
+            : [
+                ...current,
+                {
+                  id: draftId,
+                  initialData: draftToInitialData(stored.content),
+                  existing: true,
+                  status: stored.status
+                }
+              ]
+        )
+      }
+
+      const handle = await composerHandleFor(draftId)
+
+      if (!handle) {
+        await resolve({ sent: false, error: 'La bozza non si è aperta.' })
+        return
+      }
+
+      segretarioSendWaitersRef.current.set(draftId, (outcome) => void resolve(outcome))
+
+      if (!(await handle.send())) {
+        segretarioSendWaitersRef.current.delete(draftId)
+        setActiveComposeId(draftId)
+        await resolve({
+          sent: false,
+          error: 'L’invio si è fermato per un controllo: la bozza è aperta per correggerla.'
+        })
+      }
+    },
+    [composerHandleFor, segretario]
+  )
+
+  /** A link the Segretario wrote, followed. */
+  const openSegretarioHandle = useCallback(
+    (link: HandleLink): void => {
+      switch (link.kind) {
+        case 'message':
+          openMessageRef(link.ref)
+          return
+        case 'draft':
+          void openDraftById(link.draftId)
+          return
+        case 'file':
+          if (link.path) {
+            void window.mailApi.openFile(link.path)
+          } else if (link.ref && link.attachmentId) {
+            void window.mailApi.openAttachment({ ref: link.ref, attachmentId: link.attachmentId })
+          }
+      }
+    },
+    [openDraftById, openMessageRef]
+  )
+
   const addressActions = useMemo<AddressActions>(
     () => ({
       // Writing to someone from a message starts from the account that got it.
@@ -3435,6 +3775,9 @@ function App(): React.JSX.Element {
       case 'settings':
         setSettingsOpen(true)
         return true
+      case 'segretario':
+        setSegretarioOpen((open) => !open)
+        return true
       case 'reader-zoom-in':
       case 'reader-zoom-out':
       case 'reader-zoom-reset':
@@ -3629,6 +3972,16 @@ function App(): React.JSX.Element {
     }
   }
 
+  /** A send the Segretario asked for went, or did not: it hears how. */
+  const settleSegretarioSend = (draftId: string | undefined, outcome: SendOutcome): void => {
+    const waiter = draftId ? segretarioSendWaitersRef.current.get(draftId) : undefined
+
+    if (draftId && waiter) {
+      segretarioSendWaitersRef.current.delete(draftId)
+      waiter(outcome)
+    }
+  }
+
   const handleComposerSendRequested = useCallback(
     (payload: ComposeMailInput, draft: ComposerInitialData): void => {
       if (draft.draftId) {
@@ -3644,8 +3997,16 @@ function App(): React.JSX.Element {
             html: await buildOutgoingMailHtml(payload.html)
           })
           toast.success('Messaggio inviato', { id: sendingToast })
+          settleSegretarioSend(payload.draftId, { sent: true })
         } catch (caughtError) {
           toast.dismiss(sendingToast)
+          settleSegretarioSend(payload.draftId, {
+            sent: false,
+            error:
+              caughtError instanceof Error && caughtError.message.trim()
+                ? caughtError.message
+                : 'Invio email non riuscito.'
+          })
           const failure = {
             id: ++failedSendIdRef.current,
             draft,
@@ -3843,6 +4204,29 @@ function App(): React.JSX.Element {
     : currentFolder
       ? folderDisplayName(currentFolder)
       : 'Conversazioni'
+  // What the user is looking at goes along with what they ask the Segretario.
+  const segretarioContextRefs = selection.selectedRefs.slice(0, SEGRETARIO_CONTEXT_LIMIT)
+  const segretarioContext: SegretarioContextChip = {
+    context: {
+      messages: segretarioContextRefs,
+      accountId: selectedAccountId,
+      folderLabel: currentViewLabel
+    },
+    label:
+      selection.selectedRefs.length > 1
+        ? selection.selectedRefs.length > SEGRETARIO_CONTEXT_LIMIT
+          ? `I primi ${SEGRETARIO_CONTEXT_LIMIT} dei ${selection.selectedRefs.length.toLocaleString('it-IT')} messaggi selezionati`
+          : `${selection.selectedRefs.length} messaggi selezionati`
+        : messageForViewer
+          ? `«${messageForViewer.subject || 'Senza oggetto'}»${messageForViewer.from[0] ? ` — ${messageForViewer.from[0].name || messageForViewer.from[0].address}` : ''}`
+          : currentViewLabel
+  }
+  const segretarioSuggestions =
+    selection.selectedRefs.length > 1
+      ? SEGRETARIO_SELECTION_SUGGESTIONS
+      : messageForViewer
+        ? SEGRETARIO_MESSAGE_SUGGESTIONS
+        : SEGRETARIO_GENERAL_SUGGESTIONS
   const filterNouns =
     messageFilter === 'unread'
       ? (['messaggio non letto', 'messaggi non letti'] as const)
@@ -3906,7 +4290,8 @@ function App(): React.JSX.Element {
     searchScopeLabel: currentUnifiedRole ? folderRoleLabel(currentUnifiedRole) : currentViewLabel,
     filter: messageFilter,
     onFilterChange: setMessageFilter,
-    atWindowTopRight: uiPreferences.layoutMode === 'outlook' && !isMessageExpanded,
+    atWindowTopRight:
+      uiPreferences.layoutMode === 'outlook' && !isMessageExpanded && !segretarioOpen,
     messages,
     sections: messageSections,
     countLabel: listCountLabel,
@@ -3962,6 +4347,7 @@ function App(): React.JSX.Element {
         inert={composerOpen}
         framed
         dockVisible={!composerOpen && composeSessions.length > 0}
+        rightInset={assistantInset}
         dock={
           <ComposeDock
             entries={composeSessions
@@ -3972,6 +4358,7 @@ function App(): React.JSX.Element {
                 summary: composeSummaries[session.id] ?? null
               }))}
             hidden={composerOpen}
+            rightInset={assistantInset}
             onRestore={setActiveComposeId}
             onClose={(id) => void composerHandlesRef.current.get(id)?.close()}
           />
@@ -3986,6 +4373,11 @@ function App(): React.JSX.Element {
               activeItemId="mail"
               onSelectItem={() => undefined}
               syncSummary={syncSummary}
+              segretario={{
+                open: segretarioOpen,
+                attention: segretario.attention,
+                onToggle: () => setSegretarioOpen((current) => !current)
+              }}
               onOpenSettings={() => setSettingsOpen(true)}
             />
           }
@@ -4086,7 +4478,9 @@ function App(): React.JSX.Element {
                     }
                   : undefined
               }
-              atWindowTopRight={isMessageExpanded || uiPreferences.layoutMode === 'apple'}
+              atWindowTopRight={
+                !segretarioOpen && (isMessageExpanded || uiPreferences.layoutMode === 'apple')
+              }
               extensionActions={
                 selection.selectedRefs.length > 0 &&
                 extensionRenderer.toolbarActions.map((action) => (
@@ -4141,6 +4535,26 @@ function App(): React.JSX.Element {
               }
               addressActions={addressActions}
             />
+          }
+          assistant={
+            segretarioOpen ? (
+              <SegretarioPanel
+                state={segretario}
+                contextChip={segretarioContext}
+                suggestions={segretarioSuggestions}
+                atWindowTopRight
+                onClose={() => setSegretarioOpen(false)}
+                onOpenSettings={() => {
+                  setSettingsSection('segretario')
+                  setSettingsOpen(true)
+                }}
+                onOpenHandle={openSegretarioHandle}
+                onApprove={(activityId, approval, approved) =>
+                  void answerSegretarioApproval(activityId, approval, approved)
+                }
+                onOpenDraft={(draftId) => void openDraftById(draftId)}
+              />
+            ) : null
           }
         />
 
@@ -4225,7 +4639,14 @@ function App(): React.JSX.Element {
 
         <SettingsDialog
           open={settingsOpen}
-          onOpenChange={setSettingsOpen}
+          onOpenChange={(open) => {
+            setSettingsOpen(open)
+
+            if (!open) {
+              setSettingsSection(null)
+            }
+          }}
+          initialSectionId={settingsSection}
           accounts={accounts}
           selectedAccountId={selectedAccountId}
           removingAccountId={removingAccountId}

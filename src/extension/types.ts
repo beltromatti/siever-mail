@@ -119,6 +119,17 @@ export interface ExtensionMain {
    * Optional teardown hook invoked when the mail service stops.
    */
   uninstall?(): Promise<void> | void
+  /**
+   * What the extension adds to the Segretario, SIEVER Mail's agent: what
+   * it must know of the company the build is for, in the words of the
+   * host's own prompts (Italian, written as text). Absent in public builds.
+   */
+  readonly assistant?: ExtensionAssistant
+}
+
+export interface ExtensionAssistant {
+  /** Joins the Segretario's system prompt, after the host's. */
+  readonly systemPrompt?: string
 }
 
 export interface ExtensionMainContext {

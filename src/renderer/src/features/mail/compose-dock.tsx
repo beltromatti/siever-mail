@@ -17,6 +17,7 @@ const KIND_ICONS = { new: PenLine, reply: Reply, forward: Forward } as const
 const BAR_WIDTH = 248
 const BAR_GAP = 8
 const OVERFLOW_WIDTH = 48
+const DOCK_EDGE = 12
 /** The share of the window's width the dock may take, from the right: the list stays clear. */
 const DOCK_SHARE_OF_WIDTH = 0.62
 
@@ -24,10 +25,6 @@ export interface ComposeDockEntry {
   id: string
   kind: ComposerKind
   summary: ComposerSummary | null
-}
-
-function dockRoom(): number {
-  return window.innerWidth * DOCK_SHARE_OF_WIDTH
 }
 
 /** How many of `count` bars show in `room`; the rest fold into "+N" beside them. */
@@ -115,22 +112,27 @@ function DockBar({
 export function ComposeDock({
   entries,
   hidden,
+  rightInset,
   onRestore,
   onClose
 }: {
   entries: ReadonlyArray<ComposeDockEntry>
   /** A message is in front: the dock is out of its way. */
   hidden: boolean
+  /** What takes the window's right edge — the Segretario's column — in px: the dock sits beside it. */
+  rightInset: number
   onRestore: (id: string) => void
   onClose: (id: string) => void
 }): React.JSX.Element | null {
-  const [room, setRoom] = useState(dockRoom)
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth)
 
   useEffect(() => {
-    const onResize = (): void => setRoom(dockRoom())
+    const onResize = (): void => setWindowWidth(window.innerWidth)
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
+
+  const room = (windowWidth - rightInset) * DOCK_SHARE_OF_WIDTH
 
   if (entries.length === 0) {
     return null
@@ -145,10 +147,10 @@ export function ComposeDock({
     <section
       aria-label="Messaggi in scrittura"
       className={cn(
-        'fixed right-3 bottom-3 z-40 flex flex-row-reverse items-end transition-[opacity,transform] duration-200',
+        'fixed bottom-3 z-40 flex flex-row-reverse items-end transition-[opacity,transform] duration-200',
         hidden ? 'pointer-events-none translate-y-4 opacity-0' : 'opacity-100'
       )}
-      style={{ gap: BAR_GAP }}
+      style={{ gap: BAR_GAP, right: DOCK_EDGE + rightInset }}
     >
       {shown.map((entry) => (
         <DockBar

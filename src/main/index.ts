@@ -15,6 +15,7 @@ import { loadRuntimeConfig } from './config/env'
 import { installAppMenu } from './app-menu'
 import { installContextMenus } from './context-menu'
 import { registerMailIpc } from './ipc/register-mail-ipc'
+import { registerSegretarioIpc } from './ipc/register-segretario-ipc'
 import { prepareUpgradeMigration } from './services/data-migration'
 import { MailService } from './services/mail-service'
 import { normalizeExternalHttpUrl } from './utils/external-url'
@@ -283,6 +284,7 @@ if (hasSingleInstanceLock) {
       })
 
     registerMailIpc(mailService, () => mainWindow)
+    registerSegretarioIpc(mailService.segretario)
     installAppMenu(() => mainWindow)
 
     mainWindow = createMainWindow()

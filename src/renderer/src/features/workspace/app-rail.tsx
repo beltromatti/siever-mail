@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Settings } from 'lucide-react'
+import { PenLine, Settings } from 'lucide-react'
 
 import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
@@ -26,12 +26,15 @@ export function AppRail({
   activeItemId,
   onSelectItem,
   syncSummary,
+  segretario,
   onOpenSettings
 }: {
   items: ReadonlyArray<RailItem>
   activeItemId: string
   onSelectItem: (id: string) => void
   syncSummary: SyncSummary | null
+  /** The Segretario's panel: open or not, and whether something waits in it. */
+  segretario: { open: boolean; attention: boolean; onToggle: () => void }
   onOpenSettings: () => void
 }): React.JSX.Element {
   return (
@@ -81,6 +84,25 @@ export function AppRail({
       <div className="flex-1" />
 
       <div className="window-no-drag flex flex-col items-center gap-1">
+        <ActionTooltip label="Segretario" commandId="segretario" side="right">
+          <button
+            type="button"
+            aria-label="Segretario"
+            aria-pressed={segretario.open}
+            onClick={segretario.onToggle}
+            className={cn(
+              'focus-visible:ring-ring/60 relative mb-1 grid size-9 place-items-center rounded-[9px] transition-colors outline-none focus-visible:ring-2',
+              segretario.open
+                ? 'bg-ai-soft text-ai'
+                : 'text-faint-foreground hover:bg-hover hover:text-foreground'
+            )}
+          >
+            <PenLine className="size-[17px]" strokeWidth={1.7} />
+            {segretario.attention && !segretario.open && (
+              <span className="bg-ai ring-background absolute top-[7px] right-[7px] size-[7px] rounded-full ring-2" />
+            )}
+          </button>
+        </ActionTooltip>
         {syncSummary && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -102,6 +124,23 @@ export function AppRail({
             <TooltipContent side="right" className="max-w-72">
               <span className="block font-semibold">{syncSummary.label}</span>
               <span className="text-muted-foreground block font-normal">{syncSummary.detail}</span>
+              {syncSummary.indexing && (
+                <span className="mt-2 block font-normal">
+                  <span className="text-muted-foreground block">
+                    Lettura della posta per la ricerca:{' '}
+                    {syncSummary.indexing.indexed.toLocaleString('it-IT')} di{' '}
+                    {syncSummary.indexing.total.toLocaleString('it-IT')}
+                  </span>
+                  <span className="bg-hover mt-1 block h-1 overflow-hidden rounded-full">
+                    <span
+                      className="bg-foreground/60 block h-full rounded-full"
+                      style={{
+                        width: `${Math.round((syncSummary.indexing.indexed / syncSummary.indexing.total) * 100)}%`
+                      }}
+                    />
+                  </span>
+                </span>
+              )}
             </TooltipContent>
           </Tooltip>
         )}

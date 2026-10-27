@@ -129,6 +129,15 @@ describe('planPartialBody', () => {
     expect(plan?.headerParts).toEqual(['1', '1.1', '1.1.1', '1.1.2', '1.2', '2', '3'])
     expect(plan?.contentParts).toEqual(['1.1.1', '1.1.2', '1.2'])
     expect([...(plan?.omittedParts.keys() ?? [])]).toEqual(['2', '3'])
+    expect(plan?.drawsPictures).toBe(false)
+  })
+
+  it('reads only the words for the index, and says when the text draws pictures', () => {
+    const plan = planPartialBody(STRUCTURE, { pictures: false })
+
+    expect(plan?.contentParts).toEqual(['1.1.1', '1.1.2'])
+    expect([...(plan?.omittedParts.keys() ?? [])]).toEqual(['1.2', '2', '3'])
+    expect(plan?.drawsPictures).toBe(true)
   })
 
   it('reads an embedded message not marked as an attachment, which may be body', () => {

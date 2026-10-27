@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildComposerBody,
   hasWrittenContent,
+  plainTextToComposerHtml,
   replaceComposerSignature,
   splitSignature
 } from './composer-body'
@@ -75,6 +76,42 @@ describe('buildComposerBody', () => {
     expect(buildComposerBody('<div>Mario</div>', QUOTE)).toBe(
       `${EMPTY_LINE}${EMPTY_LINE}<div class="gmail_signature"><div>Mario</div></div>${EMPTY_LINE}${QUOTE}`
     )
+  })
+
+  it('sets what is already written above the signature, a line apart', () => {
+    expect(buildComposerBody('<div>Mario</div>', QUOTE, '<div>Ciao Anna,</div>')).toBe(
+      `<div>Ciao Anna,</div>${EMPTY_LINE}<div class="gmail_signature"><div>Mario</div></div>${EMPTY_LINE}${QUOTE}`
+    )
+  })
+
+  it('keeps what is written a line apart from the quote without a signature', () => {
+    expect(buildComposerBody(null, QUOTE, '<div>Va bene.</div>')).toBe(
+      `<div>Va bene.</div>${EMPTY_LINE}${QUOTE}`
+    )
+  })
+})
+
+describe('plainTextToComposerHtml', () => {
+  it('writes a line per block and an empty line per blank one', () => {
+    expect(plainTextToComposerHtml('Ciao Anna,\n\nci vediamo lunedì.\r\nGrazie')).toBe(
+      `<div>Ciao Anna,</div>${EMPTY_LINE}<div>ci vediamo lunedì.</div><div>Grazie</div>`
+    )
+  })
+
+  it('makes a list of dashed lines and keeps bold', () => {
+    expect(plainTextToComposerHtml('Servono:\n- il **contratto**\n• la fattura\nA presto')).toBe(
+      '<div>Servono:</div><ul><li>il <b>contratto</b></li><li>la fattura</li></ul><div>A presto</div>'
+    )
+  })
+
+  it('escapes what would read as markup', () => {
+    expect(plainTextToComposerHtml('<script>a & b</script>')).toBe(
+      '<div>&lt;script&gt;a &amp; b&lt;/script&gt;</div>'
+    )
+  })
+
+  it('drops the blank lines around the text', () => {
+    expect(plainTextToComposerHtml('\n\n  Ok  \n\n')).toBe('<div>Ok</div>')
   })
 })
 

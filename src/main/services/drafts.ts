@@ -205,33 +205,41 @@ export class DraftService {
    */
   async listDocked(): Promise<StoredDraft[]> {
     const records = await this.deps.database.listDockedDrafts()
+    return Promise.all(records.map((record) => this.storedDraftOf(record)))
+  }
 
-    return Promise.all(
-      records.map(async (record) => ({
-        content: {
-          ...record.content,
-          attachments: await Promise.all(
-            record.content.attachments.map(async (attachment): Promise<DraftAttachment> => {
-              const present =
-                !attachment.path ||
-                (await stat(attachment.path).then(
-                  (stats) => stats.isFile(),
-                  () => false
-                ))
+  /** A draft kept here, by its id, to take up again; null when there is none. */
+  async get(id: string): Promise<StoredDraft | null> {
+    const record = await this.deps.database.getDraft(id)
+    return record ? this.storedDraftOf(record) : null
+  }
 
-              return present || !attachment.originalId
-                ? attachment
-                : {
-                    name: attachment.name,
-                    size: attachment.size,
-                    originalId: attachment.originalId
-                  }
-            })
-          )
-        },
-        status: this.statusOf(record)
-      }))
-    )
+  /** A stored draft as the composer takes it up: copies of originals that are gone, made again. */
+  private async storedDraftOf(record: StoredDraftRecord): Promise<StoredDraft> {
+    return {
+      content: {
+        ...record.content,
+        attachments: await Promise.all(
+          record.content.attachments.map(async (attachment): Promise<DraftAttachment> => {
+            const present =
+              !attachment.path ||
+              (await stat(attachment.path).then(
+                (stats) => stats.isFile(),
+                () => false
+              ))
+
+            return present || !attachment.originalId
+              ? attachment
+              : {
+                  name: attachment.name,
+                  size: attachment.size,
+                  originalId: attachment.originalId
+                }
+          })
+        )
+      },
+      status: this.statusOf(record)
+    }
   }
 
   /**

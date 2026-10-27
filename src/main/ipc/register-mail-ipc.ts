@@ -235,6 +235,9 @@ export function registerMailIpc(
   registerDataHandler(IPC_CHANNELS.discardDraft, async (id: string) => mailService.discardDraft(id))
 
   registerDataHandler(IPC_CHANNELS.listDockedDrafts, async () => mailService.listDockedDrafts())
+  registerDataHandler(IPC_CHANNELS.getStoredDraft, async (id: string) =>
+    mailService.getStoredDraft(id)
+  )
 
   registerDataHandler(IPC_CHANNELS.openDraftMessage, async (ref) =>
     mailService.openDraftMessage(ref as MessageRef)

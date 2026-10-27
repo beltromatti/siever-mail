@@ -147,6 +147,8 @@ function buildMenu(): void {
     {
       label: 'Vista',
       submenu: [
+        item('segretario'),
+        { type: 'separator' },
         item('reader-zoom-in'),
         item('reader-zoom-out'),
         item('reader-zoom-reset'),

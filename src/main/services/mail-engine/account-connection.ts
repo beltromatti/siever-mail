@@ -32,6 +32,7 @@ import type { AppDatabase, FolderSyncState } from '../database'
 import type { GoogleOAuthService } from '../google-oauth'
 
 import {
+  fetchedIdentity,
   formatSubject,
   hasAttachmentInStructure,
   internalDateToIso,
@@ -40,6 +41,7 @@ import {
   mergeSummaryAndParsedIntoDetail
 } from './message-mapper'
 import { collectFetchResults, formatUidSet } from './fetch-results'
+import { MailIndexer, type IndexProgress } from './mail-indexer'
 import { extractPreview } from './preview'
 import { intersectUids, SERVER_SEARCH_MATCH_LIMIT } from './server-search'
 import { attachmentFileName, parseMessageSource } from './message-parts'
@@ -212,6 +214,16 @@ const UID_COMMAND_CHUNK = 500
 /** Messages whose raw source one command fetches: a handful, however large each may be. */
 const RAW_SOURCE_BATCH_SIZE = 8
 
+/**
+ * What every fetch of a message asks for besides its content, to know who
+ * it is and which conversation it is in (see `fetchedIdentity`).
+ */
+const IDENTITY_FETCH_QUERY = {
+  threadId: true,
+  emailId: true,
+  headers: ['references']
+} as const satisfies FetchQueryObject
+
 /** A message as the server stores it, with a parsed view of it. */
 export interface RawMessage {
   source: Buffer
@@ -373,6 +385,10 @@ export class AccountConnection extends EventEmitter {
   private readonly bootstrappingFolders = new Set<string>()
   // Resolves the pause between reconnect attempts early (see `nudge`).
   private wakeRetry: (() => void) | null = null
+  // Reads the text of every message into the full-text index, on a third
+  // connection of its own (see `MailIndexer`).
+  private readonly indexer: MailIndexer
+  private indexProgress: IndexProgress | undefined
 
   constructor(
     private readonly database: AppDatabase,
@@ -380,6 +396,29 @@ export class AccountConnection extends EventEmitter {
     private account: AccountWithSecret
   ) {
     super()
+    this.indexer = new MailIndexer({
+      accountId: account.id,
+      database,
+      isConnected: () => this.status === 'connected',
+      openClient: async () => {
+        const client = this.buildClient(
+          await resolveImapAuth(this.account, this.googleOAuthService)
+        )
+        await client.connect()
+        return client
+      },
+      onRowsUpdated: (rows) => this.emitUpdatedRows(rows),
+      onProgress: (progress) => {
+        if (
+          progress.total !== this.indexProgress?.total ||
+          progress.indexed !== this.indexProgress?.indexed
+        ) {
+          this.indexProgress = progress
+          this.emitState()
+        }
+      },
+      onError: (message, error) => logMainError(message, error, { accountId: this.account.id })
+    })
   }
 
   override on<E extends keyof AccountConnectionEvents>(
@@ -406,7 +445,8 @@ export class AccountConnection extends EventEmitter {
       syncing: this.status === 'connected' && this.bootstrappingFolders.size > 0,
       errorMessage: this.status === 'error' ? this.lastError?.message : undefined,
       authFailed: this.status === 'error' ? this.lastError?.authFailed : undefined,
-      lastContactAt: this.lastContactAt
+      lastContactAt: this.lastContactAt,
+      index: this.indexProgress
     }
   }
 
@@ -492,6 +532,7 @@ export class AccountConnection extends EventEmitter {
     this.running = false
     // The loop may be parked between attempts; let it see `running` is off.
     this.wakeRetry?.()
+    const indexerStopped = this.indexer.stop()
 
     if (this.folderPollInterval) {
       clearInterval(this.folderPollInterval)
@@ -518,6 +559,8 @@ export class AccountConnection extends EventEmitter {
           }
         })
     )
+
+    await indexerStopped
 
     try {
       await this.connectionLoopPromise
@@ -779,25 +822,35 @@ export class AccountConnection extends EventEmitter {
       lock.release()
     }
 
-    const updated = await this.database.updateMessageBody(ref, detail)
+    this.emitUpdatedRows(await this.database.updateMessageBody(ref, detail))
+    return detail
+  }
 
-    if (updated) {
+  /** Rows a body changed — in every folder the message is in — told to the views, folder by folder. */
+  private emitUpdatedRows(rows: ReadonlyArray<MailMessageSummary>): void {
+    const byFolder = new Map<string, MailMessageSummary[]>()
+
+    for (const row of rows) {
+      const folder = byFolder.get(row.folderPath) ?? []
+      folder.push(row)
+      byFolder.set(row.folderPath, folder)
+    }
+
+    for (const [folderPath, updated] of byFolder) {
       this.emit('messages', {
         accountId: this.account.id,
-        folderPath: ref.folderPath,
+        folderPath,
         added: [],
-        updated: [updated],
+        updated,
         removedUids: [],
         bootstrap: false
       })
     }
-
-    return detail
   }
 
   private async fetchWholeBody(client: ImapFlow, ref: MessageRef): Promise<FetchedMessageDetail> {
     const fetched = await this.fetchOneRequested(client, ref, {
-      threadId: true,
+      ...IDENTITY_FETCH_QUERY,
       envelope: true,
       flags: true,
       internalDate: true,
@@ -822,6 +875,7 @@ export class AccountConnection extends EventEmitter {
     const head = (
       await this.fetchRequested(client, ref.folderPath, [ref.uid], {
         threadId: true,
+        emailId: true,
         envelope: true,
         flags: true,
         internalDate: true,
@@ -1772,6 +1826,7 @@ export class AccountConnection extends EventEmitter {
         this.backoffMs = RECONNECT_BACKOFF_INITIAL_MS
         this.startPrimaryWorkerIfNeeded()
         this.startSyncWorkerIfNeeded()
+        this.indexer.start()
 
         this.enqueueSyncCommand(
           async () => {
@@ -2534,6 +2589,10 @@ export class AccountConnection extends EventEmitter {
       }
 
       const added = result.added.filter(stays)
+
+      if (result.added.length > 0) {
+        this.indexer.poke()
+      }
       const updated = result.updated.filter(stays)
 
       if (added.length > 0 || updated.length > 0) {
@@ -2802,7 +2861,7 @@ export class AccountConnection extends EventEmitter {
     // we include it and extract the preview right here, so the row lands in
     // the DB with previewHydrated=true and notifications fire with snippet.
     const fetchedMessages = await this.fetchRequested(this.requireSync(), folderPath, uids, {
-      threadId: true,
+      ...IDENTITY_FETCH_QUERY,
       envelope: true,
       flags: true,
       internalDate: true,
@@ -2846,7 +2905,7 @@ export class AccountConnection extends EventEmitter {
         accountId: this.account.id,
         folderPath,
         uid: fetched.uid,
-        threadId: fetched.threadId,
+        ...fetchedIdentity(fetched),
         messageId: envelope.messageId,
         subject,
         from,

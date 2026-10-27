@@ -1,0 +1,111 @@
+import type { MessageRef } from '@shared/models'
+
+/**
+ * Short names for what an activity has seen — `m3` a message, `f2` a file
+ * or an attachment, `b1` a draft — so the model refers to them in a few
+ * characters and the page turns them into links. Each activity has its
+ * own; the same message keeps its name for the whole activity.
+ */
+export type FileTarget =
+  | {
+      kind: 'attachment'
+      ref: MessageRef
+      attachmentId: string
+      fileName: string
+      contentType?: string
+    }
+  | { kind: 'path'; path: string; fileName: string }
+
+export type HandleTarget =
+  | { kind: 'message'; ref: MessageRef; messageKey: string }
+  | { kind: 'file'; file: FileTarget }
+  | { kind: 'draft'; draftId: string }
+
+/** A name given, as kept in the activity's log to rebuild the registry. */
+export interface HandleRecord {
+  handle: string
+  target: HandleTarget
+}
+
+function identityOf(target: HandleTarget): string {
+  switch (target.kind) {
+    case 'message':
+      return `m\u0000${target.ref.accountId}\u0000${target.messageKey}`
+    case 'draft':
+      return `b\u0000${target.draftId}`
+    case 'file':
+      return target.file.kind === 'path'
+        ? `f\u0000${target.file.path}`
+        : `f\u0000${target.file.ref.accountId}\u0000${target.file.ref.folderPath}\u0000${target.file.ref.uid}\u0000${target.file.attachmentId}`
+  }
+}
+
+const PREFIX: Readonly<Record<HandleTarget['kind'], string>> = {
+  message: 'm',
+  file: 'f',
+  draft: 'b'
+}
+
+export class HandleRegistry {
+  private readonly byHandle = new Map<string, HandleTarget>()
+  private readonly byIdentity = new Map<string, string>()
+  private readonly counters: Record<string, number> = { m: 0, f: 0, b: 0 }
+
+  constructor(records: ReadonlyArray<HandleRecord> = []) {
+    for (const record of records) {
+      this.restore(record)
+    }
+  }
+
+  /** The name of `target`, given now if it has none yet; `added` collects new names. */
+  name(target: HandleTarget, added?: HandleRecord[]): string {
+    const identity = identityOf(target)
+    const known = this.byIdentity.get(identity)
+
+    if (known) {
+      // A message seen again from another folder keeps its name, and is
+      // found where it was seen last.
+      this.byHandle.set(known, target)
+      return known
+    }
+
+    const prefix = PREFIX[target.kind]
+    this.counters[prefix] += 1
+    const handle = `${prefix}${this.counters[prefix]}`
+    this.byHandle.set(handle, target)
+    this.byIdentity.set(identity, handle)
+    added?.push({ handle, target })
+    return handle
+  }
+
+  resolve(handle: string): HandleTarget | null {
+    return this.byHandle.get(handle.trim().toLowerCase()) ?? null
+  }
+
+  message(handle: string): { ref: MessageRef; messageKey: string } | null {
+    const target = this.resolve(handle)
+    return target?.kind === 'message' ? target : null
+  }
+
+  file(handle: string): FileTarget | null {
+    const target = this.resolve(handle)
+    return target?.kind === 'file' ? target.file : null
+  }
+
+  draft(handle: string): string | null {
+    const target = this.resolve(handle)
+    return target?.kind === 'draft' ? target.draftId : null
+  }
+
+  private restore({ handle, target }: HandleRecord): void {
+    const prefix = handle.charAt(0)
+    const number = Number(handle.slice(1))
+
+    this.byHandle.set(handle, target)
+    this.byIdentity.set(identityOf(target), handle)
+
+    if (Number.isFinite(number) && number > (this.counters[prefix] ?? 0)) {
+      this.counters[prefix] = number
+    }
+  }
+}

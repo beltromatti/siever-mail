@@ -5,6 +5,7 @@ import type { FetchedMessageDetail, MailAddress, MailAttachment } from '@shared/
 import { cleanDisplayName, deriveSenderKey, deriveSenderName } from '@shared/sender'
 import { EMPTY_SUBJECT_LABEL } from '@shared/subject'
 
+import { headerValue, messageIdsIn, messageKeyFor, threadKeyFor } from './message-identity'
 import { extractPreview } from './preview'
 import {
   attachmentFileName,
@@ -113,6 +114,38 @@ export function internalDateToIso(internalDate: Date | string | undefined): stri
   return new Date().toISOString()
 }
 
+/**
+ * Who a fetched message is, and the conversation it belongs to (see
+ * `message-identity.ts`), from what every fetch asks for: the server's ids
+ * (`emailId`, `threadId`), the envelope, and the References header. Worked
+ * out from the envelope alone, so the list's fetch and a body's agree.
+ */
+export function fetchedIdentity(
+  fetched: FetchMessageObject,
+  references: ReadonlyArray<string> = messageIdsIn(headerValue(fetched.headers, 'references'))
+): { messageKey: string; threadId: string } {
+  const envelope = fetched.envelope
+  const messageKey = messageKeyFor({
+    emailId: fetched.emailId,
+    messageId: envelope?.messageId,
+    from: mapAddresses(envelope?.from),
+    date: internalDateToIso(fetched.internalDate),
+    subject: formatSubject(envelope?.subject),
+    size: fetched.size ?? 0
+  })
+
+  return {
+    messageKey,
+    threadId: threadKeyFor({
+      serverThreadId: fetched.threadId,
+      references,
+      inReplyTo: envelope?.inReplyTo,
+      messageId: envelope?.messageId,
+      messageKey
+    })
+  }
+}
+
 export async function mapFetchedToDetail(
   accountId: string,
   folderPath: string,
@@ -199,12 +232,16 @@ export function mergeSummaryAndParsedIntoDetail(
   const html = rawHtml ? inlineCidReferences(rawHtml, parsed) : undefined
 
   const from = pickAddresses(mapParsedAddresses(parsed.from), mapAddresses(envelope?.from))
+  const references = parsedReferences(parsed.references)
 
   return {
     accountId,
     folderPath,
     uid: fetched.uid,
-    threadId: fetched.threadId,
+    ...fetchedIdentity(
+      fetched,
+      references.map((reference) => reference.replace(/^<|>$/g, ''))
+    ),
     messageId: envelope?.messageId,
     subject,
     from,
@@ -212,7 +249,7 @@ export function mergeSummaryAndParsedIntoDetail(
     cc: pickAddresses(mapParsedAddresses(parsed.cc), mapAddresses(envelope?.cc)),
     bcc: pickAddresses(mapParsedAddresses(parsed.bcc), mapAddresses(envelope?.bcc)),
     replyTo: pickAddresses(mapParsedAddresses(parsed.replyTo), mapAddresses(envelope?.replyTo)),
-    references: parsedReferences(parsed.references),
+    references,
     date: internalDateToIso(fetched.internalDate),
     preview: extractPreview(parsed, subject),
     // Full body is available here (mergeSummaryAndParsedIntoDetail is called for

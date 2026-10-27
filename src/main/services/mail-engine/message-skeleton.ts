@@ -25,6 +25,8 @@ export interface PartialBodyPlan {
   contentParts: string[]
   /** The parts left out, with their size on the wire. */
   omittedParts: Map<string, MessageStructureObject>
+  /** Pictures the text draws were left out: the body is not yet as the reader shows it. */
+  drawsPictures: boolean
 }
 
 /**
@@ -38,7 +40,7 @@ export interface PartialBodyPlan {
  *   • an embedded message not marked as an attachment may be read as part
  *     of the body, its files with it, so it comes whole.
  */
-function isBodyContent(node: MessageStructureObject): boolean {
+function isBodyContent(node: MessageStructureObject, pictures: boolean): boolean {
   const type = node.type.toLowerCase()
   const disposition = node.disposition?.toLowerCase()
 
@@ -50,7 +52,12 @@ function isBodyContent(node: MessageStructureObject): boolean {
     return !disposition || disposition === 'inline'
   }
 
-  return Boolean(node.id) && type.startsWith('image/')
+  return pictures && isDrawnPicture(node)
+}
+
+/** A picture with a Content-ID: one the HTML draws through `cid:`. */
+function isDrawnPicture(node: MessageStructureObject): boolean {
+  return Boolean(node.id) && node.type.toLowerCase().startsWith('image/')
 }
 
 function isMultipart(node: MessageStructureObject): boolean {
@@ -60,14 +67,24 @@ function isMultipart(node: MessageStructureObject): boolean {
 /**
  * The parts to download for the body of a message with this structure, or
  * null when it cannot be rebuilt from parts — a message that is a single
- * part, or a container whose boundary the server did not report.
+ * part, or a container whose boundary the server did not report. With
+ * `pictures` off — the index, which reads words — the pictures the text
+ * draws are left out too, and `drawsPictures` says whether there were any.
  */
-export function planPartialBody(structure: MessageStructureObject): PartialBodyPlan | null {
+export function planPartialBody(
+  structure: MessageStructureObject,
+  { pictures = true }: { pictures?: boolean } = {}
+): PartialBodyPlan | null {
   if (!isMultipart(structure) || !structure.parameters?.boundary) {
     return null
   }
 
-  const plan: PartialBodyPlan = { headerParts: [], contentParts: [], omittedParts: new Map() }
+  const plan: PartialBodyPlan = {
+    headerParts: [],
+    contentParts: [],
+    omittedParts: new Map(),
+    drawsPictures: false
+  }
 
   const walk = (node: MessageStructureObject): boolean =>
     (node.childNodes ?? []).every((child) => {
@@ -81,10 +98,11 @@ export function planPartialBody(structure: MessageStructureObject): PartialBodyP
         return Boolean(child.parameters?.boundary) && walk(child)
       }
 
-      if (isBodyContent(child)) {
+      if (isBodyContent(child, pictures)) {
         plan.contentParts.push(child.part)
       } else {
         plan.omittedParts.set(child.part, child)
+        plan.drawsPictures ||= isDrawnPicture(child)
       }
 
       return true

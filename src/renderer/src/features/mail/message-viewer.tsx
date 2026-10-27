@@ -608,7 +608,9 @@ export function MessageViewer({
   const headerBand = (content: ReactNode): React.JSX.Element => (
     <div
       className={cn(
-        'window-drag-region flex h-[52px] shrink-0 items-center gap-1 border-b pl-3',
+        // A container: beside the Segretario's panel the reading pane narrows,
+        // and its buttons give up their words before they would overlap.
+        'window-drag-region @container/reader-header flex h-[52px] shrink-0 items-center gap-1 border-b pl-3',
         atWindowTopRight ? 'pr-[calc(var(--titlebar-controls)+8px)]' : 'pr-2'
       )}
     >
@@ -711,17 +713,20 @@ export function MessageViewer({
               <>
                 <ActionTooltip label="Rispondi al mittente" commandId="reply">
                   <Button variant="secondary" size="sm" onClick={onReply}>
-                    <Reply className="size-3.5" /> Rispondi
+                    <Reply className="size-3.5" />
+                    <span className="@max-[560px]/reader-header:hidden">Rispondi</span>
                   </Button>
                 </ActionTooltip>
                 <ActionTooltip label="Rispondi a tutti i destinatari" commandId="reply-all">
                   <Button variant="ghost" size="sm" onClick={onReplyAll}>
-                    <ReplyAll className="size-3.5" /> Rispondi a tutti
+                    <ReplyAll className="size-3.5" />
+                    <span className="@max-[760px]/reader-header:hidden">Rispondi a tutti</span>
                   </Button>
                 </ActionTooltip>
                 <ActionTooltip label="Inoltra con gli allegati" commandId="forward">
                   <Button variant="ghost" size="sm" onClick={onForward}>
-                    <Forward className="size-3.5" /> Inoltra
+                    <Forward className="size-3.5" />
+                    <span className="@max-[760px]/reader-header:hidden">Inoltra</span>
                   </Button>
                 </ActionTooltip>
               </>

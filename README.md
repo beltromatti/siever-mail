@@ -44,6 +44,13 @@ open-source software released under the Apache License 2.0.
 
 ## Highlights
 
+- **A secretary, not a chatbot** — the Segretario works on your mail: it
+  searches and reads every message and attachment and the files on your
+  computer, answers with links to what it found, writes replies in your
+  style into the composer you write in, and files messages. Several jobs
+  run side by side; nothing is sent without your confirmation, files are
+  only read. It runs on your own [OpenRouter](https://openrouter.ai/) key,
+  only through providers that keep no data, and you see what it costs.
 - **Multi-account by design** — IMAP/SMTP (SSL/TLS or STARTTLS) and Gmail
   OAuth side by side. "Tutti gli account" gathers the inbox, sent mail,
   drafts, archive, spam and trash of every account, whatever each server
@@ -60,8 +67,8 @@ open-source software released under the Apache License 2.0.
   the rows loaded or the whole folder, and act on it in one command.
   Drag messages onto a folder, or find one with "Sposta" as you type; a
   folder can be created on the way. Search ignores case and accents,
-  narrows with `da:` `a:` `oggetto:`, searches the full text on the server
-  too, and says where it looked.
+  narrows with `da:` `a:` `oggetto:`, searches the full text of every
+  message in a local index, and says where it looked.
 - **A composer that knows people** — recipients are chips, checked before
   sending, pasted lists split into people, names resolved from the
   contacts. Suggestions put the people you write to first and leave out

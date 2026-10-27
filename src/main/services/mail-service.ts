@@ -3,7 +3,8 @@ import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { mkdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, net, shell } from 'electron'
+import { NodeHtmlMarkdown } from 'node-html-markdown'
 
 import type {
   ExtensionDatabaseHandle,
@@ -31,6 +32,7 @@ import type {
   ListMessagesOptions,
   MailAccount,
   MailAccountSignature,
+  MailAddress,
   MailContactSuggestion,
   MailFolder,
   MailMessageDetail,
@@ -76,6 +78,8 @@ import {
   sha256
 } from './attachment-files'
 import { APP_ID } from '@main/app-identity'
+import { SegretarioService } from '@main/ai/segretario-service'
+import type { SegretarioMailPort } from '@main/ai/agent/tool-types'
 import { AppBadge } from './app-badge'
 import { DraftService } from './drafts'
 import { AppDatabase, type MessageListView } from './database'
@@ -337,6 +341,8 @@ export class MailService {
   private readonly engine: MailEngine
   private readonly badge: AppBadge
   private readonly drafts: DraftService
+  /** SIEVER Mail's agent (see `src/main/ai`). */
+  readonly segretario: SegretarioService
   private extension: ExtensionMain | null = null
   private storageReady: Promise<void> | null = null
   // The copy of each attachment last written, and what it held, keyed by its
@@ -373,6 +379,104 @@ export class MailService {
         }
       }
     })
+    this.segretario = new SegretarioService({
+      database: this.database,
+      mail: this.segretarioMailPort(),
+      fetch: (input, init) => net.fetch(input, init),
+      send: (channel, payload) => getMainWindow()?.webContents.send(channel, payload)
+    })
+  }
+
+  /**
+   * What the Segretario reaches of the mail: the same operations the
+   * user's own clicks call, so its work shows in the views as theirs does.
+   */
+  private segretarioMailPort(): SegretarioMailPort {
+    const markdown = new NodeHtmlMarkdown({ keepDataImages: false, maxConsecutiveNewlines: 2 })
+
+    return {
+      listAccounts: () => this.database.getAccounts(),
+      listFolders: (accountId) => this.database.listFolders(accountId),
+      searchClient: () => this.database.storeClient(),
+      readMessage: async (ref) => {
+        await this.ensureAccountExists(ref.accountId)
+        let message = await this.database.getMessage(ref)
+
+        if (!message) {
+          throw new Error('Il messaggio non è più in questa cartella.')
+        }
+
+        let body = await this.database.getStoredBody(ref.accountId, message.messageKey)
+
+        if (!body) {
+          await this.engine.loadMessageBody(ref, message.size, 'use')
+          message = (await this.database.getMessage(ref)) ?? message
+          body = await this.database.getStoredBody(ref.accountId, message.messageKey)
+        }
+
+        const text = body?.text?.trim()
+          ? body.text
+          : body?.html
+            ? markdown.translate(body.html)
+            : ''
+
+        return {
+          ...message,
+          attachments: body?.attachments ?? message.attachments,
+          replyTo: body?.replyTo ?? message.replyTo,
+          references: body?.references ?? message.references,
+          textForReading: text.replace(/\n{3,}/g, '\n\n').trim()
+        }
+      },
+      attachmentContent: async (ref, attachment) => {
+        const message = await this.requireMessage(ref)
+        const [fetched] = await this.engine.fetchAttachments(
+          ref,
+          [{ index: parseAttachmentIndex(attachment.id), part: attachment.part }],
+          message.size
+        )
+
+        if (!fetched) {
+          throw new Error('Allegato non disponibile per questo messaggio.')
+        }
+
+        return { data: fetched.content, contentType: attachment.contentType }
+      },
+      copyAttachments: async (ref, attachmentIds) =>
+        (await this.copyMessageAttachments({ ref, attachmentIds })).map((copy) => ({
+          path: copy.path,
+          name: copy.name
+        })),
+      archive: (refs) => this.archiveMessages(refs),
+      move: (refs, destinationFolderPath) => this.moveMessages({ refs, destinationFolderPath }),
+      setSeen: (refs, present) => this.setMessagesSeen({ refs, present }),
+      setFlagged: (refs, present) => this.setMessagesFlagged({ refs, present }),
+      // Never a deletion for good: a message already in the Trash stays there.
+      trash: (refs) => this.engine.moveMessagesToTrash(refs),
+      getDraft: async (draftId) => {
+        const draft = await this.database.getDraft(draftId)
+
+        if (!draft) {
+          return null
+        }
+
+        const content = draft.content
+        const addresses = (list: MailAddress[]): string[] =>
+          list.map((address) =>
+            address.name ? `${address.name} <${address.address}>` : address.address
+          )
+
+        return {
+          accountId: content.accountId,
+          to: addresses(content.to),
+          cc: addresses(content.cc),
+          bcc: addresses(content.bcc),
+          subject: content.subject,
+          text: markdown.translate(content.html).trim(),
+          attachments: content.attachments.map((attachment) => attachment.name)
+        }
+      }
+    }
   }
 
   /**
@@ -405,6 +509,7 @@ export class MailService {
     this.badge.setCount(await this.engine.inboxUnreadCount())
     await this.engine.start()
     await this.drafts.resume()
+    await this.segretario.open()
   }
 
   /** The window loaded anew: what only its page can draw is drawn again. */
@@ -470,6 +575,8 @@ export class MailService {
     } catch (error) {
       logMainError('Extension teardown failed', error)
     }
+
+    await this.segretario.stop()
 
     // What is being written reaches Bozze before the connections close.
     await this.drafts
@@ -1068,6 +1175,10 @@ export class MailService {
     return this.drafts.discard(z.string().uuid().parse(id))
   }
 
+  getStoredDraft(id: string): Promise<StoredDraft | null> {
+    return this.drafts.get(z.string().min(1).parse(id))
+  }
+
   listDockedDrafts(): Promise<StoredDraft[]> {
     return this.drafts.listDocked()
   }
@@ -1161,6 +1272,7 @@ export class MailService {
 
     await this.database.clearAllDataKeepAccounts()
     await this.dropAttachmentCopies()
+    await this.segretario.clearData()
     await this.extension?.clearData()
 
     // Re-bootstrap all accounts in parallel. engine.addAccount returns once the

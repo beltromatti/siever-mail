@@ -19,13 +19,17 @@ this page is the map.
 | Lists       | [TanStack Virtual](https://tanstack.com/virtual) for the endless message list                          |
 | HTML safety | [DOMPurify](https://github.com/cure53/DOMPurify)                                                       |
 | Tests       | [Vitest](https://vitest.dev/) (node + jsdom projects)                                                  |
+| Segretario  | The user's own [OpenRouter](https://openrouter.ai/) key; the newest DeepSeek Flash; no server of ours  |
+| Documents   | unpdf (PDF), mammoth (Word), SheetJS (spreadsheets), fflate (OpenDocument, PowerPoint)                 |
+| Markdown    | [Streamdown](https://streamdown.ai/) for what the Segretario writes, as it writes it                   |
 
 ## Processes and startup
 
 The usual Electron split. Only the main process touches the network, the
 file system and the database; the renderer is context-isolated and reaches
 it through the typed `window.mailApi` bridge (`src/preload/index.ts`,
-channels in `src/shared/ipc.ts`).
+channels in `src/shared/ipc.ts`), and the Segretario through
+`window.segretarioApi` (channels in `src/shared/segretario.ts`).
 
 Startup, in `src/main/index.ts`:
 
@@ -36,8 +40,8 @@ Startup, in `src/main/index.ts`:
    finishes any upgrade migration.
 3. `MailService.start()` — the notification preferences and the icon badge
    are applied, the mounted network shares remembered (see
-   [Network shares](#network-shares)), and the mail engine connects the
-   accounts.
+   [Network shares](#network-shares)), the mail engine connects the
+   accounts and the Segretario opens (see [Segretario](#segretario)).
 4. The extension installs (see [Extensions](#extensions)).
 
 The window is created right away and loads alongside. **Every IPC channel
@@ -61,7 +65,16 @@ src/
 │   ├── app-menu.ts            macOS menu bar (Italian); none elsewhere
 │   ├── context-menu.ts        native menus for text, links, pictures, spelling
 │   ├── theme.ts               Sistema / Chiaro / Scuro → nativeTheme
-│   ├── ipc/register-mail-ipc.ts   every IPC handler
+│   ├── ipc/                   IPC handlers: the mail's, the Segretario's
+│   ├── ai/                    the Segretario
+│   │   ├── segretario-service.ts  key, activities and the loop each one turns
+│   │   ├── openrouter.ts      the model: requests, streaming, errors, the key's credit
+│   │   ├── ai-store.ts        its tables: key, usage, activities, events, memory
+│   │   ├── agent/             conversation rebuilt from the event log, short names
+│   │   ├── tools/             what it can do: search, read, write, organise, remember
+│   │   ├── prompts/           its instructions, in Italian, one file each
+│   │   ├── mail-search.ts     the full-text index as the agent asks it
+│   │   └── extraction.ts      the text of PDFs, Office files, spreadsheets, pictures
 │   ├── services/
 │   │   ├── mail-service.ts    façade the IPC layer calls
 │   │   ├── database.ts        Prisma client, raw DDL, queries
@@ -81,12 +94,13 @@ src/
 ├── renderer/src/
 │   ├── App.tsx                top-level state and wiring
 │   ├── features/              accounts, mail (list, table, reader,
-│   │                          composer, editor), settings, workspace
+│   │                          composer, editor), segretario, settings, workspace
 │   ├── components/ui/         shared primitives (dialog, confirm, menus…)
 │   ├── lib/                   selection, sections, HTML pipelines, zoom
 │   └── styles/globals.css     Tailwind entry and the theme tokens
 ├── shared/                    types, commands and shortcuts, search grammar, folder
-│                              roles, address parsing, fonts, sender/subject keys
+│                              roles, address parsing, fonts, sender/subject keys,
+│                              the Segretario's contract (segretario.ts)
 └── extension/                 the extension contract and its no-op stubs
 ```
 
@@ -97,17 +111,25 @@ One SQLite file, `userData/siever-mail.sqlite`. The schema is declared in
 `CREATE TABLE IF NOT EXISTS` plus additive column checks in `database.ts`,
 so an older file is brought forward in place.
 
-| Table                | Holds                                                                                                                                                                                                                                        |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `accounts`           | IMAP and Gmail accounts; `encrypted_secret` is the password or OAuth token, encrypted with `safeStorage`.                                                                                                                                    |
-| `folders`            | Folder metadata and sync cursors (UIDVALIDITY, HIGHESTMODSEQ, UIDNEXT, last UID). _Cache._                                                                                                                                                   |
-| `messages`           | Envelopes, previews, flags, body cache. Denormalised `sender_label` / `sender_sort` / `subject_sort` let the database sort and group by sender or subject, and the folded `search_*` columns let it search without case or accents. _Cache._ |
-| `contacts`           | Everyone stored mail names, for the composer's suggestions: `usage_count` / `last_used_at` count the mail written to them, `last_received_at` the newest they sent, `hidden_at` a contact taken out of the suggestions.                      |
-| `drafts`             | The messages being written: recipients, subject, body, files, the thread they answer; `revision` / `server_revision` say whether Bozze has the draft as it is, `server_*` where its copy is, `docked` that a composer holds it.              |
-| `account_signatures` | One signature per account, with the version of the page it was written for (`html_format`) and the edition of the extension's content it has (`extension_revision`).                                                                         |
-| `recent_files`       | Files the user attached, saved or an extension filed away, offered first in "Allega".                                                                                                                                                        |
-| `recent_folders`     | The folders each account's messages were last moved to, offered first by "Sposta".                                                                                                                                                           |
-| `app_preferences`    | One row: theme, layout, list order, sort, grouping, reader zoom, "Dettagli", shortcut overrides, the accounts "Tutti gli account" gathers, the notification preferences, the extension signature edition every account has joined.           |
+| Table                        | Holds                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `accounts`                   | IMAP and Gmail accounts; `encrypted_secret` is the password or OAuth token, encrypted with `safeStorage`.                                                                                                                                                                                                                                                           |
+| `folders`                    | Folder metadata and sync cursors (UIDVALIDITY, HIGHESTMODSEQ, UIDNEXT, last UID). _Cache._                                                                                                                                                                                                                                                                          |
+| `messages`                   | Envelopes, previews, flags. `message_key` names a message wherever it is filed (Gmail's id, else its Message-ID, else a digest), `thread_id` its conversation. Denormalised `sender_label` / `sender_sort` / `subject_sort` let the database sort and group by sender or subject, and the folded `search_*` columns let it search without case or accents. _Cache._ |
+| `message_bodies`             | One body per `message_key`, shared by every folder that holds the message: its text for the index (level 1) or the readable message with its parts (level 2). _Cache._                                                                                                                                                                                              |
+| `message_fts`                | The full-text index (FTS5 over `message_bodies`, kept in step by triggers), accents and case folded as the search box folds them. _Cache._                                                                                                                                                                                                                          |
+| `search_hits`                | The index's matches for the searches on screen, so the list's query joins them instead of carrying thousands of ids. _Cache._                                                                                                                                                                                                                                       |
+| `app_meta`                   | Small facts about the file itself: the shape of the cache (`cache_version`).                                                                                                                                                                                                                                                                                        |
+| `ai_settings`                | The Segretario's OpenRouter key, encrypted with `safeStorage`, the last check of it and the preferences.                                                                                                                                                                                                                                                            |
+| `ai_activities`, `ai_events` | The Segretario's work: each activity and the log of everything said and done in it, which the conversation is rebuilt from.                                                                                                                                                                                                                                         |
+| `ai_memory`                  | The Segretario's notes on the user, their accounts, people and matters, as path → text.                                                                                                                                                                                                                                                                             |
+| `ai_usage`                   | Every call to the model: tokens, cache hits and what OpenRouter billed.                                                                                                                                                                                                                                                                                             |
+| `contacts`                   | Everyone stored mail names, for the composer's suggestions: `usage_count` / `last_used_at` count the mail written to them, `last_received_at` the newest they sent, `hidden_at` a contact taken out of the suggestions.                                                                                                                                             |
+| `drafts`                     | The messages being written: recipients, subject, body, files, the thread they answer; `revision` / `server_revision` say whether Bozze has the draft as it is, `server_*` where its copy is, `docked` that a composer holds it.                                                                                                                                     |
+| `account_signatures`         | One signature per account, with the version of the page it was written for (`html_format`) and the edition of the extension's content it has (`extension_revision`).                                                                                                                                                                                                |
+| `recent_files`               | Files the user attached, saved or an extension filed away, offered first in "Allega".                                                                                                                                                                                                                                                                               |
+| `recent_folders`             | The folders each account's messages were last moved to, offered first by "Sposta".                                                                                                                                                                                                                                                                                  |
+| `app_preferences`            | One row: theme, layout, list order, sort, grouping, reader zoom, "Dettagli", shortcut overrides, the accounts "Tutti gli account" gathers, the notification preferences, the extension signature edition every account has joined.                                                                                                                                  |
 
 Beside the database, `network-volumes.json` remembers the URL each network
 share was mounted from (macOS).
@@ -121,16 +143,20 @@ of its attachments, and keeps its signature; the mail downloads again.
 
 ### Upgrades
 
-`data-migration.ts` treats the two kinds of rows oppositely. **Cache**
-(`messages`, `folders`, attachment copies) is rebuilt from the server, so a
-version change drops it. **User data** — every other table, an extension's
-included — exists nowhere else and is never dropped.
+`data-migration.ts` treats the two kinds of rows differently. **Cache**
+(`folders`, `messages`, their bodies and the index) can be rebuilt from the
+server; since 2.0 it holds the whole mailbox, so it is kept across
+updates, and its shape is versioned on its own: when `CACHE_SCHEMA_VERSION`
+changes, `database.ts` drops those tables before anything reads them and
+the engine downloads the mail anew. **User data** — every other table, an
+extension's and the Segretario's included — exists nowhere else and is
+never dropped.
 
 - Before the database opens, a version change (`userData/install-version.json`)
   copies every user table, definition and rows, into a small backup file,
   leaving the cache out.
-- After the schema is reconciled, the finalize step purges the cache,
-  stamps the new version and drops the backup.
+- After the schema is reconciled, the finalize step empties the attachment
+  copies, stamps the new version and drops the backup.
 - If a launch never gets there (a crash, the app quit, a file the new
   schema cannot apply to), the next launch sets the file aside, boots on a
   fresh schema and restores every table from the backup. A table the fresh
@@ -150,7 +176,7 @@ The Windows installer never touches the user data folder during an update
 ## Mail engine
 
 `src/main/services/mail-engine/`. One `AccountConnection` per account, each
-with two IMAP clients, so what the user does never waits behind a sync:
+with three IMAP clients, so what the user does never waits behind a sync:
 
 - **primary** — what the user does (read, move, flag, delete, download),
   one command at a time, and IDLE on the folder on screen (or the inbox),
@@ -158,7 +184,15 @@ with two IMAP clients, so what the user does never waits behind a sync:
 - **sync** — first downloads, catch-up, previews, the messages read ahead
   and the server side of a search, in a queue ordered by priority (`user`,
   then `active-sync`, then `background`): a search jumps the queue, a
-  background folder waits.
+  background folder waits;
+- **index** — the `MailIndexer`, which reads the text of every message, the
+  newest first, for the full-text index and the Segretario. It fetches only
+  the text parts — grouped by the shape of their structure, sixty messages
+  a round with a pause between — and never an attachment. On Gmail it reads
+  "Tutti i messaggi" and Bozze, where every message is once; elsewhere every
+  folder but Spam and the Trash. It rests while the account is offline and
+  starts again when new mail arrives; its progress shows on the rail's sync
+  dot.
 
 **What changed** is found with one `LIST` that asks every folder's
 `STATUS` (`reviewFolders`), every 45 s and when the machine wakes or the
@@ -192,10 +226,17 @@ chunks of 500 UIDs. The UIDs that leave a folder are remembered for the
 session: a sync that read one off the server just before it went does not
 put it back in the list (a UID is never given twice under one UIDVALIDITY).
 
-**Search** runs locally on the folded `search_*` columns, and — for what
-those cannot see, the full text — as `IMAP SEARCH` on the server, one per
-group of the query, intersected (`server-search.ts`); the matches it finds
-join the list. A newer search replaces one still waiting.
+**Bodies are kept once per message** (`message_bodies`, by `message_key`):
+a message in three Gmail labels is downloaded and indexed once, and a body
+never goes back to a lower level.
+
+**Search** runs locally on the folded `search_*` columns and on the
+full-text index (`full-text-query.ts` turns the search grammar into an
+FTS5 expression: groups AND'ed, alternatives OR'ed, each word matched as
+the start of a word). For the messages the index has not read yet, it asks
+the server too — `IMAP SEARCH`, one per group of the query, intersected
+(`server-search.ts`); the matches it finds join the list. A newer search
+replaces one still waiting.
 
 The connection has a state machine (`connecting`, `connected`,
 `reconnecting`, `offline`, `error`) that drives the sync badge in the
@@ -385,8 +426,8 @@ The search grammar in `shared/search.ts` is parsed once and used by both
 sides — the main process builds the `WHERE`, the renderer highlights the
 same terms. Words match sender, recipients, subject and body, without case
 or accents (`foldSearchText`); `da:`, `a:`, `oggetto:` narrow a term to one
-field, quotes keep a phrase, `OR` joins alternatives. The full text of
-messages whose body is not downloaded is searched on the server (see
+field, quotes keep a phrase, `OR` joins alternatives. Bodies are searched
+in the full-text index; those it has not read yet, on the server (see
 [Mail engine](#mail-engine)). The list says where it looked: the folder,
 how many messages, whether the server's full-text search is still going
 and how many messages have not arrived yet.
@@ -559,6 +600,75 @@ the front and never reorders while the menu is open. Files can also be
 dropped onto the composer. A file that is gone by the time the message is
 sent is named in the error, not half-uploaded.
 
+## Segretario
+
+SIEVER Mail's agent (`src/main/ai/`). It is not a chatbot beside the mail:
+it works on the mail itself — searches and reads it, reads attachments and
+the user's files, writes drafts in the composer the user writes in, files
+messages — and keeps notes on what it learns. Several activities run side
+by side, each with its state on the panel (`features/segretario/`, ⌘J).
+
+**The key is the user's.** There is no server of ours: the Segretario calls
+[OpenRouter](https://openrouter.ai/) with the user's own key, given in
+Settings → Segretario, checked there (`/api/v1/key` and `/api/v1/credits`:
+unknown, without credit, at its limit) and kept encrypted with
+`safeStorage` like the accounts' passwords. It is checked again every 20
+minutes while the app runs. What every call cost (`usage.cost`) is
+recorded, and Settings shows today's and this month's spending.
+
+**The model is not a setting.** Requests go to the alias of the newest
+DeepSeek Flash (`~deepseek/deepseek-flash-latest`), so a new checkpoint is
+used as soon as it ships, with a routing policy rather than a named
+provider: only endpoints with zero data retention that do not train on the
+data, the cheapest of those fast enough (`PROVIDER_POLICY` in
+`openrouter.ts`). A `session_id` per activity keeps it on one provider, so
+the prompt cache holds. Answers stream; rate limits and outages are retried
+before the first token, and every error reaches the user in their words.
+
+**The harness is plain.** `SegretarioService` gives the model its goal,
+its tools and what the user is looking at, and lets it work: no workflow,
+no classifier, no rules the model could follow better on its own. What it
+keeps for itself is what cannot be left to the model:
+
+- nothing leaves without the user: `invia_bozza` asks, the panel shows the
+  draft as it will go, and the send goes through the composer like any
+  other, with its checks;
+- files are read, never written; mail is never deleted for good;
+- the conversation is rebuilt every turn from the activity's event log
+  (`ai_events`, `agent/conversation.ts`), so an activity survives a restart
+  and an unfinished step is answered as interrupted;
+- the size of what the model reads: past 60 000 tokens old tool results are
+  cleared (the eight newest kept), past 140 000 the older part of the
+  activity is summarised (`compattazione.md`).
+
+The context the model starts from — the date, the accounts, its notes —
+sits in the first message, so the cached prefix stays the same through an
+activity. The model names what it found by short handles (`m4` a message,
+`f2` a file, `b1` a draft, `agent/handles.ts`), which the panel turns into
+links.
+
+**Its words are text files.** Every prompt — the system prompt, the
+context block, each tool's description, the summary, the title — is a
+Markdown file in Italian under `src/main/ai/prompts/`, bundled with `?raw`.
+An extension adds its own (see [Extensions](#extensions)).
+
+**Tools** (`src/main/ai/tools/`): `cerca_posta` (the full-text index, every
+account, by folder, sender, date), `leggi_posta` (a message or its whole
+conversation, quoted history left out), `leggi_allegato` and `leggi_file`
+(PDF, Word, spreadsheets, presentations, OpenDocument, mail, text and
+pictures, through `extraction.ts`, page by page), `cerca_file` (by name,
+in the home folder and the mounted volumes), `scrivi_bozza` (the renderer
+opens the composer as for a reply, a forward or a new message, with the
+text written in; the draft is kept and filed in Bozze like the user's
+own), `invia_bozza`, `organizza` (archive, move, read, flag, Trash),
+`memoria` (its notes: read, write, edit, rename, delete) and `mostra`
+(opens a message, a draft or a search on screen).
+
+**Memory** is a set of notes the model keeps itself (`ai_memory`): who the
+user is (`tu.md`), how they write (`stile.md`), each account, people,
+matters. The two core notes and the index of the others come with every
+activity; the model reads and updates the rest as it works.
+
 ## Extensions
 
 The host reserves one extension slot, filled at build time through four
@@ -583,6 +693,7 @@ extension code by path. The contract is `src/extension/types.ts`:
 | `ExtensionMain.uninstall()`                 | Optional; called when the app quits.                                                                                                        |
 | `ExtensionMain.defaultAccountSignatureHtml` | Signature given to the first account added. Empty in the public build.                                                                      |
 | `ExtensionMain.accountSignatureRevision`    | Edition of that content; stored signatures on an older one — and accounts without one — are handed, once, to `upgradeAccountSignatureHtml`. |
+| `ExtensionMain.assistant.systemPrompt`      | What the Segretario must know of the company the build is for; joins its system prompt after the host's.                                    |
 | `ExtensionRenderer.toolbarActions`          | Buttons first in the reading pane's header, given the selection.                                                                            |
 | `ExtensionRenderer.settingsTabs`            | Tabs after the host's in Settings.                                                                                                          |
 | `ExtensionRenderer.PrimaryActionDialog`     | A dialog the host mounts and opens on request.                                                                                              |
@@ -632,6 +743,11 @@ and writes to `release/<label>/v<version>/`. `runBuild()` is exported, so
 an extension can build its own releases with `loadExtension: true` and a
 label of its own.
 
+The packaged app reads the Google OAuth client from a `.env` in its
+resources. `build.mjs` writes it (`.env.runtime`) from the local `.env`,
+keeping only the variables the app reads (`RUNTIME_ENV_KEYS`): a
+developer's own keys never ship.
+
 `.github/workflows/release.yml` runs the targets in parallel on `v*` tags
 and publishes a GitHub Release.
 
@@ -646,6 +762,11 @@ and publishes a GitHub Release.
   microphone, location and every other web permission are refused.
 - External links open in the browser only if they are `http(s)`.
 - Opened attachments never execute; Windows marks them as downloaded.
+- The Segretario sends nothing without the user's confirmation, never
+  deletes mail for good and only reads files. Mail and files are data to
+  it, never instructions (its system prompt says so, and it reports what
+  looks like an attempt). It talks only to OpenRouter, with the user's key,
+  and only to providers that keep no data.
 
 ## License
 

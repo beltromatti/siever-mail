@@ -36,6 +36,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui
 import { GROUPING_OPTIONS } from '@renderer/features/mail/message-list-shared'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
 import { NotificationsSection } from '@renderer/features/settings/notifications-section'
+import { SegretarioSection } from '@renderer/features/settings/segretario-section'
 import { ShortcutsSection } from '@renderer/features/settings/shortcuts-section'
 import { cn } from '@renderer/lib/utils'
 import type {
@@ -46,8 +47,15 @@ import type {
   UiPreferences
 } from '@shared/models'
 
-type SettingsSectionId =
-  'accounts' | 'preferences' | 'notifications' | 'shortcuts' | 'data' | 'signatures' | string
+export type SettingsSectionId =
+  | 'accounts'
+  | 'preferences'
+  | 'segretario'
+  | 'notifications'
+  | 'shortcuts'
+  | 'data'
+  | 'signatures'
+  | (string & {})
 
 interface SettingsSection {
   id: SettingsSectionId
@@ -59,6 +67,8 @@ interface SettingsSection {
 interface SettingsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** The section to show as it opens; without one it opens where it was left. */
+  initialSectionId?: SettingsSectionId | null
   accounts: MailAccount[]
   selectedAccountId: string | null
   removingAccountId: string | null
@@ -88,6 +98,12 @@ const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
     label: 'Preferenze',
     title: 'Preferenze',
     description: "Configura le preferenze generali dell'applicazione."
+  },
+  {
+    id: 'segretario',
+    label: 'Segretario',
+    title: 'Segretario',
+    description: 'La chiave del modello con cui lavora, il credito e quanto spende.'
   },
   {
     id: 'notifications',
@@ -244,6 +260,7 @@ function normalizeSignatureHtmlForComparison(value: string | null | undefined): 
 export function SettingsDialog({
   open,
   onOpenChange,
+  initialSectionId,
   accounts,
   selectedAccountId,
   removingAccountId,
@@ -257,7 +274,18 @@ export function SettingsDialog({
   onAddAccount,
   onUnifiedPreferencesChanged
 }: SettingsDialogProps): React.JSX.Element {
-  const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>('accounts')
+  const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>(
+    initialSectionId ?? 'accounts'
+  )
+  const [wasOpen, setWasOpen] = useState(open)
+
+  if (open !== wasOpen) {
+    setWasOpen(open)
+
+    if (open && initialSectionId) {
+      setActiveSectionId(initialSectionId)
+    }
+  }
   const { confirm, dialog: confirmDialog } = useConfirmDialog()
   const [dataBreakdown, setDataBreakdown] = useState<DataStorageBreakdown | null>(null)
   const [dataBreakdownLoading, setDataBreakdownLoading] = useState(false)
@@ -888,6 +916,8 @@ export function SettingsDialog({
                   )}
                 </div>
               </div>
+            ) : activeSectionId === 'segretario' ? (
+              <SegretarioSection />
             ) : activeSectionId === 'notifications' ? (
               <NotificationsSection accounts={accounts} />
             ) : activeSectionId === 'shortcuts' ? (

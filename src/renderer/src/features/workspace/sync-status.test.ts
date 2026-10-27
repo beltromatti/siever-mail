@@ -81,4 +81,22 @@ describe('summarizeSyncStatus', () => {
   it('reports a missing network as such', () => {
     expect(summarizeSyncStatus([A], { a: state('a', 'offline') })?.label).toBe('Non in linea')
   })
+
+  it('says how much of the mail the index has read while it is still reading', () => {
+    const summary = summarizeSyncStatus([A, B], {
+      a: state('a', 'connected', { index: { total: 1000, indexed: 400 } }),
+      b: state('b', 'connected', { index: { total: 200, indexed: 200 } })
+    })
+
+    expect(summary?.label).toBe('Sincronizzato')
+    expect(summary?.indexing).toEqual({ indexed: 600, total: 1200 })
+  })
+
+  it('stops counting once every message is read', () => {
+    const summary = summarizeSyncStatus([A], {
+      a: state('a', 'connected', { index: { total: 50, indexed: 50 } })
+    })
+
+    expect(summary?.indexing).toBeUndefined()
+  })
 })

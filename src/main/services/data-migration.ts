@@ -4,10 +4,13 @@
  * SIEVER Mail keeps two very different kinds of rows in the same SQLite
  * file, and they deserve opposite treatment when the app version changes:
  *
- *   • CACHE — `messages` and `folders`. Local mirrors of what lives on the
- *     IMAP server: every row can be rebuilt by a resync. Their shape moves
- *     between releases (new envelope fields, a new preview format, …), so
- *     carrying them across an upgrade risks half-populated or stale rows.
+ *   • CACHE — `folders`, `messages`, their bodies and the full-text index.
+ *     Local mirrors of what lives on the IMAP server: every row can be
+ *     rebuilt by a resync. Since 2.0 the cache holds the whole mailbox, so
+ *     it is kept across updates; its shape is versioned on its own, and
+ *     `AppDatabase` drops and recreates it when that version changes (see
+ *     `CACHE_SCHEMA_VERSION`). The migration only leaves it out of the
+ *     backup: it is most of the file, and the server has it all.
  *
  *   • USER DATA — everything else: accounts, signatures, app preferences,
  *     the contact history, the recent files, and any table an extension
@@ -22,9 +25,9 @@
  *      bulk of the file and is rebuilt anyway. Nothing is deleted.
  *   2. `AppDatabase` reconciles the schema additively, as it always does.
  *   3. `finalizeUpgradeMigration()` — once the schema is ready and before
- *      anything reads or syncs (the IPC layer waits for it). Purges the
- *      cache tables and the attachment scratch directories, stamps the new
- *      version marker, drops the backup.
+ *      anything reads or syncs (the IPC layer waits for it). Empties the
+ *      attachment scratch directories, stamps the new version marker, drops
+ *      the backup.
  *
  * If step 3 never ran — a file the new schema could not be applied to, a
  * crash, the app quit mid-way — the pending record is still on disk at the
@@ -55,11 +58,22 @@ const BACKUP_SCHEMA_NAME = 'upgrade_backup'
 const ATTACHMENT_DIRECTORY_CANDIDATES = ['attachments', 'cache', 'temp', 'mail-cache']
 
 /**
- * Tables the app is allowed to throw away on a version change because the
- * IMAP server is their source of truth. Everything else in the file is
- * user data and is preserved as-is.
+ * Tables the IMAP server is the source of truth of, left out of the backup.
+ * Everything else in the file is user data and is preserved as-is.
  */
-const CACHE_TABLE_NAMES: ReadonlySet<string> = new Set(['messages', 'folders'])
+const CACHE_TABLE_NAMES: ReadonlySet<string> = new Set([
+  'messages',
+  'folders',
+  'message_bodies',
+  'search_hits'
+])
+
+/** The full-text index and the tables FTS5 keeps it in (`message_fts_data`, …). */
+const CACHE_TABLE_PREFIX = 'message_fts'
+
+function isCacheTable(name: string): boolean {
+  return CACHE_TABLE_NAMES.has(name) || name.startsWith(CACHE_TABLE_PREFIX)
+}
 
 /**
  * SQLite's own bookkeeping tables. They must never be copied — every
@@ -246,7 +260,7 @@ function listUserTables(db: Database.Database): TableDefinition[] {
   return tables.filter(
     (table) =>
       !table.name.startsWith(INTERNAL_TABLE_PREFIX) &&
-      !CACHE_TABLE_NAMES.has(table.name) &&
+      !isCacheTable(table.name) &&
       !virtualTables.some(
         (virtualTable) => table.name === virtualTable || table.name.startsWith(`${virtualTable}_`)
       )
@@ -505,7 +519,10 @@ async function finalize(
       pendingUpgrade.setAsidePaths.forEach(removeDatabaseFile)
     }
   } else {
-    await purgeCacheTables(executor, pendingUpgrade)
+    console.info(
+      `[data-migration] Upgrade ${pendingUpgrade.fromVersion} -> ${pendingUpgrade.toVersion} ` +
+        'completed: user data preserved, mail cache kept.'
+    )
   }
 
   purgeAttachmentScratchDirectories(userDataPath)
@@ -536,32 +553,6 @@ async function listTargetColumns(
     `PRAGMA table_info(${quoteIdentifier(tableName)})`
   )
   return rows.map((row) => row.name).filter((name): name is string => Boolean(name))
-}
-
-/**
- * Drops the resyncable mirrors so the new build repopulates them in its own
- * shape. Everything else in the file — accounts, signatures, preferences,
- * contacts, extension-owned tables — is left untouched.
- */
-async function purgeCacheTables(
-  executor: MigrationSqlExecutor,
-  pendingUpgrade: PendingUpgradeRecord
-): Promise<void> {
-  const existingTables = await listExistingTables(executor)
-
-  for (const tableName of CACHE_TABLE_NAMES) {
-    if (existingTables.has(tableName)) {
-      await executor.run(`DELETE FROM ${quoteIdentifier(tableName)}`)
-    }
-  }
-
-  await executor.run('PRAGMA wal_checkpoint(TRUNCATE)')
-  await executor.run('VACUUM')
-
-  console.info(
-    `[data-migration] Upgrade ${pendingUpgrade.fromVersion} -> ${pendingUpgrade.toVersion} ` +
-      'completed: message cache cleared, user data preserved.'
-  )
 }
 
 /**

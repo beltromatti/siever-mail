@@ -3,6 +3,7 @@ import {
   useEffect,
   useId,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -92,6 +93,11 @@ export interface ComposerInitialData {
   quoteHtml?: string
   /** A body taken as it is, signature included — a draft opened again. */
   html?: string
+  /**
+   * What the Segretario wrote, as the lines above the signature. The
+   * message is a draft from the start: kept, and filed in Bozze, at once.
+   */
+  writtenHtml?: string
   inReplyTo?: string
   references?: string[]
   /**
@@ -133,6 +139,11 @@ export type ComposerOutcome =
 export interface MailComposerHandle {
   /** Saves the draft and closes, as the window's own close button does. */
   close: () => Promise<void>
+  /**
+   * Sends, as Invia does — the same checks first. Resolves false when a
+   * check stopped it (an address to correct, a subject to confirm).
+   */
+  send: () => Promise<boolean>
 }
 
 interface MailComposerProps {
@@ -164,6 +175,8 @@ const EMPTY_RECIPIENT_DRAFTS: RecipientDrafts = { to: '', cc: '', bcc: '' }
 const RECIPIENT_FIELDS: ReadonlyArray<RecipientFieldKey> = ['to', 'cc', 'bcc']
 /** A draft is kept this long after the last change: often enough to lose nothing. */
 const DRAFT_SAVE_DELAY_MS = 700
+/** How long a send asked from outside waits for the composer to be ready. */
+const SEND_READY_TIMEOUT_MS = 10_000
 
 export const COMPOSER_TITLES: Readonly<Record<ComposerKind, string>> = {
   new: 'Nuovo messaggio',
@@ -182,7 +195,9 @@ function buildInitialState(
     cc: initialData.cc ?? [],
     bcc: initialData.bcc ?? [],
     subject: initialData.subject ?? '',
-    html: initialData.html ?? buildComposerBody(signatureHtml, initialData.quoteHtml),
+    html:
+      initialData.html ??
+      buildComposerBody(signatureHtml, initialData.quoteHtml, initialData.writtenHtml),
     inReplyTo: initialData.inReplyTo,
     references: initialData.references
   }
@@ -327,7 +342,7 @@ export function MailComposer({
    * a composer opened and closed untouched — a reply, a new message — leaves
    * nothing behind, and a draft opened again is not filed anew unchanged.
    */
-  const [touched, setTouched] = useState(false)
+  const [touched, setTouched] = useState(initialData.writtenHtml !== undefined)
   /** Whether the draft exists, here and in Bozze: opened as one, or saved since. */
   const [persisted, setPersisted] = useState(session.existing)
   const [status, setStatus] = useState<DraftStatus | null>(session.status ?? null)
@@ -379,7 +394,7 @@ export function MailComposer({
       insertedSignatureRef.current = signatureHtml
       setForm((current) => ({
         ...current,
-        html: buildComposerBody(signatureHtml, initialData.quoteHtml)
+        html: buildComposerBody(signatureHtml, initialData.quoteHtml, initialData.writtenHtml)
       }))
       setBodyReady(true)
     }
@@ -568,8 +583,6 @@ export function MailComposer({
       content: touched || persisted ? contentWith(committedRecipients()) : null
     })
   }
-
-  useImperativeHandle(ref, () => ({ close }))
 
   /**
    * Sends from another account, swapping the signature for its own. For a
@@ -875,9 +888,9 @@ export function MailComposer({
     }
   }
 
-  const handleSend = async (): Promise<void> => {
+  const handleSend = async (): Promise<boolean> => {
     if (!account || !canSend) {
-      return
+      return false
     }
 
     // What is still typed goes too, as it would on leaving its field.
@@ -896,7 +909,7 @@ export function MailComposer({
           : `${invalid.length} indirizzi non sono validi`,
         { description: 'Correggi o togli i destinatari in rosso, poi invia.' }
       )
-      return
+      return false
     }
 
     if (
@@ -910,13 +923,13 @@ export function MailComposer({
       }))
     ) {
       window.requestAnimationFrame(() => subjectInputRef.current?.focus())
-      return
+      return false
     }
 
     const draft = contentWith(recipients)
 
     if (!draft) {
-      return
+      return false
     }
 
     // Kept as it goes: should sending fail, it waits in Bozze as it was.
@@ -938,7 +951,32 @@ export function MailComposer({
       },
       draftToInitialData(draft)
     )
+    return true
   }
+
+  // A send asked from outside (the Segretario's, confirmed by the user)
+  // waits for the body to be laid out and every file copied, then sends
+  // what the composer holds by then — not what it held when asked.
+  const latestSendRef = useRef({ canSend, send: handleSend })
+
+  useLayoutEffect(() => {
+    latestSendRef.current = { canSend, send: handleSend }
+  })
+
+  useImperativeHandle(ref, () => ({
+    close,
+    send: async () => {
+      for (
+        let waited = 0;
+        !latestSendRef.current.canSend && waited < SEND_READY_TIMEOUT_MS;
+        waited += 100
+      ) {
+        await new Promise((resolve) => window.setTimeout(resolve, 100))
+      }
+
+      return latestSendRef.current.send()
+    }
+  }))
 
   // A new message starts from who it goes to; a reply, in its body, once that is in.
   const firstOpenRef = useRef(true)

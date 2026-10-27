@@ -9,6 +9,12 @@ export interface SyncSummary {
   label: string
   /** One or two sentences for the tooltip: what is happening, and what next. */
   detail: string
+  /**
+   * How much of the mail on screen the full-text index has read, while it
+   * is still reading: every message is searchable — its words, files and
+   * people — once it has.
+   */
+  indexing?: { indexed: number; total: number }
 }
 
 const TIME_FORMAT = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
@@ -41,6 +47,27 @@ function lastContactSentence(states: AccountConnectionState[]): string {
  * serious first. Returns null when there is nothing to report on.
  */
 export function summarizeSyncStatus(
+  accounts: ReadonlyArray<MailAccount>,
+  connections: Readonly<Record<string, AccountConnectionState>>
+): SyncSummary | null {
+  const summary = summarizeConnections(accounts, connections)
+
+  if (!summary) {
+    return null
+  }
+
+  const counted = accounts
+    .map((account) => connections[account.id]?.index)
+    .filter((index): index is { total: number; indexed: number } => index !== undefined)
+  const indexing = counted.reduce(
+    (sum, index) => ({ indexed: sum.indexed + index.indexed, total: sum.total + index.total }),
+    { indexed: 0, total: 0 }
+  )
+
+  return indexing.indexed < indexing.total ? { ...summary, indexing } : summary
+}
+
+function summarizeConnections(
   accounts: ReadonlyArray<MailAccount>,
   connections: Readonly<Record<string, AccountConnectionState>>
 ): SyncSummary | null {

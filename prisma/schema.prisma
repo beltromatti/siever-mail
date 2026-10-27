@@ -25,6 +25,7 @@ model Account {
   updatedAt       BigInt    @map("updated_at")
   folders         Folder[]
   messages        Message[]
+  messageBodies   MessageBody[]
   recentFolders   RecentFolder[]
   drafts          Draft[]
 
@@ -58,7 +59,10 @@ model Message {
   accountId       String  @map("account_id")
   folderPath      String  @map("folder_path")
   uid             Int
-  threadId        String? @map("thread_id")
+  /// Who the message is, whichever folder holds it (see `message-identity.ts`).
+  messageKey      String  @map("message_key")
+  /// The conversation: the server's thread, or the message that started it.
+  threadId        String  @map("thread_id")
   messageId       String? @map("message_id")
   subject         String
   subjectSort     String  @default("") @map("subject_sort")
@@ -78,26 +82,58 @@ model Message {
   senderSort      String  @default("") @map("sender_sort")
   hasAttachments  Boolean @map("has_attachments")
   size            Int
-  htmlBody        String? @map("html_body")
-  textBody        String? @map("text_body")
-  attachmentsJson String  @default("[]") @map("attachments_json")
-  replyToJson     String  @default("[]") @map("reply_to_json")
-  referencesJson  String  @default("[]") @map("references_json")
   searchFrom      String  @default("") @map("search_from")
   searchTo        String  @default("") @map("search_to")
   searchSubject   String  @default("") @map("search_subject")
   searchPreview   String  @default("") @map("search_preview")
-  searchBody      String  @default("") @map("search_body")
   updatedAt       BigInt  @map("updated_at")
   account         Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  searchHits      SearchHit[]
 
   @@unique([accountId, folderPath, uid])
+  @@index([accountId, messageKey], map: "idx_messages_key")
+  @@index([accountId, threadId], map: "idx_messages_thread")
   @@index([accountId, folderPath, dateIso], map: "idx_messages_folder_date")
   @@index([accountId, folderPath, senderSort], map: "idx_messages_folder_sender_sort")
   @@index([senderKey], map: "idx_messages_sender_key")
   @@index([accountId, folderPath, subjectSort], map: "idx_messages_folder_subject_sort")
   @@index([accountId, folderPath, isFlagged], map: "idx_messages_folder_flagged")
   @@map("messages")
+}
+
+/// A message's body, once per message however many folders hold it, with
+/// the words the full-text index (`message_fts`, FTS5) reads. Cache.
+model MessageBody {
+  id              Int     @id @default(autoincrement())
+  accountId       String  @map("account_id")
+  messageKey      String  @map("message_key")
+  /// 1: the text alone (the indexer); 2: the message as the reader shows it.
+  level           Int
+  html            String?
+  text            String?
+  attachmentsJson String  @default("[]") @map("attachments_json")
+  replyToJson     String  @default("[]") @map("reply_to_json")
+  referencesJson  String  @default("[]") @map("references_json")
+  subject         String  @default("")
+  sender          String  @default("")
+  recipients      String  @default("")
+  body            String  @default("")
+  fetchedAt       BigInt  @map("fetched_at")
+  account         Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, messageKey])
+  @@map("message_bodies")
+}
+
+/// The rows the full-text index found for a search on screen, under a token
+/// per search (see `AppDatabase.indexHitsToken`). Transient.
+model SearchHit {
+  token     String
+  messageId String  @map("message_id")
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@id([token, messageId])
+  @@map("search_hits")
 }
 
 /// The people the composer suggests: everyone the stored mail names, the
@@ -170,6 +206,83 @@ model Draft {
 
   @@index([accountId], map: "idx_drafts_account")
   @@map("drafts")
+}
+
+/// The Segretario's settings: one row. The OpenRouter key is kept encrypted
+/// with the system keychain (`safeStorage`), like the accounts' passwords.
+model AiSettings {
+  id                 Int     @id
+  encryptedApiKey    String? @map("encrypted_api_key")
+  /// What the last check of the key found (see `SegretarioStatus`), as JSON.
+  keyStatusJson      String  @default("{}") @map("key_status_json")
+  preferencesJson    String  @default("{}") @map("preferences_json")
+  updatedAt          BigInt  @map("updated_at")
+
+  @@map("ai_settings")
+}
+
+/// What each call to the model cost, for Impostazioni → Segretario.
+model AiUsage {
+  id               Int     @id @default(autoincrement())
+  createdAt        BigInt  @map("created_at")
+  activityId       String? @map("activity_id")
+  /// What the call was for: an activity, sorting mail, learning, compacting.
+  purpose          String
+  model            String?
+  provider         String?
+  promptTokens     Int     @map("prompt_tokens")
+  cachedTokens     Int     @map("cached_tokens")
+  completionTokens Int     @map("completion_tokens")
+  reasoningTokens  Int     @map("reasoning_tokens")
+  cost             Float
+
+  @@index([createdAt], map: "idx_ai_usage_created")
+  @@map("ai_usage")
+}
+
+/// A piece of the Segretario's work, asked by the user or begun on its own.
+model AiActivity {
+  id          String    @id
+  kind        String
+  title       String
+  status      String
+  createdAt   BigInt    @map("created_at")
+  updatedAt   BigInt    @map("updated_at")
+  unseen      Boolean   @default(false)
+  cost        Float     @default(0)
+  events      AiEvent[]
+
+  @@index([updatedAt], map: "idx_ai_activities_updated")
+  @@map("ai_activities")
+}
+
+/// What happened in an activity, in order, never rewritten: the user's
+/// words, the model's turns with their tool calls and reasoning, the tools'
+/// results, confirmations, compactions. The conversation the model reads is
+/// rebuilt from it.
+model AiEvent {
+  id          Int        @id @default(autoincrement())
+  activityId  String     @map("activity_id")
+  type        String
+  payloadJson String     @map("payload_json")
+  createdAt   BigInt     @map("created_at")
+  activity    AiActivity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  @@index([activityId, id], map: "idx_ai_events_activity")
+  @@map("ai_events")
+}
+
+/// The Segretario's notebook: what it knows of the user, their accounts,
+/// people and matters, as documents it writes and the user can read and
+/// correct (Impostazioni → Segretario).
+model AiMemory {
+  path      String @id
+  content   String
+  createdAt BigInt @map("created_at")
+  updatedAt BigInt @map("updated_at")
+  readAt    BigInt @map("read_at")
+
+  @@map("ai_memory")
 }
 
 model RecentFile {

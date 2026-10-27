@@ -1,0 +1,290 @@
+import type { MessageRef } from './models'
+
+/**
+ * The Segretario: SIEVER Mail's agent. What the main process and the page
+ * say to each other about it — the key, the credit, the activities and
+ * what happens in them.
+ */
+
+/** Where the OpenRouter key stands, as the last check found it. */
+export type SegretarioKeyState =
+  /** No key saved: the Segretario is off. */
+  | 'missing'
+  /** Saved and answered; `credit` says how much is left. */
+  | 'ready'
+  /** OpenRouter turned it down: revoked, mistyped, deleted. */
+  | 'invalid'
+  /** No credit left on the account, or the key reached its own limit. */
+  | 'exhausted'
+  /** It could not be checked: no network, OpenRouter down. Kept as it was. */
+  | 'unchecked'
+
+export interface SegretarioCredit {
+  /** What can still be spent, in dollars: the lower of the account's balance and the key's limit. */
+  available: number
+  /** The account's balance (credits bought less usage), when OpenRouter says it. */
+  balance: number | null
+  /** The key's own limit and what is left of it, when it has one. */
+  keyLimit: number | null
+  keyRemaining: number | null
+  /** When the key's limit starts again: daily, weekly, monthly. */
+  keyLimitReset: string | null
+}
+
+export interface SegretarioStatus {
+  keyState: SegretarioKeyState
+  /** The key as OpenRouter labels it ("sk-or-v1-9b6…138"), never the key itself. */
+  keyLabel: string | null
+  credit: SegretarioCredit | null
+  /** When it was last checked, epoch ms. */
+  checkedAt: number | null
+  /** What went wrong at the last check, in the user's words. */
+  problem: string | null
+  /** The model in use, as OpenRouter names it ("DeepSeek: DeepSeek V4.1 Flash 1017"). */
+  modelName: string | null
+}
+
+/** What the Segretario does on its own; each can be switched off (see Impostazioni → Segretario). */
+export interface SegretarioPreferences {
+  /** Reads every message as it arrives: what it asks, by when, how it matters. */
+  triage: boolean
+  /** Prepares replies, in the user's voice, to the messages that need one. */
+  readyDrafts: boolean
+  /** Learns from what the user writes and does, quietly, when the app is idle. */
+  learning: boolean
+}
+
+export const DEFAULT_SEGRETARIO_PREFERENCES: SegretarioPreferences = {
+  triage: true,
+  readyDrafts: true,
+  learning: true
+}
+
+/** What the Segretario has cost, in dollars, as OpenRouter billed each call. */
+export interface SegretarioSpending {
+  today: number
+  thisMonth: number
+}
+
+/* ─────────────────────────────── activities ─────────────────────────────── */
+
+/**
+ * A piece of work of the Segretario: asked by the user, or begun on its own
+ * (getting to know an account, a reflection). Activities run side by side.
+ */
+export type ActivityStatus =
+  /** At work. */
+  | 'running'
+  /** Needs the user: a confirmation, or an answer. */
+  | 'waiting'
+  /** Finished; the user can write to it again. */
+  | 'done'
+  /** Stopped by an error it could not get past. */
+  | 'failed'
+  /** Stopped by the user. */
+  | 'cancelled'
+
+export type ActivityKind = 'richiesta' | 'conoscerti' | 'riflessione'
+
+export interface ActivitySummary {
+  id: string
+  kind: ActivityKind
+  title: string
+  status: ActivityStatus
+  createdAt: number
+  updatedAt: number
+  /** Something happened the user has not seen yet. */
+  unseen: boolean
+  /** What it cost so far, in dollars. */
+  cost: number
+}
+
+/** What the user is looking at when they write: the Segretario reads it as context. */
+export interface SegretarioContext {
+  /** The message open in the reader, or the selection. */
+  messages: MessageRef[]
+  /** The account the user is in, and the folder or view. */
+  accountId: string | null
+  folderLabel: string | null
+}
+
+/** A step a tool took, as the user sees it: one line, and what it touched. */
+export interface ToolActivity {
+  callId: string
+  name: string
+  status: 'running' | 'done' | 'error'
+  /** "Cercato «Hera» da lunedì · 9 conversazioni". */
+  summary: string
+  /** Messages it found or read, to open with a click. */
+  messages?: MessageRef[]
+  /** Files it read. */
+  files?: string[]
+}
+
+/** Something the Segretario wants the user to confirm before it happens. */
+export interface ApprovalRequest {
+  approvalId: string
+  kind: 'send'
+  /** One line for the card's header. */
+  title: string
+  status: 'pending' | 'approved' | 'rejected'
+  /** The draft to send: the card shows exactly what goes out. */
+  draft?: {
+    draftId: string
+    accountId: string
+    to: string[]
+    cc: string[]
+    subject: string
+    text: string
+    attachments: string[]
+  }
+}
+
+/**
+ * What a short name the Segretario writes stands for — `m4` a message,
+ * `f2` a file or attachment, `b1` a draft — for the page to make a link of.
+ */
+export type HandleLink =
+  | { handle: string; kind: 'message'; ref: MessageRef }
+  | {
+      handle: string
+      kind: 'file'
+      fileName: string
+      path?: string
+      ref?: MessageRef
+      attachmentId?: string
+    }
+  | { handle: string; kind: 'draft'; draftId: string }
+
+/** What the page shows of an activity, in order. */
+export type ActivityEntry =
+  | {
+      kind: 'user'
+      id: number
+      text: string
+      context?: SegretarioContext
+      at: number
+      handles: HandleLink[]
+    }
+  | { kind: 'assistant'; id: number; text: string; at: number }
+  | { kind: 'tool'; id: number; tool: ToolActivity; at: number; handles: HandleLink[] }
+  | { kind: 'approval'; id: number; approval: ApprovalRequest; at: number }
+  | { kind: 'compaction'; id: number; at: number }
+  | { kind: 'error'; id: number; message: string; at: number }
+
+export interface ActivityDetail extends ActivitySummary {
+  entries: ActivityEntry[]
+}
+
+/** What changes in an activity, as it happens. */
+export type ActivityEvent =
+  | { type: 'summary'; activity: ActivitySummary }
+  | { type: 'entry'; activityId: string; entry: ActivityEntry }
+  /** Text the Segretario is writing now, not yet a whole entry. */
+  | { type: 'stream'; activityId: string; text: string }
+  | { type: 'removed'; activityId: string }
+
+/* ────────────────────────── the page's part of the work ────────────────────────── */
+
+/**
+ * A message the Segretario writes for the user, handed to the page to open
+ * as a draft in the composer — exactly as the user's own reply, forward or
+ * new message would be: signature, quote, thread, account. Its text
+ * becomes the lines the user writes on; the draft is kept and filed in
+ * Bozze at once, and waits in the dock.
+ */
+export interface ComposeSpec {
+  kind: 'reply' | 'replyAll' | 'forward' | 'new'
+  /** The message answered or forwarded. */
+  source?: MessageRef
+  /** For a new message, the account it goes out from. */
+  accountId?: string
+  /** When given, in place of the reply's own recipients. */
+  to?: string[]
+  cc?: string[]
+  bcc?: string[]
+  /** For a new message; replies and forwards keep the original's. */
+  subject?: string
+  /** What the message says, as plain text: blank lines between paragraphs. */
+  text: string
+  /** Files to attach, by path. */
+  attachments?: Array<{ path: string; name: string }>
+  /** A draft the Segretario already wrote, to be rewritten in place. */
+  draftId?: string
+}
+
+export type ComposeResult = { draftId: string } | { error: string }
+
+/** What the Segretario wants the user to see, in the main window. */
+export type ShowRequest =
+  | { kind: 'message'; ref: MessageRef }
+  | { kind: 'search'; query: string; accountId: string | null; folderPath: string | null }
+  | { kind: 'draft'; draftId: string }
+
+/** How an approved send went, as the page reports it. */
+export type SendOutcome = { sent: true } | { sent: false; error: string }
+
+/* ───────────────────────────────── IPC ───────────────────────────────── */
+
+export const SEGRETARIO_IPC = {
+  getStatus: 'segretario:get-status',
+  saveKey: 'segretario:save-key',
+  removeKey: 'segretario:remove-key',
+  checkKey: 'segretario:check-key',
+  getPreferences: 'segretario:get-preferences',
+  setPreferences: 'segretario:set-preferences',
+  getSpending: 'segretario:get-spending',
+  listActivities: 'segretario:list-activities',
+  getActivity: 'segretario:get-activity',
+  startActivity: 'segretario:start-activity',
+  sendMessage: 'segretario:send-message',
+  cancelActivity: 'segretario:cancel-activity',
+  removeActivity: 'segretario:remove-activity',
+  markActivitySeen: 'segretario:mark-activity-seen',
+  resolveApproval: 'segretario:resolve-approval',
+  completeCompose: 'segretario:complete-compose',
+  statusChanged: 'segretario:status-changed',
+  activityEvent: 'segretario:activity-event',
+  composeRequest: 'segretario:compose-request',
+  showRequest: 'segretario:show-request'
+} as const
+
+export interface SegretarioApi {
+  getStatus: () => Promise<SegretarioStatus>
+  /** Checks a key with OpenRouter and, if it answers, keeps it encrypted. */
+  saveKey: (key: string) => Promise<SegretarioStatus>
+  removeKey: () => Promise<SegretarioStatus>
+  /** Asks OpenRouter again about the key and its credit. */
+  checkKey: () => Promise<SegretarioStatus>
+  getPreferences: () => Promise<SegretarioPreferences>
+  setPreferences: (preferences: SegretarioPreferences) => Promise<SegretarioPreferences>
+  getSpending: () => Promise<SegretarioSpending>
+  listActivities: () => Promise<ActivitySummary[]>
+  getActivity: (id: string) => Promise<ActivityDetail | null>
+  /** Begins a new activity with what the user asked. */
+  startActivity: (text: string, context: SegretarioContext) => Promise<ActivitySummary>
+  /** Writes to an activity: an answer, a correction, a new request on the same thread. */
+  sendMessage: (id: string, text: string, context: SegretarioContext) => Promise<void>
+  cancelActivity: (id: string) => Promise<void>
+  removeActivity: (id: string) => Promise<void>
+  markActivitySeen: (id: string) => Promise<void>
+  /**
+   * The user's answer to a confirmation. For a send, the page sends the
+   * draft itself — through the composer, as any message goes — and reports
+   * how it went.
+   */
+  resolveApproval: (
+    activityId: string,
+    approvalId: string,
+    approved: boolean,
+    outcome?: SendOutcome
+  ) => Promise<void>
+  /** The page opened the draft a compose request asked for, or could not. */
+  completeCompose: (requestId: string, result: ComposeResult) => Promise<void>
+  onStatusChanged: (listener: (status: SegretarioStatus) => void) => () => void
+  onActivityEvent: (listener: (event: ActivityEvent) => void) => () => void
+  onComposeRequest: (
+    listener: (request: { requestId: string; spec: ComposeSpec }) => void
+  ) => () => void
+  onShowRequest: (listener: (request: ShowRequest) => void) => () => void
+}

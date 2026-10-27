@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 
@@ -64,6 +65,7 @@ import { SIGNATURE_HTML_FORMAT, upgradeLegacySignatureHtml } from '@shared/signa
 import { subjectSortKey } from '@shared/subject'
 
 import { rankContactSuggestions, type ContactCandidate } from './contact-ranking'
+import { fullTextMatchExpression } from './full-text-query'
 import { plainTextOfHtml } from './mail-engine/preview'
 
 /**
@@ -252,6 +254,7 @@ const MESSAGE_SUMMARY_SELECT = {
   accountId: true,
   folderPath: true,
   uid: true,
+  messageKey: true,
   threadId: true,
   messageId: true,
   subject: true,
@@ -273,14 +276,6 @@ const MESSAGE_SUMMARY_SELECT = {
 
 /** Rows re-filed for search per transaction (see `refreshSearchText`). */
 const SEARCH_REFRESH_PAGE_SIZE = 1_000
-
-const SEARCH_COLUMNS = [
-  'search_from',
-  'search_to',
-  'search_subject',
-  'search_preview',
-  'search_body'
-] as const
 
 function addressesSearchText(addresses: ReadonlyArray<MailAddress>): string {
   return foldSearchText(
@@ -313,9 +308,35 @@ function messageSearchText(message: {
   }
 }
 
-/** The text of a body as searches compare it: its words, not its markup. */
-function bodySearchText(body: { html?: string; text?: string }): string {
-  return foldSearchText(body.html ? plainTextOfHtml(body.html) : (body.text ?? ''))
+/**
+ * What the reader needs of a body before it shows it: below this level a
+ * stored body is the text the indexer downloaded, without the pictures its
+ * HTML draws.
+ */
+export const READABLE_BODY_LEVEL = 2
+
+/** A body as the engine hands it over to be kept. */
+export type StoredBodyInput = Pick<
+  FetchedMessageDetail,
+  'html' | 'text' | 'bcc' | 'replyTo' | 'references' | 'attachments' | 'preview'
+>
+
+/** People as the index reads them: names and addresses, the list's own name for the sender. */
+function indexedAddresses(addresses: ReadonlyArray<MailAddress>, label?: string): string {
+  return [label, ...addresses.map((address) => `${address.name ?? ''} ${address.address}`)]
+    .filter(Boolean)
+    .join(' ')
+}
+
+/**
+ * The words of a body as the index reads them — its text, not its markup —
+ * and the names of the files it carries, so a search for "preventivo"
+ * finds the message that attaches preventivo.pdf.
+ */
+function indexedBodyText(body: StoredBodyInput): string {
+  const text = body.text?.trim() ? body.text : body.html ? plainTextOfHtml(body.html) : ''
+  const files = body.attachments.map((attachment) => attachment.fileName).join(' ')
+  return files ? `${text}\n${files}` : text
 }
 
 function normalizeMessageSearchQuery(query?: string): string | null {
@@ -346,8 +367,7 @@ function buildSingleTermWhere(term: SearchTerm): Prisma.MessageWhereInput {
           { searchSubject: { contains: value } },
           { searchFrom: { contains: value } },
           { searchTo: { contains: value } },
-          { searchPreview: { contains: value } },
-          { searchBody: { contains: value } }
+          { searchPreview: { contains: value } }
         ]
       }
   }
@@ -373,7 +393,10 @@ function buildGroupWhere(group: SearchTermGroup): Prisma.MessageWhereInput | nul
  * highlighter always agree on what counts as a match:
  *   • multiple groups → AND
  *   • multiple terms inside a group → OR
- *   • each term → contains-match across all indexable fields
+ *   • each term → contains-match across the envelope's fields
+ * A message also matches when the full-text index found the whole query in
+ * it (`indexHitsToken`, see `AppDatabase.indexHitsToken`) — its body, files
+ * and people included — or when the server's own search did.
  *
  * Returns null when the input has no usable terms — callers treat that
  * as "no filter" and read the folder in full.
@@ -381,18 +404,20 @@ function buildGroupWhere(group: SearchTermGroup): Prisma.MessageWhereInput | nul
 function buildMessageConstraints(
   query?: string,
   filter?: MessageListFilter,
-  serverMatches: ReadonlyArray<MessageRef> = []
+  serverMatches: ReadonlyArray<MessageRef> = [],
+  indexHitsToken: string | null = null
 ): Prisma.MessageWhereInput[] {
   const constraints: Prisma.MessageWhereInput[] = []
   const searchWhere = buildMessageSearchWhere(query)
   const filterWhere = buildMessageFilterWhere(filter)
 
   if (searchWhere) {
-    constraints.push(
-      serverMatches.length > 0
-        ? { OR: [searchWhere, ...buildServerMatchesWhere(serverMatches)] }
-        : searchWhere
-    )
+    const alternatives = [
+      ...(indexHitsToken ? [{ searchHits: { some: { token: indexHitsToken } } }] : []),
+      ...buildServerMatchesWhere(serverMatches)
+    ]
+
+    constraints.push(alternatives.length > 0 ? { OR: [searchWhere, ...alternatives] } : searchWhere)
   }
 
   if (filterWhere) {
@@ -424,7 +449,7 @@ function buildServerMatchesWhere(matches: ReadonlyArray<MessageRef>): Prisma.Mes
   }))
 }
 
-function buildMessageSearchWhere(query?: string): Prisma.MessageWhereInput | null {
+export function buildMessageSearchWhere(query?: string): Prisma.MessageWhereInput | null {
   const normalizedQuery = normalizeMessageSearchQuery(query)
 
   if (!normalizedQuery) {
@@ -559,6 +584,27 @@ function headerSenderName(message: FetchedMessageSummary): string | undefined {
  *   2 — subjects sort by their first letter or digit, those without one first.
  */
 const SORT_FILING_VERSION = 3
+
+/**
+ * The shape of the cache (see `resetCacheIfOutdated`). Bump it when what a
+ * cached row holds changes in a way the rows already stored cannot follow:
+ *   1 — up to 1.10, bodies kept with each row;
+ *   2 — 2.0: stable message keys and threads, one body per message, the
+ *       full-text index.
+ */
+export const CACHE_SCHEMA_VERSION = 2
+
+/** The cache's tables, dependants first. */
+const CACHE_TABLES_IN_DROP_ORDER = [
+  'search_hits',
+  'message_fts',
+  'message_bodies',
+  'messages',
+  'folders'
+] as const
+
+/** Searches whose index matches are kept, for the list, its count and its scroll to agree. */
+const CACHED_INDEX_SEARCHES = 4
 
 interface StoredSignatureRow {
   accountId: string
@@ -884,6 +930,13 @@ export class AppDatabase {
   private sentRecount: Promise<void> = Promise.resolve()
   /** Set when the contacts table predates what it now counts: `initialize` rebuilds it. */
   private contactsOutdated = false
+  /**
+   * Moves on whenever what the full-text index can match changes — a body
+   * stored, a row added or gone — so a search's kept matches are made again.
+   */
+  private indexGeneration = 0
+  /** The tokens of the last searches' index matches (see `indexHitsToken`), oldest first. */
+  private readonly indexSearches = new Map<string, { token: string; generation: number }>()
 
   constructor(filePath: string) {
     mkdirSync(dirname(filePath), { recursive: true })
@@ -1160,12 +1213,24 @@ export class AppDatabase {
             LENGTH(date_iso) +
             LENGTH(preview) +
             LENGTH(flags_json) +
-            LENGTH(COALESCE(html_body, '')) +
-            LENGTH(COALESCE(text_body, '')) +
-            LENGTH(attachments_json) +
             96
           ) AS estimated_bytes
         FROM messages
+        UNION ALL
+        SELECT
+          account_id,
+          (
+            LENGTH(message_key) +
+            LENGTH(COALESCE(html, '')) +
+            LENGTH(COALESCE(text, '')) +
+            LENGTH(attachments_json) +
+            LENGTH(subject) +
+            LENGTH(sender) +
+            LENGTH(recipients) +
+            2 * LENGTH(body) +
+            64
+          ) AS estimated_bytes
+        FROM message_bodies
         UNION ALL
         SELECT
           account_id,
@@ -1268,12 +1333,18 @@ export class AppDatabase {
           accountId
         }
       }),
+      this.prisma.messageBody.deleteMany({
+        where: {
+          accountId
+        }
+      }),
       this.prisma.folder.deleteMany({
         where: {
           accountId
         }
       })
     ])
+    this.indexGeneration += 1
 
     // Checkpoint + VACUUM the same way clearAllDataKeepAccounts does: SQLite
     // keeps deleted rows' pages as reusable "free pages" and never returns
@@ -1292,6 +1363,7 @@ export class AppDatabase {
 
     await this.prisma.$transaction([
       this.prisma.message.deleteMany(),
+      this.prisma.messageBody.deleteMany(),
       this.prisma.folder.deleteMany(),
       this.prisma.contact.deleteMany(),
       this.prisma.recentFile.deleteMany(),
@@ -2374,7 +2446,8 @@ export class AppDatabase {
           accountId,
           folderPath,
           uid: message.uid,
-          threadId: message.threadId ?? null,
+          messageKey: message.messageKey,
+          threadId: message.threadId,
           messageId: message.messageId ?? null,
           subject: message.subject,
           subjectSort,
@@ -2394,9 +2467,6 @@ export class AppDatabase {
           senderSort,
           hasAttachments: message.hasAttachments,
           size: message.size,
-          htmlBody: null,
-          textBody: null,
-          attachmentsJson: '[]',
           ...messageSearchText({ ...message, senderLabel }),
           updatedAt: now
         }
@@ -2407,7 +2477,8 @@ export class AppDatabase {
         const keepExistingPreview = existing?.previewHydrated === true && !message.previewHydrated
         const preview = keepExistingPreview ? existing!.preview : message.preview
         const update = {
-          threadId: message.threadId ?? null,
+          messageKey: message.messageKey,
+          threadId: message.threadId,
           messageId: message.messageId ?? null,
           subject: message.subject,
           subjectSort,
@@ -2456,6 +2527,10 @@ export class AppDatabase {
     )
 
     this.learnContacts(contacts)
+
+    if (result.added.length > 0) {
+      this.indexGeneration += 1
+    }
 
     if (role === '\\Sent' && result.added.length > 0) {
       this.scheduleSentRecount()
@@ -2584,6 +2659,145 @@ export class AppDatabase {
     }
   }
 
+  /** The Segretario's tables (see the `Ai*` models): user data, kept across updates. */
+  private async ensureSegretarioTables(): Promise<void> {
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_settings (
+        id INTEGER PRIMARY KEY,
+        encrypted_api_key TEXT,
+        key_status_json TEXT NOT NULL DEFAULT '{}',
+        preferences_json TEXT NOT NULL DEFAULT '{}',
+        updated_at INTEGER NOT NULL
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_usage (
+        id INTEGER PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        activity_id TEXT,
+        purpose TEXT NOT NULL,
+        model TEXT,
+        provider TEXT,
+        prompt_tokens INTEGER NOT NULL,
+        cached_tokens INTEGER NOT NULL,
+        completion_tokens INTEGER NOT NULL,
+        reasoning_tokens INTEGER NOT NULL,
+        cost REAL NOT NULL
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage(created_at)'
+    )
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_activities (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        unseen INTEGER NOT NULL DEFAULT 0,
+        cost REAL NOT NULL DEFAULT 0
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_ai_activities_updated ON ai_activities(updated_at)'
+    )
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_events (
+        id INTEGER PRIMARY KEY,
+        activity_id TEXT NOT NULL REFERENCES ai_activities(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_ai_events_activity ON ai_events(activity_id, id)'
+    )
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_memory (
+        path TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        read_at INTEGER NOT NULL
+      )
+    `)
+  }
+
+  /**
+   * The Prisma client, for the stores that keep their own tables in this
+   * file — the Segretario's (see `src/main/ai/ai-store.ts`). Resolves once
+   * the schema is ready.
+   */
+  async storeClient(): Promise<PrismaClient> {
+    await this.ready
+    return this.prisma
+  }
+
+  /**
+   * The cache — folders, messages, their bodies and the index — is kept
+   * across app updates: it holds the whole mailbox, and downloading it all
+   * again at every release would cost the user hours. Its shape is versioned
+   * on its own (`CACHE_SCHEMA_VERSION`): when it changes, the tables are
+   * dropped here, before anything reads them, and created again in the new
+   * shape; the engine downloads the mail anew.
+   */
+  private async resetCacheIfOutdated(): Promise<void> {
+    const rows = await this.prisma.$queryRaw<Array<{ value: string }>>`
+      SELECT value FROM app_meta WHERE key = 'cache_version'
+    `
+
+    if (rows[0]?.value === String(CACHE_SCHEMA_VERSION)) {
+      return
+    }
+
+    for (const table of CACHE_TABLES_IN_DROP_ORDER) {
+      await this.prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS ${table}`)
+    }
+
+    await this.prisma.$executeRaw`
+      INSERT INTO app_meta (key, value) VALUES ('cache_version', ${String(CACHE_SCHEMA_VERSION)})
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `
+  }
+
+  /**
+   * The full-text index of the bodies: an FTS5 table over `message_bodies`,
+   * kept in step by triggers. Accents and case are folded the way the app's
+   * search folds them, so "perche" finds "perché".
+   */
+  private async ensureMessageIndex(): Promise<void> {
+    await this.prisma.$executeRawUnsafe(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
+        subject, sender, recipients, body,
+        content='message_bodies', content_rowid='id',
+        tokenize='unicode61 remove_diacritics 2'
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TRIGGER IF NOT EXISTS message_bodies_ai AFTER INSERT ON message_bodies BEGIN
+        INSERT INTO message_fts (rowid, subject, sender, recipients, body)
+        VALUES (new.id, new.subject, new.sender, new.recipients, new.body);
+      END
+    `)
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TRIGGER IF NOT EXISTS message_bodies_ad AFTER DELETE ON message_bodies BEGIN
+        INSERT INTO message_fts (message_fts, rowid, subject, sender, recipients, body)
+        VALUES ('delete', old.id, old.subject, old.sender, old.recipients, old.body);
+      END
+    `)
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TRIGGER IF NOT EXISTS message_bodies_au AFTER UPDATE ON message_bodies BEGIN
+        INSERT INTO message_fts (message_fts, rowid, subject, sender, recipients, body)
+        VALUES ('delete', old.id, old.subject, old.sender, old.recipients, old.body);
+        INSERT INTO message_fts (rowid, subject, sender, recipients, body)
+        VALUES (new.id, new.subject, new.sender, new.recipients, new.body);
+      END
+    `)
+  }
+
   /**
    * Brings every stored row in line with how rows are filed now: the
    * spellings one address uses for the same person take that address's most
@@ -2699,9 +2913,7 @@ export class AppDatabase {
           ccJson: true,
           bccJson: true,
           senderLabel: true,
-          preview: true,
-          htmlBody: true,
-          textBody: true
+          preview: true
         }
       })
 
@@ -2722,14 +2934,7 @@ export class AppDatabase {
                 bcc: parseJsonArray<MailAddress>(row.bccJson),
                 senderLabel: row.senderLabel,
                 preview: row.preview
-              }),
-              searchBody:
-                row.htmlBody !== null || row.textBody !== null
-                  ? bodySearchText({
-                      html: row.htmlBody ?? undefined,
-                      text: row.textBody ?? undefined
-                    })
-                  : ''
+              })
             }
           })
         )
@@ -2791,7 +2996,8 @@ export class AppDatabase {
     accountId: string
     folderPath: string
     uid: number
-    threadId: string | null
+    messageKey: string
+    threadId: string
     messageId: string | null
     subject: string
     fromJson: string
@@ -2813,7 +3019,8 @@ export class AppDatabase {
       accountId: row.accountId,
       folderPath: row.folderPath,
       uid: row.uid,
-      threadId: row.threadId ?? undefined,
+      messageKey: row.messageKey,
+      threadId: row.threadId,
       messageId: row.messageId ?? undefined,
       subject: row.subject,
       from: parseJsonArray(row.fromJson),
@@ -2909,21 +3116,124 @@ export class AppDatabase {
 
     for (let index = 0; index < uids.length; index += chunkSize) {
       const chunk = uids.slice(index, index + chunkSize)
+      const where = { accountId, folderPath, uid: { in: chunk } }
+      const keys = (
+        await this.prisma.message.findMany({ where, select: { messageKey: true } })
+      ).map((row) => row.messageKey)
 
-      await this.prisma.message.deleteMany({
-        where: {
-          accountId,
-          folderPath,
-          uid: { in: chunk }
-        }
-      })
+      await this.prisma.message.deleteMany({ where })
+      await this.forgetUnheldBodies(accountId, keys)
     }
+
+    this.indexGeneration += 1
+  }
+
+  /**
+   * Bodies of messages no folder holds any longer — gone from the server,
+   * not just moved: a move keeps the message, and its key, in another
+   * folder.
+   */
+  private async forgetUnheldBodies(accountId: string, keys: ReadonlyArray<string>): Promise<void> {
+    if (keys.length === 0) {
+      return
+    }
+
+    await this.prisma.$executeRaw`
+      DELETE FROM message_bodies
+      WHERE account_id = ${accountId}
+        AND message_key IN (${Prisma.join([...new Set(keys)])})
+        AND NOT EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.account_id = message_bodies.account_id AND m.message_key = message_bodies.message_key
+        )
+    `
+  }
+
+  /**
+   * The rows of `mailboxes` the full-text index finds the whole of `query`
+   * in, kept under a token the list's WHERE refers to (`search_hits`): a
+   * word every signature carries can match tens of thousands of rows, more
+   * than a statement can name one by one. The same search over the same
+   * mailboxes reuses its token until a body is stored or a row leaves —
+   * the list, its count and the scroll to the selection agree — and only
+   * the last few searches are kept.
+   */
+  private async indexHitsToken(
+    mailboxes: ReadonlyArray<{ accountId: string; folderPath: string }>,
+    query: string | undefined
+  ): Promise<string | null> {
+    const expression = fullTextMatchExpression(query)
+
+    if (!expression || mailboxes.length === 0) {
+      return null
+    }
+
+    const foldersByAccount = new Map<string, string[]>()
+
+    for (const mailbox of mailboxes) {
+      const folders = foldersByAccount.get(mailbox.accountId) ?? []
+      folders.push(mailbox.folderPath)
+      foldersByAccount.set(mailbox.accountId, folders)
+    }
+
+    const searchKey = [
+      expression,
+      ...[...foldersByAccount].map(([accountId, folders]) =>
+        [accountId, ...[...folders].sort()].join('\u0000')
+      )
+    ]
+      .sort()
+      .join('\n')
+    const cached = this.indexSearches.get(searchKey)
+
+    if (cached?.generation === this.indexGeneration) {
+      return cached.token
+    }
+
+    const token = randomUUID()
+
+    await this.prisma.$transaction(
+      [...foldersByAccount].map(
+        ([accountId, folders]) => this.prisma.$executeRaw`
+          INSERT INTO search_hits (token, message_id)
+          SELECT ${token}, m.id FROM messages m
+          WHERE m.account_id = ${accountId}
+            AND m.folder_path IN (${Prisma.join(folders)})
+            AND m.message_key IN (
+              SELECT b.message_key
+              FROM message_fts JOIN message_bodies b ON b.id = message_fts.rowid
+              WHERE message_fts MATCH ${expression} AND b.account_id = ${accountId}
+            )
+        `
+      )
+    )
+
+    this.indexSearches.delete(searchKey)
+    this.indexSearches.set(searchKey, { token, generation: this.indexGeneration })
+    const stale = [...this.indexSearches].filter(
+      ([key, entry], index, all) =>
+        (key === searchKey ? false : entry.generation !== this.indexGeneration) ||
+        index < all.length - CACHED_INDEX_SEARCHES
+    )
+
+    for (const [key] of stale) {
+      this.indexSearches.delete(key)
+    }
+
+    const forgotten = [...(cached ? [cached.token] : []), ...stale.map(([, entry]) => entry.token)]
+
+    if (forgotten.length > 0) {
+      await this.prisma.searchHit.deleteMany({ where: { token: { in: forgotten } } })
+    }
+
+    return token
   }
 
   /** What a message list of some mailboxes asks the cache, in the order it shows it. */
   private messageListQuery(
     mailboxes: ReadonlyArray<{ accountId: string; folderPath: string }>,
-    view: MessageListView
+    view: MessageListView,
+    indexHitsToken: string | null
   ): {
     where: Prisma.MessageWhereInput
     orderBy: Prisma.MessageOrderByWithRelationInput[]
@@ -2938,7 +3248,12 @@ export class AppDatabase {
               folderPath: mailbox.folderPath
             }))
           }
-    const constraints = buildMessageConstraints(view.query, view.filter, view.serverMatches)
+    const constraints = buildMessageConstraints(
+      view.query,
+      view.filter,
+      view.serverMatches,
+      indexHitsToken
+    )
 
     return {
       where: constraints.length > 0 ? { ...mailboxWhere, AND: constraints } : mailboxWhere,
@@ -2970,7 +3285,11 @@ export class AppDatabase {
       return []
     }
 
-    const { where, orderBy, senderMatch } = this.messageListQuery(mailboxes, view)
+    const { where, orderBy, senderMatch } = this.messageListQuery(
+      mailboxes,
+      view,
+      await this.indexHitsToken(mailboxes, view.query)
+    )
     const rows = await this.inSearchOrder(
       where,
       senderMatch,
@@ -3007,7 +3326,11 @@ export class AppDatabase {
       return -1
     }
 
-    const { where, orderBy, senderMatch } = this.messageListQuery(mailboxes, view)
+    const { where, orderBy, senderMatch } = this.messageListQuery(
+      mailboxes,
+      view,
+      await this.indexHitsToken(mailboxes, view.query)
+    )
     const keys = await this.inSearchOrder(where, senderMatch, undefined, (pageWhere, take) =>
       this.prisma.message.findMany({
         where: pageWhere,
@@ -3033,10 +3356,14 @@ export class AppDatabase {
       return 0
     }
 
-    return this.prisma.message.count({ where: this.messageListQuery(mailboxes, view).where })
+    const indexHitsToken = await this.indexHitsToken(mailboxes, view.query)
+
+    return this.prisma.message.count({
+      where: this.messageListQuery(mailboxes, view, indexHitsToken).where
+    })
   }
 
-  /** Among a folder's `limit` newest messages, those whose body is not cached. */
+  /** Among a folder's `limit` newest messages, those the reader cannot show from the cache. */
   async listRecentMessagesWithoutBody(
     accountId: string,
     folderPath: string,
@@ -3045,28 +3372,144 @@ export class AppDatabase {
     await this.ready
 
     const rows = (await this.prisma.$queryRaw`
-      SELECT uid, size FROM (
-        SELECT uid, size, html_body, text_body, date_iso
+      SELECT recent.uid AS uid, recent.size AS size FROM (
+        SELECT uid, size, message_key, date_iso
         FROM messages
         WHERE account_id = ${accountId} AND folder_path = ${folderPath}
         ORDER BY date_iso DESC
         LIMIT ${limit}
+      ) recent
+      WHERE NOT EXISTS (
+        SELECT 1 FROM message_bodies
+        WHERE account_id = ${accountId} AND message_key = recent.message_key AND level >= ${READABLE_BODY_LEVEL}
       )
-      WHERE html_body IS NULL AND text_body IS NULL
-      ORDER BY date_iso DESC
+      ORDER BY recent.date_iso DESC
     `) as Array<{ uid: number | bigint; size: number | bigint }>
 
     return rows.map((row) => ({ uid: Number(row.uid), size: Number(row.size) }))
   }
 
-  /** A message's size, and whether its body is cached — without reading the body. */
+  /**
+   * The newest messages of `folderPaths` whose body is not stored at any
+   * level, one row per message: the indexer's next batch. `skipKeys` are
+   * messages it gave up on this session.
+   */
+  async listMessagesNeedingBody(
+    accountId: string,
+    folderPaths: ReadonlyArray<string>,
+    limit: number,
+    skipKeys: ReadonlySet<string>
+  ): Promise<Array<{ folderPath: string; uid: number; size: number; messageKey: string }>> {
+    await this.ready
+
+    if (folderPaths.length === 0) {
+      return []
+    }
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{ folderPath: string; uid: number | bigint; size: number | bigint; messageKey: string }>
+    >`
+      SELECT m.folder_path AS folderPath, m.uid AS uid, m.size AS size, m.message_key AS messageKey
+      FROM messages m
+      WHERE m.account_id = ${accountId}
+        AND m.folder_path IN (${Prisma.join([...folderPaths])})
+        AND NOT EXISTS (
+          SELECT 1 FROM message_bodies b
+          WHERE b.account_id = m.account_id AND b.message_key = m.message_key
+        )
+      ORDER BY m.date_iso DESC
+      LIMIT ${limit + skipKeys.size}
+    `
+    const seen = new Set<string>()
+    const batch: Array<{ folderPath: string; uid: number; size: number; messageKey: string }> = []
+
+    for (const row of rows) {
+      if (seen.has(row.messageKey) || skipKeys.has(row.messageKey)) {
+        continue
+      }
+
+      seen.add(row.messageKey)
+      batch.push({
+        folderPath: row.folderPath,
+        uid: Number(row.uid),
+        size: Number(row.size),
+        messageKey: row.messageKey
+      })
+
+      if (batch.length >= limit) {
+        break
+      }
+    }
+
+    return batch
+  }
+
+  /** How much of an account's mail the index holds: messages, and those whose words it has. */
+  async indexProgress(
+    accountId: string,
+    folderPaths: ReadonlyArray<string>
+  ): Promise<{ total: number; indexed: number }> {
+    await this.ready
+
+    if (folderPaths.length === 0) {
+      return { total: 0, indexed: 0 }
+    }
+
+    const [row] = await this.prisma.$queryRaw<
+      Array<{ total: number | bigint; indexed: number | bigint }>
+    >`
+      SELECT COUNT(*) AS total, COUNT(b.id) AS indexed FROM (
+        SELECT DISTINCT message_key FROM messages
+        WHERE account_id = ${accountId} AND folder_path IN (${Prisma.join([...folderPaths])})
+      ) k
+      LEFT JOIN message_bodies b ON b.account_id = ${accountId} AND b.message_key = k.message_key
+    `
+
+    return { total: Number(row?.total ?? 0), indexed: Number(row?.indexed ?? 0) }
+  }
+
+  /** A message's stored body at whatever level, for reading its words. */
+  async getStoredBody(
+    accountId: string,
+    messageKey: string
+  ): Promise<{
+    level: number
+    html: string | null
+    text: string | null
+    attachments: MailAttachment[]
+    replyTo: MailAddress[]
+    references: string[]
+  } | null> {
+    await this.ready
+
+    const body = await this.prisma.messageBody.findUnique({
+      where: { accountId_messageKey: { accountId, messageKey } }
+    })
+
+    return body
+      ? {
+          level: body.level,
+          html: body.html,
+          text: body.text,
+          attachments: parseJsonArray<MailAttachment>(body.attachmentsJson),
+          replyTo: parseJsonArray<MailAddress>(body.replyToJson),
+          references: parseJsonArray<string>(body.referencesJson)
+        }
+      : null
+  }
+
+  /** A message's size, and whether the reader can show it from the cache — without reading the body. */
   async getMessageBodyState(ref: MessageRef): Promise<{ size: number; hasBody: boolean } | null> {
     await this.ready
 
     const rows = (await this.prisma.$queryRaw`
-      SELECT size, (html_body IS NOT NULL OR text_body IS NOT NULL) AS hasBody
-      FROM messages
-      WHERE account_id = ${ref.accountId} AND folder_path = ${ref.folderPath} AND uid = ${ref.uid}
+      SELECT m.size AS size, EXISTS (
+        SELECT 1 FROM message_bodies b
+        WHERE b.account_id = m.account_id AND b.message_key = m.message_key
+          AND b.level >= ${READABLE_BODY_LEVEL}
+      ) AS hasBody
+      FROM messages m
+      WHERE m.account_id = ${ref.accountId} AND m.folder_path = ${ref.folderPath} AND m.uid = ${ref.uid}
       LIMIT 1
     `) as Array<{ size: number | bigint; hasBody: number | bigint }>
     const row = rows[0]
@@ -3074,6 +3517,11 @@ export class AppDatabase {
     return row ? { size: Number(row.size), hasBody: Number(row.hasBody) === 1 } : null
   }
 
+  /**
+   * A message with its body, as the reader shows it. The body is only
+   * there once it is readable (`READABLE_BODY_LEVEL`): the text the indexer
+   * downloaded lacks the pictures it draws.
+   */
   async getMessage(ref: MessageRef): Promise<MailMessageDetail | null> {
     await this.ready
 
@@ -3091,19 +3539,25 @@ export class AppDatabase {
       return null
     }
 
+    const body = await this.prisma.messageBody.findUnique({
+      where: { accountId_messageKey: { accountId: row.accountId, messageKey: row.messageKey } }
+    })
+    const readable = body !== null && body.level >= READABLE_BODY_LEVEL
+
     return {
       accountId: row.accountId,
       folderPath: row.folderPath,
       uid: row.uid,
-      threadId: row.threadId ?? undefined,
+      messageKey: row.messageKey,
+      threadId: row.threadId,
       messageId: row.messageId ?? undefined,
       subject: row.subject,
       from: parseJsonArray(row.fromJson),
       to: parseJsonArray(row.toJson),
       cc: parseJsonArray(row.ccJson),
       bcc: parseJsonArray(row.bccJson),
-      replyTo: parseJsonArray(row.replyToJson),
-      references: parseJsonArray<string>(row.referencesJson),
+      replyTo: body ? parseJsonArray(body.replyToJson) : [],
+      references: body ? parseJsonArray<string>(body.referencesJson) : [],
       date: row.dateIso,
       preview: row.preview,
       previewHydrated: row.previewHydrated,
@@ -3115,89 +3569,180 @@ export class AppDatabase {
       senderName: row.senderName,
       senderKey: row.senderKey,
       senderLabel: row.senderLabel,
-      html: row.htmlBody ?? undefined,
-      text: row.textBody ?? undefined,
-      attachments: parseJsonArray<MailAttachment>(row.attachmentsJson)
+      html: readable ? (body.html ?? undefined) : undefined,
+      text: readable ? (body.text ?? undefined) : undefined,
+      attachments: body ? parseJsonArray<MailAttachment>(body.attachmentsJson) : []
     }
   }
 
   /**
-   * Stores a message's body with it. When that changes what the list shows
-   * of the message, returns the row as it is now, for the views to adopt:
+   * Keeps a message's body (see `storeMessageBodies`), the one `ref` names,
+   * as the reader shows it.
+   */
+  async updateMessageBody(ref: MessageRef, body: StoredBodyInput): Promise<MailMessageSummary[]> {
+    const row = await this.prisma.message.findUnique({
+      where: {
+        accountId_folderPath_uid: {
+          accountId: ref.accountId,
+          folderPath: ref.folderPath,
+          uid: ref.uid
+        }
+      },
+      select: { messageKey: true }
+    })
+
+    return row
+      ? this.storeMessageBodies(ref.accountId, [
+          { messageKey: row.messageKey, level: READABLE_BODY_LEVEL, body }
+        ])
+      : []
+  }
+
+  /**
+   * Keeps bodies, once per message whatever folders hold it, and indexes
+   * their words. A body never goes down a level: the text the indexer
+   * downloads does not replace one the reader already shows.
+   *
+   * What the body tells the list better than the envelope could is
+   * written on every row of the message, and those rows are returned for
+   * the views to adopt:
    *   • the paperclip — the envelope-time flag is a heuristic over
    *     BODYSTRUCTURE that cannot tell a signature logo from a real
-   *     attachment; with the body in hand the answer is exact, so a row
-   *     flagged for nothing more than the sender's logo is corrected;
+   *     attachment; with the body in hand the answer is exact;
    *   • the preview — read from the whole body rather than from its first
-   *     32 KB, it replaces one the list made with less.
+   *     32 KB, it replaces one the list made with less;
+   *   • the Bcc a sent message carries, which only shows with its body.
    */
-  async updateMessageBody(
-    ref: MessageRef,
-    body: Pick<
-      FetchedMessageDetail,
-      'html' | 'text' | 'bcc' | 'replyTo' | 'references' | 'attachments' | 'preview'
-    >
-  ): Promise<MailMessageSummary | null> {
+  async storeMessageBodies(
+    accountId: string,
+    entries: ReadonlyArray<{ messageKey: string; level: number; body: StoredBodyInput }>
+  ): Promise<MailMessageSummary[]> {
     await this.ready
 
-    const where = {
-      accountId_folderPath_uid: {
-        accountId: ref.accountId,
-        folderPath: ref.folderPath,
-        uid: ref.uid
+    if (entries.length === 0) {
+      return []
+    }
+
+    const keys = [...new Set(entries.map((entry) => entry.messageKey))]
+    const [rows, stored] = await Promise.all([
+      this.prisma.message.findMany({
+        where: { accountId, messageKey: { in: keys } },
+        select: {
+          id: true,
+          messageKey: true,
+          subject: true,
+          fromJson: true,
+          toJson: true,
+          ccJson: true,
+          bccJson: true,
+          senderLabel: true,
+          hasAttachments: true,
+          preview: true,
+          previewHydrated: true
+        }
+      }),
+      this.prisma.messageBody.findMany({
+        where: { accountId, messageKey: { in: keys } },
+        select: { messageKey: true, level: true }
+      })
+    ])
+    const storedLevel = new Map(stored.map((body) => [body.messageKey, body.level]))
+    const rowsByKey = new Map<string, typeof rows>()
+
+    for (const row of rows) {
+      const keyed = rowsByKey.get(row.messageKey) ?? []
+      keyed.push(row)
+      rowsByKey.set(row.messageKey, keyed)
+    }
+
+    const now = BigInt(Date.now())
+    const writes: Prisma.PrismaPromise<unknown>[] = []
+    const changedRowIds: string[] = []
+    const learned: MailAddress[] = []
+
+    for (const { messageKey, level, body } of entries) {
+      const keyed = rowsByKey.get(messageKey)
+
+      // The message left every folder while its body was downloading.
+      if (!keyed || (storedLevel.get(messageKey) ?? 0) > level) {
+        continue
       }
-    }
-    const stored = await this.prisma.message.findUnique({
-      where,
-      select: {
-        hasAttachments: true,
-        preview: true,
-        previewHydrated: true,
-        toJson: true,
-        ccJson: true
-      }
-    })
 
-    if (!stored) {
-      return null
-    }
-
-    const existing = {
-      ...stored,
-      to: parseJsonArray<MailAddress>(stored.toJson),
-      cc: parseJsonArray<MailAddress>(stored.ccJson)
-    }
-
-    const { html, text, bcc, attachments, preview } = body
-    const hasAttachments = attachments.length > 0
-    const row = await this.prisma.message.update({
-      where,
-      select: MESSAGE_SUMMARY_SELECT,
-      data: {
-        htmlBody: html ?? null,
-        textBody: text ?? (html ? null : ''),
-        bccJson: JSON.stringify(bcc),
+      const envelope = keyed[0]
+      const from = parseJsonArray<MailAddress>(envelope.fromJson)
+      const to = parseJsonArray<MailAddress>(envelope.toJson)
+      const cc = parseJsonArray<MailAddress>(envelope.ccJson)
+      const indexed = {
+        level,
+        html: body.html ?? null,
+        text: body.text ?? (body.html ? null : ''),
+        attachmentsJson: JSON.stringify(body.attachments),
         replyToJson: JSON.stringify(body.replyTo),
         referencesJson: JSON.stringify(body.references),
-        attachmentsJson: JSON.stringify(attachments),
-        hasAttachments,
-        preview,
-        previewHydrated: true,
-        searchPreview: foldSearchText(preview),
-        searchBody: bodySearchText(body),
-        // The Bcc a sent message carries only shows with its body.
-        searchTo: addressesSearchText([...existing.to, ...existing.cc, ...bcc]),
-        updatedAt: BigInt(Date.now())
+        subject: envelope.subject,
+        sender: indexedAddresses(from, envelope.senderLabel),
+        recipients: indexedAddresses([...to, ...cc, ...body.bcc]),
+        body: indexedBodyText(body),
+        fetchedAt: now
       }
+
+      writes.push(
+        this.prisma.messageBody.upsert({
+          where: { accountId_messageKey: { accountId, messageKey } },
+          create: { accountId, messageKey, ...indexed },
+          update: indexed
+        })
+      )
+
+      const hasAttachments = body.attachments.length > 0
+      const searchTo = addressesSearchText([...to, ...cc, ...body.bcc])
+
+      for (const row of keyed) {
+        if (
+          row.hasAttachments !== hasAttachments ||
+          row.preview !== body.preview ||
+          !row.previewHydrated ||
+          (body.bcc.length > 0 && row.bccJson === '[]')
+        ) {
+          changedRowIds.push(row.id)
+        }
+      }
+
+      writes.push(
+        this.prisma.message.updateMany({
+          where: { accountId, messageKey },
+          data: {
+            bccJson: JSON.stringify(body.bcc),
+            hasAttachments,
+            preview: body.preview,
+            previewHydrated: true,
+            searchPreview: foldSearchText(body.preview),
+            searchTo,
+            updatedAt: now
+          }
+        })
+      )
+      learned.push(...body.bcc)
+    }
+
+    if (writes.length === 0) {
+      return []
+    }
+
+    await this.prisma.$transaction(writes)
+    this.indexGeneration += 1
+    this.learnContacts(learned)
+
+    if (changedRowIds.length === 0) {
+      return []
+    }
+
+    const changed = await this.prisma.message.findMany({
+      where: { id: { in: changedRowIds } },
+      select: MESSAGE_SUMMARY_SELECT
     })
 
-    this.learnContacts(bcc)
-
-    return existing.hasAttachments !== hasAttachments ||
-      existing.preview !== preview ||
-      !existing.previewHydrated
-      ? this.mapMessageRowToSummary(row)
-      : null
+    return changed.map((row) => this.mapMessageRowToSummary(row))
   }
 
   /** Every message of a folder read, its other flags kept: one statement, however many. */
@@ -3314,6 +3859,7 @@ export class AppDatabase {
       )
     ])
 
+    this.indexGeneration += 1
     const rows = await this.prisma.message.findMany({
       where: {
         accountId,
@@ -3399,6 +3945,14 @@ export class AppDatabase {
     await this.ensureAccountLastViewedAtColumn()
 
     await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS app_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `)
+    await this.resetCacheIfOutdated()
+
+    await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS folders (
         id TEXT PRIMARY KEY,
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -3417,7 +3971,6 @@ export class AppDatabase {
         UNIQUE(account_id, path)
       )
     `)
-    await this.ensureFolderColumns()
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS messages (
@@ -3425,7 +3978,8 @@ export class AppDatabase {
         account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         folder_path TEXT NOT NULL,
         uid INTEGER NOT NULL,
-        thread_id TEXT,
+        message_key TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
         message_id TEXT,
         subject TEXT NOT NULL,
         subject_sort TEXT NOT NULL DEFAULT '',
@@ -3445,21 +3999,49 @@ export class AppDatabase {
         sender_sort TEXT NOT NULL DEFAULT '',
         has_attachments INTEGER NOT NULL,
         size INTEGER NOT NULL,
-        html_body TEXT,
-        text_body TEXT,
-        attachments_json TEXT NOT NULL DEFAULT '[]',
-        reply_to_json TEXT NOT NULL DEFAULT '[]',
-        references_json TEXT NOT NULL DEFAULT '[]',
         search_from TEXT NOT NULL DEFAULT '',
         search_to TEXT NOT NULL DEFAULT '',
         search_subject TEXT NOT NULL DEFAULT '',
         search_preview TEXT NOT NULL DEFAULT '',
-        search_body TEXT NOT NULL DEFAULT '',
         updated_at INTEGER NOT NULL,
         UNIQUE(account_id, folder_path, uid)
       )
     `)
-    await this.ensureMessageColumns()
+
+    // A message's body once, however many folders hold it (see
+    // `message-identity.ts`), with the words the index reads. `level` says
+    // what was downloaded: 1 the text alone, 2 the message as the reader
+    // shows it, the pictures its text draws included.
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS message_bodies (
+        id INTEGER PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        message_key TEXT NOT NULL,
+        level INTEGER NOT NULL,
+        html TEXT,
+        text TEXT,
+        attachments_json TEXT NOT NULL DEFAULT '[]',
+        reply_to_json TEXT NOT NULL DEFAULT '[]',
+        references_json TEXT NOT NULL DEFAULT '[]',
+        subject TEXT NOT NULL DEFAULT '',
+        sender TEXT NOT NULL DEFAULT '',
+        recipients TEXT NOT NULL DEFAULT '',
+        body TEXT NOT NULL DEFAULT '',
+        fetched_at INTEGER NOT NULL,
+        UNIQUE(account_id, message_key)
+      )
+    `)
+    await this.ensureMessageIndex()
+
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS search_hits (
+        token TEXT NOT NULL,
+        message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        PRIMARY KEY (token, message_id)
+      )
+    `)
+    // Matches of a search are only good for the session that made them.
+    await this.prisma.$executeRawUnsafe('DELETE FROM search_hits')
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS contacts (
@@ -3591,11 +4173,18 @@ export class AppDatabase {
       'CREATE INDEX IF NOT EXISTS idx_messages_folder_uid ON messages(account_id, folder_path, uid DESC)'
     )
     await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_messages_key ON messages(account_id, message_key)'
+    )
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(account_id, thread_id)'
+    )
+    await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_contacts_last_used ON contacts(last_used_at DESC)'
     )
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_contacts_name_normalized ON contacts(name_normalized)'
     )
+    await this.ensureSegretarioTables()
     await this.prisma.$executeRawUnsafe(`
       INSERT OR IGNORE INTO app_preferences(id, unified_inbox_included_account_ids, updated_at)
       VALUES (${APP_PREFERENCES_SINGLETON_ID}, NULL, ${Date.now()})
@@ -3778,145 +4367,6 @@ export class AppDatabase {
           updated_at = ${Date.now()}
       WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
     `
-  }
-
-  private async ensureFolderColumns(): Promise<void> {
-    const columns = (await this.prisma.$queryRawUnsafe('PRAGMA table_info(folders)')) as Array<{
-      name?: string
-    }>
-    const columnNames = new Set(columns.map((column) => column.name ?? ''))
-
-    if (!columnNames.has('last_synced_at')) {
-      await this.prisma.$executeRawUnsafe('ALTER TABLE folders ADD COLUMN last_synced_at INTEGER')
-    }
-
-    if (!columnNames.has('uid_validity')) {
-      await this.prisma.$executeRawUnsafe('ALTER TABLE folders ADD COLUMN uid_validity TEXT')
-    }
-
-    if (!columnNames.has('highest_modseq')) {
-      await this.prisma.$executeRawUnsafe('ALTER TABLE folders ADD COLUMN highest_modseq TEXT')
-    }
-
-    if (!columnNames.has('last_known_uid')) {
-      await this.prisma.$executeRawUnsafe('ALTER TABLE folders ADD COLUMN last_known_uid INTEGER')
-    }
-
-    if (!columnNames.has('uid_next')) {
-      await this.prisma.$executeRawUnsafe('ALTER TABLE folders ADD COLUMN uid_next INTEGER')
-    }
-  }
-
-  private async ensureMessageColumns(): Promise<void> {
-    const columns = (await this.prisma.$queryRawUnsafe('PRAGMA table_info(messages)')) as Array<{
-      name?: string
-    }>
-    const columnNames = new Set(columns.map((column) => column.name ?? ''))
-
-    if (!columnNames.has('preview_hydrated')) {
-      await this.prisma.$executeRawUnsafe(
-        'ALTER TABLE messages ADD COLUMN preview_hydrated INTEGER NOT NULL DEFAULT 0'
-      )
-      // Migration: rows whose preview was populated by the previous bulk-body sync
-      // path already have a real preview. Mark them as hydrated so we don't redo
-      // the work after the upgrade, and so the UI never shows the placeholder for
-      // messages that already have a valid preview.
-      await this.prisma.$executeRawUnsafe(
-        "UPDATE messages SET preview_hydrated = 1 WHERE preview IS NOT NULL AND preview <> ''"
-      )
-    }
-
-    if (!columnNames.has('is_flagged')) {
-      await this.prisma.$executeRawUnsafe(
-        'ALTER TABLE messages ADD COLUMN is_flagged INTEGER NOT NULL DEFAULT 0'
-      )
-      // `\\Flagged` has always been synced into flags_json — it was simply
-      // never surfaced. Backfill from what is already there so existing
-      // rows light up immediately instead of waiting for a resync.
-      await this.prisma.$executeRawUnsafe(
-        `UPDATE messages
-         SET is_flagged = 1
-         WHERE EXISTS (
-           SELECT 1 FROM json_each(messages.flags_json) WHERE json_each.value = '\\Flagged'
-         )`
-      )
-    }
-
-    if (!columnNames.has('sender_name') || !columnNames.has('sender_key')) {
-      if (!columnNames.has('sender_name')) {
-        await this.prisma.$executeRawUnsafe(
-          "ALTER TABLE messages ADD COLUMN sender_name TEXT NOT NULL DEFAULT ''"
-        )
-      }
-
-      if (!columnNames.has('sender_key')) {
-        await this.prisma.$executeRawUnsafe(
-          "ALTER TABLE messages ADD COLUMN sender_key TEXT NOT NULL DEFAULT ''"
-        )
-      }
-
-      // Derive both from the address array already on the row. Mirrors
-      // `deriveSenderName` / `deriveSenderKey` in @shared/sender — display
-      // name when there is one, address otherwise.
-      await this.prisma.$executeRawUnsafe(
-        `UPDATE messages
-         SET sender_name = COALESCE(
-               NULLIF(TRIM(COALESCE(json_extract(from_json, '$[0].name'), '')), ''),
-               TRIM(COALESCE(json_extract(from_json, '$[0].address'), ''))
-             ),
-             sender_key = LOWER(TRIM(COALESCE(json_extract(from_json, '$[0].address'), '')))`
-      )
-    }
-
-    // The sort keys fold accents and reply prefixes and take the best name
-    // across every message from an address — nothing SQL can derive from
-    // the row. Rows cached without them are dropped and every folder
-    // resynced from scratch, which is what an upgrade does to the cache.
-    const missingSortColumns = ['subject_sort', 'sender_label', 'sender_sort'].filter(
-      (column) => !columnNames.has(column)
-    )
-
-    if (missingSortColumns.length > 0) {
-      for (const column of missingSortColumns) {
-        await this.prisma.$executeRawUnsafe(
-          `ALTER TABLE messages ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`
-        )
-      }
-
-      await this.prisma.$executeRawUnsafe('DELETE FROM messages')
-      await this.prisma.$executeRawUnsafe(
-        `UPDATE folders
-         SET uid_validity = NULL, highest_modseq = NULL, last_known_uid = NULL, uid_next = NULL, last_synced_at = NULL`
-      )
-    }
-
-    // Reply-To and References are read with the body. Bodies cached before
-    // they were kept are dropped, and fetched again when next opened.
-    const missingReplyColumns = ['reply_to_json', 'references_json'].filter(
-      (column) => !columnNames.has(column)
-    )
-
-    if (missingReplyColumns.length > 0) {
-      for (const column of missingReplyColumns) {
-        await this.prisma.$executeRawUnsafe(
-          `ALTER TABLE messages ADD COLUMN ${column} TEXT NOT NULL DEFAULT '[]'`
-        )
-      }
-
-      await this.prisma.$executeRawUnsafe(
-        'UPDATE messages SET html_body = NULL, text_body = NULL WHERE html_body IS NOT NULL OR text_body IS NOT NULL'
-      )
-    }
-
-    // What searches compare (see `messageSearchText`). The rows stored
-    // before get theirs when they are re-filed (`refileIfOutdated`).
-    for (const column of SEARCH_COLUMNS) {
-      if (!columnNames.has(column)) {
-        await this.prisma.$executeRawUnsafe(
-          `ALTER TABLE messages ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`
-        )
-      }
-    }
   }
 
   /**

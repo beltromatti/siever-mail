@@ -28,6 +28,8 @@
  */
 import type { ReactNode } from 'react'
 
+import { ASSISTANT_WIDTH } from './assistant-width'
+
 import { ResizableSplit } from '@renderer/components/ui/resizable-split'
 import {
   MESSAGE_TABLE_MAX_SPLIT_SHARE,
@@ -96,6 +98,8 @@ export interface WorkspaceLayoutProps {
   reader: ReactNode
   /** Error banner, rendered above the reader when present. */
   notice: ReactNode
+  /** The Segretario's panel, on the right edge when it is open. */
+  assistant: ReactNode
   /**
    * Reading pane takes the whole workspace: the folder tree steps aside and
    * the message list moves into the side column.
@@ -115,8 +119,11 @@ export function WorkspaceLayout({
   messageList,
   reader,
   notice,
+  assistant,
   readerExpanded
 }: WorkspaceLayoutProps): React.JSX.Element {
+  const assistantTrack = assistant ? ` ${ASSISTANT_WIDTH}` : ''
+
   // Expanded reading keeps the message list reachable: people read in this
   // mode and move through messages and delete without leaving it. Hiding the
   // list here would throw them out of it at every step.
@@ -129,7 +136,9 @@ export function WorkspaceLayout({
     return (
       <div
         className="grid h-full min-h-0"
-        style={{ gridTemplateColumns: `auto ${EXPANDED_LIST_WIDTH} minmax(0, 1fr)` }}
+        style={{
+          gridTemplateColumns: `auto ${EXPANDED_LIST_WIDTH} minmax(0, 1fr)${assistantTrack}`
+        }}
       >
         {rail}
         {/*
@@ -143,6 +152,7 @@ export function WorkspaceLayout({
           {notice}
           <div className="min-h-0 flex-1">{reader}</div>
         </div>
+        {assistant && <div className="min-h-0 min-w-0">{assistant}</div>}
       </div>
     )
   }
@@ -155,7 +165,7 @@ export function WorkspaceLayout({
   return (
     <div
       className="grid h-full min-h-0"
-      style={{ gridTemplateColumns: `auto ${SIDEBAR_WIDTH} minmax(0, 1fr)` }}
+      style={{ gridTemplateColumns: `auto ${SIDEBAR_WIDTH} minmax(0, 1fr)${assistantTrack}` }}
     >
       {rail}
       <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r">
@@ -189,6 +199,7 @@ export function WorkspaceLayout({
           />
         )}
       </div>
+      {assistant && <div className="min-h-0 min-w-0">{assistant}</div>}
     </div>
   )
 }

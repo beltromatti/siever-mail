@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 
 import installExtensionPreload from '@app/extension/preload'
 import { IPC_CHANNELS, type DesktopMailApi } from '@shared/ipc'
+import { SEGRETARIO_IPC, type SegretarioApi } from '@shared/segretario'
 
 const REMOTE_METHOD_ERROR_PREFIX =
   /^Error invoking remote method '[^']+':\s*(?:[A-Za-z]*Error:\s*)?/
@@ -77,6 +78,7 @@ const desktopMailApi: DesktopMailApi = {
   discardDraft: async (id) => invoke(IPC_CHANNELS.discardDraft, id),
   listDockedDrafts: async () => invoke(IPC_CHANNELS.listDockedDrafts),
   openDraftMessage: async (ref) => invoke(IPC_CHANNELS.openDraftMessage, ref),
+  getStoredDraft: async (id) => invoke(IPC_CHANNELS.getStoredDraft, id),
   onDraftStatusChanged: (listener) => subscribe(IPC_CHANNELS.draftStatusChanged, listener),
   listAccountSignatures: async () => invoke(IPC_CHANNELS.listAccountSignatures),
   getAccountSignature: async (accountId) => invoke(IPC_CHANNELS.getAccountSignature, accountId),
@@ -127,6 +129,31 @@ const desktopMailApi: DesktopMailApi = {
   onContextMenuRequest: (listener) => subscribe(IPC_CHANNELS.contextMenuRequest, listener)
 }
 
+const segretarioApi: SegretarioApi = {
+  getStatus: async () => invoke(SEGRETARIO_IPC.getStatus),
+  saveKey: async (key) => invoke(SEGRETARIO_IPC.saveKey, key),
+  removeKey: async () => invoke(SEGRETARIO_IPC.removeKey),
+  checkKey: async () => invoke(SEGRETARIO_IPC.checkKey),
+  getPreferences: async () => invoke(SEGRETARIO_IPC.getPreferences),
+  getSpending: async () => invoke(SEGRETARIO_IPC.getSpending),
+  setPreferences: async (preferences) => invoke(SEGRETARIO_IPC.setPreferences, preferences),
+  listActivities: async () => invoke(SEGRETARIO_IPC.listActivities),
+  getActivity: async (id) => invoke(SEGRETARIO_IPC.getActivity, id),
+  startActivity: async (text, context) => invoke(SEGRETARIO_IPC.startActivity, text, context),
+  sendMessage: async (id, text, context) => invoke(SEGRETARIO_IPC.sendMessage, id, text, context),
+  cancelActivity: async (id) => invoke(SEGRETARIO_IPC.cancelActivity, id),
+  removeActivity: async (id) => invoke(SEGRETARIO_IPC.removeActivity, id),
+  markActivitySeen: async (id) => invoke(SEGRETARIO_IPC.markActivitySeen, id),
+  resolveApproval: async (activityId, approvalId, approved, outcome) =>
+    invoke(SEGRETARIO_IPC.resolveApproval, activityId, approvalId, approved, outcome),
+  completeCompose: async (requestId, result) =>
+    invoke(SEGRETARIO_IPC.completeCompose, requestId, result),
+  onStatusChanged: (listener) => subscribe(SEGRETARIO_IPC.statusChanged, listener),
+  onActivityEvent: (listener) => subscribe(SEGRETARIO_IPC.activityEvent, listener),
+  onComposeRequest: (listener) => subscribe(SEGRETARIO_IPC.composeRequest, listener),
+  onShowRequest: (listener) => subscribe(SEGRETARIO_IPC.showRequest, listener)
+}
+
 // Merge any extension-provided bridge methods (the IPC channels an
 // extension registers) onto the host's API surface. The public build's
 // installer returns an empty object, so window.mailApi remains the host's
@@ -136,7 +163,10 @@ const mergedMailApi = { ...desktopMailApi, ...extensionBridge }
 
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld('mailApi', mergedMailApi)
+  contextBridge.exposeInMainWorld('segretarioApi', segretarioApi)
 } else {
   // @ts-expect-error context isolation disabled by external override
   window.mailApi = mergedMailApi
+  // @ts-expect-error context isolation disabled by external override
+  window.segretarioApi = segretarioApi
 }

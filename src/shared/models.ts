@@ -37,7 +37,14 @@ export interface MailMessageSummary {
   accountId: string
   folderPath: string
   uid: number
-  threadId?: string
+  /**
+   * Who the message is, whichever folder holds it (see
+   * `mail-engine/message-identity.ts`): its body, its words in the index
+   * and what the Segretario noted about it hang off this key.
+   */
+  messageKey: string
+  /** The conversation it belongs to: the server's thread, or the message that started it. */
+  threadId: string
   messageId?: string
   subject: string
   from: MailAddress[]
@@ -584,6 +591,11 @@ export interface AccountConnectionState {
   authFailed?: boolean
   /** The last moment the server answered, as epoch milliseconds. */
   lastContactAt?: number
+  /**
+   * How much of the account's mail the full-text index holds: its messages,
+   * and those whose words it has read. Absent until the indexer first counts.
+   */
+  index?: { total: number; indexed: number }
 }
 
 export interface FolderCountsEvent {

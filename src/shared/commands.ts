@@ -172,6 +172,15 @@ const HOST_COMMANDS = [
     editable: true
   },
   {
+    id: 'segretario',
+    label: 'Segretario',
+    description: 'Apre e chiude il pannello del Segretario.',
+    group: 'view',
+    scope: 'main',
+    defaultChord: 'Mod+KeyJ',
+    editable: true
+  },
+  {
     id: 'settings',
     label: 'Impostazioni',
     description: 'Apre le impostazioni.',

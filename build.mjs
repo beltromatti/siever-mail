@@ -50,6 +50,12 @@ const electronBuilderCacheDir = join(hostCacheRoot, 'electron-builder')
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
 
+// The variables the packaged app reads at runtime (src/main/config/env.ts).
+// Only these leave the developer's `.env` for the bundle: anything else in
+// it — a personal API key used while developing — stays on this machine.
+const RUNTIME_ENV_KEYS = ['GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET']
+const RUNTIME_ENV_FILE = '.env.runtime'
+
 const ALL_LOCAL_TARGET_IDS = ['macos-arm64', 'macos-x64', 'windows-x64']
 const ALL_LINUX_TARGET_IDS = ['linux-x64', 'linux-arm64']
 const DEFAULT_LOCAL_TARGET_IDS = ['macos-arm64', 'windows-x64']
@@ -116,6 +122,28 @@ function run(command, args, label, options = {}) {
   if (result.status !== 0) {
     throw new Error(`${label} failed with exit code ${result.status ?? 'unknown'}`)
   }
+}
+
+/**
+ * Writes the `.env` the bundle ships (electron-builder.yml copies
+ * `.env.runtime` into its resources): the runtime variables of the local
+ * `.env`, and nothing else.
+ */
+function writeRuntimeEnv() {
+  const sourcePath = join(projectRoot, '.env')
+  const lines = existsSync(sourcePath)
+    ? readFileSync(sourcePath, 'utf8')
+        .split(/\r?\n/)
+        .filter((line) => RUNTIME_ENV_KEYS.includes(line.split('=', 1)[0].trim()))
+    : []
+
+  writeFileSync(
+    join(projectRoot, RUNTIME_ENV_FILE),
+    lines.length > 0 ? `${lines.join('\n')}\n` : ''
+  )
+  console.log(
+    `Runtime env: ${lines.map((line) => line.split('=', 1)[0].trim()).join(', ') || '(none)'}`
+  )
 }
 
 function ensureCleanDirectory(directoryPath) {
@@ -623,6 +651,7 @@ export function runBuild({
         process.env[key] = value
       }
     }
+    writeRuntimeEnv()
     run(npmCommand, ['run', 'build'], 'build application bundles')
 
     buildLocalTargetsForVersion(localTargets, releaseRoot)

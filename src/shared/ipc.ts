@@ -81,6 +81,7 @@ export const IPC_CHANNELS = {
   closeDraft: 'draft:close',
   discardDraft: 'draft:discard',
   listDockedDrafts: 'draft:list-docked',
+  getStoredDraft: 'draft:get-stored',
   openDraftMessage: 'draft:open-message',
   draftStatusChanged: 'draft:status-changed',
   forgetContact: 'contact:forget',
@@ -204,6 +205,8 @@ export interface DesktopMailApi {
   listDockedDrafts: () => Promise<StoredDraft[]>
   /** A message in Bozze, opened to be written on. */
   openDraftMessage: (ref: MessageRef) => Promise<StoredDraft>
+  /** A draft kept here, by its id — one the Segretario wrote, to take up again. */
+  getStoredDraft: (id: string) => Promise<StoredDraft | null>
   onDraftStatusChanged: (listener: (status: DraftStatus) => void) => () => void
   /** Takes an address out of the suggestions, until the user writes to it again. */
   forgetContact: (address: string) => Promise<void>

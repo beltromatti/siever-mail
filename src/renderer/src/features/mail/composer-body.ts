@@ -93,22 +93,76 @@ export function splitSignature(html: string | null | undefined): SignatureParts 
   }
 }
 
-/** The body a message starts with: lines to write on, the signature, the quote. */
+/**
+ * The body a message starts with: lines to write on, the signature, the
+ * quote. `writtenHtml` is what is already written on those lines — the
+ * Segretario's draft — followed by the line that sets the signature apart.
+ */
 export function buildComposerBody(
   signatureHtml: string | null,
-  quoteHtml: string | undefined
+  quoteHtml: string | undefined,
+  writtenHtml?: string
 ): string {
   const signature = splitSignature(signatureHtml)
   const quote = quoteHtml?.trim() ?? ''
+  const written = writtenHtml?.trim() ? `${writtenHtml.trim()}${EMPTY_LINE}` : ''
 
   if (!signature) {
-    return quote ? `${EMPTY_LINE}${EMPTY_LINE}${quote}` : EMPTY_LINE
+    return written
+      ? `${written}${quote}`
+      : quote
+        ? `${EMPTY_LINE}${EMPTY_LINE}${quote}`
+        : EMPTY_LINE
   }
 
-  const writingLines = signature.leading || `${EMPTY_LINE}${EMPTY_LINE}`
+  const writingLines = written || signature.leading || `${EMPTY_LINE}${EMPTY_LINE}`
   const afterSignature = signature.trailing || (quote ? EMPTY_LINE : '')
 
   return `${writingLines}${wrapSignature(signature.core)}${afterSignature}${quote}`
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/** `**bold**` within a line, the one emphasis the Segretario's plain text carries. */
+function inlineHtml(line: string): string {
+  return escapeHtml(line).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+}
+
+/**
+ * Plain text as the lines of a message: a line per block, an empty one per
+ * blank line, `- ` items as a list — the way the editor itself writes, so
+ * the text reads and edits as if typed.
+ */
+export function plainTextToComposerHtml(text: string): string {
+  const blocks: string[] = []
+  let items: string[] = []
+  const flushItems = (): void => {
+    if (items.length > 0) {
+      blocks.push(`<ul>${items.map((item) => `<li>${inlineHtml(item)}</li>`).join('')}</ul>`)
+      items = []
+    }
+  }
+
+  for (const line of text.replace(/\r\n?/g, '\n').trim().split('\n')) {
+    const item = /^\s*[-•*]\s+(.*)$/.exec(line)
+
+    if (item) {
+      items.push(item[1])
+      continue
+    }
+
+    flushItems()
+    blocks.push(line.trim() ? `<div>${inlineHtml(line)}</div>` : EMPTY_LINE)
+  }
+
+  flushItems()
+  return blocks.join('')
 }
 
 function findQuote(root: HTMLElement): Element | undefined {

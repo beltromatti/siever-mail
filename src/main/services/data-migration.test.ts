@@ -98,6 +98,8 @@ function createHostSchema(db: SqliteTestAdapter): void {
     CREATE TABLE contacts (email_normalized TEXT PRIMARY KEY, usage_count INTEGER);
     CREATE TABLE folders (id TEXT PRIMARY KEY, path TEXT);
     CREATE TABLE messages (id TEXT PRIMARY KEY, subject TEXT);
+    CREATE TABLE message_bodies (id INTEGER PRIMARY KEY, body TEXT);
+    CREATE VIRTUAL TABLE message_fts USING fts5(body, content='message_bodies', content_rowid='id');
   `)
 }
 
@@ -194,6 +196,8 @@ describe('prepareUpgradeMigration', () => {
 
     expect(tables).not.toContain('messages')
     expect(tables).not.toContain('folders')
+    expect(tables).not.toContain('message_bodies')
+    expect(tables.filter((name) => name.startsWith('message_fts'))).toEqual([])
     expect(countRows(backup, 'accounts')).toBe(1)
     expect(countRows(backup, 'extension_records')).toBe(2)
     backup.close()
@@ -242,7 +246,7 @@ describe('prepareUpgradeMigration', () => {
 })
 
 describe('finalizeUpgradeMigration', () => {
-  it('clears the resyncable cache and preserves every user-authored table', async () => {
+  it('keeps the mail cache and preserves every user-authored table', async () => {
     const db = new Database(dbPath())
     createSchema(db)
     seedUserAndCacheData(db)
@@ -259,9 +263,10 @@ describe('finalizeUpgradeMigration', () => {
     const live = new Database(dbPath())
     await finalizeUpgradeMigration(createExecutor(live))
 
-    // Cache: gone, the server is its source of truth.
-    expect(countRows(live, 'messages')).toBe(0)
-    expect(countRows(live, 'folders')).toBe(0)
+    // Cache: kept — it holds the whole mailbox; its own version decides
+    // when it is rebuilt (see `CACHE_SCHEMA_VERSION`).
+    expect(countRows(live, 'messages')).toBe(1)
+    expect(countRows(live, 'folders')).toBe(1)
 
     // User data: intact. This is the regression users hit on every update.
     expect(countRows(live, 'accounts')).toBe(1)
@@ -489,6 +494,8 @@ describe('finalizeUpgradeMigration', () => {
       JSON.stringify({ version: '1.7.0' })
     )
     appState.version = '1.8.0'
+    // The first launch died before finalising; the second one recovers.
+    prepareUpgradeMigration()
     prepareUpgradeMigration()
 
     const failing: MigrationSqlExecutor = {

@@ -19,7 +19,9 @@ files:
     filter:
       - '**/*'
 extraResources:
-  - from: .env
+  # Written by build.mjs from the local .env: only the variables the app
+  # reads at runtime, never a developer's own keys.
+  - from: .env.runtime
     to: .env
 asarUnpack:
   - resources/**

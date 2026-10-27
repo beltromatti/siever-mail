@@ -4,6 +4,8 @@
    Tailwind's automatic source detection — explicitly opt the directory in
    so classes only used in extension/* land in the bundle. */
 @source '../../../../extension/**/*.{ts,tsx}';
+/* The markdown renderer of the Segretario's text styles itself with utilities. */
+@source '../../../../node_modules/streamdown/dist/*.js';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -497,6 +499,57 @@
 
   .text-balance {
     text-wrap: balance;
+  }
+
+  /*
+    The Segretario's writing: paragraphs spaced like a letter, lists and
+    headings in the same hand, strong text a shade heavier.
+  */
+  .segretario-text :where(p, ul, ol, blockquote, pre, table) {
+    margin: 0 0 0.6em;
+  }
+
+  .segretario-text :where(p:last-child, ul:last-child, ol:last-child) {
+    margin-bottom: 0;
+  }
+
+  .segretario-text :where(ul, ol) {
+    padding-left: 1.2em;
+  }
+
+  .segretario-text :where(ul) {
+    list-style: disc;
+  }
+
+  .segretario-text :where(ol) {
+    list-style: decimal;
+  }
+
+  .segretario-text :where(li) {
+    margin: 0.15em 0;
+  }
+
+  .segretario-text :where(li)::marker {
+    color: hsl(var(--faint-foreground));
+  }
+
+  .segretario-text :where(strong) {
+    font-weight: 620;
+  }
+
+  .segretario-text :where(h1, h2, h3, h4) {
+    font-family: var(--font-display);
+    font-weight: 650;
+    font-size: 13px;
+    letter-spacing: 0.01em;
+    margin: 0.9em 0 0.35em;
+  }
+
+  .segretario-text :where(code) {
+    font-size: 0.85em;
+    padding: 0.05em 0.3em;
+    border-radius: 4px;
+    background: hsl(var(--hover));
   }
 
   .tabular {

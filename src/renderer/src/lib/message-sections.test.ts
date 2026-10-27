@@ -9,6 +9,8 @@ function message(overrides: Partial<MailMessageSummary> & { uid: number }): Mail
   return {
     accountId: 'acc',
     folderPath: 'INBOX',
+    messageKey: `m:${overrides.uid}@example.com`,
+    threadId: `r:${overrides.uid}@example.com`,
     subject: 'Oggetto',
     from: [],
     to: [],
