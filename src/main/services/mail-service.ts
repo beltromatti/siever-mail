@@ -468,22 +468,15 @@ export class MailService {
           .slice(0, limit)
           .map(({ accountId, threadId, messages }) => ({ accountId, threadId, messages }))
       },
+      includedAccountIds: async () => [
+        ...new Set(
+          (await this.engine.resolveUnifiedMailboxes('\\Inbox')).map((mailbox) => mailbox.accountId)
+        )
+      ],
+      messageSummaries: (accountId, messageKeys) => this.bestRowsByKey(accountId, messageKeys),
       refForKey: async (accountId, messageKey) => {
-        const folders = await this.database.listFolders(accountId)
-        const rows = await this.database.listMessageRowsByKey(accountId, [messageKey])
-        const best = rows
-          .map((row) => ({
-            row,
-            rank: folderDisplayRank(folders.find((folder) => folder.path === row.folderPath))
-          }))
-          .sort((a, b) => a.rank - b.rank)[0]?.row
-
-        return best
-          ? {
-              ref: { accountId, folderPath: best.folderPath, uid: best.uid },
-              dateIso: best.dateIso
-            }
-          : null
+        const best = (await this.bestRowsByKey(accountId, [messageKey])).get(messageKey)
+        return best ? { ref: best.ref, dateIso: best.dateIso } : null
       },
       recentMailIndexed: async (accountId, days) =>
         this.database.recentMailIndexed(
@@ -1014,30 +1007,56 @@ export class MailService {
         .filter((item) => item.accountId === accountId)
         .map((item) => item.messageKey)
 
-      if (keys.length === 0) {
-        continue
-      }
-
-      const folders = await this.database.listFolders(accountId)
-      const best = new Map<string, { folderPath: string; uid: number; rank: number }>()
-
-      for (const row of await this.database.listMessageRowsByKey(accountId, keys)) {
-        const folder = folders.find((candidate) => candidate.path === row.folderPath)
-        const role = folder ? folderRole(folder) : null
-        const rank = folderDisplayRank(folder)
-        const known = best.get(row.messageKey)
-
-        if (role !== '\\Junk' && role !== '\\Trash' && (!known || rank < known.rank)) {
-          best.set(row.messageKey, { folderPath: row.folderPath, uid: row.uid, rank })
+      if (keys.length > 0) {
+        for (const summary of (await this.bestRowsByKey(accountId, keys)).values()) {
+          refs.push(summary.ref)
         }
-      }
-
-      for (const { folderPath, uid } of best.values()) {
-        refs.push({ accountId, folderPath, uid })
       }
     }
 
     return refs
+  }
+
+  /**
+   * An account's messages by key, each as one row in the folder the user
+   * thinks of it in — never one thrown away or in Spam — with who wrote it,
+   * what about and when.
+   */
+  private async bestRowsByKey(
+    accountId: string,
+    messageKeys: ReadonlyArray<string>
+  ): Promise<
+    Map<string, { ref: MessageRef; subject: string; from: MailAddress[]; dateIso: string }>
+  > {
+    const folders = await this.database.listFolders(accountId)
+    const best = new Map<
+      string,
+      {
+        rank: number
+        summary: { ref: MessageRef; subject: string; from: MailAddress[]; dateIso: string }
+      }
+    >()
+
+    for (const row of await this.database.listMessageRowsByKey(accountId, messageKeys)) {
+      const folder = folders.find((candidate) => candidate.path === row.folderPath)
+      const role = folder ? folderRole(folder) : null
+      const rank = folderDisplayRank(folder)
+      const known = best.get(row.messageKey)
+
+      if (role !== '\\Junk' && role !== '\\Trash' && (!known || rank < known.rank)) {
+        best.set(row.messageKey, {
+          rank,
+          summary: {
+            ref: { accountId, folderPath: row.folderPath, uid: row.uid },
+            subject: row.subject,
+            from: row.from,
+            dateIso: row.dateIso
+          }
+        })
+      }
+    }
+
+    return new Map([...best].map(([key, { summary }]) => [key, summary]))
   }
 
   /** The mailboxes a list shows: one folder, those "Tutti gli account" gathers for a role, or a view's. */

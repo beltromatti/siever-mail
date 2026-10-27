@@ -2,6 +2,7 @@ import type { PrismaClient } from '@prisma/client'
 
 import type {
   MailAccount,
+  MailAddress,
   MailAttachment,
   MailFolder,
   MailMessageDetail,
@@ -39,6 +40,15 @@ export interface SegretarioMailPort {
       threadId: string
       messages: Array<{ ref: MessageRef; messageKey: string; dateIso: string }>
     }>
+  >
+  /** The accounts "Tutti gli account" gathers: those the Segretario's views and day are about. */
+  includedAccountIds(): Promise<string[]>
+  /** Messages of an account by key, each where the user thinks of it, with who wrote it and what about. */
+  messageSummaries(
+    accountId: string,
+    messageKeys: ReadonlyArray<string>
+  ): Promise<
+    Map<string, { ref: MessageRef; subject: string; from: MailAddress[]; dateIso: string }>
   >
   /** Where a message is filed, in the folder the user thinks of it in, and when it was sent. */
   refForKey(

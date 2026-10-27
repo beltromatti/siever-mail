@@ -17,8 +17,12 @@ import {
   type ComposeResult,
   type ComposeSpec,
   type HandleLink,
+  type Briefing,
+  type BriefingItem,
+  type CommitmentKind,
   type MemoryNote,
   type MessageNote,
+  type NotePriority,
   type NotesChange,
   type ThreadBrief,
   type SegretarioContext,
@@ -105,6 +109,8 @@ const TRIAGE_ATTEMPTS = 2
 const TRIAGE_EARLIER_MESSAGES = 5
 /** Notes on the people involved that triage reads, at most. */
 const TRIAGE_PEOPLE_NOTES = 3
+/** Lines a section of the day shows, at most. */
+const BRIEFING_LINES = 15
 /** Replies prepared per look, one after the other. */
 const READY_DRAFT_BATCH = 4
 /** The user's own replies to the same person a prepared reply learns the voice from. */
@@ -539,6 +545,232 @@ export class SegretarioService {
     return this.requireStore().threadBrief(accountId, threadId)
   }
 
+  /* ──────────────────────────────── the day ──────────────────────────────── */
+
+  /**
+   * The day as the Segretario sees it ("Oggi"), across the accounts
+   * "Tutti gli account" gathers: what is due today or overdue, what is due
+   * this week, who waits on the user, what the user waits on, the replies
+   * prepared — each line from a note or a thing open, with its message.
+   */
+  async getBriefing(): Promise<Briefing> {
+    const store = this.requireStore()
+    const mail = this.options.mail
+    const accountIds = await mail.includedAccountIds()
+    const [notes, commitments, ready] = await Promise.all([
+      store.openConversationNotes(accountIds),
+      store.openCommitmentsIn(accountIds),
+      store.readyDraftsIn(accountIds)
+    ])
+    const day = localDay(new Date())
+    const weekEnd = localDay(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000))
+    const id = (accountId: string, key: string): string => `${accountId}\u0000${key}`
+
+    // Who wrote each message, what about, where it is: asked for once per account.
+    const keys = new Map<string, Set<string>>()
+    const want = (accountId: string, messageKey: string): void => {
+      keys.set(accountId, (keys.get(accountId) ?? new Set()).add(messageKey))
+    }
+
+    for (const item of [...notes, ...commitments, ...ready]) {
+      want(item.accountId, item.messageKey)
+    }
+
+    const summaries = new Map<
+      string,
+      { ref: MessageRef; subject: string; from: MailAddress[]; dateIso: string }
+    >()
+
+    for (const [accountId, messageKeys] of keys) {
+      for (const [key, summary] of await mail.messageSummaries(accountId, [...messageKeys])) {
+        summaries.set(id(accountId, key), summary)
+      }
+    }
+
+    const noteOfThread = new Map(notes.map((note) => [id(note.accountId, note.threadId), note]))
+    const noteOfMessage = new Map(notes.map((note) => [id(note.accountId, note.messageKey), note]))
+    const line = (
+      accountId: string,
+      messageKey: string,
+      text: string,
+      priority: NotePriority | null,
+      due: string | null,
+      commitmentKind: CommitmentKind | null
+    ): BriefingItem | null => {
+      const summary = summaries.get(id(accountId, messageKey))
+
+      return summary
+        ? {
+            text,
+            priority,
+            due,
+            commitmentKind,
+            ref: summary.ref,
+            subject: summary.subject,
+            from: summary.from[0]?.name || summary.from[0]?.address || '',
+            date: summary.dateIso
+          }
+        : null
+    }
+
+    const today: BriefingItem[] = []
+    const week: BriefingItem[] = []
+    const waiting: BriefingItem[] = []
+    const awaited: BriefingItem[] = []
+    const datedThreads = new Set<string>()
+    const awaitedThreads = new Set<string>()
+    const place = (item: BriefingItem | null): void => {
+      if (!item) {
+        return
+      }
+
+      if (item.due && item.due <= day) {
+        today.push(item)
+      } else if (item.due && item.due <= weekEnd) {
+        week.push(item)
+      } else {
+        waiting.push(item)
+      }
+    }
+
+    for (const commitment of commitments) {
+      const thread = id(commitment.accountId, commitment.threadId)
+      const priority = noteOfThread.get(thread)?.priority ?? null
+
+      if (commitment.kind === 'aspetti') {
+        awaitedThreads.add(thread)
+        const item = line(
+          commitment.accountId,
+          commitment.messageKey,
+          commitment.text,
+          priority,
+          commitment.due,
+          commitment.kind
+        )
+
+        if (item) {
+          awaited.push(item)
+        }
+      } else if (commitment.due) {
+        datedThreads.add(thread)
+        place(
+          line(
+            commitment.accountId,
+            commitment.messageKey,
+            commitment.text,
+            priority,
+            commitment.due,
+            commitment.kind
+          )
+        )
+      }
+    }
+
+    for (const note of notes) {
+      const thread = id(note.accountId, note.threadId)
+
+      if (note.state === 'in_attesa') {
+        if (!awaitedThreads.has(thread)) {
+          const item = line(
+            note.accountId,
+            note.messageKey,
+            note.summary,
+            note.priority,
+            note.due,
+            null
+          )
+
+          if (item) {
+            awaited.push(item)
+          }
+        }
+      } else if (!datedThreads.has(thread)) {
+        place(line(note.accountId, note.messageKey, note.summary, note.priority, note.due, null))
+      }
+    }
+
+    const byDue = (a: BriefingItem, b: BriefingItem): number =>
+      (a.due ?? '').localeCompare(b.due ?? '') || priorityRank(a) - priorityRank(b)
+    const byWeight = (a: BriefingItem, b: BriefingItem): number =>
+      priorityRank(a) - priorityRank(b) || b.date.localeCompare(a.date)
+    const opening = await store.briefingOpening(day)
+
+    return {
+      day,
+      opening: opening?.text ?? null,
+      openingAt: opening?.createdAt ?? null,
+      today: today.sort(byDue),
+      week: week.sort(byDue).slice(0, BRIEFING_LINES),
+      waiting: waiting.sort(byWeight).slice(0, BRIEFING_LINES),
+      awaited: awaited.sort((a, b) => a.date.localeCompare(b.date)).slice(0, BRIEFING_LINES),
+      ready: ready
+        .map((draft) => {
+          const note = noteOfMessage.get(id(draft.accountId, draft.messageKey))
+          return line(
+            draft.accountId,
+            draft.messageKey,
+            note?.summary ?? summaries.get(id(draft.accountId, draft.messageKey))?.subject ?? '',
+            note?.priority ?? null,
+            note?.due ?? null,
+            null
+          )
+        })
+        .filter((item): item is BriefingItem => item !== null)
+    }
+  }
+
+  /** Writes the top of the day again, from the day as it stands. */
+  async writeBriefingOpening(): Promise<Briefing> {
+    const store = this.requireStore()
+    const key = await this.requireKey()
+    const briefing = await this.getBriefing()
+    const tu = (await store.listMemory()).find((note) => note.path === 'tu.md')
+    const section = (title: string, items: ReadonlyArray<BriefingItem>): string =>
+      `## ${title}\n${
+        items.length > 0
+          ? items
+              .slice(0, 10)
+              .map(
+                (item) =>
+                  `- ${item.text}${item.due ? ` (entro ${item.due})` : ''}${item.priority === 'alta' ? ' [importante]' : ''} — ${item.from}, «${item.subject}»`
+              )
+              .join('\n')
+          : '- niente'
+      }`
+    const material = [
+      `Oggi è ${new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(new Date())}.`,
+      section('Da fare oggi o scaduto', briefing.today),
+      section('In scadenza questa settimana', briefing.week),
+      section('Ti aspettano (senza data)', briefing.waiting),
+      section('Aspetti tu', briefing.awaited),
+      section('Risposte pronte', briefing.ready)
+    ].join('\n\n')
+
+    const result = await this.client.chat(key, {
+      messages: [
+        {
+          role: 'system',
+          content: tu
+            ? `${PROMPTS.briefing}\n\n# Chi è l'utente\n\n${tu.content.trim()}`
+            : PROMPTS.briefing
+        },
+        { role: 'user', content: material }
+      ],
+      reasoningEffort: 'none',
+      maxTokens: 1200
+    })
+
+    await this.recordUsage(null, 'oggi', result)
+
+    // A paragraph cut short is not the day's: it is not kept.
+    if (result.finishReason === 'length' || !result.content.trim()) {
+      throw new Error('Il punto della giornata non è venuto intero: riprova.')
+    }
+
+    await store.saveBriefingOpening(briefing.day, result.content.trim())
+    return this.getBriefing()
+  }
+
   /** The messages a view of the Segretario's holds, one per conversation (see `AiStore.viewMessages`). */
   viewMessages(
     view: SegretarioView,
@@ -780,7 +1012,8 @@ export class SegretarioService {
           }
         ],
         reasoningEffort: 'low',
-        maxTokens: 3000,
+        // Reasoning counts against it: room for the thinking and a long reply.
+        maxTokens: 8000,
         responseSchema: { name: 'risposta', schema: READY_DRAFT_SCHEMA }
       })
 
@@ -1865,6 +2098,18 @@ function handleLinks(records: ReadonlyArray<HandleRecord> | undefined): HandleLi
 }
 
 /** What the page shows of a stored event; null for those it does not show. */
+/** A day by the local calendar, AAAA-MM-GG. */
+function localDay(date: Date): string {
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+const PRIORITY_ORDER: Readonly<Record<NotePriority, number>> = { alta: 0, media: 1, bassa: 2 }
+
+function priorityRank(item: { priority: NotePriority | null }): number {
+  return item.priority ? PRIORITY_ORDER[item.priority] : 1
+}
+
 /** A message as triage reads it: who, when, what — its own words, without the quoted history. */
 function triageMessage(
   message: {

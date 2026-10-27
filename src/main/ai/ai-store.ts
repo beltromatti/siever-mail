@@ -565,6 +565,59 @@ export class AiStore {
     `
   }
 
+  /* ──────────────────────────────── the day ──────────────────────────────── */
+
+  /**
+   * The latest note of every conversation that still asks something of the
+   * user or waits on someone, not handled — the day's page is made of them.
+   */
+  async openConversationNotes(accountIds: ReadonlyArray<string>): Promise<MessageNote[]> {
+    if (accountIds.length === 0) {
+      return []
+    }
+
+    const rows = await this.prisma.$queryRaw<Array<{ accountId: string; messageKey: string }>>`
+      SELECT n.account_id AS accountId, n.message_key AS messageKey
+      FROM ai_notes n
+      WHERE n.account_id IN (${Prisma.join([...accountIds])})
+        AND n.state IN ('da_rispondere', 'da_fare', 'in_attesa')
+        AND n.dismissed_at IS NULL
+        AND n.message_date = (
+          SELECT MAX(o.message_date) FROM ai_notes o
+          WHERE o.account_id = n.account_id AND o.thread_id = n.thread_id
+        )
+    `
+    return this.getNotes(rows)
+  }
+
+  async openCommitmentsIn(accountIds: ReadonlyArray<string>): Promise<Commitment[]> {
+    const rows = await this.prisma.aiItem.findMany({
+      where: { accountId: { in: [...accountIds] }, status: 'aperto' },
+      orderBy: { createdAt: 'asc' }
+    })
+    return rows.map(commitmentOf)
+  }
+
+  async readyDraftsIn(
+    accountIds: ReadonlyArray<string>
+  ): Promise<Array<{ accountId: string; messageKey: string; threadId: string }>> {
+    return this.prisma.aiReadyDraft.findMany({
+      where: { accountId: { in: [...accountIds] }, status: 'pronta' },
+      select: { accountId: true, messageKey: true, threadId: true },
+      orderBy: { createdAt: 'desc' }
+    })
+  }
+
+  async briefingOpening(day: string): Promise<{ text: string; createdAt: number } | null> {
+    const row = await this.prisma.aiBriefing.findUnique({ where: { day } })
+    return row ? { text: row.text, createdAt: Number(row.createdAt) } : null
+  }
+
+  async saveBriefingOpening(day: string, text: string): Promise<void> {
+    const data = { text, createdAt: BigInt(Date.now()) }
+    await this.prisma.aiBriefing.upsert({ where: { day }, create: { day, ...data }, update: data })
+  }
+
   /* ─────────────────────────── notes on the mail ─────────────────────────── */
 
   /**
@@ -779,7 +832,8 @@ export class AiStore {
       this.prisma.aiDraft.deleteMany(),
       this.prisma.aiNote.deleteMany(),
       this.prisma.aiItem.deleteMany(),
-      this.prisma.aiReadyDraft.deleteMany()
+      this.prisma.aiReadyDraft.deleteMany(),
+      this.prisma.aiBriefing.deleteMany()
     ])
   }
 }

@@ -2791,6 +2791,13 @@ export class AppDatabase {
       'CREATE INDEX IF NOT EXISTS idx_ai_items_status ON ai_items(status, due)'
     )
     await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_briefings (
+        day TEXT PRIMARY KEY,
+        text TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS ai_ready_drafts (
         account_id TEXT NOT NULL,
         message_key TEXT NOT NULL,
@@ -3670,13 +3677,34 @@ export class AppDatabase {
   async listMessageRowsByKey(
     accountId: string,
     messageKeys: ReadonlyArray<string>
-  ): Promise<Array<{ folderPath: string; uid: number; messageKey: string; dateIso: string }>> {
+  ): Promise<
+    Array<{
+      folderPath: string
+      uid: number
+      messageKey: string
+      dateIso: string
+      subject: string
+      from: MailAddress[]
+    }>
+  > {
     await this.ready
 
-    return this.prisma.message.findMany({
+    const rows = await this.prisma.message.findMany({
       where: { accountId, messageKey: { in: [...messageKeys] } },
-      select: { folderPath: true, uid: true, messageKey: true, dateIso: true }
+      select: {
+        folderPath: true,
+        uid: true,
+        messageKey: true,
+        dateIso: true,
+        subject: true,
+        fromJson: true
+      }
     })
+
+    return rows.map(({ fromJson, ...row }) => ({
+      ...row,
+      from: parseJsonArray<MailAddress>(fromJson)
+    }))
   }
 
   /** A message's stored body at whatever level, for reading its words. */

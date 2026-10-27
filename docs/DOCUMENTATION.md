@@ -132,6 +132,7 @@ so an older file is brought forward in place.
 | `ai_notes`                   | The Segretario's note on a message, by its key: the one thing that counts, where it leaves the user (to answer, to do, waiting, information, noise), priority, deadline, and when the user marked it handled.                                                                                                                                                       |
 | `ai_items`                   | What is open between the user and someone, by conversation: asked of them, promised, awaited, to do; closed by a later message or by the user.                                                                                                                                                                                                                      |
 | `ai_ready_drafts`            | Replies the Segretario prepared ahead, by the message they answer: offered until the user takes one up or sets it aside.                                                                                                                                                                                                                                            |
+| `ai_briefings`               | What the Segretario wrote at the top of each day ("Oggi"), by local day.                                                                                                                                                                                                                                                                                            |
 | `contacts`                   | Everyone stored mail names, for the composer's suggestions: `usage_count` / `last_used_at` count the mail written to them, `last_received_at` the newest they sent, `hidden_at` a contact taken out of the suggestions.                                                                                                                                             |
 | `drafts`                     | The messages being written: recipients, subject, body, files, the thread they answer; `revision` / `server_revision` say whether Bozze has the draft as it is, `server_*` where its copy is, `docked` that a composer holds it.                                                                                                                                     |
 | `account_signatures`         | One signature per account, with the version of the page it was written for (`html_format`) and the edition of the extension's content it has (`extension_revision`).                                                                                                                                                                                                |
@@ -714,6 +715,14 @@ user's own replies to the same person, so the voice is theirs. It stays a
 proposal in "Il punto" — "Usa questa risposta" opens it in the composer as
 a reply, recorded like the Segretario's other drafts so the user's edits
 are learnt from; "Scarta" sets it aside. Both can be switched off.
+
+**Oggi** is the page the workspace opens on when the Segretario is set up,
+in the place of the list and the reader (`today-page.tsx`, the layout's
+`page`). It is made of the notes and what is open: what is due today or
+overdue, this week, who waits on the user, the replies prepared, what the
+user waits on — each line opens its message. At the top, a few lines the
+Segretario writes once a day from the same material (`oggi.md`), kept in
+`ai_briefings` and written again on request.
 
 **Views.** "Da gestire" holds the conversations whose latest note asks a
 reply or an action and was not handled, or where something the user owes

@@ -59,6 +59,7 @@ import {
 import { useSegretario } from '@renderer/features/segretario/use-segretario'
 import { useMessageNotes } from '@renderer/features/segretario/message-notes'
 import { ThreadBriefPanel } from '@renderer/features/segretario/thread-brief'
+import { TodayPage } from '@renderer/features/segretario/today-page'
 import { plainTextToComposerHtml, writtenText } from '@renderer/features/mail/composer-body'
 import { parseRecipients } from '@shared/email-address'
 import type { ApprovalRequest, ComposeSpec, HandleLink, SendOutcome } from '@shared/segretario'
@@ -569,6 +570,8 @@ function App(): React.JSX.Element {
   /** Sends the Segretario asked for, waiting to hear how they went, by draft. */
   const segretarioSendWaitersRef = useRef(new Map<string, (outcome: SendOutcome) => void>())
   const [segretarioOpen, setSegretarioOpen] = useState(false)
+  /** The Segretario's day, "Oggi", in the place of the list and the reader. */
+  const [todayOpen, setTodayOpen] = useState(false)
   const segretario = useSegretario(segretarioOpen)
   const assistantInset = useAssistantInset(segretarioOpen)
   const messageNotes = useMessageNotes(messages)
@@ -1702,6 +1705,7 @@ function App(): React.JSX.Element {
       setSearch('')
       setSelectedAccountId(ref.accountId)
       setSelectedFolderPath(ref.folderPath)
+      setTodayOpen(false)
     },
     [cancelInFlightWork]
   )
@@ -2699,6 +2703,7 @@ function App(): React.JSX.Element {
   /** Opens a folder — of the account, or of "Tutti gli account" — showing all its messages. */
   const selectFolder = useCallback(
     (folderPath: string): void => {
+      setTodayOpen(false)
       setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
 
       // The folder already open stays as it is: emptying it here left the
@@ -3489,6 +3494,7 @@ function App(): React.JSX.Element {
               }
             }
 
+            setTodayOpen(false)
             setSearch(request.query)
             return
         }
@@ -4161,7 +4167,9 @@ function App(): React.JSX.Element {
       return accounts[0]?.id ?? null
     })
     setShowWelcomeGate(false)
-  }, [accounts])
+    // The day opens on what the Segretario saw in it.
+    setTodayOpen(segretarioConfigured)
+  }, [segretarioConfigured, accounts])
 
   if (bootstrapLoading) {
     return (
@@ -4516,6 +4524,7 @@ function App(): React.JSX.Element {
                   selectedAccountId={selectedAccountId}
                   removingAccountId={removingAccountId}
                   onSelectAccount={(accountId) => {
+                    setTodayOpen(false)
                     cancelInFlightWork()
                     setSelectedAccountId(accountId)
                     setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
@@ -4532,6 +4541,11 @@ function App(): React.JSX.Element {
                   </div>
                 ) : (
                   <FolderSidebar
+                    today={
+                      segretarioConfigured
+                        ? { open: todayOpen, onOpen: () => setTodayOpen(true) }
+                        : null
+                    }
                     segretarioViews={
                       segretarioConfigured && segretarioViewCounts
                         ? SEGRETARIO_VIEWS.map((view) => ({
@@ -4543,7 +4557,7 @@ function App(): React.JSX.Element {
                     accountLabel={selectedAccountLabel}
                     folders={folders}
                     unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
-                    selectedFolderPath={selectedFolderPath}
+                    selectedFolderPath={todayOpen ? null : selectedFolderPath}
                     messageDrop={messageDrop}
                     onSelectFolder={selectFolder}
                     onFolderContextMenu={(target) => void openFolderContextMenu(target)}
@@ -4660,6 +4674,15 @@ function App(): React.JSX.Element {
               }
               addressActions={addressActions}
             />
+          }
+          page={
+            todayOpen && segretarioConfigured ? (
+              <TodayPage
+                canWrite={segretario.status?.keyState === 'ready'}
+                atWindowTopRight={!segretarioOpen}
+                onOpenMessage={openMessageRef}
+              />
+            ) : undefined
           }
           assistant={
             segretarioOpen ? (

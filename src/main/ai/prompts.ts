@@ -2,6 +2,7 @@ import extensionMain from '@app/extension/main'
 
 import compaction from './prompts/compattazione.md?raw'
 import learning from './prompts/conoscerti.md?raw'
+import briefing from './prompts/oggi.md?raw'
 import context from './prompts/contesto.md?raw'
 import reflection from './prompts/riflessione.md?raw'
 import triage from './prompts/smistamento.md?raw'
@@ -34,6 +35,7 @@ export const PROMPTS = {
     .join('\n\n'),
   context: context.trim(),
   compaction: compaction.trim(),
+  briefing: briefing.trim(),
   learning: learning.trim(),
   reflection: reflection.trim(),
   triage: triage.trim(),

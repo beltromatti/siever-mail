@@ -409,3 +409,12 @@ model AiReadyDraft {
   @@index([status], map: "idx_ai_ready_drafts_status")
   @@map("ai_ready_drafts")
 }
+
+/// What the Segretario wrote at the top of a day ("Oggi"), by local day.
+model AiBriefing {
+  day       String @id
+  text      String
+  createdAt BigInt @map("created_at")
+
+  @@map("ai_briefings")
+}

@@ -119,6 +119,40 @@ export interface ThreadBrief {
   readyDraft: { messageKey: string; text: string; doubts: string } | null
 }
 
+/** A line of the day's page: a conversation that asks something, or a thing open in one. */
+export interface BriefingItem {
+  /** What it is, as the Segretario put it. */
+  text: string
+  priority: NotePriority | null
+  due: string | null
+  /** For a thing open: asked, promised, awaited, to do. */
+  commitmentKind: CommitmentKind | null
+  ref: MessageRef
+  subject: string
+  /** Who wrote the message, as a name. */
+  from: string
+  date: string
+}
+
+/** The day as the Segretario sees it: "Oggi". */
+export interface Briefing {
+  /** AAAA-MM-GG, local. */
+  day: string
+  /** What it writes at the top of the day; null until written. */
+  opening: string | null
+  openingAt: number | null
+  /** What is due today, or overdue. */
+  today: BriefingItem[]
+  /** What is due in the next seven days. */
+  week: BriefingItem[]
+  /** Who waits on the user, without a date. */
+  waiting: BriefingItem[]
+  /** What the user waits on, the longest first. */
+  awaited: BriefingItem[]
+  /** Replies prepared, to look at. */
+  ready: BriefingItem[]
+}
+
 /** Notes were written or changed: the views showing these refresh. */
 export interface NotesChange {
   accountId: string
@@ -338,6 +372,8 @@ export const SEGRETARIO_IPC = {
   takeUpReadyDraft: 'segretario:take-up-ready-draft',
   discardReadyDraft: 'segretario:discard-ready-draft',
   readyDraftSource: 'segretario:ready-draft-source',
+  getBriefing: 'segretario:get-briefing',
+  writeBriefingOpening: 'segretario:write-briefing-opening',
   notesChanged: 'segretario:notes-changed',
   listActivities: 'segretario:list-activities',
   getActivity: 'segretario:get-activity',
@@ -392,6 +428,9 @@ export interface SegretarioApi {
   /** The user took a prepared reply up: it became draft `draftId`, and is learnt from like the others. */
   takeUpReadyDraft: (accountId: string, messageKey: string, draftId: string) => Promise<void>
   discardReadyDraft: (accountId: string, messageKey: string) => Promise<void>
+  getBriefing: () => Promise<Briefing>
+  /** Writes the day's opening again, from the day as it stands. */
+  writeBriefingOpening: () => Promise<Briefing>
   listActivities: () => Promise<ActivitySummary[]>
   getActivity: (id: string) => Promise<ActivityDetail | null>
   /** Begins a new activity with what the user asked. */

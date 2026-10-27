@@ -1,5 +1,13 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Hourglass, ListTodo, PenLine, type Inbox } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  Hourglass,
+  ListTodo,
+  PenLine,
+  Sun,
+  type Inbox
+} from 'lucide-react'
 
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { buildFolderTree, folderNodeLabel, type FolderTreeNode } from '@renderer/lib/folder-tree'
@@ -37,6 +45,8 @@ export type FolderMenuTarget =
   | { kind: 'account' }
 
 interface FolderSidebarProps {
+  /** The Segretario's day, "Oggi": shown with its views, open or not. */
+  today: { open: boolean; onOpen: () => void } | null
   /** The Segretario's views and how many conversations each holds; none without the Segretario. */
   segretarioViews: ReadonlyArray<{ view: SegretarioView; count: number }>
   /** The account the dropdown above has open, whose folders the tree shows. */
@@ -232,6 +242,7 @@ function SectionHeading({ children }: { children: React.ReactNode }): React.JSX.
  * others as a tree whose branches fold away.
  */
 export function FolderSidebar({
+  today,
   segretarioViews,
   accountLabel,
   folders,
@@ -327,6 +338,17 @@ export function FolderSidebar({
           {segretarioViews.length > 0 && (
             <section aria-label="Segretario">
               <SectionHeading>Segretario</SectionHeading>
+              {today && (
+                <FolderRow
+                  icon={Sun}
+                  name="Oggi"
+                  messageCount={0}
+                  unseenCount={0}
+                  badge={0}
+                  active={today.open}
+                  onSelect={today.onOpen}
+                />
+              )}
               {segretarioViews.map(({ view, count }) => {
                 const path = segretarioViewPath(view)
 

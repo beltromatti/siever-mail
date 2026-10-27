@@ -112,6 +112,8 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.discardReadyDraft, (accountId: unknown, messageKey: unknown) =>
     segretario.discardReadyDraft(idSchema.parse(accountId), z.string().min(1).parse(messageKey))
   )
+  handle(SEGRETARIO_IPC.getBriefing, () => segretario.getBriefing())
+  handle(SEGRETARIO_IPC.writeBriefingOpening, () => segretario.writeBriefingOpening())
   handle(SEGRETARIO_IPC.draftSent, (draftId: unknown, writtenText: unknown) =>
     segretario.draftSent(idSchema.parse(draftId), z.string().max(200_000).parse(writtenText))
   )

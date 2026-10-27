@@ -172,7 +172,9 @@ const segretarioApi: SegretarioApi = {
   takeUpReadyDraft: async (accountId, messageKey, draftId) =>
     invoke(SEGRETARIO_IPC.takeUpReadyDraft, accountId, messageKey, draftId),
   discardReadyDraft: async (accountId, messageKey) =>
-    invoke(SEGRETARIO_IPC.discardReadyDraft, accountId, messageKey)
+    invoke(SEGRETARIO_IPC.discardReadyDraft, accountId, messageKey),
+  getBriefing: async () => invoke(SEGRETARIO_IPC.getBriefing),
+  writeBriefingOpening: async () => invoke(SEGRETARIO_IPC.writeBriefingOpening)
 }
 
 // Merge any extension-provided bridge methods (the IPC channels an
