@@ -2791,9 +2791,24 @@ export class AppDatabase {
       'CREATE INDEX IF NOT EXISTS idx_ai_items_status ON ai_items(status, due)'
     )
     await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_ready_drafts (
+        account_id TEXT NOT NULL,
+        message_key TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        doubts TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (account_id, message_key)
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_ai_ready_drafts_status ON ai_ready_drafts(status)'
+    )
+    await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS ai_drafts (
         draft_id TEXT PRIMARY KEY,
-        activity_id TEXT NOT NULL,
+        activity_id TEXT,
         account_id TEXT NOT NULL,
         text TEXT NOT NULL,
         created_at INTEGER NOT NULL
@@ -3655,12 +3670,12 @@ export class AppDatabase {
   async listMessageRowsByKey(
     accountId: string,
     messageKeys: ReadonlyArray<string>
-  ): Promise<Array<{ folderPath: string; uid: number; messageKey: string }>> {
+  ): Promise<Array<{ folderPath: string; uid: number; messageKey: string; dateIso: string }>> {
     await this.ready
 
     return this.prisma.message.findMany({
       where: { accountId, messageKey: { in: [...messageKeys] } },
-      select: { folderPath: true, uid: true, messageKey: true }
+      select: { folderPath: true, uid: true, messageKey: true, dateIso: true }
     })
   }
 

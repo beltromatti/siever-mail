@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Hourglass, ListTodo, type Inbox } from 'lucide-react'
+import { ChevronDown, ChevronRight, Hourglass, ListTodo, PenLine, type Inbox } from 'lucide-react'
 
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { buildFolderTree, folderNodeLabel, type FolderTreeNode } from '@renderer/lib/folder-tree'
@@ -19,7 +19,8 @@ import { folderIcon, ROLE_ICONS } from './folder-icons'
 
 const VIEW_ICONS: Readonly<Record<SegretarioView, typeof Inbox>> = {
   'da-gestire': ListTodo,
-  'in-attesa': Hourglass
+  'in-attesa': Hourglass,
+  'bozze-pronte': PenLine
 }
 
 /** Where dragged messages can land: a folder of an account, or a kind of folder of every account. */

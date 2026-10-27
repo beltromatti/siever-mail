@@ -131,6 +131,7 @@ so an older file is brought forward in place.
 | `ai_drafts`                  | The drafts the Segretario wrote, as it wrote them, to compare with what the user sends.                                                                                                                                                                                                                                                                             |
 | `ai_notes`                   | The Segretario's note on a message, by its key: the one thing that counts, where it leaves the user (to answer, to do, waiting, information, noise), priority, deadline, and when the user marked it handled.                                                                                                                                                       |
 | `ai_items`                   | What is open between the user and someone, by conversation: asked of them, promised, awaited, to do; closed by a later message or by the user.                                                                                                                                                                                                                      |
+| `ai_ready_drafts`            | Replies the Segretario prepared ahead, by the message they answer: offered until the user takes one up or sets it aside.                                                                                                                                                                                                                                            |
 | `contacts`                   | Everyone stored mail names, for the composer's suggestions: `usage_count` / `last_used_at` count the mail written to them, `last_received_at` the newest they sent, `hidden_at` a contact taken out of the suggestions.                                                                                                                                             |
 | `drafts`                     | The messages being written: recipients, subject, body, files, the thread they answer; `revision` / `server_revision` say whether Bozze has the draft as it is, `server_*` where its copy is, `docked` that a composer holds it.                                                                                                                                     |
 | `account_signatures`         | One signature per account, with the version of the page it was written for (`html_format`) and the edition of the extension's content it has (`extension_revision`).                                                                                                                                                                                                |
@@ -704,9 +705,20 @@ ott" and the gist — and at the top of the reader as "Il punto", with what is
 open to tick off and "Segna come gestito". It can be switched off in
 Settings → Segretario.
 
+**Replies prepared ahead.** For a conversation whose latest message waits
+on the user's answer and matters (to answer, medium or high priority), the
+Segretario writes the reply after triage, one at a time
+(`ready-drafts.ts`, `risposta-pronta.md`): the conversation, the notes on
+the user, their style and the people involved, and up to three of the
+user's own replies to the same person, so the voice is theirs. It stays a
+proposal in "Il punto" — "Usa questa risposta" opens it in the composer as
+a reply, recorded like the Segretario's other drafts so the user's edits
+are learnt from; "Scarta" sets it aside. Both can be switched off.
+
 **Views.** "Da gestire" holds the conversations whose latest note asks a
 reply or an action and was not handled, or where something the user owes
-is open; "In attesa" those where the user waits on someone. Their paths
+is open; "In attesa" those where the user waits on someone; "Risposte
+pronte" those with a reply prepared. Their paths
 (`segretarioViewPath`) open like a folder of "Tutti gli account": the
 main process resolves each conversation to one row, in the folder the user
 thinks of it in, never Spam or the Trash, and the list shows exactly those.

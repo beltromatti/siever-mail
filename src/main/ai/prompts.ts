@@ -5,6 +5,7 @@ import learning from './prompts/conoscerti.md?raw'
 import context from './prompts/contesto.md?raw'
 import reflection from './prompts/riflessione.md?raw'
 import triage from './prompts/smistamento.md?raw'
+import readyDraft from './prompts/risposta-pronta.md?raw'
 import system from './prompts/segretario.md?raw'
 import searchFiles from './prompts/strumenti/cerca_file.md?raw'
 import searchMail from './prompts/strumenti/cerca_posta.md?raw'
@@ -36,6 +37,7 @@ export const PROMPTS = {
   learning: learning.trim(),
   reflection: reflection.trim(),
   triage: triage.trim(),
+  readyDraft: readyDraft.trim(),
   title: title.trim(),
   tools: {
     cerca_posta: searchMail.trim(),

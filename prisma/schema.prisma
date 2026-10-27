@@ -340,8 +340,9 @@ model AiLesson {
 /// The drafts the Segretario wrote, as it wrote them: what the user sends is
 /// compared with this.
 model AiDraft {
-  draftId    String @id @map("draft_id")
-  activityId String @map("activity_id")
+  draftId    String  @id @map("draft_id")
+  /// The activity that wrote it; null for a reply prepared ahead and taken up.
+  activityId String? @map("activity_id")
   accountId  String @map("account_id")
   text       String
   createdAt  BigInt @map("created_at")
@@ -390,4 +391,21 @@ model AiItem {
   @@index([accountId, threadId], map: "idx_ai_items_thread")
   @@index([status, due], map: "idx_ai_items_status")
   @@map("ai_items")
+}
+
+/// A reply the Segretario prepared ahead for a message that waits on the
+/// user: a local proposal until the user takes it up (`usata`) or sets it
+/// aside (`scartata`). User data.
+model AiReadyDraft {
+  accountId  String @map("account_id")
+  messageKey String @map("message_key")
+  threadId   String @map("thread_id")
+  text       String
+  doubts     String
+  status     String
+  createdAt  BigInt @map("created_at")
+
+  @@id([accountId, messageKey])
+  @@index([status], map: "idx_ai_ready_drafts_status")
+  @@map("ai_ready_drafts")
 }

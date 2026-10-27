@@ -138,12 +138,17 @@ export function unifiedFolderRole(path: string | null | undefined): FolderRole |
 
 /**
  * The Segretario's views: the conversations its notes say ask something of
- * the user (`da-gestire`), and those where the user waits on someone
- * (`in-attesa`), across the accounts "Tutti gli account" gathers.
+ * the user (`da-gestire`), those where the user waits on someone
+ * (`in-attesa`), and the messages it prepared a reply for
+ * (`bozze-pronte`), across the accounts "Tutti gli account" gathers.
  */
-export type SegretarioView = 'da-gestire' | 'in-attesa'
+export type SegretarioView = 'da-gestire' | 'in-attesa' | 'bozze-pronte'
 
-export const SEGRETARIO_VIEWS: ReadonlyArray<SegretarioView> = ['da-gestire', 'in-attesa']
+export const SEGRETARIO_VIEWS: ReadonlyArray<SegretarioView> = [
+  'da-gestire',
+  'in-attesa',
+  'bozze-pronte'
+]
 
 const SEGRETARIO_VIEW_PREFIX = '__segretario__:'
 
@@ -165,7 +170,8 @@ export function segretarioView(path: string | null | undefined): SegretarioView 
 
 const SEGRETARIO_VIEW_LABELS: Readonly<Record<SegretarioView, string>> = {
   'da-gestire': 'Da gestire',
-  'in-attesa': 'In attesa'
+  'in-attesa': 'In attesa',
+  'bozze-pronte': 'Risposte pronte'
 }
 
 export function segretarioViewLabel(view: SegretarioView): string {

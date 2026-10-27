@@ -132,13 +132,13 @@ export function SegretarioSection(): React.JSX.Element {
     }
   }
 
-  const changeTriage = async (triage: boolean): Promise<void> => {
+  const changePreferences = async (patch: Partial<SegretarioPreferences>): Promise<void> => {
     if (!preferences) {
       return
     }
 
     try {
-      setPreferences(await window.segretarioApi.setPreferences({ ...preferences, triage }))
+      setPreferences(await window.segretarioApi.setPreferences({ ...preferences, ...patch }))
     } catch (error) {
       toast.error('Impostazione non salvata', { description: errorText(error) })
     }
@@ -422,7 +422,27 @@ export function SegretarioSection(): React.JSX.Element {
             <Switch
               id="segretario-triage"
               checked={preferences.triage}
-              onCheckedChange={(triage) => void changeTriage(triage)}
+              onCheckedChange={(triage) => void changePreferences({ triage })}
+            />
+          </label>
+          <label
+            htmlFor="segretario-ready-drafts"
+            className="flex cursor-pointer items-center justify-between gap-3"
+          >
+            <span className="min-w-0">
+              <span className="block text-[12px] font-medium">
+                Prepara le risposte che mi servono
+              </span>
+              <span className="text-muted-foreground block text-[11px]">
+                Per i messaggi importanti che aspettano una tua risposta, la scrive in anticipo nel
+                tuo stile; la trovi nel lettore e la usi solo se vuoi.
+              </span>
+            </span>
+            <Switch
+              id="segretario-ready-drafts"
+              checked={preferences.readyDrafts}
+              disabled={!preferences.triage}
+              onCheckedChange={(readyDrafts) => void changePreferences({ readyDrafts })}
             />
           </label>
         </div>

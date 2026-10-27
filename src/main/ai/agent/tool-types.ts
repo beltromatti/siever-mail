@@ -40,6 +40,11 @@ export interface SegretarioMailPort {
       messages: Array<{ ref: MessageRef; messageKey: string; dateIso: string }>
     }>
   >
+  /** Where a message is filed, in the folder the user thinks of it in, and when it was sent. */
+  refForKey(
+    accountId: string,
+    messageKey: string
+  ): Promise<{ ref: MessageRef; dateIso: string } | null>
   /** Whether the account's mail has arrived and its last `days` days are indexed: enough to get to know it. */
   recentMailIndexed(accountId: string, days: number): Promise<boolean>
   /** The client the search and the threads read from (see `mail-search.ts`). */

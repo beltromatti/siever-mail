@@ -446,7 +446,8 @@ export class AiStore {
 
   async recordDraft(draft: {
     draftId: string
-    activityId: string
+    /** The activity that wrote it; null for a reply prepared ahead and taken up. */
+    activityId: string | null
     accountId: string
     text: string
   }): Promise<void> {
@@ -462,7 +463,7 @@ export class AiStore {
   /** A draft the Segretario wrote, taken out of the record: it has been sent or thrown away. */
   async takeDraft(
     draftId: string
-  ): Promise<{ activityId: string; accountId: string; text: string } | null> {
+  ): Promise<{ activityId: string | null; accountId: string; text: string } | null> {
     const row = await this.prisma.aiDraft.findUnique({ where: { draftId } })
 
     if (!row) {
@@ -475,6 +476,93 @@ export class AiStore {
 
   async pruneDrafts(olderThan: number): Promise<void> {
     await this.prisma.aiDraft.deleteMany({ where: { createdAt: { lt: BigInt(olderThan) } } })
+  }
+
+  /* ──────────────────────── replies prepared ahead ──────────────────────── */
+
+  async saveReadyDraft(draft: {
+    accountId: string
+    messageKey: string
+    threadId: string
+    text: string
+    doubts: string
+  }): Promise<void> {
+    const data = { ...draft, status: 'pronta', createdAt: BigInt(Date.now()) }
+
+    await this.prisma.aiReadyDraft.upsert({
+      where: {
+        accountId_messageKey: { accountId: draft.accountId, messageKey: draft.messageKey }
+      },
+      create: data,
+      update: data
+    })
+  }
+
+  /** The reply prepared ahead for a message, while it waits to be taken up. */
+  async readyDraftFor(
+    accountId: string,
+    messageKey: string
+  ): Promise<{ text: string; doubts: string; createdAt: number } | null> {
+    const row = await this.prisma.aiReadyDraft.findUnique({
+      where: { accountId_messageKey: { accountId, messageKey } }
+    })
+
+    return row?.status === 'pronta'
+      ? { text: row.text, doubts: row.doubts, createdAt: Number(row.createdAt) }
+      : null
+  }
+
+  /** The user took a prepared reply up, or set it aside: it is no longer offered. */
+  async closeReadyDraft(
+    accountId: string,
+    messageKey: string,
+    status: 'usata' | 'scartata'
+  ): Promise<{ threadId: string; text: string } | null> {
+    const row = await this.prisma.aiReadyDraft.findUnique({
+      where: { accountId_messageKey: { accountId, messageKey } }
+    })
+
+    if (!row || row.status !== 'pronta') {
+      return null
+    }
+
+    await this.prisma.aiReadyDraft.update({
+      where: { accountId_messageKey: { accountId, messageKey } },
+      data: { status }
+    })
+    return { threadId: row.threadId, text: row.text }
+  }
+
+  /**
+   * Messages that wait on a reply from the user and deserve one prepared:
+   * the latest of their conversation, received, not handled, that matters,
+   * since `sinceIso`, and without one prepared yet — the newest first.
+   */
+  async messagesWantingReadyDraft(
+    sinceIso: string,
+    limit: number
+  ): Promise<Array<{ accountId: string; messageKey: string; threadId: string }>> {
+    return this.prisma.$queryRaw<
+      Array<{ accountId: string; messageKey: string; threadId: string }>
+    >`
+      SELECT n.account_id AS accountId, n.message_key AS messageKey, n.thread_id AS threadId
+      FROM ai_notes n
+      WHERE n.state = 'da_rispondere'
+        AND n.direction = 'in'
+        AND n.priority IN ('alta', 'media')
+        AND n.dismissed_at IS NULL
+        AND n.message_date >= ${sinceIso}
+        AND n.message_date = (
+          SELECT MAX(o.message_date) FROM ai_notes o
+          WHERE o.account_id = n.account_id AND o.thread_id = n.thread_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM ai_ready_drafts r
+          WHERE r.account_id = n.account_id AND r.message_key = n.message_key
+        )
+      ORDER BY n.message_date DESC
+      LIMIT ${limit}
+    `
   }
 
   /* ─────────────────────────── notes on the mail ─────────────────────────── */
@@ -554,7 +642,16 @@ export class AiStore {
       })
     ])
 
-    return { note: note ? noteOf(note) : null, commitments: items.map(commitmentOf) }
+    const readyDraft = note ? await this.readyDraftFor(note.accountId, note.messageKey) : null
+
+    return {
+      note: note ? noteOf(note) : null,
+      commitments: items.map(commitmentOf),
+      readyDraft:
+        note && readyDraft
+          ? { messageKey: note.messageKey, text: readyDraft.text, doubts: readyDraft.doubts }
+          : null
+    }
   }
 
   async openCommitments(accountId: string, threadId: string): Promise<Commitment[]> {
@@ -627,6 +724,13 @@ export class AiStore {
       return []
     }
 
+    if (view === 'bozze-pronte') {
+      return this.prisma.aiReadyDraft.findMany({
+        where: { accountId: { in: [...accountIds] }, status: 'pronta' },
+        select: { accountId: true, messageKey: true }
+      })
+    }
+
     const states = view === 'da-gestire' ? ['da_rispondere', 'da_fare'] : ['in_attesa']
     const kinds = view === 'da-gestire' ? [...OWED_KINDS] : ['aspetti']
 
@@ -658,6 +762,7 @@ export class AiStore {
       this.prisma.aiDraft.deleteMany({ where: { accountId } }),
       this.prisma.aiNote.deleteMany({ where: { accountId } }),
       this.prisma.aiItem.deleteMany({ where: { accountId } }),
+      this.prisma.aiReadyDraft.deleteMany({ where: { accountId } }),
       this.prisma.aiMemory.deleteMany({ where: { path: accountNotePath } })
     ])
   }
@@ -673,7 +778,8 @@ export class AiStore {
       this.prisma.aiLesson.deleteMany(),
       this.prisma.aiDraft.deleteMany(),
       this.prisma.aiNote.deleteMany(),
-      this.prisma.aiItem.deleteMany()
+      this.prisma.aiItem.deleteMany(),
+      this.prisma.aiReadyDraft.deleteMany()
     ])
   }
 }

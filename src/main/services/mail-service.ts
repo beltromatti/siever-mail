@@ -468,6 +468,23 @@ export class MailService {
           .slice(0, limit)
           .map(({ accountId, threadId, messages }) => ({ accountId, threadId, messages }))
       },
+      refForKey: async (accountId, messageKey) => {
+        const folders = await this.database.listFolders(accountId)
+        const rows = await this.database.listMessageRowsByKey(accountId, [messageKey])
+        const best = rows
+          .map((row) => ({
+            row,
+            rank: folderDisplayRank(folders.find((folder) => folder.path === row.folderPath))
+          }))
+          .sort((a, b) => a.rank - b.rank)[0]?.row
+
+        return best
+          ? {
+              ref: { accountId, folderPath: best.folderPath, uid: best.uid },
+              dateIso: best.dateIso
+            }
+          : null
+      },
       recentMailIndexed: async (accountId, days) =>
         this.database.recentMailIndexed(
           accountId,

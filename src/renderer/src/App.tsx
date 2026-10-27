@@ -3496,6 +3496,41 @@ function App(): React.JSX.Element {
     [cancelInFlightWork, openDraftById, openMessageRef]
   )
 
+  /**
+   * A reply the Segretario prepared ahead, taken up: it opens in front as a
+   * reply to its message, with the prepared lines written in, and from then
+   * on it is a draft like the user's own — and learnt from like one.
+   */
+  const takeUpReadyDraft = useCallback(
+    async (accountId: string, messageKey: string, text: string): Promise<void> => {
+      try {
+        const source = await window.segretarioApi.readyDraftSource(accountId, messageKey)
+
+        if (!source) {
+          toast.error('Il messaggio non c’è più', {
+            description: 'È stato spostato fuori dalla posta o eliminato.'
+          })
+          return
+        }
+
+        const data = await composerDataFor({ kind: 'reply', source, text })
+        const id = crypto.randomUUID()
+
+        setComposeSessions((current) => [
+          ...current,
+          { id, initialData: { ...data, draftId: id }, existing: false }
+        ])
+        setActiveComposeId(id)
+        await window.segretarioApi.takeUpReadyDraft(accountId, messageKey, id)
+      } catch (error) {
+        toast.error('La risposta non si è aperta', {
+          description: error instanceof Error ? error.message : undefined
+        })
+      }
+    },
+    [composerDataFor]
+  )
+
   /** Waits for the composer of a draft to be mounted, to act on it. */
   const composerHandleFor = useCallback(
     async (draftId: string): Promise<MailComposerHandle | null> => {
@@ -4544,6 +4579,7 @@ function App(): React.JSX.Element {
                     key={`${messageForViewer.accountId}:${messageForViewer.threadId}`}
                     accountId={messageForViewer.accountId}
                     threadId={messageForViewer.threadId}
+                    onTakeUpReadyDraft={takeUpReadyDraft}
                   />
                 )
               }

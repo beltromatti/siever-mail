@@ -166,7 +166,13 @@ const segretarioApi: SegretarioApi = {
   closeCommitment: async (id) => invoke(SEGRETARIO_IPC.closeCommitment, id),
   dismissNote: async (accountId, messageKey) =>
     invoke(SEGRETARIO_IPC.dismissNote, accountId, messageKey),
-  onNotesChanged: (listener) => subscribe(SEGRETARIO_IPC.notesChanged, listener)
+  onNotesChanged: (listener) => subscribe(SEGRETARIO_IPC.notesChanged, listener),
+  readyDraftSource: async (accountId, messageKey) =>
+    invoke(SEGRETARIO_IPC.readyDraftSource, accountId, messageKey),
+  takeUpReadyDraft: async (accountId, messageKey, draftId) =>
+    invoke(SEGRETARIO_IPC.takeUpReadyDraft, accountId, messageKey, draftId),
+  discardReadyDraft: async (accountId, messageKey) =>
+    invoke(SEGRETARIO_IPC.discardReadyDraft, accountId, messageKey)
 }
 
 // Merge any extension-provided bridge methods (the IPC channels an

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Check, PenLine } from 'lucide-react'
 
+import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/lib/utils'
 import type { Commitment, CommitmentKind, ThreadBrief } from '@shared/segretario'
 
@@ -70,12 +71,16 @@ function CommitmentRow({
  */
 export function ThreadBriefPanel({
   accountId,
-  threadId
+  threadId,
+  onTakeUpReadyDraft
 }: {
   accountId: string
   threadId: string
+  /** Opens the reply prepared ahead in the composer, as the user's own. */
+  onTakeUpReadyDraft: (accountId: string, messageKey: string, text: string) => Promise<void>
 }): React.JSX.Element | null {
   const [brief, setBrief] = useState<ThreadBrief | null>(null)
+  const [takingUp, setTakingUp] = useState(false)
 
   const load = useCallback(async (): Promise<void> => {
     setBrief(withRecentCommitments(await window.segretarioApi.getThreadBrief(accountId, threadId)))
@@ -144,6 +149,54 @@ export function ThreadBriefPanel({
         )}
       </div>
       <p className="voice text-foreground text-[15px] leading-[1.45]">{note.summary}</p>
+      {brief.readyDraft && (
+        <div className="bg-ai-soft/45 flex flex-col gap-2 rounded-[8px] px-3 py-2.5">
+          <p className="text-ai text-[11.5px] font-semibold">Risposta pronta</p>
+          <p className="voice text-foreground max-h-56 overflow-y-auto text-[14px] leading-[1.5] whitespace-pre-wrap">
+            {brief.readyDraft.text}
+          </p>
+          {brief.readyDraft.doubts && (
+            <p className="text-muted-foreground text-[12px] leading-[1.45]">
+              {brief.readyDraft.doubts}
+            </p>
+          )}
+          <div className="flex items-center gap-1.5">
+            <Button
+              size="sm"
+              disabled={takingUp}
+              onClick={() => {
+                const draft = brief.readyDraft
+
+                if (!draft) {
+                  return
+                }
+
+                setTakingUp(true)
+                void onTakeUpReadyDraft(note.accountId, draft.messageKey, draft.text).finally(() =>
+                  setTakingUp(false)
+                )
+              }}
+            >
+              <PenLine className="size-3.5" />
+              Usa questa risposta
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={takingUp}
+              onClick={() =>
+                brief.readyDraft &&
+                void window.segretarioApi.discardReadyDraft(
+                  note.accountId,
+                  brief.readyDraft.messageKey
+                )
+              }
+            >
+              Scarta
+            </Button>
+          </div>
+        </div>
+      )}
       {commitments.length > 0 && (
         <ul className="flex flex-col gap-1">
           {commitments.map((commitment) => (

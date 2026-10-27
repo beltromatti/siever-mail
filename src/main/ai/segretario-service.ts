@@ -56,7 +56,8 @@ import {
   type FetchFunction,
   type ToolCall
 } from './openrouter'
-import { threadMessages } from './mail-search'
+import { searchMail, searchScope, threadMessages } from './mail-search'
+import { parseReadyDraft, READY_DRAFT_SCHEMA, readyDraftRequest } from './ready-drafts'
 import { fillTemplate, PROMPTS } from './prompts'
 import {
   parseTriage,
@@ -104,6 +105,10 @@ const TRIAGE_ATTEMPTS = 2
 const TRIAGE_EARLIER_MESSAGES = 5
 /** Notes on the people involved that triage reads, at most. */
 const TRIAGE_PEOPLE_NOTES = 3
+/** Replies prepared per look, one after the other. */
+const READY_DRAFT_BATCH = 4
+/** The user's own replies to the same person a prepared reply learns the voice from. */
+const READY_DRAFT_EXAMPLES = 3
 /** The core notes the context block carries whole; the others are in the index. */
 const CORE_NOTES = ['tu.md', 'stile.md']
 const STREAM_FLUSH_MS = 60
@@ -167,6 +172,9 @@ export class SegretarioService {
   private triaging = false
   /** Messages whose note failed, by account and key, with the attempts made. */
   private readonly triageFailures = new Map<string, number>()
+  private preparing = false
+  /** Messages whose prepared reply failed, by account and key, with the attempts made. */
+  private readonly readyDraftFailures = new Map<string, number>()
 
   constructor(private readonly options: SegretarioServiceOptions) {
     this.client = new OpenRouterClient(options.fetch)
@@ -539,6 +547,28 @@ export class SegretarioService {
     return this.requireStore().viewMessages(view, accountIds)
   }
 
+  async readyDraftSource(accountId: string, messageKey: string): Promise<MessageRef | null> {
+    return (await this.options.mail.refForKey(accountId, messageKey))?.ref ?? null
+  }
+
+  async takeUpReadyDraft(accountId: string, messageKey: string, draftId: string): Promise<void> {
+    const store = this.requireStore()
+    const used = await store.closeReadyDraft(accountId, messageKey, 'usata')
+
+    if (used) {
+      await store.recordDraft({ draftId, activityId: null, accountId, text: used.text })
+      this.emitNotes({ accountId, messageKeys: [messageKey], threadIds: [used.threadId] })
+    }
+  }
+
+  async discardReadyDraft(accountId: string, messageKey: string): Promise<void> {
+    const discarded = await this.requireStore().closeReadyDraft(accountId, messageKey, 'scartata')
+
+    if (discarded) {
+      this.emitNotes({ accountId, messageKeys: [messageKey], threadIds: [discarded.threadId] })
+    }
+  }
+
   async closeCommitment(id: number): Promise<void> {
     const closed = await this.requireStore().closeCommitment(id)
 
@@ -634,6 +664,253 @@ export class SegretarioService {
       logMainError('Segretario: triage round failed', error)
     } finally {
       this.triaging = false
+      // With the notes written, the replies they call for.
+      void this.prepareReadyDrafts()
+    }
+  }
+
+  /**
+   * Prepares, one at a time, the replies the user will want: for each
+   * conversation that waits on the user's answer and matters, the reply in
+   * their voice, from the conversation, what is known of the person and how
+   * the user writes to them. It stays a proposal until the user takes it up.
+   */
+  private async prepareReadyDrafts(): Promise<void> {
+    if (this.preparing || !this.store || this.status.keyState !== 'ready') {
+      return
+    }
+
+    this.preparing = true
+
+    try {
+      const store = this.store
+
+      while ((await store.getPreferences()).readyDrafts && this.status.keyState === 'ready') {
+        const since = new Date(Date.now() - TRIAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+        const wanted = (
+          await store.messagesWantingReadyDraft(
+            since.toISOString(),
+            READY_DRAFT_BATCH + this.readyDraftFailures.size
+          )
+        )
+          .filter(
+            (item) =>
+              (this.readyDraftFailures.get(`${item.accountId}\u0000${item.messageKey}`) ?? 0) <
+              TRIAGE_ATTEMPTS
+          )
+          .slice(0, READY_DRAFT_BATCH)
+
+        if (wanted.length === 0) {
+          return
+        }
+
+        const key = await this.requireKey()
+        const accounts = await this.options.mail.listAccounts()
+        const notes = await store.listMemory()
+
+        for (const item of wanted) {
+          if (!(await this.prepareReadyDraft(item, key, accounts, notes))) {
+            return
+          }
+        }
+      }
+    } catch (error) {
+      logMainError('Segretario: preparing replies failed', error)
+    } finally {
+      this.preparing = false
+    }
+  }
+
+  private async prepareReadyDraft(
+    item: { accountId: string; messageKey: string; threadId: string },
+    key: string,
+    accounts: ReadonlyArray<MailAccount>,
+    notes: ReadonlyArray<{ path: string; content: string }>
+  ): Promise<boolean> {
+    const failureKey = `${item.accountId}\u0000${item.messageKey}`
+
+    try {
+      const store = this.requireStore()
+      const account = accounts.find((candidate) => candidate.id === item.accountId)
+      const located = await this.options.mail.refForKey(item.accountId, item.messageKey)
+      const [note] = await store.getNotes([item])
+
+      if (!account || !located || !note) {
+        // Gone meanwhile: the account, the message, its note.
+        this.readyDraftFailures.set(failureKey, TRIAGE_ATTEMPTS)
+        return true
+      }
+
+      const own = new Set(accounts.map((candidate) => candidate.email.toLowerCase()))
+      const { target, thread, people, accountNote } = await this.conversationFor(
+        { ...item, ref: located.ref, dateIso: located.dateIso },
+        account,
+        own,
+        notes
+      )
+      const sender = target.from[0]?.address
+      const examples = sender ? await this.repliesTo(account, accounts, sender) : []
+      const tu = notes.find((candidate) => candidate.path === 'tu.md')
+      const style = notes.find((candidate) => candidate.path === 'stile.md')
+
+      const result = await this.client.chat(key, {
+        messages: [
+          {
+            role: 'system',
+            content: [
+              PROMPTS.readyDraft,
+              tu ? `# Chi è l'utente\n\n${tu.content.trim()}` : null,
+              style ? `# Come scrive l'utente\n\n${style.content.trim()}` : null
+            ]
+              .filter(Boolean)
+              .join('\n\n')
+          },
+          {
+            role: 'user',
+            content: readyDraftRequest({
+              today: new Date(),
+              accountEmail: account.email,
+              accountName: account.displayName,
+              accountNote: accountNote?.content ?? null,
+              people,
+              note: { summary: note.summary, due: note.due },
+              thread,
+              examples
+            })
+          }
+        ],
+        reasoningEffort: 'low',
+        maxTokens: 3000,
+        responseSchema: { name: 'risposta', schema: READY_DRAFT_SCHEMA }
+      })
+
+      await this.recordUsage(null, 'risposta-pronta', result)
+      const draft = parseReadyDraft(result.content)
+
+      await store.saveReadyDraft({ ...item, text: draft.text, doubts: draft.doubts })
+      this.readyDraftFailures.delete(failureKey)
+      this.emitNotes({
+        accountId: item.accountId,
+        messageKeys: [item.messageKey],
+        threadIds: [item.threadId]
+      })
+      return true
+    } catch (error) {
+      if (error instanceof SegretarioError) {
+        if (error.code === 'no-credit' || error.code === 'invalid-key') {
+          void this.checkKey()
+          return false
+        }
+
+        if (error.retryable) {
+          return false
+        }
+      }
+
+      const attempts = (this.readyDraftFailures.get(failureKey) ?? 0) + 1
+      this.readyDraftFailures.set(failureKey, attempts)
+
+      if (attempts === TRIAGE_ATTEMPTS) {
+        logMainError('Segretario: a reply could not be prepared', error, {
+          messageKey: item.messageKey
+        })
+      }
+
+      return true
+    }
+  }
+
+  /** The user's latest replies to someone from an account: how they write to them. */
+  private async repliesTo(
+    account: MailAccount,
+    accounts: ReadonlyArray<MailAccount>,
+    address: string
+  ): Promise<Array<{ date: string; subject: string; text: string }>> {
+    const mail = this.options.mail
+    const scope = searchScope(
+      accounts,
+      new Map([[account.id, await mail.listFolders(account.id)]]),
+      {
+        accounts: [account.email],
+        folder: 'inviata'
+      }
+    )
+    const hits = await searchMail(await mail.searchClient(), scope, {
+      text: `a:${address}`,
+      limit: READY_DRAFT_EXAMPLES
+    })
+    const examples: Array<{ date: string; subject: string; text: string }> = []
+
+    for (const hit of hits) {
+      const message = await mail.readMessage(hit.ref)
+      examples.push({
+        date: formatDateTime(message.date),
+        subject: message.subject,
+        text: withoutQuotedHistory(message.textForReading).text
+      })
+    }
+
+    return examples
+  }
+
+  /**
+   * A message as the work done ahead reads it: the conversation up to it,
+   * what is known of the account and of the people involved.
+   */
+  private async conversationFor(
+    item: { ref: MessageRef; messageKey: string; threadId: string; dateIso: string },
+    account: MailAccount,
+    own: ReadonlySet<string>,
+    notes: ReadonlyArray<{ path: string; content: string }>
+  ): Promise<{
+    target: Awaited<ReturnType<SegretarioMailPort['readMessage']>>
+    thread: TriageMessage[]
+    people: Array<{ path: string; content: string }>
+    accountNote: { path: string; content: string } | undefined
+  }> {
+    const mail = this.options.mail
+    const target = await mail.readMessage(item.ref)
+    const earlier = (
+      await threadMessages(
+        await mail.searchClient(),
+        account.id,
+        item.threadId,
+        await mail.listFolders(account.id),
+        item.dateIso
+      )
+    ).filter((ref) => !(ref.folderPath === item.ref.folderPath && ref.uid === item.ref.uid))
+    const thread: TriageMessage[] = []
+
+    for (const ref of earlier.slice(-TRIAGE_EARLIER_MESSAGES)) {
+      const message = await mail.readMessage(ref)
+
+      if (message.messageKey !== item.messageKey) {
+        thread.push(triageMessage(message, false))
+      }
+    }
+
+    thread.push(triageMessage(target, true))
+
+    const addresses = new Set(
+      thread
+        .flatMap((message) => [...message.from, ...message.to, ...message.cc])
+        .map((address) => address.address.toLowerCase())
+        .filter((address) => !own.has(address))
+    )
+
+    return {
+      target,
+      thread,
+      people: notes
+        .filter(
+          (note) =>
+            note.path.startsWith('persone/') &&
+            [...addresses].some((address) => note.content.toLowerCase().includes(address))
+        )
+        .slice(0, TRIAGE_PEOPLE_NOTES),
+      accountNote: notes.find(
+        (note) => note.path === normalizeMemoryPath(`account/${account.email}`)
+      )
     }
   }
 
@@ -652,45 +929,12 @@ export class SegretarioService {
 
     try {
       const store = this.requireStore()
-      const mail = this.options.mail
       const own = new Set(accounts.map((candidate) => candidate.email.toLowerCase()))
-      const target = await mail.readMessage(item.ref)
-      const earlier = (
-        await threadMessages(
-          await mail.searchClient(),
-          account.id,
-          item.threadId,
-          await mail.listFolders(account.id),
-          item.dateIso
-        )
-      ).filter((ref) => !(ref.folderPath === item.ref.folderPath && ref.uid === item.ref.uid))
-      const thread: TriageMessage[] = []
-
-      for (const ref of earlier.slice(-TRIAGE_EARLIER_MESSAGES)) {
-        const message = await mail.readMessage(ref)
-
-        if (message.messageKey !== item.messageKey) {
-          thread.push(triageMessage(message, false))
-        }
-      }
-
-      thread.push(triageMessage(target, true))
-
-      const addresses = new Set(
-        thread
-          .flatMap((message) => [...message.from, ...message.to, ...message.cc])
-          .map((address) => address.address.toLowerCase())
-          .filter((address) => !own.has(address))
-      )
-      const people = notes
-        .filter(
-          (note) =>
-            note.path.startsWith('persone/') &&
-            [...addresses].some((address) => note.content.toLowerCase().includes(address))
-        )
-        .slice(0, TRIAGE_PEOPLE_NOTES)
-      const accountNote = notes.find(
-        (note) => note.path === normalizeMemoryPath(`account/${account.email}`)
+      const { target, thread, people, accountNote } = await this.conversationFor(
+        item,
+        account,
+        own,
+        notes
       )
       const tu = notes.find((note) => note.path === 'tu.md')
       const open = await store.openCommitments(account.id, item.threadId)

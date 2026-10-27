@@ -111,10 +111,12 @@ export interface Commitment {
   closedBy: 'segretario' | 'utente' | null
 }
 
-/** A conversation as the reader shows it: its latest note and what is open in it. */
+/** A conversation as the reader shows it: its latest note, what is open in it, the reply prepared. */
 export interface ThreadBrief {
   note: MessageNote | null
   commitments: Commitment[]
+  /** A reply the Segretario prepared ahead for the latest message, until taken up or set aside. */
+  readyDraft: { messageKey: string; text: string; doubts: string } | null
 }
 
 /** Notes were written or changed: the views showing these refresh. */
@@ -333,6 +335,9 @@ export const SEGRETARIO_IPC = {
   getThreadBrief: 'segretario:get-thread-brief',
   closeCommitment: 'segretario:close-commitment',
   dismissNote: 'segretario:dismiss-note',
+  takeUpReadyDraft: 'segretario:take-up-ready-draft',
+  discardReadyDraft: 'segretario:discard-ready-draft',
+  readyDraftSource: 'segretario:ready-draft-source',
   notesChanged: 'segretario:notes-changed',
   listActivities: 'segretario:list-activities',
   getActivity: 'segretario:get-activity',
@@ -382,6 +387,11 @@ export interface SegretarioApi {
   /** The user said a message is handled: it leaves "Da gestire". */
   dismissNote: (accountId: string, messageKey: string) => Promise<void>
   onNotesChanged: (listener: (change: NotesChange) => void) => () => void
+  /** Where the message a prepared reply answers is, to open the reply on it. */
+  readyDraftSource: (accountId: string, messageKey: string) => Promise<MessageRef | null>
+  /** The user took a prepared reply up: it became draft `draftId`, and is learnt from like the others. */
+  takeUpReadyDraft: (accountId: string, messageKey: string, draftId: string) => Promise<void>
+  discardReadyDraft: (accountId: string, messageKey: string) => Promise<void>
   listActivities: () => Promise<ActivitySummary[]>
   getActivity: (id: string) => Promise<ActivityDetail | null>
   /** Begins a new activity with what the user asked. */
