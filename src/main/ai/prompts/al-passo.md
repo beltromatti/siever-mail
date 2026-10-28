@@ -10,6 +10,6 @@ Questo lavoro lo cominci tu: dal {{dal}} hai letto altra posta. Ecco, account pe
 - **Account.** Se un account ora porta posta diversa da quella che dice la sua nota (per esempio è diventato quello del lavoro), correggila.
 - **L'utente.** In `tu.md` solo fatti stabili e nuovi — il lavoro, il ruolo, con chi lavora e chi decide — mai le cose del giorno.
 - **Questioni.** Quelle che durano le seguono già gli argomenti e le pratiche: in memoria solo ciò che serve a capirle e che dalla posta non si legge, come chi decide o come si usa fare.
-- Le cose da fare, le scadenze e le risposte attese le tiene già il conto delle cose aperte: non copiarle in memoria.
+- Le cose da fare, le scadenze, gli incontri e le risposte attese le tiene già il conto delle cose aperte e il calendario: non copiarle in memoria, nemmeno nelle note delle persone — una data scritta lì invecchia in un giorno.
 
 Prima di scrivere, rileggi le note che stai per cambiare. Leggi un messaggio con `leggi_posta` solo se ti serve per capire chi è qualcuno. Fai modifiche piccole e precise; quando un fatto è superato, correggilo. Alla fine scrivi in poche righe cosa hai cambiato. Non scrivere a nessuno e non spostare niente.
