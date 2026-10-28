@@ -2499,7 +2499,14 @@ export class SegretarioService {
           twinAccountId: null
         },
         {
-          opened: triage.opened,
+          // What it says of the message holds: noise opens nothing, and what is
+          // only to know asks nothing of the user — at most something awaited.
+          opened:
+            triage.state === 'rumore'
+              ? []
+              : triage.state === 'informativo'
+                ? triage.opened.filter((item) => item.kind === 'aspetti')
+                : triage.opened,
           updated: triage.updated.filter((change) => touchable(change.id)),
           closed: triage.closed.filter(touchable),
           repeated
