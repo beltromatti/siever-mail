@@ -91,7 +91,8 @@ import {
   READY_DRAFT_SCHEMA,
   readyDraftRequest,
   WRITING_SCHEMA,
-  writingRequest
+  writingRequest,
+  type TopicAround
 } from './ready-drafts'
 import { fillTemplate, PROMPTS } from './prompts'
 import {
@@ -152,6 +153,8 @@ const EXTENSION_TOPICS_SYNC_MS = 10 * 60 * 1000
 const TRIAGE_BACKLOG_COUNTED = 200
 /** How many things open in a conversation's topic triage is shown, the latest. */
 const TOPIC_OPEN_SHOWN = 20
+/** How many of the topic's other conversations a reply is told of, the latest. */
+const TOPIC_AROUND_SHOWN = 8
 /** How many of the topic's other conversations, moved on since a message read late, it is told of. */
 const TOPIC_LATER_SHOWN = 6
 /** How many of the sender's recent conversations are looked at, and how many still open shown. */
@@ -992,7 +995,8 @@ export class SegretarioService {
             thread: conversation?.thread ?? null,
             writtenText: request.writtenText,
             selectedText: request.selectedText,
-            instruction: request.instruction
+            instruction: request.instruction,
+            topic: original ? await this.topicAround(account.id, original.threadId) : null
           })
         }
       ],
@@ -2073,7 +2077,8 @@ export class SegretarioService {
               note: { summary: note.summary, due: note.due },
               thread,
               examples,
-              awaited
+              awaited,
+              topic: await this.topicAround(item.accountId, item.threadId)
             })
           }
         ],
@@ -2215,6 +2220,42 @@ export class SegretarioService {
 
     if (topicId) {
       await topics.link(accountId, threadId, topicId, 'segretario')
+    }
+  }
+
+  /**
+   * Where the topic of a conversation — a pratica — stands in its other
+   * conversations: the latest of each, and what is open in them. What is
+   * written there must not contradict what happened elsewhere. Null for a
+   * conversation in no topic.
+   */
+  private async topicAround(accountId: string, threadId: string): Promise<TopicAround | null> {
+    const topics = this.requireTopics()
+    const store = this.requireStore()
+    const filed = await topics.threadTopic(accountId, threadId)
+
+    if (!filed) {
+      return null
+    }
+
+    const others = (
+      await topics.threadsOf(filed.topic.id, await this.options.mail.includedAccountIds())
+    ).filter((other) => other.accountId !== accountId || other.threadId !== threadId)
+    const [notes, commitments] = await Promise.all([
+      store.latestNotes(others),
+      store.commitmentsOf(others)
+    ])
+
+    return {
+      title: filed.topic.title,
+      latest: notes
+        .filter((note) => note.state !== 'rumore')
+        .sort((a, b) => b.messageDate.localeCompare(a.messageDate))
+        .slice(0, TOPIC_AROUND_SHOWN)
+        .map((note) => ({ date: note.messageDate, summary: note.summary })),
+      open: commitments
+        .filter((commitment) => commitment.status === 'aperto')
+        .slice(-TOPIC_OPEN_SHOWN)
     }
   }
 

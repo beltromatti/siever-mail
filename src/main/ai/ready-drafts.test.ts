@@ -41,9 +41,17 @@ describe('readyDraftRequest', () => {
       ],
       examples: [
         { date: '12 ott 2026, 10:00', subject: 'Re: Sopralluogo', text: 'Ciao Anna, confermo.' }
-      ]
+      ],
+      topic: {
+        title: 'Prat2470 · HOTEL LIDO ESTENSE',
+        latest: [{ date: '2026-10-28T07:12:00.000Z', summary: 'Il GSE ammette la pratica' }],
+        open: []
+      }
     })
 
+    expect(request).toMatch(
+      /## In Prat2470 · HOTEL LIDO ESTENSE, nelle altre conversazioni\n\nLe ultime notizie, dalla più recente:\n- .*28\/10\/2026.*: Il GSE ammette la pratica/
+    )
     expect(request).toContain('▶ IL MESSAGGIO A CUI RISPONDERE')
     expect(request).not.toContain('Cose già aperte')
     expect(request).toContain('Anna chiede l’offerta entro venerdì (entro 2026-10-30)')

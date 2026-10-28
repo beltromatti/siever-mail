@@ -1,6 +1,8 @@
 import { z } from 'zod'
 
-import { clip } from './tools/format'
+import type { Commitment, CommitmentKind } from '@shared/segretario'
+
+import { clip, formatDateTime } from './tools/format'
 import { triageRequest, type TriageMessage } from './triage'
 
 /** What the model hands back for a reply prepared ahead. */
@@ -29,6 +31,48 @@ export function parseReadyDraft(content: string): { text: string; doubts: string
  * conversation, what the note made of the message, and some of the user's
  * own replies to the same person — how they write to them.
  */
+/** Where the conversation's topic — a pratica — stands in its other conversations. */
+export interface TopicAround {
+  title: string
+  /** The latest note of each of its other conversations, the newest first. */
+  latest: ReadonlyArray<{ date: string; summary: string }>
+  /** What is still open in them. */
+  open: ReadonlyArray<Commitment>
+}
+
+/** What happened elsewhere in the pratica, for a reply not to contradict it. */
+function topicAroundSection(topic: TopicAround | null | undefined): string | null {
+  if (!topic || (topic.latest.length === 0 && topic.open.length === 0)) {
+    return null
+  }
+
+  return [
+    `## In ${topic.title}, nelle altre conversazioni`,
+    topic.latest.length > 0
+      ? `Le ultime notizie, dalla più recente:\n${topic.latest
+          .map((note) => `- ${formatDateTime(note.date)}: ${note.summary}`)
+          .join('\n')}`
+      : null,
+    topic.open.length > 0
+      ? `Ancora aperto:\n${topic.open
+          .map(
+            (item) =>
+              `- ${COMMITMENT_WORDS[item.kind]}: ${item.text}${item.due ? ` (entro ${item.due})` : ''}`
+          )
+          .join('\n')}`
+      : null
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+const COMMITMENT_WORDS: Readonly<Record<CommitmentKind, string>> = {
+  ti_chiedono: "chiedono all'utente",
+  hai_promesso: "l'utente ha promesso",
+  aspetti: "l'utente aspetta",
+  da_fare: "l'utente deve"
+}
+
 export function readyDraftRequest(input: {
   today: Date
   accountEmail: string
@@ -40,6 +84,8 @@ export function readyDraftRequest(input: {
   examples: ReadonlyArray<{ date: string; subject: string; text: string }>
   /** For a reminder: what the user waits for, as the notes have it. */
   awaited?: ReadonlyArray<{ text: string; due: string | null }>
+  /** The pratica the conversation is in, as it stands elsewhere. */
+  topic?: TopicAround | null
 }): string {
   const context = triageRequest({
     today: input.today,
@@ -71,13 +117,16 @@ export function readyDraftRequest(input: {
 
   return [
     context,
+    topicAroundSection(input.topic),
     input.awaited
       ? `## Cosa aspetta l'utente, secondo le tue note\n\n${input.awaited
           .map((item) => `- ${item.text}${item.due ? ` (era atteso entro ${item.due})` : ''}`)
           .join('\n')}`
       : `## Cosa chiede, secondo la tua nota\n\n${input.note.summary}${input.note.due ? ` (entro ${input.note.due})` : ''}`,
     `## Come l'utente ha scritto a questa persona\n\n${examples}`
-  ].join('\n\n')
+  ]
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 /** What the model hands back when asked to write while the user writes: the whole text. */
@@ -118,6 +167,8 @@ export function writingRequest(input: {
   /** The passage selected, when only it is to be rewritten. */
   selectedText?: string | null
   instruction: string
+  /** The pratica the conversation answered is in, as it stands elsewhere. */
+  topic?: TopicAround | null
 }): string {
   const header = [
     `Oggi è ${new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(input.today)}.`,
@@ -153,6 +204,7 @@ export function writingRequest(input: {
   return [
     header,
     context,
+    topicAroundSection(input.topic),
     `## Il testo scritto finora\n\n${input.writtenText.trim() || '(vuoto)'}`,
     input.selectedText?.trim()
       ? `## Il passaggio selezionato, il solo da riscrivere\n\n${input.selectedText.trim()}`

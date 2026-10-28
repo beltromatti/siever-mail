@@ -770,8 +770,12 @@ is (`NotificationManager.setSegretarioReading`, `noteWritten`).
 on the user's answer and matters (to answer, medium or high priority), the
 Segretario writes the reply after triage, one at a time
 (`ready-drafts.ts`, `risposta-pronta.md`): the conversation, the notes on
-the user, their style and the people involved, and up to three of the
-user's own replies to the same person, so the voice is theirs. It stays a
+the user, their style and the people involved, up to three of the user's
+own replies to the same person, so the voice is theirs, and — for a
+conversation in a pratica — where the pratica stands in its other
+conversations (`topicAround`: the latest note of each and what is open), so
+news that came elsewhere is not contradicted; reminders and ⌘J read it too.
+It stays a
 proposal in "Il punto" — "Usa questa risposta" opens it in the composer as
 a reply, recorded like the Segretario's other drafts so the user's edits
 are learnt from; "Scarta" sets it aside. Both can be switched off.
