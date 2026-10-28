@@ -133,6 +133,8 @@ const DRAFT_RECORD_TTL_MS = 90 * 24 * 60 * 60 * 1000
 const EXTENSION_TOPICS_SYNC_MS = 10 * 60 * 1000
 /** Past this many conversations waiting to be read, the day's page just says it is reading. */
 const TRIAGE_BACKLOG_COUNTED = 200
+/** How many things open in a conversation's topic triage is shown, the latest. */
+const TOPIC_OPEN_SHOWN = 20
 /** How many messages a search asked in words lists, the most relevant first. */
 const ASK_MAIL_LIMIT = 200
 /** How many of those searches are kept, for their lists to be opened again. */
@@ -1551,22 +1553,38 @@ export class SegretarioService {
         const notes = await store.listMemory()
         // The topics conversations are filed into: read once a round, grown as it creates them.
         const catalog = await this.requireTopics().catalog()
-        const queue = [...threads]
+        const queue = await this.triageLanes(threads, catalog)
         let reachable = true
 
-        // Conversations side by side; within one, its messages in the order
-        // they were written: what one opens, a later one may close.
+        // Lanes side by side: a pratica's conversations one after the other in
+        // one lane, so what one opens the next sees; within a conversation,
+        // its messages in the order they were written. An answer that does
+        // not hold is asked for again at once, not after the messages that
+        // follow it.
         await Promise.all(
           Array.from({ length: TRIAGE_CONCURRENCY }, async () => {
-            for (let thread = queue.shift(); thread && reachable; thread = queue.shift()) {
-              for (const message of thread.messages) {
-                reachable = await this.triageOne(
-                  { ...message, threadId: thread.threadId },
-                  key,
-                  accounts,
-                  notes,
-                  catalog
-                )
+            for (let lane = queue.shift(); lane && reachable; lane = queue.shift()) {
+              for (const thread of lane) {
+                for (const message of thread.messages) {
+                  const failures = (): number =>
+                    this.triageFailures.get(
+                      `${message.ref.accountId}\u0000${message.messageKey}`
+                    ) ?? 0
+
+                  do {
+                    reachable = await this.triageOne(
+                      { ...message, threadId: thread.threadId },
+                      key,
+                      accounts,
+                      notes,
+                      catalog
+                    )
+                  } while (reachable && failures() > 0 && failures() < TRIAGE_ATTEMPTS)
+
+                  if (!reachable) {
+                    break
+                  }
+                }
 
                 if (!reachable) {
                   break
@@ -1589,6 +1607,61 @@ export class SegretarioService {
       void this.prepareReadyDrafts()
       void this.writeTopicGists()
     }
+  }
+
+  /**
+   * The conversations to read, in lanes: those of the same topic — filed
+   * in it already, or naming it in their subject — in one lane, read one
+   * after the other, so the same thing is not opened twice in a pratica by
+   * two of its conversations read at once; the others each in their own.
+   */
+  private async triageLanes<
+    T extends {
+      accountId: string
+      threadId: string
+      messages: ReadonlyArray<{ messageKey: string; dateIso: string }>
+    }
+  >(threads: ReadonlyArray<T>, catalog: ReadonlyArray<CatalogTopic>): Promise<T[][]> {
+    const filed = await this.requireTopics().topicIdsOf(threads)
+    const subjects = new Map<string, string>()
+
+    for (const accountId of new Set(threads.map((thread) => thread.accountId))) {
+      const ofAccount = threads.filter((thread) => thread.accountId === accountId)
+      const summaries = await this.options.mail.messageSummaries(
+        accountId,
+        ofAccount.flatMap((thread) =>
+          thread.messages.slice(0, 1).map((message) => message.messageKey)
+        )
+      )
+
+      for (const thread of ofAccount) {
+        const first = thread.messages[0]
+        const subject = first ? summaries.get(first.messageKey)?.subject : undefined
+
+        if (subject) {
+          subjects.set(`${accountId}\u0000${thread.threadId}`, subject)
+        }
+      }
+    }
+
+    const lanes = new Map<string, T[]>()
+
+    threads.forEach((thread, index) => {
+      const named = namedTopicIndexes(catalog, [
+        { subject: subjects.get(`${thread.accountId}\u0000${thread.threadId}`) ?? '', text: '' }
+      ])
+      const topic = filed[index] ?? (named.length === 1 ? catalog[named[0]].id : null)
+      const lane = topic ?? `\u0000${thread.accountId}\u0000${thread.threadId}`
+      lanes.set(lane, [...(lanes.get(lane) ?? []), thread])
+    })
+
+    // In a lane, the conversations in the order they began: an obligation is
+    // read where it starts, before the replies that answer it.
+    return [...lanes.values()].map((lane) =>
+      [...lane].sort((a, b) =>
+        (a.messages[0]?.dateIso ?? '').localeCompare(b.messages[0]?.dateIso ?? '')
+      )
+    )
   }
 
   /**
@@ -2071,6 +2144,21 @@ export class SegretarioService {
       const filed = await topics.threadTopic(account.id, item.threadId)
       const filedIndex = filed ? catalog.findIndex((topic) => topic.id === filed.topic.id) : -1
       const named = namedTopicIndexes(catalog, thread)
+      // What is open in the rest of its topic: the same thing is not opened twice in a pratica.
+      const topic = filed?.topic ?? (named.length === 1 ? catalog[named[0]] : null)
+      const openInTopic = topic
+        ? (
+            await store.commitmentsOf(
+              (
+                await topics.threadsOf(topic.id, await this.options.mail.includedAccountIds())
+              ).filter(
+                (other) => other.accountId !== account.id || other.threadId !== item.threadId
+              )
+            )
+          )
+            .filter((commitment) => commitment.status === 'aperto')
+            .slice(-TOPIC_OPEN_SHOWN)
+        : []
 
       const result = await this.client.chat(key, {
         messages: [
@@ -2096,6 +2184,8 @@ export class SegretarioService {
               open,
               thread,
               named: named.map((index) => namedTopicLine(catalog, index)),
+              openInTopic:
+                topic && openInTopic.length > 0 ? { title: topic.title, items: openInTopic } : null,
               topicsLabel: this.topicsLabel(),
               currentTopic:
                 filed && filedIndex >= 0
@@ -2108,8 +2198,12 @@ export class SegretarioService {
             })
           }
         ],
-        reasoningEffort: 'none',
-        maxTokens: 1000,
+        // A moment's thought where a pratica already has things open elsewhere:
+        // telling the same obligation in other words from a new one takes it.
+        // Reasoning counts against the tokens.
+        ...(openInTopic.length > 0
+          ? { reasoningEffort: 'low' as const, maxTokens: 4000 }
+          : { reasoningEffort: 'none' as const, maxTokens: 1000 }),
         responseSchema: { name: 'nota', schema: TRIAGE_SCHEMA }
       })
 
@@ -2131,8 +2225,20 @@ export class SegretarioService {
           twinAccountId: null
         },
         triage.opened,
-        triage.closed.filter((id) => open.some((commitment) => commitment.id === id))
+        triage.closed.filter((id) =>
+          [...open, ...openInTopic].some((commitment) => commitment.id === id)
+        )
       )
+      // Things closed in the topic's other conversations: their readers follow.
+      for (const closed of openInTopic.filter((commitment) =>
+        triage.closed.includes(commitment.id)
+      )) {
+        this.emitNotes({
+          accountId: closed.accountId,
+          messageKeys: [],
+          threadIds: [closed.threadId]
+        })
+      }
       // Noise belongs to no matter, whatever words it shares with one.
       if (triage.state !== 'rumore') {
         await this.fileIntoTopic(

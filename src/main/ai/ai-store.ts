@@ -774,13 +774,9 @@ export class AiStore {
           createdAt: now
         }))
       }),
+      // Only what the caller let it close: this conversation's, or its topic's.
       this.prisma.aiItem.updateMany({
-        where: {
-          id: { in: [...closedIds] },
-          accountId: note.accountId,
-          threadId: note.threadId,
-          status: 'aperto'
-        },
+        where: { id: { in: [...closedIds] }, status: 'aperto' },
         data: { status: 'chiuso', closedAt: now, closedBy: 'segretario' }
       }),
       // What was prepared for an earlier message of the conversation is past: it moved on.

@@ -182,11 +182,9 @@ export interface TriageMessage {
   target: boolean
 }
 
-const KIND_LABELS: Readonly<Record<CommitmentKind, string>> = {
-  ti_chiedono: 'gli chiedono',
-  hai_promesso: 'ha promesso',
-  aspetti: 'aspetta',
-  da_fare: 'da fare'
+/** An open thing as the model reads it: its number, its kind as the schema names it, its words. */
+function openLine(item: Commitment): string {
+  return `- [${item.id}] ${item.kind}: ${item.text}${item.due ? ` (entro ${item.due})` : ''}`
 }
 
 /**
@@ -205,6 +203,8 @@ export function triageRequest(input: {
   thread: ReadonlyArray<TriageMessage>
   /** The catalogue key of the topic the conversation is already filed in. */
   currentTopic?: { key: string; title: string; byUser: boolean } | null
+  /** What is open in the rest of the conversation's topic — a pratica's other conversations. */
+  openInTopic?: { title: string; items: ReadonlyArray<Commitment> } | null
   /** Catalogue lines of the topics the conversation names. */
   named?: ReadonlyArray<string>
   topicsLabel?: string
@@ -245,14 +245,15 @@ export function triageRequest(input: {
 
   sections.push(
     input.open.length > 0
-      ? `## Cose già aperte in questa conversazione\n\n${input.open
-          .map(
-            (item) =>
-              `- [${item.id}] l'utente ${KIND_LABELS[item.kind]}: ${item.text}${item.due ? ` (entro ${item.due})` : ''}`
-          )
-          .join('\n')}`
+      ? `## Cose già aperte in questa conversazione\n\n${input.open.map(openLine).join('\n')}`
       : '## Cose già aperte in questa conversazione\n\nNessuna.'
   )
+
+  if (input.openInTopic && input.openInTopic.items.length > 0) {
+    sections.push(
+      `## Cose già aperte in ${input.openInTopic.title}, in altre conversazioni\n\n${input.openInTopic.items.map(openLine).join('\n')}`
+    )
+  }
 
   sections.push(
     `## La conversazione, dal più vecchio\n\n${input.thread

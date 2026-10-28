@@ -709,9 +709,17 @@ and sent mail, gets a note once its text is indexed: one quick call
 without reasoning, held to a JSON schema (`triage.ts`, `smistamento.md`),
 with the account's note, the notes on the people involved, what is
 already open in the conversation and the conversation up to the message.
-Conversations go newest first, the messages of each in the order they were
-written, so what one opens a later one can close; a network or OpenRouter
-failure ends the round and the next one, 20 seconds later, tries again. The
+A conversation in a pratica — filed in its topic, or naming it in the
+subject — also gets what is open in the topic's other conversations (the
+latest 20), may close those, and is not to open the same obligation again
+in other words; for that judgement the call reasons briefly. Conversations
+go in lanes (`triageLanes`): those of one topic in one lane, read one after
+the other in the order they began, so what one opens the next sees; the
+others each in their own, three lanes at once. Within a conversation the
+messages go in the order they were written, so what one opens a later one
+can close; an answer that does not hold the schema is asked for again at
+once, before the next message. A network or OpenRouter failure ends the
+round and the next one, 20 seconds later, tries again. The
 note shows in the row in the Segretario's colour — "Rispondi · entro 30
 ott" and the gist — and at the top of the reader as "Il punto", with what is
 open to tick off and "Segna come gestito". It can be switched off in

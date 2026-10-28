@@ -153,7 +153,7 @@ describe('triageRequest', () => {
     expect(request).toContain("arrivato all'utente")
     expect(request).toContain('La casella di lavoro.')
     expect(request).toContain('### persone/anna-rossi.md\nCliente storica.')
-    expect(request).toContain("- [7] l'utente aspetta: Conferma del sopralluogo")
+    expect(request).toContain('- [7] aspetti: Conferma del sopralluogo')
     expect(request.indexOf('Ci confermi giovedì?')).toBeLessThan(
       request.indexOf('▶ IL MESSAGGIO DA ANNOTARE')
     )
@@ -201,5 +201,55 @@ describe('the topic catalogue', () => {
       '[T1] Prat2495 · ENERGIA VERDE',
       '[T2] Prat2310 · MOLINO SPADONI'
     ])
+  })
+})
+
+describe('triageRequest with its topic', () => {
+  it('shows what is open in the rest of the pratica, to close and not to reopen', () => {
+    const request = triageRequest({
+      today: new Date(2026, 9, 28),
+      accountEmail: 'm@example.com',
+      accountName: 'Mattia',
+      accountNote: null,
+      fromUser: false,
+      people: [],
+      open: [],
+      thread: [
+        {
+          date: '2026-10-27T09:00:00.000Z',
+          from: [{ name: 'Laura', address: 'laura@comune.example' }],
+          to: [],
+          cc: [],
+          subject: 'Integrazioni',
+          text: 'Ricevute le integrazioni, grazie.',
+          target: true
+        }
+      ],
+      openInTopic: {
+        title: 'Prat2463 · COMUNE DI COPPARO',
+        items: [
+          {
+            id: 41,
+            accountId: 'a',
+            threadId: 't2',
+            messageKey: 'k',
+            kind: 'da_fare',
+            text: 'Trasmettere le integrazioni ai VVF',
+            due: '2026-11-16',
+            status: 'aperto',
+            createdAt: 0,
+            closedAt: null,
+            closedBy: null
+          }
+        ]
+      }
+    })
+
+    expect(request).toContain(
+      '## Cose già aperte in Prat2463 · COMUNE DI COPPARO, in altre conversazioni'
+    )
+    expect(request).toContain(
+      '- [41] da_fare: Trasmettere le integrazioni ai VVF (entro 2026-11-16)'
+    )
   })
 })
