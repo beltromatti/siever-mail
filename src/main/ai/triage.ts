@@ -26,6 +26,7 @@ export const TRIAGE_SCHEMA = {
     'impegni_nuovi',
     'impegni_aggiornati',
     'impegni_chiusi',
+    'ripete',
     'argomento'
   ],
   properties: {
@@ -61,7 +62,8 @@ export const TRIAGE_SCHEMA = {
         }
       }
     },
-    impegni_chiusi: { type: 'array', items: { type: 'integer' } }
+    impegni_chiusi: { type: 'array', items: { type: 'integer' } },
+    ripete: { type: 'array', items: { type: 'string' } }
   }
 } as const
 
@@ -86,6 +88,7 @@ const triageAnswer = z.object({
     z.object({ numero: z.number().int(), testo: z.string().trim().min(1), scadenza: dueDay })
   ),
   impegni_chiusi: z.array(z.number().int()),
+  ripete: z.array(z.string()),
   argomento: z.string().trim()
 })
 
@@ -99,6 +102,8 @@ export interface TriageResult {
   /** Open things this message makes precise — the date set or moved, the words — kept as they are. */
   updated: Array<{ id: number; text: string; due: string | null }>
   closed: number[]
+  /** The sender's earlier conversations this message repeats, by their place in the list it was shown (0 first). */
+  repeats: number[]
   /** The topic it filed the conversation in: a catalogue key ("T12"), a new one, or none. */
   topic: { key: string } | { create: string } | null
 }
@@ -124,6 +129,10 @@ export function parseTriage(content: string): TriageResult {
       due: item.scadenza
     })),
     closed: answer.impegni_chiusi,
+    repeats: answer.ripete.flatMap((key) => {
+      const place = /^\[?R(\d+)\]?$/i.exec(key.trim())
+      return place ? [Number(place[1]) - 1] : []
+    }),
     topic: topicAnswer(answer.argomento)
   }
 }
@@ -229,6 +238,19 @@ export function triageRequest(input: {
   currentTopic?: { key: string; title: string; byUser: boolean } | null
   /** What is open in the rest of the conversation's topic — a pratica's other conversations. */
   openInTopic?: { title: string; items: ReadonlyArray<Commitment> } | null
+  /**
+   * What is still open with the sender in other conversations, each by its
+   * latest note and its open things: what this message may repeat.
+   */
+  fromSender?: {
+    /** The address: a platform's may carry many people's names. */
+    sender: string
+    conversations: ReadonlyArray<{
+      date: string
+      summary: string
+      items: ReadonlyArray<Commitment>
+    }>
+  } | null
   /** Where the topic's other conversations got to after the message, when it is read late. */
   laterInTopic?: { title: string; notes: ReadonlyArray<{ date: string; summary: string }> } | null
   /** Catalogue lines of the topics the conversation names. */
@@ -278,6 +300,19 @@ export function triageRequest(input: {
   if (input.openInTopic && input.openInTopic.items.length > 0) {
     sections.push(
       `## Cose già aperte in ${input.openInTopic.title}, in altre conversazioni\n\n${input.openInTopic.items.map(openLine).join('\n')}`
+    )
+  }
+
+  if (input.fromSender && input.fromSender.conversations.length > 0) {
+    sections.push(
+      `## Ancora aperto con lo stesso indirizzo (${input.fromSender.sender}), in altre conversazioni\n\n${input.fromSender.conversations
+        .map((conversation, index) =>
+          [
+            `- [R${index + 1}] ${formatDateTime(conversation.date)}: ${conversation.summary}`,
+            ...conversation.items.map((item) => `  ${openLine(item)}`)
+          ].join('\n')
+        )
+        .join('\n')}`
     )
   }
 

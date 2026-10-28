@@ -493,6 +493,8 @@ export class MailService {
           .map(({ accountId, threadId, messages }) => ({ accountId, threadId, messages }))
       },
       includedAccountIds: () => this.segretarioAccountIds(),
+      threadsFromSender: (accountId, address, sinceIso, limit) =>
+        this.database.threadsFromSender(accountId, address.trim().toLowerCase(), sinceIso, limit),
       userWroteTo: async (addresses) => {
         const sent = await Promise.all(
           (await this.segretarioAccountIds()).map(async (accountId) => {

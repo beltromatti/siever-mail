@@ -6,9 +6,11 @@ import type { PrismaClient } from '@prisma/client'
 import { logMainError } from '@main/utils/error-utils'
 import type { SegretarioView } from '@shared/folders'
 import type { MailAccount, MailAddress, MessageRef } from '@shared/models'
+import { deriveSenderKey } from '@shared/sender'
 import {
   SEGRETARIO_IPC,
   type ActivityDetail,
+  type NoteState,
   type ActivityEntry,
   type AccountLearning,
   type AskedMail,
@@ -138,6 +140,11 @@ const TRIAGE_BACKLOG_COUNTED = 200
 const TOPIC_OPEN_SHOWN = 20
 /** How many of the topic's other conversations, moved on since a message read late, it is told of. */
 const TOPIC_LATER_SHOWN = 6
+/** How many of the sender's recent conversations are looked at, and how many still open shown. */
+const SENDER_THREADS_LOOKED = 12
+const SENDER_OPEN_SHOWN = 5
+/** A note that still asks something of the user, or waits on someone. */
+const STILL_OPEN_STATES: ReadonlySet<NoteState> = new Set(['da_rispondere', 'da_fare', 'in_attesa'])
 /** How many messages a search asked in words lists, the most relevant first. */
 const ASK_MAIL_LIMIT = 200
 /** How many of those searches are kept, for their lists to be opened again. */
@@ -1556,7 +1563,7 @@ export class SegretarioService {
         const notes = await store.listMemory()
         // The topics conversations are filed into: read once a round, grown as it creates them.
         const catalog = await this.requireTopics().catalog()
-        const queue = await this.triageLanes(threads, catalog)
+        const queue = await this.triageLanes(threads, catalog, accounts)
         let reachable = true
 
         // Lanes side by side: a pratica's conversations one after the other in
@@ -1614,9 +1621,10 @@ export class SegretarioService {
 
   /**
    * The conversations to read, in lanes: those of the same topic — filed
-   * in it already, or naming it in their subject — in one lane, read one
-   * after the other, so the same thing is not opened twice in a pratica by
-   * two of its conversations read at once; the others each in their own.
+   * in it already, or naming it in their subject — or from the same sender
+   * in one lane, read one after the other, so the same thing is not opened
+   * twice by two of them read at once, and a repeat finds what it repeats;
+   * the others each in their own.
    */
   private async triageLanes<
     T extends {
@@ -1624,44 +1632,76 @@ export class SegretarioService {
       threadId: string
       messages: ReadonlyArray<{ messageKey: string; dateIso: string }>
     }
-  >(threads: ReadonlyArray<T>, catalog: ReadonlyArray<CatalogTopic>): Promise<T[][]> {
+  >(
+    threads: ReadonlyArray<T>,
+    catalog: ReadonlyArray<CatalogTopic>,
+    accounts: ReadonlyArray<MailAccount>
+  ): Promise<T[][]> {
+    const own = new Set(accounts.map((account) => account.email.toLowerCase()))
     const filed = await this.requireTopics().topicIdsOf(threads)
-    const subjects = new Map<string, string>()
+    const ties = threads.map((): string[] => [])
 
     for (const accountId of new Set(threads.map((thread) => thread.accountId))) {
-      const ofAccount = threads.filter((thread) => thread.accountId === accountId)
       const summaries = await this.options.mail.messageSummaries(
         accountId,
-        ofAccount.flatMap((thread) =>
-          thread.messages.slice(0, 1).map((message) => message.messageKey)
+        threads.flatMap((thread) =>
+          thread.accountId === accountId ? thread.messages.map((message) => message.messageKey) : []
         )
       )
 
-      for (const thread of ofAccount) {
-        const first = thread.messages[0]
-        const subject = first ? summaries.get(first.messageKey)?.subject : undefined
-
-        if (subject) {
-          subjects.set(`${accountId}\u0000${thread.threadId}`, subject)
+      threads.forEach((thread, index) => {
+        if (thread.accountId !== accountId) {
+          return
         }
-      }
+
+        const read = thread.messages.flatMap((message) => {
+          const summary = summaries.get(message.messageKey)
+          return summary ? [summary] : []
+        })
+        const named = namedTopicIndexes(
+          catalog,
+          read.slice(0, 1).map((summary) => ({ subject: summary.subject, text: '' }))
+        )
+        const topic = filed[index] ?? (named.length === 1 ? catalog[named[0]].id : null)
+        const senders = read
+          .map((summary) => deriveSenderKey(summary.from))
+          .filter((sender) => sender && !own.has(sender))
+
+        ties[index] = [
+          ...(topic ? [`topic\u0000${topic}`] : []),
+          ...senders.map((sender) => `from\u0000${accountId}\u0000${sender}`)
+        ]
+      })
     }
 
-    const lanes = new Map<string, T[]>()
+    // Conversations sharing a topic or a sender, however linked, are one lane.
+    const lane = threads.map((_thread, index) => index)
+    const laneOf = (index: number): number =>
+      lane[index] === index ? index : (lane[index] = laneOf(lane[index]))
+    const firstWith = new Map<string, number>()
+
+    ties.forEach((keys, index) => {
+      for (const key of keys) {
+        const other = firstWith.get(key)
+
+        if (other === undefined) {
+          firstWith.set(key, index)
+        } else {
+          lane[laneOf(index)] = laneOf(other)
+        }
+      }
+    })
+
+    const lanes = new Map<number, T[]>()
 
     threads.forEach((thread, index) => {
-      const named = namedTopicIndexes(catalog, [
-        { subject: subjects.get(`${thread.accountId}\u0000${thread.threadId}`) ?? '', text: '' }
-      ])
-      const topic = filed[index] ?? (named.length === 1 ? catalog[named[0]].id : null)
-      const lane = topic ?? `\u0000${thread.accountId}\u0000${thread.threadId}`
-      lanes.set(lane, [...(lanes.get(lane) ?? []), thread])
+      lanes.set(laneOf(index), [...(lanes.get(laneOf(index)) ?? []), thread])
     })
 
     // In a lane, the conversations in the order they began: an obligation is
     // read where it starts, before the replies that answer it.
-    return [...lanes.values()].map((lane) =>
-      [...lane].sort((a, b) =>
+    return [...lanes.values()].map((members) =>
+      [...members].sort((a, b) =>
         (a.messages[0]?.dateIso ?? '').localeCompare(b.messages[0]?.dateIso ?? '')
       )
     )
@@ -2196,6 +2236,45 @@ export class SegretarioService {
         .filter((note) => note.messageDate > item.dateIso)
         .sort((a, b) => b.messageDate.localeCompare(a.messageDate))
         .slice(0, TOPIC_LATER_SHOWN)
+      // What is still open with the sender elsewhere, before or after it — read
+      // late, the repeat may be read before what it repeats: the same alert,
+      // the same request again.
+      const sender = deriveSenderKey(target.from)
+      const senderThreads =
+        fromUser || !sender
+          ? []
+          : (
+              await this.options.mail.threadsFromSender(
+                account.id,
+                sender,
+                new Date(Date.now() - TRIAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+                SENDER_THREADS_LOOKED
+              )
+            )
+              .filter(
+                (threadId) =>
+                  threadId !== item.threadId &&
+                  !others.some(
+                    (other) => other.accountId === account.id && other.threadId === threadId
+                  )
+              )
+              .map((threadId) => ({ accountId: account.id, threadId }))
+      const senderItems = (await store.commitmentsOf(senderThreads)).filter(
+        (commitment) => commitment.status === 'aperto'
+      )
+      const fromSender = (await store.latestNotes(senderThreads))
+        .filter(
+          (note) =>
+            note.dismissedAt === null &&
+            note.twinAccountId === null &&
+            (STILL_OPEN_STATES.has(note.state) ||
+              senderItems.some((commitment) => commitment.threadId === note.threadId))
+        )
+        .slice(0, SENDER_OPEN_SHOWN)
+        .map((note) => ({
+          note,
+          items: senderItems.filter((commitment) => commitment.threadId === note.threadId)
+        }))
 
       const result = await this.client.chat(key, {
         messages: [
@@ -2223,6 +2302,17 @@ export class SegretarioService {
               named: named.map((index) => namedTopicLine(catalog, index)),
               openInTopic:
                 topic && openInTopic.length > 0 ? { title: topic.title, items: openInTopic } : null,
+              fromSender:
+                fromSender.length > 0
+                  ? {
+                      sender,
+                      conversations: fromSender.map(({ note, items }) => ({
+                        date: note.messageDate,
+                        summary: note.summary,
+                        items
+                      }))
+                    }
+                  : null,
               laterInTopic:
                 topic && laterInTopic.length > 0
                   ? {
@@ -2248,7 +2338,10 @@ export class SegretarioService {
         // A moment's thought where something is open already: telling the same
         // obligation in other words, or made precise, from a new one takes it.
         // Reasoning counts against the tokens.
-        ...(open.length > 0 || openInTopic.length > 0 || laterInTopic.length > 0
+        ...(open.length > 0 ||
+        openInTopic.length > 0 ||
+        laterInTopic.length > 0 ||
+        fromSender.length > 0
           ? { reasoningEffort: 'low' as const, maxTokens: 4000 }
           : { reasoningEffort: 'none' as const, maxTokens: 1000 }),
         responseSchema: { name: 'nota', schema: TRIAGE_SCHEMA }
@@ -2256,12 +2349,24 @@ export class SegretarioService {
 
       await this.recordUsage(null, 'smistamento', result)
       const triage = parseTriage(result.content)
-      // It touches only what it was shown: the conversation's open things and its topic's.
+      // It touches only what it was shown: the conversation's open things, its topic's, the sender's.
+      const shownElsewhere = [...openInTopic, ...fromSender.flatMap(({ items }) => items)]
       const touchable = (id: number): boolean =>
         open.some((commitment) => commitment.id === id) ||
-        openInTopic.some((commitment) => commitment.id === id)
+        shownElsewhere.some((commitment) => commitment.id === id)
+      const repeated = [...new Set(triage.repeats)].flatMap((place) =>
+        fromSender[place]
+          ? [
+              {
+                threadId: fromSender[place].note.threadId,
+                messageKey: fromSender[place].note.messageKey,
+                messageDate: fromSender[place].note.messageDate
+              }
+            ]
+          : []
+      )
 
-      await store.saveTriage(
+      const carried = await store.saveTriage(
         {
           accountId: account.id,
           messageKey: item.messageKey,
@@ -2278,11 +2383,12 @@ export class SegretarioService {
         {
           opened: triage.opened,
           updated: triage.updated.filter((change) => touchable(change.id)),
-          closed: triage.closed.filter(touchable)
+          closed: triage.closed.filter(touchable),
+          repeated
         }
       )
-      // Things changed in the topic's other conversations: their readers follow.
-      for (const changed of openInTopic.filter(
+      // Other conversations changed — things closed or made precise there, or now carried here: their readers follow.
+      for (const changed of shownElsewhere.filter(
         (commitment) =>
           triage.closed.includes(commitment.id) ||
           triage.updated.some((change) => change.id === commitment.id)
@@ -2291,6 +2397,13 @@ export class SegretarioService {
           accountId: changed.accountId,
           messageKeys: [],
           threadIds: [changed.threadId]
+        })
+      }
+      for (const conversation of carried) {
+        this.emitNotes({
+          accountId: account.id,
+          messageKeys: [conversation.messageKey],
+          threadIds: [conversation.threadId]
         })
       }
       // Noise belongs to no matter, whatever words it shares with one.

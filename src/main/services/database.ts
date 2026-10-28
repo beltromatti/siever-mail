@@ -3815,6 +3815,25 @@ export class AppDatabase {
     }))
   }
 
+  /** An account's conversations with a message from this sender since a date, the latest first. */
+  async threadsFromSender(
+    accountId: string,
+    senderKey: string,
+    sinceIso: string,
+    limit: number
+  ): Promise<string[]> {
+    await this.ready
+
+    const rows = await this.prisma.message.groupBy({
+      by: ['threadId'],
+      where: { accountId, senderKey, dateIso: { gte: sinceIso } },
+      _max: { dateIso: true },
+      orderBy: { _max: { dateIso: 'desc' } },
+      take: limit
+    })
+    return rows.map((row) => row.threadId)
+  }
+
   /** Whether a message in these folders went to one of these addresses, as its recipients are searched. */
   async anySentTo(
     folders: ReadonlyArray<{ accountId: string; folderPath: string }>,

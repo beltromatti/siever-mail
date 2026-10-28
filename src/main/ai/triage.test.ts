@@ -26,6 +26,7 @@ describe('parseTriage', () => {
           ],
           impegni_aggiornati: [{ numero: 2, testo: 'Sopralluogo da Anna', scadenza: '2026-11-03' }],
           impegni_chiusi: [4],
+          ripete: ['R2', 'x'],
           argomento: '[T3]'
         })
       )
@@ -42,6 +43,7 @@ describe('parseTriage', () => {
       ],
       updated: [{ id: 2, text: 'Sopralluogo da Anna', due: '2026-11-03' }],
       closed: [4],
+      repeats: [1],
       topic: { key: 'T3' }
     })
   })
@@ -58,6 +60,7 @@ describe('parseTriage', () => {
           impegni_nuovi: [],
           impegni_aggiornati: [],
           impegni_chiusi: [],
+          ripete: [],
           argomento
         })
       ).topic
@@ -81,6 +84,7 @@ describe('parseTriage', () => {
         impegni_nuovi: [],
         impegni_aggiornati: [],
         impegni_chiusi: [],
+        ripete: [],
         argomento: ''
       })
     )
@@ -100,6 +104,7 @@ describe('parseTriage', () => {
           impegni_nuovi: [],
           impegni_aggiornati: [],
           impegni_chiusi: [],
+          ripete: [],
           argomento: ''
         })
       )
@@ -263,6 +268,16 @@ describe('triageRequest with its topic', () => {
           }
         ]
       },
+      fromSender: {
+        sender: 'prevenzione@vvf.example',
+        conversations: [
+          {
+            date: '2026-10-17T10:42:00.000Z',
+            summary: 'Il Comando chiede 4 integrazioni',
+            items: []
+          }
+        ]
+      },
       laterInTopic: {
         title: 'Prat2463 · COMUNE DI COPPARO',
         notes: [{ date: '2026-10-27T16:20:00.000Z', summary: 'Integrazioni trasmesse ai VVF' }]
@@ -274,6 +289,9 @@ describe('triageRequest with its topic', () => {
     )
     expect(request).toContain(
       '- [41] da_fare: Trasmettere le integrazioni ai VVF (entro 2026-11-16)'
+    )
+    expect(request).toMatch(
+      /## Ancora aperto con lo stesso indirizzo \(prevenzione@vvf\.example\), in altre conversazioni\n\n- \[R1\] .*17\/10\/2026.*: Il Comando chiede 4 integrazioni/
     )
     expect(request).toMatch(
       /## Dopo questo messaggio, in Prat2463 · COMUNE DI COPPARO\n\n- .*27\/10\/2026.*: Integrazioni trasmesse ai VVF/

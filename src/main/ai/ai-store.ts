@@ -751,7 +751,11 @@ export class AiStore {
   /**
    * A message's note, with what it opens, makes precise and closes. Only
    * what the caller let it touch is touched: the conversation's open
-   * things, or its topic's.
+   * things, or its topic's. Conversations of the sender's it repeats —
+   * the same alert again, the same request in a new thread — are one
+   * matter with it, carried from now on by the newest of their messages:
+   * the others' notes set aside, what is open in them, and what this one
+   * opens, moved there. It returns the conversations that changed.
    */
   async saveTriage(
     note: Omit<MessageNote, 'dismissedAt'>,
@@ -759,10 +763,19 @@ export class AiStore {
       opened: ReadonlyArray<{ kind: CommitmentKind; text: string; due: string | null }>
       updated: ReadonlyArray<{ id: number; text: string; due: string | null }>
       closed: ReadonlyArray<number>
+      repeated?: ReadonlyArray<{ threadId: string; messageKey: string; messageDate: string }>
     }
-  ): Promise<void> {
+  ): Promise<Array<{ threadId: string; messageKey: string }>> {
     const now = BigInt(Date.now())
-    const data = { ...note, createdAt: now, dismissedAt: null }
+    const repeated = items.repeated ?? []
+    const carrier = repeated.reduce<{ threadId: string; messageKey: string; messageDate: string }>(
+      (newest, candidate) => (candidate.messageDate > newest.messageDate ? candidate : newest),
+      note
+    )
+    const setAside = [note, ...repeated].filter(
+      (candidate) => candidate.messageKey !== carrier.messageKey
+    )
+    const data = { ...note, createdAt: now, dismissedAt: carrier === note ? null : now }
 
     await this.prisma.$transaction([
       this.prisma.aiNote.upsert({
@@ -773,8 +786,8 @@ export class AiStore {
       this.prisma.aiItem.createMany({
         data: items.opened.map((item) => ({
           accountId: note.accountId,
-          threadId: note.threadId,
-          messageKey: note.messageKey,
+          threadId: carrier.threadId,
+          messageKey: carrier.messageKey,
           kind: item.kind,
           text: item.text,
           due: item.due,
@@ -792,6 +805,20 @@ export class AiStore {
         where: { id: { in: [...items.closed] }, status: 'aperto' },
         data: { status: 'chiuso', closedAt: now, closedBy: 'segretario' }
       }),
+      ...setAside.flatMap((aside) => [
+        this.prisma.aiNote.updateMany({
+          where: { accountId: note.accountId, messageKey: aside.messageKey, dismissedAt: null },
+          data: { dismissedAt: now }
+        }),
+        this.prisma.aiItem.updateMany({
+          where: { accountId: note.accountId, threadId: aside.threadId, status: 'aperto' },
+          data: { threadId: carrier.threadId, messageKey: carrier.messageKey }
+        }),
+        this.prisma.aiReadyDraft.updateMany({
+          where: { accountId: note.accountId, threadId: aside.threadId, status: 'pronta' },
+          data: { status: 'superata' }
+        })
+      ]),
       // What was prepared for an earlier message of the conversation is past: it moved on.
       this.prisma.$executeRaw`
         UPDATE ai_ready_drafts SET status = 'superata'
@@ -803,6 +830,7 @@ export class AiStore {
           )
       `
     ])
+    return repeated.length > 0 ? [carrier, ...setAside] : []
   }
 
   async getNotes(

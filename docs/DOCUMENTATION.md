@@ -716,11 +716,17 @@ on since), so what was done meanwhile is not opened. It opens what is new,
 makes precise what is open — the date set or moved, what is left of it
 (`impegni_aggiornati`) — and closes what is done, there or in the
 pratica's other conversations; the same obligation is not opened twice in
-other words. Where something is open already, or the pratica moved on, the
-call reasons briefly for that judgement; otherwise it does not. Conversations
-go in lanes (`triageLanes`): those of one topic in one lane, read one after
-the other in the order they began, so what one opens the next sees; the
-others each in their own, three lanes at once. Within a conversation the
+other words. It is also shown what is still open from the same address in
+other conversations of the last two weeks, older or newer: what it repeats
+— the same alert sent again, the same request in a new thread, a
+platform's notice of the same message — becomes one matter with it
+(`ripete`), carried by the newest message, the others' notes set aside and
+what is open in them moved there. Where something is open already, the
+pratica moved on, or the sender has something open, the call reasons
+briefly for that judgement; otherwise it does not. Conversations go in
+lanes (`triageLanes`): those sharing a topic or an outside sender in one
+lane, read one after the other in the order they began, so what one opens
+the next sees; the others each in their own, three lanes at once. Within a conversation the
 messages go in the order they were written, so what one opens a later one
 can close; an answer that does not hold the schema is asked for again at
 once, before the next message. A network or OpenRouter failure ends the
