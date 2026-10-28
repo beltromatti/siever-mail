@@ -61,6 +61,7 @@ import {
   folderDisplayRank,
   folderForRole,
   folderRole,
+  segretarioSearch,
   segretarioTopic,
   segretarioView,
   SEGRETARIO_VIEWS,
@@ -1065,7 +1066,13 @@ export class MailService {
     }
 
     const topicId = segretarioTopic(folderPath)
-    return topicId ? this.segretarioTopicRefs(topicId) : undefined
+
+    if (topicId) {
+      return this.segretarioTopicRefs(topicId)
+    }
+
+    const searchId = segretarioSearch(folderPath)
+    return searchId ? (this.segretario.searchRefs(searchId) ?? []) : undefined
   }
 
   /**

@@ -70,6 +70,7 @@ import { plainTextToComposerHtml, writtenText } from '@renderer/features/mail/co
 import { parseRecipients } from '@shared/email-address'
 import type {
   ApprovalRequest,
+  AskedMail,
   ComposeSpec,
   HandleLink,
   SendOutcome,
@@ -102,6 +103,8 @@ import {
   unifiedFolderRole,
   isAcrossAccounts,
   isSegretarioList,
+  segretarioSearch,
+  segretarioSearchPath,
   segretarioTopic,
   segretarioTopicPath,
   segretarioView,
@@ -2260,6 +2263,12 @@ function App(): React.JSX.Element {
   const selectionFlagged =
     selectedSummaries.length > 0 && selectedSummaries.every((message) => message.isFlagged)
 
+  // The searches asked in words this session, by id: their lists' titles.
+  const [askedSearches, setAskedSearches] = useState<ReadonlyMap<string, AskedMail>>(
+    () => new Map()
+  )
+  const [askingSegretario, setAskingSegretario] = useState(false)
+
   // Whether the conversation open has a reply prepared: the panel offers to go through it.
   const viewerThreadKey = messageForViewer
     ? `${messageForViewer.accountId}\u0000${messageForViewer.threadId}`
@@ -4401,6 +4410,8 @@ function App(): React.JSX.Element {
   // "Tutti gli account".
   const currentSegretarioView = segretarioView(selectedFolderPath)
   const currentTopicId = segretarioTopic(selectedFolderPath)
+  const currentSearchId = segretarioSearch(selectedFolderPath)
+  const currentAsked = currentSearchId ? askedSearches.get(currentSearchId) : undefined
   const currentTopic = currentTopicId
     ? topics.find((topic) => topic.id === currentTopicId)
     : undefined
@@ -4410,9 +4421,11 @@ function App(): React.JSX.Element {
       ? segretarioViewLabel(currentSegretarioView)
       : currentTopicId
         ? (currentTopic?.title ?? topicsLabel ?? '')
-        : currentFolder
-          ? folderDisplayName(currentFolder)
-          : 'Conversazioni'
+        : currentSearchId
+          ? (currentAsked?.summary ?? 'Ricerca del Segretario')
+          : currentFolder
+            ? folderDisplayName(currentFolder)
+            : 'Conversazioni'
   // What the user is looking at goes along with what they ask the Segretario.
   const segretarioContextRefs = selection.selectedRefs.slice(0, SEGRETARIO_CONTEXT_LIMIT)
   const segretarioContext: SegretarioContextChip = {
@@ -4495,6 +4508,27 @@ function App(): React.JSX.Element {
 
   const listViewProps: MessageListViewProps = {
     title: currentViewLabel,
+    askSegretario: segretarioConfigured
+      ? {
+          busy: askingSegretario,
+          onAsk: (question) => {
+            setAskingSegretario(true)
+            void window.segretarioApi
+              .askMail(question)
+              .then((asked) => {
+                setAskedSearches((current) => new Map(current).set(asked.id, asked))
+                setSearch('')
+                selectFolder(segretarioSearchPath(asked.id))
+              })
+              .catch((error: unknown) =>
+                setViewError(
+                  error instanceof Error ? error.message : 'Il Segretario non ha potuto cercare.'
+                )
+              )
+              .finally(() => setAskingSegretario(false))
+          }
+        }
+      : undefined,
     banner: currentTopicId ? (
       <TopicBanner
         key={currentTopicId}
@@ -4516,7 +4550,7 @@ function App(): React.JSX.Element {
     messages,
     notes: messageNotes,
     sections: messageSections,
-    countLabel: listCountLabel,
+    countLabel: currentAsked ? `${listCountLabel} · ${currentAsked.how}` : listCountLabel,
     emptyState: listEmptyState,
     selection,
     highlightTerms,

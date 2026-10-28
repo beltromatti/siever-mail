@@ -1,5 +1,6 @@
-import { ListFilter, Search, X } from 'lucide-react'
+import { ListFilter, LoaderCircle, Search, X } from 'lucide-react'
 
+import { CompassStar } from '@renderer/components/ui/compass-star'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -49,6 +50,7 @@ export type MessageListHeaderProps = Pick<
   | 'searchScopeLabel'
   | 'filter'
   | 'onFilterChange'
+  | 'askSegretario'
 > & {
   selectedCount: number
   /** Whether there are rows to select. */
@@ -73,6 +75,7 @@ export function MessageListHeader({
   searchScopeLabel,
   filter,
   onFilterChange,
+  askSegretario,
   selectedCount,
   canSelectAll
 }: MessageListHeaderProps): React.JSX.Element {
@@ -132,6 +135,18 @@ export function MessageListHeader({
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
             onKeyDown={(event) => {
+              // ⌘↵ / Ctrl+↵: the Segretario searches as the words mean.
+              if (
+                event.key === 'Enter' &&
+                (event.metaKey || event.ctrlKey) &&
+                askSegretario &&
+                search.trim().length >= 2
+              ) {
+                event.preventDefault()
+                askSegretario.onAsk(search.trim())
+                return
+              }
+
               if (event.key !== 'Escape') {
                 return
               }
@@ -151,6 +166,28 @@ export function MessageListHeader({
             autoComplete="off"
             className="placeholder:text-faint-foreground min-w-0 flex-1 bg-transparent text-[12.5px] outline-none"
           />
+          {askSegretario && search.trim().length >= 2 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  disabled={askSegretario.busy}
+                  onClick={() => askSegretario.onAsk(search.trim())}
+                  aria-label="Chiedi al Segretario"
+                  className="text-ai-star hover:bg-ai-soft focus-visible:ring-ring/60 grid size-5 shrink-0 place-items-center rounded-[4px] outline-none focus-visible:ring-2 disabled:opacity-60"
+                >
+                  {askSegretario.busy ? (
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : (
+                    <CompassStar className="size-3.5" />
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                Chiedi al Segretario: cerca come lo diresti · ⌘↵
+              </TooltipContent>
+            </Tooltip>
+          )}
           {search ? (
             <Tooltip>
               <TooltipTrigger asChild>

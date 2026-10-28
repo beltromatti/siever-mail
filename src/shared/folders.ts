@@ -192,9 +192,27 @@ export function segretarioTopic(path: string | null | undefined): string | null 
     : null
 }
 
-/** Whether a path is a list the Segretario's notes make: a view or a topic. */
+const SEGRETARIO_SEARCH_PREFIX = '__segretario__:ricerca:'
+
+/** The list of what a search asked in words found. */
+export function segretarioSearchPath(searchId: string): string {
+  return `${SEGRETARIO_SEARCH_PREFIX}${searchId}`
+}
+
+/** The search a path opens, by id, or null. */
+export function segretarioSearch(path: string | null | undefined): string | null {
+  return path?.startsWith(SEGRETARIO_SEARCH_PREFIX)
+    ? path.slice(SEGRETARIO_SEARCH_PREFIX.length) || null
+    : null
+}
+
+/** Whether a path is a list the Segretario makes: a view, a topic, a search asked in words. */
 export function isSegretarioList(path: string | null | undefined): boolean {
-  return segretarioView(path) !== null || segretarioTopic(path) !== null
+  return (
+    segretarioView(path) !== null ||
+    segretarioTopic(path) !== null ||
+    segretarioSearch(path) !== null
+  )
 }
 
 /** Whether a path shows mail of several accounts — a folder of Tutti gli account, a Segretario's list — not one account's folder. */

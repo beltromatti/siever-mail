@@ -228,6 +228,17 @@ export interface WritingRequest {
   replyTo: MessageRef | null
 }
 
+/** A search asked in words, as it was run: the list it makes. */
+export interface AskedMail {
+  id: string
+  question: string
+  /** What it looks for, in a few words: the list's title. */
+  summary: string
+  /** How it was searched, in the search's own terms: «offerta» · da settembre · con allegati. */
+  how: string
+  count: number
+}
+
 /** A message about to be sent, for the Segretario to reread. */
 export interface ReviewRequest {
   accountId: string
@@ -479,6 +490,7 @@ export const SEGRETARIO_IPC = {
   conversationTopics: 'segretario:conversation-topics',
   filingHint: 'segretario:filing-hint',
   reviewDraft: 'segretario:review-draft',
+  askMail: 'segretario:ask-mail',
   openTopicFolder: 'segretario:open-topic-folder',
   writeBriefingOpening: 'segretario:write-briefing-opening',
   notesChanged: 'segretario:notes-changed',
@@ -560,6 +572,12 @@ export interface SegretarioApi {
   filingHint: (
     threads: ReadonlyArray<{ accountId: string; threadId: string }>
   ) => Promise<{ topicKey: string | null; destination: string | null }>
+  /**
+   * A search asked in words — "l'offerta di Gallo di settembre con il PDF"
+   * — made into one of the search's own, and run: its list's id, what it
+   * looks for, and how many it found.
+   */
+  askMail: (question: string) => Promise<AskedMail>
   /** Rereads a message about to be sent: what the user would want to correct first, a line each. */
   reviewDraft: (request: ReviewRequest) => Promise<string[]>
   /** A topic the user makes, by its title. */

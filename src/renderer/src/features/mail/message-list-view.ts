@@ -23,6 +23,11 @@ export interface MessageListViewProps {
   title: string
   /** Under the header, above the rows: what the Segretario says of a topic's list. */
   banner?: React.ReactNode
+  /**
+   * Hands what is typed in the search to the Segretario, to search as it
+   * means (⌘↵); absent without the Segretario. Busy while it searches.
+   */
+  askSegretario?: { onAsk: (question: string) => void; busy: boolean }
   /** The active search, trimmed; empty when there is none. */
   searchQuery: string
   onClearSearch: () => void

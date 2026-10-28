@@ -169,6 +169,9 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
         .parse(threads)
     )
   )
+  handle(SEGRETARIO_IPC.askMail, (question: unknown) =>
+    segretario.askMail(z.string().trim().min(2, 'Scrivi cosa cerchi.').max(1000).parse(question))
+  )
   handle(SEGRETARIO_IPC.reviewDraft, (request: unknown) =>
     segretario.reviewDraft(reviewRequestSchema.parse(request))
   )

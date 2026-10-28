@@ -188,6 +188,7 @@ const segretarioApi: SegretarioApi = {
   conversationTopics: async (threads) => invoke(SEGRETARIO_IPC.conversationTopics, threads),
   filingHint: async (threads) => invoke(SEGRETARIO_IPC.filingHint, threads),
   reviewDraft: async (request) => invoke(SEGRETARIO_IPC.reviewDraft, request),
+  askMail: async (question) => invoke(SEGRETARIO_IPC.askMail, question),
   openTopicFolder: async (id) => invoke(SEGRETARIO_IPC.openTopicFolder, id)
 }
 

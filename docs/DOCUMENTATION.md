@@ -752,6 +752,15 @@ the lines above the signature and the quote (`replaceWrittenPart`), with
 "Annulla" to put them back, and is kept as the Segretario's draft so the
 user's later edits are learnt from.
 
+**Asking the mail in words.** In any list's search field, ⌘↵ (or the
+star beside it) hands what is typed — "l'offerta di Gallo per i gruppi
+frigo, con il pdf" — to the Segretario: one quick call
+(`ask-mail.ts`, `chiedi-alla-posta.md`) makes it the search tool's own
+parameters (words, folder, account, period, unread, attachments), the
+full-text search runs over every account, and the result opens as a list
+of the Segretario's (`segretarioSearchPath`), titled with what was sought
+and how. The latest twenty are kept for the session.
+
 **Rereading before it goes.** With "Rileggi prima di inviare" on (Settings
 → Segretario, the default), pressing Invia has the Segretario reread the
 message in one quick call (`review.ts`, `revisione.md`): the message as it

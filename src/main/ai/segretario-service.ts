@@ -11,6 +11,7 @@ import {
   type ActivityDetail,
   type ActivityEntry,
   type AccountLearning,
+  type AskedMail,
   type ActivityEvent,
   type ActivityKind,
   type ActivityStatus,
@@ -70,7 +71,8 @@ import {
   type FetchFunction,
   type ToolCall
 } from './openrouter'
-import { searchMail, searchScope, threadMessages } from './mail-search'
+import { folderQueryLabel, searchMail, searchScope, threadMessages } from './mail-search'
+import { ASK_MAIL_SCHEMA, askMailRequest, parseAskedSearch } from './ask-mail'
 import { TopicStore, type CatalogTopic } from './topic-store'
 import {
   parseReadyDraft,
@@ -93,7 +95,13 @@ import {
   type TriageResult
 } from './triage'
 import { SEGRETARIO_TOOLS, toolDefinitions } from './tools'
-import { clip, formatAddresses, formatDateTime, withoutQuotedHistory } from './tools/format'
+import {
+  clip,
+  formatAddresses,
+  formatDateTime,
+  shortDate,
+  withoutQuotedHistory
+} from './tools/format'
 import { parseReview, REVIEW_SCHEMA, reviewRequest } from './review'
 import { MAX_NOTE_CHARS, memoryIndex, normalizeMemoryPath } from './tools/memory-tool'
 
@@ -125,6 +133,10 @@ const DRAFT_RECORD_TTL_MS = 90 * 24 * 60 * 60 * 1000
 const EXTENSION_TOPICS_SYNC_MS = 10 * 60 * 1000
 /** Past this many conversations waiting to be read, the day's page just says it is reading. */
 const TRIAGE_BACKLOG_COUNTED = 200
+/** How many messages a search asked in words lists, the most relevant first. */
+const ASK_MAIL_LIMIT = 200
+/** How many of those searches are kept, for their lists to be opened again. */
+const ASKED_SEARCHES_KEPT = 20
 /** How long the user's own message waits, without a date for what it asked, before a reminder is prepared. */
 const FOLLOW_UP_AFTER_DAYS = 3
 /** Past this, a conversation the user stopped chasing is not chased for them. */
@@ -223,6 +235,8 @@ export class SegretarioService {
   private readonly triageFailures = new Map<string, number>()
   private preparing = false
   private gisting = false
+  /** The searches asked in words, the latest last, with what each found. */
+  private readonly searches = new Map<string, { asked: AskedMail; refs: MessageRef[] }>()
   /** A message come to several of the user's accounts, while one copy is being read: by its copies. */
   private readonly copiesBeingRead = new Map<string, Promise<void>>()
   /** What the app was last told of `onReadingChange`; null before it was told. */
@@ -698,6 +712,88 @@ export class SegretarioService {
    * the people they write to. What comes back is kept as the Segretario's
    * draft, so what the user changes before sending is learnt from.
    */
+  /**
+   * A search asked in words, made into one of the search's own by one
+   * quick call and run over every account: its list is kept for the page
+   * to open, the latest few of them.
+   */
+  async askMail(question: string): Promise<AskedMail> {
+    const key = await this.requireKey()
+    const mail = this.options.mail
+    const accounts = await mail.listAccounts()
+    const result = await this.client.chat(key, {
+      messages: [
+        { role: 'system', content: PROMPTS.askMail },
+        {
+          role: 'user',
+          content: askMailRequest({
+            today: new Date(),
+            accounts: accounts.map((account) => account.email),
+            question
+          })
+        }
+      ],
+      reasoningEffort: 'none',
+      maxTokens: 400,
+      responseSchema: { name: 'ricerca', schema: ASK_MAIL_SCHEMA }
+    })
+
+    await this.recordUsage(null, 'ricerca', result)
+    const asked = parseAskedSearch(result.content)
+    const folders = new Map(
+      await Promise.all(
+        accounts.map(async (account) => [account.id, await mail.listFolders(account.id)] as const)
+      )
+    )
+    const scope = searchScope(accounts, folders, {
+      accounts: asked.account ? [asked.account] : [],
+      folder: asked.folder ?? undefined
+    })
+    const hits = await searchMail(await mail.searchClient(), scope, {
+      text: asked.text || undefined,
+      from: asked.from ?? undefined,
+      to: asked.to ?? undefined,
+      unreadOnly: asked.unreadOnly,
+      withAttachments: asked.withAttachments,
+      limit: ASK_MAIL_LIMIT
+    })
+    const entry: AskedMail = {
+      id: randomUUID(),
+      question,
+      summary: asked.summary || question,
+      how: [
+        asked.text ? `«${asked.text}»` : null,
+        asked.folder ? `in ${folderQueryLabel(asked.folder)}` : null,
+        asked.account ? `di ${asked.account}` : null,
+        asked.from && asked.to
+          ? `dal ${shortDate(asked.from)} al ${shortDate(asked.to)}`
+          : asked.from
+            ? `dal ${shortDate(asked.from)}`
+            : asked.to
+              ? `fino al ${shortDate(asked.to)}`
+              : null,
+        asked.unreadOnly ? 'non letti' : null,
+        asked.withAttachments ? 'con allegati' : null
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      count: hits.length
+    }
+
+    this.searches.set(entry.id, { asked: entry, refs: hits.map((hit) => hit.ref) })
+
+    for (const id of [...this.searches.keys()].slice(0, -ASKED_SEARCHES_KEPT)) {
+      this.searches.delete(id)
+    }
+
+    return entry
+  }
+
+  /** What a search asked in words found, for its list; undefined for one no longer kept. */
+  searchRefs(id: string): MessageRef[] | undefined {
+    return this.searches.get(id)?.refs
+  }
+
   /** Rereads a message about to be sent: the mistakes the user would want to correct first. */
   async reviewDraft(request: ReviewRequest): Promise<string[]> {
     const key = await this.requireKey()
