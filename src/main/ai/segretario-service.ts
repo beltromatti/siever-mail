@@ -1722,7 +1722,11 @@ export class SegretarioService {
                       `${message.ref.accountId}\u0000${message.messageKey}`
                     ) ?? 0
 
+                  let before: number
+
+                  // Again only when this very attempt failed, and while attempts are left.
                   do {
+                    before = failures()
                     reachable = await this.triageOne(
                       { ...message, threadId: thread.threadId },
                       key,
@@ -1730,7 +1734,7 @@ export class SegretarioService {
                       notes,
                       catalog
                     )
-                  } while (reachable && failures() > 0 && failures() < TRIAGE_ATTEMPTS)
+                  } while (reachable && failures() > before && failures() < TRIAGE_ATTEMPTS)
 
                   if (!reachable) {
                     break
