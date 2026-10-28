@@ -126,6 +126,9 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.dismissNote, (accountId: unknown, messageKey: unknown) =>
     segretario.dismissNote(idSchema.parse(accountId), z.string().min(1).parse(messageKey))
   )
+  handle(SEGRETARIO_IPC.dismissConversations, (messages: unknown) =>
+    segretario.dismissConversations(messageKeysSchema.parse(messages))
+  )
   handle(SEGRETARIO_IPC.readyDraftSource, (accountId: unknown, messageKey: unknown) =>
     segretario.readyDraftSource(idSchema.parse(accountId), z.string().min(1).parse(messageKey))
   )

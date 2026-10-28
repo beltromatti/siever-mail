@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   Hourglass,
+  Layers,
   ListTodo,
   PenLine,
   Search,
@@ -286,6 +287,7 @@ export function FolderSidebar({
         .slice(0, TOPICS_SHOWN),
     [openTopicId, topics]
   )
+  const topicsBrought = (topics?.items ?? []).some((topic) => topic.origin === 'extension')
   // The folder dragged messages are over, to show where they would land.
   const [dropHoverKey, setDropHoverKey] = useState<string | null>(null)
 
@@ -417,13 +419,21 @@ export function FolderSidebar({
               <SectionHeading>{topics.label}</SectionHeading>
               {shownTopics.map((topic) => {
                 const path = segretarioTopicPath(topic.id)
+                // Among an extension's topics, one it did not bring is set apart: not (yet) one of them.
+                const ownAmongBrought = topicsBrought && topic.origin !== 'extension'
 
                 return (
                   <FolderRow
                     key={path}
-                    icon={Briefcase}
+                    icon={ownAmongBrought ? Layers : Briefcase}
                     name={topic.title}
-                    hint={`${topic.title} — ${formatCount(topic.conversations, 'conversazione', 'conversazioni')}${
+                    hint={`${topic.title}${
+                      ownAmongBrought
+                        ? topic.origin === 'utente'
+                          ? ' (creato da te)'
+                          : ' (creato dal Segretario)'
+                        : ''
+                    } — ${formatCount(topic.conversations, 'conversazione', 'conversazioni')}${
                       topic.openCommitments > 0
                         ? `, ${formatCount(topic.openCommitments, 'cosa aperta', 'cose aperte')}`
                         : ''

@@ -167,6 +167,7 @@ const segretarioApi: SegretarioApi = {
   closeCommitment: async (id) => invoke(SEGRETARIO_IPC.closeCommitment, id),
   dismissNote: async (accountId, messageKey) =>
     invoke(SEGRETARIO_IPC.dismissNote, accountId, messageKey),
+  dismissConversations: async (messages) => invoke(SEGRETARIO_IPC.dismissConversations, messages),
   onNotesChanged: (listener) => subscribe(SEGRETARIO_IPC.notesChanged, listener),
   readyDraftSource: async (accountId, messageKey) =>
     invoke(SEGRETARIO_IPC.readyDraftSource, accountId, messageKey),

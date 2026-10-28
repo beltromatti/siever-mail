@@ -109,6 +109,16 @@ const HOST_COMMANDS = [
     editable: true
   },
   {
+    id: 'mark-handled',
+    label: 'Segna come gestito',
+    description:
+      'Il Segretario non conta più le conversazioni selezionate tra quelle da gestire, e chiude ciò che ti chiedevano.',
+    group: 'messages',
+    scope: 'main',
+    defaultChord: 'Mod+Shift+KeyE',
+    editable: true
+  },
+  {
     id: 'search',
     label: 'Cerca',
     description: 'Porta il cursore nella ricerca.',

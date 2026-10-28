@@ -397,6 +397,8 @@ const RAIL_ITEMS: ReadonlyArray<RailItem> = [{ id: 'mail', label: 'Posta', icon:
 
 /** The most messages a request to the Segretario carries along. */
 const SEGRETARIO_CONTEXT_LIMIT = 200
+/** Conversations marked handled per request: a selection of any size goes in these. */
+const MARK_HANDLED_BATCH = 1000
 
 function AppFrame({
   children,
@@ -2595,6 +2597,35 @@ function App(): React.JSX.Element {
     await setMessagesKeyword(selection.selectedRefs, '\\Seen', targetSeenState)
   }, [keepShownReadState, selection.selectedRefs, setMessagesKeyword, shouldMarkSelectionAsRead])
 
+  /** "Segna come gestito" for the conversations of these messages, as many as they are. */
+  const markHandled = useCallback(
+    async (summaries: ReadonlyArray<MailMessageSummary>): Promise<void> => {
+      const messages = summaries.map(({ accountId, messageKey }) => ({ accountId, messageKey }))
+      let handled = 0
+
+      try {
+        for (let start = 0; start < messages.length; start += MARK_HANDLED_BATCH) {
+          handled += await window.segretarioApi.dismissConversations(
+            messages.slice(start, start + MARK_HANDLED_BATCH)
+          )
+        }
+
+        toast(
+          handled === 0
+            ? 'Niente da segnare: il Segretario non ha note su questi messaggi'
+            : handled === 1
+              ? 'Conversazione segnata come gestita'
+              : `${handled.toLocaleString('it-IT')} conversazioni segnate come gestite`
+        )
+      } catch (error) {
+        toast.error('Non segnate come gestite', {
+          description: error instanceof Error ? error.message : undefined
+        })
+      }
+    },
+    []
+  )
+
   const setSelectionFlagged = useCallback(async (): Promise<void> => {
     await setMessagesKeyword(selection.selectedRefs, '\\Flagged', !selectionFlagged)
   }, [selection.selectedRefs, selectionFlagged, setMessagesKeyword])
@@ -3937,6 +3968,13 @@ function App(): React.JSX.Element {
 
         void setSelectionSeen()
         return true
+      case 'mark-handled':
+        if (!hasSelection || !segretarioConfigured) {
+          return false
+        }
+
+        void markHandled(selectedSummaries)
+        return true
       case 'toggle-flag':
         if (!hasSelection) {
           return false
@@ -4100,6 +4138,10 @@ function App(): React.JSX.Element {
             : 'Contrassegna',
         chord: chordOf('toggle-flag')
       },
+      ...(segretarioConfigured &&
+      summaries.some((message) => messageNotes.get(noteKey(message))?.dismissedAt === null)
+        ? [{ id: 'mark-handled', label: 'Segna come gestito', chord: chordOf('mark-handled') }]
+        : []),
       { type: 'separator' },
       { id: 'archive', label: 'Archivia', chord: chordOf('archive') },
       targetAccountIds.length === 1 && moveTree.length > 0
@@ -4159,6 +4201,9 @@ function App(): React.JSX.Element {
       case 'toggle-flag':
       case 'archive':
         runAppCommandRef.current(chosen)
+        return
+      case 'mark-handled':
+        await markHandled(summaries)
         return
       case 'sender-messages':
         if (sender) {

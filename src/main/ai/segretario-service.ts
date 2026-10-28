@@ -1522,6 +1522,30 @@ export class SegretarioService {
     }
   }
 
+  /**
+   * The conversations of a selection, dealt with: each one's latest note
+   * marked handled and what was owed in it closed — "Segna come gestito",
+   * many at once. Resolves with how many conversations it was.
+   */
+  async dismissConversations(
+    messages: ReadonlyArray<{ accountId: string; messageKey: string }>
+  ): Promise<number> {
+    const store = this.requireStore()
+    const threads = new Map(
+      (await store.getNotes(messages)).map((note) => [
+        `${note.accountId}\u0000${note.threadId}`,
+        { accountId: note.accountId, threadId: note.threadId }
+      ])
+    )
+    const latest = await store.latestNotes([...threads.values()])
+
+    for (const note of latest) {
+      await this.dismissNote(note.accountId, note.messageKey)
+    }
+
+    return latest.length
+  }
+
   private emitNotes(change: NotesChange): void {
     this.options.send(SEGRETARIO_IPC.notesChanged, change)
   }

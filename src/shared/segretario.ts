@@ -475,6 +475,7 @@ export const SEGRETARIO_IPC = {
   getThreadBrief: 'segretario:get-thread-brief',
   closeCommitment: 'segretario:close-commitment',
   dismissNote: 'segretario:dismiss-note',
+  dismissConversations: 'segretario:dismiss-conversations',
   takeUpReadyDraft: 'segretario:take-up-ready-draft',
   discardReadyDraft: 'segretario:discard-ready-draft',
   readyDraftSource: 'segretario:ready-draft-source',
@@ -541,6 +542,10 @@ export interface SegretarioApi {
   closeCommitment: (id: number) => Promise<void>
   /** The user said a message is handled: it leaves "Da gestire". */
   dismissNote: (accountId: string, messageKey: string) => Promise<void>
+  /** "Segna come gestito" for the conversations of these messages; resolves with how many. */
+  dismissConversations: (
+    messages: ReadonlyArray<{ accountId: string; messageKey: string }>
+  ) => Promise<number>
   onNotesChanged: (listener: (change: NotesChange) => void) => () => void
   /** Where the message a prepared reply answers is, to open the reply on it. */
   readyDraftSource: (accountId: string, messageKey: string) => Promise<MessageRef | null>
