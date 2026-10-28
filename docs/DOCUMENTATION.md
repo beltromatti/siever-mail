@@ -672,8 +672,12 @@ in the home folder and the mounted volumes), `scrivi_bozza` (the renderer
 opens the composer as for a reply, a forward or a new message, with the
 text written in; the draft is kept and filed in Bozze like the user's
 own), `invia_bozza`, `organizza` (archive, move, read, flag, Trash),
-`memoria` (its notes: read, write, edit, rename, delete) and `mostra`
-(opens a message, a draft or a search on screen).
+`memoria` (its notes: read, write, edit, rename, delete), `argomenti` (the
+topics in corso or searched, one read with where it stands, what is open
+and its conversations, a conversation filed as the user asks; `a1` names
+a topic and opens its list), `impegni` (what is open across the mail, the
+most pressing first, narrowed by kind, date or topic; one closed) and
+`mostra` (opens a message, a draft or a search on screen).
 
 **Scanned PDFs** are looked at. A PDF is read page by page: a page with
 text gives its text (unpdf), a page without — a scan — is drawn as a JPEG
@@ -730,8 +734,11 @@ in the place of the list and the reader (`today-page.tsx`, the layout's
 `page`). It is made of the notes and what is open: what is due today or
 overdue, this week, who waits on the user, the replies prepared, what the
 user waits on — each line opens its message. At the top, a few lines the
-Segretario writes once a day from the same material (`oggi.md`), kept in
-`ai_briefings` and written again on request.
+Segretario writes from the same material (`oggi.md`), kept in
+`ai_briefings` with the lines they were written from: while triage still
+has mail to read (the first launch, after a holiday) the page says so and
+waits; once read, it writes; opened again after new lines came, it writes
+again, and while open it says how many came since, with "Aggiorna".
 
 **Views.** "Da gestire" holds the conversations whose latest note asks a
 reply or an action and was not handled, or where something the user owes

@@ -21,6 +21,8 @@ import memory from './prompts/strumenti/memoria.md?raw'
 import show from './prompts/strumenti/mostra.md?raw'
 import organize from './prompts/strumenti/organizza.md?raw'
 import overview from './prompts/strumenti/panoramica.md?raw'
+import topicsTool from './prompts/strumenti/argomenti.md?raw'
+import commitmentsTool from './prompts/strumenti/impegni.md?raw'
 import writeDraft from './prompts/strumenti/scrivi_bozza.md?raw'
 import title from './prompts/titolo.md?raw'
 
@@ -63,6 +65,8 @@ export const PROMPTS = {
     invia_bozza: sendDraft.trim(),
     organizza: organize.trim(),
     memoria: memory.trim(),
+    argomenti: topicsTool.trim(),
+    impegni: commitmentsTool.trim(),
     mostra: show.trim()
   }
 } as const

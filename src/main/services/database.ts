@@ -2827,6 +2827,7 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS ai_briefings (
         day TEXT PRIMARY KEY,
         text TEXT NOT NULL,
+        basis TEXT NOT NULL,
         created_at INTEGER NOT NULL
       )
     `)

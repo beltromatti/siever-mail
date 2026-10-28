@@ -186,14 +186,9 @@ function checkSize(text: string): void {
 function checkShortNames(text: string, handles: HandleRegistry): void {
   const used = [
     ...new Set(
-      [...text.matchAll(/\b([mfb]\d{1,4})\b/g)]
+      [...text.matchAll(/\b([mfba]\d{1,4})\b/g)]
         .map((match) => match[1])
-        .filter(
-          (name) =>
-            handles.message(name) !== null ||
-            handles.file(name) !== null ||
-            handles.draft(name) !== null
-        )
+        .filter((name) => handles.resolve(name) !== null)
     )
   ]
 

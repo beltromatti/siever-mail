@@ -414,6 +414,8 @@ model AiReadyDraft {
 model AiBriefing {
   day       String @id
   text      String
+  /// JSON list of the lines it was written from: those added since make it behind.
+  basis     String
   createdAt BigInt @map("created_at")
 
   @@map("ai_briefings")

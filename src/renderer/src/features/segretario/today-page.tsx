@@ -132,6 +132,8 @@ export function TodayPage({
   const [writing, setWriting] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const reloadTimer = useRef<number | null>(null)
+  // Written by itself at most once a visit: after that, only when asked.
+  const wroteOnItsOwn = useRef(false)
 
   const write = useCallback(async (): Promise<void> => {
     setWriting(true)
@@ -149,19 +151,30 @@ export function TodayPage({
   useEffect(() => {
     let current = true
 
-    void window.segretarioApi.getBriefing().then((loaded) => {
+    // The day is written once the mail is read: on opening, when there is
+    // none yet or the day moved since; while the page is open, the first
+    // time the reading is done.
+    const show = (loaded: Briefing, opening: boolean): void => {
       if (!current) {
         return
       }
 
       setBriefing(loaded)
 
-      if (loaded.opening === null && canWrite) {
+      if (
+        canWrite &&
+        !wroteOnItsOwn.current &&
+        loaded.reading === 0 &&
+        (loaded.opening === null || (opening && loaded.openingBehind > 0))
+      ) {
+        wroteOnItsOwn.current = true
         void write()
       }
-    })
+    }
 
-    // New notes change the day: the lists follow, the opening stays until asked.
+    void window.segretarioApi.getBriefing().then((loaded) => show(loaded, true))
+
+    // New notes change the day: the lists follow, the opening says it is behind.
     const unsubscribe = window.segretarioApi.onNotesChanged(() => {
       if (reloadTimer.current !== null) {
         window.clearTimeout(reloadTimer.current)
@@ -169,7 +182,7 @@ export function TodayPage({
 
       reloadTimer.current = window.setTimeout(() => {
         reloadTimer.current = null
-        void window.segretarioApi.getBriefing().then(setBriefing)
+        void window.segretarioApi.getBriefing().then((loaded) => show(loaded, false))
       }, 1500)
     })
 
@@ -221,16 +234,48 @@ export function TodayPage({
             <p className="display-title text-[28px] leading-tight first-letter:uppercase">
               {DAY_TITLE.format(new Date())}
             </p>
-            {briefing?.opening ? (
-              <p className="voice text-foreground text-[18px] leading-[1.55] whitespace-pre-line">
+            {briefing?.opening && (
+              <p
+                className={cn(
+                  'voice text-foreground text-[18px] leading-[1.55] whitespace-pre-line',
+                  writing && 'opacity-60'
+                )}
+              >
                 {briefing.opening}
               </p>
-            ) : writing ? (
+            )}
+            {writing ? (
               <p className="text-muted-foreground flex items-center gap-2 text-[13px]">
                 <LoaderCircle className="text-ai size-4 animate-spin" />
                 Sto guardando la tua giornata…
               </p>
-            ) : null}
+            ) : briefing && briefing.reading > 0 ? (
+              <p className="text-muted-foreground flex items-center gap-2 text-[13px]">
+                <LoaderCircle className="text-ai size-4 animate-spin" />
+                Sto ancora leggendo la tua posta:{' '}
+                {briefing.reading === 1
+                  ? 'un messaggio'
+                  : `${briefing.reading.toLocaleString('it-IT')} messaggi`}
+                {", poi ti dico com'è la giornata."}
+              </p>
+            ) : (
+              briefing?.opening &&
+              briefing.openingBehind > 0 &&
+              canWrite && (
+                <p className="text-muted-foreground text-[12.5px]">
+                  {briefing.openingBehind === 1
+                    ? "Da quando l'ho scritto è arrivata una cosa nuova."
+                    : `Da quando l'ho scritto sono arrivate ${briefing.openingBehind} cose nuove.`}{' '}
+                  <button
+                    type="button"
+                    onClick={() => void write()}
+                    className="text-ai focus-visible:ring-ring/60 rounded-sm font-semibold outline-none hover:underline focus-visible:ring-2"
+                  >
+                    Aggiorna
+                  </button>
+                </p>
+              )
+            )}
             {problem && <p className="text-destructive-soft-foreground text-[12.5px]">{problem}</p>}
           </div>
 

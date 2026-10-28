@@ -6,6 +6,7 @@ import { organizeTool, readAttachmentTool, readMailTool, searchMailTool } from '
 import { memoryTool } from './memory-tool'
 import { overviewTool } from './overview-tool'
 import { showTool } from './show-tool'
+import { commitmentsTool, topicsTool } from './work-tools'
 
 /**
  * The Segretario's tools, in a fixed order: the list is part of every
@@ -23,6 +24,8 @@ export const SEGRETARIO_TOOLS: ReadonlyArray<SegretarioTool> = [
   sendDraftTool,
   organizeTool,
   memoryTool,
+  topicsTool,
+  commitmentsTool,
   showTool
 ]
 

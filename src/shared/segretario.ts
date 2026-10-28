@@ -139,6 +139,8 @@ export interface Topic {
   origin: 'extension' | 'segretario' | 'utente'
   /** The extension's key for it ("pratica:2451"); null for the Segretario's and the user's own. */
   externalKey: string | null
+  /** What it is about in a line, as the Segretario learnt it from its mail; null until it has. */
+  gist: string | null
   /** Where it stands, as the Segretario last wrote it; null until written. */
   state: string | null
   stateAt: number | null
@@ -163,6 +165,8 @@ export interface BriefingItem {
   /** For a thing open: asked, promised, awaited, to do. */
   commitmentKind: CommitmentKind | null
   ref: MessageRef
+  /** The message's key in its account: the same in every folder it is in. */
+  messageKey: string
   subject: string
   /** Who wrote the message, as a name. */
   from: string
@@ -176,6 +180,10 @@ export interface Briefing {
   /** What it writes at the top of the day; null until written. */
   opening: string | null
   openingAt: number | null
+  /** How many lines came since the opening was written: past zero, it is behind the day. */
+  openingBehind: number
+  /** Messages triage has still to read: while there are, the day is not written about. */
+  reading: number
   /** What is due today, or overdue. */
   today: BriefingItem[]
   /** What is due in the next seven days. */
@@ -327,6 +335,7 @@ export type HandleLink =
       attachmentId?: string
     }
   | { handle: string; kind: 'draft'; draftId: string }
+  | { handle: string; kind: 'topic'; topicId: string; title: string }
 
 /** What the page shows of an activity, in order. */
 export type ActivityEntry =

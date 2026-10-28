@@ -56,6 +56,7 @@ import {
   ToolInputError,
   type SegretarioMailPort,
   type SegretarioTool,
+  type SegretarioWorkPort,
   type ToolContext
 } from './agent/tool-types'
 import {
@@ -117,6 +118,8 @@ const LESSONS_PER_REFLECTION = 20
 const DRAFT_RECORD_TTL_MS = 90 * 24 * 60 * 60 * 1000
 /** How often the extension's topics are read again: a new pratica folder appears within this. */
 const EXTENSION_TOPICS_SYNC_MS = 10 * 60 * 1000
+/** Past this many conversations waiting to be read, the day's page just says it is reading. */
+const TRIAGE_BACKLOG_COUNTED = 200
 /** How often triage looks for messages without a note. */
 const TRIAGE_CHECK_MS = 20_000
 /** Messages taken per look, and read side by side. */
@@ -206,6 +209,31 @@ export class SegretarioService {
   private gisting = false
   /** Messages whose prepared reply failed, by account and key, with the attempts made. */
   private readonly readyDraftFailures = new Map<string, number>()
+
+  /** What the tools reach of the topics and of what is open: the same as the page's. */
+  private readonly workPort: SegretarioWorkPort = {
+    topicsLabel: () => this.topicsLabel(),
+    listTopics: () => this.listTopics(),
+    getTopic: (id) => this.getTopic(id),
+    conversationTopics: (threads) => this.conversationTopics(threads),
+    fileConversation: (accountId, threadId, topicId) =>
+      this.setConversationTopic(accountId, threadId, topicId),
+    openCommitments: async () =>
+      this.requireStore().openCommitmentsIn(await this.options.mail.includedAccountIds()),
+    closeCommitment: async (id) => {
+      const closed = await this.requireStore().closeCommitment(id)
+
+      if (closed) {
+        this.emitNotes({
+          accountId: closed.accountId,
+          messageKeys: [],
+          threadIds: [closed.threadId]
+        })
+      }
+
+      return closed !== null
+    }
+  }
 
   constructor(private readonly options: SegretarioServiceOptions) {
     this.client = new OpenRouterClient(options.fetch)
@@ -781,6 +809,7 @@ export class SegretarioService {
             due: note.due,
             commitmentKind: null,
             ref: message.ref,
+            messageKey: note.messageKey,
             subject: message.subject,
             from: message.from[0]?.name || message.from[0]?.address || '',
             date: message.dateIso
@@ -953,6 +982,7 @@ export class SegretarioService {
             due,
             commitmentKind,
             ref: summary.ref,
+            messageKey,
             subject: summary.subject,
             from: summary.from[0]?.name || summary.from[0]?.address || '',
             date: summary.dateIso
@@ -1040,12 +1070,13 @@ export class SegretarioService {
       (a.due ?? '').localeCompare(b.due ?? '') || priorityRank(a) - priorityRank(b)
     const byWeight = (a: BriefingItem, b: BriefingItem): number =>
       priorityRank(a) - priorityRank(b) || b.date.localeCompare(a.date)
-    const opening = await store.briefingOpening(day)
-
-    return {
+    const [opening, reading] = await Promise.all([store.briefingOpening(day), this.triageBacklog()])
+    const briefing = {
       day,
       opening: opening?.text ?? null,
       openingAt: opening?.createdAt ?? null,
+      openingBehind: 0,
+      reading,
       today: today.sort(byDue),
       week: week.sort(byDue).slice(0, BRIEFING_LINES),
       waiting: waiting.sort(byWeight).slice(0, BRIEFING_LINES),
@@ -1064,6 +1095,37 @@ export class SegretarioService {
         })
         .filter((item): item is BriefingItem => item !== null)
     }
+
+    if (opening) {
+      const basis = new Set(opening.basis)
+      briefing.openingBehind = briefingBasis(briefing).filter((key) => !basis.has(key)).length
+    }
+
+    return briefing
+  }
+
+  /**
+   * How many messages of the last two weeks triage has still to read: the
+   * day is not written about while they wait, on the first launch or after
+   * a holiday.
+   */
+  private async triageBacklog(): Promise<number> {
+    if (this.status.keyState !== 'ready' || !(await this.requireStore().getPreferences()).triage) {
+      return 0
+    }
+
+    const since = new Date(Date.now() - TRIAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString()
+    const threads = await this.options.mail.untriagedThreads(since, TRIAGE_BACKLOG_COUNTED)
+    return threads.reduce(
+      (count, thread) =>
+        count +
+        thread.messages.filter(
+          (message) =>
+            (this.triageFailures.get(`${thread.accountId}\u0000${message.messageKey}`) ?? 0) <
+            TRIAGE_ATTEMPTS
+        ).length,
+      0
+    )
   }
 
   /** Writes the top of the day again, from the day as it stands. */
@@ -1114,7 +1176,7 @@ export class SegretarioService {
       throw new Error('Il punto della giornata non è venuto intero: riprova.')
     }
 
-    await store.saveBriefingOpening(briefing.day, result.content.trim())
+    await store.saveBriefingOpening(briefing.day, result.content.trim(), briefingBasis(briefing))
     return this.getBriefing()
   }
 
@@ -2386,6 +2448,7 @@ export class SegretarioService {
       handles,
       newHandles: [],
       mail: this.options.mail,
+      work: this.workPort,
       store,
       page: {
         compose: (spec, signal) => this.requestCompose(spec, signal),
@@ -2576,6 +2639,8 @@ function handleLinks(records: ReadonlyArray<HandleRecord> | undefined): HandleLi
         return { handle, kind: 'message', ref: target.ref }
       case 'draft':
         return { handle, kind: 'draft', draftId: target.draftId }
+      case 'topic':
+        return { handle, kind: 'topic', topicId: target.topicId, title: target.title }
       case 'file':
         return target.file.kind === 'path'
           ? { handle, kind: 'file', fileName: target.file.fileName, path: target.file.path }
@@ -2591,6 +2656,13 @@ function handleLinks(records: ReadonlyArray<HandleRecord> | undefined): HandleLi
 }
 
 /** What the page shows of a stored event; null for those it does not show. */
+/** What the top of the day is written from: the lines that ask something of the user, by key. */
+function briefingBasis(briefing: Pick<Briefing, 'today' | 'week' | 'waiting' | 'ready'>): string[] {
+  return [...briefing.today, ...briefing.week, ...briefing.waiting, ...briefing.ready].map(
+    (item) => `${item.ref.accountId}\u0000${item.messageKey}\u0000${item.text}`
+  )
+}
+
 /** A day by the local calendar, AAAA-MM-GG. */
 function localDay(date: Date): string {
   const pad = (value: number): string => String(value).padStart(2, '0')

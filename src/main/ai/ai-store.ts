@@ -642,13 +642,26 @@ export class AiStore {
     })
   }
 
-  async briefingOpening(day: string): Promise<{ text: string; createdAt: number } | null> {
+  async briefingOpening(
+    day: string
+  ): Promise<{ text: string; createdAt: number; basis: string[] } | null> {
     const row = await this.prisma.aiBriefing.findUnique({ where: { day } })
-    return row ? { text: row.text, createdAt: Number(row.createdAt) } : null
+    return row
+      ? {
+          text: row.text,
+          createdAt: Number(row.createdAt),
+          basis: JSON.parse(row.basis) as string[]
+        }
+      : null
   }
 
-  async saveBriefingOpening(day: string, text: string): Promise<void> {
-    const data = { text, createdAt: BigInt(Date.now()) }
+  /** The top of the day, with the lines it was written from (see `briefingBasis`). */
+  async saveBriefingOpening(
+    day: string,
+    text: string,
+    basis: ReadonlyArray<string>
+  ): Promise<void> {
+    const data = { text, basis: JSON.stringify(basis), createdAt: BigInt(Date.now()) }
     await this.prisma.aiBriefing.upsert({ where: { day }, create: { day, ...data }, update: data })
   }
 

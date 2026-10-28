@@ -402,6 +402,7 @@ function topicOf(
     folderPath: topic.folderPath,
     origin: topic.origin === 'extension' || topic.origin === 'utente' ? topic.origin : 'segretario',
     externalKey: topic.externalKey,
+    gist: topic.gist,
     state: topic.state,
     stateAt: topic.stateAt === null ? null : Number(topic.stateAt),
     lastActivityAt,

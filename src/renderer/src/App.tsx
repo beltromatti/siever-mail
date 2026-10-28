@@ -3689,9 +3689,12 @@ function App(): React.JSX.Element {
           } else if (link.ref && link.attachmentId) {
             void window.mailApi.openAttachment({ ref: link.ref, attachmentId: link.attachmentId })
           }
+          return
+        case 'topic':
+          selectFolder(segretarioTopicPath(link.topicId))
       }
     },
-    [openDraftById, openMessageRef]
+    [openDraftById, openMessageRef, selectFolder]
   )
 
   const addressActions = useMemo<AddressActions>(

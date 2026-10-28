@@ -9,7 +9,15 @@ import type {
   MessageRef,
   MessagesActionResult
 } from '@shared/models'
-import type { ApprovalRequest, ComposeSpec, SendOutcome, ShowRequest } from '@shared/segretario'
+import type {
+  ApprovalRequest,
+  Commitment,
+  ComposeSpec,
+  SendOutcome,
+  ShowRequest,
+  Topic,
+  TopicDetail
+} from '@shared/segretario'
 
 import type { AiStore } from '../ai-store'
 import type { ContentPart } from '../openrouter'
@@ -91,6 +99,23 @@ export interface SegretarioMailPort {
   } | null>
 }
 
+/** What the Segretario keeps of the mail as it reads it: the topics and what is open. */
+export interface SegretarioWorkPort {
+  /** What topics are called in this build: "Argomenti", or the extension's word ("Pratiche"). */
+  topicsLabel(): string
+  listTopics(): Promise<Topic[]>
+  getTopic(id: string): Promise<TopicDetail | null>
+  /** The topic each conversation is in, by id; null for one in none. */
+  conversationTopics(
+    threads: ReadonlyArray<{ accountId: string; threadId: string }>
+  ): Promise<Array<string | null>>
+  /** Files a conversation as the user asked — a choice the Segretario keeps to. */
+  fileConversation(accountId: string, threadId: string, topicId: string | null): Promise<void>
+  /** What is open across the accounts the Segretario looks after. */
+  openCommitments(): Promise<Commitment[]>
+  closeCommitment(id: number): Promise<boolean>
+}
+
 /** What the page does for the Segretario. */
 export interface SegretarioPagePort {
   /** Opens a draft in the composer as `spec` says; resolves with its id. */
@@ -105,6 +130,7 @@ export interface ToolContext {
   /** Names given during this call, to keep in the log. */
   newHandles: HandleRecord[]
   mail: SegretarioMailPort
+  work: SegretarioWorkPort
   page: SegretarioPagePort
   store: AiStore
   /**

@@ -2,7 +2,7 @@ import type { MessageRef } from '@shared/models'
 
 /**
  * Short names for what an activity has seen — `m3` a message, `f2` a file
- * or an attachment, `b1` a draft — so the model refers to them in a few
+ * or an attachment, `b1` a draft, `a4` a topic — so the model refers to them in a few
  * characters and the page turns them into links. Each activity has its
  * own; the same message keeps its name for the whole activity.
  */
@@ -20,6 +20,7 @@ export type HandleTarget =
   | { kind: 'message'; ref: MessageRef; messageKey: string }
   | { kind: 'file'; file: FileTarget }
   | { kind: 'draft'; draftId: string }
+  | { kind: 'topic'; topicId: string; title: string }
 
 /** A name given, as kept in the activity's log to rebuild the registry. */
 export interface HandleRecord {
@@ -33,6 +34,8 @@ function identityOf(target: HandleTarget): string {
       return `m\u0000${target.ref.accountId}\u0000${target.messageKey}`
     case 'draft':
       return `b\u0000${target.draftId}`
+    case 'topic':
+      return `a\u0000${target.topicId}`
     case 'file':
       return target.file.kind === 'path'
         ? `f\u0000${target.file.path}`
@@ -43,13 +46,14 @@ function identityOf(target: HandleTarget): string {
 const PREFIX: Readonly<Record<HandleTarget['kind'], string>> = {
   message: 'm',
   file: 'f',
-  draft: 'b'
+  draft: 'b',
+  topic: 'a'
 }
 
 export class HandleRegistry {
   private readonly byHandle = new Map<string, HandleTarget>()
   private readonly byIdentity = new Map<string, string>()
-  private readonly counters: Record<string, number> = { m: 0, f: 0, b: 0 }
+  private readonly counters: Record<string, number> = { m: 0, f: 0, b: 0, a: 0 }
 
   constructor(records: ReadonlyArray<HandleRecord> = []) {
     for (const record of records) {
@@ -95,6 +99,11 @@ export class HandleRegistry {
   draft(handle: string): string | null {
     const target = this.resolve(handle)
     return target?.kind === 'draft' ? target.draftId : null
+  }
+
+  topic(handle: string): { topicId: string; title: string } | null {
+    const target = this.resolve(handle)
+    return target?.kind === 'topic' ? target : null
   }
 
   private restore({ handle, target }: HandleRecord): void {
