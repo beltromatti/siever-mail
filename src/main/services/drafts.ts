@@ -130,10 +130,29 @@ export function draftFromParsedMail(
   }
 }
 
+/** Drafts held while their copies leave Bozze (see `DraftService.hold`). */
+export interface HeldDrafts {
+  /** The copy to act on, by the ref the caller had: the draft's copy as it is now on the server. */
+  current: ReadonlyMap<string, MessageRef>
+  /** Refs left where they are: their draft has changes the server could not take yet. */
+  refused: MessageRef[]
+  error?: string
+  /** With the copies the action moved: their drafts are let go, the others written on again. */
+  settle(moved: ReadonlyArray<MessageRef>): Promise<void>
+}
+
+export function draftRefKey(ref: MessageRef): string {
+  return `${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`
+}
+
 export class DraftService {
   private readonly timers = new Map<string, NodeJS.Timeout>()
   private readonly uploads = new Map<string, Promise<DraftStatus>>()
   private readonly statuses = new Map<string, DraftStatus>()
+  /** Drafts whose copy is leaving Bozze: written here, not filed, until it is settled. */
+  private readonly held = new Set<string>()
+  /** Drafts whose copy left Bozze: a composer's late save no longer brings them back. */
+  private readonly released = new Set<string>()
   /** Messages being opened, so one opened twice at once is made a draft once. */
   private readonly opening = new Map<string, Promise<StoredDraft>>()
 
@@ -141,8 +160,15 @@ export class DraftService {
 
   /** Keeps the draft as it is now; the server gets it once typing settles. */
   async save(content: DraftContent): Promise<DraftStatus> {
+    if (this.released.has(content.id)) {
+      return { id: content.id, state: 'gone' }
+    }
+
     await this.deps.database.saveDraft(content)
-    this.schedule(content.id, SERVER_SAVE_DELAY_MS)
+
+    if (!this.held.has(content.id)) {
+      this.schedule(content.id, SERVER_SAVE_DELAY_MS)
+    }
 
     return this.setStatus({
       id: content.id,
@@ -152,7 +178,16 @@ export class DraftService {
   }
 
   /** Files the draft on the server now, when the server does not have it as it is. */
-  flush(id: string): Promise<DraftStatus> {
+  async flush(id: string): Promise<DraftStatus> {
+    if (this.released.has(id)) {
+      return { id, state: 'gone' }
+    }
+
+    // Its copy is leaving Bozze: a new one is not filed meanwhile.
+    if (this.held.has(id)) {
+      return this.statuses.get(id) ?? { id, state: 'pending' }
+    }
+
     this.clearTimer(id)
     return this.upload(id)
   }
@@ -304,11 +339,20 @@ export class DraftService {
   }
 
   /**
-   * Messages of Bozze leaving it — moved, archived, thrown away: the drafts
-   * they are the server's copy of are no longer written on, here or in a
-   * composer, so a later save cannot put them back.
+   * Messages of Bozze about to leave it — moved, archived, thrown away. The
+   * drafts they are copies of stop being filed while it happens; what is
+   * newer here than on the server is filed first, so the copy that leaves
+   * is the draft as it is, and is the one to act on. A draft the server
+   * cannot take as it is stays, with its copy, and says why. `settle`, with
+   * the copies the action moved, lets their drafts go — a composer holding
+   * one closes — and has the others filed again as they were.
    */
-  async release(refs: ReadonlyArray<MessageRef>): Promise<void> {
+  async hold(refs: ReadonlyArray<MessageRef>): Promise<HeldDrafts> {
+    const current = new Map<string, MessageRef>()
+    const refused: MessageRef[] = []
+    const heldIds = new Map<string, string>()
+    let error: string | undefined
+
     for (const ref of refs) {
       const known = await this.deps.database.findDraftByServerCopy(
         ref.accountId,
@@ -316,9 +360,63 @@ export class DraftService {
         ref.uid
       )
 
-      if (known) {
-        await this.forget(known.content.id)
-        this.deps.onStatus({ id: known.content.id, state: 'gone' })
+      if (!known || this.released.has(known.content.id)) {
+        continue
+      }
+
+      const id = known.content.id
+      this.held.add(id)
+      this.clearTimer(id)
+      await this.uploads.get(id)?.catch(() => undefined)
+      let record = await this.deps.database.getDraft(id)
+
+      if (record && record.revision > record.serverRevision) {
+        await this.upload(id)
+        record = await this.deps.database.getDraft(id)
+      }
+
+      const server = record?.server
+
+      if (!record || !server || server.uid == null || record.revision > record.serverRevision) {
+        this.held.delete(id)
+
+        if (record && record.revision > record.serverRevision) {
+          this.schedule(id, SERVER_RETRY_DELAY_MS)
+        }
+
+        refused.push(ref)
+        error = 'Una bozza ha modifiche che il server non ha ancora preso: resta in Bozze.'
+        continue
+      }
+
+      const copy = { accountId: server.accountId, folderPath: server.folderPath, uid: server.uid }
+      current.set(draftRefKey(ref), copy)
+      heldIds.set(draftRefKey(copy), id)
+    }
+
+    return {
+      current,
+      refused,
+      error,
+      settle: async (moved) => {
+        const movedKeys = new Set(moved.map(draftRefKey))
+
+        for (const [copyKey, id] of heldIds) {
+          this.held.delete(id)
+
+          if (movedKeys.has(copyKey)) {
+            this.released.add(id)
+            await this.forget(id)
+            this.deps.onStatus({ id, state: 'gone' })
+            continue
+          }
+
+          const record = await this.deps.database.getDraft(id)
+
+          if (record && record.revision > record.serverRevision) {
+            this.schedule(id, SERVER_SAVE_DELAY_MS)
+          }
+        }
       }
     }
   }
@@ -368,6 +466,11 @@ export class DraftService {
   }
 
   private schedule(id: string, delayMs: number): void {
+    // A copy leaving Bozze, or gone: nothing is filed for it meanwhile.
+    if (this.held.has(id) || this.released.has(id)) {
+      return
+    }
+
     this.clearTimer(id)
     this.timers.set(
       id,

@@ -97,7 +97,7 @@ import { parseInvitation } from '@main/calendar/ics'
 import { isIcsAttachment, type MessageInvitation } from '@shared/calendar'
 import type { SegretarioMailPort } from '@main/ai/agent/tool-types'
 import { AppBadge } from './app-badge'
-import { DraftService } from './drafts'
+import { DraftService, draftRefKey } from './drafts'
 import { AppDatabase, type MessageListView } from './database'
 import { finalizeUpgradeMigration } from './data-migration'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
@@ -581,10 +581,8 @@ export class MailService {
       setSeen: (refs, present) => this.setMessagesSeen({ refs, present }),
       setFlagged: (refs, present) => this.setMessagesFlagged({ refs, present }),
       // Never a deletion for good: a message already in the Trash stays there.
-      trash: async (refs) => {
-        await this.releaseDrafts(refs)
-        return this.engine.moveMessagesToTrash(refs)
-      },
+      trash: (refs) =>
+        this.withDraftsLeaving(refs, (acting) => this.engine.moveMessagesToTrash(acting)),
       draftOfMessage: async (ref) =>
         folderForRole(await this.database.listFolders(ref.accountId), '\\Drafts')?.path ===
         ref.folderPath
@@ -1342,8 +1340,9 @@ export class MailService {
   async moveMessages(input: MoveMessagesInput): Promise<MessagesActionResult> {
     const payload = moveMessagesSchema.parse(input)
     await this.ensureAccountsExist(payload.refs)
-    await this.releaseDrafts(payload.refs)
-    const result = await this.engine.moveMessages(payload.refs, payload.destinationFolderPath)
+    const result = await this.withDraftsLeaving(payload.refs, (acting) =>
+      this.engine.moveMessages(acting, payload.destinationFolderPath)
+    )
     const failed = new Set(
       result.failed.map((ref) => `${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`)
     )
@@ -1363,8 +1362,9 @@ export class MailService {
   async moveMessagesToRole(input: MoveMessagesToRoleInput): Promise<MessagesActionResult> {
     const payload = moveMessagesToRoleSchema.parse(input)
     await this.ensureAccountsExist(payload.refs)
-    await this.releaseDrafts(payload.refs)
-    return this.engine.moveMessagesToRole(payload.refs, payload.role)
+    return this.withDraftsLeaving(payload.refs, (acting) =>
+      this.engine.moveMessagesToRole(acting, payload.role)
+    )
   }
 
   /** An account's recent destinations of "Sposta", the latest first. */
@@ -1400,19 +1400,25 @@ export class MailService {
   async deleteMessages(refs: MessageRef[]): Promise<MessagesActionResult> {
     const payload = messageRefsSchema.parse(refs)
     await this.ensureAccountsExist(payload)
-    await this.releaseDrafts(payload)
-    return this.engine.deleteMessages(payload)
+    return this.withDraftsLeaving(payload, (acting) => this.engine.deleteMessages(acting))
   }
 
   async archiveMessages(refs: MessageRef[]): Promise<MessagesActionResult> {
     const payload = messageRefsSchema.parse(refs)
     await this.ensureAccountsExist(payload)
-    await this.releaseDrafts(payload)
-    return this.engine.archiveMessages(payload)
+    return this.withDraftsLeaving(payload, (acting) => this.engine.archiveMessages(acting))
   }
 
-  /** Before messages leave their folder: those of Bozze take their drafts with them. */
-  private async releaseDrafts(refs: ReadonlyArray<MessageRef>): Promise<void> {
+  /**
+   * Messages leaving their folder, by `act`. Those of Bozze take their
+   * drafts with them (see `DraftService.hold`): the copy that leaves is the
+   * draft as it is, and only a draft whose copy did leave is let go. What
+   * failed is said in the refs the caller gave.
+   */
+  private async withDraftsLeaving(
+    refs: ReadonlyArray<MessageRef>,
+    act: (refs: MessageRef[]) => Promise<MessagesActionResult>
+  ): Promise<MessagesActionResult> {
     const draftsFolders = new Map<string, string | undefined>()
 
     for (const accountId of new Set(refs.map((ref) => ref.accountId))) {
@@ -1422,9 +1428,38 @@ export class MailService {
       )
     }
 
-    await this.drafts.release(
+    const held = await this.drafts.hold(
       refs.filter((ref) => draftsFolders.get(ref.accountId) === ref.folderPath)
     )
+    const refused = new Set(held.refused.map(draftRefKey))
+    const given = new Map<string, MessageRef>()
+    const acting = refs.flatMap((ref) => {
+      if (refused.has(draftRefKey(ref))) {
+        return []
+      }
+
+      const copy = held.current.get(draftRefKey(ref)) ?? ref
+      given.set(draftRefKey(copy), ref)
+      return [copy]
+    })
+
+    let result: MessagesActionResult
+
+    try {
+      result = acting.length > 0 ? await act(acting) : { failed: [] }
+    } catch (error) {
+      // Nothing is known to have left: every draft is written on again.
+      await held.settle([])
+      throw error
+    }
+
+    const failed = new Set(result.failed.map(draftRefKey))
+    await held.settle(acting.filter((ref) => !failed.has(draftRefKey(ref))))
+
+    return {
+      failed: [...result.failed.map((ref) => given.get(draftRefKey(ref)) ?? ref), ...held.refused],
+      error: result.error ?? held.error
+    }
   }
 
   async setMessagesSeen(input: SetMessagesKeywordInput): Promise<MessagesActionResult> {

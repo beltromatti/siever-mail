@@ -576,9 +576,12 @@ In Bozze — of this app or any other client — a double click, Invio or
 the copy kept here if it is newer or open, otherwise the server's,
 parsed with its recipients, Ccn, thread, files (written to
 `userData/drafts/<id>/`) and inline pictures. A draft whose copy leaves
-Bozze — moved, archived, thrown away, by the user or the Segretario — is
-let go with it (`DraftService.release`): what is kept of it goes, and a
-composer holding it closes (status `gone`), so no later save puts it back.
+Bozze — moved, archived, thrown away, by the user or the Segretario — goes
+with it (`DraftService.hold`): it stops being filed while the copy leaves,
+what is newer here is filed first so the copy that leaves is the draft as
+it is (a draft the server cannot take as it is stays, and says why), and
+only once the copy did leave is what is kept of it let go — a composer
+holding it closes (status `gone`) and no later save puts it back.
 
 Several messages are written at once. One is in front, modal; the others
 wait in the dock, bars in the bottom right corner, as Gmail keeps them,

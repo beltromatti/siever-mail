@@ -2891,9 +2891,19 @@ export class AppDatabase {
         activity_id TEXT,
         account_id TEXT NOT NULL,
         text TEXT NOT NULL,
+        snapshot TEXT,
         created_at INTEGER NOT NULL
       )
     `)
+
+    // Kept before the Segretario remembered how it left a draft.
+    const draftColumns = (await this.prisma.$queryRawUnsafe(
+      'PRAGMA table_info(ai_drafts)'
+    )) as Array<{ name?: string }>
+
+    if (!draftColumns.some((column) => column.name === 'snapshot')) {
+      await this.prisma.$executeRawUnsafe('ALTER TABLE ai_drafts ADD COLUMN snapshot TEXT')
+    }
   }
 
   /** The calendars' tables (see the `Calendar*` models): a copy of the provider's, kept in step. */

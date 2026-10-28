@@ -2622,7 +2622,15 @@ function App(): React.JSX.Element {
   /** "Segna come gestito" for the conversations of these messages, as many as they are. */
   const markHandled = useCallback(
     async (summaries: ReadonlyArray<MailMessageSummary>): Promise<void> => {
-      const messages = summaries.map(({ accountId, messageKey }) => ({ accountId, messageKey }))
+      // One message per conversation: it is the conversation that is marked, counted once.
+      const messages = [
+        ...new Map(
+          summaries.map(({ accountId, messageKey, threadId }) => [
+            `${accountId}\u0000${threadId}`,
+            { accountId, messageKey }
+          ])
+        ).values()
+      ]
       let handled = 0
 
       try {

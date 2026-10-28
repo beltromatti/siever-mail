@@ -18,21 +18,38 @@ import {
  * the user — taken up and opened on the user's desk.
  */
 /**
- * The reply the Segretario wrote to a message and the user left as it was,
- * as a reference to write on: a draft the user changed is theirs.
+ * A draft as a whole — its words, who it goes to, its subject and files —
+ * in one comparable string: two that are equal are the same draft.
+ */
+function draftShape(
+  draft: NonNullable<Awaited<ReturnType<ToolContext['mail']['getDraft']>>>
+): string {
+  return JSON.stringify({
+    text: comparableText(draft.text),
+    to: [...draft.to].sort(),
+    cc: [...draft.cc].sort(),
+    bcc: [...draft.bcc].sort(),
+    subject: draft.subject.trim(),
+    attachments: [...draft.attachments].sort()
+  })
+}
+
+/**
+ * The reply the Segretario wrote to a message, as a reference to write on,
+ * while it is still exactly as the Segretario left it: a draft the user
+ * touched anywhere — a word, a recipient, a file — is theirs.
  */
 async function untouchedReplyDraft(
   context: ToolContext,
   source: MessageRef
 ): Promise<string | undefined> {
   for (const draftId of await context.mail.draftsReplyingTo(source)) {
-    const [written, draft] = await Promise.all([
-      context.store.draftWritten(draftId),
+    const [left, draft] = await Promise.all([
+      context.store.draftSnapshot(draftId),
       context.mail.getDraft(draftId)
     ])
 
-    // Its signature and the quoted message come after: what it wrote is all still there.
-    if (written !== null && draft && comparableText(draft.text).includes(comparableText(written))) {
+    if (left !== null && draft && draftShape(draft) === left) {
       return context.handles.name({ kind: 'draft', draftId }, context.newHandles)
     }
   }
@@ -191,9 +208,16 @@ export const writeDraftTool: SegretarioTool = {
     const draft = await context.mail.getDraft(draftId)
     const accountId = draft?.accountId ?? spec.accountId ?? spec.source?.accountId
 
-    // Kept as written, to learn from what the user changes before sending.
+    // Kept as written, to learn from what the user changes before sending,
+    // and as it was left, to know later whether the user touched it.
     if (accountId) {
-      await context.store.recordDraft({ draftId, activityId: context.activityId, accountId, text })
+      await context.store.recordDraft({
+        draftId,
+        activityId: context.activityId,
+        accountId,
+        text,
+        snapshot: draft ? draftShape(draft) : null
+      })
     }
 
     if (answered) {

@@ -472,8 +472,10 @@ export class AiStore {
     activityId: string | null
     accountId: string
     text: string
+    /** The whole draft as it was left (see `AiDraft.snapshot`), when it is one to rewrite later. */
+    snapshot?: string | null
   }): Promise<void> {
-    const data = { ...draft, createdAt: BigInt(Date.now()) }
+    const data = { ...draft, snapshot: draft.snapshot ?? null, createdAt: BigInt(Date.now()) }
 
     await this.prisma.aiDraft.upsert({
       where: { draftId: draft.draftId },
@@ -483,13 +485,13 @@ export class AiStore {
   }
 
   /** A draft the Segretario wrote, taken out of the record: it has been sent or thrown away. */
-  /** What the Segretario wrote in a draft, while it keeps it: null for one it did not write. */
-  async draftWritten(draftId: string): Promise<string | null> {
+  /** The draft as the Segretario left it (see `AiDraft.snapshot`): null for one it did not write so. */
+  async draftSnapshot(draftId: string): Promise<string | null> {
     const row = await this.prisma.aiDraft.findUnique({
       where: { draftId },
-      select: { text: true }
+      select: { snapshot: true }
     })
-    return row?.text ?? null
+    return row?.snapshot ?? null
   }
 
   async takeDraft(

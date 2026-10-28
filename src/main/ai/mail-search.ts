@@ -20,7 +20,9 @@ export interface AgentSearchQuery {
   accounts?: string[]
   /** A role (`arrivo`, `inviata`…) or a folder's name. */
   folder?: string
+  /** The first day searched, AAAA-MM-GG, as the user's clock has it. */
   from?: string
+  /** The last day searched, AAAA-MM-GG, whole. */
   to?: string
   unreadOnly?: boolean
   withAttachments?: boolean
@@ -160,6 +162,16 @@ function scopeSql(scope: SearchScope): Prisma.Sql {
   )
 }
 
+/**
+ * The instant a local day begins, `offset` days on, as the stored dates are
+ * written (UTC ISO): "oggi" is from this midnight here, not from midnight
+ * in Greenwich.
+ */
+export function localDayStart(day: string, offset = 0): string {
+  const [year, month, date] = day.split('-').map(Number)
+  return new Date(year, month - 1, date + offset).toISOString()
+}
+
 function filterSql(query: AgentSearchQuery): Prisma.Sql {
   const clauses: Prisma.Sql[] = [Prisma.sql`1 = 1`]
 
@@ -172,12 +184,12 @@ function filterSql(query: AgentSearchQuery): Prisma.Sql {
   }
 
   if (query.from) {
-    clauses.push(Prisma.sql`m.date_iso >= ${query.from}`)
+    clauses.push(Prisma.sql`m.date_iso >= ${localDayStart(query.from)}`)
   }
 
   if (query.to) {
-    // The whole day of the end date is in.
-    clauses.push(Prisma.sql`m.date_iso < ${`${query.to}T23:59:59.999Z`}`)
+    // The whole of the last day is in: up to the next one's midnight.
+    clauses.push(Prisma.sql`m.date_iso < ${localDayStart(query.to, 1)}`)
   }
 
   return Prisma.join(clauses, ' AND ')

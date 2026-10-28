@@ -2295,6 +2295,8 @@ export class SegretarioService {
 
     const reading = Promise.withResolvers<void>()
     let copies: string | null = null
+    // Once its note is kept, the message is read: what fails after is not read again.
+    let saved = false
 
     try {
       const store = this.requireStore()
@@ -2333,6 +2335,7 @@ export class SegretarioService {
         }
 
         await store.saveTriage(note, { opened: [], updated: [], closed: [] })
+        saved = true
 
         if (twinThread) {
           const [topicId] = await this.requireTopics().topicIdsOf([twinThread])
@@ -2502,16 +2505,18 @@ export class SegretarioService {
       const touchable = (id: number): boolean =>
         open.some((commitment) => commitment.id === id) ||
         shownElsewhere.some((commitment) => commitment.id === id)
-      const repeated = [...new Set(triage.repeats)].flatMap((place) =>
-        fromSender[place]
-          ? [
-              {
-                threadId: fromSender[place].note.threadId,
-                messageKey: fromSender[place].note.messageKey,
-                messageDate: fromSender[place].note.messageDate
-              }
-            ]
-          : []
+      // Noise carries no matter, whatever it seems to repeat.
+      const repeated = [...new Set(triage.state === 'rumore' ? [] : triage.repeats)].flatMap(
+        (place) =>
+          fromSender[place]
+            ? [
+                {
+                  threadId: fromSender[place].note.threadId,
+                  messageKey: fromSender[place].note.messageKey,
+                  messageDate: fromSender[place].note.messageDate
+                }
+              ]
+            : []
       )
 
       const carried = await store.saveTriage(
@@ -2542,6 +2547,7 @@ export class SegretarioService {
           repeated
         }
       )
+      saved = true
       // Other conversations changed — things closed or made precise there, or now carried here: their readers follow.
       for (const changed of shownElsewhere.filter(
         (commitment) =>
@@ -2614,9 +2620,17 @@ export class SegretarioService {
           return false
         }
 
-        if (error.retryable) {
+        if (error.retryable && !saved) {
           return false
         }
+      }
+
+      if (saved) {
+        logMainError('Segretario: a note was kept, what follows it failed', error, {
+          messageKey: item.messageKey
+        })
+        this.triageFailures.delete(failureKey)
+        return true
       }
 
       const attempts = (this.triageFailures.get(failureKey) ?? 0) + 1
@@ -3268,8 +3282,12 @@ export class SegretarioService {
         }
       }
 
-      // A reflection is quiet work: it is there to read, never waiting to be seen.
-      await store.updateActivity(id, { status: 'done', unseen: kind !== 'riflessione' })
+      // A reflection, or keeping up with the mail, is quiet work on its memory:
+      // there to read, never waiting to be seen.
+      await store.updateActivity(id, {
+        status: 'done',
+        unseen: kind !== 'riflessione' && kind !== 'aggiornamento'
+      })
       ended = 'done'
     } catch (raw) {
       const error = raw instanceof SegretarioError ? raw : null

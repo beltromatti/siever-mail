@@ -345,6 +345,9 @@ model AiDraft {
   activityId String? @map("activity_id")
   accountId  String @map("account_id")
   text       String
+  /// The whole draft as the Segretario left it — words, recipients, subject,
+  /// files — as JSON: while it is still exactly so, the draft is its own to rewrite.
+  snapshot   String?
   createdAt  BigInt @map("created_at")
 
   @@map("ai_drafts")
