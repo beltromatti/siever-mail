@@ -21,6 +21,8 @@ import type { MessageHighlightTerms, PrimaryAddressMode } from './message-list-s
  */
 export interface MessageListViewProps {
   title: string
+  /** Under the header, above the rows: what the Segretario says of a topic's list. */
+  banner?: React.ReactNode
   /** The active search, trimmed; empty when there is none. */
   searchQuery: string
   onClearSearch: () => void

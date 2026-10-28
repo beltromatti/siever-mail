@@ -60,9 +60,16 @@ import { useSegretario } from '@renderer/features/segretario/use-segretario'
 import { useMessageNotes } from '@renderer/features/segretario/message-notes'
 import { ThreadBriefPanel } from '@renderer/features/segretario/thread-brief'
 import { TodayPage } from '@renderer/features/segretario/today-page'
+import { TopicBanner } from '@renderer/features/segretario/topic-banner'
 import { plainTextToComposerHtml, writtenText } from '@renderer/features/mail/composer-body'
 import { parseRecipients } from '@shared/email-address'
-import type { ApprovalRequest, ComposeSpec, HandleLink, SendOutcome } from '@shared/segretario'
+import type {
+  ApprovalRequest,
+  ComposeSpec,
+  HandleLink,
+  SendOutcome,
+  Topic
+} from '@shared/segretario'
 import { WorkspaceLayout } from '@renderer/features/workspace/workspace-layout'
 import { useAssistantInset } from '@renderer/features/workspace/assistant-width'
 import extensionRenderer from '@app/extension/renderer'
@@ -89,6 +96,9 @@ import {
   unifiedFolderPath,
   unifiedFolderRole,
   isAcrossAccounts,
+  isSegretarioList,
+  segretarioTopic,
+  segretarioTopicPath,
   segretarioView,
   segretarioViewLabel,
   SEGRETARIO_VIEWS,
@@ -755,9 +765,18 @@ function App(): React.JSX.Element {
     number
   > | null>(null)
 
+  // The topics — a company's pratiche — the Segretario files conversations into, and their name.
+  const [topics, setTopics] = useState<Topic[]>([])
+  const [topicsLabel, setTopicsLabel] = useState<string | null>(null)
+
   const refreshSegretarioViews = useCallback(async (): Promise<void> => {
     try {
-      setSegretarioViewCounts(await window.mailApi.getSegretarioViewCounts())
+      const [counts, nextTopics] = await Promise.all([
+        window.mailApi.getSegretarioViewCounts(),
+        window.segretarioApi.listTopics()
+      ])
+      setSegretarioViewCounts(counts)
+      setTopics(nextTopics)
     } catch {
       return
     }
@@ -1169,9 +1188,10 @@ function App(): React.JSX.Element {
     }
 
     void refreshSegretarioViews()
+    void window.segretarioApi.topicsLabel().then(setTopicsLabel)
 
     const unsubscribe = window.segretarioApi.onNotesChanged(() => {
-      if (segretarioView(currentViewRef.current?.folderPath)) {
+      if (isSegretarioList(currentViewRef.current?.folderPath)) {
         scheduleListRefresh()
       }
 
@@ -2249,13 +2269,50 @@ function App(): React.JSX.Element {
   const selectionFlagged =
     selectedSummaries.length > 0 && selectedSummaries.every((message) => message.isFlagged)
 
+  // The extension topic the selected conversations share, as the Segretario filed them.
+  const [selectionTopic, setSelectionTopic] = useState<{
+    selection: ReadonlyArray<MailMessageSummary>
+    key: string | null
+  } | null>(null)
+
+  useEffect(() => {
+    if (selectedSummaries.length === 0 || topics.length === 0) {
+      return
+    }
+
+    let current = true
+
+    void window.segretarioApi
+      .conversationTopics(
+        selectedSummaries.map((summary) => ({
+          accountId: summary.accountId,
+          threadId: summary.threadId
+        }))
+      )
+      .then((ids) => {
+        const shared = new Set(ids)
+        const id = shared.size === 1 ? ids[0] : null
+        const key = id ? (topics.find((topic) => topic.id === id)?.externalKey ?? null) : null
+
+        if (current) {
+          setSelectionTopic({ selection: selectedSummaries, key })
+        }
+      })
+      .catch(() => undefined)
+
+    return () => {
+      current = false
+    }
+  }, [selectedSummaries, topics])
+
   const extensionSelection = useMemo<ExtensionSelectionContext>(
     () => ({
       refs: selection.selectedRefs,
       summaries: selectedSummaries,
-      multiSelectActive: selection.selectedRefs.length > 1
+      multiSelectActive: selection.selectedRefs.length > 1,
+      topicKey: selectionTopic?.selection === selectedSummaries ? selectionTopic.key : null
     }),
-    [selectedSummaries, selection.selectedRefs]
+    [selectedSummaries, selection.selectedRefs, selectionTopic]
   )
 
   const extensionHostHooks = useMemo<ExtensionHostHooks>(
@@ -4310,13 +4367,19 @@ function App(): React.JSX.Element {
   // What the view is called where it is named: the folder, or a folder of
   // "Tutti gli account".
   const currentSegretarioView = segretarioView(selectedFolderPath)
+  const currentTopicId = segretarioTopic(selectedFolderPath)
+  const currentTopic = currentTopicId
+    ? topics.find((topic) => topic.id === currentTopicId)
+    : undefined
   const currentViewLabel = currentUnifiedRole
     ? `${folderRoleLabel(currentUnifiedRole)} · ${ALL_ACCOUNTS_LABEL}`
     : currentSegretarioView
       ? segretarioViewLabel(currentSegretarioView)
-      : currentFolder
-        ? folderDisplayName(currentFolder)
-        : 'Conversazioni'
+      : currentTopicId
+        ? (currentTopic?.title ?? topicsLabel ?? '')
+        : currentFolder
+          ? folderDisplayName(currentFolder)
+          : 'Conversazioni'
   // What the user is looking at goes along with what they ask the Segretario.
   const segretarioContextRefs = selection.selectedRefs.slice(0, SEGRETARIO_CONTEXT_LIMIT)
   const segretarioContext: SegretarioContextChip = {
@@ -4395,6 +4458,14 @@ function App(): React.JSX.Element {
 
   const listViewProps: MessageListViewProps = {
     title: currentViewLabel,
+    banner: currentTopicId ? (
+      <TopicBanner
+        key={currentTopicId}
+        topicId={currentTopicId}
+        canWrite={segretario.status?.keyState === 'ready'}
+        onChanged={() => void refreshSegretarioViews()}
+      />
+    ) : undefined,
     searchQuery: search.trim(),
     onClearSearch: clearSearch,
     search,
@@ -4554,6 +4625,11 @@ function App(): React.JSX.Element {
                           }))
                         : []
                     }
+                    topics={
+                      segretarioConfigured && topicsLabel
+                        ? { label: topicsLabel, items: topics }
+                        : null
+                    }
                     accountLabel={selectedAccountLabel}
                     folders={folders}
                     unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
@@ -4593,6 +4669,8 @@ function App(): React.JSX.Element {
                     key={`${messageForViewer.accountId}:${messageForViewer.threadId}`}
                     accountId={messageForViewer.accountId}
                     threadId={messageForViewer.threadId}
+                    topics={topicsLabel ? { label: topicsLabel, items: topics } : null}
+                    onOpenTopic={(topicId) => selectFolder(segretarioTopicPath(topicId))}
                     onTakeUpReadyDraft={takeUpReadyDraft}
                   />
                 )

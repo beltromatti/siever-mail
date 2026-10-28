@@ -25,6 +25,8 @@ import {
   type NotePriority,
   type NotesChange,
   type ThreadBrief,
+  type Topic,
+  type TopicDetail,
   type WritingRequest,
   type SegretarioContext,
   type SegretarioPreferences,
@@ -33,6 +35,8 @@ import {
   type SendOutcome,
   type ShowRequest
 } from '@shared/segretario'
+
+import extensionMain from '@app/extension/main'
 
 import { AiStore, type StoredEvent } from './ai-store'
 import {
@@ -62,6 +66,7 @@ import {
   type ToolCall
 } from './openrouter'
 import { searchMail, searchScope, threadMessages } from './mail-search'
+import { TopicStore, type CatalogTopic } from './topic-store'
 import {
   parseReadyDraft,
   parseWriting,
@@ -72,11 +77,15 @@ import {
 } from './ready-drafts'
 import { fillTemplate, PROMPTS } from './prompts'
 import {
+  namedTopicIndexes,
+  namedTopicLine,
   parseTriage,
+  topicCatalog,
   TRIAGE_SCHEMA,
   TRIAGE_WINDOW_DAYS,
   triageRequest,
-  type TriageMessage
+  type TriageMessage,
+  type TriageResult
 } from './triage'
 import { SEGRETARIO_TOOLS, toolDefinitions } from './tools'
 import { clip, formatDateTime, withoutQuotedHistory } from './tools/format'
@@ -106,6 +115,8 @@ const REFLECTION_INTERVAL_MS = 6 * 60 * 60 * 1000
 const LESSONS_PER_REFLECTION = 20
 /** A draft it wrote and nobody sent is forgotten after this. */
 const DRAFT_RECORD_TTL_MS = 90 * 24 * 60 * 60 * 1000
+/** How often the extension's topics are read again: a new pratica folder appears within this. */
+const EXTENSION_TOPICS_SYNC_MS = 10 * 60 * 1000
 /** How often triage looks for messages without a note. */
 const TRIAGE_CHECK_MS = 20_000
 /** Messages taken per look, and read side by side. */
@@ -169,6 +180,9 @@ export interface SegretarioServiceOptions {
  */
 export class SegretarioService {
   private store: AiStore | null = null
+  private topics: TopicStore | null = null
+  private topicsTimer: NodeJS.Timeout | null = null
+  private topicsSyncing: Promise<void> = Promise.resolve()
   private readonly client: OpenRouterClient
   private status: SegretarioStatus = EMPTY_STATUS
   private readonly running = new Map<string, RunningActivity>()
@@ -180,6 +194,8 @@ export class SegretarioService {
   private readonly toolsByName = new Map(this.tools.map((tool) => [tool.name, tool]))
   private recheckTimer: ReturnType<typeof setInterval> | null = null
   private readonly opened = Promise.withResolvers<void>()
+  /** Resolves once the extension is in, its topics read: triage files against them. */
+  private readonly extensionIn = Promise.withResolvers<void>()
   private ownWorkTimer: NodeJS.Timeout | null = null
   private consideringOwnWork = false
   private triageTimer: NodeJS.Timeout | null = null
@@ -187,6 +203,7 @@ export class SegretarioService {
   /** Messages whose note failed, by account and key, with the attempts made. */
   private readonly triageFailures = new Map<string, number>()
   private preparing = false
+  private gisting = false
   /** Messages whose prepared reply failed, by account and key, with the attempts made. */
   private readonly readyDraftFailures = new Map<string, number>()
 
@@ -200,8 +217,10 @@ export class SegretarioService {
   }
 
   async open(): Promise<void> {
-    const store = new AiStore(await this.options.database.storeClient())
+    const client = await this.options.database.storeClient()
+    const store = new AiStore(client)
     this.store = store
+    this.topics = new TopicStore(client)
     this.status = (await store.getStoredStatus()) ?? EMPTY_STATUS
 
     // Work a quit cut short cannot go on by itself: it says so, and waits
@@ -228,7 +247,38 @@ export class SegretarioService {
     }, KEY_RECHECK_MS)
     this.ownWorkTimer = setInterval(() => void this.considerOwnWork(), OWN_WORK_CHECK_MS)
     this.triageTimer = setInterval(() => void this.triageRound(), TRIAGE_CHECK_MS)
+    this.topicsTimer = setInterval(() => void this.syncExtensionTopics(), EXTENSION_TOPICS_SYNC_MS)
     this.opened.resolve()
+  }
+
+  /** The extension installed — or failed to: its topics are read, and triage may begin. */
+  async extensionInstalled(): Promise<void> {
+    await this.syncExtensionTopics()
+    this.extensionIn.resolve()
+  }
+
+  /** The extension says its topics changed: read again, once the extension is in. */
+  extensionTopicsChanged(): void {
+    void this.extensionIn.promise.then(() => this.syncExtensionTopics())
+  }
+
+  /** The extension's topics (a company's pratiche), brought in step with the Segretario's. */
+  private syncExtensionTopics(): Promise<void> {
+    const read = extensionMain.assistant?.topics
+
+    if (!read) {
+      return Promise.resolve()
+    }
+
+    // One reading at a time: two would race to add the same pratica.
+    this.topicsSyncing = this.topicsSyncing.then(async () => {
+      try {
+        await this.requireTopics().syncExtensionTopics(await read())
+      } catch (error) {
+        logMainError('Segretario: the extension topics could not be read', error)
+      }
+    })
+    return this.topicsSyncing
   }
 
   async stop(): Promise<void> {
@@ -247,6 +297,11 @@ export class SegretarioService {
       this.triageTimer = null
     }
 
+    if (this.topicsTimer) {
+      clearInterval(this.topicsTimer)
+      this.topicsTimer = null
+    }
+
     for (const activity of this.running.values()) {
       activity.controller.abort()
     }
@@ -258,6 +313,14 @@ export class SegretarioService {
     }
 
     return this.store
+  }
+
+  private requireTopics(): TopicStore {
+    if (!this.topics) {
+      throw new Error('Il Segretario non è ancora pronto.')
+    }
+
+    return this.topics
   }
 
   /* ─────────────────────────────── key and credit ─────────────────────────────── */
@@ -539,6 +602,8 @@ export class SegretarioService {
     }
 
     await this.requireStore().clearData()
+    await this.requireTopics().clear()
+    await this.syncExtensionTopics()
   }
 
   /* ─────────────────────────── notes on the mail ─────────────────────────── */
@@ -549,8 +614,18 @@ export class SegretarioService {
     return this.requireStore().getNotes(messages)
   }
 
-  getThreadBrief(accountId: string, threadId: string): Promise<ThreadBrief> {
-    return this.requireStore().threadBrief(accountId, threadId)
+  async getThreadBrief(accountId: string, threadId: string): Promise<ThreadBrief> {
+    const [brief, link] = await Promise.all([
+      this.requireStore().threadBrief(accountId, threadId),
+      this.requireTopics().threadTopic(accountId, threadId)
+    ])
+
+    return {
+      ...brief,
+      topic: link
+        ? { id: link.topic.id, title: link.topic.title, folderPath: link.topic.folderPath }
+        : null
+    }
   }
 
   /* ───────────────────────── writing with the user ───────────────────────── */
@@ -647,6 +722,174 @@ export class SegretarioService {
       text
     })
     return { text }
+  }
+
+  /* ──────────────────────────────── topics ──────────────────────────────── */
+
+  /** A topic's conversations among some accounts', for its list. */
+  async topicThreads(
+    topicId: string,
+    accountIds: ReadonlyArray<string>
+  ): Promise<Array<{ accountId: string; threadId: string }>> {
+    await this.whenReady()
+    return this.requireTopics().threadsOf(topicId, accountIds)
+  }
+
+  async getTopicsLabel(): Promise<string> {
+    return this.topicsLabel()
+  }
+
+  async listTopics(): Promise<Topic[]> {
+    return this.requireTopics().listTopics(await this.options.mail.includedAccountIds())
+  }
+
+  /**
+   * A topic with its conversations — each by its latest message, the
+   * newest first — and what is open in them.
+   */
+  async getTopic(id: string): Promise<TopicDetail | null> {
+    const topics = this.requireTopics()
+    const accountIds = await this.options.mail.includedAccountIds()
+    const summary = (await topics.listTopics(accountIds)).find((topic) => topic.id === id)
+
+    if (!summary) {
+      return null
+    }
+
+    const store = this.requireStore()
+    const threads = await topics.threadsOf(id, accountIds)
+    const [notes, commitments] = await Promise.all([
+      store.latestNotes(threads),
+      store.commitmentsOf(threads)
+    ])
+    const messages: BriefingItem[] = []
+
+    for (const accountId of new Set(notes.map((note) => note.accountId))) {
+      const ofAccount = notes.filter((note) => note.accountId === accountId)
+      const summaries = await this.options.mail.messageSummaries(
+        accountId,
+        ofAccount.map((note) => note.messageKey)
+      )
+
+      for (const note of ofAccount) {
+        const message = summaries.get(note.messageKey)
+
+        if (message) {
+          messages.push({
+            text: note.summary,
+            priority: note.priority,
+            due: note.due,
+            commitmentKind: null,
+            ref: message.ref,
+            subject: message.subject,
+            from: message.from[0]?.name || message.from[0]?.address || '',
+            date: message.dateIso
+          })
+        }
+      }
+    }
+
+    return {
+      ...summary,
+      messages: messages.sort((a, b) => b.date.localeCompare(a.date)),
+      commitments
+    }
+  }
+
+  /** Writes where a topic stands, from its conversations' notes and what is open in them. */
+  async writeTopicState(id: string): Promise<TopicDetail | null> {
+    const topic = await this.getTopic(id)
+
+    if (!topic) {
+      return null
+    }
+
+    const key = await this.requireKey()
+    const material = [
+      `Oggi è ${new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(new Date())}.`,
+      `# ${topic.title}${topic.description ? `\n${topic.description}` : ''}`,
+      `## Le conversazioni, dalla più recente\n${
+        topic.messages
+          .slice(0, 30)
+          .map(
+            (item) =>
+              `- ${formatDateTime(item.date)} · ${item.from} · «${item.subject}»: ${item.text}${item.due ? ` (entro ${item.due})` : ''}`
+          )
+          .join('\n') || '- nessuna'
+      }`,
+      `## Cose aperte e chiuse di recente\n${
+        topic.commitments
+          .map(
+            (commitment) =>
+              `- [${commitment.status}] ${commitment.kind}: ${commitment.text}${commitment.due ? ` (entro ${commitment.due})` : ''}`
+          )
+          .join('\n') || '- nessuna'
+      }`
+    ].join('\n\n')
+
+    const result = await this.client.chat(key, {
+      messages: [
+        { role: 'system', content: PROMPTS.topicState },
+        { role: 'user', content: material }
+      ],
+      reasoningEffort: 'none',
+      maxTokens: 1200
+    })
+
+    await this.recordUsage(null, 'argomento', result)
+
+    if (result.finishReason === 'length' || !result.content.trim()) {
+      throw new Error('Il punto della questione non è venuto intero: riprova.')
+    }
+
+    await this.requireTopics().setState(id, result.content.trim())
+    return this.getTopic(id)
+  }
+
+  /** The user files a conversation into a topic, or out of any: the Segretario keeps to it. */
+  async setConversationTopic(
+    accountId: string,
+    threadId: string,
+    topicId: string | null
+  ): Promise<void> {
+    await this.requireTopics().link(accountId, threadId, topicId, 'utente')
+    this.emitNotes({ accountId, messageKeys: [], threadIds: [threadId] })
+  }
+
+  conversationTopics(
+    threads: ReadonlyArray<{ accountId: string; threadId: string }>
+  ): Promise<Array<string | null>> {
+    return this.requireTopics().topicIdsOf(threads)
+  }
+
+  async createTopic(title: string): Promise<Topic> {
+    const id = await this.requireTopics().createTopic(title, 'utente')
+    const topic = (await this.listTopics()).find((candidate) => candidate.id === id)
+
+    if (!topic) {
+      throw new Error('Non sono riuscito a crearlo.')
+    }
+
+    return topic
+  }
+
+  /** A topic's folder, as stored — never a path the page sends. */
+  async topicFolder(id: string): Promise<string> {
+    const folderPath = (await this.requireTopics().getTopic(id))?.folderPath
+
+    if (!folderPath) {
+      throw new Error('Non ha una cartella.')
+    }
+
+    return folderPath
+  }
+
+  async updateTopic(
+    id: string,
+    change: { title?: string; archived?: boolean }
+  ): Promise<Topic | null> {
+    await this.requireTopics().update(id, change)
+    return (await this.listTopics()).find((topic) => topic.id === id) ?? null
   }
 
   /* ──────────────────────────────── the day ──────────────────────────────── */
@@ -939,6 +1182,7 @@ export class SegretarioService {
     this.triaging = true
 
     try {
+      await this.extensionIn.promise
       const store = this.store
 
       while ((await store.getPreferences()).triage && this.status.keyState === 'ready') {
@@ -967,6 +1211,8 @@ export class SegretarioService {
         const key = await this.requireKey()
         const accounts = await this.options.mail.listAccounts()
         const notes = await store.listMemory()
+        // The topics conversations are filed into: read once a round, grown as it creates them.
+        const catalog = await this.requireTopics().catalog()
         const queue = [...threads]
         let reachable = true
 
@@ -980,7 +1226,8 @@ export class SegretarioService {
                   { ...message, threadId: thread.threadId },
                   key,
                   accounts,
-                  notes
+                  notes,
+                  catalog
                 )
 
                 if (!reachable) {
@@ -1000,8 +1247,64 @@ export class SegretarioService {
       logMainError('Segretario: triage round failed', error)
     } finally {
       this.triaging = false
-      // With the notes written, the replies they call for.
+      // With the notes written, the replies they call for, and what the topics turned out to be.
       void this.prepareReadyDrafts()
+      void this.writeTopicGists()
+    }
+  }
+
+  /**
+   * A line on what each topic is about — the job, for whom, the suppliers
+   * and offices in it — learnt from its mail: the catalogue triage files
+   * against shows it, so a message that does not name its topic still
+   * finds it. Written once a topic has conversations, again as they double.
+   */
+  private async writeTopicGists(): Promise<void> {
+    if (this.gisting || !this.topics || this.status.keyState !== 'ready') {
+      return
+    }
+
+    this.gisting = true
+
+    try {
+      const topics = this.topics
+
+      for (const { id, conversations } of await topics.needingGist()) {
+        const topic = await this.getTopic(id)
+
+        if (!topic || topic.messages.length === 0 || this.status.keyState !== 'ready') {
+          continue
+        }
+
+        const result = await this.client.chat(await this.requireKey(), {
+          messages: [
+            { role: 'system', content: PROMPTS.topicGist },
+            {
+              role: 'user',
+              content: [
+                `# ${topic.title}${topic.description ? `\n${topic.description}` : ''}`,
+                `## Le conversazioni\n${topic.messages
+                  .slice(0, 20)
+                  .map((item) => `- ${item.from} · «${item.subject}»: ${item.text}`)
+                  .join('\n')}`
+              ].join('\n\n')
+            }
+          ],
+          reasoningEffort: 'none',
+          maxTokens: 200
+        })
+
+        await this.recordUsage(null, 'argomento', result)
+        const gist = result.content.replace(/\s+/g, ' ').trim().replace(/\.$/, '')
+
+        if (result.finishReason !== 'length' && gist) {
+          await topics.setGist(id, clip(gist, 300).text, conversations)
+        }
+      }
+    } catch (error) {
+      logMainError('Segretario: a topic gist could not be written', error)
+    } finally {
+      this.gisting = false
     }
   }
 
@@ -1190,6 +1493,65 @@ export class SegretarioService {
     return examples
   }
 
+  /** What topics are called in this build: the extension's word, or "Argomenti". */
+  private topicsLabel(): string {
+    return extensionMain.assistant?.topicsLabel ?? 'Argomenti'
+  }
+
+  /**
+   * Files a conversation where triage said: a topic of the catalogue, a new
+   * one — made once, even when two conversations name it together — or
+   * none, which leaves any filing as it is.
+   */
+  private async fileIntoTopic(
+    accountId: string,
+    threadId: string,
+    answer: TriageResult['topic'],
+    catalog: CatalogTopic[],
+    /** The one topic the conversation names, if it names one alone: a pratica, by number or client. */
+    namedTopicId: string | null
+  ): Promise<void> {
+    if (!answer) {
+      return
+    }
+
+    const topics = this.requireTopics()
+    let topicId: string | null = null
+
+    if ('key' in answer) {
+      topicId = catalog[Number(answer.key.slice(1)) - 1]?.id ?? null
+    } else {
+      // A "new" topic whose title names a known one — "Prat2451 – ordine" — is that one.
+      topicId =
+        catalog.find((topic) => topic.title.toLowerCase() === answer.create.toLowerCase())?.id ??
+        (await topics.extensionTopicNamedBy(answer.create))
+    }
+
+    // A pratica the conversation names beats a guess: a topic the Segretario made, or would make.
+    if (namedTopicId && topicId !== namedTopicId) {
+      const chosen = topicId ? await topics.getTopic(topicId) : null
+
+      if (!chosen || chosen.origin === 'segretario') {
+        topicId = namedTopicId
+      }
+    }
+
+    if (!topicId && 'create' in answer) {
+      topicId = await topics.createTopic(answer.create, 'segretario')
+      catalog.push({
+        id: topicId,
+        title: answer.create,
+        description: null,
+        current: true,
+        names: []
+      })
+    }
+
+    if (topicId) {
+      await topics.link(accountId, threadId, topicId, 'segretario')
+    }
+  }
+
   /**
    * A message as the work done ahead reads it: the conversation up to it,
    * what is known of the account and of the people involved.
@@ -1255,7 +1617,8 @@ export class SegretarioService {
     item: { ref: MessageRef; messageKey: string; threadId: string; dateIso: string },
     key: string,
     accounts: ReadonlyArray<MailAccount>,
-    notes: ReadonlyArray<{ path: string; content: string }>
+    notes: ReadonlyArray<{ path: string; content: string }>,
+    catalog: CatalogTopic[]
   ): Promise<boolean> {
     const failureKey = `${item.ref.accountId}\u0000${item.messageKey}`
     const account = accounts.find((candidate) => candidate.id === item.ref.accountId)
@@ -1276,14 +1639,22 @@ export class SegretarioService {
       const tu = notes.find((note) => note.path === 'tu.md')
       const open = await store.openCommitments(account.id, item.threadId)
       const fromUser = target.from.some((address) => own.has(address.address.toLowerCase()))
+      const topics = this.requireTopics()
+      const filed = await topics.threadTopic(account.id, item.threadId)
+      const filedIndex = filed ? catalog.findIndex((topic) => topic.id === filed.topic.id) : -1
+      const named = namedTopicIndexes(catalog, thread)
 
       const result = await this.client.chat(key, {
         messages: [
           {
             role: 'system',
-            content: tu
-              ? `${PROMPTS.triage}\n\n# Cosa sai dell'utente\n\n${tu.content.trim()}`
-              : PROMPTS.triage
+            content: [
+              PROMPTS.triage,
+              tu ? `# Cosa sai dell'utente\n\n${tu.content.trim()}` : null,
+              topicCatalog(this.topicsLabel(), catalog)
+            ]
+              .filter(Boolean)
+              .join('\n\n')
           },
           {
             role: 'user',
@@ -1295,7 +1666,17 @@ export class SegretarioService {
               fromUser,
               people,
               open,
-              thread
+              thread,
+              named: named.map((index) => namedTopicLine(catalog, index)),
+              topicsLabel: this.topicsLabel(),
+              currentTopic:
+                filed && filedIndex >= 0
+                  ? {
+                      key: `T${filedIndex + 1}`,
+                      title: filed.topic.title,
+                      byUser: filed.linkedBy === 'utente'
+                    }
+                  : null
             })
           }
         ],
@@ -1322,6 +1703,13 @@ export class SegretarioService {
         },
         triage.opened,
         triage.closed.filter((id) => open.some((commitment) => commitment.id === id))
+      )
+      await this.fileIntoTopic(
+        account.id,
+        item.threadId,
+        triage.topic,
+        catalog,
+        named.length === 1 ? catalog[named[0]].id : null
       )
       this.triageFailures.delete(failureKey)
       this.emitNotes({
@@ -1479,6 +1867,7 @@ export class SegretarioService {
     }
 
     await store.forgetAccount(accountId, normalizeMemoryPath(`account/${email}`))
+    await this.requireTopics().forgetAccount(accountId)
 
     if ((await store.getPreferences()).learning === true) {
       await store.addLesson('account-rimosso', { email })

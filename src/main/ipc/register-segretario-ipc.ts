@@ -1,7 +1,8 @@
-import { ipcMain } from 'electron'
+import { ipcMain, shell } from 'electron'
 import { z } from 'zod'
 
 import type { SegretarioService } from '@main/ai/segretario-service'
+import { ensurePathReachable } from '@main/services/network-volumes'
 import { logMainError } from '@main/utils/error-utils'
 import { SEGRETARIO_IPC } from '@shared/segretario'
 
@@ -48,6 +49,13 @@ const composeResultSchema = z.union([
   z.object({ draftId: z.string().min(1) }),
   z.object({ error: z.string().max(2000) })
 ])
+
+const topicChangeSchema = z
+  .object({
+    title: z.string().trim().min(1, 'Dai un nome.').max(120).optional(),
+    archived: z.boolean().optional()
+  })
+  .strict()
 
 const textSchema = z.string().trim().min(1, 'Scrivi qualcosa al Segretario.').max(20_000)
 const idSchema = z.string().min(1).max(100)
@@ -127,6 +135,45 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
     segretario.assistWriting(writingRequestSchema.parse(request))
   )
   handle(SEGRETARIO_IPC.writeBriefingOpening, () => segretario.writeBriefingOpening())
+  handle(SEGRETARIO_IPC.topicsLabel, () => segretario.getTopicsLabel())
+  handle(SEGRETARIO_IPC.listTopics, () => segretario.listTopics())
+  handle(SEGRETARIO_IPC.getTopic, (id: unknown) => segretario.getTopic(idSchema.parse(id)))
+  handle(SEGRETARIO_IPC.writeTopicState, (id: unknown) =>
+    segretario.writeTopicState(idSchema.parse(id))
+  )
+  handle(
+    SEGRETARIO_IPC.setConversationTopic,
+    (accountId: unknown, threadId: unknown, topicId: unknown) =>
+      segretario.setConversationTopic(
+        idSchema.parse(accountId),
+        z.string().min(1).parse(threadId),
+        idSchema.nullable().parse(topicId)
+      )
+  )
+  handle(SEGRETARIO_IPC.conversationTopics, (threads: unknown) =>
+    segretario.conversationTopics(
+      z
+        .array(z.object({ accountId: idSchema, threadId: z.string().min(1) }))
+        .max(1000)
+        .parse(threads)
+    )
+  )
+  handle(SEGRETARIO_IPC.createTopic, (title: unknown) =>
+    segretario.createTopic(z.string().trim().min(1, 'Dai un nome.').max(120).parse(title))
+  )
+  handle(SEGRETARIO_IPC.openTopicFolder, async (id: unknown) => {
+    // The archive is on a share a restart may have left unmounted: reached first.
+    const folderPath = await segretario.topicFolder(idSchema.parse(id))
+    await ensurePathReachable(folderPath)
+    const failure = await shell.openPath(folderPath)
+
+    if (failure) {
+      throw new Error(`La cartella non si apre: ${failure}`)
+    }
+  })
+  handle(SEGRETARIO_IPC.updateTopic, (id: unknown, change: unknown) =>
+    segretario.updateTopic(idSchema.parse(id), topicChangeSchema.parse(change))
+  )
   handle(SEGRETARIO_IPC.draftSent, (draftId: unknown, writtenText: unknown) =>
     segretario.draftSent(idSchema.parse(draftId), z.string().max(200_000).parse(writtenText))
   )

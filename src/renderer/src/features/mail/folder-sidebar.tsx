@@ -1,20 +1,25 @@
 import { useMemo, useState } from 'react'
 import {
+  Briefcase,
   ChevronDown,
   ChevronRight,
   Hourglass,
   ListTodo,
   PenLine,
+  Search,
   Sun,
   type Inbox
 } from 'lucide-react'
 
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
+import { TopicPickerPopover } from '@renderer/features/segretario/topic-picker'
 import { buildFolderTree, folderNodeLabel, type FolderTreeNode } from '@renderer/lib/folder-tree'
 import { cn, formatCount } from '@renderer/lib/utils'
 import {
   folderRole,
   folderRoleLabel,
+  segretarioTopic,
+  segretarioTopicPath,
   segretarioViewLabel,
   segretarioViewPath,
   unifiedFolderPath,
@@ -22,8 +27,12 @@ import {
   type SegretarioView
 } from '@shared/folders'
 import type { MailFolder, UnifiedFolderSummary } from '@shared/models'
+import type { Topic } from '@shared/segretario'
 
 import { folderIcon, ROLE_ICONS } from './folder-icons'
+
+/** How many topics in corso the sidebar lists; the others are a search away. */
+const TOPICS_SHOWN = 8
 
 const VIEW_ICONS: Readonly<Record<SegretarioView, typeof Inbox>> = {
   'da-gestire': ListTodo,
@@ -49,6 +58,11 @@ interface FolderSidebarProps {
   today: { open: boolean; onOpen: () => void } | null
   /** The Segretario's views and how many conversations each holds; none without the Segretario. */
   segretarioViews: ReadonlyArray<{ view: SegretarioView; count: number }>
+  /**
+   * The topics — a company's pratiche — with their name: those in corso
+   * listed, every one a search away. Null without the Segretario.
+   */
+  topics: { label: string; items: ReadonlyArray<Topic> } | null
   /** The account the dropdown above has open, whose folders the tree shows. */
   accountLabel: string
   folders: MailFolder[]
@@ -105,7 +119,8 @@ function FolderRow({
   onToggleExpanded,
   onSelect,
   drop,
-  onContextMenu
+  onContextMenu,
+  hint
 }: {
   icon: typeof Inbox
   name: string
@@ -123,6 +138,8 @@ function FolderRow({
   drop?: { hovered: boolean; onEnter: () => void; onLeave: () => void; onDrop: () => void }
   /** Undefined for a row without a menu of its own: a view of the Segretario's. */
   onContextMenu?: () => void
+  /** What its tooltip says, when not its count of messages. */
+  hint?: string
 }): React.JSX.Element {
   return (
     <div
@@ -188,11 +205,12 @@ function FolderRow({
         onClick={onSelect}
         disabled={!onSelect}
         title={
-          onSelect
+          hint ??
+          (onSelect
             ? `${name} — ${formatCount(messageCount, 'messaggio', 'messaggi')}${
                 unseenCount > 0 ? `, ${formatCount(unseenCount, 'non letto', 'non letti')}` : ''
               }`
-            : name
+            : name)
         }
         className="focus-visible:ring-ring/60 flex h-full min-w-0 flex-1 items-center gap-2 rounded-[6px] pr-2 pl-0.5 text-left outline-none focus-visible:ring-2 disabled:cursor-default"
       >
@@ -250,9 +268,20 @@ export function FolderSidebar({
   selectedFolderPath,
   onSelectFolder,
   onFolderContextMenu,
+  topics,
   messageDrop
 }: FolderSidebarProps): React.JSX.Element {
   const tree = useMemo(() => buildFolderTree(folders), [folders])
+  const [topicSearchOpen, setTopicSearchOpen] = useState(false)
+  const openTopicId = segretarioTopic(selectedFolderPath)
+  // In corso: those with conversations, the most recently moved first — the open one always.
+  const shownTopics = useMemo(
+    () =>
+      (topics?.items ?? [])
+        .filter((topic) => topic.id === openTopicId || (!topic.archived && topic.conversations > 0))
+        .slice(0, TOPICS_SHOWN),
+    [openTopicId, topics]
+  )
   // The folder dragged messages are over, to show where they would land.
   const [dropHoverKey, setDropHoverKey] = useState<string | null>(null)
 
@@ -365,6 +394,54 @@ export function FolderSidebar({
                   />
                 )
               })}
+            </section>
+          )}
+
+          {topics && (
+            <section aria-label={topics.label}>
+              <SectionHeading>{topics.label}</SectionHeading>
+              {shownTopics.map((topic) => {
+                const path = segretarioTopicPath(topic.id)
+
+                return (
+                  <FolderRow
+                    key={path}
+                    icon={Briefcase}
+                    name={topic.title}
+                    hint={`${topic.title} — ${formatCount(topic.conversations, 'conversazione', 'conversazioni')}${
+                      topic.openCommitments > 0
+                        ? `, ${formatCount(topic.openCommitments, 'cosa aperta', 'cose aperte')}`
+                        : ''
+                    }`}
+                    messageCount={topic.conversations}
+                    unseenCount={0}
+                    badge={topic.openCommitments}
+                    active={selectedFolderPath === path}
+                    onSelect={() => onSelectFolder(path)}
+                  />
+                )
+              })}
+              <TopicPickerPopover
+                open={topicSearchOpen}
+                onOpenChange={setTopicSearchOpen}
+                side="right"
+                topics={topics.items}
+                label={topics.label}
+                currentId={openTopicId}
+                onPick={(topic) => {
+                  setTopicSearchOpen(false)
+                  onSelectFolder(segretarioTopicPath(topic.id))
+                }}
+                trigger={
+                  <button
+                    type="button"
+                    className="text-faint-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring/60 flex h-7 w-full items-center gap-2 rounded-[6px] pr-2 pl-[18px] text-left text-[12.5px] font-medium outline-none focus-visible:ring-2"
+                  >
+                    <Search className="size-[15px] shrink-0" strokeWidth={1.7} />
+                    <span className="min-w-0 flex-1 truncate">Cerca tra tutte…</span>
+                  </button>
+                }
+              />
             </section>
           )}
 

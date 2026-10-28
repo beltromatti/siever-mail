@@ -114,9 +114,44 @@ export interface Commitment {
 /** A conversation as the reader shows it: its latest note, what is open in it, the reply prepared. */
 export interface ThreadBrief {
   note: MessageNote | null
+  /** The topic it belongs to, if any. */
+  topic: Pick<Topic, 'id' | 'title' | 'folderPath'> | null
   commitments: Commitment[]
   /** A reply the Segretario prepared ahead for the latest message, until taken up or set aside. */
   readyDraft: { messageKey: string; text: string; doubts: string } | null
+}
+
+/* ──────────────────────────────── topics ──────────────────────────────── */
+
+/**
+ * A matter that lasts — a job, a project, a negotiation; in a company's
+ * build, a pratica of its archive — and the conversations that belong to
+ * it, across the accounts. The Segretario files conversations into topics
+ * as they arrive and keeps a word on where each stands.
+ */
+export interface Topic {
+  id: string
+  title: string
+  description: string | null
+  /** Where its files are, when it has a folder: a pratica's, on the archive. */
+  folderPath: string | null
+  /** Brought by the extension (a pratica), made by the Segretario, or by the user. */
+  origin: 'extension' | 'segretario' | 'utente'
+  /** The extension's key for it ("pratica:2451"); null for the Segretario's and the user's own. */
+  externalKey: string | null
+  /** Where it stands, as the Segretario last wrote it; null until written. */
+  state: string | null
+  stateAt: number | null
+  lastActivityAt: number | null
+  conversations: number
+  openCommitments: number
+  archived: boolean
+}
+
+export interface TopicDetail extends Topic {
+  /** Its conversations, each by its latest message, the newest first. */
+  messages: BriefingItem[]
+  commitments: Commitment[]
 }
 
 /** A line of the day's page: a conversation that asks something, or a thing open in one. */
@@ -389,6 +424,15 @@ export const SEGRETARIO_IPC = {
   readyDraftSource: 'segretario:ready-draft-source',
   getBriefing: 'segretario:get-briefing',
   assistWriting: 'segretario:assist-writing',
+  listTopics: 'segretario:list-topics',
+  getTopic: 'segretario:get-topic',
+  writeTopicState: 'segretario:write-topic-state',
+  setConversationTopic: 'segretario:set-conversation-topic',
+  updateTopic: 'segretario:update-topic',
+  topicsLabel: 'segretario:topics-label',
+  createTopic: 'segretario:create-topic',
+  conversationTopics: 'segretario:conversation-topics',
+  openTopicFolder: 'segretario:open-topic-folder',
   writeBriefingOpening: 'segretario:write-briefing-opening',
   notesChanged: 'segretario:notes-changed',
   listActivities: 'segretario:list-activities',
@@ -445,6 +489,28 @@ export interface SegretarioApi {
   takeUpReadyDraft: (accountId: string, messageKey: string, draftId: string) => Promise<void>
   discardReadyDraft: (accountId: string, messageKey: string) => Promise<void>
   getBriefing: () => Promise<Briefing>
+  /** What topics are called in this build: "Argomenti", or the extension's word ("Pratiche"). */
+  topicsLabel: () => Promise<string>
+  listTopics: () => Promise<Topic[]>
+  getTopic: (id: string) => Promise<TopicDetail | null>
+  /** Writes again where the topic stands, from its conversations and what is open in them. */
+  writeTopicState: (id: string) => Promise<TopicDetail | null>
+  /** Files a conversation into a topic, or out of any (null): the user's choice is kept. */
+  setConversationTopic: (
+    accountId: string,
+    threadId: string,
+    topicId: string | null
+  ) => Promise<void>
+  /** The topic each conversation is in, by id, in the order asked; null for one in none. */
+  conversationTopics: (
+    threads: ReadonlyArray<{ accountId: string; threadId: string }>
+  ) => Promise<Array<string | null>>
+  /** A topic the user makes, by its title. */
+  createTopic: (title: string) => Promise<Topic>
+  /** Opens a topic's folder — a pratica's, on the archive — in Finder or Explorer. */
+  openTopicFolder: (id: string) => Promise<void>
+  /** Renames, archives or brings back a topic. */
+  updateTopic: (id: string, change: { title?: string; archived?: boolean }) => Promise<Topic | null>
   /** Writes or rewrites the message being written, as asked: the whole text, ready to send. */
   assistWriting: (request: WritingRequest) => Promise<{ text: string }>
   /** Writes the day's opening again, from the day as it stands. */

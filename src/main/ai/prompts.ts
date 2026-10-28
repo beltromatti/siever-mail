@@ -1,6 +1,8 @@
 import extensionMain from '@app/extension/main'
 
 import compaction from './prompts/compattazione.md?raw'
+import topicState from './prompts/argomento.md?raw'
+import topicGist from './prompts/argomento-in-breve.md?raw'
 import learning from './prompts/conoscerti.md?raw'
 import briefing from './prompts/oggi.md?raw'
 import context from './prompts/contesto.md?raw'
@@ -27,21 +29,28 @@ import title from './prompts/titolo.md?raw'
  * in Italian, edited as text — they are what makes the Segretario what it
  * is. They are part of the build (`?raw`), not read from disk at runtime.
  *
- * An extension adds its own (see `ExtensionMain.assistant`): its text joins
- * the system prompt after the host's.
+ * An extension adds its own (see `ExtensionMain.assistant`): what it says
+ * of the company joins, after the host's text, every prompt that reads the
+ * user's mail to judge or write it.
  */
+const company = extensionMain.assistant?.systemPrompt?.trim()
+
+function withCompany(prompt: string): string {
+  return company ? `${prompt.trim()}\n\n${company}` : prompt.trim()
+}
+
 export const PROMPTS = {
-  system: [system.trim(), extensionMain.assistant?.systemPrompt?.trim()]
-    .filter(Boolean)
-    .join('\n\n'),
+  system: withCompany(system),
   context: context.trim(),
   compaction: compaction.trim(),
-  briefing: briefing.trim(),
+  topicState: withCompany(topicState),
+  topicGist: withCompany(topicGist),
+  briefing: withCompany(briefing),
   learning: learning.trim(),
   reflection: reflection.trim(),
-  triage: triage.trim(),
-  writing: writing.trim(),
-  readyDraft: readyDraft.trim(),
+  triage: withCompany(triage),
+  writing: withCompany(writing),
+  readyDraft: withCompany(readyDraft),
   title: title.trim(),
   tools: {
     cerca_posta: searchMail.trim(),

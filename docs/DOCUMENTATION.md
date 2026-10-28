@@ -741,6 +741,34 @@ pronte" those with a reply prepared. Their paths
 main process resolves each conversation to one row, in the folder the user
 thinks of it in, never Spam or the Trash, and the list shows exactly those.
 
+**Topics** (`topic-store.ts`, `ai_topics` / `ai_topic_threads`): the
+lasting matters the mail is about — a job, a negotiation; in a company's
+build, the pratiche of its archive, which the extension lists
+(`ExtensionAssistant.topics`, called "Pratiche" there). Triage files each
+conversation into one as it reads it (`argomento` in the schema), against a
+catalogue in its system prompt: the topics in corso — joined lately, or
+among the extension's hundred most recent — each with a line on what it is
+about (`gist`, written from its conversations once they exist and again as
+they double, `argomento-in-breve.md`), so a supplier's offer that never
+names the client still finds its job. The others keep their key and come
+with the conversation that names them: the extension gives each pratica
+the names mail uses ("Prat2451", "pratica n. 2451", the client), compared
+case, accents and punctuation aside (`topic-names.ts`). A conversation that
+names one pratica alone goes there, whatever the model guessed; a "new"
+topic whose title names one is that one; a topic the Segretario made and
+the extension later brings — the job got its folder — is folded into it.
+The user moves a conversation from the reader ("Cambia", which also makes
+a new topic) and that choice is kept; a topic the Segretario made, left
+empty, goes. Each topic opens as a list, like a view, of every message of
+its conversations (`segretarioTopicPath`), under "Il punto" — where it
+stands, written by the Segretario when the topic moved since
+(`argomento.md`), and what is open in it. The sidebar lists the busiest
+eight and searches the rest. With the extension, ARCHIVIA SIEVER opens on
+the pratica the conversation is in (`ExtensionSelectionContext.topicKey`).
+
+For tuning the prompts, `SIEVER_AI_TRACE=<folder>` writes every call's
+messages and answer there, a JSON line each; it is off unless set.
+
 **Learning** is work the Segretario begins itself, once the user has said
 yes (the panel asks; Settings → Cosa so di te switches it):
 
@@ -786,7 +814,9 @@ extension code by path. The contract is `src/extension/types.ts`:
 | `ExtensionMain.uninstall()`                 | Optional; called when the app quits.                                                                                                        |
 | `ExtensionMain.defaultAccountSignatureHtml` | Signature given to the first account added. Empty in the public build.                                                                      |
 | `ExtensionMain.accountSignatureRevision`    | Edition of that content; stored signatures on an older one — and accounts without one — are handed, once, to `upgradeAccountSignatureHtml`. |
-| `ExtensionMain.assistant.systemPrompt`      | What the Segretario must know of the company the build is for; joins its system prompt after the host's.                                    |
+| `ExtensionMain.assistant.systemPrompt`      | What the Segretario must know of the company the build is for; joins every prompt that reads the mail, after the host's.                    |
+| `ExtensionMain.assistant.topics`            | The company's lasting matters (pratiche), the most recent first, with the names mail uses for them: the Segretario files mail into them.    |
+| `ExtensionMain.assistant.topicsLabel`       | What those are called in the sidebar and the prompts ("Pratiche"); "Argomenti" in the public build.                                         |
 | `ExtensionRenderer.toolbarActions`          | Buttons first in the reading pane's header, given the selection.                                                                            |
 | `ExtensionRenderer.settingsTabs`            | Tabs after the host's in Settings.                                                                                                          |
 | `ExtensionRenderer.PrimaryActionDialog`     | A dialog the host mounts and opens on request.                                                                                              |
@@ -797,8 +827,11 @@ extension code by path. The contract is `src/extension/types.ts`:
 
 `install()` receives an `ExtensionMainContext`: `app`, `ipcMain`, the user
 data path, a database handle (`applyDdl`, `query`, `execute`) on the host's
-connection, a mail engine handle, `getMainWindow()`, `recordRecentFiles()`
-and `adoptShortcutOverride()`. The engine handle gives raw messages in bulk
+connection, a mail engine handle, `getMainWindow()`, `recordRecentFiles()`,
+`adoptShortcutOverride()` and `topicsChanged()` — called when what
+`assistant.topics()` lists changed, so the Segretario reads it again then.
+The selection handed to toolbar actions and the primary dialog carries
+`topicKey`, the extension topic its conversations are filed in. The engine handle gives raw messages in bulk
 — `fetchMessageRawSources(refs, onMessage)` downloads a few per command and
 hands each on while the next arrive — and `moveMessagesToTrash(refs)`, one
 command per folder. Renderer surfaces get `ExtensionHostHooks`:

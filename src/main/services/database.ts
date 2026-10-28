@@ -2791,6 +2791,39 @@ export class AppDatabase {
       'CREATE INDEX IF NOT EXISTS idx_ai_items_status ON ai_items(status, due)'
     )
     await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_topics (
+        id TEXT PRIMARY KEY,
+        external_key TEXT UNIQUE,
+        title TEXT NOT NULL,
+        description TEXT,
+        folder_path TEXT,
+        aliases TEXT,
+        rank INTEGER,
+        active_at INTEGER,
+        gist TEXT,
+        gist_conversations INTEGER,
+        origin TEXT NOT NULL,
+        state TEXT,
+        state_at INTEGER,
+        archived_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_topic_threads (
+        account_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        topic_id TEXT NOT NULL,
+        linked_by TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (account_id, thread_id)
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_ai_topic_threads_topic ON ai_topic_threads(topic_id)'
+    )
+    await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS ai_briefings (
         day TEXT PRIMARY KEY,
         text TEXT NOT NULL,
@@ -3671,6 +3704,21 @@ export class AppDatabase {
       .filter((row) => !seen.has(row.messageKey) && seen.add(row.messageKey))
       .slice(0, limit)
       .map((row) => ({ ...row, uid: Number(row.uid) }))
+  }
+
+  /** The keys of an account's messages in these conversations. */
+  async listMessageKeysOfThreads(
+    accountId: string,
+    threadIds: ReadonlyArray<string>
+  ): Promise<string[]> {
+    await this.ready
+
+    const rows = await this.prisma.message.findMany({
+      where: { accountId, threadId: { in: [...threadIds] } },
+      select: { messageKey: true },
+      distinct: ['messageKey']
+    })
+    return rows.map((row) => row.messageKey)
   }
 
   /** Where an account's messages with these keys are filed: every row of each. */

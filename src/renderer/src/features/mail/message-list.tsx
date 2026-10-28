@@ -75,6 +75,7 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
         selectedCount={selection.selectedRefs.length}
         canSelectAll={messages.length > 0}
       />
+      {props.banner}
 
       {messages.length === 0 && emptyState ? (
         <MessageListEmpty state={emptyState} />

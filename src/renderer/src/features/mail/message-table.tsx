@@ -144,6 +144,7 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
         selectedCount={selection.selectedRefs.length}
         canSelectAll={messages.length > 0}
       />
+      {props.banner}
 
       <div
         className={cn(

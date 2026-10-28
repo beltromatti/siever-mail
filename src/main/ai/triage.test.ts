@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseTriage, triageRequest } from './triage'
+import {
+  namedTopicIndexes,
+  namedTopicLine,
+  parseTriage,
+  topicCatalog,
+  triageRequest
+} from './triage'
+import { nameForm, nameForms, saysAnyName } from './topic-names'
 
 describe('parseTriage', () => {
   it('takes the note and what it opens and closes', () => {
@@ -13,9 +20,11 @@ describe('parseTriage', () => {
           motivo: 'cliente, scadenza vicina',
           scadenza: '2026-10-30',
           impegni_nuovi: [
-            { tipo: 'ti_chiedono', testo: 'Offerta 3 pompe', scadenza: '2026-10-30' }
+            { tipo: 'ti_chiedono', testo: 'Offerta 3 pompe', scadenza: '2026-10-30' },
+            { tipo: 'aspetti', testo: 'Aspetti il riscontro di Giulia', scadenza: null }
           ],
-          impegni_chiusi: [4]
+          impegni_chiusi: [4],
+          argomento: '[T3]'
         })
       )
     ).toEqual({
@@ -24,9 +33,36 @@ describe('parseTriage', () => {
       priority: 'alta',
       reason: 'cliente, scadenza vicina',
       due: '2026-10-30',
-      opened: [{ kind: 'ti_chiedono', text: 'Offerta 3 pompe', due: '2026-10-30' }],
-      closed: [4]
+      opened: [
+        { kind: 'ti_chiedono', text: 'Offerta 3 pompe', due: '2026-10-30' },
+        { kind: 'aspetti', text: 'Il riscontro di Giulia', due: null }
+      ],
+      closed: [4],
+      topic: { key: 'T3' }
     })
+  })
+
+  it('reads the topic as a key, a new one, or none', () => {
+    const answer = (argomento: string): ReturnType<typeof parseTriage>['topic'] =>
+      parseTriage(
+        JSON.stringify({
+          sintesi: 'x',
+          stato: 'informativo',
+          priorita: 'media',
+          motivo: '',
+          scadenza: null,
+          impegni_nuovi: [],
+          impegni_chiusi: [],
+          argomento
+        })
+      ).topic
+
+    expect(answer('t12')).toEqual({ key: 'T12' })
+    expect(answer('NUOVO:  Celle di stagionatura –  Caseificio Valli')).toEqual({
+      create: 'Celle di stagionatura – Caseificio Valli'
+    })
+    expect(answer('')).toBeNull()
+    expect(answer('nessuno')).toBeNull()
   })
 
   it('keeps only real dates as deadlines', () => {
@@ -38,7 +74,8 @@ describe('parseTriage', () => {
         motivo: '',
         scadenza: 'venerdì',
         impegni_nuovi: [],
-        impegni_chiusi: []
+        impegni_chiusi: [],
+        argomento: ''
       })
     )
 
@@ -55,7 +92,8 @@ describe('parseTriage', () => {
           motivo: '',
           scadenza: null,
           impegni_nuovi: [],
-          impegni_chiusi: []
+          impegni_chiusi: [],
+          argomento: ''
         })
       )
     ).toThrow()
@@ -120,5 +158,48 @@ describe('triageRequest', () => {
       request.indexOf('▶ IL MESSAGGIO DA ANNOTARE')
     )
     expect(request).toContain('Mi mandi l’offerta entro venerdì?')
+  })
+})
+
+describe('topic names', () => {
+  it('matches a pratica however its number is written, and only whole', () => {
+    const names = nameForms(['Prat2451', 'pratica n. 2451', 'CASEIFICIO VALLI', 'xy'])
+
+    expect(names).toEqual(['prat2451', 'pratica n2451', 'caseificio valli'])
+    expect(saysAnyName(nameForm('Re: Prat. 2451 – ordine'), names)).toBe(true)
+    expect(saysAnyName(nameForm('vedi PRAT 2451(snc)'), names)).toBe(true)
+    expect(saysAnyName(nameForm('la pratica n.2451 è chiusa'), names)).toBe(true)
+    expect(saysAnyName(nameForm('Il Caseificio Vallì di Bondeno'), names)).toBe(true)
+    expect(saysAnyName(nameForm('Prat24510'), names)).toBe(false)
+    expect(saysAnyName(nameForm('caseificio vallio'), names)).toBe(false)
+  })
+})
+
+describe('the topic catalogue', () => {
+  const topics = [
+    { title: 'Prat2495 · ENERGIA VERDE', description: null, current: true, names: ['prat2495'] },
+    { title: 'Prat2310 · MOLINO SPADONI', description: null, current: false, names: ['prat2310'] },
+    { title: 'Prat2311 · BANCA DEL PO', description: null, current: false, names: ['prat2311'] }
+  ]
+
+  it('lists those in corso, with keys that hold for the others', () => {
+    const catalog = topicCatalog('Pratiche', topics)
+
+    expect(catalog).toContain('# Pratiche in corso')
+    expect(catalog).toContain('[T1] Prat2495 · ENERGIA VERDE')
+    expect(catalog).not.toContain('MOLINO')
+    expect(catalog).toContain('altri 2')
+  })
+
+  it('points out every topic a conversation names, in corso or not', () => {
+    const named = namedTopicIndexes(topics, [
+      { subject: 'Re: Prat. 2310 molino', text: 'vedi anche Prat2495' }
+    ])
+
+    expect(named).toEqual([0, 1])
+    expect(named.map((index) => namedTopicLine(topics, index))).toEqual([
+      '[T1] Prat2495 · ENERGIA VERDE',
+      '[T2] Prat2310 · MOLINO SPADONI'
+    ])
   })
 })

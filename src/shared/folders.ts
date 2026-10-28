@@ -178,7 +178,26 @@ export function segretarioViewLabel(view: SegretarioView): string {
   return SEGRETARIO_VIEW_LABELS[view]
 }
 
-/** Whether a path shows mail of several accounts — a folder of Tutti gli account, a view — not one account's folder. */
+const SEGRETARIO_TOPIC_PREFIX = '__segretario__:argomento:'
+
+/** The list of a topic — a pratica — as a folder: every message of its conversations. */
+export function segretarioTopicPath(topicId: string): string {
+  return `${SEGRETARIO_TOPIC_PREFIX}${topicId}`
+}
+
+/** The topic a path opens, by id, or null. */
+export function segretarioTopic(path: string | null | undefined): string | null {
+  return path?.startsWith(SEGRETARIO_TOPIC_PREFIX)
+    ? path.slice(SEGRETARIO_TOPIC_PREFIX.length) || null
+    : null
+}
+
+/** Whether a path is a list the Segretario's notes make: a view or a topic. */
+export function isSegretarioList(path: string | null | undefined): boolean {
+  return segretarioView(path) !== null || segretarioTopic(path) !== null
+}
+
+/** Whether a path shows mail of several accounts — a folder of Tutti gli account, a Segretario's list — not one account's folder. */
 export function isAcrossAccounts(path: string | null | undefined): boolean {
-  return unifiedFolderRole(path) !== null || segretarioView(path) !== null
+  return unifiedFolderRole(path) !== null || isSegretarioList(path)
 }

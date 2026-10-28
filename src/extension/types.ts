@@ -130,6 +130,32 @@ export interface ExtensionMain {
 export interface ExtensionAssistant {
   /** Joins the Segretario's system prompt, after the host's. */
   readonly systemPrompt?: string
+  /** What the topics it brings are called, in the sidebar and the prompts: "Pratiche". */
+  readonly topicsLabel?: string
+  /**
+   * The lasting matters the extension knows — a company's job folders —
+   * which the Segretario files conversations into alongside its own: the
+   * most recent first, since the first ones are those it offers for every
+   * message. Read again from time to time: one no longer listed leaves the
+   * catalogue — forgotten when no conversation is in it, closed otherwise.
+   */
+  topics?(): Promise<ReadonlyArray<ExtensionTopic>>
+}
+
+export interface ExtensionTopic {
+  /** Stable across reads: "pratica:<id>". */
+  key: string
+  /** "Prat2451 · CASEIFICIO VALLI". */
+  title: string
+  description?: string
+  /** Its folder, when it has one: the Segretario reads it, the user opens it. */
+  folderPath?: string
+  /**
+   * How mail names it, when it does by more than its title — "Prat2451",
+   * "pratica 2451", the client: a conversation that says one of these is
+   * offered the topic even when it is not among the most recent.
+   */
+  aliases?: ReadonlyArray<string>
 }
 
 export interface ExtensionMainContext {
@@ -146,6 +172,11 @@ export interface ExtensionMainContext {
    * menu opens are left out.
    */
   recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void>
+  /**
+   * The topics `assistant.topics()` lists changed — a new root, a folder
+   * found: the Segretario reads them again now rather than at its next look.
+   */
+  topicsChanged(): void
   /**
    * Gives one of the extension's commands a chord the user chose before the
    * host managed shortcuts, unless they have since chosen one in Settings ›
@@ -270,6 +301,12 @@ export interface ExtensionSelectionContext {
   summaries: ReadonlyArray<MailMessageSummary>
   /** Whether multi-select mode is currently active. */
   multiSelectActive: boolean
+  /**
+   * The extension topic the selected conversations are filed in, when the
+   * Segretario filed them all in the same one ("pratica:2451"); null
+   * otherwise, and in a build without the Segretario.
+   */
+  topicKey: string | null
 }
 
 export interface SettingsTabDescriptor {

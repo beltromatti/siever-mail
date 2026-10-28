@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { MailAddress } from '@shared/models'
 import type { Commitment, CommitmentKind, NotePriority, NoteState } from '@shared/segretario'
 
+import { nameForm, saysAnyName } from './topic-names'
 import { clip, formatAddresses, formatDateTime } from './tools/format'
 
 /** How far back triage reads: what arrived in the last two weeks, a holiday included. */
@@ -23,10 +24,12 @@ export const TRIAGE_SCHEMA = {
     'motivo',
     'scadenza',
     'impegni_nuovi',
-    'impegni_chiusi'
+    'impegni_chiusi',
+    'argomento'
   ],
   properties: {
     sintesi: { type: 'string' },
+    argomento: { type: 'string' },
     stato: { type: 'string', enum: NOTE_STATES },
     priorita: { type: 'string', enum: PRIORITIES },
     motivo: { type: 'string' },
@@ -65,7 +68,8 @@ const triageAnswer = z.object({
   impegni_nuovi: z.array(
     z.object({ tipo: z.enum(COMMITMENT_KINDS), testo: z.string().trim().min(1), scadenza: dueDay })
   ),
-  impegni_chiusi: z.array(z.number().int())
+  impegni_chiusi: z.array(z.number().int()),
+  argomento: z.string().trim()
 })
 
 export interface TriageResult {
@@ -76,6 +80,8 @@ export interface TriageResult {
   due: string | null
   opened: Array<{ kind: CommitmentKind; text: string; due: string | null }>
   closed: number[]
+  /** The topic it filed the conversation in: a catalogue key ("T12"), a new one, or none. */
+  topic: { key: string } | { create: string } | null
 }
 
 /** The model's answer, checked: what the views will show must be what they expect. */
@@ -90,11 +96,78 @@ export function parseTriage(content: string): TriageResult {
     due: answer.scadenza,
     opened: answer.impegni_nuovi.map((item) => ({
       kind: item.tipo,
-      text: clip(item.testo.replace(/\s+/g, ' '), 240).text,
+      text: clip(withoutKind(item.testo.replace(/\s+/g, ' ')), 240).text,
       due: item.scadenza
     })),
-    closed: answer.impegni_chiusi
+    closed: answer.impegni_chiusi,
+    topic: topicAnswer(answer.argomento)
   }
+}
+
+/** "Aspetti il riscontro…" under the label "Aspetti": the label says it, the text starts at the thing. */
+function withoutKind(text: string): string {
+  const rest = text.replace(/^(aspetti|ti chiedono|hai promesso|da fare)\b[\s:,-]*/i, '')
+  return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : text
+}
+
+function topicAnswer(value: string): TriageResult['topic'] {
+  const created = /^NUOVO\s*:\s*(.+)$/i.exec(value)
+
+  if (created) {
+    return { create: clip(created[1].replace(/\s+/g, ' ').trim(), 120).text }
+  }
+
+  const key = /^\[?(T\d+)\]?$/i.exec(value)
+  return key ? { key: key[1].toUpperCase() } : null
+}
+
+interface CatalogEntry {
+  title: string
+  description: string | null
+  current: boolean
+  /** In their compared form (see `nameForm`). */
+  names: ReadonlyArray<string>
+}
+
+function catalogLine(topic: CatalogEntry, index: number): string {
+  return `[T${index + 1}] ${topic.title}${topic.description ? ` — ${clip(topic.description.replace(/\s+/g, ' '), 140).text}` : ''}`
+}
+
+/**
+ * The topics the model files against, as the stable part of its prompt
+ * lists them: those in corso. The others keep their key, and are offered
+ * with the conversation that names them.
+ */
+export function topicCatalog(label: string, topics: ReadonlyArray<CatalogEntry>): string {
+  const lines = topics.flatMap((topic, index) => (topic.current ? [catalogLine(topic, index)] : []))
+  const others = topics.length - lines.length
+
+  return [
+    `# ${label} in corso`,
+    lines.length > 0 ? lines.join('\n') : '(nessuno, per ora)',
+    others > 0
+      ? `Ce ne sono altri ${others}, meno recenti, con le loro chiavi: quelli che la conversazione nomina te li indico insieme a lei.`
+      : null
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+/** Where in the catalogue are the topics the conversation names — by number, by client, as the extension knows them. */
+export function namedTopicIndexes(
+  topics: ReadonlyArray<CatalogEntry>,
+  thread: ReadonlyArray<{ subject: string; text: string }>
+): number[] {
+  const text = nameForm(thread.map((message) => `${message.subject}\n${message.text}`).join('\n'))
+
+  return topics.flatMap((topic, index) =>
+    topic.names.length > 0 && saysAnyName(text, topic.names) ? [index] : []
+  )
+}
+
+/** A topic of the catalogue as its line reads, with its key: for those the conversation names. */
+export function namedTopicLine(topics: ReadonlyArray<CatalogEntry>, index: number): string {
+  return catalogLine(topics[index], index)
 }
 
 export interface TriageMessage {
@@ -130,6 +203,11 @@ export function triageRequest(input: {
   people: ReadonlyArray<{ path: string; content: string }>
   open: ReadonlyArray<Commitment>
   thread: ReadonlyArray<TriageMessage>
+  /** The catalogue key of the topic the conversation is already filed in. */
+  currentTopic?: { key: string; title: string; byUser: boolean } | null
+  /** Catalogue lines of the topics the conversation names. */
+  named?: ReadonlyArray<string>
+  topicsLabel?: string
 }): string {
   const today = new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(input.today)
   const sections = [
@@ -148,6 +226,20 @@ export function triageRequest(input: {
       `## Cosa sai delle persone coinvolte\n\n${input.people
         .map((note) => `### ${note.path}\n${clip(note.content, 1500).text}`)
         .join('\n\n')}`
+    )
+  }
+
+  if (input.named && input.named.length > 0) {
+    sections.push(
+      `## ${input.topicsLabel ?? 'Argomenti'} che la conversazione nomina\n\n${input.named.slice(0, 12).join('\n')}`
+    )
+  }
+
+  if (input.currentTopic) {
+    sections.push(
+      input.currentTopic.byUser
+        ? `La conversazione è in [${input.currentTopic.key}] ${input.currentTopic.title}, per scelta dell'utente: lasciala lì.`
+        : `Finora hai messo la conversazione in [${input.currentTopic.key}] ${input.currentTopic.title}. Se questo messaggio fa capire che è di un altro argomento dell'elenco (nomina la pratica, il cliente, il cantiere), metti quello: la sposto io.`
     )
   }
 

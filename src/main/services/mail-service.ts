@@ -61,6 +61,7 @@ import {
   folderDisplayRank,
   folderForRole,
   folderRole,
+  segretarioTopic,
   segretarioView,
   SEGRETARIO_VIEWS,
   UNIFIED_FOLDER_ROLES,
@@ -468,11 +469,7 @@ export class MailService {
           .slice(0, limit)
           .map(({ accountId, threadId, messages }) => ({ accountId, threadId, messages }))
       },
-      includedAccountIds: async () => [
-        ...new Set(
-          (await this.engine.resolveUnifiedMailboxes('\\Inbox')).map((mailbox) => mailbox.accountId)
-        )
-      ],
+      includedAccountIds: () => this.segretarioAccountIds(),
       messageSummaries: (accountId, messageKeys) => this.bestRowsByKey(accountId, messageKeys),
       refForKey: async (accountId, messageKey) => {
         const best = (await this.bestRowsByKey(accountId, [messageKey])).get(messageKey)
@@ -702,6 +699,7 @@ export class MailService {
       mailEngine: mailEngineHandle,
       getMainWindow: getAppWindow,
       recordRecentFiles: (paths, activity) => this.recordRecentFiles(paths, activity),
+      topicsChanged: () => this.segretario.extensionTopicsChanged(),
       adoptShortcutOverride: async (commandId, chord) => {
         const preferences = await this.database.getUiPreferences()
 
@@ -714,8 +712,12 @@ export class MailService {
       }
     }
 
-    await extension.install(context)
-    this.extension = extension
+    try {
+      await extension.install(context)
+      this.extension = extension
+    } finally {
+      await this.segretario.extensionInstalled()
+    }
   }
 
   async bootstrap(): Promise<AppBootstrap> {
@@ -912,8 +914,7 @@ export class MailService {
     folderPath: string,
     options?: ListMessagesOptions
   ): Promise<MailMessageListPage> {
-    const segretario = segretarioView(folderPath)
-    const onlyRefs = segretario ? await this.segretarioViewRefs(segretario) : undefined
+    const onlyRefs = await this.segretarioListRefs(folderPath)
     const mailboxes = onlyRefs
       ? mailboxesOf(onlyRefs)
       : await this.listMailboxes(accountId, folderPath)
@@ -988,17 +989,61 @@ export class MailService {
     }
   }
 
+  /** The messages a list of the Segretario's holds — a view or a topic — or undefined for a folder. */
+  private async segretarioListRefs(folderPath: string): Promise<MessageRef[] | undefined> {
+    const view = segretarioView(folderPath)
+
+    if (view) {
+      return this.segretarioViewRefs(view)
+    }
+
+    const topicId = segretarioTopic(folderPath)
+    return topicId ? this.segretarioTopicRefs(topicId) : undefined
+  }
+
+  /**
+   * The messages of a topic: every message of its conversations, across
+   * the accounts "Tutti gli account" gathers, each once, in the folder the
+   * user thinks of it in.
+   */
+  private async segretarioTopicRefs(topicId: string): Promise<MessageRef[]> {
+    const accountIds = await this.segretarioAccountIds()
+    const threads = await this.segretario.topicThreads(topicId, accountIds)
+    const refs: MessageRef[] = []
+
+    for (const accountId of accountIds) {
+      const threadIds = threads
+        .filter((thread) => thread.accountId === accountId)
+        .map((thread) => thread.threadId)
+
+      if (threadIds.length > 0) {
+        const keys = await this.database.listMessageKeysOfThreads(accountId, threadIds)
+
+        for (const summary of (await this.bestRowsByKey(accountId, keys)).values()) {
+          refs.push(summary.ref)
+        }
+      }
+    }
+
+    return refs
+  }
+
+  /** The accounts the Segretario's lists gather: those of Tutti gli account. */
+  private async segretarioAccountIds(): Promise<string[]> {
+    return [
+      ...new Set(
+        (await this.engine.resolveUnifiedMailboxes('\\Inbox')).map((mailbox) => mailbox.accountId)
+      )
+    ]
+  }
+
   /**
    * The messages a view of the Segretario's holds: the conversations its
    * notes chose, across the accounts "Tutti gli account" gathers, each as
    * one row in the folder the user thinks of it in — never one thrown away.
    */
   private async segretarioViewRefs(view: SegretarioView): Promise<MessageRef[]> {
-    const accountIds = [
-      ...new Set(
-        (await this.engine.resolveUnifiedMailboxes('\\Inbox')).map((mailbox) => mailbox.accountId)
-      )
-    ]
+    const accountIds = await this.segretarioAccountIds()
     const chosen = await this.segretario.viewMessages(view, accountIds)
     const refs: MessageRef[] = []
 
@@ -1070,10 +1115,10 @@ export class MailService {
       return this.engine.resolveUnifiedMailboxes(role)
     }
 
-    const view = segretarioView(folderPath)
+    const refs = await this.segretarioListRefs(folderPath)
 
-    if (view) {
-      return mailboxesOf(await this.segretarioViewRefs(view))
+    if (refs) {
+      return mailboxesOf(refs)
     }
 
     await this.ensureAccountExists(accountId)

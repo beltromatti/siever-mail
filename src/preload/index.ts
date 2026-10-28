@@ -175,7 +175,17 @@ const segretarioApi: SegretarioApi = {
     invoke(SEGRETARIO_IPC.discardReadyDraft, accountId, messageKey),
   getBriefing: async () => invoke(SEGRETARIO_IPC.getBriefing),
   assistWriting: async (request) => invoke(SEGRETARIO_IPC.assistWriting, request),
-  writeBriefingOpening: async () => invoke(SEGRETARIO_IPC.writeBriefingOpening)
+  writeBriefingOpening: async () => invoke(SEGRETARIO_IPC.writeBriefingOpening),
+  topicsLabel: async () => invoke(SEGRETARIO_IPC.topicsLabel),
+  listTopics: async () => invoke(SEGRETARIO_IPC.listTopics),
+  getTopic: async (id) => invoke(SEGRETARIO_IPC.getTopic, id),
+  writeTopicState: async (id) => invoke(SEGRETARIO_IPC.writeTopicState, id),
+  setConversationTopic: async (accountId, threadId, topicId) =>
+    invoke(SEGRETARIO_IPC.setConversationTopic, accountId, threadId, topicId),
+  updateTopic: async (id, change) => invoke(SEGRETARIO_IPC.updateTopic, id, change),
+  createTopic: async (title) => invoke(SEGRETARIO_IPC.createTopic, title),
+  conversationTopics: async (threads) => invoke(SEGRETARIO_IPC.conversationTopics, threads),
+  openTopicFolder: async (id) => invoke(SEGRETARIO_IPC.openTopicFolder, id)
 }
 
 // Merge any extension-provided bridge methods (the IPC channels an

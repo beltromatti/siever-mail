@@ -13,6 +13,8 @@
  * Every request of a conversation carries its `session_id`, which keeps it
  * on one provider and its cache warm: a long activity costs a tenth.
  */
+import { appendFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 export const SEGRETARIO_MODEL = '~deepseek/deepseek-flash-latest'
 
@@ -227,6 +229,24 @@ export interface KeyCheck {
   balance: number | null
 }
 
+/**
+ * For tuning the prompts: with `SIEVER_AI_TRACE` set to a folder, every
+ * call's messages and answer go to a file there, a JSON object a line.
+ * Off unless asked for; what it writes is the user's mail.
+ */
+async function traceCall(request: ChatRequest, result: ChatResult): Promise<void> {
+  const folder = process.env.SIEVER_AI_TRACE
+
+  if (!folder) {
+    return
+  }
+
+  await appendFile(
+    join(folder, `segretario-${new Date().toISOString().slice(0, 10)}.jsonl`),
+    `${JSON.stringify({ at: new Date().toISOString(), request, result })}\n`
+  ).catch(() => undefined)
+}
+
 export class OpenRouterClient {
   constructor(private readonly fetchImpl: FetchFunction) {}
 
@@ -301,10 +321,12 @@ export class OpenRouterClient {
       let started = false
 
       try {
-        return await this.chatOnce(key, request, options.signal, (text) => {
+        const result = await this.chatOnce(key, request, options.signal, (text) => {
           started = true
           options.onText?.(text)
         })
+        await traceCall(request, result)
+        return result
       } catch (raw) {
         const error = networkError(raw)
 

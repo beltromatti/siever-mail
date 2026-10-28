@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Check, PenLine } from 'lucide-react'
+import { Briefcase, Check, ChevronDown, PenLine } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/lib/utils'
-import type { Commitment, CommitmentKind, ThreadBrief } from '@shared/segretario'
+import type { Commitment, CommitmentKind, ThreadBrief, Topic } from '@shared/segretario'
 
 import { dueLabel, NOTE_ACTION_LABELS, noteAsks } from './message-notes'
+import { TopicPickerPopover } from './topic-picker'
 
 const COMMITMENT_LABELS: Readonly<Record<CommitmentKind, string>> = {
   ti_chiedono: 'Ti chiedono',
@@ -28,7 +29,7 @@ function withRecentCommitments(brief: ThreadBrief): ThreadBrief {
   }
 }
 
-function CommitmentRow({
+export function CommitmentRow({
   commitment,
   onClose
 }: {
@@ -65,6 +66,84 @@ function CommitmentRow({
 }
 
 /**
+ * The topic the conversation is in — its pratica — which opens its list,
+ * and the picker that moves it to another, takes it out, or files it.
+ */
+function TopicLine({
+  accountId,
+  threadId,
+  topic,
+  topics,
+  onOpenTopic
+}: {
+  accountId: string
+  threadId: string
+  topic: ThreadBrief['topic']
+  topics: { label: string; items: ReadonlyArray<Topic> }
+  onOpenTopic: (topicId: string) => void
+}): React.JSX.Element {
+  const [picking, setPicking] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+
+  const file = async (topicId: string | null): Promise<void> => {
+    setPicking(false)
+    setProblem(null)
+
+    try {
+      await window.segretarioApi.setConversationTopic(accountId, threadId, topicId)
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : 'Non sono riuscito a spostarla.')
+    }
+  }
+
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 text-[11.5px]">
+      <Briefcase className="text-faint-foreground size-3.5 shrink-0" />
+      {topic ? (
+        <button
+          type="button"
+          onClick={() => onOpenTopic(topic.id)}
+          title={`Apri ${topic.title}`}
+          className="text-foreground focus-visible:ring-ring/60 min-w-0 truncate rounded-sm font-semibold outline-none hover:underline focus-visible:ring-2"
+        >
+          {topic.title}
+        </button>
+      ) : (
+        <span className="text-muted-foreground">Fuori da {topics.label.toLowerCase()}</span>
+      )}
+      <TopicPickerPopover
+        open={picking}
+        onOpenChange={setPicking}
+        topics={topics.items}
+        label={topics.label}
+        currentId={topic?.id ?? null}
+        onPick={(picked) => void file(picked.id)}
+        onRemove={() => void file(null)}
+        onCreate={(title) =>
+          void window.segretarioApi
+            .createTopic(title)
+            .then((created) => file(created.id))
+            .catch((error: unknown) =>
+              setProblem(error instanceof Error ? error.message : 'Non sono riuscito a crearla.')
+            )
+        }
+        trigger={
+          <button
+            type="button"
+            aria-label={topic ? "Sposta in un'altra" : 'Metti in una'}
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/60 inline-flex shrink-0 items-center gap-0.5 rounded-sm outline-none focus-visible:ring-2"
+          >
+            {topic ? 'Cambia' : 'Scegli'}
+            <ChevronDown className="size-3" />
+          </button>
+        }
+      />
+      {problem && <span className="text-destructive-soft-foreground truncate">{problem}</span>}
+    </div>
+  )
+}
+
+/**
  * "Il punto": the Segretario's word on the conversation open in the
  * reader — where it leaves the user and what is open in it, each thing to
  * tick off — written in its hand, in the margin of the message.
@@ -72,10 +151,15 @@ function CommitmentRow({
 export function ThreadBriefPanel({
   accountId,
   threadId,
+  topics,
+  onOpenTopic,
   onTakeUpReadyDraft
 }: {
   accountId: string
   threadId: string
+  /** The topics a conversation can be filed in, with their name; null without them. */
+  topics: { label: string; items: ReadonlyArray<Topic> } | null
+  onOpenTopic: (topicId: string) => void
   /** Opens the reply prepared ahead in the composer, as the user's own. */
   onTakeUpReadyDraft: (accountId: string, messageKey: string, text: string) => Promise<void>
 }): React.JSX.Element | null {
@@ -109,8 +193,23 @@ export function ThreadBriefPanel({
 
   const note = brief?.note
 
-  if (!brief || !note || note.state === 'rumore') {
+  if (!brief) {
     return null
+  }
+
+  const topicLine = topics && (
+    <TopicLine
+      accountId={accountId}
+      threadId={threadId}
+      topic={brief.topic}
+      topics={topics}
+      onOpenTopic={onOpenTopic}
+    />
+  )
+
+  if (!note || note.state === 'rumore') {
+    // Noise has nothing to say; a conversation it knows nothing of can still be filed.
+    return topicLine && (brief.topic || !note) ? <div className="mb-3">{topicLine}</div> : null
   }
 
   const action = noteAsks(note) ? NOTE_ACTION_LABELS[note.state] : null
@@ -122,6 +221,7 @@ export function ThreadBriefPanel({
       aria-label="Il punto del Segretario"
       className="border-ai-line mb-4 flex flex-col gap-2 border-l-2 py-0.5 pl-3.5"
     >
+      {topicLine}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px]">
         <PenLine className="text-ai size-3.5" />
         <span className="text-ai font-semibold">Il punto</span>

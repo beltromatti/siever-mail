@@ -565,6 +565,40 @@ export class AiStore {
     `
   }
 
+  /** The latest note of each of these conversations, those that have one. */
+  async latestNotes(
+    threads: ReadonlyArray<{ accountId: string; threadId: string }>
+  ): Promise<MessageNote[]> {
+    const notes = await Promise.all(
+      threads.map((thread) =>
+        this.prisma.aiNote.findFirst({
+          where: { accountId: thread.accountId, threadId: thread.threadId },
+          orderBy: { messageDate: 'desc' }
+        })
+      )
+    )
+    return notes.filter((note): note is AiNote => note !== null).map(noteOf)
+  }
+
+  /** What is open in these conversations, and what closed in the last week. */
+  async commitmentsOf(
+    threads: ReadonlyArray<{ accountId: string; threadId: string }>
+  ): Promise<Commitment[]> {
+    if (threads.length === 0) {
+      return []
+    }
+
+    const recent = BigInt(Date.now() - 7 * 24 * 60 * 60 * 1000)
+    const rows = await this.prisma.aiItem.findMany({
+      where: {
+        OR: threads.map((thread) => ({ accountId: thread.accountId, threadId: thread.threadId })),
+        AND: [{ OR: [{ status: 'aperto' }, { closedAt: { gte: recent } }] }]
+      },
+      orderBy: [{ status: 'asc' }, { createdAt: 'asc' }]
+    })
+    return rows.map(commitmentOf)
+  }
+
   /* ──────────────────────────────── the day ──────────────────────────────── */
 
   /**
@@ -683,7 +717,7 @@ export class AiStore {
   }
 
   /** A conversation's latest note and what is open in it, then what closed lately. */
-  async threadBrief(accountId: string, threadId: string): Promise<ThreadBrief> {
+  async threadBrief(accountId: string, threadId: string): Promise<Omit<ThreadBrief, 'topic'>> {
     const [note, items] = await Promise.all([
       this.prisma.aiNote.findFirst({
         where: { accountId, threadId },

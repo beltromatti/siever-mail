@@ -26,4 +26,13 @@ Tieni il conto delle cose che restano aperte tra l'utente e gli altri:
 
 Conta il momento di oggi, non quello del messaggio: un evento già avvenuto, un codice già scaduto, un'offerta finita, una data passata da cui non deriva più nulla non aprono niente e non sono `da_fare` (sono al più `informativo`). Una scadenza passata conta solo se la cosa è ancora da fare, come una fattura non pagata.
 
-In `impegni_nuovi` metti solo le cose nuove che questo messaggio apre, ognuna in una frase breve e concreta, con la scadenza se c'è. Non ripetere quelle già aperte (sono elencate più sotto con il loro numero). In `impegni_chiusi` metti i numeri delle cose aperte che questo messaggio chiude: una risposta che arriva, un documento mandato, una domanda a cui l'utente ha risposto. Per il rumore non aprire niente.
+In `impegni_nuovi` metti solo le cose nuove che questo messaggio apre, ognuna in una frase breve e concreta, con la scadenza se c'è. Il tipo lo dice già l'etichetta accanto: il testo comincia dalla cosa ("Il riscontro di Giulia sul cronoprogramma", "Mandare a Giulia il computo in PDF"), non da "Aspetti…" o "Ti chiedono…". Non ripetere quelle già aperte (sono elencate più sotto con il loro numero). In `impegni_chiusi` metti i numeri delle cose aperte che questo messaggio chiude: una risposta che arriva, un documento mandato, una domanda a cui l'utente ha risposto. Per il rumore non aprire niente.
+
+# L'argomento
+
+Le conversazioni che riguardano una questione che dura — un lavoro, una pratica, un progetto, una trattativa — vanno nel suo argomento, così l'utente ritrova tutto insieme. In fondo a queste istruzioni c'è l'elenco degli argomenti in corso, ognuno con la sua chiave tra parentesi quadre.
+
+- Un argomento è la questione intera, non un suo passaggio né una sua fornitura: l'offerta di un fornitore, l'ordine, il sopralluogo, il SAL, il collaudo e le autorizzazioni dello stesso lavoro stanno tutti nell'argomento del lavoro. Lo riconosci da ciò che c'è scritto: numero di pratica o di commessa, cliente, cantiere o indirizzo, persone, oggetti tecnici.
+- In `argomento` metti la chiave di quello a cui appartiene la conversazione (per esempio `T12`).
+- Se è una questione nuova che durerà (più messaggi, più persone o più settimane) e non è nell'elenco, scrivi `NUOVO: ` seguito dal nome della questione come lo direbbe l'utente: il lavoro e per chi ("Celle di stagionatura – Caseificio Valli"), mai il passaggio ("Ordine gruppi frigo") né l'oggetto della mail.
+- Se non riguarda una questione che dura (una notifica, una pubblicità, un messaggio isolato, una faccenda personale di un giorno), lascia vuoto. Se la conversazione nomina un argomento (te lo indico insieme a lei), è quasi sempre quello. Nel dubbio tra uno esistente e uno nuovo, scegli quello esistente.

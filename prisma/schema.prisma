@@ -418,3 +418,45 @@ model AiBriefing {
 
   @@map("ai_briefings")
 }
+
+/// A matter that lasts — a job, a project; a pratica in a company build —
+/// which conversations are filed into. User data.
+model AiTopic {
+  id           String  @id
+  /// The extension's key for a topic it brings ("pratica:<id>"); null for the Segretario's own.
+  externalKey  String? @unique @map("external_key")
+  title        String
+  description  String?
+  folderPath   String? @map("folder_path")
+  /// JSON list of the words that name it in mail ("Prat2451", the client), the extension's.
+  aliases      String?
+  /// Its place in the extension's list, the most recent first; null for the Segretario's own.
+  rank         Int?
+  /// When a conversation last joined it, or it was made; null for a pratica never seen in mail.
+  activeAt     BigInt? @map("active_at")
+  /// What it is about in a line, as the Segretario learnt it from its mail: the catalogue shows it.
+  gist         String?
+  /// How many conversations it had when the gist was written: it is written again as they double.
+  gistConversations Int? @map("gist_conversations")
+  origin       String
+  state        String?
+  stateAt      BigInt? @map("state_at")
+  archivedAt   BigInt? @map("archived_at")
+  createdAt    BigInt  @map("created_at")
+  updatedAt    BigInt  @map("updated_at")
+
+  @@map("ai_topics")
+}
+
+/// Which topic a conversation belongs to: one at most. A link the user made is kept.
+model AiTopicThread {
+  accountId String @map("account_id")
+  threadId  String @map("thread_id")
+  topicId   String @map("topic_id")
+  linkedBy  String @map("linked_by")
+  createdAt BigInt @map("created_at")
+
+  @@id([accountId, threadId])
+  @@index([topicId], map: "idx_ai_topic_threads_topic")
+  @@map("ai_topic_threads")
+}
