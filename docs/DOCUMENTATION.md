@@ -745,6 +745,18 @@ the lines above the signature and the quote (`replaceWrittenPart`), with
 "Annulla" to put them back, and is kept as the Segretario's draft so the
 user's later edits are learnt from.
 
+**Rereading before it goes.** With "Rileggi prima di inviare" on (Settings
+→ Segretario, the default), pressing Invia has the Segretario reread the
+message in one quick call (`review.ts`, `revisione.md`): the message as it
+will go, the one it answers, and the next weeks' days with their weekdays.
+It flags only what the user would want to fix — an attachment named and
+not attached, a question skipped, a greeting to someone not among the
+recipients, a weekday that does not match its date, a figure that
+contradicts the message answered, a "[data]" left to fill — in a panel at
+the button, with "Correggi" and "Invia comunque". Nothing found, it goes;
+a reread not done within eight seconds never holds it. What the Segretario
+sends after the user confirmed on its card is not reread again.
+
 **Oggi** is the page the workspace opens on when the Segretario is set up,
 in the place of the list and the reader (`today-page.tsx`, the layout's
 `page`). It is made of the notes and what is open: what is due today or

@@ -445,6 +445,24 @@ export function SegretarioSection(): React.JSX.Element {
               onCheckedChange={(readyDrafts) => void changePreferences({ readyDrafts })}
             />
           </label>
+          <label
+            htmlFor="segretario-review"
+            className="flex cursor-pointer items-center justify-between gap-3"
+          >
+            <span className="min-w-0">
+              <span className="block text-[12px] font-medium">Rileggi prima di inviare</span>
+              <span className="text-muted-foreground block text-[11px]">
+                Quando premi Invia, ti avvisa se manca l&apos;allegato di cui parli, se salti una
+                domanda, se un giorno non corrisponde alla data o se è rimasto qualcosa da
+                completare. Se è tutto a posto, il messaggio parte e basta.
+              </span>
+            </span>
+            <Switch
+              id="segretario-review"
+              checked={preferences.reviewBeforeSend}
+              onCheckedChange={(reviewBeforeSend) => void changePreferences({ reviewBeforeSend })}
+            />
+          </label>
         </div>
       )}
 

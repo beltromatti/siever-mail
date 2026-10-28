@@ -16,6 +16,7 @@ import {
   LoaderCircle,
   Minus,
   Paperclip,
+  PenLine,
   RotateCw,
   Send,
   Trash2,
@@ -34,6 +35,7 @@ import {
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
 import { IconButton } from '@renderer/components/ui/icon-button'
+import { Popover, PopoverAnchor, PopoverContent } from '@renderer/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { AttachMenu } from '@renderer/features/mail/attach-menu'
 import { AttachmentChip } from '@renderer/features/mail/attachment-chip'
@@ -162,6 +164,14 @@ interface MailComposerProps {
   /** The Segretario can be asked to write (⌘J): its key is there. */
   canAskSegretario: boolean
   ref?: React.Ref<MailComposerHandle>
+}
+
+/** How long a send waits for the Segretario's reread before going as it is. */
+const REVIEW_TIMEOUT_MS = 8_000
+
+/** "Anna Rossi <anna@cliente.it>", or the address alone: who a message goes to, as the reread reads it. */
+function addressLabel(address: MailAddress): string {
+  return address.name ? `${address.name} <${address.address}>` : address.address
 }
 
 interface ComposerFormState {
@@ -878,6 +888,9 @@ export function MailComposer({
   // The Segretario writing here: its popover, and what was written before
   // its last rewrite, to put back.
   const [assistOpen, setAssistOpen] = useState(false)
+  const [reviewing, setReviewing] = useState(false)
+  // What the Segretario found rereading the message as it went: the send waits on the user.
+  const [reviewIssues, setReviewIssues] = useState<string[] | null>(null)
   const [assistUndo, setAssistUndo] = useState<string | null>(null)
 
   const askSegretario = async (instruction: string): Promise<void> => {
@@ -930,10 +943,50 @@ export function MailComposer({
     }
   }
 
-  const handleSend = async (): Promise<boolean> => {
-    if (!account || !canSend) {
+  /**
+   * The Segretario rereads the message as it goes, when the user wants it:
+   * what it finds holds the send until the user decides. A reread that
+   * cannot be done in time — offline, no credit — never holds a message.
+   */
+  const reviewBeforeSending = async (
+    recipients: Pick<ComposerFormState, 'to' | 'cc'>
+  ): Promise<string[]> => {
+    if (!account || !canAskSegretario) {
+      return []
+    }
+
+    setReviewing(true)
+
+    try {
+      if (!(await window.segretarioApi.getPreferences()).reviewBeforeSend) {
+        return []
+      }
+
+      return await Promise.race([
+        window.segretarioApi.reviewDraft({
+          accountId: account.id,
+          to: recipients.to.map(addressLabel),
+          cc: recipients.cc.map(addressLabel),
+          subject: form.subject.trim(),
+          writtenText: writtenText(form.html),
+          attachments: attachments.map((attachment) => attachment.name),
+          replyTo: initialData.original?.ref ?? null
+        }),
+        new Promise<string[]>((resolve) => window.setTimeout(() => resolve([]), REVIEW_TIMEOUT_MS))
+      ])
+    } catch {
+      return []
+    } finally {
+      setReviewing(false)
+    }
+  }
+
+  const handleSend = async (options: { reviewed?: boolean } = {}): Promise<boolean> => {
+    if (!account || !canSend || reviewing) {
       return false
     }
+
+    setReviewIssues(null)
 
     // What is still typed goes too, as it would on leaving its field.
     const recipients = committedRecipients()
@@ -968,6 +1021,15 @@ export function MailComposer({
       return false
     }
 
+    if (!options.reviewed) {
+      const issues = await reviewBeforeSending(recipients)
+
+      if (issues.length > 0) {
+        setReviewIssues(issues)
+        return false
+      }
+    }
+
     const draft = contentWith(recipients)
 
     if (!draft) {
@@ -999,10 +1061,11 @@ export function MailComposer({
   // A send asked from outside (the Segretario's, confirmed by the user)
   // waits for the body to be laid out and every file copied, then sends
   // what the composer holds by then — not what it held when asked.
-  const latestSendRef = useRef({ canSend, send: handleSend })
+  const latestSendRef = useRef({ canSend, send: () => handleSend({ reviewed: true }) })
 
   useLayoutEffect(() => {
-    latestSendRef.current = { canSend, send: handleSend }
+    // The user read it on the Segretario's card before saying send.
+    latestSendRef.current = { canSend, send: () => handleSend({ reviewed: true }) }
   })
 
   useImperativeHandle(ref, () => ({
@@ -1331,17 +1394,56 @@ export function MailComposer({
               >
                 <Trash2 className="size-4" />
               </IconButton>
-              <ActionTooltip label="Invia il messaggio" commandId="send" side="top">
-                <Button
-                  size="sm"
-                  onClick={() => void handleSend()}
-                  disabled={!canSend}
-                  className="h-8 gap-1.5 text-[12px]"
+              <Popover
+                open={reviewIssues !== null}
+                onOpenChange={(nextOpen) => !nextOpen && setReviewIssues(null)}
+              >
+                <PopoverAnchor asChild>
+                  <span className="inline-flex">
+                    <ActionTooltip label="Invia il messaggio" commandId="send" side="top">
+                      <Button
+                        size="sm"
+                        onClick={() => void handleSend()}
+                        disabled={!canSend || reviewing}
+                        className="h-8 gap-1.5 text-[12px]"
+                      >
+                        {reviewing ? (
+                          <LoaderCircle className="size-3.5 animate-spin" />
+                        ) : (
+                          <Send className="size-3.5" />
+                        )}
+                        {reviewing ? 'Rileggo…' : 'Invia'}
+                      </Button>
+                    </ActionTooltip>
+                  </span>
+                </PopoverAnchor>
+                <PopoverContent
+                  side="top"
+                  align="end"
+                  className="flex w-[340px] flex-col gap-2.5 p-3"
                 >
-                  <Send className="size-3.5" />
-                  Invia
-                </Button>
-              </ActionTooltip>
+                  <p className="text-ai flex items-center gap-1.5 text-[11.5px] font-semibold">
+                    <PenLine className="size-3.5" />
+                    Prima di inviare
+                  </p>
+                  <ul className="flex flex-col gap-1.5">
+                    {reviewIssues?.map((issue) => (
+                      <li key={issue} className="voice text-foreground text-[14px] leading-[1.45]">
+                        {issue}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="flex items-center justify-end gap-1.5">
+                    <Button variant="ghost" size="sm" onClick={() => setReviewIssues(null)}>
+                      Correggi
+                    </Button>
+                    <Button size="sm" onClick={() => void handleSend({ reviewed: true })}>
+                      <Send className="size-3.5" />
+                      Invia comunque
+                    </Button>
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
           </div>
         </div>

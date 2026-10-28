@@ -26,6 +26,7 @@ import {
   type NotePriority,
   type NotesChange,
   type ReadyDraftKind,
+  type ReviewRequest,
   type ThreadBrief,
   type Topic,
   type TopicDetail,
@@ -91,7 +92,8 @@ import {
   type TriageResult
 } from './triage'
 import { SEGRETARIO_TOOLS, toolDefinitions } from './tools'
-import { clip, formatDateTime, withoutQuotedHistory } from './tools/format'
+import { clip, formatAddresses, formatDateTime, withoutQuotedHistory } from './tools/format'
+import { parseReview, REVIEW_SCHEMA, reviewRequest } from './review'
 import { MAX_NOTE_CHARS, memoryIndex, normalizeMemoryPath } from './tools/memory-tool'
 
 /** Model turns one message of the user may take, at most: a safeguard, not a plan. */
@@ -690,6 +692,50 @@ export class SegretarioService {
    * the people they write to. What comes back is kept as the Segretario's
    * draft, so what the user changes before sending is learnt from.
    */
+  /** Rereads a message about to be sent: the mistakes the user would want to correct first. */
+  async reviewDraft(request: ReviewRequest): Promise<string[]> {
+    const key = await this.requireKey()
+    const account = (await this.options.mail.listAccounts()).find(
+      (candidate) => candidate.id === request.accountId
+    )
+
+    if (!account) {
+      return []
+    }
+
+    const answered = request.replyTo ? await this.options.mail.readMessage(request.replyTo) : null
+    const result = await this.client.chat(key, {
+      messages: [
+        { role: 'system', content: PROMPTS.review },
+        {
+          role: 'user',
+          content: reviewRequest({
+            today: new Date(),
+            from: `${account.displayName} <${account.email}>`,
+            to: request.to,
+            cc: request.cc,
+            subject: request.subject,
+            attachments: request.attachments,
+            writtenText: request.writtenText,
+            answered: answered
+              ? {
+                  from: formatAddresses(answered.from, 1),
+                  date: formatDateTime(answered.date),
+                  text: withoutQuotedHistory(answered.textForReading).text
+                }
+              : null
+          })
+        }
+      ],
+      reasoningEffort: 'none',
+      maxTokens: 600,
+      responseSchema: { name: 'revisione', schema: REVIEW_SCHEMA }
+    })
+
+    await this.recordUsage(null, 'revisione', result)
+    return parseReview(result.content)
+  }
+
   async assistWriting(request: WritingRequest): Promise<{ text: string }> {
     const store = this.requireStore()
     const key = await this.requireKey()

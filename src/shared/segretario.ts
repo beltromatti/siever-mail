@@ -56,12 +56,15 @@ export interface SegretarioPreferences {
    * has said yes or no: it reads their mail on its own, so it asks first.
    */
   learning: boolean | null
+  /** Rereads each message as it is sent, for what the user would want to correct first. */
+  reviewBeforeSend: boolean
 }
 
 export const DEFAULT_SEGRETARIO_PREFERENCES: SegretarioPreferences = {
   triage: true,
   readyDrafts: true,
-  learning: null
+  learning: null,
+  reviewBeforeSend: true
 }
 
 /* ─────────────────────────── notes on the mail ─────────────────────────── */
@@ -215,6 +218,20 @@ export interface WritingRequest {
   subject: string
   to: string[]
   /** The message answered or forwarded, for its conversation. */
+  replyTo: MessageRef | null
+}
+
+/** A message about to be sent, for the Segretario to reread. */
+export interface ReviewRequest {
+  accountId: string
+  to: string[]
+  cc: string[]
+  subject: string
+  /** What the user wrote, without the signature and the quote. */
+  writtenText: string
+  /** The names of the files it carries. */
+  attachments: string[]
+  /** The message it answers, if it answers one. */
   replyTo: MessageRef | null
 }
 
@@ -453,6 +470,7 @@ export const SEGRETARIO_IPC = {
   createTopic: 'segretario:create-topic',
   conversationTopics: 'segretario:conversation-topics',
   filingHint: 'segretario:filing-hint',
+  reviewDraft: 'segretario:review-draft',
   openTopicFolder: 'segretario:open-topic-folder',
   writeBriefingOpening: 'segretario:write-briefing-opening',
   notesChanged: 'segretario:notes-changed',
@@ -534,6 +552,8 @@ export interface SegretarioApi {
   filingHint: (
     threads: ReadonlyArray<{ accountId: string; threadId: string }>
   ) => Promise<{ topicKey: string | null; destination: string | null }>
+  /** Rereads a message about to be sent: what the user would want to correct first, a line each. */
+  reviewDraft: (request: ReviewRequest) => Promise<string[]>
   /** A topic the user makes, by its title. */
   createTopic: (title: string) => Promise<Topic>
   /** Opens a topic's folder — a pratica's, on the archive — in Finder or Explorer. */

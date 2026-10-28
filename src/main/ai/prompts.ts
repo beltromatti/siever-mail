@@ -3,6 +3,7 @@ import extensionMain from '@app/extension/main'
 import compaction from './prompts/compattazione.md?raw'
 import topicState from './prompts/argomento.md?raw'
 import followUp from './prompts/sollecito.md?raw'
+import review from './prompts/revisione.md?raw'
 import topicGist from './prompts/argomento-in-breve.md?raw'
 import learning from './prompts/conoscerti.md?raw'
 import briefing from './prompts/oggi.md?raw'
@@ -55,6 +56,7 @@ export const PROMPTS = {
   writing: withCompany(writing),
   readyDraft: withCompany(readyDraft),
   followUp: withCompany(followUp),
+  review: review.trim(),
   title: title.trim(),
   tools: {
     cerca_posta: searchMail.trim(),

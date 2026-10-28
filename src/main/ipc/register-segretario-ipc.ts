@@ -21,7 +21,18 @@ const contextSchema = z.object({
 const preferencesSchema = z.object({
   triage: z.boolean(),
   readyDrafts: z.boolean(),
-  learning: z.boolean().nullable()
+  learning: z.boolean().nullable(),
+  reviewBeforeSend: z.boolean()
+})
+
+const reviewRequestSchema = z.object({
+  accountId: z.string().min(1),
+  to: z.array(z.string().max(500)).max(500),
+  cc: z.array(z.string().max(500)).max(500),
+  subject: z.string().max(2000),
+  writtenText: z.string().max(200_000),
+  attachments: z.array(z.string().max(500)).max(200),
+  replyTo: messageRefSchema.nullable()
 })
 
 const memoryPathSchema = z.string().trim().min(1).max(300)
@@ -157,6 +168,9 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
         .max(1000)
         .parse(threads)
     )
+  )
+  handle(SEGRETARIO_IPC.reviewDraft, (request: unknown) =>
+    segretario.reviewDraft(reviewRequestSchema.parse(request))
   )
   handle(SEGRETARIO_IPC.filingHint, (threads: unknown) =>
     segretario.filingHint(
