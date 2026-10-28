@@ -4297,12 +4297,23 @@ function App(): React.JSX.Element {
                 emptyStateIntroStep === 'logo' ? 'gap-0' : 'gap-4 lg:gap-5'
               )}
             >
-              <img
-                src={appLogo}
-                alt="Logo SIEVER Mail"
-                className="size-[5.5rem] shrink-0 select-none lg:size-[6.5rem]"
-                draggable={false}
-              />
+              <span className="relative grid shrink-0 place-items-center">
+                {/* The logo's two colours, as a glow behind it. */}
+                <span
+                  aria-hidden
+                  className="absolute -inset-16 rounded-full"
+                  style={{
+                    backgroundImage:
+                      'radial-gradient(closest-side, hsl(var(--ai-star) / 0.16), hsl(var(--primary) / 0.1) 55%, transparent)'
+                  }}
+                />
+                <img
+                  src={appLogo}
+                  alt="Logo SIEVER Mail"
+                  className="relative size-[5.5rem] select-none lg:size-[6.5rem]"
+                  draggable={false}
+                />
+              </span>
               <div
                 className={cn(
                   'overflow-hidden transition-all duration-[1800ms] ease-out',
@@ -4316,8 +4327,8 @@ function App(): React.JSX.Element {
                   )}
                 >
                   SIEVER Mail
-                  <span className="text-primary mt-2 block text-2xl leading-tight font-semibold whitespace-nowrap">
-                    Lightweight IMAP/SMTP Client
+                  <span className="text-muted-foreground mt-2 block font-serif text-2xl leading-tight font-normal tracking-normal whitespace-nowrap italic">
+                    La posta, con un segretario.
                   </span>
                 </h1>
               </div>
