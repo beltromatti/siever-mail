@@ -808,7 +808,10 @@ export class AiStore {
       })
     ])
 
-    const readyDraft = note ? await this.readyDraftFor(note.accountId, note.messageKey) : null
+    const [readyDraft, archived] = await Promise.all([
+      note ? this.readyDraftFor(note.accountId, note.messageKey) : null,
+      this.threadArchived(accountId, threadId)
+    ])
 
     return {
       note: note ? noteOf(note) : null,
@@ -821,7 +824,8 @@ export class AiStore {
               text: readyDraft.text,
               doubts: readyDraft.doubts
             }
-          : null
+          : null,
+      archived
     }
   }
 
@@ -929,6 +933,7 @@ export class AiStore {
   /** An account was removed: what the Segretario kept about it alone goes with it. */
   async forgetAccount(accountId: string, accountNotePath: string): Promise<void> {
     await this.prisma.$transaction([
+      this.prisma.aiArchived.deleteMany({ where: { accountId } }),
       this.prisma.aiLearning.deleteMany({ where: { accountId } }),
       this.prisma.aiDraft.deleteMany({ where: { accountId } }),
       this.prisma.aiNote.deleteMany({ where: { accountId } }),
@@ -951,7 +956,54 @@ export class AiStore {
       this.prisma.aiNote.deleteMany(),
       this.prisma.aiItem.deleteMany(),
       this.prisma.aiReadyDraft.deleteMany(),
-      this.prisma.aiBriefing.deleteMany()
+      this.prisma.aiBriefing.deleteMany(),
+      this.prisma.aiArchived.deleteMany()
     ])
+  }
+
+  /* ─────────────────────────── filed outside the mail ─────────────────────────── */
+
+  async saveArchived(
+    entries: ReadonlyArray<{
+      accountId: string
+      messageKey: string
+      threadId: string
+      folder: string
+    }>
+  ): Promise<void> {
+    const archivedAt = BigInt(Date.now())
+
+    await this.prisma.$transaction(
+      entries.map((entry) =>
+        this.prisma.aiArchived.upsert({
+          where: {
+            accountId_messageKey: { accountId: entry.accountId, messageKey: entry.messageKey }
+          },
+          create: { ...entry, archivedAt },
+          update: { folder: entry.folder, threadId: entry.threadId, archivedAt }
+        })
+      )
+    )
+  }
+
+  /** Which of these messages of an account were filed outside the mail. */
+  async archivedKeys(accountId: string, messageKeys: ReadonlyArray<string>): Promise<Set<string>> {
+    const rows = await this.prisma.aiArchived.findMany({
+      where: { accountId, messageKey: { in: [...messageKeys] } },
+      select: { messageKey: true }
+    })
+    return new Set(rows.map((row) => row.messageKey))
+  }
+
+  /** Where a conversation was last filed outside the mail, and when. */
+  async threadArchived(
+    accountId: string,
+    threadId: string
+  ): Promise<{ folder: string; at: number } | null> {
+    const row = await this.prisma.aiArchived.findFirst({
+      where: { accountId, threadId },
+      orderBy: { archivedAt: 'desc' }
+    })
+    return row ? { folder: row.folder, at: Number(row.archivedAt) } : null
   }
 }

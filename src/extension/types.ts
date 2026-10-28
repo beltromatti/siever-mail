@@ -216,6 +216,13 @@ export interface ExtensionMainContext {
    */
   recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void>
   /**
+   * Messages the extension filed outside the mail — ARCHIVIA SIEVER, into a
+   * pratica — before taking them out of it: the Segretario keeps what is
+   * open in them, and says where they went. Called while they are still
+   * where `ref` says.
+   */
+  messagesArchived(entries: ReadonlyArray<{ ref: MessageRef; folder: string }>): Promise<void>
+  /**
    * The topics `assistant.topics()` lists changed — a new root, a folder
    * found: the Segretario reads them again now rather than at its next look.
    */

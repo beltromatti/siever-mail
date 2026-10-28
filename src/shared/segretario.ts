@@ -119,6 +119,8 @@ export interface ThreadBrief {
   commitments: Commitment[]
   /** A reply the Segretario prepared ahead for the latest message, until taken up or set aside. */
   readyDraft: { messageKey: string; kind: ReadyDraftKind; text: string; doubts: string } | null
+  /** Where it was filed outside the mail — a pratica's folder — and when; null if it was not. */
+  archived: { folder: string; at: number } | null
 }
 
 /** A reply to a message that waits on the user, or a reminder after the user's own that waits too long. */

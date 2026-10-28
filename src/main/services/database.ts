@@ -2825,6 +2825,19 @@ export class AppDatabase {
       'CREATE INDEX IF NOT EXISTS idx_ai_topic_threads_topic ON ai_topic_threads(topic_id)'
     )
     await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_archived (
+        account_id TEXT NOT NULL,
+        message_key TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        folder TEXT NOT NULL,
+        archived_at INTEGER NOT NULL,
+        PRIMARY KEY (account_id, message_key)
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_ai_archived_thread ON ai_archived(account_id, thread_id)'
+    )
+    await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS ai_briefings (
         day TEXT PRIMARY KEY,
         text TEXT NOT NULL,
@@ -3707,6 +3720,50 @@ export class AppDatabase {
       .filter((row) => !seen.has(row.messageKey) && seen.add(row.messageKey))
       .slice(0, limit)
       .map((row) => ({ ...row, uid: Number(row.uid) }))
+  }
+
+  /** The key and conversation of each message, where it is now; those not in the cache are left out. */
+  async messageIdentities(
+    refs: ReadonlyArray<MessageRef>
+  ): Promise<Array<{ ref: MessageRef; messageKey: string; threadId: string }>> {
+    await this.ready
+
+    if (refs.length === 0) {
+      return []
+    }
+
+    const rows = await this.prisma.message.findMany({
+      where: {
+        OR: refs.map((ref) => ({
+          accountId: ref.accountId,
+          folderPath: ref.folderPath,
+          uid: ref.uid
+        }))
+      },
+      select: { accountId: true, folderPath: true, uid: true, messageKey: true, threadId: true }
+    })
+
+    return rows.map((row) => ({
+      ref: { accountId: row.accountId, folderPath: row.folderPath, uid: Number(row.uid) },
+      messageKey: row.messageKey,
+      threadId: row.threadId
+    }))
+  }
+
+  /** The keys of a folder's messages by UID, each once. */
+  async messageKeysOfUids(
+    accountId: string,
+    folderPath: string,
+    uids: ReadonlyArray<number>
+  ): Promise<string[]> {
+    await this.ready
+
+    const rows = await this.prisma.message.findMany({
+      where: { accountId, folderPath, uid: { in: [...uids] } },
+      select: { messageKey: true },
+      distinct: ['messageKey']
+    })
+    return rows.map((row) => row.messageKey)
   }
 
   /** The keys of an account's messages in these conversations. */

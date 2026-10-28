@@ -789,6 +789,14 @@ stands, written by the Segretario when the topic moved since
 eight and searches the rest. With the extension, ARCHIVIA SIEVER opens on
 the pratica the conversation is in (`ExtensionSelectionContext.topicKey`).
 
+**Archived, still followed.** An extension that files messages outside the
+mail before taking them out of it — ARCHIVIA SIEVER, into a pratica, then
+the Trash — says so (`ExtensionMainContext.messagesArchived`), and the
+Segretario keeps it (`ai_archived`): what is open in those conversations
+stays in Oggi and the views, found in the Trash while it keeps them, and
+the reader says where they went ("Archiviata in Prat2451 › CORRISPONDENZA",
+with the folder a click away).
+
 For tuning the prompts, `SIEVER_AI_TRACE=<folder>` writes every call's
 messages and answer there, a JSON line each; it is off unless set.
 
@@ -852,8 +860,10 @@ extension code by path. The contract is `src/extension/types.ts`:
 `install()` receives an `ExtensionMainContext`: `app`, `ipcMain`, the user
 data path, a database handle (`applyDdl`, `query`, `execute`) on the host's
 connection, a mail engine handle, `getMainWindow()`, `recordRecentFiles()`,
-`adoptShortcutOverride()` and `topicsChanged()` — called when what
-`assistant.topics()` lists changed, so the Segretario reads it again then.
+`adoptShortcutOverride()`, `topicsChanged()` — called when what
+`assistant.topics()` lists changed, so the Segretario reads it again then —
+and `messagesArchived()`, for messages filed outside the mail before they
+leave it.
 The selection handed to toolbar actions and the primary dialog carries
 `topicKey`, the extension topic its conversations are filed in. The engine handle gives raw messages in bulk
 — `fetchMessageRawSources(refs, onMessage)` downloads a few per command and

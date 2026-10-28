@@ -703,6 +703,37 @@ export class MailService {
       getMainWindow: getAppWindow,
       recordRecentFiles: (paths, activity) => this.recordRecentFiles(paths, activity),
       topicsChanged: () => this.segretario.extensionTopicsChanged(),
+      // Bookkeeping: the archive never fails for it.
+      messagesArchived: async (entries) => {
+        const refKey = (ref: MessageRef): string =>
+          `${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`
+
+        try {
+          const identities = new Map(
+            (await this.database.messageIdentities(entries.map((entry) => entry.ref))).map(
+              (identity) => [refKey(identity.ref), identity]
+            )
+          )
+
+          await this.segretario.messagesArchived(
+            entries.flatMap((entry) => {
+              const identity = identities.get(refKey(entry.ref))
+              return identity
+                ? [
+                    {
+                      accountId: entry.ref.accountId,
+                      messageKey: identity.messageKey,
+                      threadId: identity.threadId,
+                      folder: entry.folder
+                    }
+                  ]
+                : []
+            })
+          )
+        } catch (error) {
+          logMainError('Segretario: archived messages could not be recorded', error)
+        }
+      },
       adoptShortcutOverride: async (commandId, chord) => {
         const preferences = await this.database.getUiPreferences()
 
@@ -1085,23 +1116,39 @@ export class MailService {
       }
     >()
 
+    const trashed = new Map<
+      string,
+      { ref: MessageRef; subject: string; from: MailAddress[]; dateIso: string }
+    >()
+
     for (const row of await this.database.listMessageRowsByKey(accountId, messageKeys)) {
       const folder = folders.find((candidate) => candidate.path === row.folderPath)
       const role = folder ? folderRole(folder) : null
       const rank = folderDisplayRank(folder)
       const known = best.get(row.messageKey)
-
-      if (role !== '\\Junk' && role !== '\\Trash' && (!known || rank < known.rank)) {
-        best.set(row.messageKey, {
-          rank,
-          summary: {
-            ref: { accountId, folderPath: row.folderPath, uid: row.uid },
-            subject: row.subject,
-            from: row.from,
-            dateIso: row.dateIso
-          }
-        })
+      const summary = {
+        ref: { accountId, folderPath: row.folderPath, uid: row.uid },
+        subject: row.subject,
+        from: row.from,
+        dateIso: row.dateIso
       }
+
+      if (role === '\\Trash') {
+        trashed.set(row.messageKey, summary)
+      } else if (role !== '\\Junk' && (!known || rank < known.rank)) {
+        best.set(row.messageKey, { rank, summary })
+      }
+    }
+
+    // A message filed into a pratica left the mail for the Trash, but what
+    // is open in it is not done: it is found there while the Trash keeps it.
+    const archived = await this.segretario.archivedKeys(
+      accountId,
+      [...trashed.keys()].filter((key) => !best.has(key))
+    )
+
+    for (const key of archived) {
+      best.set(key, { rank: Number.MAX_SAFE_INTEGER, summary: trashed.get(key)! })
     }
 
     return new Map([...best].map(([key, { summary }]) => [key, summary]))

@@ -1267,8 +1267,44 @@ export class AccountConnection extends EventEmitter {
       return { sourceFolder: folderPath, destinationFolder: trash?.path }
     }
 
-    await this.moveMessages(folderPath, uids, trash.path, options)
+    await this.moveToTrash(folderPath, uids, trash.path, options)
     return { sourceFolder: folderPath, destinationFolder: trash.path }
+  }
+
+  /**
+   * Moves messages to the Trash. On Gmail that takes them out of every
+   * label, "Tutti i messaggi" included: their copies there leave the cache
+   * at once, rather than when each label is next looked at — a view that
+   * found a message by any of its copies would otherwise find one that is gone.
+   */
+  private async moveToTrash(
+    folderPath: string,
+    uids: number[],
+    trashPath: string,
+    options: { markAsSeenBeforeMove?: boolean } = {}
+  ): Promise<void> {
+    const gmail = this.requirePrimary().capabilities.has('X-GM-EXT-1')
+    const keys = gmail
+      ? await this.database.messageKeysOfUids(this.account.id, folderPath, uids)
+      : []
+
+    await this.moveMessages(folderPath, uids, trashPath, options)
+
+    if (keys.length === 0) {
+      return
+    }
+
+    const copies = new Map<string, number[]>()
+
+    for (const row of await this.database.listMessageRowsByKey(this.account.id, keys)) {
+      if (row.folderPath !== trashPath) {
+        copies.set(row.folderPath, [...(copies.get(row.folderPath) ?? []), row.uid])
+      }
+    }
+
+    for (const [labelPath, labelUids] of copies) {
+      await this.forgetMessages(labelPath, labelUids)
+    }
   }
 
   /**
@@ -1282,7 +1318,7 @@ export class AccountConnection extends EventEmitter {
     const trash = folderForRole(await this.database.listFolders(this.account.id), '\\Trash')
 
     if (trash && trash.path !== folderPath) {
-      await this.moveMessages(folderPath, uids, trash.path)
+      await this.moveToTrash(folderPath, uids, trash.path)
       return { sourceFolder: folderPath, destinationFolder: trash.path }
     }
 

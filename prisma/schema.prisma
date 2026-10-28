@@ -412,6 +412,20 @@ model AiReadyDraft {
   @@map("ai_ready_drafts")
 }
 
+/// A message an extension filed outside the mail (ARCHIVIA SIEVER, into a pratica) before taking it out.
+model AiArchived {
+  accountId  String @map("account_id")
+  messageKey String @map("message_key")
+  threadId   String @map("thread_id")
+  /// The folder it went into.
+  folder     String
+  archivedAt BigInt @map("archived_at")
+
+  @@id([accountId, messageKey])
+  @@index([accountId, threadId], map: "idx_ai_archived_thread")
+  @@map("ai_archived")
+}
+
 /// What the Segretario wrote at the top of a day ("Oggi"), by local day.
 model AiBriefing {
   day       String @id

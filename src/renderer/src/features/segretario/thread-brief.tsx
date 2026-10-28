@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Briefcase, Check, ChevronDown, PenLine } from 'lucide-react'
+import { Briefcase, Check, ChevronDown, FolderArchive, PenLine } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/lib/utils'
@@ -62,6 +62,38 @@ export function CommitmentRow({
         )}
       </span>
     </li>
+  )
+}
+
+const ARCHIVED_ON = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
+
+/** "…/Prat2451-CASEIFICIO VALLI/CORRISPONDENZA/261027Celle" as it reads: from the pratica down. */
+function archivedPlace(folder: string): string {
+  const parts = folder.split(/[\\/]/).filter(Boolean)
+  const start = parts.findIndex((part) => /^prat/i.test(part))
+  return parts.slice(start >= 0 ? start : Math.max(0, parts.length - 3)).join(' › ')
+}
+
+/** Where the conversation was filed outside the mail, with the folder a click away. */
+function ArchivedLine({
+  archived
+}: {
+  archived: { folder: string; at: number }
+}): React.JSX.Element {
+  return (
+    <div className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-[11.5px]">
+      <FolderArchive className="text-faint-foreground size-3.5 shrink-0" />
+      <span className="min-w-0 truncate" title={archived.folder}>
+        Archiviata in {archivedPlace(archived.folder)} · {ARCHIVED_ON.format(new Date(archived.at))}
+      </span>
+      <button
+        type="button"
+        onClick={() => void window.mailApi.revealFile(archived.folder)}
+        className="hover:text-foreground focus-visible:ring-ring/60 shrink-0 rounded-sm outline-none focus-visible:ring-2"
+      >
+        Mostra
+      </button>
+    </div>
   )
 }
 
@@ -197,19 +229,26 @@ export function ThreadBriefPanel({
     return null
   }
 
-  const topicLine = topics && (
-    <TopicLine
-      accountId={accountId}
-      threadId={threadId}
-      topic={brief.topic}
-      topics={topics}
-      onOpenTopic={onOpenTopic}
-    />
+  const topicLine = (topics || brief.archived) && (
+    <div className="flex flex-col gap-1">
+      {topics && (
+        <TopicLine
+          accountId={accountId}
+          threadId={threadId}
+          topic={brief.topic}
+          topics={topics}
+          onOpenTopic={onOpenTopic}
+        />
+      )}
+      {brief.archived && <ArchivedLine archived={brief.archived} />}
+    </div>
   )
 
   if (!note || note.state === 'rumore') {
     // Noise has nothing to say; a conversation it knows nothing of can still be filed.
-    return topicLine && (brief.topic || !note) ? <div className="mb-3">{topicLine}</div> : null
+    return topicLine && (brief.topic || brief.archived || !note) ? (
+      <div className="mb-3">{topicLine}</div>
+    ) : null
   }
 
   const action = noteAsks(note) ? NOTE_ACTION_LABELS[note.state] : null

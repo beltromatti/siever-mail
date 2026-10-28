@@ -779,6 +779,37 @@ export class SegretarioService {
 
   /* ──────────────────────────────── topics ──────────────────────────────── */
 
+  /** Messages an extension filed outside the mail: what is open in them is kept, and where they went. */
+  async messagesArchived(
+    entries: ReadonlyArray<{
+      accountId: string
+      messageKey: string
+      threadId: string
+      folder: string
+    }>
+  ): Promise<void> {
+    await this.whenReady()
+    await this.requireStore().saveArchived(entries)
+
+    for (const accountId of new Set(entries.map((entry) => entry.accountId))) {
+      const ofAccount = entries.filter((entry) => entry.accountId === accountId)
+      this.emitNotes({
+        accountId,
+        messageKeys: ofAccount.map((entry) => entry.messageKey),
+        threadIds: [...new Set(ofAccount.map((entry) => entry.threadId))]
+      })
+    }
+  }
+
+  /** Which of these messages of an account were filed outside the mail. */
+  async archivedKeys(accountId: string, messageKeys: ReadonlyArray<string>): Promise<Set<string>> {
+    if (messageKeys.length === 0 || !this.store) {
+      return new Set()
+    }
+
+    return this.store.archivedKeys(accountId, messageKeys)
+  }
+
   /** A topic's conversations among some accounts', for its list. */
   async topicThreads(
     topicId: string,
