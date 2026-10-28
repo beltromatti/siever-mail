@@ -51,4 +51,32 @@ describe('readyDraftRequest', () => {
       '### 12 ott 2026, 10:00 · Oggetto: Re: Sopralluogo\nCiao Anna, confermo.'
     )
   })
+
+  it('asks for a reminder after the user’s own message, with what is awaited', () => {
+    const request = readyDraftRequest({
+      today: new Date(2026, 9, 28),
+      accountEmail: me.address,
+      accountName: 'Mattia',
+      accountNote: null,
+      people: [],
+      note: { summary: 'Chiedi ad Anna il verbale firmato', due: null },
+      thread: [
+        {
+          date: '2026-10-21T09:00:00.000Z',
+          from: [me],
+          to: [anna],
+          cc: [],
+          subject: 'Verbale',
+          text: 'Mi rimandi il verbale firmato?',
+          target: true
+        }
+      ],
+      examples: [],
+      awaited: [{ text: 'Il verbale firmato da Anna', due: '2026-10-24' }]
+    })
+
+    expect(request).toContain("▶ L'ULTIMO MESSAGGIO DELL'UTENTE, ANCORA SENZA RISPOSTA")
+    expect(request).toContain('- Il verbale firmato da Anna (era atteso entro 2026-10-24)')
+    expect(request).not.toContain('Cosa chiede, secondo la tua nota')
+  })
 })

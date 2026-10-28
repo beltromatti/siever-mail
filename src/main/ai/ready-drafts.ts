@@ -38,6 +38,8 @@ export function readyDraftRequest(input: {
   note: { summary: string; due: string | null }
   thread: ReadonlyArray<TriageMessage>
   examples: ReadonlyArray<{ date: string; subject: string; text: string }>
+  /** For a reminder: what the user waits for, as the notes have it. */
+  awaited?: ReadonlyArray<{ text: string; due: string | null }>
 }): string {
   const context = triageRequest({
     today: input.today,
@@ -49,7 +51,12 @@ export function readyDraftRequest(input: {
     open: [],
     thread: input.thread
   })
-    .replace('▶ IL MESSAGGIO DA ANNOTARE', '▶ IL MESSAGGIO A CUI RISPONDERE')
+    .replace(
+      '▶ IL MESSAGGIO DA ANNOTARE',
+      input.awaited
+        ? "▶ L'ULTIMO MESSAGGIO DELL'UTENTE, ANCORA SENZA RISPOSTA"
+        : '▶ IL MESSAGGIO A CUI RISPONDERE'
+    )
     .replace(/\n\n## Cose già aperte in questa conversazione\n\nNessuna\./, '')
 
   const examples =
@@ -64,7 +71,11 @@ export function readyDraftRequest(input: {
 
   return [
     context,
-    `## Cosa chiede, secondo la tua nota\n\n${input.note.summary}${input.note.due ? ` (entro ${input.note.due})` : ''}`,
+    input.awaited
+      ? `## Cosa aspetta l'utente, secondo le tue note\n\n${input.awaited
+          .map((item) => `- ${item.text}${item.due ? ` (era atteso entro ${item.due})` : ''}`)
+          .join('\n')}`
+      : `## Cosa chiede, secondo la tua nota\n\n${input.note.summary}${input.note.due ? ` (entro ${input.note.due})` : ''}`,
     `## Come l'utente ha scritto a questa persona\n\n${examples}`
   ].join('\n\n')
 }

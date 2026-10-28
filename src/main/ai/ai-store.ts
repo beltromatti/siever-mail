@@ -12,6 +12,7 @@ import {
   type MessageNote,
   type NotePriority,
   type NoteState,
+  type ReadyDraftKind,
   type ThreadBrief,
   type ActivityStatus,
   type ActivitySummary,
@@ -484,6 +485,7 @@ export class AiStore {
     accountId: string
     messageKey: string
     threadId: string
+    kind: ReadyDraftKind
     text: string
     doubts: string
   }): Promise<void> {
@@ -502,13 +504,23 @@ export class AiStore {
   async readyDraftFor(
     accountId: string,
     messageKey: string
-  ): Promise<{ text: string; doubts: string; createdAt: number } | null> {
+  ): Promise<{
+    kind: ReadyDraftKind
+    text: string
+    doubts: string
+    createdAt: number
+  } | null> {
     const row = await this.prisma.aiReadyDraft.findUnique({
       where: { accountId_messageKey: { accountId, messageKey } }
     })
 
     return row?.status === 'pronta'
-      ? { text: row.text, doubts: row.doubts, createdAt: Number(row.createdAt) }
+      ? {
+          kind: row.kind === 'sollecito' ? 'sollecito' : 'risposta',
+          text: row.text,
+          doubts: row.doubts,
+          createdAt: Number(row.createdAt)
+        }
       : null
   }
 
@@ -562,6 +574,44 @@ export class AiStore {
         )
       ORDER BY n.message_date DESC
       LIMIT ${limit}
+    `
+  }
+
+  /**
+   * The user's own last messages that wait too long for an answer — past
+   * the date the awaited thing was due, or `waitedSinceIso` without one —
+   * and have no reminder prepared: the newest first.
+   */
+  async messagesWantingFollowUp(input: {
+    sinceIso: string
+    waitedSinceIso: string
+    today: string
+    limit: number
+  }): Promise<Array<{ accountId: string; messageKey: string; threadId: string }>> {
+    return this.prisma.$queryRaw<
+      Array<{ accountId: string; messageKey: string; threadId: string }>
+    >`
+      SELECT n.account_id AS accountId, n.message_key AS messageKey, n.thread_id AS threadId
+      FROM ai_notes n
+      WHERE n.direction = 'out'
+        AND n.dismissed_at IS NULL
+        AND n.message_date >= ${input.sinceIso}
+        AND n.message_date = (
+          SELECT MAX(o.message_date) FROM ai_notes o
+          WHERE o.account_id = n.account_id AND o.thread_id = n.thread_id
+        )
+        AND EXISTS (
+          SELECT 1 FROM ai_items i
+          WHERE i.account_id = n.account_id AND i.thread_id = n.thread_id
+            AND i.kind = 'aspetti' AND i.status = 'aperto'
+            AND (i.due < ${input.today} OR (i.due IS NULL AND n.message_date <= ${input.waitedSinceIso}))
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM ai_ready_drafts r
+          WHERE r.account_id = n.account_id AND r.message_key = n.message_key
+        )
+      ORDER BY n.message_date DESC
+      LIMIT ${input.limit}
     `
   }
 
@@ -634,12 +684,18 @@ export class AiStore {
 
   async readyDraftsIn(
     accountIds: ReadonlyArray<string>
-  ): Promise<Array<{ accountId: string; messageKey: string; threadId: string }>> {
-    return this.prisma.aiReadyDraft.findMany({
+  ): Promise<
+    Array<{ accountId: string; messageKey: string; threadId: string; kind: ReadyDraftKind }>
+  > {
+    const rows = await this.prisma.aiReadyDraft.findMany({
       where: { accountId: { in: [...accountIds] }, status: 'pronta' },
-      select: { accountId: true, messageKey: true, threadId: true },
+      select: { accountId: true, messageKey: true, threadId: true, kind: true },
       orderBy: { createdAt: 'desc' }
     })
+    return rows.map((row) => ({
+      ...row,
+      kind: row.kind === 'sollecito' ? 'sollecito' : 'risposta'
+    }))
   }
 
   async briefingOpening(
@@ -705,7 +761,17 @@ export class AiStore {
           status: 'aperto'
         },
         data: { status: 'chiuso', closedAt: now, closedBy: 'segretario' }
-      })
+      }),
+      // What was prepared for an earlier message of the conversation is past: it moved on.
+      this.prisma.$executeRaw`
+        UPDATE ai_ready_drafts SET status = 'superata'
+        WHERE account_id = ${note.accountId} AND thread_id = ${note.threadId} AND status = 'pronta'
+          AND message_key IN (
+            SELECT message_key FROM ai_notes
+            WHERE account_id = ${note.accountId} AND thread_id = ${note.threadId}
+              AND message_date < ${note.messageDate}
+          )
+      `
     ])
   }
 
@@ -749,7 +815,12 @@ export class AiStore {
       commitments: items.map(commitmentOf),
       readyDraft:
         note && readyDraft
-          ? { messageKey: note.messageKey, text: readyDraft.text, doubts: readyDraft.doubts }
+          ? {
+              messageKey: note.messageKey,
+              kind: readyDraft.kind,
+              text: readyDraft.text,
+              doubts: readyDraft.doubts
+            }
           : null
     }
   }

@@ -2837,6 +2837,7 @@ export class AppDatabase {
         account_id TEXT NOT NULL,
         message_key TEXT NOT NULL,
         thread_id TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'risposta',
         text TEXT NOT NULL,
         doubts TEXT NOT NULL,
         status TEXT NOT NULL,

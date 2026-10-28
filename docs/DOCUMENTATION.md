@@ -729,6 +729,13 @@ proposal in "Il punto" — "Usa questa risposta" opens it in the composer as
 a reply, recorded like the Segretario's other drafts so the user's edits
 are learnt from; "Scarta" sets it aside. Both can be switched off.
 
+Reminders are prepared the same way (`sollecito.md`): where the user's own
+last message waits for something past the date it was due — or three days,
+without one — and no more than a month, a short follow-up in the user's
+voice to whom they wrote, shown as "Sollecito pronto". Whatever was
+prepared for a message is retired once a later message of its
+conversation is read: the user answered from the phone, the reply came.
+
 **Writing together.** In the composer, ⌘J (or the "Segretario" button
 beside "Allega") asks it to write the reply, or to rewrite what is written —
 shorter, more formal, corrected, in English, or in the user's own words.

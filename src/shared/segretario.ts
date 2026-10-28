@@ -118,8 +118,11 @@ export interface ThreadBrief {
   topic: Pick<Topic, 'id' | 'title' | 'folderPath'> | null
   commitments: Commitment[]
   /** A reply the Segretario prepared ahead for the latest message, until taken up or set aside. */
-  readyDraft: { messageKey: string; text: string; doubts: string } | null
+  readyDraft: { messageKey: string; kind: ReadyDraftKind; text: string; doubts: string } | null
 }
+
+/** A reply to a message that waits on the user, or a reminder after the user's own that waits too long. */
+export type ReadyDraftKind = 'risposta' | 'sollecito'
 
 /* ──────────────────────────────── topics ──────────────────────────────── */
 
@@ -164,6 +167,8 @@ export interface BriefingItem {
   due: string | null
   /** For a thing open: asked, promised, awaited, to do. */
   commitmentKind: CommitmentKind | null
+  /** For a text prepared: a reply, or a reminder. */
+  readyKind?: ReadyDraftKind
   ref: MessageRef
   /** The message's key in its account: the same in every folder it is in. */
   messageKey: string

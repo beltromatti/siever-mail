@@ -251,7 +251,9 @@ export function ThreadBriefPanel({
       <p className="voice text-foreground text-[15px] leading-[1.45]">{note.summary}</p>
       {brief.readyDraft && (
         <div className="bg-ai-soft/45 flex flex-col gap-2 rounded-[8px] px-3 py-2.5">
-          <p className="text-ai text-[11.5px] font-semibold">Risposta pronta</p>
+          <p className="text-ai text-[11.5px] font-semibold">
+            {brief.readyDraft.kind === 'sollecito' ? 'Sollecito pronto' : 'Risposta pronta'}
+          </p>
           <p className="voice text-foreground max-h-56 overflow-y-auto text-[14px] leading-[1.5] whitespace-pre-wrap">
             {brief.readyDraft.text}
           </p>
@@ -278,7 +280,9 @@ export function ThreadBriefPanel({
               }}
             >
               <PenLine className="size-3.5" />
-              Usa questa risposta
+              {brief.readyDraft.kind === 'sollecito'
+                ? 'Usa questo sollecito'
+                : 'Usa questa risposta'}
             </Button>
             <Button
               variant="ghost"

@@ -44,9 +44,9 @@ function Line({
         className="hover:bg-hover focus-visible:ring-ring/60 -mx-3 flex w-[calc(100%+1.5rem)] flex-col gap-1 rounded-[8px] px-3 py-2.5 text-left outline-none focus-visible:ring-2"
       >
         <span className="voice text-foreground text-[16px] leading-[1.4]">
-          {item.commitmentKind && (
+          {(item.commitmentKind || item.readyKind === 'sollecito') && (
             <span className="text-ai mr-1.5 font-sans text-[12px] font-semibold">
-              {COMMITMENT_LABELS[item.commitmentKind]}
+              {item.commitmentKind ? COMMITMENT_LABELS[item.commitmentKind] : 'Sollecito'}
             </span>
           )}
           {item.text}

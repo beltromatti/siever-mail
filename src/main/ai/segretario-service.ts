@@ -24,6 +24,7 @@ import {
   type MessageNote,
   type NotePriority,
   type NotesChange,
+  type ReadyDraftKind,
   type ThreadBrief,
   type Topic,
   type TopicDetail,
@@ -120,6 +121,10 @@ const DRAFT_RECORD_TTL_MS = 90 * 24 * 60 * 60 * 1000
 const EXTENSION_TOPICS_SYNC_MS = 10 * 60 * 1000
 /** Past this many conversations waiting to be read, the day's page just says it is reading. */
 const TRIAGE_BACKLOG_COUNTED = 200
+/** How long the user's own message waits, without a date for what it asked, before a reminder is prepared. */
+const FOLLOW_UP_AFTER_DAYS = 3
+/** Past this, a conversation the user stopped chasing is not chased for them. */
+const FOLLOW_UP_WINDOW_DAYS = 30
 /** How often triage looks for messages without a note. */
 const TRIAGE_CHECK_MS = 20_000
 /** Messages taken per look, and read side by side. */
@@ -1102,9 +1107,9 @@ export class SegretarioService {
       waiting: waiting.sort(byWeight).slice(0, BRIEFING_LINES),
       awaited: awaited.sort((a, b) => a.date.localeCompare(b.date)).slice(0, BRIEFING_LINES),
       ready: ready
-        .map((draft) => {
+        .map((draft): BriefingItem | null => {
           const note = noteOfMessage.get(id(draft.accountId, draft.messageKey))
-          return line(
+          const item = line(
             draft.accountId,
             draft.messageKey,
             note?.summary ?? summaries.get(id(draft.accountId, draft.messageKey))?.subject ?? '',
@@ -1112,6 +1117,7 @@ export class SegretarioService {
             note?.due ?? null,
             null
           )
+          return item && { ...item, readyKind: draft.kind }
         })
         .filter((item): item is BriefingItem => item !== null)
     }
@@ -1407,19 +1413,40 @@ export class SegretarioService {
       const store = this.store
 
       while ((await store.getPreferences()).readyDrafts && this.status.keyState === 'ready') {
-        const since = new Date(Date.now() - TRIAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000)
-        const wanted = (
+        const now = Date.now()
+        const since = new Date(now - TRIAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000)
+        const fresh = (item: { accountId: string; messageKey: string }): boolean =>
+          (this.readyDraftFailures.get(`${item.accountId}\u0000${item.messageKey}`) ?? 0) <
+          TRIAGE_ATTEMPTS
+        // The replies first: someone waits on the user. Then the reminders.
+        const replies = (
           await store.messagesWantingReadyDraft(
             since.toISOString(),
             READY_DRAFT_BATCH + this.readyDraftFailures.size
           )
-        )
-          .filter(
-            (item) =>
-              (this.readyDraftFailures.get(`${item.accountId}\u0000${item.messageKey}`) ?? 0) <
-              TRIAGE_ATTEMPTS
-          )
-          .slice(0, READY_DRAFT_BATCH)
+        ).filter(fresh)
+        const wanted: Array<{
+          accountId: string
+          messageKey: string
+          threadId: string
+          kind: ReadyDraftKind
+        }> =
+          replies.length > 0
+            ? replies.map((item) => ({ ...item, kind: 'risposta' }))
+            : (
+                await store.messagesWantingFollowUp({
+                  sinceIso: new Date(
+                    now - FOLLOW_UP_WINDOW_DAYS * 24 * 60 * 60 * 1000
+                  ).toISOString(),
+                  waitedSinceIso: new Date(
+                    now - FOLLOW_UP_AFTER_DAYS * 24 * 60 * 60 * 1000
+                  ).toISOString(),
+                  today: localDay(new Date(now)),
+                  limit: READY_DRAFT_BATCH + this.readyDraftFailures.size
+                })
+              )
+                .filter(fresh)
+                .map((item) => ({ ...item, kind: 'sollecito' }))
 
         if (wanted.length === 0) {
           return
@@ -1429,7 +1456,7 @@ export class SegretarioService {
         const accounts = await this.options.mail.listAccounts()
         const notes = await store.listMemory()
 
-        for (const item of wanted) {
+        for (const item of wanted.slice(0, READY_DRAFT_BATCH)) {
           if (!(await this.prepareReadyDraft(item, key, accounts, notes))) {
             return
           }
@@ -1443,7 +1470,7 @@ export class SegretarioService {
   }
 
   private async prepareReadyDraft(
-    item: { accountId: string; messageKey: string; threadId: string },
+    item: { accountId: string; messageKey: string; threadId: string; kind: ReadyDraftKind },
     key: string,
     accounts: ReadonlyArray<MailAccount>,
     notes: ReadonlyArray<{ path: string; content: string }>
@@ -1455,6 +1482,12 @@ export class SegretarioService {
       const account = accounts.find((candidate) => candidate.id === item.accountId)
       const located = await this.options.mail.refForKey(item.accountId, item.messageKey)
       const [note] = await store.getNotes([item])
+      const awaited =
+        item.kind === 'sollecito'
+          ? (await store.openCommitments(item.accountId, item.threadId)).filter(
+              (commitment) => commitment.kind === 'aspetti'
+            )
+          : undefined
 
       if (!account || !located || !note) {
         // Gone meanwhile: the account, the message, its note.
@@ -1469,8 +1502,9 @@ export class SegretarioService {
         own,
         notes
       )
-      const sender = target.from[0]?.address
-      const examples = sender ? await this.repliesTo(account, accounts, sender) : []
+      // A reply is written to who wrote; a reminder to whom the user wrote.
+      const person = (item.kind === 'sollecito' ? target.to : target.from)[0]?.address
+      const examples = person ? await this.repliesTo(account, accounts, person) : []
       const tu = notes.find((candidate) => candidate.path === 'tu.md')
       const style = notes.find((candidate) => candidate.path === 'stile.md')
 
@@ -1479,7 +1513,7 @@ export class SegretarioService {
           {
             role: 'system',
             content: [
-              PROMPTS.readyDraft,
+              item.kind === 'sollecito' ? PROMPTS.followUp : PROMPTS.readyDraft,
               tu ? `# Chi è l'utente\n\n${tu.content.trim()}` : null,
               style ? `# Come scrive l'utente\n\n${style.content.trim()}` : null
             ]
@@ -1496,7 +1530,8 @@ export class SegretarioService {
               people,
               note: { summary: note.summary, due: note.due },
               thread,
-              examples
+              examples,
+              awaited
             })
           }
         ],
@@ -1506,7 +1541,11 @@ export class SegretarioService {
         responseSchema: { name: 'risposta', schema: READY_DRAFT_SCHEMA }
       })
 
-      await this.recordUsage(null, 'risposta-pronta', result)
+      await this.recordUsage(
+        null,
+        item.kind === 'sollecito' ? 'sollecito' : 'risposta-pronta',
+        result
+      )
       const draft = parseReadyDraft(result.content)
 
       await store.saveReadyDraft({ ...item, text: draft.text, doubts: draft.doubts })

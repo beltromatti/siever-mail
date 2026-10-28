@@ -400,6 +400,8 @@ model AiReadyDraft {
   accountId  String @map("account_id")
   messageKey String @map("message_key")
   threadId   String @map("thread_id")
+  /// A reply to a message that waits on the user, or a reminder after the user's own ('sollecito').
+  kind       String @default("risposta")
   text       String
   doubts     String
   status     String
