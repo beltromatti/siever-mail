@@ -306,7 +306,7 @@ export type ActivityStatus =
   /** Stopped by the user. */
   | 'cancelled'
 
-export type ActivityKind = 'richiesta' | 'conoscerti' | 'riflessione'
+export type ActivityKind = 'richiesta' | 'conoscerti' | 'riflessione' | 'aggiornamento'
 
 export interface ActivitySummary {
   id: string

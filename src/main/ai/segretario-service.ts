@@ -129,6 +129,11 @@ const OWN_WORK_CHECK_MS = 60_000
 const LEARNING_READY_DAYS = 90
 /** Reflections come at most this often, and only with something new to learn from. */
 const REFLECTION_INTERVAL_MS = 6 * 60 * 60 * 1000
+/** Keeping the memory up with the mail: about once a day, once this much has been read since. */
+const KEEP_UP_INTERVAL_MS = 20 * 60 * 60 * 1000
+const KEEP_UP_MIN_NOTES = 12
+/** The notes it is shown, the newest. */
+const KEEP_UP_NOTES_SHOWN = 150
 /** Corrections a reflection takes in at once; the rest wait for the next. */
 const LESSONS_PER_REFLECTION = 20
 /** A draft it wrote and nobody sent is forgotten after this. */
@@ -2659,13 +2664,19 @@ export class SegretarioService {
       if (
         (await this.store.getPreferences()).learning !== true ||
         running.includes('conoscerti') ||
-        running.includes('riflessione')
+        running.includes('riflessione') ||
+        running.includes('aggiornamento')
       ) {
         return
       }
 
-      if (!(await this.beginLearning()) && !running.includes('richiesta')) {
-        await this.beginReflection()
+      // One thing at a time, and never while the user is asking something.
+      if (
+        !(await this.beginLearning()) &&
+        !running.includes('richiesta') &&
+        !(await this.beginReflection())
+      ) {
+        await this.beginKeepingUp()
       }
     } catch (error) {
       logMainError('Segretario: own work could not begin', error)
@@ -2712,16 +2723,16 @@ export class SegretarioService {
     return false
   }
 
-  private async beginReflection(): Promise<void> {
+  private async beginReflection(): Promise<boolean> {
     const store = this.requireStore()
     const lessons = (await store.pendingLessons()).slice(0, LESSONS_PER_REFLECTION)
-    const last = await store.lastReflectionAt()
+    const last = await store.lastActivityAt('riflessione')
 
     if (
       !lessons.some((lesson) => lesson.kind !== 'confermata') ||
       (last !== null && Date.now() - last < REFLECTION_INTERVAL_MS)
     ) {
-      return
+      return false
     }
 
     const emails = new Map(
@@ -2779,6 +2790,78 @@ export class SegretarioService {
       id
     )
     void this.runTurn(id)
+    return true
+  }
+
+  /**
+   * Keeps the memory up with the mail: about once a day, when enough has
+   * been read since the last time, the notes it wrote on what matters —
+   * who wrote, about what — go to work that updates what it knows of the
+   * people, the accounts and the user. Once every account is known.
+   */
+  private async beginKeepingUp(): Promise<boolean> {
+    const store = this.requireStore()
+    const accounts = await this.options.mail.listAccounts()
+    const learnt = new Map((await store.listLearning()).map((row) => [row.accountId, row]))
+    const known = accounts.map((account) => learnt.get(account.id)?.finishedAt ?? null)
+
+    if (known.length === 0 || known.some((finishedAt) => finishedAt === null)) {
+      return false
+    }
+
+    const last = await store.lastActivityAt('aggiornamento')
+
+    if (last !== null && Date.now() - last < KEEP_UP_INTERVAL_MS) {
+      return false
+    }
+
+    const since = last ?? Math.max(...known.map(Number))
+    const { notes, total } = await store.notesWrittenSince(since, KEEP_UP_NOTES_SHOWN)
+
+    if (total < KEEP_UP_MIN_NOTES) {
+      return false
+    }
+
+    const sections: string[] = []
+
+    for (const account of accounts) {
+      const ofAccount = notes.filter((note) => note.accountId === account.id)
+
+      if (ofAccount.length === 0) {
+        continue
+      }
+
+      const summaries = await this.options.mail.messageSummaries(
+        account.id,
+        ofAccount.map((note) => note.messageKey)
+      )
+
+      sections.push(
+        [
+          `## ${account.email}`,
+          ...ofAccount.map((note) => {
+            const from = summaries.get(note.messageKey)?.from ?? []
+            const who = note.direction === 'out' ? "scritto dall'utente" : formatAddresses(from, 1)
+            return `- ${formatDateTime(note.messageDate)} · ${who} · ${note.state.replace('_', ' ')}: ${note.summary}`
+          })
+        ].join('\n')
+      )
+    }
+
+    const id = await this.beginOwnActivity(
+      'aggiornamento',
+      'Al passo',
+      'Rileggo la posta degli ultimi giorni e aggiorno quello che so di te e delle persone.',
+      fillTemplate(PROMPTS.keepingUp, {
+        dal: formatDateTime(new Date(since).toISOString()),
+        materiale: `${sections.join('\n\n')}${
+          total > notes.length ? `\n\n(Le più recenti ${notes.length} di ${total}.)` : ''
+        }`
+      })
+    )
+
+    void this.runTurn(id)
+    return true
   }
 
   /** An activity it began on its own, with the goal it set out with. */
@@ -2819,6 +2902,8 @@ export class SegretarioService {
       case 'riflessione':
         await store.endReflection(id, ended === 'done')
         return
+      // When it began is what says when it is due again (`beginKeepingUp`).
+      case 'aggiornamento':
       case 'richiesta':
         return
     }

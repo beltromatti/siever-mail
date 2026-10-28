@@ -434,14 +434,34 @@ export class AiStore {
     }
   }
 
-  /** When the last reflection began, epoch ms; null if none has. */
-  async lastReflectionAt(): Promise<number | null> {
+  /** When the last activity of a kind began, epoch ms; null if none has. */
+  async lastActivityAt(kind: ActivityKind): Promise<number | null> {
     const row = await this.prisma.aiActivity.findFirst({
-      where: { kind: 'riflessione' },
+      where: { kind },
       orderBy: { createdAt: 'desc' },
       select: { createdAt: true }
     })
     return row ? Number(row.createdAt) : null
+  }
+
+  /**
+   * The notes written since a moment on messages that say something —
+   * noise and copies aside — the newest `limit`, with how many there were.
+   */
+  async notesWrittenSince(
+    sinceMs: number,
+    limit: number
+  ): Promise<{ notes: MessageNote[]; total: number }> {
+    const where = {
+      createdAt: { gt: BigInt(sinceMs) },
+      state: { not: 'rumore' },
+      twinAccountId: null
+    }
+    const [rows, total] = await Promise.all([
+      this.prisma.aiNote.findMany({ where, orderBy: { messageDate: 'desc' }, take: limit }),
+      this.prisma.aiNote.count({ where })
+    ])
+    return { notes: rows.reverse().map(noteOf), total }
   }
 
   /* ───────────────────────── the drafts it wrote ───────────────────────── */

@@ -894,6 +894,13 @@ yes (the panel asks; Settings → Cosa so di te switches it):
   lesson. At most every six hours, with corrections waiting and no request
   of the user's running, a quiet activity turns them into rules in the
   notes.
+- **Al passo** (`al-passo.md`): once every account is known, about once a
+  day (20 hours apart) and when at least a dozen notes on messages that say
+  something were written since, the latest 150 of them — when, who wrote,
+  the note — go to a quiet activity that keeps the memory true: the people
+  who matter and come back, an account now used differently, stable facts
+  about the user; never what the open things already keep. The mail read
+  every day teaches it, not only the first look.
 
 Settings → Cosa so di te shows how far each account has got (with
 "Rifai"), and every note, to read, correct or forget.
