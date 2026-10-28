@@ -185,7 +185,7 @@ export interface BriefingItem {
   /** The message's key in its account: the same in every folder it is in. */
   messageKey: string
   subject: string
-  /** Who wrote the message, as a name. */
+  /** Who wrote the message, as a name: "Tu" when it is the user, from any of their accounts. */
   from: string
   date: string
 }

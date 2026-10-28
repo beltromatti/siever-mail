@@ -1343,11 +1343,14 @@ export class SegretarioService {
     const store = this.requireStore()
     const mail = this.options.mail
     const accountIds = await mail.includedAccountIds()
-    const [notes, commitments, ready] = await Promise.all([
+    const [notes, commitments, ready, accounts] = await Promise.all([
       store.openConversationNotes(accountIds),
       store.openCommitmentsIn(accountIds),
-      store.readyDraftsIn(accountIds)
+      store.readyDraftsIn(accountIds),
+      mail.listAccounts()
     ])
+    // A line the user wrote, from whichever of their accounts, is theirs: "Tu".
+    const own = new Set(accounts.map((account) => account.email.toLowerCase()))
     const id = (accountId: string, key: string): string => `${accountId}\u0000${key}`
 
     // Who wrote each message, what about, where it is: asked for once per account.
@@ -1392,7 +1395,10 @@ export class SegretarioService {
             ref: summary.ref,
             messageKey,
             subject: summary.subject,
-            from: summary.from[0]?.name || summary.from[0]?.address || '',
+            from:
+              summary.from[0] && own.has(summary.from[0].address.toLowerCase())
+                ? 'Tu'
+                : summary.from[0]?.name || summary.from[0]?.address || '',
             date: summary.dateIso
           }
         : null
@@ -2429,6 +2435,9 @@ export class SegretarioService {
               today: new Date(),
               accountEmail: account.email,
               accountName: account.displayName,
+              otherAccounts: accounts
+                .filter((candidate) => candidate.id !== account.id)
+                .map((candidate) => candidate.email),
               accountNote: accountNote?.content ?? null,
               fromUser,
               people,

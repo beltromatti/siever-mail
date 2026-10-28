@@ -229,6 +229,8 @@ export function triageRequest(input: {
   today: Date
   accountEmail: string
   accountName: string
+  /** The user's other accounts: mail to or from them is the user's own, not someone else's. */
+  otherAccounts?: ReadonlyArray<string>
   accountNote: string | null
   fromUser: boolean
   people: ReadonlyArray<{ path: string; content: string }>
@@ -264,6 +266,12 @@ export function triageRequest(input: {
       input.fromUser ? "stato mandato dall'utente" : "arrivato all'utente"
     }.`
   ]
+
+  if (input.otherAccounts && input.otherAccounts.length > 0) {
+    sections.push(
+      `Gli altri indirizzi dell'utente: ${input.otherAccounts.join(', ')}. Chi scrive da uno di questi, o a uno di questi, è l'utente stesso — un promemoria, una prova — non un'altra persona.`
+    )
+  }
 
   if (input.accountNote) {
     sections.push(`## Cosa sai di questo account\n\n${clip(input.accountNote, 2500).text}`)

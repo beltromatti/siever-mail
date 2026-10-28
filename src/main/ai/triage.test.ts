@@ -118,6 +118,7 @@ describe('triageRequest', () => {
 
   it('gives the day, the account, what is open and the conversation up to the message', () => {
     const request = triageRequest({
+      otherAccounts: ['mio.altro@example.com'],
       today: new Date(2026, 9, 27),
       accountEmail: me.address,
       accountName: 'Mattia',
@@ -165,6 +166,7 @@ describe('triageRequest', () => {
     expect(request).toContain("arrivato all'utente")
     expect(request).toContain('La casella di lavoro.')
     expect(request).toContain('### persone/anna-rossi.md\nCliente storica.')
+    expect(request).toContain("Gli altri indirizzi dell'utente: mio.altro@example.com.")
     expect(request).toContain('- [7] aspetti: Conferma del sopralluogo')
     expect(request.indexOf('Ci confermi giovedì?')).toBeLessThan(
       request.indexOf('▶ IL MESSAGGIO DA ANNOTARE')
