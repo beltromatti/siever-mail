@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, LoaderCircle, RefreshCw } from 'lucide-react'
 
+import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { cn } from '@renderer/lib/utils'
 import type { MessageRef } from '@shared/models'
@@ -26,6 +27,21 @@ const COMMITMENT_LABELS: Readonly<Record<CommitmentKind, string>> = {
 }
 
 const SINCE = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
+const WRITTEN_AT = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
+
+/** The day's parts, in the order the page gives them: where each is, and how its count reads. */
+const SECTIONS = [
+  { key: 'today', id: 'oggi-da-fare', title: 'Da fare oggi', glance: 'da fare oggi' },
+  { key: 'week', id: 'oggi-settimana', title: 'Questa settimana', glance: 'questa settimana' },
+  { key: 'waiting', id: 'oggi-ti-aspettano', title: 'Ti aspettano', glance: 'ti aspettano' },
+  { key: 'ready', id: 'oggi-pronte', title: 'Risposte pronte', glance: 'pronte' },
+  { key: 'awaited', id: 'oggi-aspetti', title: 'Aspetti tu', glance: 'aspetti tu' }
+] as const satisfies ReadonlyArray<{
+  key: keyof Pick<Briefing, 'today' | 'week' | 'waiting' | 'ready' | 'awaited'>
+  id: string
+  title: string
+  glance: string
+}>
 
 /** A line's key: its message, and the thing open in it when it is one. */
 function lineKey(item: BriefingItem): string {
@@ -117,6 +133,7 @@ function Line({
 }
 
 function Section({
+  id,
   title,
   items,
   day,
@@ -125,6 +142,7 @@ function Section({
   settled,
   onSettled
 }: {
+  id: string
   title: string
   items: ReadonlyArray<BriefingItem>
   day: string
@@ -141,7 +159,7 @@ function Section({
   }
 
   return (
-    <section className="flex flex-col gap-1.5">
+    <section id={id} className="flex scroll-mt-6 flex-col gap-1.5">
       <h2 className="eyebrow">
         {title} · {shown.length}
       </h2>
@@ -256,14 +274,17 @@ export function TodayPage({
     }
   }, [canWrite, write])
 
-  const empty =
-    briefing !== null &&
-    [briefing.today, briefing.week, briefing.waiting, briefing.awaited, briefing.ready].every(
-      (items) => items.length === 0
-    )
+  const empty = briefing !== null && SECTIONS.every(({ key }) => briefing[key].length === 0)
+  // At a glance, what each part holds still: a click goes to it.
+  const glance = briefing
+    ? SECTIONS.flatMap((section) => {
+        const count = briefing[section.key].filter((item) => !settled.has(lineKey(item))).length
+        return count > 0 ? [{ ...section, count }] : []
+      })
+    : []
 
   return (
-    <div className="page flex h-full min-h-0 flex-col">
+    <div className="paper flex h-full min-h-0 flex-col">
       <header
         className={cn(
           'window-drag-region flex h-[52px] shrink-0 items-center gap-2 border-b pl-6',
@@ -288,16 +309,57 @@ export function TodayPage({
         )}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <article className="mx-auto flex max-w-[680px] flex-col gap-8 px-8 pt-10 pb-16">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8 sm:py-8">
+        <article className="letter mx-auto flex max-w-[720px] flex-col gap-8 rounded-[14px] px-7 pt-7 pb-14 sm:px-12">
           <div className="flex flex-col gap-4">
-            <p className="display-title text-[28px] leading-tight first-letter:uppercase">
+            <div className="flex items-center gap-2 border-b pb-3">
+              <CompassStar className="text-ai-star size-[15px]" />
+              <span className="eyebrow">Il punto del Segretario</span>
+              <span className="flex-1" />
+              {briefing?.openingAt && !writing && (
+                <span className="text-faint-foreground text-[11.5px]">
+                  scritto alle {WRITTEN_AT.format(briefing.openingAt)}
+                </span>
+              )}
+            </div>
+            <p className="display-title pt-2 text-[30px] leading-tight first-letter:uppercase">
               {DAY_TITLE.format(new Date())}
             </p>
+            {glance.length > 0 && (
+              <nav
+                aria-label="La giornata in breve"
+                className="text-muted-foreground flex flex-wrap items-baseline gap-x-1.5 gap-y-1 text-[12.5px]"
+              >
+                {glance.map((part, index) => (
+                  <span key={part.key} className="flex items-baseline gap-1.5">
+                    {index > 0 && <span className="text-faint-foreground">·</span>}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        document
+                          .getElementById(part.id)
+                          ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                      }
+                      className="focus-visible:ring-ring/60 hover:text-foreground rounded-sm outline-none focus-visible:ring-2"
+                    >
+                      <span
+                        className={cn(
+                          'font-semibold tabular-nums',
+                          part.key === 'today' ? 'text-urgent' : 'text-foreground'
+                        )}
+                      >
+                        {part.count}
+                      </span>{' '}
+                      {part.glance}
+                    </button>
+                  </span>
+                ))}
+              </nav>
+            )}
             {briefing?.opening && (
               <p
                 className={cn(
-                  'voice text-foreground text-[18px] leading-[1.55] whitespace-pre-line',
+                  'voice drop-cap text-foreground text-[18px] leading-[1.55] whitespace-pre-line',
                   writing && 'opacity-60'
                 )}
               >
@@ -354,47 +416,19 @@ export function TodayPage({
 
           {briefing && (
             <>
-              <Section
-                title="Da fare oggi"
-                items={briefing.today}
-                day={briefing.day}
-                onOpen={onOpenMessage}
-                settled={settled}
-                onSettled={settle}
-              />
-              <Section
-                title="Questa settimana"
-                items={briefing.week}
-                day={briefing.day}
-                onOpen={onOpenMessage}
-                settled={settled}
-                onSettled={settle}
-              />
-              <Section
-                title="Ti aspettano"
-                items={briefing.waiting}
-                day={briefing.day}
-                onOpen={onOpenMessage}
-                settled={settled}
-                onSettled={settle}
-              />
-              <Section
-                title="Risposte pronte"
-                items={briefing.ready}
-                day={briefing.day}
-                onOpen={onOpenMessage}
-                settled={settled}
-                onSettled={settle}
-              />
-              <Section
-                title="Aspetti tu"
-                items={briefing.awaited}
-                day={briefing.day}
-                showWaitingSince
-                onOpen={onOpenMessage}
-                settled={settled}
-                onSettled={settle}
-              />
+              {SECTIONS.map((section) => (
+                <Section
+                  key={section.key}
+                  id={section.id}
+                  title={section.title}
+                  items={briefing[section.key]}
+                  day={briefing.day}
+                  showWaitingSince={section.key === 'awaited'}
+                  onOpen={onOpenMessage}
+                  settled={settled}
+                  onSettled={settle}
+                />
+              ))}
               {empty && (
                 <p className="voice text-muted-foreground text-[16px]">
                   Niente in sospeso: la posta è in ordine.
