@@ -4697,6 +4697,9 @@ function App(): React.JSX.Element {
                       threadId={messageForViewer.threadId}
                       topics={topicsLabel ? { label: topicsLabel, items: topics } : null}
                       onOpenTopic={(topicId) => selectFolder(segretarioTopicPath(topicId))}
+                      accountEmail={(accountId) =>
+                        accounts.find((account) => account.id === accountId)?.email
+                      }
                       onTakeUpReadyDraft={takeUpReadyDraft}
                     />
                   </>

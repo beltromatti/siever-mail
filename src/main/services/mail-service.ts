@@ -492,6 +492,17 @@ export class MailService {
           .map(({ accountId, threadId, messages }) => ({ accountId, threadId, messages }))
       },
       includedAccountIds: () => this.segretarioAccountIds(),
+      sameMessageElsewhere: async (ref) => {
+        const messageId = (await this.database.getMessage(ref))?.messageId
+
+        return messageId
+          ? this.database.sameMessageElsewhere(
+              ref.accountId,
+              messageId,
+              await this.segretarioAccountIds()
+            )
+          : []
+      },
       messageSummaries: (accountId, messageKeys) => this.bestRowsByKey(accountId, messageKeys),
       refForKey: async (accountId, messageKey) => {
         const best = (await this.bestRowsByKey(accountId, [messageKey])).get(messageKey)

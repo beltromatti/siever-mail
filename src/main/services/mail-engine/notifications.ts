@@ -192,7 +192,13 @@ export class NotificationManager {
     clearTimeout(held.timer)
     this.held.delete(key)
 
-    if (noteMatters(note) && !held.message.isRead && this.announces(held.account.id)) {
+    // A copy of a message come to another account too was announced there.
+    if (
+      !note.twinAccountId &&
+      noteMatters(note) &&
+      !held.message.isRead &&
+      this.announces(held.account.id)
+    ) {
       this.announce(held.account, [held.message], note)
     }
   }

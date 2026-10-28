@@ -366,6 +366,8 @@ model AiNote {
   messageDate  String  @map("message_date")
   createdAt    BigInt  @map("created_at")
   dismissedAt  BigInt? @map("dismissed_at")
+  /// The other account of the user's this same message came to, whose note this copies: followed there.
+  twinAccountId String? @map("twin_account_id")
 
   @@id([accountId, messageKey])
   @@index([accountId, threadId], map: "idx_ai_notes_thread")

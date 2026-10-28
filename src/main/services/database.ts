@@ -2761,6 +2761,7 @@ export class AppDatabase {
         message_date TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         dismissed_at INTEGER,
+        twin_account_id TEXT,
         PRIMARY KEY (account_id, message_key)
       )
     `)
@@ -3800,6 +3801,27 @@ export class AppDatabase {
       messageKey: row.messageKey,
       threadId: row.threadId
     }))
+  }
+
+  /** The same message — by its Message-ID — in other accounts of the user's: each account's key and conversation. */
+  async sameMessageElsewhere(
+    accountId: string,
+    messageId: string,
+    accountIds: ReadonlyArray<string>
+  ): Promise<Array<{ accountId: string; messageKey: string; threadId: string }>> {
+    await this.ready
+
+    const others = accountIds.filter((candidate) => candidate !== accountId)
+
+    if (others.length === 0) {
+      return []
+    }
+
+    return this.prisma.message.findMany({
+      where: { accountId: { in: others }, messageId },
+      select: { accountId: true, messageKey: true, threadId: true },
+      distinct: ['accountId', 'messageKey']
+    })
   }
 
   /** The keys of a folder's messages by UID, each once. */

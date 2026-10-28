@@ -776,6 +776,14 @@ pronte" those with a reply prepared. Their paths
 main process resolves each conversation to one row, in the folder the user
 thinks of it in, never Spam or the Trash, and the list shows exactly those.
 
+**The same message in two accounts** — CC'd to both of the user's
+addresses, a team mailbox's copy — is read once: triage finds it by its
+Message-ID among the accounts it looks after, and copies the note of the
+copy already read (`twin_account_id`), opening nothing; two copies come to
+be read together, one waits for the other. The copy stays out of the
+views, Oggi and the prepared replies, files its conversation in the same
+topic, gives no second alert, and says in the reader where it is followed.
+
 **Topics** (`topic-store.ts`, `ai_topics` / `ai_topic_threads`): the
 lasting matters the mail is about — a job, a negotiation; in a company's
 build, the pratiche of its archive, which the extension lists

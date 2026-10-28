@@ -93,6 +93,11 @@ export interface MessageNote {
   messageDate: string
   /** The user said it is handled. */
   dismissedAt: number | null
+  /**
+   * The same message came to another of the user's accounts, and is
+   * followed there: this note copies that one's, and opens nothing.
+   */
+  twinAccountId: string | null
 }
 
 export type CommitmentKind = 'ti_chiedono' | 'hai_promesso' | 'aspetti' | 'da_fare'

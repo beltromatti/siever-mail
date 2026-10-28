@@ -185,6 +185,7 @@ export function ThreadBriefPanel({
   threadId,
   topics,
   onOpenTopic,
+  accountEmail,
   onTakeUpReadyDraft
 }: {
   accountId: string
@@ -192,6 +193,8 @@ export function ThreadBriefPanel({
   /** The topics a conversation can be filed in, with their name; null without them. */
   topics: { label: string; items: ReadonlyArray<Topic> } | null
   onOpenTopic: (topicId: string) => void
+  /** The address of one of the user's accounts, by id. */
+  accountEmail: (accountId: string) => string | undefined
   /** Opens the reply prepared ahead in the composer, as the user's own. */
   onTakeUpReadyDraft: (accountId: string, messageKey: string, text: string) => Promise<void>
 }): React.JSX.Element | null {
@@ -288,6 +291,12 @@ export function ThreadBriefPanel({
         )}
       </div>
       <p className="voice text-foreground text-[15px] leading-[1.45]">{note.summary}</p>
+      {note.twinAccountId && (
+        <p className="text-muted-foreground text-[11.5px]">
+          Arrivata anche a {accountEmail(note.twinAccountId) ?? 'un altro tuo account'}: la seguo
+          lì, con le cose aperte.
+        </p>
+      )}
       {brief.readyDraft && (
         <div className="bg-ai-soft/45 flex flex-col gap-2 rounded-[8px] px-3 py-2.5">
           <p className="text-ai text-[11.5px] font-semibold">

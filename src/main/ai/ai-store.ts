@@ -55,7 +55,8 @@ function noteOf(row: AiNote): MessageNote {
     reason: row.reason,
     due: row.due,
     messageDate: row.messageDate,
-    dismissedAt: row.dismissedAt === null ? null : Number(row.dismissedAt)
+    dismissedAt: row.dismissedAt === null ? null : Number(row.dismissedAt),
+    twinAccountId: row.twinAccountId
   }
 }
 
@@ -561,6 +562,7 @@ export class AiStore {
       FROM ai_notes n
       WHERE n.state = 'da_rispondere'
         AND n.direction = 'in'
+        AND n.twin_account_id IS NULL
         AND n.priority IN ('alta', 'media')
         AND n.dismissed_at IS NULL
         AND n.message_date >= ${sinceIso}
@@ -595,6 +597,7 @@ export class AiStore {
       FROM ai_notes n
       WHERE n.direction = 'out'
         AND n.dismissed_at IS NULL
+        AND n.twin_account_id IS NULL
         AND n.message_date >= ${input.sinceIso}
         AND n.message_date = (
           SELECT MAX(o.message_date) FROM ai_notes o
@@ -666,6 +669,7 @@ export class AiStore {
       WHERE n.account_id IN (${Prisma.join([...accountIds])})
         AND n.state IN ('da_rispondere', 'da_fare', 'in_attesa')
         AND n.dismissed_at IS NULL
+        AND n.twin_account_id IS NULL
         AND n.message_date = (
           SELECT MAX(o.message_date) FROM ai_notes o
           WHERE o.account_id = n.account_id AND o.thread_id = n.thread_id
@@ -727,6 +731,23 @@ export class AiStore {
    * What triage made of a message: its note, the things it opened in the
    * conversation and those it closed — only ever this conversation's.
    */
+  /** The first of these messages' notes that is not itself a copy: the one a twin copies. */
+  async noteToCopy(
+    messages: ReadonlyArray<{ accountId: string; messageKey: string }>
+  ): Promise<MessageNote | null> {
+    if (messages.length === 0) {
+      return null
+    }
+
+    const row = await this.prisma.aiNote.findFirst({
+      where: {
+        OR: messages.map(({ accountId, messageKey }) => ({ accountId, messageKey })),
+        twinAccountId: null
+      }
+    })
+    return row ? noteOf(row) : null
+  }
+
   async saveTriage(
     note: Omit<MessageNote, 'dismissedAt'>,
     opened: ReadonlyArray<{ kind: CommitmentKind; text: string; due: string | null }>,
@@ -914,6 +935,7 @@ export class AiStore {
         SELECT n.account_id, n.thread_id, n.message_key, n.state, n.dismissed_at
         FROM ai_notes n
         WHERE n.account_id IN (${Prisma.join([...accountIds])})
+          AND n.twin_account_id IS NULL
           AND n.message_date = (
             SELECT MAX(o.message_date) FROM ai_notes o
             WHERE o.account_id = n.account_id AND o.thread_id = n.thread_id

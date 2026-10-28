@@ -223,6 +223,8 @@ export class SegretarioService {
   private readonly triageFailures = new Map<string, number>()
   private preparing = false
   private gisting = false
+  /** A message come to several of the user's accounts, while one copy is being read: by its copies. */
+  private readonly copiesBeingRead = new Map<string, Promise<void>>()
   /** What the app was last told of `onReadingChange`; null before it was told. */
   private reading: boolean | null = null
   /** Messages whose prepared reply failed, by account and key, with the attempts made. */
@@ -1872,8 +1874,65 @@ export class SegretarioService {
       return true
     }
 
+    const reading = Promise.withResolvers<void>()
+    let copies: string | null = null
+
     try {
       const store = this.requireStore()
+
+      // Come to another of the user's accounts too, and read there: the same note, nothing opened twice.
+      const elsewhere = await this.options.mail.sameMessageElsewhere(item.ref)
+      // Two copies read at once would both be read: one waits for the other, then copies it.
+      copies =
+        elsewhere.length > 0
+          ? [...elsewhere, { accountId: account.id, messageKey: item.messageKey }]
+              .map((copy) => `${copy.accountId}\u0000${copy.messageKey}`)
+              .sort()
+              .join('\u0001')
+          : null
+
+      while (copies && this.copiesBeingRead.has(copies)) {
+        await this.copiesBeingRead.get(copies)
+      }
+
+      // Taken at once, with nothing awaited since the look: no other copy slips in between.
+      if (copies) {
+        this.copiesBeingRead.set(copies, reading.promise)
+      }
+
+      const twin = await store.noteToCopy(elsewhere)
+
+      if (twin) {
+        const twinThread = elsewhere.find((copy) => copy.accountId === twin.accountId)
+        const note = {
+          ...twin,
+          accountId: account.id,
+          messageKey: item.messageKey,
+          threadId: item.threadId,
+          messageDate: item.dateIso,
+          twinAccountId: twin.accountId
+        }
+
+        await store.saveTriage(note, [], [])
+
+        if (twinThread) {
+          const [topicId] = await this.requireTopics().topicIdsOf([twinThread])
+
+          if (topicId) {
+            await this.requireTopics().link(account.id, item.threadId, topicId, 'segretario')
+          }
+        }
+
+        this.triageFailures.delete(failureKey)
+        this.options.onNoteWritten({ ...note, dismissedAt: null })
+        this.emitNotes({
+          accountId: account.id,
+          messageKeys: [item.messageKey],
+          threadIds: [item.threadId]
+        })
+        return true
+      }
+
       const own = new Set(accounts.map((candidate) => candidate.email.toLowerCase()))
       const { target, thread, people, accountNote } = await this.conversationFor(
         item,
@@ -1944,7 +2003,8 @@ export class SegretarioService {
           priority: triage.priority,
           reason: triage.reason,
           due: triage.due,
-          messageDate: item.dateIso
+          messageDate: item.dateIso,
+          twinAccountId: null
         },
         triage.opened,
         triage.closed.filter((id) => open.some((commitment) => commitment.id === id))
@@ -1968,7 +2028,8 @@ export class SegretarioService {
         reason: triage.reason,
         due: triage.due,
         messageDate: item.dateIso,
-        dismissedAt: null
+        dismissedAt: null,
+        twinAccountId: null
       })
       this.emitNotes({
         accountId: account.id,
@@ -1999,6 +2060,12 @@ export class SegretarioService {
       }
 
       return true
+    } finally {
+      if (copies && this.copiesBeingRead.get(copies) === reading.promise) {
+        this.copiesBeingRead.delete(copies)
+      }
+
+      reading.resolve()
     }
   }
 

@@ -50,6 +50,14 @@ export interface SegretarioMailPort {
       messages: Array<{ ref: MessageRef; messageKey: string; dateIso: string }>
     }>
   >
+  /**
+   * The same message — by its Message-ID — in the user's other accounts
+   * among those the Segretario looks after: a copy CC'd to both, a team
+   * mailbox's. Each account's key and conversation.
+   */
+  sameMessageElsewhere(
+    ref: MessageRef
+  ): Promise<Array<{ accountId: string; messageKey: string; threadId: string }>>
   /** The accounts "Tutti gli account" gathers: those the Segretario's views and day are about. */
   includedAccountIds(): Promise<string[]>
   /** Messages of an account by key, each where the user thinks of it, with who wrote it and what about. */

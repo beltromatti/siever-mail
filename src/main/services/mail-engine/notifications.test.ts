@@ -186,7 +186,8 @@ describe('NotificationManager', () => {
       reason: '',
       due: null,
       messageDate: '2026-10-28T08:00:00.000Z',
-      dismissedAt: null
+      dismissedAt: null,
+      twinAccountId: null
     })
 
     beforeEach(() => manager.setSegretarioReading(true))
