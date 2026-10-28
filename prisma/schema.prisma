@@ -415,6 +415,22 @@ model AiReadyDraft {
 }
 
 /// A message an extension filed outside the mail (ARCHIVIA SIEVER, into a pratica) before taking it out.
+/// A search asked in words that the user kept as a folder: what the question
+/// became in the search's own terms, run again each time it is opened. User data.
+model AiSavedSearch {
+  id         String @id
+  question   String
+  /// The folder's name.
+  summary    String
+  /// How it searches, in the search's terms: «offerta» · da settembre.
+  how        String
+  /// The search itself (`AskedSearch`), as JSON.
+  search     String @map("search_json")
+  createdAt  BigInt @map("created_at")
+
+  @@map("ai_saved_searches")
+}
+
 model AiArchived {
   accountId  String @map("account_id")
   messageKey String @map("message_key")

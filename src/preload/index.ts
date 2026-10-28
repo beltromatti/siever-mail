@@ -192,6 +192,9 @@ const segretarioApi: SegretarioApi = {
   filingHint: async (threads) => invoke(SEGRETARIO_IPC.filingHint, threads),
   reviewDraft: async (request) => invoke(SEGRETARIO_IPC.reviewDraft, request),
   askMail: async (question) => invoke(SEGRETARIO_IPC.askMail, question),
+  listSavedSearches: async () => invoke(SEGRETARIO_IPC.listSavedSearches),
+  saveSearch: async (id) => invoke(SEGRETARIO_IPC.saveSearch, id),
+  removeSavedSearch: async (id) => invoke(SEGRETARIO_IPC.removeSavedSearch, id),
   openTopicFolder: async (id) => invoke(SEGRETARIO_IPC.openTopicFolder, id)
 }
 

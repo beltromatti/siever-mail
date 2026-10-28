@@ -1096,7 +1096,7 @@ export class MailService {
     }
 
     const searchId = segretarioSearch(folderPath)
-    return searchId ? (this.segretario.searchRefs(searchId) ?? []) : undefined
+    return searchId ? ((await this.segretario.searchRefs(searchId)) ?? []) : undefined
   }
 
   /**

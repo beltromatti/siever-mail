@@ -1049,6 +1049,41 @@ export class AiStore {
     ])
   }
 
+  /* ───────────────────────────── searches kept ───────────────────────────── */
+
+  async saveSearch(entry: {
+    id: string
+    question: string
+    summary: string
+    how: string
+    search: string
+  }): Promise<void> {
+    await this.prisma.aiSavedSearch.upsert({
+      where: { id: entry.id },
+      create: { ...entry, createdAt: BigInt(Date.now()) },
+      update: {
+        question: entry.question,
+        summary: entry.summary,
+        how: entry.how,
+        search: entry.search
+      }
+    })
+  }
+
+  /** The searches kept as folders, in the order they were kept, each with its search as JSON. */
+  async listSavedSearches(): Promise<
+    Array<{ id: string; question: string; summary: string; how: string; search: string }>
+  > {
+    return this.prisma.aiSavedSearch.findMany({
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, question: true, summary: true, how: true, search: true }
+    })
+  }
+
+  async removeSavedSearch(id: string): Promise<void> {
+    await this.prisma.aiSavedSearch.deleteMany({ where: { id } })
+  }
+
   /* ─────────────────────────── filed outside the mail ─────────────────────────── */
 
   async saveArchived(

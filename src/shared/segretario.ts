@@ -239,6 +239,17 @@ export interface AskedMail {
   count: number
 }
 
+/**
+ * A search asked in words that the user kept as a folder: it lives in the
+ * sidebar and is run again, over the mail as it is then, each time it opens.
+ */
+export interface SavedSearch {
+  id: string
+  question: string
+  summary: string
+  how: string
+}
+
 /** A message about to be sent, for the Segretario to reread. */
 export interface ReviewRequest {
   accountId: string
@@ -494,6 +505,9 @@ export const SEGRETARIO_IPC = {
   filingHint: 'segretario:filing-hint',
   reviewDraft: 'segretario:review-draft',
   askMail: 'segretario:ask-mail',
+  listSavedSearches: 'segretario:list-saved-searches',
+  saveSearch: 'segretario:save-search',
+  removeSavedSearch: 'segretario:remove-saved-search',
   openTopicFolder: 'segretario:open-topic-folder',
   writeBriefingOpening: 'segretario:write-briefing-opening',
   notesChanged: 'segretario:notes-changed',
@@ -590,6 +604,10 @@ export interface SegretarioApi {
    * looks for, and how many it found.
    */
   askMail: (question: string) => Promise<AskedMail>
+  listSavedSearches: () => Promise<SavedSearch[]>
+  /** Keeps a search asked this session as a folder; resolves with every one kept. */
+  saveSearch: (id: string) => Promise<SavedSearch[]>
+  removeSavedSearch: (id: string) => Promise<SavedSearch[]>
   /** Rereads a message about to be sent: what the user would want to correct first, a line each. */
   reviewDraft: (request: ReviewRequest) => Promise<string[]>
   /** A topic the user makes, by its title. */

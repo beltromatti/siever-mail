@@ -792,7 +792,11 @@ frigo, con il pdf" — to the Segretario: one quick call
 parameters (words, folder, account, period, unread, attachments), the
 full-text search runs over every account, and the result opens as a list
 of the Segretario's (`segretarioSearchPath`), titled with what was sought
-and how. The latest twenty are kept for the session.
+and how, the question above it. The latest twenty are kept for the session;
+"Tienila come cartella" keeps one for good (`ai_saved_searches`, user
+data): a folder under Segretario in the sidebar that runs the same search
+again, over the mail as it is then, each time it opens — no model call —
+until "Togli dalle cartelle".
 
 **Rereading before it goes.** With "Rileggi prima di inviare" on (Settings
 → Segretario, the default), pressing Invia has the Segretario reread the

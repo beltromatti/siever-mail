@@ -14,6 +14,7 @@ import {
   type ActivityEntry,
   type AccountLearning,
   type AskedMail,
+  type SavedSearch,
   type ActivityEvent,
   type ActivityKind,
   type ActivityStatus,
@@ -74,7 +75,7 @@ import {
   type ToolCall
 } from './openrouter'
 import { folderQueryLabel, searchMail, searchScope, threadMessages } from './mail-search'
-import { ASK_MAIL_SCHEMA, askMailRequest, parseAskedSearch } from './ask-mail'
+import { ASK_MAIL_SCHEMA, askMailRequest, parseAskedSearch, type AskedSearch } from './ask-mail'
 import { nameForm, saysAnyName } from './topic-names'
 import { TopicStore, type CatalogTopic } from './topic-store'
 import {
@@ -254,7 +255,10 @@ export class SegretarioService {
   private preparing = false
   private gisting = false
   /** The searches asked in words, the latest last, with what each found. */
-  private readonly searches = new Map<string, { asked: AskedMail; refs: MessageRef[] }>()
+  private readonly searches = new Map<
+    string,
+    { asked: AskedMail; search: AskedSearch; refs: MessageRef[] }
+  >()
   /** A message come to several of the user's accounts, while one copy is being read: by its copies. */
   private readonly copiesBeingRead = new Map<string, Promise<void>>()
   /** What the app was last told of `onReadingChange`; null before it was told. */
@@ -765,23 +769,7 @@ export class SegretarioService {
 
     await this.recordUsage(null, 'ricerca', result)
     const asked = parseAskedSearch(result.content)
-    const folders = new Map(
-      await Promise.all(
-        accounts.map(async (account) => [account.id, await mail.listFolders(account.id)] as const)
-      )
-    )
-    const scope = searchScope(accounts, folders, {
-      accounts: asked.account ? [asked.account] : [],
-      folder: asked.folder ?? undefined
-    })
-    const hits = await searchMail(await mail.searchClient(), scope, {
-      text: asked.text || undefined,
-      from: asked.from ?? undefined,
-      to: asked.to ?? undefined,
-      unreadOnly: asked.unreadOnly,
-      withAttachments: asked.withAttachments,
-      limit: ASK_MAIL_LIMIT
-    })
+    const refs = await this.runAskedSearch(asked)
     const entry: AskedMail = {
       id: randomUUID(),
       question,
@@ -802,10 +790,10 @@ export class SegretarioService {
       ]
         .filter(Boolean)
         .join(' · '),
-      count: hits.length
+      count: refs.length
     }
 
-    this.searches.set(entry.id, { asked: entry, refs: hits.map((hit) => hit.ref) })
+    this.searches.set(entry.id, { asked: entry, search: asked, refs })
 
     for (const id of [...this.searches.keys()].slice(0, -ASKED_SEARCHES_KEPT)) {
       this.searches.delete(id)
@@ -814,9 +802,71 @@ export class SegretarioService {
     return entry
   }
 
-  /** What a search asked in words found, for its list; undefined for one no longer kept. */
-  searchRefs(id: string): MessageRef[] | undefined {
+  /** A search asked in words, run over every account's mail as it is now. */
+  private async runAskedSearch(asked: AskedSearch): Promise<MessageRef[]> {
+    const mail = this.options.mail
+    const accounts = await mail.listAccounts()
+    const folders = new Map(
+      await Promise.all(
+        accounts.map(async (account) => [account.id, await mail.listFolders(account.id)] as const)
+      )
+    )
+    const scope = searchScope(accounts, folders, {
+      accounts: asked.account ? [asked.account] : [],
+      folder: asked.folder ?? undefined
+    })
+    const hits = await searchMail(await mail.searchClient(), scope, {
+      text: asked.text || undefined,
+      from: asked.from ?? undefined,
+      to: asked.to ?? undefined,
+      unreadOnly: asked.unreadOnly,
+      withAttachments: asked.withAttachments,
+      limit: ASK_MAIL_LIMIT
+    })
+    return hits.map((hit) => hit.ref)
+  }
+
+  /**
+   * What a search's list holds: a search kept as a folder, run again now;
+   * one asked this session, what it found; undefined for one no longer kept.
+   */
+  async searchRefs(id: string): Promise<MessageRef[] | undefined> {
+    const saved = (await this.requireStore().listSavedSearches()).find((entry) => entry.id === id)
+
+    if (saved) {
+      return this.runAskedSearch(JSON.parse(saved.search) as AskedSearch)
+    }
+
     return this.searches.get(id)?.refs
+  }
+
+  async listSavedSearches(): Promise<SavedSearch[]> {
+    return (await this.requireStore().listSavedSearches()).map(
+      ({ id, question, summary, how }) => ({ id, question, summary, how })
+    )
+  }
+
+  /** Keeps a search asked this session as a folder: from now on it is run again each time it opens. */
+  async saveSearch(id: string): Promise<SavedSearch[]> {
+    const asked = this.searches.get(id)
+
+    if (!asked) {
+      throw new Error('Questa ricerca non c’è più: chiedila di nuovo per tenerla.')
+    }
+
+    await this.requireStore().saveSearch({
+      id,
+      question: asked.asked.question,
+      summary: asked.asked.summary,
+      how: asked.asked.how,
+      search: JSON.stringify(asked.search)
+    })
+    return this.listSavedSearches()
+  }
+
+  async removeSavedSearch(id: string): Promise<SavedSearch[]> {
+    await this.requireStore().removeSavedSearch(id)
+    return this.listSavedSearches()
   }
 
   /** Rereads a message about to be sent: the mistakes the user would want to correct first. */

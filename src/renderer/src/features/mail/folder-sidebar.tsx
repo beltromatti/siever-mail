@@ -8,6 +8,7 @@ import {
   Layers,
   ListTodo,
   PenLine,
+  ScanSearch,
   Search,
   Sun,
   type Inbox
@@ -21,6 +22,7 @@ import {
   folderRole,
   folderRoleLabel,
   segretarioTopic,
+  segretarioSearchPath,
   segretarioTopicPath,
   segretarioViewLabel,
   segretarioViewPath,
@@ -29,7 +31,7 @@ import {
   type SegretarioView
 } from '@shared/folders'
 import type { MailFolder, UnifiedFolderSummary } from '@shared/models'
-import type { Topic } from '@shared/segretario'
+import type { SavedSearch, Topic } from '@shared/segretario'
 
 import { folderIcon, ROLE_ICONS } from './folder-icons'
 
@@ -67,6 +69,8 @@ interface FolderSidebarProps {
    * listed, every one a search away. Null without the Segretario.
    */
   topics: { label: string; items: ReadonlyArray<Topic> } | null
+  /** The searches asked in words that the user kept as folders. */
+  savedSearches: ReadonlyArray<SavedSearch>
   /** The account the dropdown above has open, whose folders the tree shows. */
   accountLabel: string
   folders: MailFolder[]
@@ -267,6 +271,7 @@ export function FolderSidebar({
   today,
   agenda,
   segretarioViews,
+  savedSearches,
   accountLabel,
   folders,
   unifiedFolders,
@@ -370,7 +375,7 @@ export function FolderSidebar({
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-px px-2 pb-3">
-          {(segretarioViews.length > 0 || agenda) && (
+          {(segretarioViews.length > 0 || agenda || savedSearches.length > 0) && (
             <section aria-label="Segretario">
               <SectionHeading>Segretario</SectionHeading>
               {today && (
@@ -406,6 +411,23 @@ export function FolderSidebar({
                     messageCount={count}
                     unseenCount={count}
                     badge={count}
+                    active={selectedFolderPath === path}
+                    onSelect={() => onSelectFolder(path)}
+                  />
+                )
+              })}
+              {savedSearches.map((search) => {
+                const path = segretarioSearchPath(search.id)
+
+                return (
+                  <FolderRow
+                    key={path}
+                    icon={ScanSearch}
+                    name={search.summary}
+                    hint={`${search.summary} — «${search.question}»`}
+                    messageCount={0}
+                    unseenCount={0}
+                    badge={0}
                     active={selectedFolderPath === path}
                     onSelect={() => onSelectFolder(path)}
                   />

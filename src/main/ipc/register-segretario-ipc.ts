@@ -181,6 +181,11 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
         .parse(threads)
     )
   )
+  handle(SEGRETARIO_IPC.listSavedSearches, () => segretario.listSavedSearches())
+  handle(SEGRETARIO_IPC.saveSearch, (id: unknown) => segretario.saveSearch(idSchema.parse(id)))
+  handle(SEGRETARIO_IPC.removeSavedSearch, (id: unknown) =>
+    segretario.removeSavedSearch(idSchema.parse(id))
+  )
   handle(SEGRETARIO_IPC.askMail, (question: unknown) =>
     segretario.askMail(z.string().trim().min(2, 'Scrivi cosa cerchi.').max(1000).parse(question))
   )

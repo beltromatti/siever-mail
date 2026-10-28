@@ -2852,6 +2852,16 @@ export class AppDatabase {
       'CREATE INDEX IF NOT EXISTS idx_ai_archived_thread ON ai_archived(account_id, thread_id)'
     )
     await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS ai_saved_searches (
+        id TEXT PRIMARY KEY,
+        question TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        how TEXT NOT NULL,
+        search_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS ai_briefings (
         day TEXT PRIMARY KEY,
         text TEXT NOT NULL,

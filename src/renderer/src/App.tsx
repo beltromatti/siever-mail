@@ -64,6 +64,7 @@ import { AgendaPage } from '@renderer/features/calendar/agenda-page'
 import { InvitationCard } from '@renderer/features/calendar/invitation-card'
 import { isIcsAttachment } from '@shared/calendar'
 import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
+import { SearchBanner } from '@renderer/features/segretario/search-banner'
 import { TopicBanner } from '@renderer/features/segretario/topic-banner'
 import { segretarioSuggestions } from '@renderer/features/segretario/suggestions'
 import { useConversationTopicTags } from '@renderer/features/segretario/conversation-topics'
@@ -72,6 +73,7 @@ import { parseRecipients } from '@shared/email-address'
 import type {
   ApprovalRequest,
   AskedMail,
+  SavedSearch,
   ComposeSpec,
   HandleLink,
   SendOutcome,
@@ -2272,6 +2274,24 @@ function App(): React.JSX.Element {
     () => new Map()
   )
   const [askingSegretario, setAskingSegretario] = useState(false)
+  // The searches kept as folders: in the sidebar, searched again each time they open.
+  const [savedSearches, setSavedSearches] = useState<ReadonlyArray<SavedSearch>>([])
+
+  useEffect(() => {
+    if (!segretarioConfigured) {
+      return
+    }
+
+    let current = true
+    void window.segretarioApi
+      .listSavedSearches()
+      .then((searches) => current && setSavedSearches(searches))
+      .catch(() => undefined)
+
+    return () => {
+      current = false
+    }
+  }, [segretarioConfigured])
 
   // Whether the conversation open has a reply prepared: the panel offers to go through it.
   const viewerThreadKey = messageForViewer
@@ -4466,7 +4486,12 @@ function App(): React.JSX.Element {
   const currentSegretarioView = segretarioView(selectedFolderPath)
   const currentTopicId = segretarioTopic(selectedFolderPath)
   const currentSearchId = segretarioSearch(selectedFolderPath)
-  const currentAsked = currentSearchId ? askedSearches.get(currentSearchId) : undefined
+  const currentSaved = currentSearchId
+    ? savedSearches.find((search) => search.id === currentSearchId)
+    : undefined
+  const currentAsked = currentSearchId
+    ? (askedSearches.get(currentSearchId) ?? currentSaved)
+    : undefined
   const currentTopic = currentTopicId
     ? topics.find((topic) => topic.id === currentTopicId)
     : undefined
@@ -4601,6 +4626,26 @@ function App(): React.JSX.Element {
         topicId={currentTopicId}
         canWrite={segretario.status?.keyState === 'ready'}
         onChanged={() => void refreshSegretarioViews()}
+      />
+    ) : currentSearchId && currentAsked ? (
+      <SearchBanner
+        key={currentSearchId}
+        question={currentAsked.question}
+        saved={currentSaved !== undefined}
+        onSave={async () => {
+          try {
+            setSavedSearches(await window.segretarioApi.saveSearch(currentSearchId))
+          } catch (error) {
+            toast.error('Cartella non creata', {
+              description: error instanceof Error ? error.message : undefined
+            })
+          }
+        }}
+        onRemove={async () => {
+          setSavedSearches(await window.segretarioApi.removeSavedSearch(currentSearchId))
+          // A folder no longer kept has nothing to show: back to the mail.
+          runAppCommandRef.current('go-inbox')
+        }}
       />
     ) : undefined,
     searchQuery: search.trim(),
@@ -4767,6 +4812,7 @@ function App(): React.JSX.Element {
                         ? { label: topicsLabel, items: topics }
                         : null
                     }
+                    savedSearches={segretarioConfigured ? savedSearches : []}
                     accountLabel={selectedAccountLabel}
                     folders={folders}
                     unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
