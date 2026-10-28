@@ -1,6 +1,6 @@
 import { type ReactNode, useMemo, useRef, useState } from 'react'
 
-import { AlertCircle, Check, LoaderCircle, LogIn, Mail, Plus } from 'lucide-react'
+import { AlertCircle, Check, LoaderCircle, LogIn, Plus } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
 import {
@@ -238,49 +238,42 @@ export function AddAccountDialog({
 
       <DialogContent className="w-[min(720px,calc(100vw-1.5rem))]">
         <DialogHeader>
-          <DialogTitle>Collega un account email</DialogTitle>
+          <DialogTitle>Aggiungi un account</DialogTitle>
           <DialogDescription>
-            Gmail con OAuth Google oppure server IMAP/SMTP aziendale con connessione sicura.
+            La posta resta dov&apos;è: SIEVER Mail la legge e la manda dal server del tuo account.
           </DialogDescription>
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList>
-            {canUseGoogle && <TabsTrigger value="google">Google</TabsTrigger>}
-            <TabsTrigger value="imap">IMAP / SMTP</TabsTrigger>
+            {canUseGoogle && <TabsTrigger value="google">Gmail</TabsTrigger>}
+            <TabsTrigger value="imap">Un&apos;altra casella</TabsTrigger>
           </TabsList>
 
           {canUseGoogle && (
-            <TabsContent value="google" className="space-y-3">
-              <div className="border-border bg-card/60 rounded-lg border p-3">
-                <div className="space-y-1">
-                  <h3 className="display-title text-[13px] leading-5">Accedi con Google</h3>
-                  <p className="text-muted-foreground text-[11px]">
-                    Login sicuro OAuth 2.0. L&apos;account Gmail verrà sincronizzato con cartelle,
-                    invio e gestione messaggi.
-                  </p>
-                </div>
-
-                {/* `w-fit`, not `w-full`: a single sign-in button stretched
-                    across 880px read as a banner rather than a control. */}
-                <Button
-                  className="mt-3 w-fit gap-2"
-                  size="sm"
-                  onClick={handleGoogleAdd}
-                  disabled={pending}
-                >
-                  {pending ? (
-                    <LoaderCircle className="size-4 animate-spin" />
-                  ) : (
-                    <LogIn className="size-4" />
-                  )}
-                  Continua con Google
-                </Button>
-              </div>
+            <TabsContent value="google" className="flex flex-col items-start gap-3 pt-1">
+              <p className="text-muted-foreground max-w-[52ch] text-[12.5px] leading-[1.5]">
+                Si apre la pagina di Google: scegli l&apos;account e consenti l&apos;accesso alla
+                posta. La password resta a Google, non passa da qui.
+              </p>
+              {/* `w-fit`, not `w-full`: a single sign-in button stretched
+                  across the dialog read as a banner rather than a control. */}
+              <Button className="w-fit gap-2" onClick={handleGoogleAdd} disabled={pending}>
+                {pending ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <LogIn className="size-4" />
+                )}
+                Continua con Google
+              </Button>
             </TabsContent>
           )}
 
           <TabsContent value="imap" className="space-y-3">
+            <p className="text-muted-foreground text-[12px] leading-[1.5]">
+              Aruba, Register, il server della tua azienda: i dati dei server te li dà chi gestisce
+              la tua posta, e spesso sono nella sua pagina di aiuto.
+            </p>
             <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
               <div className="space-y-1">
                 <Label htmlFor="email">Email</Label>
@@ -401,25 +394,23 @@ export function AddAccountDialog({
               </div>
             </div>
 
-            <div className="border-border bg-muted/30 text-muted-foreground flex items-center gap-3 rounded-md border p-3 text-[11px]">
-              <Mail className="size-4" />
-              SIEVER Mail prova subito la connessione ai due server e conserva le credenziali
-              cifrate su questo computer.
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <Button
+                className="w-fit gap-2"
+                onClick={handleImapAdd}
+                disabled={pending || !canSubmitImap}
+              >
+                {pending ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <Check className="size-4" />
+                )}
+                Collega la casella
+              </Button>
+              <p className="text-muted-foreground text-[11.5px]">
+                Prova subito i due server; la password resta cifrata su questo computer.
+              </p>
             </div>
-
-            <Button
-              className="w-fit gap-2"
-              size="sm"
-              onClick={handleImapAdd}
-              disabled={pending || !canSubmitImap}
-            >
-              {pending ? (
-                <LoaderCircle className="size-4 animate-spin" />
-              ) : (
-                <Check className="size-4" />
-              )}
-              Collega account IMAP
-            </Button>
           </TabsContent>
         </Tabs>
 
