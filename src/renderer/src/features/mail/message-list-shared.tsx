@@ -117,7 +117,7 @@ export function HighlightedText({
 export function UnreadDot({ unread }: { unread: boolean }): React.JSX.Element {
   return (
     <span className="flex w-3.5 shrink-0 justify-center pt-[6px]" aria-hidden={!unread}>
-      {unread && <span className="bg-seal-text size-[6px] rounded-full" />}
+      {unread && <span className="bg-unread size-[7px] rounded-full" />}
       {unread && <span className="sr-only">Non letta</span>}
     </span>
   )

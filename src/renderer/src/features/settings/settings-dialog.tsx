@@ -1,13 +1,21 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import {
+  AtSign,
+  Bell,
+  Blocks,
+  Database,
   FolderOpen,
+  Keyboard,
   LoaderCircle,
   LogOut,
   Mail,
   Monitor,
   Moon,
+  NotebookPen,
   Plus,
   Save,
+  Signature,
+  SlidersHorizontal,
   Sun,
   Trash2,
   type LucideIcon
@@ -16,6 +24,7 @@ import {
 import extensionRenderer from '@app/extension/renderer'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
+import { CompassStar } from '@renderer/components/ui/compass-star'
 import { CalendarConnectionLine } from '@renderer/features/calendar/calendar-connection'
 import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
@@ -66,6 +75,7 @@ interface SettingsSection {
   label: string
   title: string
   description: string
+  icon: ComponentType<{ className?: string; strokeWidth?: number }>
 }
 
 interface SettingsDialogProps {
@@ -95,49 +105,57 @@ const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
     id: 'accounts',
     label: 'Account',
     title: 'Account',
-    description: 'Configura e gestisci gli account email collegati.'
+    description: 'Configura e gestisci gli account email collegati.',
+    icon: AtSign
   },
   {
     id: 'preferences',
     label: 'Preferenze',
     title: 'Preferenze',
-    description: "Configura le preferenze generali dell'applicazione."
+    description: "Configura le preferenze generali dell'applicazione.",
+    icon: SlidersHorizontal
   },
   {
     id: 'segretario',
     label: 'Segretario',
     title: 'Segretario',
-    description: 'La chiave del modello con cui lavora, il credito e quanto spende.'
+    description: 'La chiave del modello con cui lavora, il credito e quanto spende.',
+    icon: CompassStar
   },
   {
     id: 'memoria',
     label: 'Cosa so di te',
     title: 'Cosa so di te',
-    description: 'Come il Segretario impara a conoscerti, e le sue note: leggile e correggile.'
+    description: 'Come il Segretario impara a conoscerti, e le sue note: leggile e correggile.',
+    icon: NotebookPen
   },
   {
     id: 'notifications',
     label: 'Notifiche',
     title: 'Notifiche',
-    description: "Gli avvisi per la nuova posta e il numero di non lette sull'icona."
+    description: "Gli avvisi per la nuova posta e il numero di non lette sull'icona.",
+    icon: Bell
   },
   {
     id: 'shortcuts',
     label: 'Scorciatoie',
     title: 'Scorciatoie da tastiera',
-    description: 'I tasti che eseguono ogni comando, da qualunque punto della finestra.'
+    description: 'I tasti che eseguono ogni comando, da qualunque punto della finestra.',
+    icon: Keyboard
   },
   {
     id: 'data',
     label: 'Dati',
     title: 'Dati',
-    description: 'Gestisci archiviazione locale, cache e preferenze dati.'
+    description: 'Gestisci archiviazione locale, cache e preferenze dati.',
+    icon: Database
   },
   {
     id: 'signatures',
     label: 'Firme',
     title: 'Firme',
-    description: 'Configura firme per gli account e per la composizione messaggi.'
+    description: 'Configura firme per gli account e per la composizione messaggi.',
+    icon: Signature
   }
 ]
 
@@ -150,7 +168,8 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
     id: tab.id,
     label: tab.label,
     title: tab.title,
-    description: tab.description
+    description: tab.description,
+    icon: tab.icon ?? Blocks
   }))
 ]
 
@@ -610,39 +629,56 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="h-[min(640px,calc(100vh-3rem))] w-[min(960px,calc(100vw-2rem))] max-w-none grid-rows-[auto_minmax(0,1fr)] content-start overflow-hidden">
-        <DialogHeader className="pr-10">
-          <DialogTitle>Impostazioni</DialogTitle>
-          <DialogDescription>
-            Personalizza configurazioni applicazione, account e scrittura email.
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="h-[min(700px,calc(100vh-3rem))] w-[min(1000px,calc(100vw-2rem))] max-w-none gap-0 overflow-hidden p-0">
+        <div className="grid h-full min-h-0 grid-cols-[210px_minmax(0,1fr)]">
+          {/* The desk the sections sit on: the same tone as the app's sidebar. */}
+          <nav className="bg-background flex h-full min-h-0 flex-col border-r px-3 pt-5 pb-3">
+            <DialogHeader className="px-2 pb-4">
+              <DialogTitle className="display-title text-[17px]">Impostazioni</DialogTitle>
+              <DialogDescription className="sr-only">
+                Account, preferenze, Segretario, notifiche e dati di SIEVER Mail.
+              </DialogDescription>
+            </DialogHeader>
+            <ul className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
+              {SETTINGS_SECTIONS.map((section) => {
+                const Icon = section.icon
+                const active = section.id === activeSectionId
 
-        <div className="grid h-full min-h-0 grid-cols-[168px_minmax(0,1fr)] gap-2.5">
-          <nav className="border-border bg-card/40 h-full overflow-y-auto rounded-lg border p-1.5">
-            <ul className="space-y-1">
-              {SETTINGS_SECTIONS.map((section) => (
-                <li key={section.id}>
-                  <button
-                    type="button"
-                    className={cn(
-                      'w-full rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
-                      section.id === activeSectionId
-                        ? 'bg-primary/18 text-foreground border-primary/45 border'
-                        : 'text-muted-foreground hover:bg-secondary/70 hover:text-foreground border border-transparent'
-                    )}
-                    onClick={() => setActiveSectionId(section.id)}
-                  >
-                    {section.label}
-                  </button>
-                </li>
-              ))}
+                return (
+                  <li key={section.id}>
+                    <button
+                      type="button"
+                      aria-current={active ? 'page' : undefined}
+                      className={cn(
+                        'focus-visible:ring-ring/60 flex h-8 w-full items-center gap-2.5 rounded-[7px] px-2.5 text-left text-[12.5px] font-medium transition-colors outline-none focus-visible:ring-2',
+                        active
+                          ? 'bg-selected text-foreground'
+                          : 'text-muted-foreground hover:bg-hover hover:text-foreground'
+                      )}
+                      onClick={() => setActiveSectionId(section.id)}
+                    >
+                      <Icon
+                        className={cn(
+                          'size-[15px] shrink-0',
+                          active
+                            ? section.id === 'segretario'
+                              ? 'text-ai-star'
+                              : 'text-primary-text'
+                            : 'text-faint-foreground'
+                        )}
+                        strokeWidth={1.8}
+                      />
+                      <span className="min-w-0 truncate">{section.label}</span>
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           </nav>
 
-          <section className="border-border bg-card/30 flex h-full min-h-0 flex-col rounded-lg border p-3">
-            <h3 className="display-title text-[13px] leading-5">{activeSection.title}</h3>
-            <p className="text-muted-foreground mt-0.5 text-[11px]">{activeSection.description}</p>
+          <section className="page flex h-full min-h-0 flex-col px-7 pt-6 pb-5">
+            <h3 className="display-title pr-8 text-[19px] leading-tight">{activeSection.title}</h3>
+            <p className="text-muted-foreground mt-1 text-[12.5px]">{activeSection.description}</p>
             {activeSectionId === 'accounts' ? (
               <div className="mt-3 flex min-h-0 flex-1 flex-col gap-2.5">
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
@@ -652,10 +688,7 @@ export function SettingsDialog({
                     </div>
                   ) : (
                     accounts.map((account) => (
-                      <div
-                        key={account.id}
-                        className="border-border bg-card/55 flex items-start gap-3 rounded-md border p-3"
-                      >
+                      <div key={account.id} className="settings-group flex items-start gap-3">
                         <div className="bg-primary/15 text-primary mt-0.5 rounded-md p-1.5">
                           <Mail className="size-4" />
                         </div>
@@ -725,10 +758,8 @@ export function SettingsDialog({
               </div>
             ) : activeSectionId === 'preferences' ? (
               <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-                <div className="border-border bg-card/55 rounded-md border p-3">
-                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-                    Tema
-                  </p>
+                <div className="settings-group">
+                  <p className="eyebrow">Tema</p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
                     Aspetto dell&apos;applicazione. Con Sistema segue il tema chiaro o scuro del
                     computer, anche quando cambia durante la giornata. Il testo dei messaggi resta
@@ -757,10 +788,8 @@ export function SettingsDialog({
                   </div>
                 </div>
 
-                <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
-                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-                    Layout finestra
-                  </p>
+                <div className="settings-group flex flex-col">
+                  <p className="eyebrow">Layout finestra</p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
                     Due disposizioni dello stesso spazio di lavoro. Cambiano la geometria e la
                     densità, non le funzioni: colori, comandi e scorciatoie restano identici.
@@ -801,10 +830,8 @@ export function SettingsDialog({
                   </div>
                 </div>
 
-                <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
-                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-                    Visualizzazione lista email
-                  </p>
+                <div className="settings-group flex flex-col">
+                  <p className="eyebrow">Visualizzazione lista email</p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
                     L&apos;ordinamento (data, mittente, oggetto) resta invariato. In modalità
                     invertita l&apos;intera lista viene rovesciata, gruppi compresi: i messaggi più
@@ -833,10 +860,8 @@ export function SettingsDialog({
                   </div>
                 </div>
 
-                <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
-                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-                    Raggruppamento predefinito
-                  </p>
+                <div className="settings-group flex flex-col">
+                  <p className="eyebrow">Raggruppamento predefinito</p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
                     Come la lista divide i messaggi in sezioni. Automatico segue l&apos;ordinamento:
                     per data se ordini per data, per mittente se ordini per mittente. Mittente
@@ -861,10 +886,8 @@ export function SettingsDialog({
                   </div>
                 </div>
 
-                <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
-                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-                    Tutti gli account
-                  </p>
+                <div className="settings-group flex flex-col">
+                  <p className="eyebrow">Tutti gli account</p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
                     Gli account che la sezione «Tutti gli account» della barra laterale riunisce:
                     per ciascuno la Posta in arrivo, la Posta inviata, le Bozze, l&apos;Archivio, lo
@@ -892,7 +915,7 @@ export function SettingsDialog({
                             <label
                               key={switchId}
                               htmlFor={switchId}
-                              className="border-border/70 bg-card/45 flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2"
+                              className="bg-hover flex cursor-pointer items-center justify-between gap-3 rounded-md px-3 py-2"
                             >
                               <span className="min-w-0">
                                 <span className="block truncate text-[12px] font-medium">
@@ -949,16 +972,14 @@ export function SettingsDialog({
               />
             ) : activeSectionId === 'data' ? (
               <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-                <div className="border-border bg-card/55 rounded-md border p-3">
-                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-                    Spazio occupato
-                  </p>
+                <div className="settings-group">
+                  <p className="eyebrow">Spazio occupato</p>
                   <p className="mt-1 text-[14px] font-semibold">
                     {formatMegabytes(dataBreakdown?.totalBytes ?? 0)}
                   </p>
                 </div>
 
-                <div className="border-border bg-card/55 flex flex-col rounded-md border p-3">
+                <div className="settings-group flex flex-col">
                   {dataBreakdownLoading ? (
                     <div className="text-muted-foreground flex items-center gap-2 py-6 text-[12px]">
                       <LoaderCircle className="size-4 animate-spin" />
@@ -998,7 +1019,7 @@ export function SettingsDialog({
                         {dataSections.map((section) => (
                           <div
                             key={`legend-${section.id}`}
-                            className="border-border/70 bg-card/45 flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-[12px]"
+                            className="bg-hover flex items-center justify-between gap-3 rounded-md px-3 py-2 text-[12px]"
                           >
                             <div className="flex min-w-0 items-center gap-2">
                               <span
@@ -1033,10 +1054,8 @@ export function SettingsDialog({
                   )}
                 </div>
 
-                <div className="border-border bg-card/55 rounded-md border p-3">
-                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-                    Cancella dati per account
-                  </p>
+                <div className="settings-group">
+                  <p className="eyebrow">Cancella dati per account</p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
                     Reimposta a zero i dati locali di un singolo account mantenendo il login attivo.
                     La posta si scarica di nuovo, come alla prima connessione.
@@ -1050,7 +1069,7 @@ export function SettingsDialog({
                       {accounts.map((account) => (
                         <div
                           key={`clear-${account.id}`}
-                          className="border-border/70 bg-card/45 flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+                          className="bg-hover flex items-center justify-between gap-3 rounded-md px-3 py-2"
                         >
                           <div className="min-w-0">
                             <p className="truncate text-[12px] font-medium">
@@ -1089,11 +1108,9 @@ export function SettingsDialog({
                   )}
                 </div>
 
-                <div className="border-border bg-card/55 flex items-center justify-between gap-3 rounded-md border p-3">
+                <div className="settings-group flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-                      Diagnostica
-                    </p>
+                    <p className="eyebrow">Diagnostica</p>
                     <p className="text-muted-foreground mt-1 text-[11px]">
                       SIEVER Mail annota connessioni ed errori in un registro sul computer. Se
                       qualcosa non va, è il file da allegare alla segnalazione.
@@ -1112,9 +1129,7 @@ export function SettingsDialog({
                 </div>
 
                 <div className="border-destructive/35 bg-destructive/5 rounded-md border p-3">
-                  <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-                    Azione nucleare
-                  </p>
+                  <p className="eyebrow">Azione nucleare</p>
                   <p className="text-muted-foreground mt-1 text-[11px]">
                     {LOCAL_DATA_DESCRIPTION} Gli account restano collegati e la posta si scarica di
                     nuovo, per ognuno in parallelo.
@@ -1253,7 +1268,7 @@ export function SettingsDialog({
                     )}
 
                     {signaturesStatusMessage && !signaturesError && (
-                      <div className="border-border bg-card/55 text-muted-foreground rounded-md border px-3 py-2 text-[12px]">
+                      <div className="bg-hover text-muted-foreground rounded-md px-3 py-2 text-[12px]">
                         {signaturesStatusMessage}
                       </div>
                     )}

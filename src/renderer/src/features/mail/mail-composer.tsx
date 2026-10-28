@@ -16,7 +16,6 @@ import {
   LoaderCircle,
   Minus,
   Paperclip,
-  PenLine,
   RotateCw,
   Send,
   Trash2,
@@ -34,6 +33,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
+import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { Popover, PopoverAnchor, PopoverContent } from '@renderer/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
@@ -1423,7 +1423,7 @@ export function MailComposer({
                   className="flex w-[340px] flex-col gap-2.5 p-3"
                 >
                   <p className="text-ai flex items-center gap-1.5 text-[11.5px] font-semibold">
-                    <PenLine className="size-3.5" />
+                    <CompassStar className="text-ai-star size-3.5" />
                     Prima di inviare
                   </p>
                   <ul className="flex flex-col gap-1.5">

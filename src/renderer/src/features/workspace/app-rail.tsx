@@ -1,7 +1,9 @@
 import type { LucideIcon } from 'lucide-react'
-import { PenLine, Settings } from 'lucide-react'
+import { Settings } from 'lucide-react'
 
+import appMark from '@renderer/assets/logo-128.png'
 import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
+import { CompassStar } from '@renderer/components/ui/compass-star'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { cn } from '@renderer/lib/utils'
 
@@ -42,12 +44,12 @@ export function AppRail({
       aria-label="Sezioni"
       className="window-drag-region flex h-full w-[52px] flex-col items-center border-r pt-[var(--titlebar-band)] pb-3"
     >
-      <span
-        aria-hidden
-        className="button-seal mt-1 mb-4 grid size-7 shrink-0 place-items-center rounded-full text-[13px] leading-none font-bold [font-stretch:115%]"
-      >
-        S
-      </span>
+      <img
+        src={appMark}
+        alt=""
+        draggable={false}
+        className="mt-1 mb-4 size-[30px] shrink-0 drop-shadow-[0_1px_2px_hsl(var(--shadow)/0.35)] select-none"
+      />
 
       <div className="window-no-drag flex flex-col items-center gap-1">
         {items.map((item) => {
@@ -71,7 +73,7 @@ export function AppRail({
                 >
                   <Icon className="size-[17px]" strokeWidth={1.7} />
                   {item.attention && (
-                    <span className="bg-ai ring-background absolute top-[7px] right-[7px] size-[7px] rounded-full ring-2" />
+                    <span className="bg-ai-star ring-background absolute top-[7px] right-[7px] size-[7px] rounded-full ring-2" />
                   )}
                 </button>
               </TooltipTrigger>
@@ -93,13 +95,13 @@ export function AppRail({
             className={cn(
               'focus-visible:ring-ring/60 relative mb-1 grid size-9 place-items-center rounded-[9px] transition-colors outline-none focus-visible:ring-2',
               segretario.open
-                ? 'bg-ai-soft text-ai'
-                : 'text-faint-foreground hover:bg-hover hover:text-foreground'
+                ? 'bg-ai-soft text-ai-star shadow-[inset_0_0_0_1px_hsl(var(--ai-line)/0.6)]'
+                : 'text-faint-foreground hover:bg-hover hover:text-ai-star'
             )}
           >
-            <PenLine className="size-[17px]" strokeWidth={1.7} />
+            <CompassStar className="size-[19px]" />
             {segretario.attention && !segretario.open && (
-              <span className="bg-ai ring-background absolute top-[7px] right-[7px] size-[7px] rounded-full ring-2" />
+              <span className="bg-urgent ring-background absolute top-[7px] right-[7px] size-[7px] rounded-full ring-2" />
             )}
           </button>
         </ActionTooltip>

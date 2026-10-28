@@ -623,7 +623,7 @@ export function MessageViewer({
 
   if (selectedCount > 1) {
     return (
-      <div className="paper flex h-full min-h-0 flex-col">
+      <div className="page flex h-full min-h-0 flex-col">
         {headerBand(
           <>
             <div className="window-no-drag flex items-center gap-1">
@@ -680,7 +680,7 @@ export function MessageViewer({
 
   if (!message) {
     return (
-      <div className="paper flex h-full min-h-0 flex-col">
+      <div className="page flex h-full min-h-0 flex-col">
         {headerBand(null)}
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center p-8 text-center">
           {bodyStatus === 'loading' ? (
@@ -701,7 +701,7 @@ export function MessageViewer({
   }
 
   return (
-    <div ref={attachPaneZoomWheel} className="paper flex h-full min-h-0 flex-col overflow-hidden">
+    <div ref={attachPaneZoomWheel} className="page flex h-full min-h-0 flex-col overflow-hidden">
       {headerBand(
         <>
           <div className="window-no-drag flex min-w-0 items-center gap-1">

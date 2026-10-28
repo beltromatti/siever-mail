@@ -60,7 +60,7 @@ function Line({
             <span
               className={cn(
                 'shrink-0 font-semibold',
-                late || item.priority === 'alta' ? 'text-seal-text' : 'text-foreground'
+                late || item.priority === 'alta' ? 'text-urgent' : 'text-foreground'
               )}
             >
               {dueLabel(item.due)}
@@ -213,7 +213,7 @@ export function TodayPage({
     )
 
   return (
-    <div className="paper flex h-full min-h-0 flex-col">
+    <div className="page flex h-full min-h-0 flex-col">
       <header
         className={cn(
           'window-drag-region flex h-[52px] shrink-0 items-center gap-2 border-b pl-6',

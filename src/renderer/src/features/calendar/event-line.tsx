@@ -67,7 +67,7 @@ export function EventLine({
             <span
               className={cn(
                 'ml-2 text-[11.5px] font-semibold',
-                event.myResponse === 'needsAction' ? 'text-seal-text' : 'text-muted-foreground'
+                event.myResponse === 'needsAction' ? 'text-urgent' : 'text-muted-foreground'
               )}
             >
               {RESPONSE_LABELS[event.myResponse]}

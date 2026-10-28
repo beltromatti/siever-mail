@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Briefcase, Check, ChevronDown, FolderArchive, PenLine } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
+import { CompassStar } from '@renderer/components/ui/compass-star'
 import { cn } from '@renderer/lib/utils'
 import type { Commitment, CommitmentKind, ThreadBrief, Topic } from '@shared/segretario'
 
@@ -265,13 +266,13 @@ export function ThreadBriefPanel({
     >
       {topicLine}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px]">
-        <PenLine className="text-ai size-3.5" />
+        <CompassStar className="text-ai-star size-3.5" />
         <span className="text-ai font-semibold">Il punto</span>
         {action && (
           <span
             className={cn(
               'font-semibold',
-              note.priority === 'alta' ? 'text-seal-text' : 'text-foreground'
+              note.priority === 'alta' ? 'text-urgent' : 'text-foreground'
             )}
           >
             {action}

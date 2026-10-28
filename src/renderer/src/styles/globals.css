@@ -10,14 +10,16 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
-  The palette: paper, ink, sealing wax and pencil.
+  The palette: the logo's two colours on cool neutrals.
 
-  Mail is correspondence, so the app is drawn as a desk: warm paper in the
-  light theme, warm graphite in the dark one — never the blue of a generic
-  dashboard. Ink is the primary colour: text, primary buttons, selection.
-  Sealing wax (`--seal`) is spent on few things — sending, which seals a
-  letter, unread mail and what is due. Pencil ochre (`--ai`) is the
-  Segretario's: what it noted, prepared or is working on, nothing else.
+  SIEVER Mail's mark is a compass star over an envelope, electric blue
+  and yellow. The blue is the app's ink: actions, selection, what is
+  unread, sending. The yellow is the star, the Segretario's: what it
+  noted, prepared or is working on — bright as a mark, a deep amber as
+  text on a light page, where yellow would not read. Red is kept for what
+  is late or urgent. The surfaces are three: the desk (rail and sidebar),
+  the panes laid on it (the list, the Segretario), and the page being
+  read (the message, Oggi, the agenda), each a step lighter.
 
   Two palettes on one set of tokens. Dark is the default; light takes over
   whenever the page is told the scheme is light. The app never picks
@@ -29,116 +31,131 @@
 :root {
   color-scheme: dark;
   /* The desk: rail and sidebar. */
-  --background: 30 6% 6.7%;
-  --foreground: 43 16% 91.2%;
-  /* The panes laid on it: list, message, the Segretario. */
-  --card: 40 7% 8.8%;
-  --card-foreground: 43 16% 91.2%;
+  --background: 222 22% 7%;
+  --foreground: 213 25% 93%;
+  /* The panes laid on it: the list, the Segretario. */
+  --card: 222 17% 9.6%;
+  --card-foreground: 213 25% 93%;
+  /* The page being read: the message, Oggi, the agenda. */
+  --page: 222 15% 11.6%;
   /* What floats above: menus, dialogs, bubbles. */
-  --popover: 30 6% 12.2%;
-  --popover-foreground: 43 16% 91.2%;
-  --muted: 36 7% 13.1%;
-  --muted-foreground: 39 7% 62.7%;
+  --popover: 222 15% 13.6%;
+  --popover-foreground: 213 25% 93%;
+  --muted: 222 14% 14.5%;
+  --muted-foreground: 216 12% 66%;
   /* Third rank of text: times, counts, captions. */
-  --faint-foreground: 39 6% 49%;
-  --border: 36 6% 15.5%;
-  --input: 34 6% 21.8%;
-  --primary: 43 16% 91.2%;
-  --primary-foreground: 30 6% 6.7%;
-  --secondary: 36 7% 13.5%;
-  --secondary-foreground: 43 16% 91.2%;
-  --accent: 36 6% 15.5%;
-  --accent-foreground: 43 16% 91.2%;
-  --hover: 43 16% 91% / 0.05;
-  --selected: 43 16% 91% / 0.085;
-  --seal: 9 65% 46.1%;
-  --seal-highlight: 11 70% 59.6%;
-  --seal-shade: 10 66% 37.3%;
-  --seal-foreground: 20 100% 97.6%;
-  /* Wax as text or a dot on the panes, where the button's fill is too dark. */
-  --seal-text: 11 73% 62.5%;
-  --ai: 39 65% 57.5%;
-  --ai-soft: 37 27% 12.9%;
-  --ai-line: 39 57% 35.5%;
-  --destructive: 7 76% 57.3%;
-  --destructive-foreground: 20 100% 97.6%;
+  --faint-foreground: 216 9% 51%;
+  --border: 222 14% 16.5%;
+  --input: 220 11% 25%;
+  /* The blue of the logo: a key's fill, and as text on the panes. */
+  --primary: 208 100% 50%;
+  --primary-foreground: 0 0% 100%;
+  --primary-text: 206 100% 68%;
+  --secondary: 222 13% 15.5%;
+  --secondary-foreground: 213 25% 93%;
+  --accent: 222 13% 17.5%;
+  --accent-foreground: 213 25% 93%;
+  --hover: 213 30% 92% / 0.05;
+  --selected: 208 100% 58% / 0.17;
+  /* Sending, which seals a letter: the blue key at its brightest. */
+  --seal: 208 100% 50%;
+  --seal-highlight: 204 100% 64%;
+  --seal-shade: 212 100% 38%;
+  --seal-foreground: 0 0% 100%;
+  --seal-text: 206 100% 68%;
+  --unread: 206 100% 64%;
+  /* What is late, urgent, waiting on the user. */
+  --urgent: 6 88% 64%;
+  /* The star: the Segretario's mark, its words, its tint. */
+  --ai: 46 92% 63%;
+  /* Its running text, where the full colour on every row would shout. */
+  --ai-muted: 44 30% 70%;
+  --ai-star: 52 100% 54%;
+  --ai-soft: 46 32% 12%;
+  --ai-line: 47 70% 40%;
+  --destructive: 4 78% 58%;
+  --destructive-foreground: 0 0% 100%;
   /* Text on a destructive tint (bg-destructive/10–15): error notices. The
      plain foreground is for solid destructive fills, and on the light
      palette's pale tint it vanishes. */
-  --destructive-soft-foreground: 7 80% 72%;
-  --ring: 39 7% 62.7%;
-  --mail-editor-surface: 42 38% 97%;
+  --destructive-soft-foreground: 4 86% 72%;
+  --ring: 207 100% 60%;
+  --mail-editor-surface: 0 0% 100%;
   --mail-editor-foreground: 0 0% 6%;
   --mail-editor-muted-foreground: 220 9% 42%;
   --mail-editor-border: 220 16% 84%;
-  --brand-primary: 9 65% 46.1%;
-  --brand-primary-foreground: 20 100% 97.6%;
-  --brand-accent: 39 65% 57.5%;
-  --status-online: 149 36% 53.3%;
-  --status-offline: 7 76% 57.3%;
-  --scrollbar-thumb: 34 6% 24%;
-  --scrollbar-thumb-hover: 37 6% 38%;
-  --flagged: 11 73% 62.5%;
+  --brand-primary: 208 100% 50%;
+  --brand-primary-foreground: 0 0% 100%;
+  --brand-accent: 52 100% 54%;
+  --status-online: 152 52% 50%;
+  --status-offline: 4 78% 58%;
+  --scrollbar-thumb: 220 11% 24%;
+  --scrollbar-thumb-hover: 218 10% 36%;
+  --flagged: 22 95% 60%;
   /* A caution that is not an error: a draft kept here, not yet on the server. */
-  --warning: 36 72% 56.5%;
-  --shadow: 0 0% 0%;
-  --specular: 0 0% 100% / 0.06;
-  --scrim: 30 6% 4% / 0.55;
-  --grain-opacity: 0.05;
+  --warning: 38 92% 58%;
+  --shadow: 222 40% 2%;
+  --specular: 0 0% 100% / 0.07;
+  --scrim: 222 30% 3% / 0.55;
   --radius: 0.5rem;
 }
 
 @media (prefers-color-scheme: light) {
   :root {
     color-scheme: light;
-    --background: 43 21% 93.5%;
-    --foreground: 40 5% 10.8%;
-    --card: 45 33% 97.6%;
-    --card-foreground: 40 5% 10.8%;
-    --popover: 40 60% 99%;
-    --popover-foreground: 40 5% 10.8%;
-    --muted: 42 21% 90.6%;
-    --muted-foreground: 38 6% 34.7%;
-    --faint-foreground: 39 6% 47.1%;
-    --border: 42 20% 87.3%;
-    --input: 41 15% 79.2%;
-    --primary: 40 5% 10.8%;
-    --primary-foreground: 45 33% 97.6%;
-    --secondary: 42 22% 91%;
-    --secondary-foreground: 40 5% 10.8%;
-    --accent: 42 19% 89.8%;
-    --accent-foreground: 40 5% 10.8%;
-    --hover: 40 5% 11% / 0.045;
-    --selected: 40 5% 11% / 0.075;
-    --seal: 9 73% 41.8%;
-    --seal-highlight: 11 63% 54.1%;
-    --seal-shade: 10 81% 31.8%;
-    --seal-foreground: 20 100% 97.6%;
-    --seal-text: 9 73% 41.8%;
-    --ai: 39 85% 30.4%;
-    --ai-soft: 44 59% 91.4%;
-    --ai-line: 41 61% 59%;
-    --destructive: 3 62% 43.7%;
-    --destructive-foreground: 20 100% 97.6%;
-    --destructive-soft-foreground: 3 66% 34%;
-    --ring: 38 6% 34.7%;
+    --background: 214 30% 93.5%;
+    --foreground: 222 28% 13%;
+    --card: 210 33% 98.4%;
+    --card-foreground: 222 28% 13%;
+    --page: 0 0% 100%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 28% 13%;
+    --muted: 214 28% 92.5%;
+    --muted-foreground: 220 13% 35%;
+    --faint-foreground: 220 9% 47%;
+    --border: 214 24% 87.5%;
+    --input: 214 18% 78%;
+    --primary: 208 100% 43%;
+    --primary-foreground: 0 0% 100%;
+    --primary-text: 208 100% 39%;
+    --secondary: 214 30% 94%;
+    --secondary-foreground: 222 28% 13%;
+    --accent: 214 26% 90.5%;
+    --accent-foreground: 222 28% 13%;
+    --hover: 222 30% 15% / 0.045;
+    --selected: 208 100% 45% / 0.11;
+    --seal: 208 100% 44%;
+    --seal-highlight: 204 100% 57%;
+    --seal-shade: 212 100% 33%;
+    --seal-foreground: 0 0% 100%;
+    --seal-text: 208 100% 39%;
+    --unread: 208 100% 46%;
+    --urgent: 4 76% 44%;
+    --ai: 40 100% 29%;
+    --ai-muted: 38 40% 33%;
+    --ai-star: 47 100% 47%;
+    --ai-soft: 50 100% 94.5%;
+    --ai-line: 47 92% 56%;
+    --destructive: 3 70% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --destructive-soft-foreground: 3 70% 36%;
+    --ring: 208 100% 45%;
     --mail-editor-surface: 0 0% 100%;
     --mail-editor-foreground: 0 0% 6%;
     --mail-editor-muted-foreground: 220 9% 42%;
     --mail-editor-border: 220 16% 84%;
-    --brand-primary: 9 73% 41.8%;
-    --brand-primary-foreground: 20 100% 97.6%;
-    --brand-accent: 39 85% 30.4%;
-    --status-online: 148 44% 32.2%;
-    --status-offline: 3 62% 43.7%;
-    --scrollbar-thumb: 41 12% 78%;
-    --scrollbar-thumb-hover: 40 8% 62%;
-    --flagged: 9 73% 41.8%;
-    --warning: 33 92% 32.9%;
-    --shadow: 40 10% 10%;
-    --specular: 0 0% 100% / 0.75;
-    --scrim: 40 10% 12% / 0.22;
-    --grain-opacity: 0.035;
+    --brand-primary: 208 100% 44%;
+    --brand-primary-foreground: 0 0% 100%;
+    --brand-accent: 47 100% 47%;
+    --status-online: 152 58% 34%;
+    --status-offline: 3 70% 45%;
+    --scrollbar-thumb: 214 16% 78%;
+    --scrollbar-thumb-hover: 216 12% 62%;
+    --flagged: 22 90% 47%;
+    --warning: 33 92% 33%;
+    --shadow: 222 40% 12%;
+    --specular: 0 0% 100% / 0.8;
+    --scrim: 222 30% 12% / 0.22;
   }
 }
 
@@ -163,6 +180,12 @@
   --color-muted-foreground: hsl(var(--muted-foreground));
   --color-faint-foreground: hsl(var(--faint-foreground));
   --color-card: hsl(var(--card));
+  --color-page: hsl(var(--page));
+  --color-primary-text: hsl(var(--primary-text));
+  --color-unread: hsl(var(--unread));
+  --color-urgent: hsl(var(--urgent));
+  --color-ai-star: hsl(var(--ai-star));
+  --color-ai-muted: hsl(var(--ai-muted));
   --color-card-foreground: hsl(var(--card-foreground));
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
@@ -284,7 +307,7 @@
 
 @media (prefers-color-scheme: light) {
   :root {
-    --paper-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1  0 0 0 0 0.09  0 0 0 0 0.07  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23g)' opacity='0.035'/></svg>");
+    --paper-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.08  0 0 0 0 0.1  0 0 0 0 0.14  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23g)' opacity='0.035'/></svg>");
   }
 }
 
@@ -293,9 +316,15 @@
   (`data-[state=active]:button-raised`).
 */
 
-/* A pane of the workspace: paper laid on the desk. */
+/* A pane of the workspace: laid on the desk. */
 @utility paper {
   background-color: hsl(var(--card));
+  background-image: var(--paper-grain);
+}
+
+/* The page being read — the message, Oggi, the agenda — a step lighter than the panes. */
+@utility page {
+  background-color: hsl(var(--page));
   background-image: var(--paper-grain);
 }
 
@@ -392,6 +421,20 @@
   &:active:not(:disabled) {
     transform: translateY(0.5px);
     filter: brightness(0.96);
+  }
+}
+
+/*
+  A group of settings: a heading over its rows, set apart from the one
+  above by a hairline — never a box inside the dialog's box.
+*/
+@utility settings-group {
+  border-top: 1px solid hsl(var(--border));
+  padding-top: 1.25rem;
+
+  &:first-child {
+    border-top-width: 0;
+    padding-top: 0;
   }
 }
 

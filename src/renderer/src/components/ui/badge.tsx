@@ -5,7 +5,7 @@ import { cn } from '@renderer/lib/utils'
 
 /**
  * A small tag on a row or a heading: a state ("Da rispondere · ven 30"), a
- * topic, a count. Neutral by default; `seal` for what is due, `ai` for what
+ * topic, a count. Neutral by default; `urgent` for what is due, `ai` for what
  * the Segretario prepared.
  */
 const badgeVariants = cva(
@@ -15,7 +15,7 @@ const badgeVariants = cva(
       variant: {
         default: 'bg-hover text-muted-foreground shadow-[inset_0_0_0_1px_hsl(var(--border))]',
         muted: 'bg-hover text-muted-foreground shadow-[inset_0_0_0_1px_hsl(var(--border))]',
-        seal: 'bg-seal/[0.07] text-seal-text shadow-[inset_0_0_0_1px_hsl(var(--seal-text)/0.35)]',
+        urgent: 'bg-urgent/[0.08] text-urgent shadow-[inset_0_0_0_1px_hsl(var(--urgent)/0.35)]',
         ai: 'bg-ai-soft text-ai shadow-[inset_0_0_0_1px_hsl(var(--ai)/0.3)]',
         accent: 'bg-hover text-foreground shadow-[inset_0_0_0_1px_hsl(var(--input))]'
       }

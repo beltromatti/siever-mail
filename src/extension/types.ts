@@ -369,6 +369,8 @@ export interface SettingsTabDescriptor {
   label: string
   title: string
   description: string
+  /** Its icon in the list of sections; a generic one without. */
+  icon?: ComponentType<{ className?: string; strokeWidth?: number }>
   render(props: SettingsTabRenderProps): ReactNode
 }
 

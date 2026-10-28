@@ -74,7 +74,7 @@ function NoteRow({
   }
 
   return (
-    <div className="border-border/70 bg-card/45 rounded-md border">
+    <div className="bg-hover rounded-md">
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
@@ -260,7 +260,7 @@ export function MemorySection(): React.JSX.Element {
 
   return (
     <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-      <div className="border-border bg-card/55 flex flex-col gap-3 rounded-md border p-3">
+      <div className="settings-group flex flex-col gap-3">
         <label
           htmlFor="segretario-learning"
           className="flex cursor-pointer items-center justify-between gap-3"
@@ -285,7 +285,7 @@ export function MemorySection(): React.JSX.Element {
             {learning.map((account) => (
               <div
                 key={account.accountId}
-                className="border-border/70 bg-card/45 flex items-center gap-3 rounded-md border px-3 py-2"
+                className="bg-hover flex items-center gap-3 rounded-md px-3 py-2"
               >
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[12px] font-medium">{account.email}</span>
@@ -309,10 +309,10 @@ export function MemorySection(): React.JSX.Element {
         )}
       </div>
 
-      <div className="border-border bg-card/55 flex flex-col gap-2 rounded-md border p-3">
+      <div className="settings-group flex flex-col gap-2">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">Note</p>
+            <p className="eyebrow">Note</p>
             <p className="text-muted-foreground mt-1 text-[11px]">
               Quello che il Segretario sa: di te, del tuo modo di scrivere, delle persone e delle
               questioni. Le scrive e le aggiorna lui mentre lavora; correggile quando sbaglia.

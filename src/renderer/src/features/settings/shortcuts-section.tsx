@@ -133,7 +133,7 @@ export function ShortcutsSection({
         }
 
         return (
-          <div key={group} className="border-border bg-card/55 rounded-md border">
+          <div key={group} className="bg-hover rounded-md">
             <p className="text-muted-foreground border-border/60 border-b px-3 py-2 text-[11px] tracking-[0.08em] uppercase">
               {COMMAND_GROUP_LABELS[group]}
             </p>
@@ -153,7 +153,7 @@ export function ShortcutsSection({
         )
       })}
 
-      <div className="border-border bg-card/55 rounded-md border">
+      <div className="bg-hover rounded-md">
         <p className="text-muted-foreground border-border/60 border-b px-3 py-2 text-[11px] tracking-[0.08em] uppercase">
           Sempre disponibili
         </p>

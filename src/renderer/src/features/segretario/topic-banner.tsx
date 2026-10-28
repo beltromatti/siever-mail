@@ -7,6 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
+import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { usePromptDialog } from '@renderer/components/ui/prompt-dialog'
 import { cn, formatCount } from '@renderer/lib/utils'
@@ -124,7 +125,7 @@ export function TopicBanner({
       className="border-ai-line bg-ai-soft/25 flex max-h-[55%] shrink-0 flex-col gap-2 overflow-y-auto border-b px-4 py-3 select-text"
     >
       <div className="flex items-center gap-2 text-[11.5px]">
-        <PenLine className="text-ai size-3.5 shrink-0" />
+        <CompassStar className="text-ai-star size-3.5" />
         <span className="text-ai shrink-0 font-semibold whitespace-nowrap">Il punto</span>
         <span className="text-muted-foreground min-w-0 truncate">
           {formatCount(topic.conversations, 'conversazione', 'conversazioni')}

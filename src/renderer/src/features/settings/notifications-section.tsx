@@ -46,7 +46,7 @@ function SettingRow({
   return (
     <label
       htmlFor={id}
-      className="border-border/70 bg-card/45 flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2 has-[button:disabled]:cursor-default"
+      className="bg-hover flex cursor-pointer items-center justify-between gap-3 rounded-md px-3 py-2 has-[button:disabled]:cursor-default"
     >
       <span className="min-w-0">
         <span className="block truncate text-[12px] font-medium">{title}</span>
@@ -165,11 +165,9 @@ export function NotificationsSection({
 
   return (
     <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-      <div className="border-border bg-card/55 flex flex-col gap-3 rounded-md border p-3">
+      <div className="settings-group flex flex-col gap-3">
         <div>
-          <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-            Nuova posta
-          </p>
+          <p className="eyebrow">Nuova posta</p>
           <p className="text-muted-foreground mt-1 text-[11px]">
             Un avviso sul desktop per ogni messaggio non letto che arriva in Posta in arrivo, con i
             pulsanti Segna come letta e Archivia. Un clic lo apre; l&apos;avviso sparisce da solo
@@ -243,11 +241,9 @@ export function NotificationsSection({
       </div>
 
       {status.supported && (
-        <div className="border-border bg-card/55 flex flex-col gap-3 rounded-md border p-3">
+        <div className="settings-group flex flex-col gap-3">
           <div>
-            <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-              Permesso del sistema
-            </p>
+            <p className="eyebrow">Permesso del sistema</p>
             <p className="text-muted-foreground mt-1 text-[11px]">
               È il sistema a decidere se mostrare gli avvisi di SIEVER Mail, e con quale stile. Con
               «Non disturbare» o una modalità Full immersion attiva li trattiene finché non la
@@ -304,11 +300,9 @@ export function NotificationsSection({
         </div>
       )}
 
-      <div className="border-border bg-card/55 flex flex-col gap-3 rounded-md border p-3">
+      <div className="settings-group flex flex-col gap-3">
         <div>
-          <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-            Icona dell&apos;app
-          </p>
+          <p className="eyebrow">Icona dell&apos;app</p>
           <p className="text-muted-foreground mt-1 text-[11px]">
             I messaggi non letti in Posta in arrivo, di tutti gli account.
             {/mac/i.test(navigator.platform) &&

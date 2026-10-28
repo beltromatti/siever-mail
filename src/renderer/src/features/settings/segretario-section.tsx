@@ -48,7 +48,7 @@ const KEY_STATE: Readonly<Record<SegretarioKeyState, { label: string; tone: stri
   missing: { label: 'Nessuna chiave', tone: 'bg-faint-foreground' },
   ready: { label: 'Collegata', tone: 'bg-status-online' },
   invalid: { label: 'Non valida', tone: 'bg-destructive' },
-  exhausted: { label: 'Credito esaurito', tone: 'bg-seal' },
+  exhausted: { label: 'Credito esaurito', tone: 'bg-urgent' },
   unchecked: { label: 'Non verificata', tone: 'bg-warning' }
 }
 
@@ -211,11 +211,9 @@ export function SegretarioSection(): React.JSX.Element {
 
   return (
     <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-      <div className="border-border bg-card/55 flex flex-col gap-3 rounded-md border p-3">
+      <div className="settings-group flex flex-col gap-3">
         <div>
-          <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-            Chiave OpenRouter
-          </p>
+          <p className="eyebrow">Chiave OpenRouter</p>
           <p className="text-muted-foreground mt-1 text-[11px]">
             Il Segretario lavora con un modello linguistico che usi attraverso il tuo account
             OpenRouter: paghi a consumo solo quello che fa, senza abbonamenti. La chiave resta su
@@ -382,8 +380,8 @@ export function SegretarioSection(): React.JSX.Element {
       </div>
 
       {spending && (
-        <div className="border-border bg-card/55 flex flex-col gap-2 rounded-md border p-3">
-          <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">Spesa</p>
+        <div className="settings-group flex flex-col gap-2">
+          <p className="eyebrow">Spesa</p>
           <div className="flex gap-8 text-[12px]">
             <p>
               <span className="text-muted-foreground block text-[11px]">Oggi</span>
@@ -401,10 +399,8 @@ export function SegretarioSection(): React.JSX.Element {
       )}
 
       {hasKey && preferences && (
-        <div className="border-border bg-card/55 flex flex-col gap-2 rounded-md border p-3">
-          <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-            Lavoro in anticipo
-          </p>
+        <div className="settings-group flex flex-col gap-2">
+          <p className="eyebrow">Lavoro in anticipo</p>
           <label
             htmlFor="segretario-triage"
             className="flex cursor-pointer items-center justify-between gap-3"
@@ -466,10 +462,8 @@ export function SegretarioSection(): React.JSX.Element {
         </div>
       )}
 
-      <div className="border-border bg-card/55 flex flex-col gap-2 rounded-md border p-3">
-        <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
-          Riservatezza
-        </p>
+      <div className="settings-group flex flex-col gap-2">
+        <p className="eyebrow">Riservatezza</p>
         <p className="text-[12px] leading-[1.5]">
           Il Segretario manda al modello solo quello che gli serve per il lavoro che sta facendo, e
           solo a fornitori che non conservano i dati e non li usano per addestrare i modelli (Zero

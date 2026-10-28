@@ -37,8 +37,8 @@ export function noteAsks(note: MessageNote): boolean {
 
 /**
  * The Segretario's word on a message, in a row: what is expected and by
- * when, then the one thing that counts — in its ochre, the colour of its
- * annotations. Noise stays faint.
+ * when, in the star's colour, then the one thing that counts in a calmer
+ * shade of it. Noise stays faint.
  */
 export function NoteLine({
   note,
@@ -54,7 +54,7 @@ export function NoteLine({
     <span
       className={cn(
         'min-w-0 truncate',
-        note.state === 'rumore' ? 'text-faint-foreground' : 'text-ai',
+        note.state === 'rumore' ? 'text-faint-foreground' : 'text-ai-muted',
         className
       )}
       title={note.reason ? `${note.summary} — ${note.reason}` : note.summary}
@@ -63,7 +63,7 @@ export function NoteLine({
         <span
           className={cn(
             'mr-1.5 font-semibold',
-            note.priority === 'alta' ? 'text-seal-text' : 'text-ai'
+            note.priority === 'alta' ? 'text-urgent' : 'text-ai'
           )}
         >
           {action}

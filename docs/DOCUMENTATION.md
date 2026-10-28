@@ -462,15 +462,22 @@ dark set and a light one under `prefers-color-scheme: light`. The choice in
 Settings (Sistema, Chiaro, Scuro) becomes Electron's `themeSource`, which is
 what that media query reports. Components only use the tokens.
 
-The palette is a desk: warm paper in the light theme, warm graphite in the
-dark one, never a dashboard's blue. Ink (`--primary`) draws text, primary
-buttons and the selection; sealing wax (`--seal`) is spent on sending,
-unread mail and what is due; pencil ochre (`--ai`) belongs to the
-Segretario alone. Surfaces carry a faint paper grain, painted once as a
-background image (`.paper`, `--paper-grain`). Buttons have a body — ink,
-seal and raised keys (`button-ink`, `button-seal`, `button-raised`
-utilities), lit from above and giving a little when pressed; shortcuts
-show as keycaps. What floats is a `sheet` / `sheet-high`: one surface, a
+The palette is the logo's: a compass star over an envelope, electric blue
+and yellow, on cool neutrals. The blue (`--primary`, `--primary-text`) is
+the app's ink: actions, the selection's tint, unread mail (`--unread`),
+sending (`--seal`, the brightest key). The yellow is the star, the
+Segretario's alone (`--ai-star` as a mark, `--ai` for its labels — a deep
+amber on a light page — and `--ai-muted` for its running text); its mark
+everywhere is the logo's star (`CompassStar`), and the logo itself heads
+the rail. Red (`--urgent`) is kept for what is late or urgent. There are
+three surfaces, each a step lighter: the desk (rail and sidebar,
+`--background`), the panes on it (the list, the Segretario, `.paper`) and
+the page being read (the message, Oggi, the agenda, `.page`), all with a
+faint grain painted once as a background image (`--paper-grain`). Buttons
+have a body — ink, seal and raised keys (`button-ink`, `button-seal`,
+`button-raised` utilities), lit from above and giving a little when
+pressed; shortcuts show as keycaps. Settings group their rows under a
+heading and a hairline (`settings-group`), never a box inside the dialog's. What floats is a `sheet` / `sheet-high`: one surface, a
 hairline and a shadow. Message bodies stay on a white page in both themes,
 as they were written.
 
@@ -705,7 +712,7 @@ already open in the conversation and the conversation up to the message.
 Conversations go newest first, the messages of each in the order they were
 written, so what one opens a later one can close; a network or OpenRouter
 failure ends the round and the next one, 20 seconds later, tries again. The
-note shows in the row in the Segretario's ochre — "Rispondi · entro 30
+note shows in the row in the Segretario's colour — "Rispondi · entro 30
 ott" and the gist — and at the top of the reader as "Il punto", with what is
 open to tick off and "Segna come gestito". It can be switched off in
 Settings → Segretario.

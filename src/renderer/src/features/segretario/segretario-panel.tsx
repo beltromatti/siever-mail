@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
+import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { ShortcutKeys } from '@renderer/components/ui/shortcut-keys'
 import { useCommandKeys } from '@renderer/lib/command-shortcuts'
@@ -74,7 +75,7 @@ function StatusMark({ status }: { status: ActivityStatus }): React.JSX.Element {
     case 'running':
       return <LoaderCircle className="text-ai size-3.5 animate-spin" />
     case 'waiting':
-      return <span className="bg-seal-text size-[7px] rounded-full" aria-label="Ti aspetta" />
+      return <span className="bg-urgent size-[7px] rounded-full" aria-label="Ti aspetta" />
     case 'done':
       return <Check className="text-faint-foreground size-3.5" />
     case 'failed':
@@ -124,7 +125,7 @@ function ActivityRow({
       <span
         className={cn(
           'shrink-0 text-[11px]',
-          activity.status === 'waiting' ? 'text-seal-text font-semibold' : 'text-faint-foreground'
+          activity.status === 'waiting' ? 'text-urgent font-semibold' : 'text-faint-foreground'
         )}
       >
         {STATUS_LABEL[activity.status]}
@@ -177,7 +178,7 @@ function ApprovalCard({
   return (
     <div className="sheet overflow-hidden rounded-[10px]">
       <div className="flex items-center gap-2 border-b px-3 py-2 text-[12px]">
-        <span className="bg-seal-text size-[6px] rounded-full" />
+        <span className="bg-urgent size-[6px] rounded-full" />
         <span className="text-foreground shrink-0 font-semibold whitespace-nowrap">
           Da confermare
         </span>
@@ -567,7 +568,7 @@ export function SegretarioPanel({
           atWindowTopRight ? 'pr-[calc(var(--titlebar-controls)+8px)]' : 'pr-2'
         )}
       >
-        <PenLine className="text-ai size-4" />
+        <CompassStar className="text-ai-star size-[18px]" />
         <h2 className="display-title text-[15px]">Segretario</h2>
         {panelKeys && <ShortcutKeys keys={panelKeys} className="ml-1" />}
         <div className="flex-1" />

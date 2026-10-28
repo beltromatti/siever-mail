@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { ArrowUp, LoaderCircle, PenLine } from 'lucide-react'
+import { ArrowUp, LoaderCircle } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
+import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { Popover, PopoverContent, PopoverTrigger } from '@renderer/components/ui/popover'
 import { ShortcutKeys } from '@renderer/components/ui/shortcut-keys'
@@ -75,7 +76,7 @@ export function ComposeAssist({
             {writing ? (
               <LoaderCircle className="size-3.5 animate-spin" />
             ) : (
-              <PenLine className="size-3.5" />
+              <CompassStar className="text-ai-star size-3.5" />
             )}
             Segretario
             {keys && <ShortcutKeys keys={keys} className="ml-0.5" />}
