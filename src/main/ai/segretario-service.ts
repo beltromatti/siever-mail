@@ -935,6 +935,7 @@ export class SegretarioService {
       messageKey: string
       threadId: string
       folder: string
+      fromAddress: string | null
     }>
   ): Promise<void> {
     await this.whenReady()
@@ -1097,8 +1098,9 @@ export class SegretarioService {
   }
 
   async filingHint(
-    threads: ReadonlyArray<{ accountId: string; threadId: string }>
+    messages: ReadonlyArray<{ accountId: string; threadId: string; from: string | null }>
   ): Promise<{ topicKey: string | null; destination: string | null }> {
+    const threads = messages.map(({ accountId, threadId }) => ({ accountId, threadId }))
     const topicIds = await this.requireTopics().topicIdsOf(threads)
     const shared = new Set(topicIds)
     const topicId = shared.size === 1 ? topicIds[0] : null
@@ -1108,8 +1110,21 @@ export class SegretarioService {
       return { topicKey: null, destination: null }
     }
 
-    // The folder a message went into is its day's, under the subfolder chosen.
-    const filed = await this.requireStore().latestArchivedFolder(threads)
+    // The folder a message went into is its day's, under the subfolder chosen:
+    // where the conversation went before, else where its sender's mail goes in this pratica.
+    const store = this.requireStore()
+    const filed =
+      (await store.latestArchivedFolder(threads)) ??
+      (topic.folderPath
+        ? await store.latestArchivedFrom(
+            [
+              ...new Set(
+                messages.flatMap((message) => (message.from ? [message.from.toLowerCase()] : []))
+              )
+            ],
+            `${topic.folderPath}${sep}`
+          )
+        : null)
     const destination =
       filed && topic.folderPath ? relative(topic.folderPath, dirname(filed)) : null
 

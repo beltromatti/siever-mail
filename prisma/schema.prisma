@@ -421,6 +421,8 @@ model AiArchived {
   threadId   String @map("thread_id")
   /// The folder it went into.
   folder     String
+  /// Who wrote it, lower case: where their next message goes is guessed from it.
+  fromAddress String? @map("from_address")
   archivedAt BigInt @map("archived_at")
 
   @@id([accountId, messageKey])

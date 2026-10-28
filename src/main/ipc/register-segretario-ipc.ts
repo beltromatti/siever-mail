@@ -175,12 +175,18 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.reviewDraft, (request: unknown) =>
     segretario.reviewDraft(reviewRequestSchema.parse(request))
   )
-  handle(SEGRETARIO_IPC.filingHint, (threads: unknown) =>
+  handle(SEGRETARIO_IPC.filingHint, (messages: unknown) =>
     segretario.filingHint(
       z
-        .array(z.object({ accountId: idSchema, threadId: z.string().min(1) }))
+        .array(
+          z.object({
+            accountId: idSchema,
+            threadId: z.string().min(1),
+            from: z.string().max(500).nullable()
+          })
+        )
         .max(1000)
-        .parse(threads)
+        .parse(messages)
     )
   )
   handle(SEGRETARIO_IPC.createTopic, (title: unknown) =>

@@ -991,6 +991,7 @@ export class AiStore {
       messageKey: string
       threadId: string
       folder: string
+      fromAddress: string | null
     }>
   ): Promise<void> {
     const archivedAt = BigInt(Date.now())
@@ -1002,7 +1003,12 @@ export class AiStore {
             accountId_messageKey: { accountId: entry.accountId, messageKey: entry.messageKey }
           },
           create: { ...entry, archivedAt },
-          update: { folder: entry.folder, threadId: entry.threadId, archivedAt }
+          update: {
+            folder: entry.folder,
+            threadId: entry.threadId,
+            fromAddress: entry.fromAddress,
+            archivedAt
+          }
         })
       )
     )
@@ -1027,6 +1033,22 @@ export class AiStore {
 
     const row = await this.prisma.aiArchived.findFirst({
       where: { OR: threads.map(({ accountId, threadId }) => ({ accountId, threadId })) },
+      orderBy: { archivedAt: 'desc' }
+    })
+    return row?.folder ?? null
+  }
+
+  /** Where a sender's mail was last filed outside the mail, under a folder (a pratica's). */
+  async latestArchivedFrom(
+    fromAddresses: ReadonlyArray<string>,
+    under: string
+  ): Promise<string | null> {
+    if (fromAddresses.length === 0) {
+      return null
+    }
+
+    const row = await this.prisma.aiArchived.findFirst({
+      where: { fromAddress: { in: [...fromAddresses] }, folder: { startsWith: under } },
       orderBy: { archivedAt: 'desc' }
     })
     return row?.folder ?? null

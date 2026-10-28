@@ -565,12 +565,13 @@ export interface SegretarioApi {
     threads: ReadonlyArray<{ accountId: string; threadId: string }>
   ) => Promise<Array<string | null>>
   /**
-   * Where these conversations are kept, for an extension's filing: the
-   * extension topic they all share, and the subfolder of its folder their
-   * earlier messages were filed in, when they were.
+   * Where these messages are kept, for an extension's filing: the extension
+   * topic their conversations all share, and the subfolder of its folder
+   * their earlier messages were filed in — or, for a new conversation, where
+   * their sender's mail goes in it.
    */
   filingHint: (
-    threads: ReadonlyArray<{ accountId: string; threadId: string }>
+    messages: ReadonlyArray<{ accountId: string; threadId: string; from: string | null }>
   ) => Promise<{ topicKey: string | null; destination: string | null }>
   /**
    * A search asked in words — "l'offerta di Gallo di settembre con il PDF"

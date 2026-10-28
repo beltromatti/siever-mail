@@ -934,7 +934,8 @@ leave it.
 The selection handed to toolbar actions and the primary dialog carries
 `topicKey`, the extension topic its conversations are filed in, and
 `filedIn`, the subfolder of that topic's folder their earlier messages went
-into — ARCHIVIA SIEVER opens on both. The engine handle gives raw messages in bulk
+into — or, for a new conversation, the one its sender's mail goes to in
+that topic — and ARCHIVIA SIEVER opens on both. The engine handle gives raw messages in bulk
 — `fetchMessageRawSources(refs, onMessage)` downloads a few per command and
 hands each on while the next arrive — and `moveMessagesToTrash(refs)`, one
 command per folder. Renderer surfaces get `ExtensionHostHooks`:

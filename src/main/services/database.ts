@@ -2831,6 +2831,7 @@ export class AppDatabase {
         message_key TEXT NOT NULL,
         thread_id TEXT NOT NULL,
         folder TEXT NOT NULL,
+        from_address TEXT,
         archived_at INTEGER NOT NULL,
         PRIMARY KEY (account_id, message_key)
       )
@@ -3778,7 +3779,9 @@ export class AppDatabase {
   /** The key and conversation of each message, where it is now; those not in the cache are left out. */
   async messageIdentities(
     refs: ReadonlyArray<MessageRef>
-  ): Promise<Array<{ ref: MessageRef; messageKey: string; threadId: string }>> {
+  ): Promise<
+    Array<{ ref: MessageRef; messageKey: string; threadId: string; fromAddress: string | null }>
+  > {
     await this.ready
 
     if (refs.length === 0) {
@@ -3793,13 +3796,22 @@ export class AppDatabase {
           uid: ref.uid
         }))
       },
-      select: { accountId: true, folderPath: true, uid: true, messageKey: true, threadId: true }
+      select: {
+        accountId: true,
+        folderPath: true,
+        uid: true,
+        messageKey: true,
+        threadId: true,
+        fromJson: true
+      }
     })
 
     return rows.map((row) => ({
       ref: { accountId: row.accountId, folderPath: row.folderPath, uid: Number(row.uid) },
       messageKey: row.messageKey,
-      threadId: row.threadId
+      threadId: row.threadId,
+      fromAddress:
+        parseJsonArray<MailAddress>(row.fromJson)[0]?.address.trim().toLowerCase() || null
     }))
   }
 

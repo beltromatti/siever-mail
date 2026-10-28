@@ -757,7 +757,8 @@ export class MailService {
                       accountId: entry.ref.accountId,
                       messageKey: identity.messageKey,
                       threadId: identity.threadId,
-                      folder: entry.folder
+                      folder: entry.folder,
+                      fromAddress: identity.fromAddress
                     }
                   ]
                 : []

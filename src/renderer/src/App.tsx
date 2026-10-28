@@ -2314,7 +2314,8 @@ function App(): React.JSX.Element {
       .filingHint(
         selectedSummaries.map((summary) => ({
           accountId: summary.accountId,
-          threadId: summary.threadId
+          threadId: summary.threadId,
+          from: summary.from[0]?.address ?? null
         }))
       )
       .then((hint) => {

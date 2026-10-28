@@ -359,7 +359,8 @@ export interface ExtensionSelectionContext {
   topicKey: string | null
   /**
    * The subfolder of that topic's folder the earlier messages of these
-   * conversations were filed in ("CORRISPONDENZA"), when they were.
+   * conversations were filed in ("CORRISPONDENZA") — or, for a new
+   * conversation, the one its sender's mail goes to in that topic.
    */
   filedIn: string | null
 }
