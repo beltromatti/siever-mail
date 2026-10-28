@@ -1,7 +1,7 @@
 <div align="center">
   <img src="resources/icon.png" alt="SIEVER Mail" width="160" />
   <h1>SIEVER Mail</h1>
-  <p><strong>A fast, modern, lightweight desktop email client.</strong></p>
+  <p><strong>A fast desktop email client with a secretary in it.</strong></p>
   <p>
     <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" />
     <img alt="Platforms" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey" />
@@ -44,13 +44,32 @@ open-source software released under the Apache License 2.0.
 
 ## Highlights
 
-- **A secretary, not a chatbot** — the Segretario works on your mail: it
-  searches and reads every message and attachment and the files on your
-  computer, answers with links to what it found, writes replies in your
-  style into the composer you write in, and files messages. Several jobs
-  run side by side; nothing is sent without your confirmation, files are
-  only read. It runs on your own [OpenRouter](https://openrouter.ai/) key,
-  only through providers that keep no data, and you see what it costs.
+- **A secretary that reads your mail with you** — the Segretario notes every
+  message as it arrives: what it wants of you and by when, what you
+  promised, what you are waiting for. It keeps that count across
+  conversations — the same request again, or a reply that settles it, is
+  one thing, not two — and files each conversation in the matter it
+  belongs to. Your day opens on **Oggi**, written in its hand; the
+  **Agenda** puts the mail's deadlines beside your calendar; **Da gestire**
+  and **In attesa** are folders it keeps for you.
+- **Work done ahead** — replies to what matters and reminders for what is
+  late are written before you ask, in your style; a message is reread as it
+  goes (the attachment you mention, the question left open, the weekday
+  that does not match the date); alerts come only for what matters, saying
+  what it wants.
+- **Ask it anything, or ask the mail** — in its panel it searches and reads
+  every message, attachment and file on your computer, writes and fixes
+  drafts in the composer you use, schedules, files and tidies — nothing is
+  sent without your confirmation. In any search field, ask in words
+  ("le offerte di Gallo da settembre, con il pdf") and keep the answer as a
+  folder that searches again each time it opens. In the composer, ⌘J
+  writes the reply or rewrites what you selected.
+- **It learns you, and keeps up** — it gets to know each account from the
+  mail you wrote, learns from how you correct its drafts, and every day
+  from the mail that arrives: who people are, how you write to them. Every
+  note is yours to read, correct or forget. It runs on your own
+  [OpenRouter](https://openrouter.ai/) key, only through providers that
+  keep no data, and you see what it costs.
 - **Multi-account by design** — IMAP/SMTP (SSL/TLS or STARTTLS) and Gmail
   OAuth side by side. "Tutti gli account" gathers the inbox, sent mail,
   drafts, archive, spam and trash of every account, whatever each server
@@ -110,11 +129,10 @@ open-source software released under the Apache License 2.0.
 
 ## Roadmap
 
-The current focus is **stabilising the public client** — accessibility passes,
-localisation, performance budgets, automated tests. Once that baseline is in
-place, the next major chapter is opt-in **AI features** built directly into
-the client: smart triage, summaries, draft assistance, and similar
-assistive workflows that respect the existing local-only data model.
+2.0 makes the Segretario part of the client: triage, the day, the agenda,
+work done ahead, memory. Next: Microsoft 365 and CalDAV calendars beside
+Google's, accessibility passes, localisation beyond Italian, and
+performance budgets for very large mailboxes.
 
 ## Quick start
 
