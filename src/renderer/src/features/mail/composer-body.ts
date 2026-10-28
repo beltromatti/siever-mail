@@ -135,6 +135,15 @@ function inlineHtml(line: string): string {
 }
 
 /**
+ * A passage written over a selection: one line stays inside the line it
+ * goes into, several are blocks of their own.
+ */
+export function passageToComposerHtml(text: string): string {
+  const passage = text.replace(/\r\n?/g, '\n').trim()
+  return passage.includes('\n') ? plainTextToComposerHtml(passage) : inlineHtml(passage)
+}
+
+/**
  * Plain text as the lines of a message: a line per block, an empty one per
  * blank line, `- ` items as a list — the way the editor itself writes, so
  * the text reads and edits as if typed.

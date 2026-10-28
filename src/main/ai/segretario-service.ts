@@ -991,6 +991,7 @@ export class SegretarioService {
             to: request.to,
             thread: conversation?.thread ?? null,
             writtenText: request.writtenText,
+            selectedText: request.selectedText,
             instruction: request.instruction
           })
         }
@@ -1003,12 +1004,17 @@ export class SegretarioService {
     await this.recordUsage(null, 'scrittura', result)
     const text = parseWriting(result.content)
 
-    await store.recordDraft({
-      draftId: request.draftId,
-      activityId: null,
-      accountId: account.id,
-      text
-    })
+    // A passage rewritten in the user's own text leaves the rest theirs: only
+    // a message it wrote whole is learnt from.
+    if (!request.selectedText) {
+      await store.recordDraft({
+        draftId: request.draftId,
+        activityId: null,
+        accountId: account.id,
+        text
+      })
+    }
+
     return { text }
   }
 

@@ -60,7 +60,18 @@ import {
 } from '@shared/mail-fonts'
 import { cn } from '@renderer/lib/utils'
 
+/** What the host can ask of the body from outside it. */
+export interface RichTextEditorHandle {
+  /**
+   * The passage selected in the body, kept to be written over later — once
+   * the focus has moved to a popover, say: null when nothing is selected.
+   */
+  captureSelection(): { text: string; replace: (html: string) => void } | null
+}
+
 interface RichTextEditorProps {
+  /** Filled with the body's handle while the editor is up. */
+  handleRef?: React.RefObject<RichTextEditorHandle | null>
   value: string
   placeholder?: string
   disabled?: boolean
@@ -2077,6 +2088,7 @@ function applyLineHeight(editor: SquireInstance, lineHeight: string): void {
 }
 
 export function RichTextEditor({
+  handleRef,
   value,
   placeholder = "Scrivi il contenuto dell'email...",
   disabled = false,
@@ -2151,6 +2163,38 @@ export function RichTextEditor({
   })
 
   const active = useEditorActiveState(editor)
+
+  useEffect(() => {
+    if (!handleRef || !editor) {
+      return
+    }
+
+    handleRef.current = {
+      captureSelection: () => {
+        const range = editor.getSelection()
+        const text = range.toString().trim()
+
+        if (range.collapsed || !text) {
+          return null
+        }
+
+        const kept = range.cloneRange()
+        return {
+          text,
+          // Squire writes over a selection it is given: the passage goes, the new one takes its place.
+          replace: (html) => {
+            editor.focus()
+            editor.setSelection(kept)
+            editor.insertHTML(html)
+          }
+        }
+      }
+    }
+
+    return () => {
+      handleRef.current = null
+    }
+  }, [editor, handleRef])
 
   /**
    * A reply opened with the caret in the "A" field, which is the one field

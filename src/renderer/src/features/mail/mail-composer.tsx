@@ -41,6 +41,7 @@ import { AttachMenu } from '@renderer/features/mail/attach-menu'
 import { AttachmentChip } from '@renderer/features/mail/attachment-chip'
 import {
   buildComposerBody,
+  passageToComposerHtml,
   plainTextToComposerHtml,
   replaceComposerSignature,
   replaceWrittenPart,
@@ -49,7 +50,7 @@ import {
 } from '@renderer/features/mail/composer-body'
 import { ComposerPanel } from '@renderer/features/mail/composer-panel'
 import { RecipientField, type RecipientFieldKey } from '@renderer/features/mail/recipient-field'
-import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
+import { RichTextEditor, type RichTextEditorHandle } from '@renderer/features/mail/rich-text-editor'
 import { ComposeAssist } from '@renderer/features/segretario/compose-assist'
 import { commandForKeyEvent, useShortcutOverrides } from '@renderer/lib/command-shortcuts'
 import { htmlToPlainText } from '@renderer/lib/email'
@@ -892,6 +893,20 @@ export function MailComposer({
   // What the Segretario found rereading the message as it went: the send waits on the user.
   const [reviewIssues, setReviewIssues] = useState<string[] | null>(null)
   const [assistUndo, setAssistUndo] = useState<string | null>(null)
+  const editorHandleRef = useRef<RichTextEditorHandle | null>(null)
+  // The passage selected when the Segretario was called: only it is rewritten.
+  const [assistSelection, setAssistSelection] = useState<{
+    text: string
+    replace: (html: string) => void
+  } | null>(null)
+
+  const openAssist = (open: boolean): void => {
+    if (open) {
+      setAssistSelection(editorHandleRef.current?.captureSelection() ?? null)
+    }
+
+    setAssistOpen(open)
+  }
 
   const askSegretario = async (instruction: string): Promise<void> => {
     if (!account) {
@@ -899,21 +914,31 @@ export function MailComposer({
     }
 
     const previous = form.html
+    const selection = assistSelection
     const { text } = await window.segretarioApi.assistWriting({
       draftId: session.id,
       accountId: account.id,
       instruction,
       writtenText: writtenText(form.html),
+      selectedText: selection?.text ?? null,
       subject: form.subject,
       to: [...form.to, ...form.cc].map((recipient) => recipient.address),
       replyTo: initialData.original?.ref ?? null
     })
 
     touch()
-    setForm((current) => ({
-      ...current,
-      html: replaceWrittenPart(current.html, plainTextToComposerHtml(text))
-    }))
+
+    if (selection) {
+      // Written over the passage in the editor, which reports the body as it is then.
+      selection.replace(passageToComposerHtml(text))
+      setAssistSelection(null)
+    } else {
+      setForm((current) => ({
+        ...current,
+        html: replaceWrittenPart(current.html, plainTextToComposerHtml(text))
+      }))
+    }
+
     setAssistUndo(previous)
   }
 
@@ -922,7 +947,7 @@ export function MailComposer({
       case 'segretario-write':
         if (account && canAskSegretario) {
           setEditorFocusMode(false)
-          setAssistOpen(true)
+          openAssist(true)
         }
         return
       case 'send':
@@ -1286,6 +1311,7 @@ export function MailComposer({
           {/* One editor, in place or full size: the caret and the undo history stay. */}
           <div className="min-h-0 flex-1">
             <RichTextEditor
+              handleRef={editorHandleRef}
               value={form.html}
               disabled={!account}
               defaultFontFamily={MAIL_COMPOSER_DEFAULT_FONT_FAMILY}
@@ -1367,7 +1393,8 @@ export function MailComposer({
               {canAskSegretario && (
                 <ComposeAssist
                   open={assistOpen}
-                  onOpenChange={setAssistOpen}
+                  onOpenChange={openAssist}
+                  selection={assistSelection?.text ?? null}
                   disabled={!account || !bodyReady}
                   isReply={initialData.original !== undefined}
                   hasText={writtenText(form.html).length > 0}

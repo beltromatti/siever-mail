@@ -222,6 +222,8 @@ export interface WritingRequest {
   instruction: string
   /** What is written so far, without the signature and the quote. */
   writtenText: string
+  /** A passage the user selected: only it is rewritten, and what comes back takes its place. */
+  selectedText: string | null
   subject: string
   to: string[]
   /** The message answered or forwarded, for its conversation. */

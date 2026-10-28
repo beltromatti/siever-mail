@@ -42,6 +42,7 @@ const writingRequestSchema = z.object({
   accountId: z.string().min(1),
   instruction: z.string().trim().min(1, 'Scrivi cosa vuoi che scriva.').max(4000),
   writtenText: z.string().max(200_000),
+  selectedText: z.string().max(50_000).nullable(),
   subject: z.string().max(2000),
   to: z.array(z.string().max(500)).max(500),
   replyTo: messageRefSchema.nullable()

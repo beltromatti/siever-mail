@@ -783,7 +783,11 @@ One call (`scrittura.md`) with the conversation answered, the user's notes
 and style and the people written to; what comes back takes the place of
 the lines above the signature and the quote (`replaceWrittenPart`), with
 "Annulla" to put them back, and is kept as the Segretario's draft so the
-user's later edits are learnt from.
+user's later edits are learnt from. With a passage selected when it is
+called, only that passage is rewritten (`selectedText`): the editor keeps
+the selection while the popover has the focus (`RichTextEditorHandle`)
+and writes the new passage over it — inline when it is one line — and the
+rest stays the user's, not learnt from.
 
 **Asking the mail in words.** In any list's search field, ⌘↵ (or the
 star beside it) hands what is typed — "l'offerta di Gallo per i gruppi

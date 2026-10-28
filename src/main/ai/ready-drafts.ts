@@ -115,6 +115,8 @@ export function writingRequest(input: {
   to: ReadonlyArray<string>
   thread: ReadonlyArray<TriageMessage> | null
   writtenText: string
+  /** The passage selected, when only it is to be rewritten. */
+  selectedText?: string | null
   instruction: string
 }): string {
   const header = [
@@ -152,6 +154,9 @@ export function writingRequest(input: {
     header,
     context,
     `## Il testo scritto finora\n\n${input.writtenText.trim() || '(vuoto)'}`,
+    input.selectedText?.trim()
+      ? `## Il passaggio selezionato, il solo da riscrivere\n\n${input.selectedText.trim()}`
+      : null,
     `## La richiesta dell'utente\n\n${input.instruction.trim()}`
   ]
     .filter(Boolean)

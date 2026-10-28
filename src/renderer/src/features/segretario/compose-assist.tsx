@@ -20,11 +20,13 @@ const REWRITES = [
  * The Segretario in the composer (⌘J): asked in a few words — or with one
  * of the usual requests — it writes the message, or rewrites what is
  * written, in the user's voice. What it writes takes the place of the
- * lines above the signature; "Annulla" puts them back.
+ * lines above the signature — or, with a passage selected, of that passage
+ * alone; "Annulla" puts them back.
  */
 export function ComposeAssist({
   open,
   onOpenChange,
+  selection,
   disabled,
   isReply,
   hasText,
@@ -33,6 +35,8 @@ export function ComposeAssist({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** The passage selected when it was called: what it rewrites, alone. */
+  selection: string | null
   disabled: boolean
   /** A reply or a forward: with nothing written, it can write the answer. */
   isReply: boolean
@@ -45,7 +49,7 @@ export function ComposeAssist({
   const [writing, setWriting] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const keys = useCommandKeys('segretario-write')
-  const suggestions = hasText ? REWRITES : isReply ? ['Scrivi la risposta'] : []
+  const suggestions = selection || hasText ? REWRITES : isReply ? ['Scrivi la risposta'] : []
 
   const ask = async (text: string): Promise<void> => {
     const trimmed = text.trim()
@@ -83,6 +87,12 @@ export function ComposeAssist({
           </Button>
         </PopoverTrigger>
         <PopoverContent side="top" align="start" className="flex w-[380px] flex-col gap-2 p-2.5">
+          {selection && (
+            <p className="text-muted-foreground border-ai-line border-l-2 pl-2 text-[11.5px]">
+              <span className="text-ai font-semibold">Solo il passaggio selezionato · </span>
+              <span className="voice line-clamp-2 italic">«{selection}»</span>
+            </p>
+          )}
           <form
             className="flex items-end gap-1.5"
             onSubmit={(event) => {
@@ -103,11 +113,13 @@ export function ComposeAssist({
                 }
               }}
               placeholder={
-                hasText
-                  ? 'Come lo riscrivo?'
-                  : isReply
-                    ? 'Cosa rispondo? Anche solo «sì, ma giovedì»'
-                    : 'Cosa scrivo, e a chi?'
+                selection
+                  ? 'Come riscrivo questo passaggio?'
+                  : hasText
+                    ? 'Come lo riscrivo?'
+                    : isReply
+                      ? 'Cosa rispondo? Anche solo «sì, ma giovedì»'
+                      : 'Cosa scrivo, e a chi?'
               }
               className="field placeholder:text-faint-foreground min-h-[52px] flex-1 resize-none rounded-md px-2.5 py-1.5 text-[12.5px] leading-[1.45] outline-none"
             />

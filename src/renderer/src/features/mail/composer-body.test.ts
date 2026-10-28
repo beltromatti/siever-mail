@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildComposerBody,
   hasWrittenContent,
+  passageToComposerHtml,
   plainTextToComposerHtml,
   replaceComposerSignature,
   replaceWrittenPart,
@@ -251,5 +252,14 @@ describe('replaceWrittenPart', () => {
     expect(replaceWrittenPart('<div>Ciao</div>', '<div>Buongiorno</div>')).toBe(
       '<div>Buongiorno</div>'
     )
+  })
+})
+
+describe('passageToComposerHtml', () => {
+  it('keeps a one-line passage inside its line, and makes blocks of several', () => {
+    expect(passageToComposerHtml(' più breve <e> **chiaro** ')).toBe(
+      'più breve &lt;e&gt; <b>chiaro</b>'
+    )
+    expect(passageToComposerHtml('prima\nseconda')).toBe(plainTextToComposerHtml('prima\nseconda'))
   })
 })
