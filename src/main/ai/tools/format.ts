@@ -91,3 +91,17 @@ export function shortDate(day: string): string {
   const [year, month, date] = day.split('-').map(Number)
   return SHORT_DATE.format(new Date(year, month - 1, date))
 }
+
+/**
+ * A text as written words, its formatting aside — bold, bullets, spacing,
+ * the escapes Markdown puts back when a draft's HTML is read again — so
+ * what the Segretario wrote can be told apart from what the user changed.
+ */
+export function comparableText(text: string): string {
+  return text
+    .replace(/\\([\\`*_{}[\]()#+\-.!>~|])/g, '$1')
+    .replace(/\*\*/g, '')
+    .replace(/^\s*[-•*]\s+/gm, '- ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}

@@ -189,6 +189,7 @@ export const readMailTool: SegretarioTool = {
       return {
         content: [
           describeMessage(handle, message),
+          ...(await segretarioWork(context, ref, message.messageKey)),
           '',
           page.text || '(nessun testo)',
           page.clipped
@@ -236,6 +237,9 @@ export const readMailTool: SegretarioTool = {
         [
           `## ${index + 1}/${refs.length}`,
           describeMessage(itemHandle, item),
+          ...(index === refs.length - 1
+            ? await segretarioWork(context, threadRef, item.messageKey)
+            : []),
           '',
           page.text || '(nessun testo)',
           own.cut ? '[Citazioni dei messaggi precedenti omesse.]' : '',
@@ -256,6 +260,36 @@ export const readMailTool: SegretarioTool = {
       messages: refs
     }
   }
+}
+
+/**
+ * What was already done with a message: the Segretario's note, the reply
+ * or reminder it prepared while reading the mail, which the user sees in
+ * the reader, and the drafts already written in answer to it — so the
+ * work builds on them, not beside them.
+ */
+async function segretarioWork(
+  context: ToolContext,
+  ref: MessageRef,
+  messageKey: string
+): Promise<string[]> {
+  const [[note], ready, drafts] = await Promise.all([
+    context.store.getNotes([{ accountId: ref.accountId, messageKey }]),
+    context.store.readyDraftFor(ref.accountId, messageKey),
+    context.mail.draftsReplyingTo(ref)
+  ])
+
+  return [
+    note ? `La tua nota: ${note.summary}${note.dismissedAt !== null ? ' (gestito)' : ''}` : '',
+    drafts.length > 0
+      ? `Già in Bozze, in risposta: ${drafts
+          .map((draftId) => context.handles.name({ kind: 'draft', draftId }, context.newHandles))
+          .join(', ')} — per correggerla o inviarla usa quella, non scriverne un'altra.`
+      : '',
+    ready
+      ? `${ready.kind === 'sollecito' ? 'Il sollecito' : 'La risposta'} che hai già preparato, e che l'utente vede nel lettore:\n«${ready.text}»${ready.doubts ? `\nI tuoi dubbi: ${ready.doubts}` : ''}`
+      : ''
+  ].filter(Boolean)
 }
 
 function describeMessage(

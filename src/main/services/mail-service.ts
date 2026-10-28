@@ -581,7 +581,19 @@ export class MailService {
       setSeen: (refs, present) => this.setMessagesSeen({ refs, present }),
       setFlagged: (refs, present) => this.setMessagesFlagged({ refs, present }),
       // Never a deletion for good: a message already in the Trash stays there.
-      trash: (refs) => this.engine.moveMessagesToTrash(refs),
+      trash: async (refs) => {
+        await this.releaseDrafts(refs)
+        return this.engine.moveMessagesToTrash(refs)
+      },
+      draftOfMessage: async (ref) =>
+        folderForRole(await this.database.listFolders(ref.accountId), '\\Drafts')?.path ===
+        ref.folderPath
+          ? (await this.drafts.openMessage(ref)).content.id
+          : null,
+      draftsReplyingTo: async (ref) => {
+        const messageId = (await this.database.getMessage(ref))?.messageId
+        return messageId ? this.database.draftIdsReplyingTo(ref.accountId, messageId) : []
+      },
       getDraft: async (draftId) => {
         const draft = await this.database.getDraft(draftId)
 
@@ -1330,6 +1342,7 @@ export class MailService {
   async moveMessages(input: MoveMessagesInput): Promise<MessagesActionResult> {
     const payload = moveMessagesSchema.parse(input)
     await this.ensureAccountsExist(payload.refs)
+    await this.releaseDrafts(payload.refs)
     const result = await this.engine.moveMessages(payload.refs, payload.destinationFolderPath)
     const failed = new Set(
       result.failed.map((ref) => `${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`)
@@ -1350,6 +1363,7 @@ export class MailService {
   async moveMessagesToRole(input: MoveMessagesToRoleInput): Promise<MessagesActionResult> {
     const payload = moveMessagesToRoleSchema.parse(input)
     await this.ensureAccountsExist(payload.refs)
+    await this.releaseDrafts(payload.refs)
     return this.engine.moveMessagesToRole(payload.refs, payload.role)
   }
 
@@ -1386,13 +1400,31 @@ export class MailService {
   async deleteMessages(refs: MessageRef[]): Promise<MessagesActionResult> {
     const payload = messageRefsSchema.parse(refs)
     await this.ensureAccountsExist(payload)
+    await this.releaseDrafts(payload)
     return this.engine.deleteMessages(payload)
   }
 
   async archiveMessages(refs: MessageRef[]): Promise<MessagesActionResult> {
     const payload = messageRefsSchema.parse(refs)
     await this.ensureAccountsExist(payload)
+    await this.releaseDrafts(payload)
     return this.engine.archiveMessages(payload)
+  }
+
+  /** Before messages leave their folder: those of Bozze take their drafts with them. */
+  private async releaseDrafts(refs: ReadonlyArray<MessageRef>): Promise<void> {
+    const draftsFolders = new Map<string, string | undefined>()
+
+    for (const accountId of new Set(refs.map((ref) => ref.accountId))) {
+      draftsFolders.set(
+        accountId,
+        folderForRole(await this.database.listFolders(accountId), '\\Drafts')?.path
+      )
+    }
+
+    await this.drafts.release(
+      refs.filter((ref) => draftsFolders.get(ref.accountId) === ref.folderPath)
+    )
   }
 
   async setMessagesSeen(input: SetMessagesKeywordInput): Promise<MessagesActionResult> {

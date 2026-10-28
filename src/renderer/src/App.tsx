@@ -3156,6 +3156,13 @@ function App(): React.JSX.Element {
       window.mailApi.onDraftStatusChanged((status) => {
         const reported = reportedDraftFailuresRef.current
 
+        // Moved or thrown away from Bozze: its composer goes too, with nothing left to save.
+        if (status.state === 'gone') {
+          reported.delete(status.id)
+          removeComposeSession(status.id)
+          return
+        }
+
         if (status.state !== 'error') {
           reported.delete(status.id)
           return
@@ -3171,7 +3178,7 @@ function App(): React.JSX.Element {
             `È al sicuro su questo computer e ci andrà appena possibile. ${status.message ?? ''}`.trim()
         })
       }),
-    []
+    [removeComposeSession]
   )
 
   // Set once the handlers below exist; the menu bar and the keyboard both
@@ -4429,16 +4436,26 @@ function App(): React.JSX.Element {
           : currentFolder
             ? folderDisplayName(currentFolder)
             : 'Conversazioni'
+  // A page over the lists — the day, the agenda — is what the user looks at, not the selection under it.
+  const shownPage =
+    openPage === 'oggi' && segretarioConfigured
+      ? 'Oggi'
+      : openPage === 'agenda' && calendarConnected
+        ? 'Agenda'
+        : null
   // What the user is looking at goes along with what they ask the Segretario.
-  const segretarioContextRefs = selection.selectedRefs.slice(0, SEGRETARIO_CONTEXT_LIMIT)
+  const segretarioContextRefs = shownPage
+    ? []
+    : selection.selectedRefs.slice(0, SEGRETARIO_CONTEXT_LIMIT)
   const segretarioContext: SegretarioContextChip = {
     context: {
       messages: segretarioContextRefs,
       accountId: selectedAccountId,
-      folderLabel: currentViewLabel
+      folderLabel: shownPage ?? currentViewLabel
     },
-    label:
-      selection.selectedRefs.length > 1
+    label: shownPage
+      ? shownPage
+      : selection.selectedRefs.length > 1
         ? selection.selectedRefs.length > SEGRETARIO_CONTEXT_LIMIT
           ? `I primi ${SEGRETARIO_CONTEXT_LIMIT} dei ${selection.selectedRefs.length.toLocaleString('it-IT')} messaggi selezionati`
           : `${selection.selectedRefs.length} messaggi selezionati`
@@ -4448,10 +4465,10 @@ function App(): React.JSX.Element {
   }
   const viewerNote = messageForViewer ? (messageNotes.get(noteKey(messageForViewer)) ?? null) : null
   const segretarioSuggestionList = segretarioSuggestions({
-    selectionCount: selection.selectedRefs.length,
-    note: viewerNote,
-    messageOpen: Boolean(messageForViewer),
-    topic: currentTopic?.title ?? null,
+    selectionCount: shownPage ? 0 : selection.selectedRefs.length,
+    note: shownPage ? null : viewerNote,
+    messageOpen: !shownPage && Boolean(messageForViewer),
+    topic: shownPage ? null : (currentTopic?.title ?? null),
     topicsLabel,
     readyReply: viewerReady === viewerThreadKey && viewerThreadKey !== null,
     calendarConnected

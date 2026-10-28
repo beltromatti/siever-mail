@@ -9,6 +9,6 @@ Parametri:
 - `oggetto`: per un messaggio nuovo; per risposte e inoltri si usa quello del messaggio.
 - `testo`: il corpo del messaggio, scritto come lo scriverebbe l'utente. Testo semplice: righe vuote tra i paragrafi; `**grassetto**` e elenchi con `- ` solo se l'utente li usa. Senza firma: la aggiunge il programma.
 - `allegati`: riferimenti di file (f1…) trovati sul computer o allegati di altri messaggi da allegare.
-- `bozza`: il riferimento di una bozza già preparata (b1…), per correggerla invece di farne una nuova.
+- `bozza`: il riferimento di una bozza già preparata (b1…), o di un messaggio trovato in Bozze (m…), per correggerla invece di farne una nuova.
 
 Restituisce il riferimento della bozza (b1, b2…). Per inviarla serve `invia_bozza`, che chiede conferma all'utente.

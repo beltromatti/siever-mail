@@ -461,7 +461,8 @@ export interface DraftContent {
  */
 export interface DraftStatus {
   id: string
-  state: 'pending' | 'saving' | 'saved' | 'error'
+  /** `gone`: its copy left Bozze — moved, archived, thrown away — so it is no longer written on. */
+  state: 'pending' | 'saving' | 'saved' | 'error' | 'gone'
   /** When the server last got the draft as it is now. */
   savedAt?: number
   /** Why it is not on the server yet, in the user's words. */

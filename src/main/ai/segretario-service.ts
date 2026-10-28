@@ -100,6 +100,7 @@ import {
 import { SEGRETARIO_TOOLS, toolDefinitions } from './tools'
 import {
   clip,
+  comparableText,
   formatAddresses,
   formatDateTime,
   shortDate,
@@ -278,6 +279,13 @@ export class SegretarioService {
       }
 
       return closed !== null
+    },
+    replyWritten: async (accountId, messageKey) => {
+      const used = await this.requireStore().closeReadyDraft(accountId, messageKey, 'usata')
+
+      if (used) {
+        this.emitNotes({ accountId, messageKeys: [messageKey], threadIds: [used.threadId] })
+      }
     }
   }
 
@@ -2578,14 +2586,7 @@ export class SegretarioService {
       return
     }
 
-    const comparable = (text: string): string =>
-      text
-        .replace(/\*\*/g, '')
-        .replace(/^\s*[-•*]\s+/gm, '- ')
-        .replace(/\s+/g, ' ')
-        .trim()
-
-    if (comparable(draft.text) === comparable(writtenText)) {
+    if (comparableText(draft.text) === comparableText(writtenText)) {
       await store.addLesson('confermata', { accountId: draft.accountId })
     } else {
       await store.addLesson('correzione', {

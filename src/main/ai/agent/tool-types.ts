@@ -105,6 +105,14 @@ export interface SegretarioMailPort {
   setSeen(refs: MessageRef[], seen: boolean): Promise<MessagesActionResult>
   setFlagged(refs: MessageRef[], flagged: boolean): Promise<MessagesActionResult>
   trash(refs: MessageRef[]): Promise<MessagesActionResult>
+  /**
+   * A message in Bozze as the draft the app writes on — the one it keeps
+   * for it, or one made from it — opened as the user's click opens it;
+   * null for a message that is not in Bozze.
+   */
+  draftOfMessage(ref: MessageRef): Promise<string | null>
+  /** The drafts written in answer to a message: the newest first. */
+  draftsReplyingTo(ref: MessageRef): Promise<string[]>
   /** A draft as stored: who it goes to, what it says, what it carries. */
   getDraft(draftId: string): Promise<{
     accountId: string
@@ -132,6 +140,8 @@ export interface SegretarioWorkPort {
   /** What is open across the accounts the Segretario looks after. */
   openCommitments(): Promise<Commitment[]>
   closeCommitment(id: number): Promise<boolean>
+  /** A reply was written to a message: the one prepared for it ahead is taken up, not offered beside it. */
+  replyWritten(accountId: string, messageKey: string): Promise<void>
 }
 
 /** The calendars, as the Segretario reaches them: the same as the page's. */

@@ -1477,6 +1477,18 @@ export class AppDatabase {
     return row ? mapDraftRow(row) : null
   }
 
+  /** The drafts of an account that answer a message, by its Message-ID. */
+  async draftIdsReplyingTo(accountId: string, messageId: string): Promise<string[]> {
+    await this.ready
+
+    const rows = await this.prisma.draft.findMany({
+      where: { accountId, inReplyTo: messageId },
+      select: { id: true },
+      orderBy: { createdAt: 'desc' }
+    })
+    return rows.map((row) => row.id)
+  }
+
   /** The draft whose server copy is `uid` of `folderPath`, if the app keeps it. */
   async findDraftByServerCopy(
     accountId: string,

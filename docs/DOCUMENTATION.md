@@ -571,7 +571,10 @@ In Bozze — of this app or any other client — a double click, Invio or
 "Continua a scrivere" (in place of Rispondi and Inoltra) opens the draft:
 the copy kept here if it is newer or open, otherwise the server's,
 parsed with its recipients, Ccn, thread, files (written to
-`userData/drafts/<id>/`) and inline pictures.
+`userData/drafts/<id>/`) and inline pictures. A draft whose copy leaves
+Bozze — moved, archived, thrown away, by the user or the Segretario — is
+let go with it (`DraftService.release`): what is kept of it goes, and a
+composer holding it closes (status `gone`), so no later save puts it back.
 
 Several messages are written at once. One is in front, modal; the others
 wait in the dock, bars in the bottom right corner, as Gmail keeps them,
@@ -685,6 +688,15 @@ and its conversations, a conversation filed as the user asks; `a1` names
 a topic and opens its list), `impegni` (what is open across the mail, the
 most pressing first, narrowed by kind, date or topic; one closed) and
 `mostra` (opens a message, a draft or a search on screen).
+
+What the Segretario did in the background meets what it does when asked:
+a message read with `leggi_posta` comes with its note, the reply or
+reminder prepared for it, and the drafts already answering it. A reply
+`scrivi_bozza` writes goes on the one the Segretario wrote to that message
+before, while the user has not changed it (what it wrote is still all
+there, `comparableText`), never a second beside it; a draft found in Bozze
+(`m…`) can be taken up by reference; and the reply prepared ahead for that
+message counts as used. It tidies only what it was asked to.
 
 **Scanned PDFs** are looked at. A PDF is read page by page: a page with
 text gives its text (unpdf), a page without — a scan — is drawn as a JPEG

@@ -1,13 +1,64 @@
+import type { MessageRef } from '@shared/models'
 import type { ComposeSpec } from '@shared/segretario'
 
 import { PROMPTS } from '../prompts'
+import { comparableText } from './format'
 import {
   requireString,
   stringArg,
   stringListArg,
   ToolInputError,
-  type SegretarioTool
+  type SegretarioTool,
+  type ToolContext
 } from '../agent/tool-types'
+
+/**
+ * The draft a reference names: one written here (b1…), or a message found
+ * in Bozze (m1…) — a draft written earlier, in another conversation or by
+ * the user — taken up and opened on the user's desk.
+ */
+/**
+ * The reply the Segretario wrote to a message and the user left as it was,
+ * as a reference to write on: a draft the user changed is theirs.
+ */
+async function untouchedReplyDraft(
+  context: ToolContext,
+  source: MessageRef
+): Promise<string | undefined> {
+  for (const draftId of await context.mail.draftsReplyingTo(source)) {
+    const [written, draft] = await Promise.all([
+      context.store.draftWritten(draftId),
+      context.mail.getDraft(draftId)
+    ])
+
+    // Its signature and the quoted message come after: what it wrote is all still there.
+    if (written !== null && draft && comparableText(draft.text).includes(comparableText(written))) {
+      return context.handles.name({ kind: 'draft', draftId }, context.newHandles)
+    }
+  }
+
+  return undefined
+}
+
+async function draftIdOf(context: ToolContext, handle: string): Promise<string> {
+  const written = context.handles.draft(handle)
+
+  if (written) {
+    return written
+  }
+
+  const message = context.handles.message(handle)
+  const taken = message ? await context.mail.draftOfMessage(message.ref) : null
+
+  if (!taken) {
+    throw new ToolInputError(
+      `«${handle}» non è una bozza: usa il riferimento di scrivi_bozza (b1…) o un messaggio che sta in Bozze.`
+    )
+  }
+
+  context.page.show({ kind: 'draft', draftId: taken })
+  return taken
+}
 
 const KINDS: Readonly<Record<string, ComposeSpec['kind']>> = {
   risposta: 'reply',
@@ -46,6 +97,7 @@ export const writeDraftTool: SegretarioTool = {
     const text = requireString(args, 'testo')
     const spec: ComposeSpec = { kind, text }
     const sourceHandle = stringArg(args, 'messaggio')
+    let answered: { accountId: string; messageKey: string } | null = null
 
     if (kind !== 'new') {
       if (!sourceHandle) {
@@ -59,6 +111,10 @@ export const writeDraftTool: SegretarioTool = {
       }
 
       spec.source = source.ref
+
+      if (kind === 'reply' || kind === 'replyAll') {
+        answered = { accountId: source.ref.accountId, messageKey: source.messageKey }
+      }
     } else {
       const accounts = await context.mail.listAccounts()
       const address = stringArg(args, 'account')
@@ -114,14 +170,16 @@ export const writeDraftTool: SegretarioTool = {
       spec.attachments = attachments
     }
 
-    const rewrite = stringArg(args, 'bozza')
+    // A reply goes on the one the Segretario already wrote to that message,
+    // while the user has not taken it in hand: never a second beside it.
+    const rewrite =
+      stringArg(args, 'bozza') ??
+      (spec.source && (kind === 'reply' || kind === 'replyAll')
+        ? await untouchedReplyDraft(context, spec.source)
+        : undefined)
 
     if (rewrite) {
-      const draftId = context.handles.draft(rewrite)
-
-      if (!draftId) {
-        throw new ToolInputError(`Non conosco la bozza «${rewrite}».`)
-      }
+      const draftId = await draftIdOf(context, rewrite)
 
       spec.draftId = draftId
       // The draft it replaces is thrown away: what it said is no longer what was written.
@@ -136,6 +194,10 @@ export const writeDraftTool: SegretarioTool = {
     // Kept as written, to learn from what the user changes before sending.
     if (accountId) {
       await context.store.recordDraft({ draftId, activityId: context.activityId, accountId, text })
+    }
+
+    if (answered) {
+      await context.work.replyWritten(answered.accountId, answered.messageKey)
     }
 
     return {
@@ -155,13 +217,7 @@ export const sendDraftTool: SegretarioTool = {
   },
   running: () => 'Aspetto la conferma per inviare…',
   async execute(args, context) {
-    const handle = requireString(args, 'bozza')
-    const draftId = context.handles.draft(handle)
-
-    if (!draftId) {
-      throw new ToolInputError(`Non conosco la bozza «${handle}».`)
-    }
-
+    const draftId = await draftIdOf(context, requireString(args, 'bozza'))
     const draft = await context.mail.getDraft(draftId)
 
     if (!draft) {

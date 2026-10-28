@@ -303,6 +303,26 @@ export class DraftService {
     return { content: record.content, status: this.statusOf(record) }
   }
 
+  /**
+   * Messages of Bozze leaving it — moved, archived, thrown away: the drafts
+   * they are the server's copy of are no longer written on, here or in a
+   * composer, so a later save cannot put them back.
+   */
+  async release(refs: ReadonlyArray<MessageRef>): Promise<void> {
+    for (const ref of refs) {
+      const known = await this.deps.database.findDraftByServerCopy(
+        ref.accountId,
+        ref.folderPath,
+        ref.uid
+      )
+
+      if (known) {
+        await this.forget(known.content.id)
+        this.deps.onStatus({ id: known.content.id, state: 'gone' })
+      }
+    }
+  }
+
   /** Files the drafts the server does not have yet — at launch, once connected. */
   async resume(): Promise<void> {
     for (const id of await this.deps.database.listUnfiledDraftIds()) {

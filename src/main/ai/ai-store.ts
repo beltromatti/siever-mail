@@ -463,6 +463,15 @@ export class AiStore {
   }
 
   /** A draft the Segretario wrote, taken out of the record: it has been sent or thrown away. */
+  /** What the Segretario wrote in a draft, while it keeps it: null for one it did not write. */
+  async draftWritten(draftId: string): Promise<string | null> {
+    const row = await this.prisma.aiDraft.findUnique({
+      where: { draftId },
+      select: { text: true }
+    })
+    return row?.text ?? null
+  }
+
   async takeDraft(
     draftId: string
   ): Promise<{ activityId: string | null; accountId: string; text: string } | null> {
