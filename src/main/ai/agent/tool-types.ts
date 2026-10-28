@@ -60,6 +60,8 @@ export interface SegretarioMailPort {
   ): Promise<Array<{ accountId: string; messageKey: string; threadId: string }>>
   /** The accounts "Tutti gli account" gathers: those the Segretario's views and day are about. */
   includedAccountIds(): Promise<string[]>
+  /** Whether the user has written, from any of those accounts, to one of these addresses: someone they deal with. */
+  userWroteTo(addresses: ReadonlyArray<string>): Promise<boolean>
   /** Messages of an account by key, each where the user thinks of it, with who wrote it and what about. */
   messageSummaries(
     accountId: string,

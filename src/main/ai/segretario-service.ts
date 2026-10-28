@@ -73,6 +73,7 @@ import {
 } from './openrouter'
 import { folderQueryLabel, searchMail, searchScope, threadMessages } from './mail-search'
 import { ASK_MAIL_SCHEMA, askMailRequest, parseAskedSearch } from './ask-mail'
+import { nameForm, saysAnyName } from './topic-names'
 import { TopicStore, type CatalogTopic } from './topic-store'
 import {
   parseReadyDraft,
@@ -135,6 +136,8 @@ const EXTENSION_TOPICS_SYNC_MS = 10 * 60 * 1000
 const TRIAGE_BACKLOG_COUNTED = 200
 /** How many things open in a conversation's topic triage is shown, the latest. */
 const TOPIC_OPEN_SHOWN = 20
+/** How many of the topic's other conversations, moved on since a message read late, it is told of. */
+const TOPIC_LATER_SHOWN = 6
 /** How many messages a search asked in words lists, the most relevant first. */
 const ASK_MAIL_LIMIT = 200
 /** How many of those searches are kept, for their lists to be opened again. */
@@ -1679,11 +1682,42 @@ export class SegretarioService {
 
     try {
       const topics = this.topics
+      const accountIds = await this.options.mail.includedAccountIds()
+      const catalog = await topics.catalog()
 
       for (const { id, conversations } of await topics.needingGist()) {
         const topic = await this.getTopic(id)
 
-        if (!topic || topic.messages.length === 0 || this.status.keyState !== 'ready') {
+        if (!topic || this.status.keyState !== 'ready') {
+          continue
+        }
+
+        // A topic with names — a pratica — learns what it is about only from
+        // the conversations that name it, or that the user filed in it: one
+        // the Segretario filed there by a guess teaches nothing, or a wrong
+        // guess would teach itself.
+        const names = catalog.find((entry) => entry.id === id)?.names ?? []
+        const filedByUser = new Set(
+          names.length > 0
+            ? (
+                await this.requireStore().latestNotes(
+                  (await topics.threadsOf(id, accountIds)).filter(
+                    (link) => link.linkedBy === 'utente'
+                  )
+                )
+              ).map((note) => `${note.accountId}\u0000${note.messageKey}`)
+            : []
+        )
+        const evidence =
+          names.length > 0
+            ? topic.messages.filter(
+                (message) =>
+                  saysAnyName(nameForm(message.subject), names) ||
+                  filedByUser.has(`${message.ref.accountId}\u0000${message.messageKey}`)
+              )
+            : topic.messages
+
+        if (evidence.length === 0) {
           continue
         }
 
@@ -1694,7 +1728,7 @@ export class SegretarioService {
               role: 'user',
               content: [
                 `# ${topic.title}${topic.description ? `\n${topic.description}` : ''}`,
-                `## Le conversazioni\n${topic.messages
+                `## Le conversazioni\n${evidence
                   .slice(0, 20)
                   .map((item) => `- ${item.from} · «${item.subject}»: ${item.text}`)
                   .join('\n')}`
@@ -1953,7 +1987,9 @@ export class SegretarioService {
     answer: TriageResult['topic'],
     catalog: CatalogTopic[],
     /** The one topic the conversation names, if it names one alone: a pratica, by number or client. */
-    namedTopicId: string | null
+    namedTopicId: string | null,
+    /** Whether the user takes part in the conversation: only such a one starts a topic. */
+    takesPart: () => Promise<boolean>
   ): Promise<void> {
     if (!answer) {
       return
@@ -1980,7 +2016,8 @@ export class SegretarioService {
       }
     }
 
-    if (!topicId && 'create' in answer) {
+    // A matter is one the user deals in: a service's notices, however they ask, start none.
+    if (!topicId && 'create' in answer && (await takesPart())) {
       topicId = await topics.createTopic(answer.create, 'segretario')
       catalog.push({
         id: topicId,
@@ -2110,7 +2147,7 @@ export class SegretarioService {
           twinAccountId: twin.accountId
         }
 
-        await store.saveTriage(note, [], [])
+        await store.saveTriage(note, { opened: [], updated: [], closed: [] })
 
         if (twinThread) {
           const [topicId] = await this.requireTopics().topicIdsOf([twinThread])
@@ -2144,21 +2181,21 @@ export class SegretarioService {
       const filed = await topics.threadTopic(account.id, item.threadId)
       const filedIndex = filed ? catalog.findIndex((topic) => topic.id === filed.topic.id) : -1
       const named = namedTopicIndexes(catalog, thread)
-      // What is open in the rest of its topic: the same thing is not opened twice in a pratica.
       const topic = filed?.topic ?? (named.length === 1 ? catalog[named[0]] : null)
-      const openInTopic = topic
-        ? (
-            await store.commitmentsOf(
-              (
-                await topics.threadsOf(topic.id, await this.options.mail.includedAccountIds())
-              ).filter(
-                (other) => other.accountId !== account.id || other.threadId !== item.threadId
-              )
-            )
+      const others = topic
+        ? (await topics.threadsOf(topic.id, await this.options.mail.includedAccountIds())).filter(
+            (other) => other.accountId !== account.id || other.threadId !== item.threadId
           )
-            .filter((commitment) => commitment.status === 'aperto')
-            .slice(-TOPIC_OPEN_SHOWN)
         : []
+      // What is open in the rest of its topic: the same thing is not opened twice in a pratica.
+      const openInTopic = (await store.commitmentsOf(others))
+        .filter((commitment) => commitment.status === 'aperto')
+        .slice(-TOPIC_OPEN_SHOWN)
+      // Read late, after the topic moved on: what it asked may be done or past.
+      const laterInTopic = (await store.latestNotes(others))
+        .filter((note) => note.messageDate > item.dateIso)
+        .sort((a, b) => b.messageDate.localeCompare(a.messageDate))
+        .slice(0, TOPIC_LATER_SHOWN)
 
       const result = await this.client.chat(key, {
         messages: [
@@ -2186,6 +2223,16 @@ export class SegretarioService {
               named: named.map((index) => namedTopicLine(catalog, index)),
               openInTopic:
                 topic && openInTopic.length > 0 ? { title: topic.title, items: openInTopic } : null,
+              laterInTopic:
+                topic && laterInTopic.length > 0
+                  ? {
+                      title: topic.title,
+                      notes: laterInTopic.map((note) => ({
+                        date: note.messageDate,
+                        summary: note.summary
+                      }))
+                    }
+                  : null,
               topicsLabel: this.topicsLabel(),
               currentTopic:
                 filed && filedIndex >= 0
@@ -2198,10 +2245,10 @@ export class SegretarioService {
             })
           }
         ],
-        // A moment's thought where a pratica already has things open elsewhere:
-        // telling the same obligation in other words from a new one takes it.
+        // A moment's thought where something is open already: telling the same
+        // obligation in other words, or made precise, from a new one takes it.
         // Reasoning counts against the tokens.
-        ...(openInTopic.length > 0
+        ...(open.length > 0 || openInTopic.length > 0 || laterInTopic.length > 0
           ? { reasoningEffort: 'low' as const, maxTokens: 4000 }
           : { reasoningEffort: 'none' as const, maxTokens: 1000 }),
         responseSchema: { name: 'nota', schema: TRIAGE_SCHEMA }
@@ -2209,6 +2256,10 @@ export class SegretarioService {
 
       await this.recordUsage(null, 'smistamento', result)
       const triage = parseTriage(result.content)
+      // It touches only what it was shown: the conversation's open things and its topic's.
+      const touchable = (id: number): boolean =>
+        open.some((commitment) => commitment.id === id) ||
+        openInTopic.some((commitment) => commitment.id === id)
 
       await store.saveTriage(
         {
@@ -2224,19 +2275,22 @@ export class SegretarioService {
           messageDate: item.dateIso,
           twinAccountId: null
         },
-        triage.opened,
-        triage.closed.filter((id) =>
-          [...open, ...openInTopic].some((commitment) => commitment.id === id)
-        )
+        {
+          opened: triage.opened,
+          updated: triage.updated.filter((change) => touchable(change.id)),
+          closed: triage.closed.filter(touchable)
+        }
       )
-      // Things closed in the topic's other conversations: their readers follow.
-      for (const closed of openInTopic.filter((commitment) =>
-        triage.closed.includes(commitment.id)
+      // Things changed in the topic's other conversations: their readers follow.
+      for (const changed of openInTopic.filter(
+        (commitment) =>
+          triage.closed.includes(commitment.id) ||
+          triage.updated.some((change) => change.id === commitment.id)
       )) {
         this.emitNotes({
-          accountId: closed.accountId,
+          accountId: changed.accountId,
           messageKeys: [],
-          threadIds: [closed.threadId]
+          threadIds: [changed.threadId]
         })
       }
       // Noise belongs to no matter, whatever words it shares with one.
@@ -2246,7 +2300,21 @@ export class SegretarioService {
           item.threadId,
           triage.topic,
           catalog,
-          named.length === 1 ? catalog[named[0]].id : null
+          named.length === 1 ? catalog[named[0]].id : null,
+          async () => {
+            const senders = [
+              ...new Set(
+                thread.flatMap((message) =>
+                  message.from.map((address) => address.address.toLowerCase())
+                )
+              )
+            ]
+            // They wrote in it, or have written to who did.
+            return (
+              senders.some((address) => own.has(address)) ||
+              (await this.options.mail.userWroteTo(senders))
+            )
+          }
         )
       }
       this.triageFailures.delete(failureKey)

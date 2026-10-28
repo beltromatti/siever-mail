@@ -25,3 +25,19 @@ export function saysAnyName(formedText: string, formedNames: ReadonlyArray<strin
   const padded = ` ${formedText} `
   return formedNames.some((name) => padded.includes(` ${name} `))
 }
+
+/**
+ * Each topic's names that no other topic has: a client's name shared by
+ * several of its pratiche says the client, not which of them.
+ */
+export function distinctNames(namesOf: ReadonlyArray<ReadonlyArray<string>>): string[][] {
+  const topicsNaming = new Map<string, number>()
+
+  for (const names of namesOf) {
+    for (const name of new Set(names)) {
+      topicsNaming.set(name, (topicsNaming.get(name) ?? 0) + 1)
+    }
+  }
+
+  return namesOf.map((names) => names.filter((name) => topicsNaming.get(name) === 1))
+}

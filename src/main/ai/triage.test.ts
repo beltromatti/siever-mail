@@ -7,7 +7,7 @@ import {
   topicCatalog,
   triageRequest
 } from './triage'
-import { nameForm, nameForms, saysAnyName } from './topic-names'
+import { distinctNames, nameForm, nameForms, saysAnyName } from './topic-names'
 
 describe('parseTriage', () => {
   it('takes the note and what it opens and closes', () => {
@@ -21,8 +21,10 @@ describe('parseTriage', () => {
           scadenza: '2026-10-30',
           impegni_nuovi: [
             { tipo: 'ti_chiedono', testo: 'Offerta 3 pompe', scadenza: '2026-10-30' },
-            { tipo: 'aspetti', testo: 'Aspetti il riscontro di Giulia', scadenza: null }
+            { tipo: 'aspetti', testo: 'Aspetti il riscontro di Giulia', scadenza: null },
+            { tipo: 'ti_chiedono', testo: 'Ti_chiedono: la disponibilità', scadenza: null }
           ],
+          impegni_aggiornati: [{ numero: 2, testo: 'Sopralluogo da Anna', scadenza: '2026-11-03' }],
           impegni_chiusi: [4],
           argomento: '[T3]'
         })
@@ -35,8 +37,10 @@ describe('parseTriage', () => {
       due: '2026-10-30',
       opened: [
         { kind: 'ti_chiedono', text: 'Offerta 3 pompe', due: '2026-10-30' },
-        { kind: 'aspetti', text: 'Il riscontro di Giulia', due: null }
+        { kind: 'aspetti', text: 'Il riscontro di Giulia', due: null },
+        { kind: 'ti_chiedono', text: 'La disponibilità', due: null }
       ],
+      updated: [{ id: 2, text: 'Sopralluogo da Anna', due: '2026-11-03' }],
       closed: [4],
       topic: { key: 'T3' }
     })
@@ -52,6 +56,7 @@ describe('parseTriage', () => {
           motivo: '',
           scadenza: null,
           impegni_nuovi: [],
+          impegni_aggiornati: [],
           impegni_chiusi: [],
           argomento
         })
@@ -74,6 +79,7 @@ describe('parseTriage', () => {
         motivo: '',
         scadenza: 'venerdì',
         impegni_nuovi: [],
+        impegni_aggiornati: [],
         impegni_chiusi: [],
         argomento: ''
       })
@@ -92,6 +98,7 @@ describe('parseTriage', () => {
           motivo: '',
           scadenza: null,
           impegni_nuovi: [],
+          impegni_aggiornati: [],
           impegni_chiusi: [],
           argomento: ''
         })
@@ -173,6 +180,19 @@ describe('topic names', () => {
     expect(saysAnyName(nameForm('Prat24510'), names)).toBe(false)
     expect(saysAnyName(nameForm('caseificio vallio'), names)).toBe(false)
   })
+
+  it('names a pratica only by what no other one is called', () => {
+    const [older, newer, other] = distinctNames([
+      nameForms(['Prat2447', 'AUSL FERRARA']),
+      nameForms(['Prat2427', 'AUSL FERRARA']),
+      nameForms(['Prat2483', 'AUSL OSPEDALE SANT ANNA'])
+    ])
+
+    expect(older).toEqual(['prat2447'])
+    expect(newer).toEqual(['prat2427'])
+    expect(other).toEqual(['prat2483', 'ausl ospedale sant anna'])
+    expect(saysAnyName(nameForm("AUSL Ferrara — Ospedale Sant'Anna"), older)).toBe(false)
+  })
 })
 
 describe('the topic catalogue', () => {
@@ -242,6 +262,10 @@ describe('triageRequest with its topic', () => {
             closedBy: null
           }
         ]
+      },
+      laterInTopic: {
+        title: 'Prat2463 · COMUNE DI COPPARO',
+        notes: [{ date: '2026-10-27T16:20:00.000Z', summary: 'Integrazioni trasmesse ai VVF' }]
       }
     })
 
@@ -250,6 +274,9 @@ describe('triageRequest with its topic', () => {
     )
     expect(request).toContain(
       '- [41] da_fare: Trasmettere le integrazioni ai VVF (entro 2026-11-16)'
+    )
+    expect(request).toMatch(
+      /## Dopo questo messaggio, in Prat2463 · COMUNE DI COPPARO\n\n- .*27\/10\/2026.*: Integrazioni trasmesse ai VVF/
     )
   })
 })

@@ -5,7 +5,7 @@ import { Prisma, type AiTopic, type PrismaClient } from '@prisma/client'
 import type { ExtensionTopic } from '@app/extension/types'
 import type { Topic } from '@shared/segretario'
 
-import { nameForm, nameForms, saysAnyName } from './topic-names'
+import { distinctNames, nameForm, nameForms, saysAnyName } from './topic-names'
 
 /** How many of the extension's topics, the most recent, are offered for every message. */
 const CURRENT_EXTENSION_TOPICS = 100
@@ -88,12 +88,12 @@ export class TopicStore {
    */
   async extensionTopicNamedBy(title: string): Promise<string | null> {
     const formed = nameForm(title)
-    const named = (
-      await this.prisma.aiTopic.findMany({
-        where: { origin: 'extension', archivedAt: null, aliases: { not: null } },
-        select: { id: true, aliases: true }
-      })
-    ).filter((topic) => saysAnyName(formed, aliasesOf(topic)))
+    const topics = await this.prisma.aiTopic.findMany({
+      where: { origin: 'extension', archivedAt: null, aliases: { not: null } },
+      select: { id: true, aliases: true }
+    })
+    const names = distinctNames(topics.map(aliasesOf))
+    const named = topics.filter((_topic, index) => saysAnyName(formed, names[index]))
 
     return named.length === 1 ? named[0].id : null
   }
@@ -142,15 +142,16 @@ export class TopicStore {
       orderBy: [{ createdAt: 'asc' }, { rank: 'asc' }, { id: 'asc' }]
     })
     const since = BigInt(Date.now() - CURRENT_FOR_MS)
+    const names = distinctNames(rows.map(aliasesOf))
 
-    return rows.map((topic) => ({
+    return rows.map((topic, index) => ({
       id: topic.id,
       title: topic.title,
       description: topic.gist ?? topic.description,
       current:
         (topic.activeAt !== null && topic.activeAt >= since) ||
         (topic.rank !== null && topic.rank < CURRENT_EXTENSION_TOPICS),
-      names: aliasesOf(topic)
+      names: names[index]
     }))
   }
 
@@ -253,10 +254,10 @@ export class TopicStore {
   async threadsOf(
     topicId: string,
     accountIds: ReadonlyArray<string>
-  ): Promise<Array<{ accountId: string; threadId: string }>> {
+  ): Promise<Array<{ accountId: string; threadId: string; linkedBy: string }>> {
     return this.prisma.aiTopicThread.findMany({
       where: { topicId, accountId: { in: [...accountIds] } },
-      select: { accountId: true, threadId: true }
+      select: { accountId: true, threadId: true, linkedBy: true }
     })
   }
 

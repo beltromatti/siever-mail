@@ -705,14 +705,19 @@ rest as it works. A note may not carry an activity's short names (`m4`):
 the memory tool sends such a text back.
 
 **Triage.** Every message of the last two weeks, in each account's inbox
-and sent mail, gets a note once its text is indexed: one quick call
-without reasoning, held to a JSON schema (`triage.ts`, `smistamento.md`),
-with the account's note, the notes on the people involved, what is
-already open in the conversation and the conversation up to the message.
-A conversation in a pratica — filed in its topic, or naming it in the
-subject — also gets what is open in the topic's other conversations (the
-latest 20), may close those, and is not to open the same obligation again
-in other words; for that judgement the call reasons briefly. Conversations
+and sent mail, gets a note once its text is indexed: one quick call held
+to a JSON schema (`triage.ts`, `smistamento.md`), with the account's note,
+the notes on the people involved, what is already open in the conversation
+and the conversation up to the message. A conversation in a pratica —
+filed in its topic, or naming it in the subject — also gets what is open in
+the topic's other conversations (the latest 20), and, read late, where
+those got to after the message (the latest notes of the six that moved
+on since), so what was done meanwhile is not opened. It opens what is new,
+makes precise what is open — the date set or moved, what is left of it
+(`impegni_aggiornati`) — and closes what is done, there or in the
+pratica's other conversations; the same obligation is not opened twice in
+other words. Where something is open already, or the pratica moved on, the
+call reasons briefly for that judgement; otherwise it does not. Conversations
 go in lanes (`triageLanes`): those of one topic in one lane, read one after
 the other in the order they began, so what one opens the next sees; the
 others each in their own, three lanes at once. Within a conversation the
@@ -820,14 +825,20 @@ they double, `argomento-in-breve.md`), so a supplier's offer that never
 names the client still finds its job. The others keep their key and come
 with the conversation that names them: the extension gives each pratica
 the names mail uses ("Prat2451", "pratica n. 2451", the client), compared
-case, accents and punctuation aside (`topic-names.ts`). A conversation that
+case, accents and punctuation aside (`topic-names.ts`); a name several
+pratiche share — the client of many jobs — names none of them. A
+pratica's gist is learnt only from the conversations that name it or that
+the user filed in it, so a wrong guess does not teach itself. A
+conversation that
 names one pratica alone goes there, whatever the model guessed; a "new"
 topic whose title names one is that one; a topic the Segretario made and
 the extension later brings — the job got its folder — is folded into it.
 The user moves a conversation from the reader ("Cambia", which also makes
 a new topic) and that choice is kept, and what both topics are about is
 learnt again; a topic the Segretario made, left empty, goes. Noise is never
-filed. In every other list each row shows its conversation's topic as a
+filed, and a new topic starts only from a conversation the user takes part
+in — they wrote in it, or have written to who did — never from a service's
+notices, however much they ask (`userWroteTo`). In every other list each row shows its conversation's topic as a
 tag — a pratica by its number (`conversation-topics.ts`). Each topic opens as a list, like a view, of every message of
 its conversations (`segretarioTopicPath`), under "Il punto" — where it
 stands, written by the Segretario when the topic moved since

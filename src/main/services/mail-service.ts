@@ -493,6 +493,15 @@ export class MailService {
           .map(({ accountId, threadId, messages }) => ({ accountId, threadId, messages }))
       },
       includedAccountIds: () => this.segretarioAccountIds(),
+      userWroteTo: async (addresses) => {
+        const sent = await Promise.all(
+          (await this.segretarioAccountIds()).map(async (accountId) => {
+            const path = folderForRole(await this.database.listFolders(accountId), '\\Sent')?.path
+            return path ? [{ accountId, folderPath: path }] : []
+          })
+        )
+        return this.database.anySentTo(sent.flat(), addresses)
+      },
       sameMessageElsewhere: async (ref) => {
         const messageId = (await this.database.getMessage(ref))?.messageId
 

@@ -3815,6 +3815,35 @@ export class AppDatabase {
     }))
   }
 
+  /** Whether a message in these folders went to one of these addresses, as its recipients are searched. */
+  async anySentTo(
+    folders: ReadonlyArray<{ accountId: string; folderPath: string }>,
+    addresses: ReadonlyArray<string>
+  ): Promise<boolean> {
+    await this.ready
+
+    if (folders.length === 0 || addresses.length === 0) {
+      return false
+    }
+
+    // Each recipient is "name address", one after the other: an address is whole after a space.
+    const whole = addresses.flatMap((address) => {
+      const folded = ` ${foldSearchText(address.trim())}`
+      return [{ searchTo: { endsWith: folded } }, { searchTo: { contains: `${folded} ` } }]
+    })
+    const found = await this.prisma.message.findFirst({
+      where: {
+        OR: folders.map((folder) => ({
+          accountId: folder.accountId,
+          folderPath: folder.folderPath
+        })),
+        AND: [{ OR: whole }]
+      },
+      select: { id: true }
+    })
+    return found !== null
+  }
+
   /** The same message — by its Message-ID — in other accounts of the user's: each account's key and conversation. */
   async sameMessageElsewhere(
     accountId: string,

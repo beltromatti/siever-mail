@@ -748,10 +748,18 @@ export class AiStore {
     return row ? noteOf(row) : null
   }
 
+  /**
+   * A message's note, with what it opens, makes precise and closes. Only
+   * what the caller let it touch is touched: the conversation's open
+   * things, or its topic's.
+   */
   async saveTriage(
     note: Omit<MessageNote, 'dismissedAt'>,
-    opened: ReadonlyArray<{ kind: CommitmentKind; text: string; due: string | null }>,
-    closedIds: ReadonlyArray<number>
+    items: {
+      opened: ReadonlyArray<{ kind: CommitmentKind; text: string; due: string | null }>
+      updated: ReadonlyArray<{ id: number; text: string; due: string | null }>
+      closed: ReadonlyArray<number>
+    }
   ): Promise<void> {
     const now = BigInt(Date.now())
     const data = { ...note, createdAt: now, dismissedAt: null }
@@ -763,7 +771,7 @@ export class AiStore {
         update: data
       }),
       this.prisma.aiItem.createMany({
-        data: opened.map((item) => ({
+        data: items.opened.map((item) => ({
           accountId: note.accountId,
           threadId: note.threadId,
           messageKey: note.messageKey,
@@ -774,9 +782,14 @@ export class AiStore {
           createdAt: now
         }))
       }),
-      // Only what the caller let it close: this conversation's, or its topic's.
+      ...items.updated.map((item) =>
+        this.prisma.aiItem.updateMany({
+          where: { id: item.id, status: 'aperto' },
+          data: { text: item.text, due: item.due }
+        })
+      ),
       this.prisma.aiItem.updateMany({
-        where: { id: { in: [...closedIds] }, status: 'aperto' },
+        where: { id: { in: [...items.closed] }, status: 'aperto' },
         data: { status: 'chiuso', closedAt: now, closedBy: 'segretario' }
       }),
       // What was prepared for an earlier message of the conversation is past: it moved on.

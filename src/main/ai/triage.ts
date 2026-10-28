@@ -24,6 +24,7 @@ export const TRIAGE_SCHEMA = {
     'motivo',
     'scadenza',
     'impegni_nuovi',
+    'impegni_aggiornati',
     'impegni_chiusi',
     'argomento'
   ],
@@ -42,6 +43,19 @@ export const TRIAGE_SCHEMA = {
         required: ['tipo', 'testo', 'scadenza'],
         properties: {
           tipo: { type: 'string', enum: COMMITMENT_KINDS },
+          testo: { type: 'string' },
+          scadenza: { type: ['string', 'null'] }
+        }
+      }
+    },
+    impegni_aggiornati: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['numero', 'testo', 'scadenza'],
+        properties: {
+          numero: { type: 'integer' },
           testo: { type: 'string' },
           scadenza: { type: ['string', 'null'] }
         }
@@ -68,6 +82,9 @@ const triageAnswer = z.object({
   impegni_nuovi: z.array(
     z.object({ tipo: z.enum(COMMITMENT_KINDS), testo: z.string().trim().min(1), scadenza: dueDay })
   ),
+  impegni_aggiornati: z.array(
+    z.object({ numero: z.number().int(), testo: z.string().trim().min(1), scadenza: dueDay })
+  ),
   impegni_chiusi: z.array(z.number().int()),
   argomento: z.string().trim()
 })
@@ -79,6 +96,8 @@ export interface TriageResult {
   reason: string
   due: string | null
   opened: Array<{ kind: CommitmentKind; text: string; due: string | null }>
+  /** Open things this message makes precise — the date set or moved, the words — kept as they are. */
+  updated: Array<{ id: number; text: string; due: string | null }>
   closed: number[]
   /** The topic it filed the conversation in: a catalogue key ("T12"), a new one, or none. */
   topic: { key: string } | { create: string } | null
@@ -99,6 +118,11 @@ export function parseTriage(content: string): TriageResult {
       text: clip(withoutKind(item.testo.replace(/\s+/g, ' ')), 240).text,
       due: item.scadenza
     })),
+    updated: answer.impegni_aggiornati.map((item) => ({
+      id: item.numero,
+      text: clip(withoutKind(item.testo.replace(/\s+/g, ' ')), 240).text,
+      due: item.scadenza
+    })),
     closed: answer.impegni_chiusi,
     topic: topicAnswer(answer.argomento)
   }
@@ -106,7 +130,7 @@ export function parseTriage(content: string): TriageResult {
 
 /** "Aspetti il riscontro…" under the label "Aspetti": the label says it, the text starts at the thing. */
 function withoutKind(text: string): string {
-  const rest = text.replace(/^(aspetti|ti chiedono|hai promesso|da fare)\b[\s:,-]*/i, '')
+  const rest = text.replace(/^(aspetti|ti[ _]chiedono|hai[ _]promesso|da[ _]fare)\b[\s:,-]*/i, '')
   return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : text
 }
 
@@ -205,6 +229,8 @@ export function triageRequest(input: {
   currentTopic?: { key: string; title: string; byUser: boolean } | null
   /** What is open in the rest of the conversation's topic — a pratica's other conversations. */
   openInTopic?: { title: string; items: ReadonlyArray<Commitment> } | null
+  /** Where the topic's other conversations got to after the message, when it is read late. */
+  laterInTopic?: { title: string; notes: ReadonlyArray<{ date: string; summary: string }> } | null
   /** Catalogue lines of the topics the conversation names. */
   named?: ReadonlyArray<string>
   topicsLabel?: string
@@ -252,6 +278,14 @@ export function triageRequest(input: {
   if (input.openInTopic && input.openInTopic.items.length > 0) {
     sections.push(
       `## Cose già aperte in ${input.openInTopic.title}, in altre conversazioni\n\n${input.openInTopic.items.map(openLine).join('\n')}`
+    )
+  }
+
+  if (input.laterInTopic && input.laterInTopic.notes.length > 0) {
+    sections.push(
+      `## Dopo questo messaggio, in ${input.laterInTopic.title}\n\n${input.laterInTopic.notes
+        .map((note) => `- ${formatDateTime(note.date)}: ${note.summary}`)
+        .join('\n')}`
     )
   }
 
