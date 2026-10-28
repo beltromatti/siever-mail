@@ -179,6 +179,8 @@ export interface BriefingItem {
   commitmentKind: CommitmentKind | null
   /** For a text prepared: a reply, or a reminder. */
   readyKind?: ReadyDraftKind
+  /** For a thing open: its id, to tick it off. */
+  commitmentId?: number
   ref: MessageRef
   /** The message's key in its account: the same in every folder it is in. */
   messageKey: string

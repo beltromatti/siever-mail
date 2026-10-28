@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { LoaderCircle, RefreshCw } from 'lucide-react'
+import { Check, LoaderCircle, RefreshCw } from 'lucide-react'
 
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { cn } from '@renderer/lib/utils'
@@ -27,25 +27,52 @@ const COMMITMENT_LABELS: Readonly<Record<CommitmentKind, string>> = {
 
 const SINCE = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
 
+/** A line's key: its message, and the thing open in it when it is one. */
+function lineKey(item: BriefingItem): string {
+  return `${item.ref.accountId}\u0000${item.messageKey}\u0000${item.commitmentId ?? ''}\u0000${item.text}`
+}
+
+/**
+ * What can be done with a line without opening it: a thing open is ticked
+ * off, a message that asked something is marked handled. A reply prepared
+ * is used from its message.
+ */
+async function settleLine(item: BriefingItem): Promise<boolean> {
+  if (item.commitmentId !== undefined) {
+    await window.segretarioApi.closeCommitment(item.commitmentId)
+    return true
+  }
+
+  if (!item.readyKind) {
+    await window.segretarioApi.dismissNote(item.ref.accountId, item.messageKey)
+    return true
+  }
+
+  return false
+}
+
 function Line({
   item,
   day,
   showWaitingSince,
-  onOpen
+  onOpen,
+  onSettled
 }: {
   item: BriefingItem
   day: string
   showWaitingSince?: boolean
   onOpen: (ref: MessageRef) => void
+  onSettled: (item: BriefingItem) => void
 }): React.JSX.Element {
   const late = item.due !== null && item.due < day
+  const settleLabel = item.commitmentId !== undefined ? 'Fatto' : item.readyKind ? null : 'Gestito'
 
   return (
-    <li>
+    <li className="group relative">
       <button
         type="button"
         onClick={() => onOpen(item.ref)}
-        className="hover:bg-hover focus-visible:ring-ring/60 -mx-3 flex w-[calc(100%+1.5rem)] flex-col gap-1 rounded-[8px] px-3 py-2.5 text-left outline-none focus-visible:ring-2"
+        className="hover:bg-hover focus-visible:ring-ring/60 -mx-3 flex w-[calc(100%+1.5rem)] flex-col gap-1 rounded-[8px] px-3 py-2.5 pr-24 text-left outline-none focus-visible:ring-2"
       >
         <span className="voice text-foreground text-[16px] leading-[1.4]">
           {(item.commitmentKind || item.readyKind === 'sollecito') && (
@@ -75,6 +102,16 @@ function Line({
           </span>
         </span>
       </button>
+      {settleLabel && (
+        <button
+          type="button"
+          onClick={() => void settleLine(item).then((settled) => settled && onSettled(item))}
+          className="button-raised focus-visible:ring-ring/60 absolute top-2.5 -right-1 flex h-7 items-center gap-1 rounded-[7px] px-2 text-[11.5px] font-semibold opacity-0 transition-opacity outline-none group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:ring-2"
+        >
+          <Check className="size-3.5" />
+          {settleLabel}
+        </button>
+      )}
     </li>
   )
 }
@@ -84,31 +121,39 @@ function Section({
   items,
   day,
   showWaitingSince,
-  onOpen
+  onOpen,
+  settled,
+  onSettled
 }: {
   title: string
   items: ReadonlyArray<BriefingItem>
   day: string
   showWaitingSince?: boolean
   onOpen: (ref: MessageRef) => void
+  /** Lines just dealt with here, gone before the day is read again. */
+  settled: ReadonlySet<string>
+  onSettled: (item: BriefingItem) => void
 }): React.JSX.Element | null {
-  if (items.length === 0) {
+  const shown = items.filter((item) => !settled.has(lineKey(item)))
+
+  if (shown.length === 0) {
     return null
   }
 
   return (
     <section className="flex flex-col gap-1.5">
       <h2 className="eyebrow">
-        {title} · {items.length}
+        {title} · {shown.length}
       </h2>
       <ul className="flex flex-col">
-        {items.map((item) => (
+        {shown.map((item) => (
           <Line
-            key={`${item.ref.accountId}:${item.ref.folderPath}:${item.ref.uid}:${item.text}`}
+            key={lineKey(item)}
             item={item}
             day={day}
             showWaitingSince={showWaitingSince}
             onOpen={onOpen}
+            onSettled={onSettled}
           />
         ))}
       </ul>
@@ -133,6 +178,11 @@ export function TodayPage({
   onOpenMessage: (ref: MessageRef) => void
 }): React.JSX.Element {
   const [briefing, setBriefing] = useState<Briefing | null>(null)
+  const [settled, setSettled] = useState<ReadonlySet<string>>(() => new Set())
+  const settle = useCallback(
+    (item: BriefingItem): void => setSettled((current) => new Set(current).add(lineKey(item))),
+    []
+  )
   const [now] = useState(() => Date.now())
   const today = startOfDay(new Date(now))
   const agenda = useCalendarEvents(
@@ -309,24 +359,32 @@ export function TodayPage({
                 items={briefing.today}
                 day={briefing.day}
                 onOpen={onOpenMessage}
+                settled={settled}
+                onSettled={settle}
               />
               <Section
                 title="Questa settimana"
                 items={briefing.week}
                 day={briefing.day}
                 onOpen={onOpenMessage}
+                settled={settled}
+                onSettled={settle}
               />
               <Section
                 title="Ti aspettano"
                 items={briefing.waiting}
                 day={briefing.day}
                 onOpen={onOpenMessage}
+                settled={settled}
+                onSettled={settle}
               />
               <Section
                 title="Risposte pronte"
                 items={briefing.ready}
                 day={briefing.day}
                 onOpen={onOpenMessage}
+                settled={settled}
+                onSettled={settle}
               />
               <Section
                 title="Aspetti tu"
@@ -334,6 +392,8 @@ export function TodayPage({
                 day={briefing.day}
                 showWaitingSince
                 onOpen={onOpenMessage}
+                settled={settled}
+                onSettled={settle}
               />
               {empty && (
                 <p className="voice text-muted-foreground text-[16px]">

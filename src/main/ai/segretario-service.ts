@@ -1161,20 +1161,19 @@ export class SegretarioService {
         )
 
         if (item) {
-          awaited.push(item)
+          awaited.push({ ...item, commitmentId: commitment.id })
         }
       } else if (commitment.due) {
         datedThreads.add(thread)
-        place(
-          line(
-            commitment.accountId,
-            commitment.messageKey,
-            commitment.text,
-            priority,
-            commitment.due,
-            commitment.kind
-          )
+        const item = line(
+          commitment.accountId,
+          commitment.messageKey,
+          commitment.text,
+          priority,
+          commitment.due,
+          commitment.kind
         )
+        place(item && { ...item, commitmentId: commitment.id })
       }
     }
 
