@@ -452,6 +452,7 @@ export const SEGRETARIO_IPC = {
   topicsLabel: 'segretario:topics-label',
   createTopic: 'segretario:create-topic',
   conversationTopics: 'segretario:conversation-topics',
+  filingHint: 'segretario:filing-hint',
   openTopicFolder: 'segretario:open-topic-folder',
   writeBriefingOpening: 'segretario:write-briefing-opening',
   notesChanged: 'segretario:notes-changed',
@@ -525,6 +526,14 @@ export interface SegretarioApi {
   conversationTopics: (
     threads: ReadonlyArray<{ accountId: string; threadId: string }>
   ) => Promise<Array<string | null>>
+  /**
+   * Where these conversations are kept, for an extension's filing: the
+   * extension topic they all share, and the subfolder of its folder their
+   * earlier messages were filed in, when they were.
+   */
+  filingHint: (
+    threads: ReadonlyArray<{ accountId: string; threadId: string }>
+  ) => Promise<{ topicKey: string | null; destination: string | null }>
   /** A topic the user makes, by its title. */
   createTopic: (title: string) => Promise<Topic>
   /** Opens a topic's folder — a pratica's, on the archive — in Finder or Explorer. */

@@ -158,6 +158,14 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
         .parse(threads)
     )
   )
+  handle(SEGRETARIO_IPC.filingHint, (threads: unknown) =>
+    segretario.filingHint(
+      z
+        .array(z.object({ accountId: idSchema, threadId: z.string().min(1) }))
+        .max(1000)
+        .parse(threads)
+    )
+  )
   handle(SEGRETARIO_IPC.createTopic, (title: unknown) =>
     segretario.createTopic(z.string().trim().min(1, 'Dai un nome.').max(120).parse(title))
   )

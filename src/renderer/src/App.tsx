@@ -2269,10 +2269,11 @@ function App(): React.JSX.Element {
   const selectionFlagged =
     selectedSummaries.length > 0 && selectedSummaries.every((message) => message.isFlagged)
 
-  // The extension topic the selected conversations share, as the Segretario filed them.
-  const [selectionTopic, setSelectionTopic] = useState<{
+  // Where the selected conversations are kept: the extension topic they share, the subfolder they went to.
+  const [selectionFiling, setSelectionFiling] = useState<{
     selection: ReadonlyArray<MailMessageSummary>
-    key: string | null
+    topicKey: string | null
+    destination: string | null
   } | null>(null)
 
   useEffect(() => {
@@ -2283,19 +2284,15 @@ function App(): React.JSX.Element {
     let current = true
 
     void window.segretarioApi
-      .conversationTopics(
+      .filingHint(
         selectedSummaries.map((summary) => ({
           accountId: summary.accountId,
           threadId: summary.threadId
         }))
       )
-      .then((ids) => {
-        const shared = new Set(ids)
-        const id = shared.size === 1 ? ids[0] : null
-        const key = id ? (topics.find((topic) => topic.id === id)?.externalKey ?? null) : null
-
+      .then((hint) => {
         if (current) {
-          setSelectionTopic({ selection: selectedSummaries, key })
+          setSelectionFiling({ selection: selectedSummaries, ...hint })
         }
       })
       .catch(() => undefined)
@@ -2310,9 +2307,10 @@ function App(): React.JSX.Element {
       refs: selection.selectedRefs,
       summaries: selectedSummaries,
       multiSelectActive: selection.selectedRefs.length > 1,
-      topicKey: selectionTopic?.selection === selectedSummaries ? selectionTopic.key : null
+      topicKey: selectionFiling?.selection === selectedSummaries ? selectionFiling.topicKey : null,
+      filedIn: selectionFiling?.selection === selectedSummaries ? selectionFiling.destination : null
     }),
-    [selectedSummaries, selection.selectedRefs, selectionTopic]
+    [selectedSummaries, selection.selectedRefs, selectionFiling]
   )
 
   const extensionHostHooks = useMemo<ExtensionHostHooks>(

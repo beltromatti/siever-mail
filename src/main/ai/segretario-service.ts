@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { dirname, isAbsolute, relative, sep } from 'node:path'
 
 import type { PrismaClient } from '@prisma/client'
 
@@ -945,6 +946,32 @@ export class SegretarioService {
     threads: ReadonlyArray<{ accountId: string; threadId: string }>
   ): Promise<Array<string | null>> {
     return this.requireTopics().topicIdsOf(threads)
+  }
+
+  async filingHint(
+    threads: ReadonlyArray<{ accountId: string; threadId: string }>
+  ): Promise<{ topicKey: string | null; destination: string | null }> {
+    const topicIds = await this.requireTopics().topicIdsOf(threads)
+    const shared = new Set(topicIds)
+    const topicId = shared.size === 1 ? topicIds[0] : null
+    const topic = topicId ? await this.requireTopics().getTopic(topicId) : null
+
+    if (!topic?.externalKey) {
+      return { topicKey: null, destination: null }
+    }
+
+    // The folder a message went into is its day's, under the subfolder chosen.
+    const filed = await this.requireStore().latestArchivedFolder(threads)
+    const destination =
+      filed && topic.folderPath ? relative(topic.folderPath, dirname(filed)) : null
+
+    return {
+      topicKey: topic.externalKey,
+      destination:
+        destination !== null && !destination.startsWith('..') && !isAbsolute(destination)
+          ? destination.split(sep).join('/')
+          : null
+    }
   }
 
   async createTopic(title: string): Promise<Topic> {

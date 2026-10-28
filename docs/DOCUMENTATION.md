@@ -865,7 +865,9 @@ connection, a mail engine handle, `getMainWindow()`, `recordRecentFiles()`,
 and `messagesArchived()`, for messages filed outside the mail before they
 leave it.
 The selection handed to toolbar actions and the primary dialog carries
-`topicKey`, the extension topic its conversations are filed in. The engine handle gives raw messages in bulk
+`topicKey`, the extension topic its conversations are filed in, and
+`filedIn`, the subfolder of that topic's folder their earlier messages went
+into — ARCHIVIA SIEVER opens on both. The engine handle gives raw messages in bulk
 — `fetchMessageRawSources(refs, onMessage)` downloads a few per command and
 hands each on while the next arrive — and `moveMessagesToTrash(refs)`, one
 command per folder. Renderer surfaces get `ExtensionHostHooks`:

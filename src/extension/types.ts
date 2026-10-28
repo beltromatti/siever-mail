@@ -357,6 +357,11 @@ export interface ExtensionSelectionContext {
    * otherwise, and in a build without the Segretario.
    */
   topicKey: string | null
+  /**
+   * The subfolder of that topic's folder the earlier messages of these
+   * conversations were filed in ("CORRISPONDENZA"), when they were.
+   */
+  filedIn: string | null
 }
 
 export interface SettingsTabDescriptor {

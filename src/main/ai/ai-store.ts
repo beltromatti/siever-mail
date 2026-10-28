@@ -995,6 +995,21 @@ export class AiStore {
     return new Set(rows.map((row) => row.messageKey))
   }
 
+  /** Where the latest message of any of these conversations was filed outside the mail. */
+  async latestArchivedFolder(
+    threads: ReadonlyArray<{ accountId: string; threadId: string }>
+  ): Promise<string | null> {
+    if (threads.length === 0) {
+      return null
+    }
+
+    const row = await this.prisma.aiArchived.findFirst({
+      where: { OR: threads.map(({ accountId, threadId }) => ({ accountId, threadId })) },
+      orderBy: { archivedAt: 'desc' }
+    })
+    return row?.folder ?? null
+  }
+
   /** Where a conversation was last filed outside the mail, and when. */
   async threadArchived(
     accountId: string,
