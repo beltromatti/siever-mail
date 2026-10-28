@@ -2,12 +2,14 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   AlertCircle,
   ArrowUp,
+  Briefcase,
   ChartColumn,
   Check,
   Eye,
   FileSearch,
   FileText,
   FolderInput,
+  ListTodo,
   LoaderCircle,
   Mail,
   MailOpen,
@@ -55,6 +57,8 @@ const TOOL_ICONS: Readonly<Record<string, typeof Search>> = {
   invia_bozza: Send,
   organizza: FolderInput,
   memoria: NotebookPen,
+  argomenti: Briefcase,
+  impegni: ListTodo,
   mostra: Eye
 }
 
@@ -206,6 +210,15 @@ function ApprovalCard({
           )}
         </div>
       )}
+      {approval.kind === 'action' && approval.details && approval.details.length > 0 && (
+        <ul className="text-foreground space-y-1 px-3 py-2.5 text-[12.5px] leading-[1.45]">
+          {approval.details.map((detail) => (
+            <li key={detail} className="break-words">
+              {detail}
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="bg-hover/60 flex items-center justify-end gap-1.5 border-t px-2.5 py-2">
         <Button
           variant="ghost"
@@ -216,7 +229,7 @@ function ApprovalCard({
             onDecide(false)
           }}
         >
-          Non inviare
+          {approval.kind === 'send' ? 'Non inviare' : 'Annulla'}
         </Button>
         {draft && (
           <Button
@@ -239,10 +252,12 @@ function ApprovalCard({
         >
           {deciding ? (
             <LoaderCircle className="size-3.5 animate-spin" />
-          ) : (
+          ) : approval.kind === 'send' ? (
             <Send className="size-3.5" />
+          ) : (
+            <Check className="size-3.5" />
           )}
-          Invia
+          {approval.kind === 'send' ? 'Invia' : (approval.confirmLabel ?? 'Conferma')}
         </Button>
       </div>
     </div>

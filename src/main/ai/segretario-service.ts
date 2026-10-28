@@ -2817,11 +2817,12 @@ function entryOf(event: StoredEvent): ActivityEntry | null {
       }
     }
     case 'approval': {
-      const { approvalId, kind, title, status, draft } = event.payload as ApprovalPayload
+      const { approvalId, kind, title, status, draft, details, confirmLabel } =
+        event.payload as ApprovalPayload
       return {
         kind: 'approval',
         id: event.id,
-        approval: { approvalId, kind, title, status, draft },
+        approval: { approvalId, kind, title, status, draft, details, confirmLabel },
         at: event.createdAt
       }
     }

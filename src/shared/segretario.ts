@@ -309,10 +309,14 @@ export interface ToolActivity {
 /** Something the Segretario wants the user to confirm before it happens. */
 export interface ApprovalRequest {
   approvalId: string
-  kind: 'send'
+  /** A draft to send, or something else to do — an extension's action. */
+  kind: 'send' | 'action'
   /** One line for the card's header. */
   title: string
   status: 'pending' | 'approved' | 'rejected'
+  /** For an action: what will happen, a line each, and the word on its button. */
+  details?: string[]
+  confirmLabel?: string
   /** The draft to send: the card shows exactly what goes out. */
   draft?: {
     draftId: string

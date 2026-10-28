@@ -839,6 +839,7 @@ extension code by path. The contract is `src/extension/types.ts`:
 | `ExtensionMain.accountSignatureRevision`    | Edition of that content; stored signatures on an older one — and accounts without one — are handed, once, to `upgradeAccountSignatureHtml`. |
 | `ExtensionMain.assistant.systemPrompt`      | What the Segretario must know of the company the build is for; joins every prompt that reads the mail, after the host's.                    |
 | `ExtensionMain.assistant.topics`            | The company's lasting matters (pratiche), the most recent first, with the names mail uses for them: the Segretario files mail into them.    |
+| `ExtensionMain.assistant.tools`             | Tools the Segretario gets after the host's, given its short names resolved to messages and a confirmation asked on its card.                |
 | `ExtensionMain.assistant.topicsLabel`       | What those are called in the sidebar and the prompts ("Pratiche"); "Argomenti" in the public build.                                         |
 | `ExtensionRenderer.toolbarActions`          | Buttons first in the reading pane's header, given the selection.                                                                            |
 | `ExtensionRenderer.settingsTabs`            | Tabs after the host's in Settings.                                                                                                          |

@@ -140,6 +140,49 @@ export interface ExtensionAssistant {
    * catalogue — forgotten when no conversation is in it, closed otherwise.
    */
   topics?(): Promise<ReadonlyArray<ExtensionTopic>>
+  /**
+   * Tools the extension gives the Segretario, after the host's: what only
+   * it can do — ARCHIVIA SIEVER files messages into a pratica. Each says,
+   * in its description, in Italian, what it does and how it is called.
+   */
+  readonly tools?: ReadonlyArray<ExtensionAssistantTool>
+}
+
+export interface ExtensionAssistantTool {
+  /** Its name for the model: lower case, words joined by `_`. */
+  readonly name: string
+  readonly description: string
+  /** JSON Schema of its arguments. */
+  readonly parameters: Record<string, unknown>
+  /** The line the user sees while it runs, from its arguments. */
+  running(args: Record<string, unknown>): string
+  execute(
+    args: Record<string, unknown>,
+    context: ExtensionToolContext
+  ): Promise<ExtensionToolResult>
+}
+
+export interface ExtensionToolContext {
+  /**
+   * The message a short name the model wrote (`m4`) stands for, with its
+   * subject and date; null when it names none.
+   */
+  message(handle: string): Promise<{ ref: MessageRef; subject: string; dateIso: string } | null>
+  /**
+   * Asks the user, on the Segretario's card, before it is done: what will
+   * happen, a line each, and the word on the button. Resolves with the answer.
+   */
+  confirm(request: { title: string; details: string[]; confirmLabel: string }): Promise<boolean>
+  signal: AbortSignal
+}
+
+export interface ExtensionToolResult {
+  /** What the model reads. */
+  content: string
+  /** The line the user sees: "Archiviati 3 messaggi in Prat2451". */
+  summary: string
+  /** It did not do what was asked: the content says why, the line shows it. */
+  failed?: boolean
 }
 
 export interface ExtensionTopic {
