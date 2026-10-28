@@ -469,6 +469,7 @@ export const SEGRETARIO_IPC = {
   deleteMemory: 'segretario:delete-memory',
   forgetEverything: 'segretario:forget-everything',
   listLearning: 'segretario:list-learning',
+  lastKeptUpAt: 'segretario:last-kept-up-at',
   relearnAccount: 'segretario:relearn-account',
   draftSent: 'segretario:draft-sent',
   getNotes: 'segretario:get-notes',
@@ -528,6 +529,8 @@ export interface SegretarioApi {
   /** Empties the memory and starts getting to know every account again. */
   forgetEverything: () => Promise<void>
   listLearning: () => Promise<AccountLearning[]>
+  /** When the memory was last brought up to date with the mail read since; null if never. */
+  lastKeptUpAt: () => Promise<number | null>
   /** Gets to know one account again, from the start. */
   relearnAccount: (accountId: string) => Promise<AccountLearning[]>
   /**

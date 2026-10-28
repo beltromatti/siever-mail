@@ -111,6 +111,7 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   )
   handle(SEGRETARIO_IPC.forgetEverything, () => segretario.forgetEverything())
   handle(SEGRETARIO_IPC.listLearning, () => segretario.listLearning())
+  handle(SEGRETARIO_IPC.lastKeptUpAt, () => segretario.lastKeptUpAt())
   handle(SEGRETARIO_IPC.relearnAccount, (accountId: unknown) =>
     segretario.relearnAccount(idSchema.parse(accountId))
   )

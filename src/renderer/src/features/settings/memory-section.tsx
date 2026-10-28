@@ -146,20 +146,23 @@ export function MemorySection(): React.JSX.Element {
   const [preferences, setPreferences] = useState<SegretarioPreferences | null>(null)
   const [learning, setLearning] = useState<AccountLearning[] | null>(null)
   const [notes, setNotes] = useState<MemoryNote[] | null>(null)
+  const [keptUpAt, setKeptUpAt] = useState<number | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const { confirm, dialog: confirmDialog } = useConfirmDialog()
   const reloadTimer = useRef<number | null>(null)
 
   const reload = useCallback(async (): Promise<void> => {
-    const [storedPreferences, storedLearning, storedNotes] = await Promise.all([
+    const [storedPreferences, storedLearning, storedNotes, storedKeptUpAt] = await Promise.all([
       window.segretarioApi.getPreferences(),
       window.segretarioApi.listLearning(),
-      window.segretarioApi.listMemory()
+      window.segretarioApi.listMemory(),
+      window.segretarioApi.lastKeptUpAt()
     ])
     setPreferences(storedPreferences)
     setLearning(storedLearning)
     setNotes(storedNotes)
+    setKeptUpAt(storedKeptUpAt)
   }, [])
 
   useEffect(() => {
@@ -269,7 +272,8 @@ export function MemorySection(): React.JSX.Element {
             <span className="block text-[12px] font-medium">Impara a conoscermi</span>
             <span className="text-muted-foreground block text-[11px]">
               Legge la posta che hai scritto da ogni account e prende appunti; poi impara da come
-              correggi le sue bozze. Gli appunti restano su questo computer.
+              correggi le sue bozze e, ogni giorno, dalla posta che arriva. Gli appunti restano su
+              questo computer.
               {preferences.learning === null && ' Non hai ancora deciso.'}
             </span>
           </span>
@@ -305,6 +309,11 @@ export function MemorySection(): React.JSX.Element {
                 )}
               </div>
             ))}
+            <p className="text-muted-foreground px-1 text-[11px]">
+              {keptUpAt
+                ? `Al passo con la posta: l'ultima volta ${WHEN.format(keptUpAt)}. Ci torna ogni giorno, quando c'è abbastanza di nuovo.`
+                : 'Al passo con la posta: una volta conosciuti gli account, ogni giorno rilegge cosa è arrivato e aggiorna le note.'}
+            </p>
           </div>
         )}
       </div>

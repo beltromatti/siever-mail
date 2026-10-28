@@ -2593,6 +2593,11 @@ export class SegretarioService {
 
   /* ──────────────────────── getting to know the user ──────────────────────── */
 
+  /** When "Al passo" last began: the memory brought up to date with the mail. */
+  async lastKeptUpAt(): Promise<number | null> {
+    return this.requireStore().lastActivityAt('aggiornamento')
+  }
+
   async listLearning(): Promise<AccountLearning[]> {
     const accounts = await this.options.mail.listAccounts()
     const rows = new Map(

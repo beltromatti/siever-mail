@@ -143,6 +143,7 @@ const segretarioApi: SegretarioApi = {
   deleteMemory: async (path) => invoke(SEGRETARIO_IPC.deleteMemory, path),
   forgetEverything: async () => invoke(SEGRETARIO_IPC.forgetEverything),
   listLearning: async () => invoke(SEGRETARIO_IPC.listLearning),
+  lastKeptUpAt: async () => invoke(SEGRETARIO_IPC.lastKeptUpAt),
   relearnAccount: async (accountId) => invoke(SEGRETARIO_IPC.relearnAccount, accountId),
   draftSent: async (draftId, writtenText) => invoke(SEGRETARIO_IPC.draftSent, draftId, writtenText),
   setPreferences: async (preferences) => invoke(SEGRETARIO_IPC.setPreferences, preferences),
