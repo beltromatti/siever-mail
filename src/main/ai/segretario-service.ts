@@ -75,7 +75,14 @@ import {
   type ToolCall
 } from './openrouter'
 import { folderQueryLabel, searchMail, searchScope, threadMessages } from './mail-search'
-import { ASK_MAIL_SCHEMA, askMailRequest, parseAskedSearch, type AskedSearch } from './ask-mail'
+import {
+  ASK_MAIL_SCHEMA,
+  askMailRequest,
+  parseAskedSearch,
+  periodWords,
+  searchPeriod,
+  type AskedSearch
+} from './ask-mail'
 import { nameForm, saysAnyName } from './topic-names'
 import { TopicStore, type CatalogTopic } from './topic-store'
 import {
@@ -778,13 +785,15 @@ export class SegretarioService {
         asked.text ? `«${asked.text}»` : null,
         asked.folder ? `in ${folderQueryLabel(asked.folder)}` : null,
         asked.account ? `di ${asked.account}` : null,
-        asked.from && asked.to
-          ? `dal ${shortDate(asked.from)} al ${shortDate(asked.to)}`
-          : asked.from
-            ? `dal ${shortDate(asked.from)}`
-            : asked.to
-              ? `fino al ${shortDate(asked.to)}`
-              : null,
+        asked.period
+          ? periodWords(asked.period)
+          : asked.from && asked.to
+            ? `dal ${shortDate(asked.from)} al ${shortDate(asked.to)}`
+            : asked.from
+              ? `dal ${shortDate(asked.from)}`
+              : asked.to
+                ? `fino al ${shortDate(asked.to)}`
+                : null,
         asked.unreadOnly ? 'non letti' : null,
         asked.withAttachments ? 'con allegati' : null
       ]
@@ -815,10 +824,12 @@ export class SegretarioService {
       accounts: asked.account ? [asked.account] : [],
       folder: asked.folder ?? undefined
     })
+    // A period from today is counted from today, each time it runs.
+    const { from, to } = searchPeriod(asked, new Date())
     const hits = await searchMail(await mail.searchClient(), scope, {
       text: asked.text || undefined,
-      from: asked.from ?? undefined,
-      to: asked.to ?? undefined,
+      from: from ?? undefined,
+      to: to ?? undefined,
       unreadOnly: asked.unreadOnly,
       withAttachments: asked.withAttachments,
       limit: ASK_MAIL_LIMIT

@@ -796,7 +796,9 @@ and how, the question above it. The latest twenty are kept for the session;
 "Tienila come cartella" keeps one for good (`ai_saved_searches`, user
 data): a folder under Segretario in the sidebar that runs the same search
 again, over the mail as it is then, each time it opens — no model call —
-until "Togli dalle cartelle".
+until "Togli dalle cartelle". A period said from today ("questa settimana",
+"negli ultimi 10 giorni") is kept as said (`periodo`) and counted from the
+day it runs, so the folder moves with the days.
 
 **Rereading before it goes.** With "Rileggi prima di inviare" on (Settings
 → Segretario, the default), pressing Invia has the Segretario reread the
