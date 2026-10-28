@@ -364,6 +364,7 @@ export type HandleLink =
     }
   | { handle: string; kind: 'draft'; draftId: string }
   | { handle: string; kind: 'topic'; topicId: string; title: string }
+  | { handle: string; kind: 'event'; eventKey: string; title: string }
 
 /** What the page shows of an activity, in order. */
 export type ActivityEntry =

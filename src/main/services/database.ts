@@ -2872,10 +2872,62 @@ export class AppDatabase {
     `)
   }
 
+  /** The calendars' tables (see the `Calendar*` models): a copy of the provider's, kept in step. */
+  private async ensureCalendarTables(): Promise<void> {
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS calendar_accounts (
+        account_id TEXT PRIMARY KEY,
+        encrypted_token TEXT NOT NULL,
+        connected_at INTEGER NOT NULL,
+        last_sync_at INTEGER,
+        problem TEXT
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS calendar_calendars (
+        account_id TEXT NOT NULL,
+        calendar_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        is_primary INTEGER NOT NULL,
+        sync_token TEXT,
+        window_end INTEGER,
+        PRIMARY KEY (account_id, calendar_id)
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS calendar_events (
+        key TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        calendar_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        ical_uid TEXT,
+        title TEXT NOT NULL,
+        start TEXT NOT NULL,
+        end TEXT NOT NULL,
+        all_day INTEGER NOT NULL,
+        starts_at INTEGER NOT NULL,
+        ends_at INTEGER NOT NULL,
+        location TEXT,
+        description TEXT,
+        attendees_json TEXT NOT NULL,
+        organizer TEXT,
+        my_response TEXT,
+        meet_link TEXT,
+        html_link TEXT
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_calendar_events_range ON calendar_events(starts_at, ends_at)'
+    )
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_calendar_events_uid ON calendar_events(account_id, ical_uid)'
+    )
+  }
+
   /**
    * The Prisma client, for the stores that keep their own tables in this
-   * file — the Segretario's (see `src/main/ai/ai-store.ts`). Resolves once
-   * the schema is ready.
+   * file — the Segretario's (see `src/main/ai/ai-store.ts`), the
+   * calendars'. Resolves once the schema is ready.
    */
   async storeClient(): Promise<PrismaClient> {
     await this.ready
@@ -4532,6 +4584,7 @@ export class AppDatabase {
       'CREATE INDEX IF NOT EXISTS idx_contacts_name_normalized ON contacts(name_normalized)'
     )
     await this.ensureSegretarioTables()
+    await this.ensureCalendarTables()
     await this.prisma.$executeRawUnsafe(`
       INSERT OR IGNORE INTO app_preferences(id, unified_inbox_included_account_ids, updated_at)
       VALUES (${APP_PREFERENCES_SINGLETON_ID}, NULL, ${Date.now()})

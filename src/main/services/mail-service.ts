@@ -91,6 +91,9 @@ import {
 import { APP_ID } from '@main/app-identity'
 import { getAppWindow } from '@main/app-window'
 import { SegretarioService } from '@main/ai/segretario-service'
+import { CalendarService } from '@main/calendar/calendar-service'
+import { parseInvitation } from '@main/calendar/ics'
+import { isIcsAttachment, type MessageInvitation } from '@shared/calendar'
 import type { SegretarioMailPort } from '@main/ai/agent/tool-types'
 import { AppBadge } from './app-badge'
 import { DraftService } from './drafts'
@@ -373,6 +376,7 @@ export class MailService {
   private readonly drafts: DraftService
   /** SIEVER Mail's agent (see `src/main/ai`). */
   readonly segretario: SegretarioService
+  readonly calendar: CalendarService
   private extension: ExtensionMain | null = null
   private storageReady: Promise<void> | null = null
   // The copy of each attachment last written, and what it held, keyed by its
@@ -402,13 +406,28 @@ export class MailService {
       onStatus: (status) =>
         getAppWindow()?.webContents.send(IPC_CHANNELS.draftStatusChanged, status)
     })
+    this.calendar = new CalendarService({
+      database: this.database,
+      oauth: this.googleOAuthService,
+      send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload),
+      parentWindow: () => getAppWindow()
+    })
     this.segretario = new SegretarioService({
       database: this.database,
       mail: this.segretarioMailPort(),
       fetch: (input, init) => net.fetch(input, init),
       send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload),
       onReadingChange: (reading) => this.engine.setSegretarioReading(reading),
-      onNoteWritten: (note) => this.engine.noteWritten(note)
+      onNoteWritten: (note) => this.engine.noteWritten(note),
+      calendar: {
+        connectedAccountIds: async () =>
+          (await this.calendar.listConnections())
+            .filter((connection) => connection.state === 'connected')
+            .map((connection) => connection.accountId),
+        events: (fromIso, toIso) => this.calendar.events(fromIso, toIso),
+        create: (event) => this.calendar.create(event),
+        respond: (eventKey, response) => this.calendar.respond(eventKey, response)
+      }
     })
   }
 
@@ -596,6 +615,7 @@ export class MailService {
     this.badge.setCount(await this.engine.inboxUnreadCount())
     await this.engine.start()
     await this.drafts.resume()
+    await this.calendar.open()
     await this.segretario.open()
   }
 
@@ -663,6 +683,7 @@ export class MailService {
       logMainError('Extension teardown failed', error)
     }
 
+    this.calendar.stop()
     await this.segretario.stop()
 
     // What is being written reaches Bozze before the connections close.
@@ -838,6 +859,7 @@ export class MailService {
   async removeAccount(accountId: string): Promise<void> {
     const account = await this.ensureAccountExists(accountId)
     await this.segretario.forgetAccount(accountId, account.email)
+    await this.calendar.forgetAccount(accountId)
     await this.engine.removeAccount(accountId)
     await this.database.clearAccountData(accountId)
     await this.database.deleteAccount(accountId)
@@ -1553,6 +1575,7 @@ export class MailService {
     await this.database.clearAllDataKeepAccounts()
     await this.dropAttachmentCopies()
     await this.segretario.clearData()
+    await this.calendar.clearData()
     await this.extension?.clearData()
 
     // Re-bootstrap all accounts in parallel. engine.addAccount returns once the
@@ -1854,6 +1877,38 @@ export class MailService {
 
   async clearAttachmentCache(): Promise<void> {
     await this.dropAttachmentCopies()
+  }
+
+  /** The calendar invitation a message carries, with its event in the account's calendar. */
+  async calendarInvitation(ref: MessageRef): Promise<MessageInvitation | null> {
+    const message = await this.requireMessage(ref)
+    const file = message.attachments.find(isIcsAttachment)
+
+    if (!file) {
+      return null
+    }
+
+    const [fetched] = await this.engine.fetchAttachments(
+      ref,
+      [{ index: parseAttachmentIndex(file.id), part: file.part }],
+      message.size
+    )
+    const invitation = fetched ? parseInvitation(fetched.content.toString('utf8')) : null
+
+    if (!invitation) {
+      return null
+    }
+
+    const connected = (await this.calendar.listConnections()).some(
+      (connection) => connection.accountId === ref.accountId && connection.state === 'connected'
+    )
+
+    return {
+      method: invitation.method,
+      summary: invitation.summary,
+      event: connected ? await this.calendar.eventByUid(ref.accountId, invitation.uid) : null,
+      calendarConnected: connected
+    }
   }
 
   private async requireMessage(ref: MessageRef): Promise<MailMessageDetail> {

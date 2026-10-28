@@ -10,9 +10,12 @@ interface GoogleAuthResult {
   email: string
   displayName: string
   refreshToken: string
+  /** What the user granted, every scope of the token. */
+  scopes: string[]
 }
 
-const GOOGLE_SCOPES = ['https://mail.google.com/', 'openid', 'email', 'profile']
+const IDENTITY_SCOPES = ['openid', 'email', 'profile']
+const MAIL_SCOPES = ['https://mail.google.com/', ...IDENTITY_SCOPES]
 
 function callbackResponseHtml(success: boolean): string {
   const title = success ? 'Accesso completato' : 'Accesso non riuscito'
@@ -36,7 +39,15 @@ export class GoogleOAuthService {
     return Boolean(this.clientId && this.clientSecret)
   }
 
-  async authorize(parentWindow?: BrowserWindow): Promise<GoogleAuthResult> {
+  /**
+   * Asks Google, in a window of the app's, for access to an account: its
+   * mail by default; with `scopes`, something more of an account already
+   * connected — its calendar — the account chosen for the user (`loginHint`).
+   */
+  async authorize(
+    parentWindow?: BrowserWindow,
+    request: { scopes?: ReadonlyArray<string>; loginHint?: string; title?: string } = {}
+  ): Promise<GoogleAuthResult> {
     if (!this.clientId || !this.clientSecret) {
       throw new Error(
         'Google OAuth is not configured. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET.'
@@ -105,11 +116,12 @@ export class GoogleOAuthService {
       access_type: 'offline',
       prompt: 'consent',
       include_granted_scopes: true,
-      scope: GOOGLE_SCOPES
+      scope: request.scopes ? [...request.scopes, ...IDENTITY_SCOPES] : MAIL_SCOPES,
+      login_hint: request.loginHint
     })
 
     const authWindow = new BrowserWindow({
-      title: 'Accedi con Google',
+      title: request.title ?? 'Accedi con Google',
       width: 560,
       height: 760,
       parent: parentWindow,
@@ -151,7 +163,8 @@ export class GoogleOAuthService {
       return {
         email,
         displayName: profile.data.name || email,
-        refreshToken: tokens.refresh_token
+        refreshToken: tokens.refresh_token,
+        scopes: tokens.scope?.split(' ') ?? []
       }
     } finally {
       if (!authWindow.isDestroyed()) {
@@ -162,6 +175,19 @@ export class GoogleOAuthService {
         server.close(() => resolve())
       })
     }
+  }
+
+  /** An authorized client from a refresh token, for Google's APIs (the calendar's). */
+  client(refreshToken: string): InstanceType<typeof google.auth.OAuth2> {
+    if (!this.clientId || !this.clientSecret) {
+      throw new Error(
+        'Google OAuth is not configured. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET.'
+      )
+    }
+
+    const oauthClient = new google.auth.OAuth2(this.clientId, this.clientSecret)
+    oauthClient.setCredentials({ refresh_token: refreshToken })
+    return oauthClient
   }
 
   async getAccessToken(refreshToken: string): Promise<string> {

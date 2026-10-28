@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowUp,
   Briefcase,
+  CalendarDays,
   ChartColumn,
   Check,
   Eye,
@@ -59,6 +60,7 @@ const TOOL_ICONS: Readonly<Record<string, typeof Search>> = {
   memoria: NotebookPen,
   argomenti: Briefcase,
   impegni: ListTodo,
+  calendario: CalendarDays,
   mostra: Eye
 }
 
@@ -176,7 +178,9 @@ function ApprovalCard({
     <div className="sheet overflow-hidden rounded-[10px]">
       <div className="flex items-center gap-2 border-b px-3 py-2 text-[12px]">
         <span className="bg-seal-text size-[6px] rounded-full" />
-        <span className="text-foreground font-semibold">Da confermare</span>
+        <span className="text-foreground shrink-0 font-semibold whitespace-nowrap">
+          Da confermare
+        </span>
         <span className="text-faint-foreground min-w-0 truncate">{approval.title}</span>
       </div>
       {draft && (

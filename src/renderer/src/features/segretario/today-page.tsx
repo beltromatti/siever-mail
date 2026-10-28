@@ -6,6 +6,10 @@ import { cn } from '@renderer/lib/utils'
 import type { MessageRef } from '@shared/models'
 import type { Briefing, BriefingItem, CommitmentKind } from '@shared/segretario'
 
+import { isOn, startOfDay } from '@renderer/features/calendar/calendar-days'
+import { EventLine } from '@renderer/features/calendar/event-line'
+import { useCalendarEvents } from '@renderer/features/calendar/use-calendar'
+
 import { dueLabel } from './message-notes'
 
 const DAY_TITLE = new Intl.DateTimeFormat('it-IT', {
@@ -129,6 +133,12 @@ export function TodayPage({
   onOpenMessage: (ref: MessageRef) => void
 }): React.JSX.Element {
   const [briefing, setBriefing] = useState<Briefing | null>(null)
+  const [now] = useState(() => Date.now())
+  const today = startOfDay(new Date(now))
+  const agenda = useCalendarEvents(
+    today.toISOString(),
+    new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).toISOString()
+  )
   const [writing, setWriting] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const reloadTimer = useRef<number | null>(null)
@@ -278,6 +288,19 @@ export function TodayPage({
             )}
             {problem && <p className="text-destructive-soft-foreground text-[12.5px]">{problem}</p>}
           </div>
+
+          {agenda && agenda.some((event) => isOn(event, today)) && (
+            <section className="flex flex-col gap-1">
+              <h2 className="eyebrow">In agenda</h2>
+              <ul className="flex flex-col">
+                {agenda
+                  .filter((event) => isOn(event, today))
+                  .map((event) => (
+                    <EventLine key={event.key} event={event} day={today} now={now} />
+                  ))}
+              </ul>
+            </section>
+          )}
 
           {briefing && (
             <>

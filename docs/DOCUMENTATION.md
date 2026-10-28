@@ -833,6 +833,37 @@ yes (the panel asks; Settings → Cosa so di te switches it):
 Settings → Cosa so di te shows how far each account has got (with
 "Rifai"), and every note, to read, correct or forget.
 
+## Calendar
+
+The calendars of the user's accounts (`src/main/calendar/`, `shared/calendar.ts`).
+A Google account's is connected from Settings → Account, "Collega il
+calendario": Google's own window asks for the calendar scope
+(`https://www.googleapis.com/auth/calendar`) on the account already
+chosen (`login_hint`, incremental with `include_granted_scopes`), and the
+token it gives is kept for the calendar alone (`calendar_accounts`,
+encrypted) — the account's mail never depends on it, and disconnecting
+forgets it here without touching the grant.
+
+**Sync.** The calendars the user shows in Google Calendar are read
+(`calendarList`), and each one's events as single instances, from two
+months back to a year ahead, into `calendar_events`; then every five
+minutes only what changed, with the sync token Google gives (deleted
+events included; a 410 starts over), and from the start again as the
+window's end comes within six months. A provider is an interface
+(`CalendarProvider`): Google's is `google-calendar.ts`; Microsoft 365's
+(Graph `/me/calendarView` with delta) takes the same shape once Microsoft
+accounts sign in with OAuth — an Azure app registration with
+`Calendars.ReadWrite`, `IMAP.AccessAsUser.All` and `SMTP.Send`.
+
+**Where it shows.** "Agenda" in the sidebar, two weeks a day at a time;
+"In agenda" at the top of Oggi, and the day's events in what its opening is
+written from; an invitation in a message (its `.ics`, `ics.ts`) at the top
+of the reader, answered there — Partecipo, Forse, Non partecipo — through
+the API, the organizer told. The Segretario's `calendario` tool lists the
+agenda, creates an event and answers an invitation, each after the user
+confirms on its card; an event has a short name (`e1`) the panel links to
+the agenda.
+
 ## Extensions
 
 The host reserves one extension slot, filled at build time through four

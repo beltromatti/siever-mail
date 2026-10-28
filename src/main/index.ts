@@ -16,6 +16,7 @@ import { loadRuntimeConfig } from './config/env'
 import { installAppMenu } from './app-menu'
 import { installContextMenus } from './context-menu'
 import { registerMailIpc } from './ipc/register-mail-ipc'
+import { registerCalendarIpc } from './ipc/register-calendar-ipc'
 import { registerSegretarioIpc } from './ipc/register-segretario-ipc'
 import { prepareUpgradeMigration } from './services/data-migration'
 import { MailService } from './services/mail-service'
@@ -287,6 +288,11 @@ if (hasSingleInstanceLock) {
 
     registerMailIpc(mailService, () => mainWindow)
     registerSegretarioIpc(mailService.segretario)
+    registerCalendarIpc(
+      service.calendar,
+      (ref) => service.calendarInvitation(ref),
+      () => service.segretario.whenReady()
+    )
     installAppMenu(() => mainWindow)
 
     mainWindow = createMainWindow()

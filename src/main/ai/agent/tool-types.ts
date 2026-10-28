@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 
+import type { CalendarEvent, CalendarResponse, NewCalendarEvent } from '@shared/calendar'
 import type {
   MailAccount,
   MailAddress,
@@ -116,6 +117,18 @@ export interface SegretarioWorkPort {
   closeCommitment(id: number): Promise<boolean>
 }
 
+/** The calendars, as the Segretario reaches them: the same as the page's. */
+export interface SegretarioCalendarPort {
+  /** The accounts whose calendar is connected. */
+  connectedAccountIds(): Promise<string[]>
+  events(fromIso: string, toIso: string): Promise<CalendarEvent[]>
+  create(event: NewCalendarEvent): Promise<CalendarEvent>
+  respond(
+    eventKey: string,
+    response: Exclude<CalendarResponse, 'needsAction'>
+  ): Promise<CalendarEvent>
+}
+
 /** What the page does for the Segretario. */
 export interface SegretarioPagePort {
   /** Opens a draft in the composer as `spec` says; resolves with its id. */
@@ -131,6 +144,7 @@ export interface ToolContext {
   newHandles: HandleRecord[]
   mail: SegretarioMailPort
   work: SegretarioWorkPort
+  calendar: SegretarioCalendarPort
   page: SegretarioPagePort
   store: AiStore
   /**

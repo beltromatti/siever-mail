@@ -16,6 +16,8 @@ import {
 import extensionRenderer from '@app/extension/renderer'
 import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
+import { CalendarConnectionLine } from '@renderer/features/calendar/calendar-connection'
+import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import {
   Dialog,
@@ -317,6 +319,7 @@ export function SettingsDialog({
 
   const activeSection =
     SETTINGS_SECTIONS.find((section) => section.id === activeSectionId) ?? SETTINGS_SECTIONS[0]
+  const calendars = useCalendarConnections()
 
   useEffect(() => {
     if (!open || activeSectionId !== 'preferences') {
@@ -670,6 +673,15 @@ export function SettingsDialog({
                           <p className="text-muted-foreground truncate text-[11px]">
                             {account.email}
                           </p>
+                          {calendars.connections
+                            ?.filter((connection) => connection.accountId === account.id)
+                            .map((connection) => (
+                              <CalendarConnectionLine
+                                key={connection.accountId}
+                                connection={connection}
+                                onChange={calendars.setConnections}
+                              />
+                            ))}
                         </div>
                         <div className="mt-0.5 flex shrink-0 items-center gap-1">
                           <Tooltip>

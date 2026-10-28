@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Briefcase,
+  CalendarDays,
   ChevronDown,
   ChevronRight,
   Hourglass,
@@ -56,6 +57,8 @@ export type FolderMenuTarget =
 interface FolderSidebarProps {
   /** The Segretario's day, "Oggi": shown with its views, open or not. */
   today: { open: boolean; onOpen: () => void } | null
+  /** The agenda of the connected calendars; null when none is connected. */
+  agenda: { open: boolean; onOpen: () => void } | null
   /** The Segretario's views and how many conversations each holds; none without the Segretario. */
   segretarioViews: ReadonlyArray<{ view: SegretarioView; count: number }>
   /**
@@ -261,6 +264,7 @@ function SectionHeading({ children }: { children: React.ReactNode }): React.JSX.
  */
 export function FolderSidebar({
   today,
+  agenda,
   segretarioViews,
   accountLabel,
   folders,
@@ -364,7 +368,7 @@ export function FolderSidebar({
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-px px-2 pb-3">
-          {segretarioViews.length > 0 && (
+          {(segretarioViews.length > 0 || agenda) && (
             <section aria-label="Segretario">
               <SectionHeading>Segretario</SectionHeading>
               {today && (
@@ -376,6 +380,17 @@ export function FolderSidebar({
                   badge={0}
                   active={today.open}
                   onSelect={today.onOpen}
+                />
+              )}
+              {agenda && (
+                <FolderRow
+                  icon={CalendarDays}
+                  name="Agenda"
+                  messageCount={0}
+                  unseenCount={0}
+                  badge={0}
+                  active={agenda.open}
+                  onSelect={agenda.onOpen}
                 />
               )}
               {segretarioViews.map(({ view, count }) => {

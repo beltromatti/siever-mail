@@ -25,6 +25,7 @@ import organize from './prompts/strumenti/organizza.md?raw'
 import overview from './prompts/strumenti/panoramica.md?raw'
 import topicsTool from './prompts/strumenti/argomenti.md?raw'
 import commitmentsTool from './prompts/strumenti/impegni.md?raw'
+import calendarTool from './prompts/strumenti/calendario.md?raw'
 import writeDraft from './prompts/strumenti/scrivi_bozza.md?raw'
 import title from './prompts/titolo.md?raw'
 
@@ -71,6 +72,7 @@ export const PROMPTS = {
     memoria: memory.trim(),
     argomenti: topicsTool.trim(),
     impegni: commitmentsTool.trim(),
+    calendario: calendarTool.trim(),
     mostra: show.trim()
   }
 } as const

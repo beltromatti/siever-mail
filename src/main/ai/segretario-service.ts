@@ -59,6 +59,7 @@ import {
   ToolInputError,
   type SegretarioMailPort,
   type SegretarioTool,
+  type SegretarioCalendarPort,
   type SegretarioWorkPort,
   type ToolContext
 } from './agent/tool-types'
@@ -170,6 +171,8 @@ interface RunningActivity {
       reject: (error: Error) => void
     }
   >
+  /** The calls that failed in this run, by tool and arguments: one is not made again as it was. */
+  failedCalls: Set<string>
 }
 
 export interface SegretarioServiceOptions {
@@ -182,6 +185,7 @@ export interface SegretarioServiceOptions {
   onReadingChange(reading: boolean): void
   /** A message's note, written as it read it. */
   onNoteWritten(note: MessageNote): void
+  calendar: SegretarioCalendarPort
 }
 
 /**
@@ -1276,14 +1280,30 @@ export class SegretarioService {
               .join('\n')
           : '- niente'
       }`
+    const now = new Date()
+    const agenda = await this.options.calendar.events(
+      new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(),
+      new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString()
+    )
+    const time = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
     const material = [
-      `Oggi è ${new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(new Date())}.`,
+      `Oggi è ${new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(now)}.`,
+      agenda.length > 0
+        ? `## In agenda oggi\n${agenda
+            .map(
+              (event) =>
+                `- ${event.allDay ? 'tutto il giorno' : `${time.format(new Date(event.start))}–${time.format(new Date(event.end))}`}: ${event.title}${event.location ? ` (${event.location})` : ''}${event.myResponse === 'needsAction' ? ' [invito ancora senza risposta]' : ''}`
+            )
+            .join('\n')}`
+        : null,
       section('Da fare oggi o scaduto', briefing.today),
       section('In scadenza questa settimana', briefing.week),
       section('Ti aspettano (senza data)', briefing.waiting),
       section('Aspetti tu', briefing.awaited),
       section('Risposte pronte', briefing.ready)
-    ].join('\n\n')
+    ]
+      .filter(Boolean)
+      .join('\n\n')
 
     const result = await this.client.chat(key, {
       messages: [
@@ -2463,7 +2483,8 @@ export class SegretarioService {
     const activity: RunningActivity = {
       kind,
       controller: new AbortController(),
-      approvals: new Map()
+      approvals: new Map(),
+      failedCalls: new Set()
     }
     let ended: ActivityStatus = 'failed'
     const { signal } = activity.controller
@@ -2618,6 +2639,23 @@ export class SegretarioService {
       return
     }
 
+    // A call that failed, made again as it was, fails again: said so instead of tried.
+    const signature = `${tool.name}\u0000${JSON.stringify(
+      Object.keys(args)
+        .sort()
+        .map((name) => [name, args[name]])
+    )}`
+
+    if (activity.failedCalls.has(signature)) {
+      await finish({
+        status: 'error',
+        summary: 'Già provato così',
+        result:
+          "Hai già fatto esattamente questa chiamata e non è riuscita: non ripeterla uguale. Rileggi l'errore, rifalla con tutti gli argomenti che servono, o chiedi all'utente."
+      })
+      return
+    }
+
     const context: ToolContext = {
       activityId,
       signal: activity.controller.signal,
@@ -2625,6 +2663,7 @@ export class SegretarioService {
       newHandles: [],
       mail: this.options.mail,
       work: this.workPort,
+      calendar: this.options.calendar,
       store,
       page: {
         compose: (spec, signal) => this.requestCompose(spec, signal),
@@ -2635,6 +2674,11 @@ export class SegretarioService {
 
     try {
       const outcome = await tool.execute(args, context)
+
+      if (outcome.failed) {
+        activity.failedCalls.add(signature)
+      }
+
       await finish({
         status: outcome.failed ? 'error' : 'done',
         summary: outcome.summary,
@@ -2650,6 +2694,7 @@ export class SegretarioService {
       }
 
       const message = error instanceof Error ? error.message : String(error)
+      activity.failedCalls.add(signature)
 
       if (!(error instanceof ToolInputError)) {
         logMainError(`Segretario tool ${tool.name} failed`, error, { activityId })
@@ -2817,6 +2862,8 @@ function handleLinks(records: ReadonlyArray<HandleRecord> | undefined): HandleLi
         return { handle, kind: 'draft', draftId: target.draftId }
       case 'topic':
         return { handle, kind: 'topic', topicId: target.topicId, title: target.title }
+      case 'event':
+        return { handle, kind: 'event', eventKey: target.eventKey, title: target.title }
       case 'file':
         return target.file.kind === 'path'
           ? { handle, kind: 'file', fileName: target.file.fileName, path: target.file.path }

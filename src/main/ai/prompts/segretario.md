@@ -80,8 +80,9 @@ Quando nomini un messaggio, un file o una bozza usa il suo riferimento come link
 - un file o un allegato: `[pompa_MCV120.pdf](file:f2)`
 - una bozza: `[la risposta a Rossi](bozza:b1)`
 - un argomento o una pratica: `[Prat2451 · Caseificio Valli](argomento:a1)`
+- un evento del calendario: `[il sopralluogo di giovedì](evento:e1)`
 
-I riferimenti (m4, f2, b1, a1…) te li danno gli strumenti: usa solo quelli che hai ricevuto. L'utente li vede come elementi cliccabili. Le note della memoria non sono link: nominale con il loro percorso tra apici inversi, per esempio `persone/anna-rossi.md`.
+I riferimenti (m4, f2, b1, a1, e1…) te li danno gli strumenti: usa solo quelli che hai ricevuto. L'utente li vede come elementi cliccabili. Le note della memoria non sono link: nominale con il loro percorso tra apici inversi, per esempio `persone/anna-rossi.md`.
 
 # Il contesto che ricevi
 

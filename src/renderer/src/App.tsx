@@ -60,6 +60,10 @@ import { useSegretario } from '@renderer/features/segretario/use-segretario'
 import { useMessageNotes } from '@renderer/features/segretario/message-notes'
 import { ThreadBriefPanel } from '@renderer/features/segretario/thread-brief'
 import { TodayPage } from '@renderer/features/segretario/today-page'
+import { AgendaPage } from '@renderer/features/calendar/agenda-page'
+import { InvitationCard } from '@renderer/features/calendar/invitation-card'
+import { isIcsAttachment } from '@shared/calendar'
+import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
 import { TopicBanner } from '@renderer/features/segretario/topic-banner'
 import { plainTextToComposerHtml, writtenText } from '@renderer/features/mail/composer-body'
 import { parseRecipients } from '@shared/email-address'
@@ -581,7 +585,13 @@ function App(): React.JSX.Element {
   const segretarioSendWaitersRef = useRef(new Map<string, (outcome: SendOutcome) => void>())
   const [segretarioOpen, setSegretarioOpen] = useState(false)
   /** The Segretario's day, "Oggi", in the place of the list and the reader. */
-  const [todayOpen, setTodayOpen] = useState(false)
+  // Whether any account's calendar is connected: the agenda is shown then.
+  const { connections: calendarConnections } = useCalendarConnections()
+  const calendarConnected = Boolean(
+    calendarConnections?.some((connection) => connection.state === 'connected')
+  )
+  // A page in the place of the list and the reader: the day ("Oggi"), or the agenda.
+  const [openPage, setOpenPage] = useState<'oggi' | 'agenda' | null>(null)
   const segretario = useSegretario(segretarioOpen)
   const assistantInset = useAssistantInset(segretarioOpen)
   const messageNotes = useMessageNotes(messages)
@@ -1725,7 +1735,7 @@ function App(): React.JSX.Element {
       setSearch('')
       setSelectedAccountId(ref.accountId)
       setSelectedFolderPath(ref.folderPath)
-      setTodayOpen(false)
+      setOpenPage(null)
     },
     [cancelInFlightWork]
   )
@@ -2758,7 +2768,7 @@ function App(): React.JSX.Element {
   /** Opens a folder — of the account, or of "Tutti gli account" — showing all its messages. */
   const selectFolder = useCallback(
     (folderPath: string): void => {
-      setTodayOpen(false)
+      setOpenPage(null)
       setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
 
       // The folder already open stays as it is: emptying it here left the
@@ -3549,7 +3559,7 @@ function App(): React.JSX.Element {
               }
             }
 
-            setTodayOpen(false)
+            setOpenPage(null)
             setSearch(request.query)
             return
         }
@@ -3690,6 +3700,9 @@ function App(): React.JSX.Element {
           return
         case 'topic':
           selectFolder(segretarioTopicPath(link.topicId))
+          return
+        case 'event':
+          setOpenPage('agenda')
       }
     },
     [openDraftById, openMessageRef, selectFolder]
@@ -4226,7 +4239,7 @@ function App(): React.JSX.Element {
     })
     setShowWelcomeGate(false)
     // The day opens on what the Segretario saw in it.
-    setTodayOpen(segretarioConfigured)
+    setOpenPage(segretarioConfigured ? 'oggi' : null)
   }, [segretarioConfigured, accounts])
 
   if (bootstrapLoading) {
@@ -4596,7 +4609,7 @@ function App(): React.JSX.Element {
                   selectedAccountId={selectedAccountId}
                   removingAccountId={removingAccountId}
                   onSelectAccount={(accountId) => {
-                    setTodayOpen(false)
+                    setOpenPage(null)
                     cancelInFlightWork()
                     setSelectedAccountId(accountId)
                     setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
@@ -4615,7 +4628,7 @@ function App(): React.JSX.Element {
                   <FolderSidebar
                     today={
                       segretarioConfigured
-                        ? { open: todayOpen, onOpen: () => setTodayOpen(true) }
+                        ? { open: openPage === 'oggi', onOpen: () => setOpenPage('oggi') }
                         : null
                     }
                     segretarioViews={
@@ -4634,7 +4647,12 @@ function App(): React.JSX.Element {
                     accountLabel={selectedAccountLabel}
                     folders={folders}
                     unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
-                    selectedFolderPath={todayOpen ? null : selectedFolderPath}
+                    agenda={
+                      calendarConnected
+                        ? { open: openPage === 'agenda', onOpen: () => setOpenPage('agenda') }
+                        : null
+                    }
+                    selectedFolderPath={openPage ? null : selectedFolderPath}
                     messageDrop={messageDrop}
                     onSelectFolder={selectFolder}
                     onFolderContextMenu={(target) => void openFolderContextMenu(target)}
@@ -4666,14 +4684,22 @@ function App(): React.JSX.Element {
               brief={
                 messageForViewer &&
                 selection.selectedRefs.length === 1 && (
-                  <ThreadBriefPanel
-                    key={`${messageForViewer.accountId}:${messageForViewer.threadId}`}
-                    accountId={messageForViewer.accountId}
-                    threadId={messageForViewer.threadId}
-                    topics={topicsLabel ? { label: topicsLabel, items: topics } : null}
-                    onOpenTopic={(topicId) => selectFolder(segretarioTopicPath(topicId))}
-                    onTakeUpReadyDraft={takeUpReadyDraft}
-                  />
+                  <>
+                    {messageForViewer.attachments.some(isIcsAttachment) && (
+                      <InvitationCard
+                        key={`${messageForViewer.accountId}:${messageForViewer.folderPath}:${messageForViewer.uid}`}
+                        messageRef={summaryToMessageRef(messageForViewer)}
+                      />
+                    )}
+                    <ThreadBriefPanel
+                      key={`${messageForViewer.accountId}:${messageForViewer.threadId}`}
+                      accountId={messageForViewer.accountId}
+                      threadId={messageForViewer.threadId}
+                      topics={topicsLabel ? { label: topicsLabel, items: topics } : null}
+                      onOpenTopic={(topicId) => selectFolder(segretarioTopicPath(topicId))}
+                      onTakeUpReadyDraft={takeUpReadyDraft}
+                    />
+                  </>
                 )
               }
               bodyStatus={readerBodyStatus}
@@ -4755,12 +4781,14 @@ function App(): React.JSX.Element {
             />
           }
           page={
-            todayOpen && segretarioConfigured ? (
+            openPage === 'oggi' && segretarioConfigured ? (
               <TodayPage
                 canWrite={segretario.status?.keyState === 'ready'}
                 atWindowTopRight={!segretarioOpen}
                 onOpenMessage={openMessageRef}
               />
+            ) : openPage === 'agenda' && calendarConnected ? (
+              <AgendaPage atWindowTopRight={!segretarioOpen} />
             ) : undefined
           }
           assistant={

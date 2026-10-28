@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 
 import installExtensionPreload from '@app/extension/preload'
 import { IPC_CHANNELS, type DesktopMailApi } from '@shared/ipc'
+import { CALENDAR_IPC, type CalendarApi } from '@shared/calendar'
 import { SEGRETARIO_IPC, type SegretarioApi } from '@shared/segretario'
 
 const REMOTE_METHOD_ERROR_PREFIX =
@@ -190,6 +191,18 @@ const segretarioApi: SegretarioApi = {
   openTopicFolder: async (id) => invoke(SEGRETARIO_IPC.openTopicFolder, id)
 }
 
+const calendarApi: CalendarApi = {
+  listConnections: async () => invoke(CALENDAR_IPC.listConnections),
+  connect: async (accountId) => invoke(CALENDAR_IPC.connect, accountId),
+  disconnect: async (accountId) => invoke(CALENDAR_IPC.disconnect, accountId),
+  events: async (fromIso, toIso) => invoke(CALENDAR_IPC.events, fromIso, toIso),
+  eventByUid: async (accountId, iCalUid) => invoke(CALENDAR_IPC.eventByUid, accountId, iCalUid),
+  invitation: async (ref) => invoke(CALENDAR_IPC.invitation, ref),
+  respond: async (eventKey, response) => invoke(CALENDAR_IPC.respond, eventKey, response),
+  syncNow: async () => invoke(CALENDAR_IPC.syncNow),
+  onChanged: (listener) => subscribe(CALENDAR_IPC.changed, () => listener())
+}
+
 // Merge any extension-provided bridge methods (the IPC channels an
 // extension registers) onto the host's API surface. The public build's
 // installer returns an empty object, so window.mailApi remains the host's
@@ -200,9 +213,12 @@ const mergedMailApi = { ...desktopMailApi, ...extensionBridge }
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld('mailApi', mergedMailApi)
   contextBridge.exposeInMainWorld('segretarioApi', segretarioApi)
+  contextBridge.exposeInMainWorld('calendarApi', calendarApi)
 } else {
   // @ts-expect-error context isolation disabled by external override
   window.mailApi = mergedMailApi
   // @ts-expect-error context isolation disabled by external override
   window.segretarioApi = segretarioApi
+  // @ts-expect-error context isolation disabled by external override
+  window.calendarApi = calendarApi
 }

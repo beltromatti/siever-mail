@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { Briefcase, FileText, Mail, PenLine } from 'lucide-react'
+import { Briefcase, CalendarDays, FileText, Mail, PenLine } from 'lucide-react'
 import { Streamdown } from 'streamdown'
 
 import { cn } from '@renderer/lib/utils'
@@ -9,19 +9,25 @@ const INTERNAL_LINK_PREFIX = '#segretario/'
 
 /**
  * The Segretario writes links to what it found as `[testo](mail:m4)`,
- * `(file:f2)`, `(bozza:b1)`, `(argomento:a1)`. They become internal anchors before the
+ * `(file:f2)`, `(bozza:b1)`, `(argomento:a1)`, `(evento:e1)`. They become internal anchors before the
  * markdown is read — a sanitiser would drop an unknown scheme — and chips
  * when drawn.
  */
 function internalizeLinks(markdown: string): string {
   return markdown.replace(
-    /\]\(\s*(mail|file|bozza|argomento)\s*:\s*([a-z]\d+)\s*\)/gi,
+    /\]\(\s*(mail|file|bozza|argomento|evento)\s*:\s*([a-z]\d+)\s*\)/gi,
     (_match, kind: string, handle: string) =>
       `](${INTERNAL_LINK_PREFIX}${kind.toLowerCase()}/${handle.toLowerCase()})`
   )
 }
 
-const CHIP_ICONS = { message: Mail, file: FileText, draft: PenLine, topic: Briefcase } as const
+const CHIP_ICONS = {
+  message: Mail,
+  file: FileText,
+  draft: PenLine,
+  topic: Briefcase,
+  event: CalendarDays
+} as const
 
 /**
  * What the Segretario writes, set as writing — in serif — with its links to
