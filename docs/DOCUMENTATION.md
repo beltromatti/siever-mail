@@ -820,7 +820,10 @@ sends after the user confirmed on its card is not reread again.
 in the place of the list and the reader (`today-page.tsx`, the layout's
 `page`). It is made of the notes and what is open: what is due today or
 overdue, this week, who waits on the user, the replies prepared, what the
-user waits on — each line opens its message. At the top, a few lines the
+user waits on — each line opens its message and says who wrote it, "Tu"
+when it is the user from any of their accounts. It sits on its own sheet
+over the pane (`letter`), under a masthead with when it was written and
+the day at a glance — a count per part, each a jump to it. At the top, a few lines the
 Segretario writes from the same material (`oggi.md`), kept in
 `ai_briefings` with the lines they were written from: while triage still
 has mail to read (the first launch, after a holiday) the page says so and
