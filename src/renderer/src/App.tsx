@@ -57,7 +57,7 @@ import {
   type SegretarioContextChip
 } from '@renderer/features/segretario/segretario-panel'
 import { useSegretario } from '@renderer/features/segretario/use-segretario'
-import { useMessageNotes } from '@renderer/features/segretario/message-notes'
+import { noteKey, useMessageNotes } from '@renderer/features/segretario/message-notes'
 import { ThreadBriefPanel } from '@renderer/features/segretario/thread-brief'
 import { TodayPage } from '@renderer/features/segretario/today-page'
 import { AgendaPage } from '@renderer/features/calendar/agenda-page'
@@ -65,6 +65,7 @@ import { InvitationCard } from '@renderer/features/calendar/invitation-card'
 import { isIcsAttachment } from '@shared/calendar'
 import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
 import { TopicBanner } from '@renderer/features/segretario/topic-banner'
+import { segretarioSuggestions } from '@renderer/features/segretario/suggestions'
 import { plainTextToComposerHtml, writtenText } from '@renderer/features/mail/composer-body'
 import { parseRecipients } from '@shared/email-address'
 import type {
@@ -392,26 +393,6 @@ const RAIL_ITEMS: ReadonlyArray<RailItem> = [{ id: 'mail', label: 'Posta', icon:
 
 /** The most messages a request to the Segretario carries along. */
 const SEGRETARIO_CONTEXT_LIMIT = 200
-
-const SEGRETARIO_GENERAL_SUGGESTIONS = [
-  'Cosa è arrivato di importante negli ultimi giorni?',
-  'A chi devo ancora rispondere?',
-  'Quali scadenze ho nelle prossime settimane?',
-  'Leggi le email che ho mandato e impara come scrivo'
-] as const
-
-const SEGRETARIO_MESSAGE_SUGGESTIONS = [
-  'Riassumimi la conversazione',
-  'Cosa mi chiede, e per quando?',
-  'Prepara una risposta',
-  'Trova le email e i file collegati'
-] as const
-
-const SEGRETARIO_SELECTION_SUGGESTIONS = [
-  'Riassumimi questi messaggi',
-  'Cosa devo fare con questi?',
-  'Mettili in ordine nelle cartelle giuste'
-] as const
 
 function AppFrame({
   children,
@@ -2278,6 +2259,33 @@ function App(): React.JSX.Element {
   const toggleSeenLabel = shouldMarkSelectionAsRead ? 'Segna letta' : 'Segna non letta'
   const selectionFlagged =
     selectedSummaries.length > 0 && selectedSummaries.every((message) => message.isFlagged)
+
+  // Whether the conversation open has a reply prepared: the panel offers to go through it.
+  const viewerThreadKey = messageForViewer
+    ? `${messageForViewer.accountId}\u0000${messageForViewer.threadId}`
+    : null
+  const [viewerReady, setViewerReady] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!messageForViewer || !viewerThreadKey) {
+      return
+    }
+
+    let current = true
+    const load = (): void =>
+      void window.segretarioApi
+        .getThreadBrief(messageForViewer.accountId, messageForViewer.threadId)
+        .then((brief) => current && setViewerReady(brief.readyDraft ? viewerThreadKey : null))
+        .catch(() => undefined)
+
+    load()
+    const unsubscribe = window.segretarioApi.onNotesChanged(load)
+
+    return () => {
+      current = false
+      unsubscribe()
+    }
+  }, [messageForViewer, viewerThreadKey])
 
   // Where the selected conversations are kept: the extension topic they share, the subfolder they went to.
   const [selectionFiling, setSelectionFiling] = useState<{
@@ -4422,12 +4430,16 @@ function App(): React.JSX.Element {
           ? `«${messageForViewer.subject || 'Senza oggetto'}»${messageForViewer.from[0] ? ` — ${messageForViewer.from[0].name || messageForViewer.from[0].address}` : ''}`
           : currentViewLabel
   }
-  const segretarioSuggestions =
-    selection.selectedRefs.length > 1
-      ? SEGRETARIO_SELECTION_SUGGESTIONS
-      : messageForViewer
-        ? SEGRETARIO_MESSAGE_SUGGESTIONS
-        : SEGRETARIO_GENERAL_SUGGESTIONS
+  const viewerNote = messageForViewer ? (messageNotes.get(noteKey(messageForViewer)) ?? null) : null
+  const segretarioSuggestionList = segretarioSuggestions({
+    selectionCount: selection.selectedRefs.length,
+    note: viewerNote,
+    messageOpen: Boolean(messageForViewer),
+    topic: currentTopic?.title ?? null,
+    topicsLabel,
+    readyReply: viewerReady === viewerThreadKey && viewerThreadKey !== null,
+    calendarConnected
+  })
   const filterNouns =
     messageFilter === 'unread'
       ? (['messaggio non letto', 'messaggi non letti'] as const)
@@ -4810,7 +4822,7 @@ function App(): React.JSX.Element {
               <SegretarioPanel
                 state={segretario}
                 contextChip={segretarioContext}
-                suggestions={segretarioSuggestions}
+                suggestions={segretarioSuggestionList}
                 atWindowTopRight
                 onClose={() => setSegretarioOpen(false)}
                 onOpenSettings={() => {
