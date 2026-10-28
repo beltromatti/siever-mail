@@ -176,6 +176,7 @@ const segretarioApi: SegretarioApi = {
   discardReadyDraft: async (accountId, messageKey) =>
     invoke(SEGRETARIO_IPC.discardReadyDraft, accountId, messageKey),
   getBriefing: async () => invoke(SEGRETARIO_IPC.getBriefing),
+  getDue: async (throughDay) => invoke(SEGRETARIO_IPC.getDue, throughDay),
   assistWriting: async (request) => invoke(SEGRETARIO_IPC.assistWriting, request),
   writeBriefingOpening: async () => invoke(SEGRETARIO_IPC.writeBriefingOpening),
   topicsLabel: async () => invoke(SEGRETARIO_IPC.topicsLabel),

@@ -88,7 +88,7 @@ export function EventLine({
                 onClick={() =>
                   event.meetLink && void window.mailApi.openExternalUrl(event.meetLink)
                 }
-                className="text-ai hover:text-foreground focus-visible:ring-ring/60 flex shrink-0 items-center gap-1 rounded-sm font-semibold outline-none focus-visible:ring-2"
+                className="text-primary-text hover:text-foreground focus-visible:ring-ring/60 flex shrink-0 items-center gap-1 rounded-sm font-semibold outline-none focus-visible:ring-2"
               >
                 <Video className="size-3" />
                 Entra nella call

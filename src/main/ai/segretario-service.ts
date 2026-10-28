@@ -1216,6 +1216,64 @@ export class SegretarioService {
    */
   async getBriefing(): Promise<Briefing> {
     const store = this.requireStore()
+    const { dated, undated, awaited, ready } = await this.briefingLines()
+    const day = localDay(new Date())
+    const weekEnd = localDay(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000))
+    const byDue = (a: BriefingItem, b: BriefingItem): number =>
+      (a.due ?? '').localeCompare(b.due ?? '') || priorityRank(a) - priorityRank(b)
+    const byWeight = (a: BriefingItem, b: BriefingItem): number =>
+      priorityRank(a) - priorityRank(b) || b.date.localeCompare(a.date)
+    const [opening, reading] = await Promise.all([store.briefingOpening(day), this.triageBacklog()])
+    const briefing = {
+      day,
+      opening: opening?.text ?? null,
+      openingAt: opening?.createdAt ?? null,
+      openingBehind: 0,
+      reading,
+      today: dated.filter((item) => item.due !== null && item.due <= day).sort(byDue),
+      week: dated
+        .filter((item) => item.due !== null && item.due > day && item.due <= weekEnd)
+        .sort(byDue)
+        .slice(0, BRIEFING_LINES),
+      // Further on, a date says less than who waits: with those without one.
+      waiting: [...undated, ...dated.filter((item) => item.due !== null && item.due > weekEnd)]
+        .sort(byWeight)
+        .slice(0, BRIEFING_LINES),
+      awaited: awaited.sort((a, b) => a.date.localeCompare(b.date)).slice(0, BRIEFING_LINES),
+      ready
+    }
+
+    if (opening) {
+      const basis = new Set(opening.basis)
+      briefing.openingBehind = briefingBasis(briefing).filter((key) => !basis.has(key)).length
+    }
+
+    return briefing
+  }
+
+  /** What is due from today to `throughDay` (AAAA-MM-GG, included): the agenda's deadlines beside its events. */
+  async getDue(throughDay: string): Promise<BriefingItem[]> {
+    const day = localDay(new Date())
+    const { dated } = await this.briefingLines()
+
+    return dated
+      .filter((item) => item.due !== null && item.due >= day && item.due <= throughDay)
+      .sort((a, b) => (a.due ?? '').localeCompare(b.due ?? '') || priorityRank(a) - priorityRank(b))
+  }
+
+  /**
+   * The day's lines, each opening its message: what is open with a date
+   * (a thing owed, or a conversation's note that has one), the
+   * conversations that ask something without one, what the user waits
+   * on, and the replies prepared.
+   */
+  private async briefingLines(): Promise<{
+    dated: BriefingItem[]
+    undated: BriefingItem[]
+    awaited: BriefingItem[]
+    ready: BriefingItem[]
+  }> {
+    const store = this.requireStore()
     const mail = this.options.mail
     const accountIds = await mail.includedAccountIds()
     const [notes, commitments, ready] = await Promise.all([
@@ -1223,8 +1281,6 @@ export class SegretarioService {
       store.openCommitmentsIn(accountIds),
       store.readyDraftsIn(accountIds)
     ])
-    const day = localDay(new Date())
-    const weekEnd = localDay(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000))
     const id = (accountId: string, key: string): string => `${accountId}\u0000${key}`
 
     // Who wrote each message, what about, where it is: asked for once per account.
@@ -1275,23 +1331,16 @@ export class SegretarioService {
         : null
     }
 
-    const today: BriefingItem[] = []
-    const week: BriefingItem[] = []
-    const waiting: BriefingItem[] = []
+    const dated: BriefingItem[] = []
+    const undated: BriefingItem[] = []
     const awaited: BriefingItem[] = []
     const datedThreads = new Set<string>()
     const awaitedThreads = new Set<string>()
     const place = (item: BriefingItem | null): void => {
-      if (!item) {
-        return
-      }
-
-      if (item.due && item.due <= day) {
-        today.push(item)
-      } else if (item.due && item.due <= weekEnd) {
-        week.push(item)
-      } else {
-        waiting.push(item)
+      if (item?.due) {
+        dated.push(item)
+      } else if (item) {
+        undated.push(item)
       }
     }
 
@@ -1350,21 +1399,10 @@ export class SegretarioService {
       }
     }
 
-    const byDue = (a: BriefingItem, b: BriefingItem): number =>
-      (a.due ?? '').localeCompare(b.due ?? '') || priorityRank(a) - priorityRank(b)
-    const byWeight = (a: BriefingItem, b: BriefingItem): number =>
-      priorityRank(a) - priorityRank(b) || b.date.localeCompare(a.date)
-    const [opening, reading] = await Promise.all([store.briefingOpening(day), this.triageBacklog()])
-    const briefing = {
-      day,
-      opening: opening?.text ?? null,
-      openingAt: opening?.createdAt ?? null,
-      openingBehind: 0,
-      reading,
-      today: today.sort(byDue),
-      week: week.sort(byDue).slice(0, BRIEFING_LINES),
-      waiting: waiting.sort(byWeight).slice(0, BRIEFING_LINES),
-      awaited: awaited.sort((a, b) => a.date.localeCompare(b.date)).slice(0, BRIEFING_LINES),
+    return {
+      dated,
+      undated,
+      awaited,
       ready: ready
         .map((draft): BriefingItem | null => {
           const note = noteOfMessage.get(id(draft.accountId, draft.messageKey))
@@ -1380,13 +1418,6 @@ export class SegretarioService {
         })
         .filter((item): item is BriefingItem => item !== null)
     }
-
-    if (opening) {
-      const basis = new Set(opening.basis)
-      briefing.openingBehind = briefingBasis(briefing).filter((key) => !basis.has(key)).length
-    }
-
-    return briefing
   }
 
   /**

@@ -4,17 +4,10 @@ import { Briefcase, Check, ChevronDown, FolderArchive, PenLine } from 'lucide-re
 import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { cn } from '@renderer/lib/utils'
-import type { Commitment, CommitmentKind, ThreadBrief, Topic } from '@shared/segretario'
+import type { Commitment, ThreadBrief, Topic } from '@shared/segretario'
 
-import { dueLabel, NOTE_ACTION_LABELS, noteAsks } from './message-notes'
+import { COMMITMENT_LABELS, dueLabel, NOTE_ACTION_LABELS, noteAsks } from './message-notes'
 import { TopicPickerPopover } from './topic-picker'
-
-const COMMITMENT_LABELS: Readonly<Record<CommitmentKind, string>> = {
-  ti_chiedono: 'Ti chiedono',
-  hai_promesso: 'Hai promesso',
-  aspetti: 'Aspetti',
-  da_fare: 'Da fare'
-}
 
 const PRIORITY_LABELS = { alta: 'Importante', media: null, bassa: 'Può aspettare' } as const
 

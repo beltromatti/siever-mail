@@ -5,26 +5,19 @@ import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { cn } from '@renderer/lib/utils'
 import type { MessageRef } from '@shared/models'
-import type { Briefing, BriefingItem, CommitmentKind } from '@shared/segretario'
+import type { Briefing, BriefingItem } from '@shared/segretario'
 
 import { isOn, startOfDay } from '@renderer/features/calendar/calendar-days'
 import { EventLine } from '@renderer/features/calendar/event-line'
 import { useCalendarEvents } from '@renderer/features/calendar/use-calendar'
 
-import { dueLabel } from './message-notes'
+import { COMMITMENT_LABELS, dueLabel } from './message-notes'
 
 const DAY_TITLE = new Intl.DateTimeFormat('it-IT', {
   weekday: 'long',
   day: 'numeric',
   month: 'long'
 })
-
-const COMMITMENT_LABELS: Readonly<Record<CommitmentKind, string>> = {
-  ti_chiedono: 'Ti chiedono',
-  hai_promesso: 'Hai promesso',
-  aspetti: 'Aspetti',
-  da_fare: 'Da fare'
-}
 
 const SINCE = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
 const WRITTEN_AT = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })

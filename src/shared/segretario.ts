@@ -476,6 +476,7 @@ export const SEGRETARIO_IPC = {
   closeCommitment: 'segretario:close-commitment',
   dismissNote: 'segretario:dismiss-note',
   dismissConversations: 'segretario:dismiss-conversations',
+  getDue: 'segretario:get-due',
   takeUpReadyDraft: 'segretario:take-up-ready-draft',
   discardReadyDraft: 'segretario:discard-ready-draft',
   readyDraftSource: 'segretario:ready-draft-source',
@@ -553,6 +554,8 @@ export interface SegretarioApi {
   takeUpReadyDraft: (accountId: string, messageKey: string, draftId: string) => Promise<void>
   discardReadyDraft: (accountId: string, messageKey: string) => Promise<void>
   getBriefing: () => Promise<Briefing>
+  /** What is due from today through a day (AAAA-MM-GG): the agenda's deadlines. */
+  getDue: (throughDay: string) => Promise<BriefingItem[]>
   /** What topics are called in this build: "Argomenti", or the extension's word ("Pratiche"). */
   topicsLabel: () => Promise<string>
   listTopics: () => Promise<Topic[]>

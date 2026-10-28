@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { cn } from '@renderer/lib/utils'
-import type { MessageNote, NoteState } from '@shared/segretario'
+import type { CommitmentKind, MessageNote, NoteState } from '@shared/segretario'
+
+/** A thing open, by its kind, as a label before its words. */
+export const COMMITMENT_LABELS: Readonly<Record<CommitmentKind, string>> = {
+  ti_chiedono: 'Ti chiedono',
+  hai_promesso: 'Hai promesso',
+  aspetti: 'Aspetti',
+  da_fare: 'Da fare'
+}
 
 /** What the user is expected to do, as a row says it in a word or two. */
 export const NOTE_ACTION_LABELS: Readonly<Partial<Record<NoteState, string>>> = {

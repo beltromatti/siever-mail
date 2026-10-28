@@ -4914,7 +4914,11 @@ function App(): React.JSX.Element {
                 onOpenMessage={openMessageRef}
               />
             ) : openPage === 'agenda' && calendarConnected ? (
-              <AgendaPage atWindowTopRight={!segretarioOpen} />
+              <AgendaPage
+                atWindowTopRight={!segretarioOpen}
+                showDue={segretarioConfigured}
+                onOpenMessage={openMessageRef}
+              />
             ) : undefined
           }
           assistant={

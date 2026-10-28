@@ -927,7 +927,10 @@ window's end comes within six months. A provider is an interface
 accounts sign in with OAuth — an Azure app registration with
 `Calendars.ReadWrite`, `IMAP.AccessAsUser.All` and `SMTP.Send`.
 
-**Where it shows.** "Agenda" in the sidebar, two weeks a day at a time;
+**Where it shows.** "Agenda" in the sidebar, two weeks a day at a time,
+a planner on its sheet like Oggi: each day's events and, beside them, what
+the mail says is due that day as the Segretario read it (`getDue`, from
+the same lines as Oggi), each opening its message;
 "In agenda" at the top of Oggi, and the day's events in what its opening is
 written from; an invitation in a message (its `.ics`, `ics.ts`) at the top
 of the reader, answered there — Partecipo, Forse, Non partecipo — through

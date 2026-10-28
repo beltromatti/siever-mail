@@ -145,6 +145,14 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
     segretario.discardReadyDraft(idSchema.parse(accountId), z.string().min(1).parse(messageKey))
   )
   handle(SEGRETARIO_IPC.getBriefing, () => segretario.getBriefing())
+  handle(SEGRETARIO_IPC.getDue, (throughDay: unknown) =>
+    segretario.getDue(
+      z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .parse(throughDay)
+    )
+  )
   handle(SEGRETARIO_IPC.assistWriting, (request: unknown) =>
     segretario.assistWriting(writingRequestSchema.parse(request))
   )
