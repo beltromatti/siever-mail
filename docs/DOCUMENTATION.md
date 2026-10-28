@@ -710,6 +710,15 @@ ott" and the gist — and at the top of the reader as "Il punto", with what is
 open to tick off and "Segna come gestito". It can be switched off in
 Settings → Segretario.
 
+**Alerts that matter.** With "Solo ciò che conta" on (Settings →
+Notifiche, the default) and the Segretario reading new mail, a new message
+is not announced as it arrives: it waits for its note, and only one that
+asks something of the user and matters — a reply or an action of high
+priority, a reply of medium — gets an alert, saying what the note says. A
+note that has not come within ten minutes, or the Segretario stopping
+(the key failing, triage turned off), lets what waited be announced as it
+is (`NotificationManager.setSegretarioReading`, `noteWritten`).
+
 **Replies prepared ahead.** For a conversation whose latest message waits
 on the user's answer and matters (to answer, medium or high priority), the
 Segretario writes the reply after triage, one at a time

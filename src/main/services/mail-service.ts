@@ -219,6 +219,7 @@ const notificationPreferencesSchema = z.object({
   enabled: z.boolean(),
   mutedAccountIds: z.array(z.string().trim().min(1)).max(200),
   showPreview: z.boolean(),
+  onlyImportant: z.boolean(),
   sound: z.boolean(),
   badge: z.boolean()
 })
@@ -405,7 +406,9 @@ export class MailService {
       database: this.database,
       mail: this.segretarioMailPort(),
       fetch: (input, init) => net.fetch(input, init),
-      send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload)
+      send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload),
+      onReadingChange: (reading) => this.engine.setSegretarioReading(reading),
+      onNoteWritten: (note) => this.engine.noteWritten(note)
     })
   }
 

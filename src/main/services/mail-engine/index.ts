@@ -16,6 +16,7 @@ import type {
   UnifiedFolderSummary
 } from '@shared/models'
 import { folderForRole, UNIFIED_FOLDER_ROLES, type FolderRole } from '@shared/folders'
+import type { MessageNote } from '@shared/segretario'
 
 import type { AppDatabase } from '../database'
 import type { GoogleOAuthService } from '../google-oauth'
@@ -102,6 +103,16 @@ export class MailEngine {
       clearInterval(this.networkWatch)
       this.networkWatch = null
     }
+  }
+
+  /** Whether the Segretario reads new mail as it comes: alerts may wait for its notes. */
+  setSegretarioReading(reading: boolean): void {
+    this.notifications.setSegretarioReading(reading)
+  }
+
+  /** A note the Segretario wrote, for the alert of a new message waiting for it. */
+  noteWritten(note: MessageNote): void {
+    this.notifications.noteWritten(note)
   }
 
   setNotificationPreferences(preferences: NotificationPreferences): void {

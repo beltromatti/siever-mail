@@ -28,6 +28,7 @@ vi.mock('electron', () => ({
 
 const { NotificationManager } = await import('./notifications')
 import type { MailFolder, MailMessageSummary } from '@shared/models'
+import type { MessageNote } from '@shared/segretario'
 
 const INBOX: MailFolder = {
   accountId: 'a1',
@@ -47,6 +48,7 @@ function message(uid: number, overrides: Partial<MailMessageSummary> = {}): Mail
     uid,
     subject: `Oggetto ${uid}`,
     preview: `Anteprima ${uid}`,
+    messageKey: `k${uid}`,
     senderLabel: `Mittente ${uid}`,
     isRead: false,
     ...overrides
@@ -109,6 +111,7 @@ describe('NotificationManager', () => {
       enabled: true,
       mutedAccountIds: ['a1'],
       showPreview: true,
+      onlyImportant: true,
       sound: true,
       badge: true
     })
@@ -117,6 +120,7 @@ describe('NotificationManager', () => {
       enabled: false,
       mutedAccountIds: [],
       showPreview: true,
+      onlyImportant: true,
       sound: true,
       badge: true
     })
@@ -131,6 +135,7 @@ describe('NotificationManager', () => {
       enabled: true,
       mutedAccountIds: [],
       showPreview: false,
+      onlyImportant: true,
       sound: false,
       badge: true
     })
@@ -163,5 +168,73 @@ describe('NotificationManager', () => {
     await vi.runAllTimersAsync()
 
     expect(actions.archive).toHaveBeenCalledWith({ accountId: 'a1', folderPath: 'INBOX', uid: 9 })
+  })
+
+  describe('while the Segretario reads the mail', () => {
+    const note = (
+      uid: number,
+      state: MessageNote['state'],
+      priority: MessageNote['priority']
+    ): MessageNote => ({
+      accountId: 'a1',
+      messageKey: `k${uid}`,
+      threadId: `t${uid}`,
+      direction: 'in',
+      summary: `Nota ${uid}`,
+      state,
+      priority,
+      reason: '',
+      due: null,
+      messageDate: '2026-10-28T08:00:00.000Z',
+      dismissedAt: null
+    })
+
+    beforeEach(() => manager.setSegretarioReading(true))
+
+    it('announces only what matters, with its note', () => {
+      manager.enqueue(ACCOUNT, [message(1), message(2), message(3)], INBOX, false)
+      vi.advanceTimersByTime(5_000)
+      expect(shown).toHaveLength(0)
+
+      manager.noteWritten(note(1, 'da_rispondere', 'alta'))
+      manager.noteWritten(note(2, 'informativo', 'alta'))
+      manager.noteWritten(note(3, 'da_fare', 'media'))
+
+      expect(shown).toHaveLength(1)
+      expect(shown[0].options.title).toBe('Mittente 1')
+      expect(`${shown[0].options.body}`).toContain('Nota 1')
+    })
+
+    it('announces as it is a message whose note does not come in time', () => {
+      manager.enqueue(ACCOUNT, [message(4)], INBOX, false)
+      vi.advanceTimersByTime(10 * 60 * 1000)
+
+      expect(shown).toHaveLength(1)
+      expect(`${shown[0].options.body}`).toContain('Anteprima 4')
+    })
+
+    it('lets go of what waited when it stops reading, and forgets what was read', () => {
+      manager.enqueue(ACCOUNT, [message(5), message(6)], INBOX, false)
+      manager.withdraw([{ accountId: 'a1', folderPath: 'INBOX', uid: 6 }])
+      manager.setSegretarioReading(false)
+
+      expect(shown).toHaveLength(1)
+      expect(shown[0].options.title).toBe('Mittente 5')
+    })
+
+    it('announces everything when the user wants every message', () => {
+      manager.setPreferences({
+        enabled: true,
+        mutedAccountIds: [],
+        showPreview: true,
+        onlyImportant: false,
+        sound: true,
+        badge: true
+      })
+      manager.enqueue(ACCOUNT, [message(7)], INBOX, false)
+      vi.runAllTimers()
+
+      expect(shown).toHaveLength(1)
+    })
   })
 })

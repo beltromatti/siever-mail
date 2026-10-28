@@ -699,13 +699,14 @@ function parseNotificationPreferences(value: string | null | undefined): Notific
     // A value no release wrote: the defaults stand in for it.
   }
 
-  const flag = (key: 'enabled' | 'showPreview' | 'sound' | 'badge'): boolean =>
+  const flag = (key: 'enabled' | 'showPreview' | 'onlyImportant' | 'sound' | 'badge'): boolean =>
     typeof stored[key] === 'boolean' ? stored[key] : DEFAULT_NOTIFICATION_PREFERENCES[key]
 
   return {
     enabled: flag('enabled'),
     mutedAccountIds: normalizeAccountIdList(stored.mutedAccountIds),
     showPreview: flag('showPreview'),
+    onlyImportant: flag('onlyImportant'),
     sound: flag('sound'),
     badge: flag('badge')
   }

@@ -170,6 +170,10 @@ export interface SegretarioServiceOptions {
   fetch: FetchFunction
   /** Sends an event to the window. */
   send(channel: string, payload: unknown): void
+  /** Whether it reads each new message as it comes — not without a working key, nor with triage off. */
+  onReadingChange(reading: boolean): void
+  /** A message's note, written as it read it. */
+  onNoteWritten(note: MessageNote): void
 }
 
 /**
@@ -207,6 +211,8 @@ export class SegretarioService {
   private readonly triageFailures = new Map<string, number>()
   private preparing = false
   private gisting = false
+  /** What the app was last told of `onReadingChange`; null before it was told. */
+  private reading: boolean | null = null
   /** Messages whose prepared reply failed, by account and key, with the attempts made. */
   private readonly readyDraftFailures = new Map<string, number>()
 
@@ -276,6 +282,7 @@ export class SegretarioService {
     this.ownWorkTimer = setInterval(() => void this.considerOwnWork(), OWN_WORK_CHECK_MS)
     this.triageTimer = setInterval(() => void this.triageRound(), TRIAGE_CHECK_MS)
     this.topicsTimer = setInterval(() => void this.syncExtensionTopics(), EXTENSION_TOPICS_SYNC_MS)
+    await this.sayWhetherReading()
     this.opened.resolve()
   }
 
@@ -357,11 +364,23 @@ export class SegretarioService {
     return this.status
   }
 
+  /** Tells the app whether new mail is read as it comes, when that changed. */
+  private async sayWhetherReading(): Promise<void> {
+    const reading =
+      this.status.keyState === 'ready' && (await this.requireStore().getPreferences()).triage
+
+    if (reading !== this.reading) {
+      this.reading = reading
+      this.options.onReadingChange(reading)
+    }
+  }
+
   private async setStatus(status: SegretarioStatus): Promise<SegretarioStatus> {
     const becameReady = status.keyState === 'ready' && this.status.keyState !== 'ready'
     this.status = status
     await this.requireStore().setStoredStatus(status)
     this.options.send(SEGRETARIO_IPC.statusChanged, status)
+    await this.sayWhetherReading()
 
     if (becameReady) {
       void this.considerOwnWork()
@@ -485,6 +504,7 @@ export class SegretarioService {
 
   async setPreferences(preferences: SegretarioPreferences): Promise<SegretarioPreferences> {
     const stored = await this.requireStore().setPreferences(preferences)
+    await this.sayWhetherReading()
     void this.considerOwnWork()
     void this.triageRound()
     return stored
@@ -1774,6 +1794,19 @@ export class SegretarioService {
         named.length === 1 ? catalog[named[0]].id : null
       )
       this.triageFailures.delete(failureKey)
+      this.options.onNoteWritten({
+        accountId: account.id,
+        messageKey: item.messageKey,
+        threadId: item.threadId,
+        direction: fromUser ? 'out' : 'in',
+        summary: triage.summary,
+        state: triage.state,
+        priority: triage.priority,
+        reason: triage.reason,
+        due: triage.due,
+        messageDate: item.dateIso,
+        dismissedAt: null
+      })
       this.emitNotes({
         accountId: account.id,
         messageKeys: [item.messageKey],

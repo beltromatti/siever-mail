@@ -191,6 +191,14 @@ export function NotificationsSection({
               onCheckedChange={(enabled) => void update({ enabled })}
             />
             <SettingRow
+              id="notifications-important"
+              title="Solo ciò che conta"
+              description="Mentre il Segretario legge la posta, ti avvisa solo dei messaggi che ti chiedono qualcosa e contano, dicendoti cosa vogliono. Gli altri li trovi nella posta, senza interruzioni. Se il Segretario non è attivo, ti avvisa di tutto."
+              checked={preferences.onlyImportant}
+              disabled={saving || !preferences.enabled}
+              onCheckedChange={(onlyImportant) => void update({ onlyImportant })}
+            />
+            <SettingRow
               id="notifications-preview"
               title="Mostra mittente, oggetto e anteprima"
               description="Senza, l'avviso dice solo che è arrivata posta e per quale account."

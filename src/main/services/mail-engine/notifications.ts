@@ -4,6 +4,7 @@ import { getAppWindow } from '@main/app-window'
 import { logMainError } from '@main/utils/error-utils'
 import { folderRole } from '@shared/folders'
 import { IPC_CHANNELS } from '@shared/ipc'
+import type { MessageNote } from '@shared/segretario'
 import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   type MailFolder,
@@ -13,6 +14,9 @@ import {
   type NotificationPreferences,
   type NotificationStatus
 } from '@shared/models'
+
+/** The longest a new message waits for the Segretario's note before it is announced as it is. */
+const NOTE_WAIT_MS = 10 * 60 * 1000
 
 const NOTIFICATION_PREVIEW_MAX_LENGTH = 180
 const NOTIFICATION_SUBJECT_MAX_LENGTH = 80
@@ -54,6 +58,10 @@ function failureReason(error: string): string {
   return error
 }
 
+function heldKey(accountId: string, key: string): string {
+  return `${accountId}\u0000${key}`
+}
+
 function messageKey(ref: MessageRef): string {
   return `${ref.accountId}:${ref.folderPath}:${ref.uid}`
 }
@@ -74,6 +82,20 @@ function senderList(messages: ReadonlyArray<MailMessageSummary>): string {
   const others = senders.length - NAMED_SENDERS
 
   return others <= 0 ? named : `${named} e ${others === 1 ? 'un altro' : `altri ${others}`}`
+}
+
+/** What deserves an alert of its own: it asks something of the user and matters. */
+function noteMatters(note: Pick<MessageNote, 'state' | 'priority'>): boolean {
+  return (
+    (note.state === 'da_rispondere' || note.state === 'da_fare') &&
+    (note.priority === 'alta' || (note.state === 'da_rispondere' && note.priority === 'media'))
+  )
+}
+
+interface HeldMessage {
+  timer: NodeJS.Timeout
+  account: NotificationAccount
+  message: MailMessageSummary
 }
 
 interface PendingBatch {
@@ -116,6 +138,10 @@ export class NotificationManager {
   private readonly shownIdByMessage = new Map<string, string>()
   /** Every notification still to be clicked or dismissed: held, or its handlers go with it. */
   private readonly live = new Set<Notification>()
+  /** Whether the Segretario reads new mail as it comes (see `setSegretarioReading`). */
+  private segretarioReading = false
+  /** New messages waiting for their note, by account and message key. */
+  private readonly held = new Map<string, HeldMessage>()
 
   constructor(
     private readonly deps: {
@@ -133,6 +159,66 @@ export class NotificationManager {
         clearTimeout(batch.timer)
         this.pendingByAccount.delete(accountId)
       }
+    }
+
+    if (!this.waitsForNotes()) {
+      this.releaseHeld()
+    }
+  }
+
+  /**
+   * Whether the Segretario reads new mail as it comes: while it does, and
+   * the user asked for it, a new message waits for its note and is
+   * announced only if it matters, with the note. When it stops — the key
+   * fails, triage is turned off — what was waiting is announced as it is.
+   */
+  setSegretarioReading(reading: boolean): void {
+    this.segretarioReading = reading
+
+    if (!this.waitsForNotes()) {
+      this.releaseHeld()
+    }
+  }
+
+  /** A message's note is written: a new message waiting for it is announced if it matters. */
+  noteWritten(note: MessageNote): void {
+    const key = heldKey(note.accountId, note.messageKey)
+    const held = this.held.get(key)
+
+    if (!held) {
+      return
+    }
+
+    clearTimeout(held.timer)
+    this.held.delete(key)
+
+    if (noteMatters(note) && !held.message.isRead && this.announces(held.account.id)) {
+      this.announce(held.account, [held.message], note)
+    }
+  }
+
+  private waitsForNotes(): boolean {
+    return this.preferences.onlyImportant && this.segretarioReading
+  }
+
+  /** What waited for a note is announced as it is, one alert per account. */
+  private releaseHeld(): void {
+    const byAccount = new Map<
+      string,
+      { account: NotificationAccount; messages: MailMessageSummary[] }
+    >()
+
+    for (const held of this.held.values()) {
+      clearTimeout(held.timer)
+      const group = byAccount.get(held.account.id) ?? { account: held.account, messages: [] }
+      group.messages.push(held.message)
+      byAccount.set(held.account.id, group)
+    }
+
+    this.held.clear()
+
+    for (const { account, messages } of byAccount.values()) {
+      this.announce(account, messages)
     }
   }
 
@@ -177,7 +263,13 @@ export class NotificationManager {
 
       this.emittedKeys.set(key, now)
 
-      if (!bootstrap && !message.isRead && this.announces(account.id)) {
+      if (bootstrap || message.isRead || !this.announces(account.id)) {
+        continue
+      }
+
+      if (this.waitsForNotes()) {
+        this.hold(account, message)
+      } else {
         batch.push(message)
       }
     }
@@ -200,11 +292,38 @@ export class NotificationManager {
     this.pendingByAccount.set(account.id, { timer, account, messages: batch })
   }
 
+  /** A new message waits for its note — at most `NOTE_WAIT_MS`, then it is announced as it is. */
+  private hold(account: NotificationAccount, message: MailMessageSummary): void {
+    const key = heldKey(account.id, message.messageKey)
+
+    if (this.held.has(key)) {
+      return
+    }
+
+    const timer = setTimeout(() => {
+      this.held.delete(key)
+
+      if (!message.isRead && this.announces(account.id)) {
+        this.announce(account, [message])
+      }
+    }, NOTE_WAIT_MS)
+
+    this.held.set(key, { timer, account, message })
+  }
+
   /**
    * Messages read, moved or deleted, here or elsewhere: an alert that
-   * announced only such messages is taken away.
+   * announced only such messages is taken away, and one waiting for its
+   * note is not given.
    */
   withdraw(refs: ReadonlyArray<MessageRef>): void {
+    for (const [key, held] of this.held) {
+      if (refs.some((ref) => messageKey(ref) === messageKey(held.message))) {
+        clearTimeout(held.timer)
+        this.held.delete(key)
+      }
+    }
+
     for (const ref of refs) {
       const key = messageKey(ref)
       const pending = this.pendingByAccount.get(ref.accountId)
@@ -256,7 +375,15 @@ export class NotificationManager {
     }
   }
 
-  private announce(account: NotificationAccount, batch: MailMessageSummary[]): void {
+  /**
+   * One alert for what came: a single message by its sender and subject,
+   * with its first lines — or, when the Segretario read it, its note.
+   */
+  private announce(
+    account: NotificationAccount,
+    batch: MailMessageSummary[],
+    note?: Pick<MessageNote, 'summary'>
+  ): void {
     const messages = batch.filter((message) => !message.isRead)
     const latest = messages.at(-1)
 
@@ -267,7 +394,10 @@ export class NotificationManager {
     const single = messages.length === 1
     const { showPreview, sound } = this.preferences
     const subject = trimText(latest.subject || '(nessun oggetto)', NOTIFICATION_SUBJECT_MAX_LENGTH)
-    const preview = trimText(latest.preview, NOTIFICATION_PREVIEW_MAX_LENGTH)
+    const preview = trimText(
+      single && note ? note.summary : latest.preview,
+      NOTIFICATION_PREVIEW_MAX_LENGTH
+    )
     // Only macOS shows a subtitle: elsewhere the subject opens the body.
     const hasSubtitle = process.platform === 'darwin'
     const id = single ? messageKey(latest) : `${account.id}:batch:${Date.now()}`
@@ -465,5 +595,11 @@ export class NotificationManager {
     }
 
     this.pendingByAccount.clear()
+
+    for (const held of this.held.values()) {
+      clearTimeout(held.timer)
+    }
+
+    this.held.clear()
   }
 }

@@ -211,6 +211,11 @@ export interface NotificationPreferences {
   mutedAccountIds: string[]
   /** Sender, subject and first lines; without, an alert says only that mail arrived. */
   showPreview: boolean
+  /**
+   * While the Segretario reads the mail as it comes, only what asks
+   * something of the user and matters is announced, with its note.
+   */
+  onlyImportant: boolean
   sound: boolean
   /** The unread count of Posta in arrivo on the Dock or taskbar icon. */
   badge: boolean
@@ -220,6 +225,7 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   enabled: true,
   mutedAccountIds: [],
   showPreview: true,
+  onlyImportant: true,
   sound: true,
   badge: true
 }
