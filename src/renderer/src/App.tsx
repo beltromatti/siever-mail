@@ -1180,6 +1180,8 @@ function App(): React.JSX.Element {
   const segretarioConfigured = Boolean(
     segretario.status && segretario.status.keyState !== 'missing'
   )
+  // The Agenda holds the calendar's events and the mail's deadlines: either is enough for it.
+  const agendaAvailable = calendarConnected || segretarioConfigured
   const viewCountsTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
@@ -4510,7 +4512,7 @@ function App(): React.JSX.Element {
   const shownPage =
     openPage === 'oggi' && segretarioConfigured
       ? 'Oggi'
-      : openPage === 'agenda' && calendarConnected
+      : openPage === 'agenda' && agendaAvailable
         ? 'Agenda'
         : null
   // What the user is looking at goes along with what they ask the Segretario.
@@ -4817,7 +4819,7 @@ function App(): React.JSX.Element {
                     folders={folders}
                     unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
                     agenda={
-                      calendarConnected
+                      agendaAvailable
                         ? { open: openPage === 'agenda', onOpen: () => setOpenPage('agenda') }
                         : null
                     }
@@ -4959,9 +4961,10 @@ function App(): React.JSX.Element {
                 atWindowTopRight={!segretarioOpen}
                 onOpenMessage={openMessageRef}
               />
-            ) : openPage === 'agenda' && calendarConnected ? (
+            ) : openPage === 'agenda' && agendaAvailable ? (
               <AgendaPage
                 atWindowTopRight={!segretarioOpen}
+                calendarConnected={calendarConnected}
                 showDue={segretarioConfigured}
                 onOpenMessage={openMessageRef}
               />

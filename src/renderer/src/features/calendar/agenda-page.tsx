@@ -58,14 +58,17 @@ function DueLine({
 /**
  * "Agenda": the next two weeks a day at a time — the events of every
  * connected calendar and, beside them, what the mail says is due that day,
- * as the Segretario read it.
+ * as the Segretario read it. Without a calendar, the deadlines alone.
  */
 export function AgendaPage({
   atWindowTopRight,
+  calendarConnected,
   showDue,
   onOpenMessage
 }: {
   atWindowTopRight: boolean
+  /** Without one, the agenda is the mail's deadlines alone, and says how to add the events. */
+  calendarConnected: boolean
   /** The Segretario reads the mail: its deadlines go on their days. */
   showDue: boolean
   onOpenMessage: (ref: MessageRef) => void
@@ -168,6 +171,12 @@ export function AgendaPage({
             <CalendarDays className="text-primary-text size-[15px]" />
             <span className="eyebrow">Le prossime due settimane</span>
           </div>
+          {!calendarConnected && (
+            <p className="text-muted-foreground pt-4 text-[12.5px]">
+              Qui ci sono le scadenze che il Segretario trova nella posta. Per vedere anche gli
+              appuntamenti, collega il calendario in Impostazioni › Account.
+            </p>
+          )}
           {events === null ? (
             <p className="text-muted-foreground flex items-center gap-2 pt-6 text-[13px]">
               <LoaderCircle className="size-4 animate-spin" />
