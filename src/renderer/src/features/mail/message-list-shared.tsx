@@ -175,6 +175,27 @@ export function FlagToggle({
  * The account a message came to, on the rows of Tutti gli account. As quiet as the date
  * beside it, but always there: it is the account a reply or a move acts on.
  */
+/** A conversation's pratica, or topic, on its row. */
+export function TopicTag({
+  label,
+  className
+}: {
+  label: string
+  className?: string
+}): React.JSX.Element {
+  return (
+    <span
+      className={cn(
+        'text-primary-text bg-primary/[0.07] inline-block max-w-[40%] shrink-0 truncate rounded-[4px] px-1 align-middle text-[10.5px] leading-4 font-semibold shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.22)]',
+        className
+      )}
+      title={label}
+    >
+      {label}
+    </span>
+  )
+}
+
 export function AccountTag({
   label,
   className

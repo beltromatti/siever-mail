@@ -32,6 +32,8 @@ import { MESSAGE_TABLE_ROW_HEIGHT_PX } from './message-list-metrics'
 import { MessageListEmpty } from './message-list-empty'
 import { VirtualMessageRows } from './virtual-message-rows'
 
+import { threadKey } from '@renderer/features/segretario/conversation-topics'
+
 import type { MessageListViewProps } from './message-list-view'
 import {
   AccountTag,
@@ -40,6 +42,7 @@ import {
   MessageSectionHeading,
   primaryAddressLabel,
   recipientsLabel,
+  TopicTag,
   UnreadDot
 } from './message-list-shared'
 import { MessageListHeader } from './message-list-header'
@@ -91,7 +94,8 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
     onRowDragStart,
     onRowDragEnd,
     onToggleFlag,
-    onSelectSection
+    onSelectSection,
+    topicTags
   } = props
   const selectedKeys = useMemo(
     () => new Set(selection.selectedRefs.map(messageRefKey)),
@@ -282,6 +286,9 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
                   >
                     <HighlightedText text={message.subject} terms={highlightTerms.subject} />
                   </span>
+                  {topicTags?.get(threadKey(message)) && (
+                    <TopicTag label={topicTags.get(threadKey(message)) ?? ''} />
+                  )}
                   {/* The Segretario's word, after the subject, where the table has room. */}
                   {note && <NoteLine note={note} className="flex-1 basis-0 text-[11.5px]" />}
                 </span>

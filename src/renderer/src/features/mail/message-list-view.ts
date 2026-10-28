@@ -21,6 +21,12 @@ import type { MessageHighlightTerms, PrimaryAddressMode } from './message-list-s
  */
 export interface MessageListViewProps {
   title: string
+  /**
+   * Each conversation's topic as a tag — its pratica — by account and
+   * thread (see `threadKey`); null where it would say nothing, as in a
+   * topic's own list.
+   */
+  topicTags: ReadonlyMap<string, string> | null
   /** Under the header, above the rows: what the Segretario says of a topic's list. */
   banner?: React.ReactNode
   /**

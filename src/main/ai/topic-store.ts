@@ -345,6 +345,14 @@ export class TopicStore {
     })
   }
 
+  /** What a topic is about is to be learnt again: the user moved a conversation in or out of it. */
+  async forgetGist(id: string): Promise<void> {
+    await this.prisma.aiTopic.updateMany({
+      where: { id },
+      data: { gist: null, gistConversations: null }
+    })
+  }
+
   async setGist(id: string, gist: string, conversations: number): Promise<void> {
     await this.prisma.aiTopic.update({
       where: { id },

@@ -1087,8 +1087,22 @@ export class SegretarioService {
     threadId: string,
     topicId: string | null
   ): Promise<void> {
-    await this.requireTopics().link(accountId, threadId, topicId, 'utente')
+    const topics = this.requireTopics()
+    const before = (await topics.threadTopic(accountId, threadId))?.topic.id ?? null
+
+    await topics.link(accountId, threadId, topicId, 'utente')
+
+    // What either topic is about is learnt again, from what it now holds.
+    if (before !== topicId) {
+      for (const changed of [before, topicId]) {
+        if (changed) {
+          await topics.forgetGist(changed)
+        }
+      }
+    }
+
     this.emitNotes({ accountId, messageKeys: [], threadIds: [threadId] })
+    void this.writeTopicGists()
   }
 
   conversationTopics(
@@ -2119,13 +2133,16 @@ export class SegretarioService {
         triage.opened,
         triage.closed.filter((id) => open.some((commitment) => commitment.id === id))
       )
-      await this.fileIntoTopic(
-        account.id,
-        item.threadId,
-        triage.topic,
-        catalog,
-        named.length === 1 ? catalog[named[0]].id : null
-      )
+      // Noise belongs to no matter, whatever words it shares with one.
+      if (triage.state !== 'rumore') {
+        await this.fileIntoTopic(
+          account.id,
+          item.threadId,
+          triage.topic,
+          catalog,
+          named.length === 1 ? catalog[named[0]].id : null
+        )
+      }
       this.triageFailures.delete(failureKey)
       this.options.onNoteWritten({
         accountId: account.id,

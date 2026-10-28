@@ -13,6 +13,7 @@ import {
   resolveSelectionIntent,
   summaryToMessageRef
 } from '@renderer/lib/message-selection'
+import { threadKey } from '@renderer/features/segretario/conversation-topics'
 import { NoteLine, noteKey } from '@renderer/features/segretario/message-notes'
 import { cn, formatDateLabel } from '@renderer/lib/utils'
 import type { MailMessageSummary } from '@shared/models'
@@ -25,6 +26,7 @@ import {
   HighlightedText,
   MessageSectionHeading,
   primaryAddressLabel,
+  TopicTag,
   UnreadDot
 } from './message-list-shared'
 import { MessageListHeader } from './message-list-header'
@@ -57,7 +59,8 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
     onRowDragStart,
     onRowDragEnd,
     onToggleFlag,
-    onSelectSection
+    onSelectSection,
+    topicTags
   } = props
   const selectedKeys = useMemo(
     () => new Set(selection.selectedRefs.map(messageRefKey)),
@@ -110,6 +113,7 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
             const primaryLabel = primaryAddressLabel(message, primaryAddressMode)
             const accountLabel = accountLabels?.get(message.accountId)
             const note = notes.get(noteKey(message))
+            const topicTag = topicTags?.get(threadKey(message))
 
             return (
               <div
@@ -176,6 +180,7 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
                     >
                       <HighlightedText text={message.subject} terms={highlightTerms.subject} />
                     </p>
+                    {topicTag && <TopicTag label={topicTag} />}
                     <AttachmentMark present={message.hasAttachments} />
                     <FlagToggle
                       flagged={message.isFlagged}

@@ -66,6 +66,7 @@ import { isIcsAttachment } from '@shared/calendar'
 import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
 import { TopicBanner } from '@renderer/features/segretario/topic-banner'
 import { segretarioSuggestions } from '@renderer/features/segretario/suggestions'
+import { useConversationTopicTags } from '@renderer/features/segretario/conversation-topics'
 import { plainTextToComposerHtml, writtenText } from '@renderer/features/mail/composer-body'
 import { parseRecipients } from '@shared/email-address'
 import type {
@@ -762,6 +763,7 @@ function App(): React.JSX.Element {
   // The topics — a company's pratiche — the Segretario files conversations into, and their name.
   const [topics, setTopics] = useState<Topic[]>([])
   const [topicsLabel, setTopicsLabel] = useState<string | null>(null)
+  const conversationTopicTags = useConversationTopicTags(messages, topics)
 
   const refreshSegretarioViews = useCallback(async (): Promise<void> => {
     try {
@@ -4509,6 +4511,7 @@ function App(): React.JSX.Element {
 
   const listViewProps: MessageListViewProps = {
     title: currentViewLabel,
+    topicTags: currentTopicId || !segretarioConfigured ? null : conversationTopicTags,
     askSegretario: segretarioConfigured
       ? {
           busy: askingSegretario,

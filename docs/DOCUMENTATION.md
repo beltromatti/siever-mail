@@ -817,8 +817,10 @@ names one pratica alone goes there, whatever the model guessed; a "new"
 topic whose title names one is that one; a topic the Segretario made and
 the extension later brings — the job got its folder — is folded into it.
 The user moves a conversation from the reader ("Cambia", which also makes
-a new topic) and that choice is kept; a topic the Segretario made, left
-empty, goes. Each topic opens as a list, like a view, of every message of
+a new topic) and that choice is kept, and what both topics are about is
+learnt again; a topic the Segretario made, left empty, goes. Noise is never
+filed. In every other list each row shows its conversation's topic as a
+tag — a pratica by its number (`conversation-topics.ts`). Each topic opens as a list, like a view, of every message of
 its conversations (`segretarioTopicPath`), under "Il punto" — where it
 stands, written by the Segretario when the topic moved since
 (`argomento.md`), and what is open in it. The sidebar lists the busiest
