@@ -1,0 +1,658 @@
+import { placeholders, type Sql } from '../sql'
+import {
+  RegistryRefusal,
+  type Actor,
+  type CommitmentHistoryEntry,
+  type CommitmentKind,
+  type CommitmentRecord,
+  type CommitmentStatus,
+  type Evidence,
+  type MessageAnchor,
+  type ThreadRef
+} from './types'
+
+interface ItemRow {
+  id: number
+  account_id: string
+  thread_id: string
+  message_key: string
+  kind: string
+  text: string
+  due: string | null
+  status: string
+  until: string | null
+  closed_by: string | null
+  reason: string | null
+  evidence_key: string | null
+  question: string | null
+  created_by: string
+  run_id: string | null
+  revision: number
+  created_at: number
+  updated_at: number | null
+  closed_at: number | null
+}
+
+const COLUMNS = `id, account_id, thread_id, message_key, kind, text, due, status, until, closed_by,
+  reason, evidence_key, question, created_by, run_id, revision, created_at, updated_at, closed_at`
+
+/** How many times a write is tried again when another writer got there between the read and the write. */
+const WRITE_ATTEMPTS = 4
+
+function recordOf(row: ItemRow): CommitmentRecord {
+  const createdAt = Number(row.created_at)
+  return {
+    id: Number(row.id),
+    accountId: row.account_id,
+    threadId: row.thread_id,
+    messageKey: row.message_key,
+    kind: row.kind as CommitmentKind,
+    text: row.text,
+    due: row.due,
+    status: row.status as CommitmentStatus,
+    until: row.until,
+    setBy: row.closed_by === 'utente' || row.closed_by === 'sistema' ? row.closed_by : 'segretario',
+    reason: row.reason,
+    evidenceKey: row.evidence_key,
+    question: row.question,
+    createdBy:
+      row.created_by === 'utente' || row.created_by === 'sistema' ? row.created_by : 'segretario',
+    runId: row.run_id,
+    revision: Number(row.revision),
+    createdAt,
+    updatedAt: row.updated_at === null ? createdAt : Number(row.updated_at),
+    closedAt: row.closed_at === null ? null : Number(row.closed_at)
+  }
+}
+
+/** What history keeps of a commitment: the fields a change can touch. */
+function snapshotOf(record: CommitmentRecord): Partial<CommitmentRecord> {
+  return {
+    kind: record.kind,
+    text: record.text,
+    due: record.due,
+    status: record.status,
+    until: record.until,
+    setBy: record.setBy,
+    reason: record.reason,
+    evidenceKey: record.evidenceKey,
+    question: record.question,
+    threadId: record.threadId,
+    messageKey: record.messageKey,
+    revision: record.revision
+  }
+}
+
+/** The same thing said again with other spacing or punctuation is the same thing. */
+export function sameWording(left: string, right: string): boolean {
+  const fold = (text: string): string =>
+    text
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .trim()
+
+  return fold(left) === fold(right)
+}
+
+/** A day as AAAA-MM-GG, or null; anything else is refused. */
+function dayOrNull(value: string | null | undefined, name: string): string | null {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
+    throw new RegistryRefusal(`${name}: una data come AAAA-MM-GG.`)
+  }
+
+  return value
+}
+
+const STATUS_WORDS: Record<CommitmentStatus, string> = {
+  aperta: 'aperta',
+  fatta: 'fatta',
+  non_serve: 'non serve più',
+  rinviata: 'rinviata'
+}
+
+/**
+ * The commitments — what is open between the user and the world — with
+ * their whole life: done, not needed, put off, opened again, each step
+ * kept with who took it and why. Every write goes through a revision, so
+ * two writers never silently overwrite each other; and what the user
+ * decided is not overturned by a run in the background unless a message
+ * newer than the decision says otherwise.
+ */
+export class CommitmentStore {
+  constructor(private readonly sql: Sql) {}
+
+  async get(id: number): Promise<CommitmentRecord | null> {
+    const row = await this.sql.get<ItemRow>(`SELECT ${COLUMNS} FROM ai_items WHERE id = ?`, id)
+    return row ? recordOf(row) : null
+  }
+
+  async many(ids: ReadonlyArray<number>): Promise<CommitmentRecord[]> {
+    if (ids.length === 0) {
+      return []
+    }
+
+    const rows = await this.sql.all<ItemRow>(
+      `SELECT ${COLUMNS} FROM ai_items WHERE id IN (${placeholders(ids)}) ORDER BY id`,
+      ...ids
+    )
+    return rows.map(recordOf)
+  }
+
+  /**
+   * These conversations' commitments: those still open or put off, and
+   * those that ended in the last `closedWithinDays` — what a reader of the
+   * conversation needs, with what was settled lately so it is not opened
+   * again.
+   */
+  async ofThreads(
+    threads: ReadonlyArray<ThreadRef>,
+    closedWithinDays = 14
+  ): Promise<CommitmentRecord[]> {
+    if (threads.length === 0) {
+      return []
+    }
+
+    const since = Date.now() - closedWithinDays * 24 * 60 * 60 * 1000
+    const rows = await this.sql.all<ItemRow>(
+      `SELECT ${COLUMNS} FROM ai_items
+       WHERE (${threads.map(() => '(account_id = ? AND thread_id = ?)').join(' OR ')})
+         AND (status IN ('aperta', 'rinviata') OR COALESCE(updated_at, created_at) >= ?)
+       ORDER BY CASE status WHEN 'aperta' THEN 0 WHEN 'rinviata' THEN 1 ELSE 2 END, created_at`,
+      ...threads.flatMap((thread) => [thread.accountId, thread.threadId]),
+      since
+    )
+    return rows.map(recordOf)
+  }
+
+  /** What is open, the nearest due first, then the newest: across all accounts, or these. */
+  async open(
+    filter: {
+      accountIds?: ReadonlyArray<string>
+      kinds?: ReadonlyArray<CommitmentKind>
+      /** Due on or before this day, AAAA-MM-GG. */
+      dueBy?: string
+      threads?: ReadonlyArray<ThreadRef>
+      includeDeferred?: boolean
+    } = {}
+  ): Promise<CommitmentRecord[]> {
+    const where: string[] = [
+      filter.includeDeferred ? "status IN ('aperta', 'rinviata')" : "status = 'aperta'"
+    ]
+    const params: unknown[] = []
+
+    if (filter.accountIds) {
+      if (filter.accountIds.length === 0) {
+        return []
+      }
+
+      where.push(`account_id IN (${placeholders(filter.accountIds)})`)
+      params.push(...filter.accountIds)
+    }
+
+    if (filter.kinds && filter.kinds.length > 0) {
+      where.push(`kind IN (${placeholders(filter.kinds)})`)
+      params.push(...filter.kinds)
+    }
+
+    if (filter.dueBy) {
+      where.push('due IS NOT NULL AND due <= ?')
+      params.push(filter.dueBy)
+    }
+
+    if (filter.threads) {
+      if (filter.threads.length === 0) {
+        return []
+      }
+
+      where.push(`(${filter.threads.map(() => '(account_id = ? AND thread_id = ?)').join(' OR ')})`)
+      params.push(...filter.threads.flatMap((thread) => [thread.accountId, thread.threadId]))
+    }
+
+    const rows = await this.sql.all<ItemRow>(
+      `SELECT ${COLUMNS} FROM ai_items WHERE ${where.join(' AND ')}
+       ORDER BY due IS NULL, due, created_at DESC`,
+      ...params
+    )
+    return rows.map(recordOf)
+  }
+
+  /**
+   * Opens a commitment on a message. The same thing already open in the
+   * conversation, worded alike, is the one returned: opening twice opens
+   * once.
+   */
+  async create(
+    anchor: MessageAnchor,
+    input: { kind: CommitmentKind; text: string; due?: string | null; question?: string | null },
+    actor: Actor
+  ): Promise<{ record: CommitmentRecord; created: boolean; historyId: number | null }> {
+    const text = input.text.trim()
+
+    if (!text) {
+      throw new RegistryRefusal('Una cosa aperta ha bisogno di un testo.')
+    }
+
+    const due = dayOrNull(input.due, 'scadenza')
+    const existing = (
+      await this.open({ threads: [anchor], kinds: [input.kind], includeDeferred: true })
+    ).find((candidate) => sameWording(candidate.text, text))
+
+    if (existing) {
+      return { record: existing, created: false, historyId: null }
+    }
+
+    const now = Date.now()
+    const row = await this.sql.get<ItemRow>(
+      `INSERT INTO ai_items (
+        account_id, thread_id, message_key, kind, text, due, status, until, closed_by, reason,
+        evidence_key, question, created_by, run_id, revision, created_at, updated_at, closed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'aperta', NULL, ?, NULL, NULL, ?, ?, ?, 1, ?, ?, NULL)
+      RETURNING ${COLUMNS}`,
+      anchor.accountId,
+      anchor.threadId,
+      anchor.messageKey,
+      input.kind,
+      text,
+      due,
+      actor.by,
+      input.question?.trim() || null,
+      actor.by,
+      actor.runId ?? null,
+      now,
+      now
+    )
+
+    if (!row) {
+      throw new Error('The commitment just written could not be read back.')
+    }
+
+    const record = recordOf(row)
+    const historyId = await this.addHistory(
+      record.id,
+      actor,
+      'apri',
+      null,
+      snapshotOf(record),
+      null
+    )
+    return { record, created: true, historyId }
+  }
+
+  /** Changes what a commitment says: its words, its date, its kind, the question it asks. */
+  async edit(
+    id: number,
+    changes: {
+      text?: string
+      due?: string | null
+      kind?: CommitmentKind
+      question?: string | null
+    },
+    actor: Actor,
+    options: { seenRevision?: number; evidence?: Evidence; reason?: string } = {}
+  ): Promise<{ record: CommitmentRecord; historyId: number }> {
+    const due = changes.due === undefined ? undefined : dayOrNull(changes.due, 'scadenza')
+
+    return this.write(
+      id,
+      actor,
+      options,
+      'aggiorna',
+      (current) => ({
+        text: changes.text?.trim() || current.text,
+        due: due === undefined ? current.due : due,
+        kind: changes.kind ?? current.kind,
+        question:
+          changes.question === undefined ? current.question : changes.question?.trim() || null
+      }),
+      options.reason ?? null
+    )
+  }
+
+  /**
+   * Done, not needed, put off until a day, or open again. Closing what is
+   * already closed the same way changes nothing.
+   */
+  async setStatus(
+    id: number,
+    status: CommitmentStatus,
+    actor: Actor,
+    options: {
+      seenRevision?: number
+      evidence?: Evidence
+      reason?: string | null
+      until?: string | null
+    } = {}
+  ): Promise<{ record: CommitmentRecord; historyId: number | null }> {
+    const until = status === 'rinviata' ? dayOrNull(options.until, 'fino a') : null
+
+    if (status === 'rinviata' && !until) {
+      throw new RegistryRefusal('Per rinviare serve il giorno in cui torna aperta (`fino_a`).')
+    }
+
+    const current = await this.require(id)
+
+    if (current.status === status && current.until === until) {
+      return { record: current, historyId: null }
+    }
+
+    const action =
+      status === 'aperta'
+        ? 'riapri'
+        : status === 'rinviata'
+          ? 'rinvia'
+          : status === 'fatta'
+            ? 'fatta'
+            : 'non_serve'
+
+    return this.write(
+      id,
+      actor,
+      options,
+      action,
+      () => ({
+        status,
+        until,
+        setBy: actor.by,
+        reason: options.reason?.trim() || null,
+        evidenceKey: options.evidence?.messageKey ?? null,
+        // Whatever it asked the user, a decision answers.
+        question: null
+      }),
+      options.reason ?? null
+    )
+  }
+
+  /**
+   * Several commitments that are one: the first is kept, the others close
+   * as not needed, pointing to it.
+   */
+  async merge(
+    keepId: number,
+    dropIds: ReadonlyArray<number>,
+    actor: Actor
+  ): Promise<Array<{ record: CommitmentRecord; historyId: number | null }>> {
+    const kept = await this.require(keepId)
+    const results: Array<{ record: CommitmentRecord; historyId: number | null }> = []
+
+    for (const id of dropIds.filter((candidate) => candidate !== keepId)) {
+      results.push(
+        await this.setStatus(id, 'non_serve', actor, {
+          reason: `È la stessa cosa di «${kept.text}» (#${kept.id}).`
+        })
+      )
+    }
+
+    return results
+  }
+
+  /**
+   * What was open in conversations that turned out to be one matter with
+   * another — the same alert again, the same request in a new thread —
+   * moves to the message that carries it now.
+   */
+  async carry(
+    from: ReadonlyArray<ThreadRef>,
+    to: MessageAnchor,
+    actor: Actor
+  ): Promise<CommitmentRecord[]> {
+    const moving = (await this.open({ threads: from, includeDeferred: true })).filter(
+      (record) => record.threadId !== to.threadId || record.accountId !== to.accountId
+    )
+
+    for (const record of moving) {
+      await this.write(
+        record.id,
+        { ...actor, background: false },
+        {},
+        'sposta',
+        () => ({ threadId: to.threadId, messageKey: to.messageKey }),
+        'Stessa cosa, seguita dal messaggio più recente.'
+      )
+    }
+
+    return moving
+  }
+
+  /** What was put off until today opens again, by the app: the day came. */
+  async wakeDeferred(today: string): Promise<CommitmentRecord[]> {
+    const due = (
+      await this.sql.all<ItemRow>(
+        `SELECT ${COLUMNS} FROM ai_items WHERE status = 'rinviata' AND until IS NOT NULL AND until <= ?`,
+        today
+      )
+    ).map(recordOf)
+    const woken: CommitmentRecord[] = []
+
+    for (const record of due) {
+      const { record: opened } = await this.setStatus(
+        record.id,
+        'aperta',
+        { by: 'sistema' },
+        { reason: `Rinviata fino al ${record.until}: è il giorno.` }
+      )
+      woken.push(opened)
+    }
+
+    return woken
+  }
+
+  async history(id: number): Promise<CommitmentHistoryEntry[]> {
+    const rows = await this.sql.all<{
+      id: number
+      item_id: number
+      at: number
+      actor: string
+      run_id: string | null
+      action: string
+      before_json: string | null
+      after_json: string
+      reason: string | null
+    }>('SELECT * FROM ai_item_history WHERE item_id = ? ORDER BY id', id)
+
+    return rows.map((row) => ({
+      id: Number(row.id),
+      itemId: Number(row.item_id),
+      at: Number(row.at),
+      actor: row.actor as CommitmentHistoryEntry['actor'],
+      runId: row.run_id,
+      action: row.action,
+      before: row.before_json ? (JSON.parse(row.before_json) as Partial<CommitmentRecord>) : null,
+      after: JSON.parse(row.after_json) as Partial<CommitmentRecord>,
+      reason: row.reason
+    }))
+  }
+
+  /**
+   * Puts a commitment back as it was before a change — a step of the
+   * Segretario's the user undoes. Only while nothing changed it since: a
+   * later change is not thrown away by an undo of an earlier one.
+   */
+  async undo(
+    historyId: number,
+    actor: Actor
+  ): Promise<{ record: CommitmentRecord; historyId: number | null } | null> {
+    const row = await this.sql.get<{
+      item_id: number
+      action: string
+      before_json: string | null
+      after_json: string
+    }>(
+      'SELECT item_id, action, before_json, after_json FROM ai_item_history WHERE id = ?',
+      historyId
+    )
+
+    if (!row) {
+      return null
+    }
+
+    const current = await this.require(Number(row.item_id))
+    const after = JSON.parse(row.after_json) as Partial<CommitmentRecord>
+
+    if (after.revision !== current.revision) {
+      throw new RegistryRefusal(
+        'Dopo questa modifica la cosa è cambiata ancora: non la rimetto com’era.',
+        current
+      )
+    }
+
+    if (!row.before_json) {
+      // Undoing an opening: it was not needed.
+      return this.setStatus(current.id, 'non_serve', actor, { reason: 'Annullata.' })
+    }
+
+    const before = JSON.parse(row.before_json) as Partial<CommitmentRecord>
+    return this.write(
+      current.id,
+      actor,
+      {},
+      'annulla',
+      () => ({
+        kind: before.kind,
+        text: before.text,
+        due: before.due,
+        status: before.status,
+        until: before.until,
+        setBy: actor.by,
+        reason: before.reason ?? null,
+        evidenceKey: before.evidenceKey ?? null,
+        question: before.question ?? null,
+        threadId: before.threadId,
+        messageKey: before.messageKey
+      }),
+      'Annullato.'
+    )
+  }
+
+  /* ───────────────────────────── internals ───────────────────────────── */
+
+  private async require(id: number): Promise<CommitmentRecord> {
+    const record = await this.get(id)
+
+    if (!record) {
+      throw new RegistryRefusal(`Non esiste una cosa aperta #${id}.`)
+    }
+
+    return record
+  }
+
+  /**
+   * One write: read, check, write if nobody wrote in between — tried again
+   * when somebody did and the caller was not working from an older look.
+   */
+  private async write(
+    id: number,
+    actor: Actor,
+    options: { seenRevision?: number; evidence?: Evidence },
+    action: string,
+    change: (current: CommitmentRecord) => Partial<CommitmentRecord>,
+    reason: string | null
+  ): Promise<{ record: CommitmentRecord; historyId: number }> {
+    for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt += 1) {
+      const current = await this.require(id)
+
+      if (options.seenRevision !== undefined && options.seenRevision !== current.revision) {
+        throw new RegistryRefusal(
+          `La cosa #${id} è cambiata da quando l'hai letta: ora è ${STATUS_WORDS[current.status]}${
+            current.setBy === 'utente' ? ', per mano dell’utente' : ''
+          } («${current.text}»). Rileggila e decidi di nuovo.`,
+          current
+        )
+      }
+
+      this.guard(current, actor, options.evidence)
+
+      const next = { ...current, ...change(current) }
+      const now = Date.now()
+      const closing = next.status === 'fatta' || next.status === 'non_serve'
+      const changed = await this.sql.run(
+        `UPDATE ai_items SET kind = ?, text = ?, due = ?, status = ?, until = ?, closed_by = ?,
+           reason = ?, evidence_key = ?, question = ?, thread_id = ?, message_key = ?,
+           closed_at = ?, run_id = COALESCE(?, run_id), revision = revision + 1, updated_at = ?
+         WHERE id = ? AND revision = ?`,
+        next.kind,
+        next.text,
+        next.due,
+        next.status,
+        next.until,
+        next.setBy,
+        next.reason,
+        next.evidenceKey,
+        next.question,
+        next.threadId,
+        next.messageKey,
+        closing ? (current.closedAt ?? now) : null,
+        actor.runId ?? null,
+        now,
+        id,
+        current.revision
+      )
+
+      if (changed === 1) {
+        const record = await this.require(id)
+        const historyId = await this.addHistory(
+          id,
+          actor,
+          action,
+          snapshotOf(current),
+          snapshotOf(record),
+          reason
+        )
+        return { record, historyId }
+      }
+    }
+
+    throw new RegistryRefusal(`La cosa #${id} cambia di continuo: riprova tra poco.`)
+  }
+
+  /**
+   * The user's word holds against a run in the background: it changes
+   * what the user decided only with a message that came after the decision.
+   */
+  private guard(current: CommitmentRecord, actor: Actor, evidence?: Evidence): void {
+    if (actor.by !== 'segretario' || !actor.background || current.setBy !== 'utente') {
+      return
+    }
+
+    const evidenceAt = evidence ? Date.parse(evidence.dateIso) : Number.NaN
+
+    if (!(evidenceAt > current.updatedAt)) {
+      throw new RegistryRefusal(
+        `L'utente ha deciso lui su #${current.id} («${current.text}», ${STATUS_WORDS[current.status]}) il ${new Date(
+          current.updatedAt
+        ).toLocaleString(
+          'it-IT'
+        )}: cambiala solo se un messaggio arrivato dopo lo giustifica, e indicalo come prova.`,
+        current
+      )
+    }
+  }
+
+  private async addHistory(
+    itemId: number,
+    actor: Actor,
+    action: string,
+    before: Partial<CommitmentRecord> | null,
+    after: Partial<CommitmentRecord>,
+    reason: string | null
+  ): Promise<number> {
+    const row = await this.sql.get<{ id: number }>(
+      `INSERT INTO ai_item_history (item_id, at, actor, run_id, action, before_json, after_json, reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      itemId,
+      Date.now(),
+      actor.by,
+      actor.runId ?? null,
+      action,
+      before ? JSON.stringify(before) : null,
+      JSON.stringify(after),
+      reason
+    )
+    return Number(row?.id ?? 0)
+  }
+}
