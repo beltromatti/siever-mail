@@ -33,3 +33,4 @@ scripts/.e2e-out/
 
 # --- Local crash reports / scratch ---
 /dev/
+PROMPT.md
