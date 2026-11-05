@@ -41,6 +41,8 @@ export interface MessageLocation {
   from: MailAddress[]
   /** Only in the Trash or Spam: what is open in it is set aside until it comes back. */
   setAside: boolean
+  /** A draft of the user's, not sent: it has not come or gone yet. */
+  draft: boolean
 }
 
 /**

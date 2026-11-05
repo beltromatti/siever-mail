@@ -18,6 +18,7 @@ import {
   type ComposeResult,
   type ComposeSpec,
   type ConnectionLearning,
+  type ConnectionReadiness,
   type DayLine,
   type FilingContext,
   type EngineState,
@@ -26,10 +27,12 @@ import {
   type MessageNote,
   type MessageRowWork,
   type MessageWork,
+  type OnboardingState,
   type Project,
   type ProjectDetail,
   type ProjectLabel,
   type Proposal,
+  type ReadingStatus,
   type ReviewRequest,
   type SavedSearch,
   type SegretarioContext,
@@ -56,7 +59,7 @@ import {
 } from './agent/tool-types'
 import { AiStore } from './ai-store'
 import { periodWords, searchPeriod, type AskedSearch } from './ask-mail'
-import { SegretarioEngine } from './engine/engine'
+import { READING_HORIZON_DAYS, SegretarioEngine } from './engine/engine'
 import { WorkQueue } from './engine/work-queue'
 import { folderQueryLabel, searchMail, searchScope } from './mail-search'
 import { MAX_NOTE_CHARS, normalizeMemoryPath, Notebook } from './memory/notebook'
@@ -120,6 +123,8 @@ const PURPOSE_LABELS: Readonly<Record<string, string>> = {
 }
 
 const PRIORITY_ORDER = { alta: 0, media: 1, bassa: 2 } as const
+/** In `ai_meta`: the guided setup under way. */
+const ONBOARDING = 'onboarding'
 
 export interface SegretarioServiceOptions {
   database: { storeClient(): Promise<PrismaClient> }
@@ -295,6 +300,7 @@ export class SegretarioService {
       queue: new WorkQueue(sql),
       emit: (event) => this.emit(event),
       ready: () => this.ready(),
+      onboarding: () => this.getOnboarding(),
       onStateChange: () => this.engineChanged(),
       onPause: (reason) => {
         if (reason) {
@@ -616,6 +622,43 @@ export class SegretarioService {
   /** The first reading is prepared with the user waiting: more runs at once. */
   setPreparing(preparing: boolean): void {
     this.engine?.setPreparing(preparing)
+  }
+
+  /* ──────────────────────────────── the guided setup ──────────────────────────────── */
+
+  async getOnboarding(): Promise<OnboardingState | null> {
+    const stored = await this.db.store.meta(ONBOARDING)
+    return stored ? (JSON.parse(stored) as OnboardingState) : null
+  }
+
+  async setOnboarding(state: OnboardingState | null): Promise<void> {
+    if (state) {
+      await this.db.store.setMeta(ONBOARDING, JSON.stringify(state))
+    } else {
+      await this.db.store.deleteMeta(ONBOARDING)
+      // The setup is over: the reading goes back to its usual pace.
+      this.setPreparing(false)
+    }
+
+    // A step on may let work through that waited for it.
+    this.engine?.wake()
+  }
+
+  /** Whether each connection's recent mail is in and read by the index: what Conoscimi and the reading start from. */
+  async connectionReadiness(accountIds: ReadonlyArray<string>): Promise<ConnectionReadiness[]> {
+    return Promise.all(
+      accountIds.map(async (accountId) => ({
+        accountId,
+        recentMailIndexed: await this.options.mail.recentMailIndexed(
+          accountId,
+          READING_HORIZON_DAYS
+        )
+      }))
+    )
+  }
+
+  getReadingStatus(): Promise<ReadingStatus> {
+    return this.db.engine.readingStatus()
   }
 
   /** Tells the window the engine's state, at most a few times a second. */

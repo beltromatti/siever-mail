@@ -131,7 +131,12 @@ function EngineLine({
  * credit, what the Segretario has cost, and what happens to the mail it
  * reads. The model is not a choice: SIEVER Mail follows the newest one.
  */
-export function SegretarioSection(): React.JSX.Element {
+export function SegretarioSection({
+  onEnableAi
+}: {
+  /** Turning the AI on goes through the guided setup: Conoscimi, then the reading. */
+  onEnableAi: () => void
+}): React.JSX.Element {
   const [status, setStatus] = useState<SegretarioStatus | null>(null)
   const [spending, setSpending] = useState<SegretarioSpending | null>(null)
   const [preferences, setPreferences] = useState<SegretarioPreferences | null>(null)
@@ -507,7 +512,9 @@ export function SegretarioSection(): React.JSX.Element {
             <Switch
               id="segretario-enabled"
               checked={preferences.enabled}
-              onCheckedChange={(enabled) => void changePreferences({ enabled })}
+              onCheckedChange={(enabled) =>
+                enabled ? onEnableAi() : void changePreferences({ enabled })
+              }
             />
           </label>
 

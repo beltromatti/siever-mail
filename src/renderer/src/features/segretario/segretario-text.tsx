@@ -9,13 +9,13 @@ const INTERNAL_LINK_PREFIX = '#segretario/'
 
 /**
  * The Segretario writes links to what it found as `[testo](mail:m4)`,
- * `(file:f2)`, `(bozza:b1)`, `(argomento:a1)`, `(evento:e1)`. They become internal anchors before the
+ * `(file:f2)`, `(bozza:b1)`, `(progetto:p1)`, `(evento:e1)`. They become internal anchors before the
  * markdown is read — a sanitiser would drop an unknown scheme — and chips
  * when drawn.
  */
 function internalizeLinks(markdown: string): string {
   return markdown.replace(
-    /\]\(\s*(mail|file|bozza|argomento|evento)\s*:\s*([a-z]\d+)\s*\)/gi,
+    /\]\(\s*(mail|file|bozza|progetto|evento)\s*:\s*([a-z]\d+)\s*\)/gi,
     (_match, kind: string, handle: string) =>
       `](${INTERNAL_LINK_PREFIX}${kind.toLowerCase()}/${handle.toLowerCase()})`
   )
@@ -25,7 +25,7 @@ const CHIP_ICONS = {
   message: Mail,
   file: FileText,
   draft: PenLine,
-  topic: Briefcase,
+  project: Briefcase,
   event: CalendarDays
 } as const
 

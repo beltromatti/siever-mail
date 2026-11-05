@@ -92,6 +92,22 @@ const composeResultSchema = z.union([
 
 const textSchema = z.string().trim().min(1, 'Scrivi qualcosa al Segretario.').max(20_000)
 
+const onboardingSchema = z
+  .object({
+    case: z.enum([
+      'primo-avvio',
+      'nuova-connessione',
+      'ai-prima-volta',
+      'ai-riaccesa',
+      'conoscimi'
+    ]),
+    step: z.enum(['connessioni', 'segretario', 'preparazione', 'conoscimi', 'lettura', 'entra']),
+    accountIds: z.array(z.string().min(1).max(100)).max(100),
+    conoscimiId: z.string().min(1).max(100).nullable(),
+    startedAt: z.number().int().nonnegative()
+  })
+  .strict()
+
 /**
  * The Segretario's channels. Each waits for it to be open — after the
  * storage and the mail engine — and checks what the page sends.
@@ -151,6 +167,17 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.listLearning, () => segretario.listLearning())
   handle(SEGRETARIO_IPC.startConoscimi, (accountIds: unknown) =>
     segretario.startConoscimi(z.array(idSchema).max(100).optional().parse(accountIds))
+  )
+  handle(SEGRETARIO_IPC.getOnboarding, () => segretario.getOnboarding())
+  handle(SEGRETARIO_IPC.setOnboarding, (state: unknown) =>
+    segretario.setOnboarding(onboardingSchema.nullable().parse(state))
+  )
+  handle(SEGRETARIO_IPC.connectionReadiness, (accountIds: unknown) =>
+    segretario.connectionReadiness(z.array(idSchema).max(100).parse(accountIds))
+  )
+  handle(SEGRETARIO_IPC.getReadingStatus, () => segretario.getReadingStatus())
+  handle(SEGRETARIO_IPC.setPreparing, (preparing: unknown) =>
+    segretario.setPreparing(z.boolean().parse(preparing))
   )
   handle(SEGRETARIO_IPC.draftSent, (draftId: unknown, writtenText: unknown) =>
     segretario.draftSent(idSchema.parse(draftId), z.string().max(200_000).parse(writtenText))

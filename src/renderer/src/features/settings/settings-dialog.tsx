@@ -96,6 +96,10 @@ interface SettingsDialogProps {
   onClearAccountData: (accountId: string) => void
   onClearDatabaseData: () => void
   onAddAccount: () => void
+  /** The AI switched on: the guided setup takes it from there. */
+  onEnableAi: () => void
+  /** Conoscimi asked again: the guided setup runs it. */
+  onRedoConoscimi: () => void
   /** The accounts "Tutti gli account" gathers changed. */
   onUnifiedPreferencesChanged: () => void
 }
@@ -301,6 +305,8 @@ export function SettingsDialog({
   onClearAccountData,
   onClearDatabaseData,
   onAddAccount,
+  onEnableAi,
+  onRedoConoscimi,
   onUnifiedPreferencesChanged
 }: SettingsDialogProps): React.JSX.Element {
   const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>(
@@ -960,9 +966,9 @@ export function SettingsDialog({
                 </div>
               </div>
             ) : activeSectionId === 'segretario' ? (
-              <SegretarioSection />
+              <SegretarioSection onEnableAi={onEnableAi} />
             ) : activeSectionId === 'memoria' ? (
-              <MemorySection />
+              <MemorySection onRedoConoscimi={onRedoConoscimi} />
             ) : activeSectionId === 'notifications' ? (
               <NotificationsSection accounts={accounts} />
             ) : activeSectionId === 'shortcuts' ? (

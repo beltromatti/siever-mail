@@ -150,6 +150,10 @@ export class AiStore {
     )
   }
 
+  async deleteMeta(key: string): Promise<void> {
+    await this.sql.run('DELETE FROM ai_meta WHERE key = ?', key)
+  }
+
   async setMeta(key: string, value: string): Promise<void> {
     await this.sql.run(
       'INSERT INTO ai_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',

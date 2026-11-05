@@ -7,7 +7,7 @@ import {
   ToolInputError,
   type SegretarioTool
 } from '../agent/tool-types'
-import { resolveMessage } from './anchors'
+import { resolveSentOrReceived } from './anchors'
 
 /**
  * Replies prepared ahead: what the user finds written in the reader, in
@@ -40,7 +40,7 @@ export const replyTool: SegretarioTool = {
   async execute(args, context) {
     const action = requireString(args, 'azione')
     const handle = requireString(args, 'messaggio')
-    const message = await resolveMessage(context, handle)
+    const message = await resolveSentOrReceived(context, handle)
     const key = seenKey('reply', message.accountId, message.messageKey)
 
     try {

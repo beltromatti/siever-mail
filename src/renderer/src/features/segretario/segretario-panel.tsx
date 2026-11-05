@@ -467,7 +467,8 @@ function DiaryView({
   )
 }
 
-function Thread({
+/** A run's page, as it is written: the user's words, the Segretario's, its tools, what it changed. */
+export function ActivityThread({
   state,
   onOpen,
   onApprove,
@@ -801,7 +802,7 @@ export function SegretarioPanel({
           }}
         />
       ) : state.selectedId ? (
-        <Thread
+        <ActivityThread
           state={state}
           onOpen={onOpenHandle}
           onApprove={(approval, approved) =>

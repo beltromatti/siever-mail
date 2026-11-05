@@ -11,7 +11,7 @@ import {
   type SegretarioTool,
   type ToolContext
 } from '../agent/tool-types'
-import { evidenceOf, resolveMessage } from './anchors'
+import { evidenceOf, resolveSentOrReceived } from './anchors'
 import { commitmentLine, rememberCommitments } from './describe'
 import { countOf } from './format'
 
@@ -49,7 +49,7 @@ export const noteTool: SegretarioTool = {
   running: () => 'Annoto…',
   async execute(args, context) {
     const handle = requireString(args, 'messaggio')
-    const message = await resolveMessage(context, handle)
+    const message = await resolveSentOrReceived(context, handle)
     const nature = requireString(args, 'natura') as NoteNature
     const priority = requireString(args, 'importanza') as NotePriority
 
@@ -115,7 +115,7 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
         throw new ToolInputError(`\`tipo\` è uno di: ${KINDS.join(', ')}.`)
       }
 
-      const message = await resolveMessage(context, handle)
+      const message = await resolveSentOrReceived(context, handle)
       const { record, created } = await context.registry.openCommitment(
         message,
         {

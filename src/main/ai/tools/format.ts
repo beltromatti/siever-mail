@@ -87,9 +87,11 @@ export function countOf(count: number, one: string, many: string): string {
 const SHORT_DATE = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
 
 /** A calendar day written AAAA-MM-GG, as a line says it: "13 ott". */
-export function shortDate(day: string): string {
-  const [year, month, date] = day.split('-').map(Number)
-  return SHORT_DATE.format(new Date(year, month - 1, date))
+/** A day — AAAA-MM-GG, or an instant on its local day — as a short date; what is no date stays as it is. */
+export function shortDate(value: string): string {
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim())
+  const date = day ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])) : new Date(value)
+  return Number.isNaN(date.getTime()) ? value : SHORT_DATE.format(date)
 }
 
 /**

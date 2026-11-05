@@ -11,6 +11,8 @@ export interface ResolvedMessage extends MessageAnchor {
   direction: 'in' | 'out'
   /** Only in the Trash or Spam. */
   setAside: boolean
+  /** A draft of the user's, not sent. */
+  draft: boolean
 }
 
 /**
@@ -51,8 +53,28 @@ export async function resolveMessage(
     direction: location.from.some((address) => own.has(address.address.toLowerCase()))
       ? 'out'
       : 'in',
-    setAside: location.setAside
+    setAside: location.setAside,
+    draft: location.draft
   }
+}
+
+/**
+ * A message that has come or gone — what a note, a commitment or a reply
+ * hangs off — or the refusal, for a draft the user has not sent.
+ */
+export async function resolveSentOrReceived(
+  context: ToolContext,
+  handle: string
+): Promise<ResolvedMessage> {
+  const message = await resolveMessage(context, handle)
+
+  if (message.draft) {
+    throw new ToolInputError(
+      `«${handle}» è una bozza dell'utente, non ancora mandata: note, cose aperte e risposte sono dei messaggi arrivati o mandati. Se la bozza conta, diglielo, o tienine conto nella cosa aperta del messaggio a cui risponde.`
+    )
+  }
+
+  return message
 }
 
 /** A message given as proof of a change: newer than the decision it overturns, or no proof. */
@@ -64,6 +86,7 @@ export async function evidenceOf(
     return undefined
   }
 
-  const message = await resolveMessage(context, handle)
+  // A draft proves nothing yet: it has not gone.
+  const message = await resolveSentOrReceived(context, handle)
   return { messageKey: message.messageKey, dateIso: message.dateIso }
 }

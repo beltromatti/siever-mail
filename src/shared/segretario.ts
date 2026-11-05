@@ -51,7 +51,8 @@ export interface SegretarioPreferences {
   enabled: boolean
 }
 
-export const DEFAULT_SEGRETARIO_PREFERENCES: SegretarioPreferences = { enabled: true }
+/** Off until the user turns it on, in the guided setup: the AI starts with Conoscimi, never by itself. */
+export const DEFAULT_SEGRETARIO_PREFERENCES: SegretarioPreferences = { enabled: false }
 
 /** What the Segretario costs, in dollars, as OpenRouter billed each call. */
 export interface SegretarioSpending {
@@ -352,6 +353,52 @@ export interface MemoryVersion {
   at: number
 }
 
+/* ──────────────────────────────── the guided setup ──────────────────────────────── */
+
+/**
+ * Why the guided setup runs: the first launch; connections added; the AI
+ * turned on for the first time, or again; Conoscimi done again.
+ */
+export type OnboardingCase =
+  'primo-avvio' | 'nuova-connessione' | 'ai-prima-volta' | 'ai-riaccesa' | 'conoscimi'
+
+/** Its steps, in their order: not every case has every one. */
+export type OnboardingStep =
+  'connessioni' | 'segretario' | 'preparazione' | 'conoscimi' | 'lettura' | 'entra'
+
+/**
+ * The guided setup under way, kept so that a quit in the middle of it
+ * brings the user back to the same step.
+ */
+export interface OnboardingState {
+  case: OnboardingCase
+  step: OnboardingStep
+  /** The connections it is for: the new ones, or every one; empty until there are. */
+  accountIds: string[]
+  /** The Conoscimi run of this setup, once started. */
+  conoscimiId: string | null
+  startedAt: number
+}
+
+/** Whether a connection's recent mail is in, read by the index: what the Segretario needs to start. */
+export interface ConnectionReadiness {
+  accountId: string
+  recentMailIndexed: boolean
+}
+
+/** Where the reading of the last thirty days stands, for the setup to wait on it. */
+export interface ReadingStatus {
+  read: number
+  total: number
+  /** Conversations waiting or being read. */
+  waiting: number
+  running: number
+  /** Conversations it could not read after its attempts: listed, retried later. */
+  failed: Array<{ title: string; error: string | null }>
+  /** Nothing left to read but what failed. */
+  done: boolean
+}
+
 /** Where getting to know a connection stands. */
 export interface ConnectionLearning {
   accountId: string
@@ -558,6 +605,11 @@ export const SEGRETARIO_IPC = {
   forgetEverything: 'segretario:forget-everything',
   listLearning: 'segretario:list-learning',
   startConoscimi: 'segretario:start-conoscimi',
+  getOnboarding: 'segretario:get-onboarding',
+  setOnboarding: 'segretario:set-onboarding',
+  connectionReadiness: 'segretario:connection-readiness',
+  getReadingStatus: 'segretario:get-reading-status',
+  setPreparing: 'segretario:set-preparing',
   draftSent: 'segretario:draft-sent',
   getRowWork: 'segretario:get-row-work',
   filingContext: 'segretario:filing-context',
@@ -634,6 +686,14 @@ export interface SegretarioApi {
    * the run, which the page shows as it goes.
    */
   startConoscimi: (accountIds?: string[]) => Promise<ActivitySummary>
+  /** The guided setup under way, or null. */
+  getOnboarding: () => Promise<OnboardingState | null>
+  /** Keeps where the guided setup is, or — null — that it is over. */
+  setOnboarding: (state: OnboardingState | null) => Promise<void>
+  connectionReadiness: (accountIds: string[]) => Promise<ConnectionReadiness[]>
+  getReadingStatus: () => Promise<ReadingStatus>
+  /** The first reading is prepared with the user waiting: more of it at once. */
+  setPreparing: (preparing: boolean) => Promise<void>
   /** A draft went out: what the user wrote in it, to learn from when the Segretario had written it. */
   draftSent: (draftId: string, writtenText: string) => Promise<void>
   /** What the rows of these messages show: the note, what is owed or awaited, the reply. */

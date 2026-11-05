@@ -24,7 +24,7 @@ import {
 import { toast } from 'sonner'
 
 import appLogo from '@renderer/assets/logo.png'
-import { AddAccountDialog } from '@renderer/features/accounts/add-account-dialog'
+import { newOnboarding, OnboardingWizard } from '@renderer/features/onboarding/onboarding-wizard'
 import { AccountSwitcher } from '@renderer/features/accounts/account-switcher'
 import {
   FolderSidebar,
@@ -74,6 +74,8 @@ import type {
   ApprovalRequest,
   AskedMail,
   Commitment,
+  OnboardingCase,
+  OnboardingState,
   SavedSearch,
   ComposeSpec,
   HandleLink,
@@ -624,7 +626,21 @@ function App(): React.JSX.Element {
   const failedSendIdRef = useRef(0)
   const { confirm, dialog: confirmDialog, open: confirmOpen } = useConfirmDialog()
   const { prompt, dialog: promptDialog, open: promptOpen } = usePromptDialog()
-  const [addAccountDialogOpen, setAddAccountDialogOpen] = useState(false)
+  // The guided setup under way, as the main process keeps it; undefined until read.
+  const [onboarding, setOnboarding] = useState<OnboardingState | null | undefined>(undefined)
+
+  // A setup a quit interrupted takes the user back to its step.
+  useEffect(() => {
+    let current = true
+    void window.segretarioApi
+      .getOnboarding()
+      .then((stored) => current && setOnboarding(stored))
+      .catch(() => current && setOnboarding(null))
+
+    return () => {
+      current = false
+    }
+  }, [])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId | null>(null)
   const [extensionPrimaryDialogOpen, setExtensionPrimaryDialogOpen] = useState(false)
@@ -3125,7 +3141,7 @@ function App(): React.JSX.Element {
     confirmOpen ||
     promptOpen ||
     goToFolderOpen ||
-    addAccountDialogOpen ||
+    Boolean(onboarding) ||
     settingsOpen ||
     extensionPrimaryDialogOpen
 
@@ -4477,7 +4493,34 @@ function App(): React.JSX.Element {
     setOpenPage(aiOn ? 'oggi' : null)
   }, [aiOn, accounts])
 
-  if (bootstrapLoading) {
+  /** Starts the guided setup of a case, kept as it goes. */
+  function startOnboarding(setupCase: OnboardingCase): void {
+    saveOnboarding(newOnboarding(setupCase))
+  }
+
+  /**
+   * The AI turned on: the first time, or again — Conoscimi is the user's to
+   * redo then — through the guided setup.
+   */
+  async function startAiOnboarding(): Promise<void> {
+    const [learning, memory] = await Promise.all([
+      window.segretarioApi.listLearning(),
+      window.segretarioApi.listMemory()
+    ])
+    const known = learning.some((connection) => connection.state === 'done') || memory.length > 0
+    startOnboarding(known ? 'ai-riaccesa' : 'ai-prima-volta')
+  }
+
+  function saveOnboarding(next: OnboardingState | null): void {
+    setOnboarding(next)
+    void window.segretarioApi.setOnboarding(next).catch((error: unknown) =>
+      toast.error('La configurazione non è stata salvata', {
+        description: error instanceof Error ? error.message : undefined
+      })
+    )
+  }
+
+  if (bootstrapLoading || onboarding === undefined) {
     return (
       <AppFrame
         windowControlsState={windowControlsState}
@@ -4512,6 +4555,37 @@ function App(): React.JSX.Element {
             </Button>
           </div>
         </div>
+      </AppFrame>
+    )
+  }
+
+  if (onboarding) {
+    return (
+      <AppFrame
+        windowControlsState={windowControlsState}
+        onMinimizeWindow={handleMinimizeWindow}
+        onToggleMaximizeWindow={handleToggleMaximizeWindow}
+        onCloseWindow={handleCloseWindow}
+      >
+        <OnboardingWizard
+          state={onboarding}
+          accounts={accounts}
+          connections={accountConnections}
+          canUseGoogle={capabilities.googleOAuthReady}
+          segretario={segretario}
+          aiOn={aiOn}
+          onAccountCreated={onAccountCreated}
+          onRemoveAccount={(accountId) => void removeAccount(accountId)}
+          onChange={saveOnboarding}
+          onFinish={(entered) => {
+            saveOnboarding(null)
+
+            if (entered) {
+              enterWorkspace()
+            }
+          }}
+        />
+        {confirmDialog}
       </AppFrame>
     )
   }
@@ -4589,26 +4663,25 @@ function App(): React.JSX.Element {
                     <LogIn className="size-4" />
                     Entra
                   </Button>
-                  <AddAccountDialog
-                    canUseGoogle={capabilities.googleOAuthReady}
-                    onAccountCreated={onAccountCreated}
-                    trigger={
-                      <Button
-                        variant="secondary"
-                        className="w-56 gap-2 rounded-lg text-sm"
-                        size="lg"
-                      >
-                        <Plus className="size-4" />
-                        Aggiungi account
-                      </Button>
-                    }
-                  />
+                  <Button
+                    variant="secondary"
+                    className="w-56 gap-2 rounded-lg text-sm"
+                    size="lg"
+                    onClick={() => startOnboarding('nuova-connessione')}
+                  >
+                    <Plus className="size-4" />
+                    Aggiungi una connessione
+                  </Button>
                 </>
               ) : (
-                <AddAccountDialog
-                  canUseGoogle={capabilities.googleOAuthReady}
-                  onAccountCreated={onAccountCreated}
-                />
+                <Button
+                  className="w-56 gap-2 rounded-lg text-sm"
+                  size="lg"
+                  onClick={() => startOnboarding('primo-avvio')}
+                >
+                  <LogIn className="size-4" />
+                  Inizia
+                </Button>
               )}
               <p className="text-muted-foreground pt-1 text-xs tracking-[0.14em] uppercase">
                 Versione {formatAppVersion(__APP_VERSION__)}
@@ -4935,7 +5008,7 @@ function App(): React.JSX.Element {
                     resetMailboxView()
                   }}
                   onRemoveAccount={(accountId) => void removeAccount(accountId)}
-                  onAddAccount={() => setAddAccountDialogOpen(true)}
+                  onAddAccount={() => startOnboarding('nuova-connessione')}
                 />
               </div>
               <div className="min-h-0 flex-1">
@@ -5139,10 +5212,7 @@ function App(): React.JSX.Element {
                 suggestions={segretarioSuggestionList}
                 atWindowTopRight
                 onClose={() => setSegretarioOpen(false)}
-                onOpenSettings={() => {
-                  setSettingsSection('segretario')
-                  setSettingsOpen(true)
-                }}
+                onOpenSettings={() => void startAiOnboarding()}
                 onOpenHandle={openSegretarioHandle}
                 onApprove={(activityId, approval, approved) =>
                   void answerSegretarioApproval(activityId, approval, approved)
@@ -5220,14 +5290,6 @@ function App(): React.JSX.Element {
           </DialogContent>
         </Dialog>
 
-        <AddAccountDialog
-          canUseGoogle={capabilities.googleOAuthReady}
-          onAccountCreated={onAccountCreated}
-          open={addAccountDialogOpen}
-          onOpenChange={setAddAccountDialogOpen}
-          trigger={null}
-        />
-
         {extensionRenderer.PrimaryActionDialog && (
           <extensionRenderer.PrimaryActionDialog
             open={extensionPrimaryDialogOpen}
@@ -5257,7 +5319,18 @@ function App(): React.JSX.Element {
           onRemoveAccount={(accountId) => void removeAccount(accountId)}
           onClearAccountData={(accountId) => void clearAccountData(accountId)}
           onClearDatabaseData={() => void clearAllDataKeepAccounts()}
-          onAddAccount={() => setAddAccountDialogOpen(true)}
+          onAddAccount={() => {
+            setSettingsOpen(false)
+            startOnboarding('nuova-connessione')
+          }}
+          onEnableAi={() => {
+            setSettingsOpen(false)
+            void startAiOnboarding()
+          }}
+          onRedoConoscimi={() => {
+            setSettingsOpen(false)
+            startOnboarding('conoscimi')
+          }}
           onUnifiedPreferencesChanged={handleUnifiedPreferencesChanged}
         />
       </AppFrame>

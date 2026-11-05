@@ -1,4 +1,11 @@
-import type { ActivityEvent, EngineState, TaskKind } from '@shared/segretario'
+import type {
+  ActivityEvent,
+  EngineState,
+  OnboardingState,
+  OnboardingStep,
+  ReadingStatus,
+  TaskKind
+} from '@shared/segretario'
 
 import type { AgentRunner, RunResult } from '../agent/runner'
 import type { SegretarioCalendarPort, SegretarioMailPort } from '../agent/tool-types'
@@ -62,7 +69,17 @@ const CALENDAR_SETTLE_MS = 2 * 60_000
 const CALENDAR_CHANGES_READ = 100
 /** In `ai_meta`: how far the changes to the calendar have been handed to the Segretario. */
 const CALENDAR_SEEN = 'calendar_seen'
+/** In `ai_meta`: when keeping up last found too little new to be worth a run. */
+const KEEP_UP_CHECKED = 'keep_up_checked'
 const DAY_MS = 24 * 60 * 60 * 1000
+
+/** The steps of the guided setup before its reading: until then, its connections are not read. */
+const BEFORE_READING: ReadonlyArray<OnboardingStep> = [
+  'connessioni',
+  'segretario',
+  'preparazione',
+  'conoscimi'
+]
 
 /** The changes to the calendar a look covers: after one point, through another. */
 interface CalendarScope {
@@ -81,6 +98,8 @@ export interface EngineDeps {
   emit(event: ActivityEvent): void
   /** Whether the AI is on and has a key: the engine plans and runs only then. */
   ready(): Promise<boolean>
+  /** The guided setup under way, which holds some of the work back (see `plan`). */
+  onboarding(): Promise<OnboardingState | null>
   /** What the engine is doing changed. */
   onStateChange(): void
   /** The key was refused or the credit ran out (a reason), or that passed (null). */
@@ -239,6 +258,45 @@ export class SegretarioEngine {
     }
   }
 
+  /**
+   * Where the reading of the last thirty days stands: what is read, what
+   * waits, what failed after its attempts — and whether anything but that
+   * is left, which the planner would have queued.
+   */
+  async readingStatus(): Promise<ReadingStatus> {
+    const { queue, mail, store } = this.deps
+    const counts = (await queue.counts()).filter((count) => count.task === 'lettura')
+    const sum = (statuses: ReadonlyArray<string>): number =>
+      counts
+        .filter((count) => statuses.includes(count.status))
+        .reduce((total, count) => total + count.count, 0)
+    const failedUnits = (await queue.failed(200)).filter((unit) => unit.task === 'lettura')
+    const failedKeys = new Set(failedUnits.map((unit) => unit.scopeKey))
+    const unread = await mail.unreadConversations(this.horizonIso(), READING_PLANNED)
+    const left = unread.filter(
+      (conversation) =>
+        !failedKeys.has(`lettura:${conversation.accountId}:${conversation.threadId}`)
+    )
+    const waiting = sum(['in_coda', 'da_riprovare'])
+    const running = sum(['al_lavoro'])
+    const failed = await Promise.all(
+      failedUnits.map(async (unit) => ({
+        title:
+          (unit.activityId ? (await store.getActivity(unit.activityId))?.title : null) ??
+          'Una conversazione',
+        error: unit.lastError
+      }))
+    )
+
+    return {
+      ...(await mail.readingProgress(this.horizonIso())),
+      waiting,
+      running,
+      failed,
+      done: waiting === 0 && running === 0 && left.length === 0
+    }
+  }
+
   /** The user asked to look at the day again now. */
   async refreshDay(): Promise<void> {
     await this.deps.queue.enqueue({
@@ -282,8 +340,22 @@ export class SegretarioEngine {
     await registry.wakeDeferred(today)
     await registry.settleDeleted()
 
+    // The guided setup under way: Conoscimi comes first, so the reading of its connections
+    // waits for it — the reading starts informed.
+    // Conoscimi done again by hand holds nothing back: the mail that comes is read meanwhile.
+    const setup = await this.deps.onboarding()
+    const holding =
+      setup !== null && setup.case !== 'conoscimi' && BEFORE_READING.includes(setup.step)
+    // A setup for no connection in particular — the AI turned on — is for all of them.
+    const held = new Set(holding ? setup.accountIds : [])
+    const holdsAll = holding && setup.accountIds.length === 0
+
     // Messages not read yet, conversation by conversation; what came now before the backlog.
-    const conversations = await mail.unreadConversations(this.horizonIso(), READING_PLANNED)
+    const conversations = holdsAll
+      ? []
+      : (await mail.unreadConversations(this.horizonIso(), READING_PLANNED)).filter(
+          (conversation) => !held.has(conversation.accountId)
+        )
     const failed = await queue.failedSince(
       conversations.map(
         (conversation) => `lettura:${conversation.accountId}:${conversation.threadId}`
@@ -311,6 +383,14 @@ export class SegretarioEngine {
         priority: recent ? PRIORITY.newMail : PRIORITY.backlog,
         delayMs: recent ? BURST_MS : 0
       })
+    }
+
+    // Turning the AI on, the rest — the day, the projects, the memory — waits for the setup to
+    // be over: it is written from what the reading found.
+    if (setup && setup.case !== 'nuova-connessione' && setup.case !== 'conoscimi') {
+      await queue.prune(7 * DAY_MS)
+      this.deps.onStateChange()
+      return
     }
 
     // The morning: once a day, once the day has begun.
@@ -397,11 +477,19 @@ export class SegretarioEngine {
       accounts.every((account) =>
         learnt.some((row) => row.accountId === account.id && row.finishedAt !== null)
       )
-    const lastKeptUp = await store.lastActivityAt('al_passo')
+    const lastKeptUp = Math.max(
+      (await store.lastActivityAt('al_passo')) ?? 0,
+      Number((await store.meta(KEEP_UP_CHECKED)) ?? 0)
+    )
+    // Keeping up waits for the reading to be done: it takes in what the notes say.
+    const reading = (await queue.counts()).some(
+      (count) => count.task === 'lettura' && count.status !== 'fallito'
+    )
 
     if (
       allKnown &&
-      (lastKeptUp === null || now.getTime() - lastKeptUp > KEEP_UP_INTERVAL_MS) &&
+      !reading &&
+      now.getTime() - lastKeptUp > KEEP_UP_INTERVAL_MS &&
       !(await queue.busy('al_passo'))
     ) {
       await queue.enqueue({
@@ -615,6 +703,8 @@ export class SegretarioEngine {
           const data = await prepareKeepingUp(deps, since, KEEP_UP_MIN_NOTES)
 
           if (!data) {
+            // Too little new: looked at again after a while, not at the next planning.
+            await deps.store.setMeta(KEEP_UP_CHECKED, String(Date.now()))
             return
           }
 

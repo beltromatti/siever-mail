@@ -196,7 +196,12 @@ function NoteRow({
  * version and deletable, because what it believes about the user is the
  * user's to see.
  */
-export function MemorySection(): React.JSX.Element {
+export function MemorySection({
+  onRedoConoscimi
+}: {
+  /** Conoscimi runs in the guided setup, on every connection, updating what it knows. */
+  onRedoConoscimi: () => void
+}): React.JSX.Element {
   const [learning, setLearning] = useState<ConnectionLearning[] | null>(null)
   const [notes, setNotes] = useState<MemoryNote[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -242,19 +247,6 @@ export function MemorySection(): React.JSX.Element {
       }
     }
   }, [reload])
-
-  const conoscimi = async (): Promise<void> => {
-    try {
-      await window.segretarioApi.startConoscimi()
-      setLearning(await window.segretarioApi.listLearning())
-      toast('Conoscimi è cominciato', {
-        description:
-          'Lo segui nel pannello del Segretario: aggiorna quello che sa, senza cancellarlo.'
-      })
-    } catch (error) {
-      toast.error('Conoscimi non è partito', { description: errorText(error) })
-    }
-  }
 
   const forgetEverything = async (): Promise<void> => {
     const confirmed = await confirm({
@@ -318,7 +310,7 @@ export function MemorySection(): React.JSX.Element {
             size="sm"
             className="shrink-0"
             disabled={running}
-            onClick={() => void conoscimi()}
+            onClick={onRedoConoscimi}
           >
             {running ? (
               <LoaderCircle className="size-3.5 animate-spin" />

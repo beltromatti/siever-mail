@@ -402,6 +402,10 @@ async function registryStep(sql: Sql): Promise<void> {
   await sql.run("UPDATE ai_activities SET kind = 'conoscimi' WHERE kind = 'conoscerti'")
   await sql.run("UPDATE ai_activities SET kind = 'al_passo' WHERE kind = 'aggiornamento'")
   await sql.run('UPDATE ai_activities SET task = kind WHERE task IS NULL')
+  // What it did alone before there was a diary goes there: the panel keeps the user's requests.
+  await sql.run(
+    "UPDATE ai_activities SET visibility = 'diario' WHERE task IN ('al_passo', 'riflessione')"
+  )
   await topicsToProjects(sql)
   await archivedToCopies(sql)
 }

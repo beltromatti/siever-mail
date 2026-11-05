@@ -1207,6 +1207,7 @@ export class MailService {
       const folder = folders.find((candidate) => candidate.path === row.folderPath)
       const role = folder ? folderRole(folder) : null
       const setAside = role === '\\Trash' || role === '\\Junk'
+      const draft = role === '\\Drafts'
       // Anywhere else comes before the Trash and Spam; then the folder the user looks in first.
       const rank = (setAside ? 100 : 0) + folderDisplayRank(folder)
       const known = located.get(row.messageKey)
@@ -1220,7 +1221,8 @@ export class MailService {
             dateIso: row.dateIso,
             subject: row.subject,
             from: row.from,
-            setAside
+            setAside,
+            draft
           }
         })
       }
