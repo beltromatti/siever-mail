@@ -86,6 +86,27 @@ function fold(text: string): string {
     .replace(/\p{Diacritic}/gu, '')
 }
 
+/**
+ * A replacement as the note has it. Copied from a numbered reading, a
+ * passage may carry the spaces that part number and line: when it is not
+ * found as written but is, once, without them at its lines' starts, it is
+ * that passage — and its replacement loses the same spaces.
+ */
+function asWritten(
+  content: string,
+  edit: { old: string; new: string }
+): { old: string; new: string } {
+  if (content.includes(edit.old)) {
+    return edit
+  }
+
+  const unmargined = (value: string): string => value.replace(/^[ \t]{1,2}/gm, '')
+  const old = unmargined(edit.old)
+  return old !== edit.old && content.split(old).length === 2
+    ? { old, new: unmargined(edit.new) }
+    : edit
+}
+
 function checkSize(path: string, content: string): void {
   if (content.length > MAX_NOTE_CHARS) {
     throw new RegistryRefusal(
@@ -276,11 +297,12 @@ export class Notebook {
       const current = await this.require(path)
       let text = current.content
 
-      for (const { old, new: replacement } of edits) {
-        if (!old) {
+      for (const edit of edits) {
+        if (!edit.old) {
           throw new RegistryRefusal('Ogni modifica ha bisogno del testo da cambiare (`vecchio`).')
         }
 
+        const { old, new: replacement } = asWritten(text, edit)
         const count = text.split(old).length - 1
 
         if (count !== 1) {

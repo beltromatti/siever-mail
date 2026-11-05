@@ -25,11 +25,26 @@ const COMMANDS = [
   'ripristina'
 ] as const
 
+/** The text to write; one put in `parole` — `cerca`'s — is said so, for the next call to land. */
+function textArg(args: Record<string, unknown>): string {
+  const text = stringArg(args, 'testo')
+
+  if (!text) {
+    throw new ToolInputError(
+      stringArg(args, 'parole')
+        ? 'Manca `testo`: il testo da scrivere va in `testo` (`parole` serve solo a `cerca`).'
+        : 'Manca `testo`: il testo da scrivere.'
+    )
+  }
+
+  return text
+}
+
 function numbered(document: MemoryDocument): string {
   return `${document.path} (versione ${document.revision}, aggiornata il ${formatDateTime(new Date(document.updatedAt).toISOString())})\n${document.content
     .replace(/\n$/, '')
     .split('\n')
-    .map((line, index) => `${String(index + 1).padStart(4)}  ${line}`)
+    .map((line, index) => `${String(index + 1).padStart(4)}\t${line}`)
     .join('\n')}`
 }
 
@@ -98,22 +113,22 @@ export const memoryTool: SegretarioTool = {
         }
       }
 
-      if (!rawPath) {
-        // The model now and then fills every other parameter and forgets this one: it is told
-        // where the text it wants to change is, so the next call lands.
-        const first = objectListArg(args, 'modifiche')[0]?.vecchio
-        const holders =
-          command === 'modifica' && typeof first === 'string' && first
-            ? (await notebook.list()).filter((note) => note.content.includes(first))
-            : []
+      // An edit without its note: the note that holds the text, when only one does.
+      const first = objectListArg(args, 'modifiche')[0]?.vecchio
+      const holders =
+        !rawPath && command === 'modifica' && typeof first === 'string' && first
+          ? (await notebook.list()).filter((note) => note.content.includes(first))
+          : []
+
+      if (!rawPath && holders.length !== 1) {
         throw new ToolInputError(
-          holders.length > 0
+          holders.length > 1
             ? `Manca \`percorso\`: il testo da sostituire è in ${holders.map((note) => note.path).join(', ')}.`
-            : 'Manca `percorso`: la nota su cui lavorare (`leggi` senza percorso dà l’indice).'
+            : 'Manca `percorso`: la nota su cui lavorare (`leggi` senza percorso dà la mappa).'
         )
       }
 
-      const path = normalizeMemoryPath(rawPath ?? '')
+      const path = normalizeMemoryPath(rawPath ?? holders[0].path)
 
       switch (command) {
         case 'leggi': {
@@ -140,7 +155,7 @@ export const memoryTool: SegretarioTool = {
           }
         }
         case 'inserisci': {
-          const text = requireString(args, 'testo')
+          const text = textArg(args)
           const document = await notebook.insert(
             path,
             numberArg(args, 'riga') ?? Number.MAX_SAFE_INTEGER,
@@ -151,7 +166,7 @@ export const memoryTool: SegretarioTool = {
           return { content: `Testo inserito in ${path}.`, summary: `Aggiornata la nota ${path}` }
         }
         case 'scrivi': {
-          const text = requireString(args, 'testo')
+          const text = textArg(args)
           const read = context.run.seen.get(seenKey('memory', path))
           const { document, created } = await notebook.write(path, text, actor, {
             seenRevision: read

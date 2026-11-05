@@ -39,6 +39,36 @@ describe('Notebook', () => {
     expect(await notebook.folder('clienti')).toBeNull()
   })
 
+  it('takes a passage copied with the spaces of a numbered reading as the passage', async () => {
+    await notebook.write(
+      'connessioni.md',
+      '# Caselle\n- Account Apple Developer\n  - rinnovo annuale\n',
+      RUN_A
+    )
+
+    await notebook.edit(
+      'connessioni.md',
+      [
+        {
+          old: '  - Account Apple Developer',
+          new: '  - Account Fineco\n  - Account Apple Developer'
+        }
+      ],
+      RUN_A
+    )
+
+    expect((await notebook.read('connessioni.md'))?.content).toBe(
+      '# Caselle\n- Account Fineco\n- Account Apple Developer\n  - rinnovo annuale\n'
+    )
+    // An indented line found as written stays as written.
+    await notebook.edit(
+      'connessioni.md',
+      [{ old: '  - rinnovo annuale', new: '  - rinnovo a novembre' }],
+      RUN_A
+    )
+    expect((await notebook.read('connessioni.md'))?.content).toContain('\n  - rinnovo a novembre\n')
+  })
+
   it('names the notes most like one that is not there', async () => {
     await notebook.write('progetti/prat2492-malagoli.md', '# Prat2492 · Acetaia Malagoli\n', RUN_A)
     await notebook.write('stile.md', '# Come scrive\n', RUN_A)

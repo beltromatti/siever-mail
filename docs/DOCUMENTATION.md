@@ -1054,8 +1054,11 @@ Every run has the same tools (`tools/`), each described to the model by
 | `mostra`       | Opens a message, a draft, a project, an event or a day on screen, or a search as a list.                                                                                                    |
 | `diario`       | What it did in the last days, run by run, with the changes each made.                                                                                                                       |
 
-The tools take what the model naturally writes, and a refusal says what
-would succeed: a project by its short name or by its name (or none, when
+Making an event or proposing one is idempotent, as making a project or a
+commitment is: they are made one at a time, and one already there at the
+same times with a title like it is given back instead of a copy — two
+readings of one booking, running together, leave one event. The tools take
+what the model naturally writes, and a refusal says what would succeed: a project by its short name or by its name (or none, when
 the run knows only one), an event to prepare by its reference or its
 title, an event all day or at an hour as its times are written, a note's
 nature where a commitment's kind is meant; a missing note is answered with
@@ -1108,8 +1111,10 @@ integrity: edits are patches on the note as it is now (each passage
 replaced found exactly once, all or none), so two runs editing different
 lines both land; a whole rewrite made on an older reading is refused; every
 version is kept (the last 40) with who wrote it, and can be restored; a
-note holds 20 000 characters at most. Every run begins with its map
-(`index`): each note with its first line, a folder of more than twelve as
+note holds 20 000 characters at most. A note is read with numbered lines
+(number, tab, line); a passage copied with the spaces of that numbering is
+found all the same, and an edit given without its note lands in the one
+note that holds its text. Every run begins with its map (`index`): each note with its first line, a folder of more than twelve as
 one line with its count and the notes touched last, opened with `memoria
 leggi <cartella>/` — so the map stays small however much the memory
 grows. Settings → "Cosa so di

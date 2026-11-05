@@ -5,6 +5,7 @@ import {
   type EventChange
 } from '@shared/calendar'
 
+import { foldTitle } from '../registry/projects'
 import type { ProposalRecord, UndoSpec } from '../registry/types'
 
 import { PROMPTS } from '../prompts'
@@ -324,6 +325,66 @@ function changeOf(args: Record<string, unknown>, allDay: boolean, wasAllDay: boo
   return change
 }
 
+/**
+ * Events and proposals are made one at a time: two readings of one booking,
+ * running together, each look before making — and see each other's.
+ */
+let eventsMade: Promise<unknown> = Promise.resolve()
+
+function oneAtATime<T>(make: () => Promise<T>): Promise<T> {
+  const made = eventsMade.then(make, make)
+  eventsMade = made.catch(() => undefined)
+  return made
+}
+
+/** Whether two titles name one thing: most words of the shorter in the longer, case and accents aside. */
+function sameTitle(a: string, b: string): boolean {
+  const words = (title: string): Set<string> =>
+    new Set(
+      foldTitle(title)
+        .split(' ')
+        .filter((word) => word.length >= 3)
+    )
+  const [fewer, more] = [words(a), words(b)].sort((x, y) => x.size - y.size)
+
+  if (fewer.size === 0) {
+    return foldTitle(a) === foldTitle(b)
+  }
+
+  return [...fewer].filter((word) => more.has(word)).length / fewer.size >= 0.6
+}
+
+/** A moment as an event keeps it: an instant, or a day (all day). */
+function momentOf(value: string): number {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? new Date(`${value}T00:00`).getTime()
+    : Date.parse(value)
+}
+
+/**
+ * The event already in the calendar for this one — the same times, a title
+ * like it — or null: making it again gives the one there is.
+ */
+async function eventAlreadyThere(
+  context: ToolContext,
+  wanted: { title: string; start: string; end: string }
+): Promise<CalendarEvent | null> {
+  const start = momentOf(wanted.start)
+  const end = momentOf(wanted.end)
+  const around = await context.calendar.events(
+    new Date(start - 60_000).toISOString(),
+    new Date(end + 60_000).toISOString()
+  )
+  return (
+    around.find(
+      (event) =>
+        Math.abs(momentOf(event.start) - start) < 60_000 &&
+        Math.abs(momentOf(event.end) - end) < 60_000 &&
+        sameTitle(event.title, wanted.title)
+    ) ?? null
+  )
+}
+
 /** When an event proposed would be, from what `proponi` kept. */
 function proposedTimes(
   payload: Record<string, unknown>
@@ -503,15 +564,26 @@ export const calendarTool: SegretarioTool = {
           }
         }
 
-        const created = await context.calendar.create(event)
-        recordChange(context, 'creato', `In calendario: ${created.title}`, created, {
-          kind: 'evento-creato',
-          eventKey: created.key
+        return oneAtATime(async () => {
+          const there = await eventAlreadyThere(context, event)
+
+          if (there) {
+            return {
+              content: `C'è già: ${eventLine(there, context)} — stesso orario, titolo simile. Se è un altro evento, dagli un titolo che lo distingua.`,
+              summary: `Già in calendario: ${there.title}`
+            }
+          }
+
+          const created = await context.calendar.create(event)
+          recordChange(context, 'creato', `In calendario: ${created.title}`, created, {
+            kind: 'evento-creato',
+            eventKey: created.key
+          })
+          return {
+            content: `Creato: ${eventLine(created, context)}`,
+            summary: `In calendario: ${created.title}`
+          }
         })
-        return {
-          content: `Creato: ${eventLine(created, context)}`,
-          summary: `In calendario: ${created.title}`
-        }
       }
       case 'modifica': {
         const key = eventOf(context, args)
@@ -645,31 +717,68 @@ export const calendarTool: SegretarioTool = {
           ? await resolveMessage(context, stringArg(args, 'messaggio')!)
           : null
         const title = requireString(args, 'titolo')
-        const proposal = await context.registry.propose(
-          {
-            kind: 'evento',
-            title: `Evento: ${title}`,
-            payload: {
-              title,
-              start: instant(stringArg(args, 'inizio'), allDay, 'inizio'),
-              end: instant(stringArg(args, 'fine'), allDay, 'fine'),
-              allDay,
-              location: stringArg(args, 'luogo') ?? null,
-              description: stringArg(args, 'descrizione') ?? null,
-              attendees: stringListArg(args, 'invitati'),
-              calendar: stringArg(args, 'calendario') ?? null,
-              eventKey: stringArg(args, 'evento') ? eventOf(context, args) : null
+        const eventKey = stringArg(args, 'evento') ? eventOf(context, args) : null
+        const start = instant(stringArg(args, 'inizio'), allDay, 'inizio')
+        const end = instant(stringArg(args, 'fine'), allDay, 'fine')
+
+        return oneAtATime(async () => {
+          // A new event already there, or already proposed, is not proposed twice.
+          if (!eventKey) {
+            const there = await eventAlreadyThere(context, { title, start, end })
+
+            if (there) {
+              return {
+                content: `È già in calendario: ${eventLine(there, context)} — non serve proporlo.`,
+                summary: `Già in calendario: ${there.title}`
+              }
+            }
+
+            const waiting = (await context.registry.proposals.open({ kind: 'evento' })).find(
+              (proposal) => {
+                const times = proposedTimes(proposal.payload)
+                return (
+                  times !== null &&
+                  Math.abs(times.start.getTime() - momentOf(start)) < 60_000 &&
+                  Math.abs(times.end.getTime() - momentOf(end)) < 60_000 &&
+                  sameTitle(String(proposal.payload.title ?? proposal.title), title)
+                )
+              }
+            )
+
+            if (waiting) {
+              return {
+                content: `La proposta c'è già e aspetta l'utente: ${proposalLine(waiting).slice(2)}.`,
+                summary: `Già proposto: ${title}`
+              }
+            }
+          }
+
+          const proposal = await context.registry.propose(
+            {
+              kind: 'evento',
+              title: `Evento: ${title}`,
+              payload: {
+                title,
+                start,
+                end,
+                allDay,
+                location: stringArg(args, 'luogo') ?? null,
+                description: stringArg(args, 'descrizione') ?? null,
+                attendees: stringListArg(args, 'invitati'),
+                calendar: stringArg(args, 'calendario') ?? null,
+                eventKey
+              },
+              accountId: source?.accountId ?? null,
+              messageKey: source?.messageKey ?? null,
+              threadId: source?.threadId ?? null
             },
-            accountId: source?.accountId ?? null,
-            messageKey: source?.messageKey ?? null,
-            threadId: source?.threadId ?? null
-          },
-          context.run.actor
-        )
-        return {
-          content: `Proposta all'utente: ${proposal.title}. La vede in Oggi e nel calendario.`,
-          summary: `Proposto: ${title}`
-        }
+            context.run.actor
+          )
+          return {
+            content: `Proposta all'utente: ${proposal.title}. La vede in Oggi e nel calendario.`,
+            summary: `Proposto: ${title}`
+          }
+        })
       }
       default:
         throw new ToolInputError(`\`azione\` è una di: ${ACTIONS.join(', ')}.`)
