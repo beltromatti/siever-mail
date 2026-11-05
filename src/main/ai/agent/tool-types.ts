@@ -258,6 +258,18 @@ export class ToolInputError extends Error {
   }
 }
 
+/**
+ * Refused because what the call writes changed since the run read it. The
+ * run has now seen it as it is: the same call, made again, is a decision
+ * taken knowingly, not a mistake repeated.
+ */
+export class ToolConflict extends ToolInputError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ToolConflict'
+  }
+}
+
 /** Something this run may not do on its own: said back, with what it can do instead. */
 export function requireInteractive(context: ToolContext, what: string, instead: string): void {
   if (context.run.background) {

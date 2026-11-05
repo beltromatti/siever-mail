@@ -1,4 +1,4 @@
-Scrive un messaggio vero per l'utente: una risposta, un inoltro o un messaggio nuovo, salvato nelle Bozze dell'account e aperto davanti a lui, che lo rivede, lo corregge e lo invia. Non parte mai da solo. Quando l'utente sta scrivendo e ti chiede di scrivere per lui, invece, scrive nel messaggio che ha aperto.
+Scrive un messaggio vero per l'utente: una risposta, un inoltro o un messaggio nuovo, salvato nelle Bozze dell'account e aperto davanti a lui, che lo rivede, lo corregge e lo invia. Non parte mai da solo, e si scrive solo quando l'utente c'è: lavorando da solo, la risposta la prepari con `risposta`. Quando l'utente sta scrivendo e ti chiede di scrivere per lui, invece, scrive nel messaggio che ha aperto.
 
 Parametri:
 

@@ -20,6 +20,16 @@ describe('Notebook', () => {
 
   afterEach(() => sql.close())
 
+  it('names the notes most like one that is not there', async () => {
+    await notebook.write('progetti/prat2492-malagoli.md', '# Prat2492 · Acetaia Malagoli\n', RUN_A)
+    await notebook.write('stile.md', '# Come scrive\n', RUN_A)
+
+    const said = await notebook.missing('progetti/prat2492-acetaia-malagoli.md')
+
+    expect(said).toContain('progetti/prat2492-malagoli.md (Prat2492 · Acetaia Malagoli)')
+    expect(said).not.toContain('stile.md')
+  })
+
   it('lets two runs edit different lines of the same note, both landing', async () => {
     await notebook.write('tu.md', '# Chi sei\n- Lavori in SIEVER\n- Abiti a Milano\n', RUN_A)
 

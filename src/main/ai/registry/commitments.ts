@@ -1,6 +1,7 @@
 import { placeholders, type Sql } from '../sql'
 import {
   RegistryRefusal,
+  RevisionConflict,
   type Actor,
   type CommitmentHistoryEntry,
   type CommitmentKind,
@@ -563,10 +564,10 @@ export class CommitmentStore {
       const current = await this.require(id)
 
       if (options.seenRevision !== undefined && options.seenRevision !== current.revision) {
-        throw new RegistryRefusal(
+        throw new RevisionConflict(
           `La cosa #${id} è cambiata da quando l'hai letta: ora è ${STATUS_WORDS[current.status]}${
             current.setBy === 'utente' ? ', per mano dell’utente' : ''
-          } («${current.text}»). Rileggila e decidi di nuovo.`,
+          } («${current.text}»${current.due ? `, entro ${current.due}` : ''}). Se ciò che volevi fare vale ancora, rifallo.`,
           current
         )
       }

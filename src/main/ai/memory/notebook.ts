@@ -1,4 +1,5 @@
 import type { Sql } from '../sql'
+import { foldTitle } from '../registry/projects'
 import { RegistryRefusal, type Actor } from '../registry/types'
 
 /** Notes are short by design: a note this long is a note to split. */
@@ -84,7 +85,7 @@ function fold(text: string): string {
 function checkSize(path: string, content: string): void {
   if (content.length > MAX_NOTE_CHARS) {
     throw new RegistryRefusal(
-      `${path} supererebbe ${MAX_NOTE_CHARS} caratteri: dividila in note più piccole.`
+      `${path} arriverebbe a ${content.length} caratteri, oltre il massimo di ${MAX_NOTE_CHARS}: lì non entra altro. Metti ciò che volevi aggiungere in una nota più specifica sul suo argomento (anche nuova, con \`inserisci\`), e se vuoi lascia in ${path} solo un rimando; oppure accorcia ${path} togliendo ciò che non serve più.`
     )
   }
 }
@@ -379,10 +380,38 @@ export class Notebook {
     const current = await this.read(path)
 
     if (!current) {
-      throw new RegistryRefusal(`La nota «${path}» non esiste. ${await this.index()}`)
+      throw new RegistryRefusal(await this.missing(path))
     }
 
     return current
+  }
+
+  /**
+   * What to say of a note that is not there: the notes called most like it,
+   * by the words of its path, or the index when none is.
+   */
+  async missing(path: string): Promise<string> {
+    const words = (value: string): string[] =>
+      foldTitle(value.replace(/\.md$/, ''))
+        .split(' ')
+        .filter((word) => word.length > 2)
+    const wanted = new Set(words(path))
+    const near = (await this.list())
+      .map((note) => ({
+        note,
+        shared: words(`${note.path} ${memoryHeadline(note.content)}`).filter((word) =>
+          wanted.has(word)
+        ).length
+      }))
+      .filter((candidate) => candidate.shared > 0)
+      .sort((a, b) => b.shared - a.shared)
+      .slice(0, 5)
+
+    return near.length > 0
+      ? `La nota «${path}» non esiste. Le più vicine: ${near
+          .map((candidate) => `${candidate.note.path} (${memoryHeadline(candidate.note.content)})`)
+          .join('; ')}.`
+      : `La nota «${path}» non esiste. ${await this.index()}`
   }
 
   /** `replace`, with a write that lost the race said back as a refusal. */

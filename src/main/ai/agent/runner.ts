@@ -30,6 +30,7 @@ import {
 import { entryOf } from './entries'
 import { HandleRegistry } from './handles'
 import {
+  ToolConflict,
   ToolInputError,
   type RunContext,
   type SegretarioCalendarPort,
@@ -392,6 +393,9 @@ export class AgentRunner {
 
       if (outcome.failed) {
         live.failedCalls.add(signature)
+      } else if (context.newHandles.length > 0) {
+        // New names: a call that failed on a name it did not have yet may be right now.
+        live.failedCalls.clear()
       }
 
       await finish({
@@ -409,7 +413,11 @@ export class AgentRunner {
       }
 
       const message = error instanceof Error ? error.message : String(error)
-      live.failedCalls.add(signature)
+
+      // What changed under the call is now seen: the same call may be made again, knowingly.
+      if (!(error instanceof ToolConflict)) {
+        live.failedCalls.add(signature)
+      }
 
       if (!(error instanceof ToolInputError)) {
         logMainError(`Segretario tool ${tool.name} failed`, error, { activityId })

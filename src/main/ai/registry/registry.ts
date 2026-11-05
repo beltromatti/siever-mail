@@ -651,7 +651,10 @@ export class Registry {
         {
           object: 'risposta',
           action: created ? 'preparata' : 'riscritta',
-          label: `${record.kind === 'sollecito' ? 'Sollecito' : 'Risposta'} ${created ? 'preparata' : 'riscritta'}`,
+          label:
+            record.kind === 'sollecito'
+              ? `Sollecito ${created ? 'preparato' : 'riscritto'}`
+              : `Risposta ${created ? 'preparata' : 'riscritta'}`,
           accountId: anchor.accountId,
           threadIds: [anchor.threadId],
           messageKeys: [anchor.messageKey],

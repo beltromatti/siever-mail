@@ -23,7 +23,7 @@ describe('shortDate', () => {
 
 describe('dayWithWeekday', () => {
   it('gives a day its weekday, and leaves what is no day', () => {
-    expect(dayWithWeekday('2026-11-10')).toBe('2026-11-10 (mar)')
+    expect(dayWithWeekday('2026-11-10')).toBe('mar 10/11/2026')
     expect(dayWithWeekday('domani')).toBe('domani')
   })
 })

@@ -288,3 +288,18 @@ export class RegistryRefusal extends Error {
     this.name = 'RegistryRefusal'
   }
 }
+
+/**
+ * A write over a revision newer than the one read: someone wrote in
+ * between. The message says what the object is now, so the caller has
+ * seen it and may decide again — the same write included.
+ */
+export class RevisionConflict extends RegistryRefusal {
+  constructor(
+    message: string,
+    readonly current: { revision: number }
+  ) {
+    super(message, current)
+    this.name = 'RevisionConflict'
+  }
+}

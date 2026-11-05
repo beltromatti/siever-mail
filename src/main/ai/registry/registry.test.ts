@@ -4,7 +4,7 @@ import { ensureAiSchema } from '../schema'
 import type { Sql } from '../sql'
 import { memorySql } from '../testing/memory-sql'
 import { Registry } from './registry'
-import { RegistryRefusal, type Actor, type RegistryChange } from './types'
+import { RegistryRefusal, RevisionConflict, type Actor, type RegistryChange } from './types'
 
 const ANNA = { accountId: 'acc', messageKey: 'm:anna', threadId: 't1' }
 const BACKGROUND: Actor = { by: 'segretario', runId: 'run-1', background: true }
@@ -141,11 +141,14 @@ describe('Registry', () => {
       )
       await registry.setCommitmentStatus(record.id, 'fatta', USER)
 
-      await expect(
-        registry.editCommitment(record.id, { due: '2026-11-20' }, CHAT, {
-          seenRevision: record.revision
-        })
-      ).rejects.toThrow(/cambiata da quando l'hai letta/)
+      // A conflict says what the thing is now: the run has seen it, and may decide again.
+      const refused = registry.editCommitment(record.id, { due: '2026-11-20' }, CHAT, {
+        seenRevision: record.revision
+      })
+      await expect(refused).rejects.toBeInstanceOf(RevisionConflict)
+      await expect(refused).rejects.toThrow(
+        /ora è fatta, per mano dell’utente \(«Pagare la fattura»\)/
+      )
     })
 
     it('puts off a thing until a day, and opens it again on that day', async () => {
@@ -209,6 +212,20 @@ describe('Registry', () => {
   })
 
   describe('projects', () => {
+    it('refuses a write over a newer one, saying the project as it is now', async () => {
+      const { record } = await registry.createProject('Prat2451 · Hotel Lido', BACKGROUND)
+      await registry.setProjectState(record.id, 'Si aspetta il collaudo.', CHAT, record.revision)
+
+      const refused = registry.setProjectState(
+        record.id,
+        'Tutto fermo.',
+        BACKGROUND,
+        record.revision
+      )
+      await expect(refused).rejects.toBeInstanceOf(RevisionConflict)
+      await expect(refused).rejects.toThrow(/«Il punto»: «Si aspetta il collaudo\.»/)
+    })
+
     it('makes a project once, by name, and keeps the user’s name', async () => {
       const made = await registry.createProject('Prat2451 · Hotel Lido', BACKGROUND)
       const again = await registry.createProject('prat2451 – hotel lido', BACKGROUND)

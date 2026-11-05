@@ -2,13 +2,19 @@ import { isAbsolute } from 'node:path'
 
 import { searchMail, searchScope } from '../mail-search'
 import { PROMPTS } from '../prompts'
-import { RegistryRefusal, type ThreadRef } from '../registry/types'
+import {
+  RegistryRefusal,
+  RevisionConflict,
+  type ProjectRecord,
+  type ThreadRef
+} from '../registry/types'
 import {
   booleanArg,
   requireString,
   seenKey,
   stringArg,
   stringListArg,
+  ToolConflict,
   ToolInputError,
   type SegretarioTool,
   type ToolContext
@@ -37,17 +43,62 @@ const ACTIONS = [
 /** Conversations a search may file at once into a project. */
 const LINKED_BY_SEARCH_MAX = 300
 
-function projectOf(context: ToolContext, args: Record<string, unknown>, name = 'progetto'): string {
-  const handle = requireString(args, name)
-  const project = context.handles.project(handle)
+/**
+ * The project a call is about: its short name, or its name as the user
+ * sees it when only one project is called so. Left out, the one project
+ * this run knows, when it knows one.
+ */
+async function projectOf(
+  context: ToolContext,
+  args: Record<string, unknown>,
+  name = 'progetto'
+): Promise<string> {
+  const written = stringArg(args, name)?.trim()
+  const named = (project: { id: string; title: string }): string =>
+    context.handles.name(
+      { kind: 'project', projectId: project.id, title: project.title },
+      context.newHandles
+    )
 
-  if (!project) {
+  if (!written) {
+    const known = context.handles.projects()
+
+    if (known.length === 1) {
+      return known[0].projectId
+    }
+
     throw new ToolInputError(
-      `Non conosco il progetto «${handle}»: usa un riferimento p… da \`progetti\` o \`leggi\`.`
+      known.length > 0
+        ? `Indica \`${name}\`: ${known.map((project) => `${project.handle} ${project.title}`).join(', ')}.`
+        : `Indica \`${name}\`: il riferimento p… di un progetto, da \`progetti\` (\`elenco\` o \`cerca\`).`
     )
   }
 
-  return project.projectId
+  const project = context.handles.project(written)
+
+  if (project) {
+    return project.projectId
+  }
+
+  const found = await context.registry.projects.search(written)
+  const exact = found.filter(
+    (candidate) => candidate.title.trim().toLowerCase() === written.toLowerCase()
+  )
+  const match = exact.length === 1 ? exact[0] : found.length === 1 ? found[0] : null
+
+  if (match) {
+    named(match)
+    return match.id
+  }
+
+  throw new ToolInputError(
+    found.length > 1
+      ? `«${written}» può essere più di un progetto: ${found
+          .slice(0, 8)
+          .map((candidate) => `${named(candidate)} ${candidate.title}`)
+          .join(', ')}. Indica il riferimento.`
+      : `Nessun progetto «${written}»: cercalo con \`progetti\` (\`cerca\`), o crealo.`
+  )
 }
 
 /** The conversations of the messages named, and of a search's results, each once. */
@@ -90,6 +141,12 @@ async function threadsOf(
     if (!stringArg(search, 'testo')) {
       throw new ToolInputError(
         'Una ricerca per collegare ha bisogno di `testo`: senza, collegherebbe tutta la posta.'
+      )
+    }
+
+    if (hits.length === 0 && threads.size === 0) {
+      throw new ToolInputError(
+        `La ricerca «${stringArg(search, 'testo')}» non trova messaggi: le parole si cercano dall'inizio, quindi un numero dentro una parola (Prat2463) va scritto come compare. Prova altre parole, o cerca prima con \`cerca_posta\`.`
       )
     }
 
@@ -215,7 +272,7 @@ export const projectsTool: SegretarioTool = {
         }
         case 'collega':
         case 'scollega': {
-          const projectId = projectOf(context, args)
+          const projectId = await projectOf(context, args)
           const threads = await threadsOf(context, args)
 
           if (threads.length === 0) {
@@ -255,7 +312,7 @@ export const projectsTool: SegretarioTool = {
           }
         }
         case 'rinomina': {
-          const id = projectOf(context, args)
+          const id = await projectOf(context, args)
           const record = await context.registry.renameProject(
             id,
             requireString(args, 'titolo'),
@@ -269,7 +326,7 @@ export const projectsTool: SegretarioTool = {
           }
         }
         case 'descrivi': {
-          const id = projectOf(context, args)
+          const id = await projectOf(context, args)
           const record = await context.registry.describeProject(
             id,
             requireString(args, 'descrizione'),
@@ -283,7 +340,7 @@ export const projectsTool: SegretarioTool = {
           }
         }
         case 'punto': {
-          const id = projectOf(context, args)
+          const id = await projectOf(context, args)
           const record = await context.registry.setProjectState(
             id,
             requireString(args, 'testo'),
@@ -297,7 +354,7 @@ export const projectsTool: SegretarioTool = {
           }
         }
         case 'unisci': {
-          const keepId = projectOf(context, args)
+          const keepId = await projectOf(context, args)
           const others = stringListArg(args, 'con').map((handle) => {
             const project = context.handles.project(handle)
 
@@ -332,7 +389,7 @@ export const projectsTool: SegretarioTool = {
         }
         case 'nascondi':
         case 'mostra': {
-          const id = projectOf(context, args)
+          const id = await projectOf(context, args)
           const record = await context.registry.setProjectHidden(
             id,
             action === 'nascondi',
@@ -347,7 +404,7 @@ export const projectsTool: SegretarioTool = {
         }
         case 'concludi':
         case 'riapri': {
-          const id = projectOf(context, args)
+          const id = await projectOf(context, args)
           const record = await context.registry.setProjectClosed(
             id,
             action === 'concludi',
@@ -361,7 +418,7 @@ export const projectsTool: SegretarioTool = {
           }
         }
         case 'risorsa': {
-          const projectId = projectOf(context, args)
+          const projectId = await projectOf(context, args)
           const folder = requireString(args, 'cartella')
 
           if (!isAbsolute(folder) && !/^https?:\/\//i.test(folder)) {
@@ -390,6 +447,11 @@ export const projectsTool: SegretarioTool = {
           throw new ToolInputError(`\`azione\` è una di: ${ACTIONS.join(', ')}.`)
       }
     } catch (error) {
+      if (error instanceof RevisionConflict) {
+        saw(context, error.current as ProjectRecord)
+        throw new ToolConflict(error.message)
+      }
+
       if (error instanceof RegistryRefusal) {
         throw new ToolInputError(error.message)
       }

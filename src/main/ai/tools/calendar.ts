@@ -104,6 +104,23 @@ function instant(value: string | undefined, allDay: boolean, name: string): stri
   return parsed.toISOString()
 }
 
+/**
+ * Whether an event is all day: as said, or else as its times are written —
+ * a day alone, or a day with its hour. Without either, as it was.
+ */
+function allDayOf(args: Record<string, unknown>, otherwise: boolean): boolean {
+  if (args.tutto_il_giorno !== undefined) {
+    return booleanArg(args, 'tutto_il_giorno')
+  }
+
+  const written = [stringArg(args, 'inizio'), stringArg(args, 'fine')].filter(
+    (value): value is string => Boolean(value?.trim())
+  )
+  return written.length === 0
+    ? otherwise
+    : written.every((value) => /^\d{4}-\d{2}-\d{2}$/.test(value.trim()))
+}
+
 function range(args: Record<string, unknown>): { from: Date; to: Date } {
   const from = localDay(stringArg(args, 'da') ?? '') ?? new Date(new Date().setHours(0, 0, 0, 0))
   const lastDay =
@@ -280,7 +297,7 @@ function freeSlots(
   return slots.slice(0, FREE_SLOTS_SHOWN)
 }
 
-function changeOf(args: Record<string, unknown>, allDay: boolean): EventChange {
+function changeOf(args: Record<string, unknown>, allDay: boolean, wasAllDay: boolean): EventChange {
   const change: EventChange = {}
   const title = stringArg(args, 'titolo')
   const start = stringArg(args, 'inizio')
@@ -289,7 +306,17 @@ function changeOf(args: Record<string, unknown>, allDay: boolean): EventChange {
   if (title) change.title = title
   if (start) change.start = instant(start, allDay, 'inizio')
   if (end) change.end = instant(end, allDay, 'fine')
-  if (args.tutto_il_giorno !== undefined) change.allDay = allDay
+  if (allDay !== wasAllDay) {
+    if (!start || !end) {
+      throw new ToolInputError(
+        allDay
+          ? 'Per farlo diventare di tutto il giorno indica `inizio` e `fine` come date (AAAA-MM-GG).'
+          : 'Per dargli un orario indica `inizio` e `fine` (AAAA-MM-GGTHH:MM).'
+      )
+    }
+
+    change.allDay = allDay
+  }
   if (args.luogo !== undefined) change.location = stringArg(args, 'luogo') ?? null
   if (args.descrizione !== undefined) change.description = stringArg(args, 'descrizione') ?? null
   if (args.invitati !== undefined) change.attendees = stringListArg(args, 'invitati')
@@ -427,7 +454,7 @@ export const calendarTool: SegretarioTool = {
         }
       }
       case 'crea': {
-        const allDay = booleanArg(args, 'tutto_il_giorno')
+        const allDay = allDayOf(args, false)
         const attendees = stringListArg(args, 'invitati')
 
         if (attendees.length > 0 && context.run.background) {
@@ -494,10 +521,7 @@ export const calendarTool: SegretarioTool = {
           throw new ToolInputError("L'evento non c'è più.")
         }
 
-        const change = changeOf(
-          args,
-          args.tutto_il_giorno !== undefined ? booleanArg(args, 'tutto_il_giorno') : current.allDay
-        )
+        const change = changeOf(args, allDayOf(args, current.allDay), current.allDay)
         // People are told of a change to an event they are in — and invited by one that adds them.
         const invited = change.attendees ?? []
 
@@ -616,7 +640,7 @@ export const calendarTool: SegretarioTool = {
         }
       }
       case 'proponi': {
-        const allDay = booleanArg(args, 'tutto_il_giorno')
+        const allDay = allDayOf(args, false)
         const source = stringArg(args, 'messaggio')
           ? await resolveMessage(context, stringArg(args, 'messaggio')!)
           : null

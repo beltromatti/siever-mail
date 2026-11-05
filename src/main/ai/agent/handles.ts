@@ -110,6 +110,22 @@ export class HandleRegistry {
     return target?.kind === 'draft' ? target.draftId : null
   }
 
+  /** The projects this run has a name for, with it. */
+  projects(): Array<{ handle: string; projectId: string; title: string }> {
+    return [...this.byHandle.entries()].flatMap(([handle, target]) =>
+      target.kind === 'project'
+        ? [{ handle, projectId: target.projectId, title: target.title }]
+        : []
+    )
+  }
+
+  /** The events this run has a name for, with it. */
+  events(): Array<{ handle: string; eventKey: string; title: string }> {
+    return [...this.byHandle.entries()].flatMap(([handle, target]) =>
+      target.kind === 'event' ? [{ handle, eventKey: target.eventKey, title: target.title }] : []
+    )
+  }
+
   project(handle: string): { projectId: string; title: string } | null {
     const target = this.resolve(handle)
     return target?.kind === 'project' ? target : null

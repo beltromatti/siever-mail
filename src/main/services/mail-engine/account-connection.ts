@@ -109,6 +109,8 @@ const INBOX_SPECIAL_USE = '\\Inbox'
 // of the list, open at once.
 const RECENT_INBOX_BODIES = 25
 const BACKGROUND_FOLDER_POLL_INTERVAL_MS = 45_000
+/** How long the primary queue stays empty before IDLE goes back to its folder. */
+const IDLE_RETURN_DELAY_MS = 2_000
 /** How stale a folder found unchanged may be marked before it is marked current again. */
 const FOLDER_CURRENT_MARK_MS = 5 * 60_000
 const ACTIVE_FOLDER_POLL_INTERVAL_MS = 20_000
@@ -361,6 +363,8 @@ export class AccountConnection extends EventEmitter {
   private readonly primaryQueue: QueuedTask[] = []
   private readonly syncQueue: QueuedTask[] = []
   private primaryWorkerActive = false
+  /** Brings IDLE back where new mail is watched, a moment after the primary queue empties. */
+  private idleReturnTimer: ReturnType<typeof setTimeout> | null = null
   private syncWorkerActive = false
   // Bodies being fetched, by folder and UID: whoever else wants one meanwhile
   // waits on the same fetch.
@@ -499,8 +503,10 @@ export class AccountConnection extends EventEmitter {
       })
     })
 
+    // The sweep is one command and is how new mail is noticed: it goes ahead of
+    // the backlog a start or a reconnect queues, not minutes behind it.
     this.folderPollInterval = setInterval(
-      () => this.enqueueFolderPoll('background'),
+      () => this.enqueueFolderPoll('active-sync'),
       BACKGROUND_FOLDER_POLL_INTERVAL_MS
     )
   }
@@ -537,6 +543,11 @@ export class AccountConnection extends EventEmitter {
     if (this.folderPollInterval) {
       clearInterval(this.folderPollInterval)
       this.folderPollInterval = null
+    }
+
+    if (this.idleReturnTimer) {
+      clearTimeout(this.idleReturnTimer)
+      this.idleReturnTimer = null
     }
 
     const primary = this.primaryClient
@@ -2099,6 +2110,24 @@ export class AccountConnection extends EventEmitter {
     }, 'idle-select')
   }
 
+  /** Where IDLE belongs: the folder on screen, or else the inbox. */
+  private async idleMailboxPath(): Promise<string | null> {
+    const folders = await this.database.listFolders(this.account.id)
+    const activePath =
+      this.lastActiveContext?.accountId === this.account.id
+        ? this.lastActiveContext.folderPath
+        : null
+
+    return (
+      (
+        (activePath && folders.find((folder) => folder.path === activePath)) ||
+        folders.find((folder) => folder.specialUse === INBOX_SPECIAL_USE) ||
+        folders[0] ||
+        null
+      )?.path ?? null
+    )
+  }
+
   private async selectIdleMailbox(): Promise<void> {
     // IDLE runs on primaryClient only — this selects the preferred mailbox so
     // imapflow enters IDLE on it and relays exists/expunge/flags events.
@@ -2106,27 +2135,35 @@ export class AccountConnection extends EventEmitter {
       return
     }
 
-    const folders = await this.database.listFolders(this.account.id)
-    const activePath =
-      this.lastActiveContext?.accountId === this.account.id
-        ? this.lastActiveContext.folderPath
-        : null
-
-    const preferred =
-      (activePath && folders.find((folder) => folder.path === activePath)) ||
-      folders.find((folder) => folder.specialUse === INBOX_SPECIAL_USE) ||
-      folders[0] ||
-      null
+    const preferred = await this.idleMailboxPath()
 
     if (!preferred) {
       return
     }
 
-    const lock = await this.primaryClient.getMailboxLock(preferred.path)
+    const lock = await this.primaryClient.getMailboxLock(preferred)
+    let selected: { exists: number; uidNext: number } | null = null
+
     try {
       // Lock released immediately; imapflow starts IDLE on the now-selected mailbox.
+      const mailbox = this.primaryClient.mailbox
+      selected = mailbox ? { exists: mailbox.exists, uidNext: mailbox.uidNext } : null
     } finally {
       lock.release()
+    }
+
+    // What came while IDLE was elsewhere raised no event: the SELECT's counts say it.
+    const state = await this.database.getFolderSyncState(this.account.id, preferred)
+    const folder = (await this.database.listFolders(this.account.id)).find(
+      (candidate) => candidate.path === preferred
+    )
+
+    if (
+      selected &&
+      state?.lastSyncedAt &&
+      (selected.uidNext !== state.uidNext || selected.exists !== folder?.messageCount)
+    ) {
+      this.incrementalSyncFolder(preferred, 'active-sync')
     }
   }
 
@@ -2228,8 +2265,9 @@ export class AccountConnection extends EventEmitter {
       const status = mailbox.status
       const folder = known.get(mailbox.path)
 
-      // The server could not say: the next review asks again.
-      if (!status) {
+      // The server could not say — no status, or a failed STATUS with no counts: the next review
+      // asks again. Taken for "unchanged", it would mark the folder current without knowing.
+      if (!status || typeof status.messages !== 'number') {
         continue
       }
 
@@ -3268,7 +3306,42 @@ export class AccountConnection extends EventEmitter {
 
     if (this.primaryQueue.length > 0 && this.primaryClient?.usable) {
       this.startPrimaryWorkerIfNeeded()
+      return
     }
+
+    this.returnIdleSoon()
+  }
+
+  /**
+   * IDLE watches the mailbox the primary client has selected, and imapflow
+   * keeps it on whatever the last command opened: a message read from "Tutti
+   * i messaggi" left the inbox unwatched until the next poll. A moment after
+   * the queue empties — reads come in bursts — IDLE goes back where it belongs.
+   */
+  private returnIdleSoon(): void {
+    if (this.idleReturnTimer) {
+      clearTimeout(this.idleReturnTimer)
+    }
+
+    this.idleReturnTimer = setTimeout(() => {
+      this.idleReturnTimer = null
+      void (async () => {
+        const selected = this.primaryClient?.mailbox ? this.primaryClient.mailbox.path : null
+        const preferred = await this.idleMailboxPath()
+
+        if (
+          preferred &&
+          selected !== preferred &&
+          this.primaryQueue.length === 0 &&
+          !this.primaryWorkerActive &&
+          this.primaryClient?.usable
+        ) {
+          this.enqueuePrimaryCommand(() => this.selectIdleMailbox(), 'idle-return')
+        }
+      })().catch((error: unknown) =>
+        logMainError('IDLE could not go back to its folder', error, { accountId: this.account.id })
+      )
+    }, IDLE_RETURN_DELAY_MS)
   }
 
   // ────────────────────────────── Sync queue ──────────────────────────────

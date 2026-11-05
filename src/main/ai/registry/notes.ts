@@ -1,6 +1,7 @@
 import { placeholders, type Sql } from '../sql'
 import {
   RegistryRefusal,
+  RevisionConflict,
   type Actor,
   type MessageAnchor,
   type NoteNature,
@@ -186,8 +187,10 @@ export class NoteStore {
       options.seenRevision !== undefined &&
       current.revision !== options.seenRevision
     ) {
-      throw new RegistryRefusal(
-        'La nota di questo messaggio è cambiata da quando l’hai letta: rileggila.',
+      throw new RevisionConflict(
+        `La nota di questo messaggio è cambiata da quando l’hai letta${
+          current.writtenBy === 'utente' ? ', per mano dell’utente' : ''
+        }: ora dice «${current.summary}» (${current.nature}, importanza ${current.priority}). Se la tua correzione vale ancora, rifalla.`,
         current
       )
     }

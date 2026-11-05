@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { placeholders, type Sql } from '../sql'
 import {
   RegistryRefusal,
+  RevisionConflict,
   type Actor,
   type ActorKind,
   type ProjectLink,
@@ -606,8 +607,16 @@ export class ProjectStore {
 
     if (changed === 0) {
       const current = await this.require(id)
-      throw new RegistryRefusal(
-        `«${current.title}» è cambiato da quando l'hai letto: rileggilo con \`leggi\` e decidi di nuovo.`,
+      const now = [
+        current.description ? `di cosa si tratta: «${current.description}»` : null,
+        current.state ? `«Il punto»: «${current.state}»` : null,
+        current.closedAt ? 'concluso' : null,
+        current.hiddenAt ? 'nascosto' : null
+      ].filter(Boolean)
+      throw new RevisionConflict(
+        `«${current.title}» è cambiato da quando l'hai letto (un altro lavoro, o l'utente, l'ha scritto nel frattempo)${
+          now.length > 0 ? `. Ora: ${now.join('; ')}` : ''
+        }. Se la tua modifica vale ancora, rifalla.`,
         current
       )
     }

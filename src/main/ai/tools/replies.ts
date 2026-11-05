@@ -1,9 +1,10 @@
 import { PROMPTS } from '../prompts'
-import { RegistryRefusal, type ReplyKind } from '../registry/types'
+import { RegistryRefusal, RevisionConflict, type ReplyKind } from '../registry/types'
 import {
   requireString,
   seenKey,
   stringArg,
+  ToolConflict,
   ToolInputError,
   type SegretarioTool,
   type ToolContext
@@ -105,7 +106,7 @@ export const replyTool: SegretarioTool = {
           )
           context.run.seen.set(key, record.revision)
           return {
-            content: `${kind === 'sollecito' ? 'Sollecito' : 'Risposta'} per ${handle} ${change.action}: l'utente la trova nel lettore.`,
+            content: `${change.label} per ${handle}: l'utente ${kind === 'sollecito' ? 'lo' : 'la'} trova nel lettore.`,
             summary: change.label,
             messages: [message.ref]
           }
@@ -146,6 +147,11 @@ export const replyTool: SegretarioTool = {
           throw new ToolInputError('`azione` è elenco, prepara, conferma o scarta.')
       }
     } catch (error) {
+      if (error instanceof RevisionConflict) {
+        context.run.seen.set(key, error.current.revision)
+        throw new ToolConflict(error.message)
+      }
+
       if (error instanceof RegistryRefusal) {
         throw new ToolInputError(error.message)
       }

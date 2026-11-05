@@ -1,6 +1,7 @@
 import { placeholders, type Sql } from '../sql'
 import {
   RegistryRefusal,
+  RevisionConflict,
   type Actor,
   type MessageAnchor,
   type ReplyKind,
@@ -174,8 +175,10 @@ export class ReplyStore {
     }
 
     if (options.seenRevision !== undefined && options.seenRevision !== current.revision) {
-      throw new RegistryRefusal(
-        'La risposta preparata è cambiata da quando l’hai letta: rileggila.',
+      throw new RevisionConflict(
+        `La risposta preparata è cambiata da quando l’hai letta: ora è ${
+          current.status === 'pronta' ? 'pronta' : current.status.replace('_', ' ')
+        }, e dice «${current.text.length > 600 ? `${current.text.slice(0, 600)}…` : current.text}». Se ciò che volevi fare vale ancora, rifallo.`,
         current
       )
     }

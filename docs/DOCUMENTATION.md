@@ -320,7 +320,11 @@ with three IMAP clients, so what the user does never waits behind a sync:
 - **primary** — what the user does (read, move, flag, delete, download),
   one command at a time, and IDLE on the folder on screen — the inbox
   when the user is elsewhere (another account, Oggi, the calendar, a view
-  of every account) — so its changes arrive as they happen;
+  of every account) — so its changes arrive as they happen. A command that
+  opened another folder (a message read from "Tutti i messaggi") leaves
+  IDLE there: two seconds after the queue empties it goes back, and what
+  came meanwhile, which raised no event, is synced from the counts the
+  folder opens with;
 - **sync** — first downloads, catch-up, previews, the messages read ahead
   and the server side of a search, in a queue ordered by priority (`user`,
   then `active-sync`, then `background`): a search jumps the queue, a
@@ -335,8 +339,10 @@ with three IMAP clients, so what the user does never waits behind a sync:
   dot.
 
 **What changed** is found with one `LIST` that asks every folder's
-`STATUS` (`reviewFolders`), every 45 s and when the machine wakes or the
-network comes back; IDLE pushes the folder it watches, and the folder on
+`STATUS` (`reviewFolders`), every 45 s — ahead of the backlog a start or a
+reconnect queues, not behind it — and when the machine wakes or the
+network comes back; a folder whose status came without counts is not
+known, not unchanged; IDLE pushes the folder it watches, and the folder on
 screen is also looked at every 20 s. A folder found unchanged is marked
 current, at most every five minutes (`markFolderCurrent`), so the
 Segretario can tell a message gone from the server from one in a folder
@@ -846,7 +852,9 @@ keeps for itself is what cannot be left to the model:
   results are cleared (the eight newest kept), past 140 000 the older part
   of the run is summarised (`infrastruttura/compattazione.md`); 80 steps at
   most;
-- a tool call that failed is not made again as it was;
+- a tool call that failed is not made again as it was — unless the run
+  has been given new names since, or it was refused for a conflict (see
+  [The registry](#the-registry));
 - what the task must leave (`missing`): a run that stops short is told what
   is missing, twice at most, then fails.
 
@@ -999,8 +1007,10 @@ the run's page of the diary and — made by the user — becomes a lesson.
 Every object has a revision. A run remembers the revision of what it read
 (`RunContext.seen`) — what its context showed counts as read, and a
 conversation in the panel keeps them from one request to the next — and a
-write over a newer one is refused with the object as it is now: the model
-reads again and decides again, so two runs never overwrite each other.
+write over a newer one is refused (`RevisionConflict`), saying what the
+object is now: the run has seen it, so it decides again at once — the same
+write included (`ToolConflict`) — and two runs never overwrite each other
+unknowingly.
 
 ### Views
 
@@ -1043,6 +1053,14 @@ Every run has the same tools (`tools/`), each described to the model by
 | `revisione`    | The outcome of a reread before sending.                                                                                                                                                     |
 | `mostra`       | Opens a message, a draft, a project, an event or a day on screen, or a search as a list.                                                                                                    |
 | `diario`       | What it did in the last days, run by run, with the changes each made.                                                                                                                       |
+
+The tools take what the model naturally writes, and a refusal says what
+would succeed: a project by its short name or by its name (or none, when
+the run knows only one), an event to prepare by its reference or its
+title, an event all day or at an hour as its times are written, a note's
+nature where a commitment's kind is meant; a missing note is answered with
+the notes called most like it, a search that finds nothing says why. The
+dates they return carry their weekday ("mar 10/11/2026").
 
 A message read with `leggi` comes with what is already there — its note,
 what is open in its conversation and recently closed, its projects, the

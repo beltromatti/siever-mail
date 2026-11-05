@@ -6,8 +6,10 @@ import {
   stringListArg,
   ToolInputError,
   type SegretarioTool,
-  type TaskKind
+  type TaskKind,
+  type ToolContext
 } from '../agent/tool-types'
+import { eventLine } from './calendar'
 import { clip, countOf, formatDateTime } from './format'
 
 /** The user's day, AAAA-MM-GG, as their clock has it. */
@@ -29,6 +31,53 @@ const TASK_WORDS: Record<string, string> = {
   al_passo: 'Al passo'
 }
 
+/** How far ahead a meeting named by its title is looked for. */
+const MEETING_AHEAD_DAYS = 14
+
+/**
+ * The event a preparation is for: its short name, or its title when one
+ * event of the next two weeks is called so. Otherwise the events of those
+ * days, named, for the next call to pick.
+ */
+async function meetingOf(
+  context: ToolContext,
+  written: string
+): Promise<{ eventKey: string; title: string }> {
+  const known = context.handles.event(written)
+
+  if (known) {
+    return known
+  }
+
+  const now = new Date()
+  const until = new Date(now.getTime() + MEETING_AHEAD_DAYS * 24 * 60 * 60 * 1000)
+  const events = await context.calendar.events(
+    new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(),
+    until.toISOString()
+  )
+  const wanted = written.trim().toLowerCase()
+  const matching = events.filter(
+    (event) =>
+      event.title.trim().toLowerCase() === wanted ||
+      wanted.includes(event.title.trim().toLowerCase())
+  )
+
+  if (matching.length === 1) {
+    return { eventKey: matching[0].key, title: matching[0].title }
+  }
+
+  const listed = (matching.length > 1 ? matching : events)
+    .slice(0, 12)
+    .map((event) => eventLine(event, context))
+  throw new ToolInputError(
+    `«${written}» non è un riferimento di evento (e…)${
+      listed.length > 0
+        ? `. Gli eventi dei prossimi giorni:\n${listed.join('\n')}`
+        : ', e nei prossimi giorni non ci sono eventi.'
+    }`
+  )
+}
+
 /** Who writes the letter: the day's own work, and the user who asks for it. */
 const LETTER_WRITERS: ReadonlyArray<TaskKind> = ['giornata', 'richiesta']
 
@@ -40,18 +89,18 @@ export const todayTool: SegretarioTool = {
     type: 'object',
     properties: {
       lettera: { type: 'string' },
-      riunione: { type: 'string' },
+      evento: { type: 'string' },
       preparazione: { type: 'string' }
     }
   },
-  running: (args) => (stringArg(args, 'riunione') ? 'Preparo la riunione…' : 'Scrivo la giornata…'),
+  running: (args) => (stringArg(args, 'evento') ? 'Preparo la riunione…' : 'Scrivo la giornata…'),
   async execute(args, context) {
     const letter = stringArg(args, 'lettera')
-    const meeting = stringArg(args, 'riunione')
+    const meeting = stringArg(args, 'evento')
     const lines: string[] = []
 
     if (!letter && !meeting) {
-      throw new ToolInputError('Indica `lettera`, oppure `riunione` con `preparazione`.')
+      throw new ToolInputError('Indica `lettera`, oppure `evento` con `preparazione`.')
     }
 
     if (letter) {
@@ -68,13 +117,7 @@ export const todayTool: SegretarioTool = {
     }
 
     if (meeting) {
-      const event = context.handles.event(meeting)
-
-      if (!event) {
-        throw new ToolInputError(
-          `Non conosco l'evento «${meeting}»: usa un riferimento e… ricevuto da \`calendario\`.`
-        )
-      }
+      const event = await meetingOf(context, meeting)
 
       await context.registry.savePrep(
         event.eventKey,

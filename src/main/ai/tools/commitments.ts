@@ -1,5 +1,5 @@
 import type { CommitmentKind, CommitmentRecord, NoteNature, NotePriority } from '../registry/types'
-import { RegistryRefusal } from '../registry/types'
+import { RegistryRefusal, RevisionConflict } from '../registry/types'
 import { PROMPTS } from '../prompts'
 import {
   objectListArg,
@@ -7,6 +7,7 @@ import {
   seenKey,
   stringArg,
   numberArg,
+  ToolConflict,
   ToolInputError,
   type SegretarioTool,
   type ToolContext
@@ -24,6 +25,28 @@ const NATURES: ReadonlyArray<NoteNature> = [
 ]
 const PRIORITIES: ReadonlyArray<NotePriority> = ['alta', 'media', 'bassa']
 const KINDS: ReadonlyArray<CommitmentKind> = ['ti_chiedono', 'hai_promesso', 'aspetti', 'da_fare']
+/** A note's nature where a commitment's kind is meant: the two words are near, the meaning the same. */
+const KIND_OF_NATURE: Readonly<Record<string, CommitmentKind>> = {
+  da_rispondere: 'ti_chiedono',
+  in_attesa: 'aspetti'
+}
+
+/** The kind of a commitment, also when written as a note's nature. */
+function kindArg(args: Record<string, unknown>): CommitmentKind | undefined {
+  const written = stringArg(args, 'tipo')?.trim().toLowerCase()
+
+  if (!written) {
+    return undefined
+  }
+
+  const kind = (KIND_OF_NATURE[written] ?? written) as CommitmentKind
+
+  if (!KINDS.includes(kind)) {
+    throw new ToolInputError(`\`tipo\` è uno di: ${KINDS.join(', ')}.`)
+  }
+
+  return kind
+}
 
 /** A nullable day argument: AAAA-MM-GG, or nothing. */
 function dayArg(args: Record<string, unknown>, name: string): string | null {
@@ -76,6 +99,14 @@ export const noteTool: SegretarioTool = {
         messages: [message.ref]
       }
     } catch (error) {
+      if (error instanceof RevisionConflict) {
+        context.run.seen.set(
+          seenKey('note', message.accountId, message.messageKey),
+          error.current.revision
+        )
+        throw new ToolConflict(error.message)
+      }
+
       if (error instanceof RegistryRefusal) {
         throw new ToolInputError(error.message)
       }
@@ -109,10 +140,10 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
   switch (action) {
     case 'apri': {
       const handle = requireString(operation, 'messaggio')
-      const kind = requireString(operation, 'tipo') as CommitmentKind
+      const kind = kindArg(operation)
 
-      if (!KINDS.includes(kind)) {
-        throw new ToolInputError(`\`tipo\` è uno di: ${KINDS.join(', ')}.`)
+      if (!kind) {
+        throw new ToolInputError(`Indica \`tipo\`: ${KINDS.join(', ')}.`)
       }
 
       const message = await resolveSentOrReceived(context, handle)
@@ -136,7 +167,7 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
         {
           text: stringArg(operation, 'testo'),
           due: operation.scadenza === undefined ? undefined : dayArg(operation, 'scadenza'),
-          kind: stringArg(operation, 'tipo') as CommitmentKind | undefined,
+          kind: kindArg(operation),
           question:
             operation.domanda === undefined ? undefined : (stringArg(operation, 'domanda') ?? null)
         },
@@ -226,7 +257,7 @@ async function conversationsWith(
 }
 
 async function listCommitments(context: ToolContext, filter: Operation): Promise<string> {
-  const kind = stringArg(filter, 'tipo') as CommitmentKind | undefined
+  const kind = kindArg(filter)
   const projectHandle = stringArg(filter, 'progetto')
   const project = projectHandle ? context.handles.project(projectHandle) : null
 
@@ -349,6 +380,7 @@ export const commitmentsTool: SegretarioTool = {
 
     const lines: string[] = []
     let failures = 0
+    let conflicts = 0
 
     for (const [index, operation] of operations.entries()) {
       try {
@@ -358,7 +390,13 @@ export const commitmentsTool: SegretarioTool = {
             : await runOperation(context, operation)
         )
       } catch (error) {
-        if (error instanceof RegistryRefusal || error instanceof ToolInputError) {
+        if (error instanceof RevisionConflict) {
+          // Seen as it is now: the same operation may be made again, knowingly.
+          rememberCommitments(context, [error.current as CommitmentRecord])
+          failures += 1
+          conflicts += 1
+          lines.push(`Operazione ${index + 1} non fatta: ${error.message}`)
+        } else if (error instanceof RegistryRefusal || error instanceof ToolInputError) {
           failures += 1
           lines.push(`Operazione ${index + 1} non fatta: ${error.message}`)
         } else {
@@ -379,7 +417,7 @@ export const commitmentsTool: SegretarioTool = {
           : failures > 0
             ? `Cose aperte: ${failures} non fatte`
             : 'Guardate le cose aperte',
-      failed: failures === operations.length
+      failed: failures === operations.length && conflicts === 0
     }
   }
 }

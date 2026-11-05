@@ -111,7 +111,7 @@ export const memoryTool: SegretarioTool = {
           const document = await notebook.read(path)
 
           if (!document) {
-            throw new ToolInputError(`La nota «${path}» non esiste. ${await notebook.index()}`)
+            throw new ToolInputError(await notebook.missing(path))
           }
 
           remember(context, document)
