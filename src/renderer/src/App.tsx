@@ -57,27 +57,28 @@ import {
   type SegretarioContextChip
 } from '@renderer/features/segretario/segretario-panel'
 import { useSegretario } from '@renderer/features/segretario/use-segretario'
-import { noteKey, useMessageNotes } from '@renderer/features/segretario/message-notes'
-import { ThreadBriefPanel } from '@renderer/features/segretario/thread-brief'
+import { rowWorkKey, savedOnly, useRowWork } from '@renderer/features/segretario/row-work'
+import { MessageWorkPanel } from '@renderer/features/segretario/message-work'
 import { TodayPage } from '@renderer/features/segretario/today-page'
 import { AgendaPage } from '@renderer/features/calendar/agenda-page'
 import { InvitationCard } from '@renderer/features/calendar/invitation-card'
 import { isIcsAttachment } from '@shared/calendar'
 import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
 import { SearchBanner } from '@renderer/features/segretario/search-banner'
-import { TopicBanner } from '@renderer/features/segretario/topic-banner'
+import { ProjectBanner } from '@renderer/features/segretario/project-banner'
 import { segretarioSuggestions } from '@renderer/features/segretario/suggestions'
-import { useConversationTopicTags } from '@renderer/features/segretario/conversation-topics'
+import { useConversationProjectTags } from '@renderer/features/segretario/conversation-projects'
 import { plainTextToComposerHtml, writtenText } from '@renderer/features/mail/composer-body'
 import { parseRecipients } from '@shared/email-address'
 import type {
   ApprovalRequest,
   AskedMail,
+  Commitment,
   SavedSearch,
   ComposeSpec,
   HandleLink,
-  SendOutcome,
-  Topic
+  Project,
+  SendOutcome
 } from '@shared/segretario'
 import { WorkspaceLayout } from '@renderer/features/workspace/workspace-layout'
 import { useAssistantInset } from '@renderer/features/workspace/assistant-width'
@@ -108,8 +109,8 @@ import {
   isSegretarioList,
   segretarioSearch,
   segretarioSearchPath,
-  segretarioTopic,
-  segretarioTopicPath,
+  segretarioProject,
+  segretarioProjectPath,
   segretarioView,
   segretarioViewLabel,
   SEGRETARIO_VIEWS,
@@ -402,6 +403,11 @@ const SEGRETARIO_CONTEXT_LIMIT = 200
 /** Conversations marked handled per request: a selection of any size goes in these. */
 const MARK_HANDLED_BATCH = 1000
 
+/** A day as the Segretario writes it: AAAA-MM-GG, local. */
+function localDayKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 function AppFrame({
   children,
   windowControlsState,
@@ -583,7 +589,33 @@ function App(): React.JSX.Element {
   const [openPage, setOpenPage] = useState<'oggi' | 'agenda' | null>(null)
   const segretario = useSegretario(segretarioOpen)
   const assistantInset = useAssistantInset(segretarioOpen)
-  const messageNotes = useMessageNotes(messages)
+  // The AI on: a key, and the one switch up. Off, nothing of the Segretario shows.
+  const aiOn = Boolean(
+    segretario.status && segretario.status.keyState !== 'missing' && segretario.preferences?.enabled
+  )
+  // The panel is there with the AI on — and, before a key is given, to ask for one.
+  const segretarioOffered = aiOn || segretario.status?.keyState === 'missing'
+  const fetchedRowWork = useRowWork(messages)
+  // With the AI off the rows keep only what an extension saved: nothing of the Segretario shows.
+  const rowWork = useMemo(
+    () => (aiOn ? fetchedRowWork : savedOnly(fetchedRowWork)),
+    [aiOn, fetchedRowWork]
+  )
+  const startSegretario = segretario.start
+
+  // Switched off, the panel closes: nothing of the Segretario stays on screen.
+  useEffect(() => {
+    if (!segretarioOffered) {
+      setSegretarioOpen(false)
+    }
+  }, [segretarioOffered])
+
+  // "Attivi" is the Segretario's: with it off, the list shows everything again.
+  useEffect(() => {
+    if (!aiOn && messageFilter === 'active') {
+      setMessageFilter('all')
+    }
+  }, [aiOn, messageFilter])
   // Sends that failed, oldest first. Each is offered back once no composer
   // is open, so retrying never replaces a message being written.
   const [failedSends, setFailedSends] = useState<
@@ -764,19 +796,18 @@ function App(): React.JSX.Element {
     number
   > | null>(null)
 
-  // The topics — a company's pratiche — the Segretario files conversations into, and their name.
-  const [topics, setTopics] = useState<Topic[]>([])
-  const [topicsLabel, setTopicsLabel] = useState<string | null>(null)
-  const conversationTopicTags = useConversationTopicTags(messages, topics)
+  // The projects the Segretario files conversations into — hidden and concluded ones too, for their names.
+  const [projects, setProjects] = useState<Project[]>([])
+  const conversationProjectTags = useConversationProjectTags(messages, aiOn)
 
   const refreshSegretarioViews = useCallback(async (): Promise<void> => {
     try {
-      const [counts, nextTopics] = await Promise.all([
+      const [counts, nextProjects] = await Promise.all([
         window.mailApi.getSegretarioViewCounts(),
-        window.segretarioApi.listTopics()
+        window.segretarioApi.listProjects({ includeHidden: true })
       ])
       setSegretarioViewCounts(counts)
-      setTopics(nextTopics)
+      setProjects(nextProjects)
     } catch {
       return
     }
@@ -1176,23 +1207,19 @@ function App(): React.JSX.Element {
     listRefreshTimerRef.current = setTimeout(run, LIST_REFRESH_COALESCE_MS)
   }, [refreshCurrentFolder])
 
-  // The Segretario's views follow its notes: their counts, and the list when one is open.
-  const segretarioConfigured = Boolean(
-    segretario.status && segretario.status.keyState !== 'missing'
-  )
+  // The Segretario's views follow its work: their counts, and the list when one is open.
   // The Agenda holds the calendar's events and the mail's deadlines: either is enough for it.
-  const agendaAvailable = calendarConnected || segretarioConfigured
+  const agendaAvailable = calendarConnected || aiOn
   const viewCountsTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
-    if (!segretarioConfigured) {
+    if (!aiOn) {
       return
     }
 
     void refreshSegretarioViews()
-    void window.segretarioApi.topicsLabel().then(setTopicsLabel)
 
-    const unsubscribe = window.segretarioApi.onNotesChanged(() => {
+    const unsubscribe = window.segretarioApi.onWorkChanged(() => {
       if (isSegretarioList(currentViewRef.current?.folderPath)) {
         scheduleListRefresh()
       }
@@ -1213,7 +1240,7 @@ function App(): React.JSX.Element {
         viewCountsTimerRef.current = null
       }
     }
-  }, [accounts, refreshSegretarioViews, scheduleListRefresh, segretarioConfigured])
+  }, [accounts, refreshSegretarioViews, scheduleListRefresh, aiOn])
 
   useEffect(
     () => () => {
@@ -2280,7 +2307,7 @@ function App(): React.JSX.Element {
   const [savedSearches, setSavedSearches] = useState<ReadonlyArray<SavedSearch>>([])
 
   useEffect(() => {
-    if (!segretarioConfigured) {
+    if (!aiOn) {
       return
     }
 
@@ -2293,60 +2320,34 @@ function App(): React.JSX.Element {
     return () => {
       current = false
     }
-  }, [segretarioConfigured])
+  }, [aiOn])
 
-  // Whether the conversation open has a reply prepared: the panel offers to go through it.
-  const viewerThreadKey = messageForViewer
-    ? `${messageForViewer.accountId}\u0000${messageForViewer.threadId}`
-    : null
-  const [viewerReady, setViewerReady] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!messageForViewer || !viewerThreadKey) {
-      return
-    }
-
-    let current = true
-    const load = (): void =>
-      void window.segretarioApi
-        .getThreadBrief(messageForViewer.accountId, messageForViewer.threadId)
-        .then((brief) => current && setViewerReady(brief.readyDraft ? viewerThreadKey : null))
-        .catch(() => undefined)
-
-    load()
-    const unsubscribe = window.segretarioApi.onNotesChanged(load)
-
-    return () => {
-      current = false
-      unsubscribe()
-    }
-  }, [messageForViewer, viewerThreadKey])
-
-  // Where the selected conversations are kept: the extension topic they share, the subfolder they went to.
+  // Where the selected messages are likely to be saved outside the mail, and what the Segretario proposes.
   const [selectionFiling, setSelectionFiling] = useState<{
     selection: ReadonlyArray<MailMessageSummary>
-    topicKey: string | null
-    destination: string | null
+    savedBefore: string | null
+    proposals: ExtensionSelectionContext['proposals']
   } | null>(null)
 
   useEffect(() => {
-    if (selectedSummaries.length === 0 || topics.length === 0) {
+    if (selectedSummaries.length === 0 || !aiOn) {
       return
     }
 
     let current = true
 
     void window.segretarioApi
-      .filingHint(
+      .filingContext(
         selectedSummaries.map((summary) => ({
           accountId: summary.accountId,
+          messageKey: summary.messageKey,
           threadId: summary.threadId,
           from: summary.from[0]?.address ?? null
         }))
       )
-      .then((hint) => {
+      .then((filing) => {
         if (current) {
-          setSelectionFiling({ selection: selectedSummaries, ...hint })
+          setSelectionFiling({ selection: selectedSummaries, ...filing })
         }
       })
       .catch(() => undefined)
@@ -2354,18 +2355,19 @@ function App(): React.JSX.Element {
     return () => {
       current = false
     }
-  }, [selectedSummaries, topics])
+  }, [selectedSummaries, aiOn])
 
-  const extensionSelection = useMemo<ExtensionSelectionContext>(
-    () => ({
+  const extensionSelection = useMemo<ExtensionSelectionContext>(() => {
+    const filing = aiOn && selectionFiling?.selection === selectedSummaries ? selectionFiling : null
+
+    return {
       refs: selection.selectedRefs,
       summaries: selectedSummaries,
       multiSelectActive: selection.selectedRefs.length > 1,
-      topicKey: selectionFiling?.selection === selectedSummaries ? selectionFiling.topicKey : null,
-      filedIn: selectionFiling?.selection === selectedSummaries ? selectionFiling.destination : null
-    }),
-    [selectedSummaries, selection.selectedRefs, selectionFiling]
-  )
+      savedBefore: filing?.savedBefore ?? null,
+      proposals: filing?.proposals ?? []
+    }
+  }, [aiOn, selectedSummaries, selection.selectedRefs, selectionFiling])
 
   const extensionHostHooks = useMemo<ExtensionHostHooks>(
     () => ({
@@ -2619,7 +2621,7 @@ function App(): React.JSX.Element {
     await setMessagesKeyword(selection.selectedRefs, '\\Seen', targetSeenState)
   }, [keepShownReadState, selection.selectedRefs, setMessagesKeyword, shouldMarkSelectionAsRead])
 
-  /** "Segna come gestito" for the conversations of these messages, as many as they are. */
+  /** "Segna come gestito": what the conversations of these messages ask of the user is done. */
   const markHandled = useCallback(
     async (summaries: ReadonlyArray<MailMessageSummary>): Promise<void> => {
       // One message per conversation: it is the conversation that is marked, counted once.
@@ -2635,14 +2637,14 @@ function App(): React.JSX.Element {
 
       try {
         for (let start = 0; start < messages.length; start += MARK_HANDLED_BATCH) {
-          handled += await window.segretarioApi.dismissConversations(
+          handled += await window.segretarioApi.markHandled(
             messages.slice(start, start + MARK_HANDLED_BATCH)
           )
         }
 
         toast(
           handled === 0
-            ? 'Niente da segnare: il Segretario non ha note su questi messaggi'
+            ? 'Niente da segnare: in queste conversazioni non ti chiedono niente'
             : handled === 1
               ? 'Conversazione segnata come gestita'
               : `${handled.toLocaleString('it-IT')} conversazioni segnate come gestite`
@@ -2868,8 +2870,91 @@ function App(): React.JSX.Element {
   const [goToFolderOpen, setGoToFolderOpen] = useState(false)
 
   /** What can be done with a folder from its right click, native as every menu of the app. */
+  /**
+   * A project's menu in the sidebar: the user's word on it — its name,
+   * other projects that are the same one, concluded, not a project at all —
+   * which the Segretario keeps and learns from.
+   */
+  const openProjectContextMenu = useCallback(
+    async (project: Project): Promise<void> => {
+      const others = projects
+        .filter((other) => other.id !== project.id && !other.hidden)
+        .sort((a, b) => (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? ''))
+        .slice(0, 30)
+      const chosen = await window.mailApi.showContextMenu([
+        { id: 'open', label: 'Apri' },
+        { type: 'separator' },
+        { id: 'rename', label: 'Rinomina…' },
+        ...(others.length > 0
+          ? [
+              {
+                id: 'merge',
+                label: 'Unisci a questo',
+                submenu: others.map((other) => ({ id: `merge:${other.id}`, label: other.title }))
+              }
+            ]
+          : []),
+        { type: 'separator' },
+        { id: 'close', label: project.closed ? 'Riapri' : 'Concluso: non è più in corso' },
+        { id: 'hide', label: 'Nascondi: non è un progetto' }
+      ])
+
+      if (!chosen) {
+        return
+      }
+
+      try {
+        if (chosen === 'open') {
+          selectFolder(segretarioProjectPath(project.id))
+        } else if (chosen === 'rename') {
+          const title = await prompt({
+            title: 'Rinomina il progetto',
+            description: 'Il Segretario userà questo nome, e non lo cambierà da solo.',
+            label: 'Nome',
+            initialValue: project.title,
+            confirmLabel: 'Rinomina',
+            validate: (value) => (value.trim() ? null : 'Dai un nome.')
+          })
+
+          if (title?.trim()) {
+            await window.segretarioApi.updateProject(project.id, { title: title.trim() })
+          }
+        } else if (chosen.startsWith('merge:')) {
+          const other = others.find((candidate) => `merge:${candidate.id}` === chosen)
+
+          if (other) {
+            await window.segretarioApi.mergeProjects(project.id, [other.id])
+            toast(`«${other.title}» è ora parte di «${project.title}»`)
+          }
+        } else if (chosen === 'close') {
+          await window.segretarioApi.updateProject(project.id, { closed: !project.closed })
+        } else if (chosen === 'hide') {
+          await window.segretarioApi.updateProject(project.id, { hidden: true })
+          toast(`«${project.title}» non è più tra i progetti`, {
+            action: {
+              label: 'Annulla',
+              onClick: () => void window.segretarioApi.updateProject(project.id, { hidden: false })
+            }
+          })
+        }
+
+        await refreshSegretarioViews()
+      } catch (error) {
+        toast.error('Il progetto non è cambiato', {
+          description: error instanceof Error ? error.message : undefined
+        })
+      }
+    },
+    [projects, prompt, refreshSegretarioViews, selectFolder]
+  )
+
   const openFolderContextMenu = useCallback(
     async (target: FolderMenuTarget): Promise<void> => {
+      if (target.kind === 'project') {
+        await openProjectContextMenu(target.project)
+        return
+      }
+
       const accountId = target.kind === 'folder' ? target.folder.accountId : selectedAccountId
 
       if (!accountId) {
@@ -3023,7 +3108,15 @@ function App(): React.JSX.Element {
         )
       }
     },
-    [accounts, folders, prompt, selectFolder, selectedAccountId, selectedFolderPath]
+    [
+      accounts,
+      folders,
+      openProjectContextMenu,
+      prompt,
+      selectFolder,
+      selectedAccountId,
+      selectedFolderPath
+    ]
   )
 
   const isModalSurfaceOpen =
@@ -3634,25 +3727,19 @@ function App(): React.JSX.Element {
             void openDraftById(request.draftId)
             return
           case 'search':
-            if (request.accountId || request.folderPath) {
-              cancelInFlightWork()
-              setShowWelcomeGate(false)
-
-              if (request.accountId) {
-                setSelectedAccountId(request.accountId)
-              }
-
-              if (request.folderPath) {
-                setSelectedFolderPath(request.folderPath)
-              }
-            }
-
-            setOpenPage(null)
-            setSearch(request.query)
+            setAskedSearches((current) => new Map(current).set(request.search.id, request.search))
+            setSearch('')
+            selectFolder(segretarioSearchPath(request.search.id))
+            return
+          case 'project':
+            selectFolder(segretarioProjectPath(request.projectId))
+            return
+          case 'day':
+            setOpenPage(request.day === localDayKey(new Date()) && aiOn ? 'oggi' : 'agenda')
             return
         }
       }),
-    [cancelInFlightWork, openDraftById, openMessageRef]
+    [aiOn, openDraftById, openMessageRef, selectFolder]
   )
 
   /**
@@ -3660,10 +3747,10 @@ function App(): React.JSX.Element {
    * reply to its message, with the prepared lines written in, and from then
    * on it is a draft like the user's own — and learnt from like one.
    */
-  const takeUpReadyDraft = useCallback(
+  const takeUpReply = useCallback(
     async (accountId: string, messageKey: string, text: string): Promise<void> => {
       try {
-        const source = await window.segretarioApi.readyDraftSource(accountId, messageKey)
+        const source = await window.segretarioApi.replySource(accountId, messageKey)
 
         if (!source) {
           toast.error('Il messaggio non c’è più', {
@@ -3680,7 +3767,7 @@ function App(): React.JSX.Element {
           { id, initialData: { ...data, draftId: id }, existing: false }
         ])
         setActiveComposeId(id)
-        await window.segretarioApi.takeUpReadyDraft(accountId, messageKey, id)
+        await window.segretarioApi.takeUpReply(accountId, messageKey, id)
       } catch (error) {
         toast.error('La risposta non si è aperta', {
           description: error instanceof Error ? error.message : undefined
@@ -3688,6 +3775,49 @@ function App(): React.JSX.Element {
       }
     },
     [composerDataFor]
+  )
+
+  /**
+   * Asks the Segretario, in its panel, for a reminder to whoever is
+   * awaited: it reads the conversation and writes the reminder, which the
+   * user sends — the same as asking it in words.
+   */
+  const remindAbout = useCallback(
+    async (commitment: Commitment): Promise<void> => {
+      try {
+        const ref = await window.segretarioApi.replySource(
+          commitment.accountId,
+          commitment.messageKey
+        )
+        setSegretarioOpen(true)
+        await startSegretario(`Prepara un sollecito: ${commitment.text}`, {
+          messages: ref ? [ref] : [],
+          accountId: commitment.accountId,
+          folderLabel: null
+        })
+      } catch (error) {
+        toast.error('Il sollecito non è partito', {
+          description: error instanceof Error ? error.message : undefined
+        })
+      }
+    },
+    [startSegretario]
+  )
+
+  /** A project the user made, from the sidebar's search: it opens, empty, to put conversations in. */
+  const createProject = useCallback(
+    async (title: string): Promise<void> => {
+      try {
+        const created = await window.segretarioApi.createProject(title)
+        await refreshSegretarioViews()
+        selectFolder(segretarioProjectPath(created.id))
+      } catch (error) {
+        toast.error('Il progetto non è stato creato', {
+          description: error instanceof Error ? error.message : undefined
+        })
+      }
+    },
+    [refreshSegretarioViews, selectFolder]
   )
 
   /** Waits for the composer of a draft to be mounted, to act on it. */
@@ -3786,8 +3916,8 @@ function App(): React.JSX.Element {
             void window.mailApi.openAttachment({ ref: link.ref, attachmentId: link.attachmentId })
           }
           return
-        case 'topic':
-          selectFolder(segretarioTopicPath(link.topicId))
+        case 'project':
+          selectFolder(segretarioProjectPath(link.projectId))
           return
         case 'event':
           setOpenPage('agenda')
@@ -3999,7 +4129,7 @@ function App(): React.JSX.Element {
         void setSelectionSeen()
         return true
       case 'mark-handled':
-        if (!hasSelection || !segretarioConfigured) {
+        if (!hasSelection || !aiOn) {
           return false
         }
 
@@ -4043,6 +4173,10 @@ function App(): React.JSX.Element {
         setSettingsOpen(true)
         return true
       case 'segretario':
+        if (!segretarioOffered) {
+          return false
+        }
+
         setSegretarioOpen((open) => !open)
         return true
       case 'reader-zoom-in':
@@ -4168,8 +4302,7 @@ function App(): React.JSX.Element {
             : 'Contrassegna',
         chord: chordOf('toggle-flag')
       },
-      ...(segretarioConfigured &&
-      summaries.some((message) => messageNotes.get(noteKey(message))?.dismissedAt === null)
+      ...(aiOn && summaries.some((message) => rowWork.get(rowWorkKey(message))?.owed)
         ? [{ id: 'mark-handled', label: 'Segna come gestito', chord: chordOf('mark-handled') }]
         : []),
       { type: 'separator' },
@@ -4341,8 +4474,8 @@ function App(): React.JSX.Element {
     })
     setShowWelcomeGate(false)
     // The day opens on what the Segretario saw in it.
-    setOpenPage(segretarioConfigured ? 'oggi' : null)
-  }, [segretarioConfigured, accounts])
+    setOpenPage(aiOn ? 'oggi' : null)
+  }, [aiOn, accounts])
 
   if (bootstrapLoading) {
     return (
@@ -4494,7 +4627,7 @@ function App(): React.JSX.Element {
   // What the view is called where it is named: the folder, or a folder of
   // "Tutti gli account".
   const currentSegretarioView = segretarioView(selectedFolderPath)
-  const currentTopicId = segretarioTopic(selectedFolderPath)
+  const currentProjectId = segretarioProject(selectedFolderPath)
   const currentSearchId = segretarioSearch(selectedFolderPath)
   const currentSaved = currentSearchId
     ? savedSearches.find((search) => search.id === currentSearchId)
@@ -4502,15 +4635,15 @@ function App(): React.JSX.Element {
   const currentAsked = currentSearchId
     ? (askedSearches.get(currentSearchId) ?? currentSaved)
     : undefined
-  const currentTopic = currentTopicId
-    ? topics.find((topic) => topic.id === currentTopicId)
+  const currentProject = currentProjectId
+    ? projects.find((project) => project.id === currentProjectId)
     : undefined
   const currentViewLabel = currentUnifiedRole
     ? `${folderRoleLabel(currentUnifiedRole)} · ${ALL_ACCOUNTS_LABEL}`
     : currentSegretarioView
       ? segretarioViewLabel(currentSegretarioView)
-      : currentTopicId
-        ? (currentTopic?.title ?? topicsLabel ?? '')
+      : currentProjectId
+        ? (currentProject?.title ?? 'Progetto')
         : currentSearchId
           ? (currentAsked?.summary ?? 'Ricerca del Segretario')
           : currentFolder
@@ -4518,7 +4651,7 @@ function App(): React.JSX.Element {
             : 'Conversazioni'
   // A page over the lists — the day, the agenda — is what the user looks at, not the selection under it.
   const shownPage =
-    openPage === 'oggi' && segretarioConfigured
+    openPage === 'oggi' && aiOn
       ? 'Oggi'
       : openPage === 'agenda' && agendaAvailable
         ? 'Agenda'
@@ -4543,14 +4676,12 @@ function App(): React.JSX.Element {
           ? `«${messageForViewer.subject || 'Senza oggetto'}»${messageForViewer.from[0] ? ` — ${messageForViewer.from[0].name || messageForViewer.from[0].address}` : ''}`
           : currentViewLabel
   }
-  const viewerNote = messageForViewer ? (messageNotes.get(noteKey(messageForViewer)) ?? null) : null
+  const viewerWork = messageForViewer ? (rowWork.get(rowWorkKey(messageForViewer)) ?? null) : null
   const segretarioSuggestionList = segretarioSuggestions({
     selectionCount: shownPage ? 0 : selection.selectedRefs.length,
-    note: shownPage ? null : viewerNote,
+    work: shownPage ? null : viewerWork,
     messageOpen: !shownPage && Boolean(messageForViewer),
-    topic: shownPage ? null : (currentTopic?.title ?? null),
-    topicsLabel,
-    readyReply: viewerReady === viewerThreadKey && viewerThreadKey !== null,
+    project: shownPage ? null : (currentProject?.title ?? null),
     calendarConnected
   })
   const filterNouns =
@@ -4558,7 +4689,9 @@ function App(): React.JSX.Element {
       ? (['messaggio non letto', 'messaggi non letti'] as const)
       : messageFilter === 'flagged'
         ? (['messaggio contrassegnato', 'messaggi contrassegnati'] as const)
-        : (['messaggio', 'messaggi'] as const)
+        : messageFilter === 'active'
+          ? (['messaggio attivo', 'messaggi attivi'] as const)
+          : (['messaggio', 'messaggi'] as const)
   const listCountLabel = activeSearchQuery
     ? formatCount(totalMessagesInFolder, 'risultato', 'risultati') +
       (serverSearchStatus === 'searching' ? ' · cerco anche nel testo…' : '')
@@ -4608,8 +4741,8 @@ function App(): React.JSX.Element {
 
   const listViewProps: MessageListViewProps = {
     title: currentViewLabel,
-    topicTags: currentTopicId || !segretarioConfigured ? null : conversationTopicTags,
-    askSegretario: segretarioConfigured
+    projectTags: currentProjectId || !aiOn ? null : conversationProjectTags,
+    askSegretario: aiOn
       ? {
           busy: askingSegretario,
           onAsk: (question) => {
@@ -4630,34 +4763,37 @@ function App(): React.JSX.Element {
           }
         }
       : undefined,
-    banner: currentTopicId ? (
-      <TopicBanner
-        key={currentTopicId}
-        topicId={currentTopicId}
-        canWrite={segretario.status?.keyState === 'ready'}
-        onChanged={() => void refreshSegretarioViews()}
-      />
-    ) : currentSearchId && currentAsked ? (
-      <SearchBanner
-        key={currentSearchId}
-        question={currentAsked.question}
-        saved={currentSaved !== undefined}
-        onSave={async () => {
-          try {
-            setSavedSearches(await window.segretarioApi.saveSearch(currentSearchId))
-          } catch (error) {
-            toast.error('Cartella non creata', {
-              description: error instanceof Error ? error.message : undefined
-            })
-          }
-        }}
-        onRemove={async () => {
-          setSavedSearches(await window.segretarioApi.removeSavedSearch(currentSearchId))
-          // A folder no longer kept has nothing to show: back to the mail.
-          runAppCommandRef.current('go-inbox')
-        }}
-      />
-    ) : undefined,
+    banner:
+      currentProjectId && aiOn ? (
+        <ProjectBanner
+          key={currentProjectId}
+          projectId={currentProjectId}
+          projects={projects}
+          canWrite={segretario.status?.keyState === 'ready'}
+          onRemind={remindAbout}
+          onMerged={(keptId) => selectFolder(segretarioProjectPath(keptId))}
+        />
+      ) : currentSearchId && currentAsked ? (
+        <SearchBanner
+          key={currentSearchId}
+          question={currentAsked.question}
+          saved={currentSaved !== undefined}
+          onSave={async () => {
+            try {
+              setSavedSearches(await window.segretarioApi.saveSearch(currentSearchId))
+            } catch (error) {
+              toast.error('Cartella non creata', {
+                description: error instanceof Error ? error.message : undefined
+              })
+            }
+          }}
+          onRemove={async () => {
+            setSavedSearches(await window.segretarioApi.removeSavedSearch(currentSearchId))
+            // A folder no longer kept has nothing to show: back to the mail.
+            runAppCommandRef.current('go-inbox')
+          }}
+        />
+      ) : undefined,
     searchQuery: search.trim(),
     onClearSearch: clearSearch,
     search,
@@ -4666,10 +4802,11 @@ function App(): React.JSX.Element {
     searchScopeLabel: currentUnifiedRole ? folderRoleLabel(currentUnifiedRole) : currentViewLabel,
     filter: messageFilter,
     onFilterChange: setMessageFilter,
+    showActiveFilter: aiOn,
     atWindowTopRight:
       uiPreferences.layoutMode === 'outlook' && !isMessageExpanded && !segretarioOpen,
     messages,
-    notes: messageNotes,
+    rowWork,
     sections: messageSections,
     countLabel: currentAsked ? `${listCountLabel} · ${currentAsked.how}` : listCountLabel,
     emptyState: listEmptyState,
@@ -4750,11 +4887,15 @@ function App(): React.JSX.Element {
               activeItemId="mail"
               onSelectItem={() => undefined}
               syncSummary={syncSummary}
-              segretario={{
-                open: segretarioOpen,
-                attention: segretario.attention,
-                onToggle: () => setSegretarioOpen((current) => !current)
-              }}
+              segretario={
+                segretarioOffered
+                  ? {
+                      open: segretarioOpen,
+                      attention: segretario.attention,
+                      onToggle: () => setSegretarioOpen((current) => !current)
+                    }
+                  : null
+              }
               onOpenSettings={() => setSettingsOpen(true)}
             />
           }
@@ -4805,24 +4946,19 @@ function App(): React.JSX.Element {
                 ) : (
                   <FolderSidebar
                     today={
-                      segretarioConfigured
-                        ? { open: openPage === 'oggi', onOpen: () => setOpenPage('oggi') }
-                        : null
+                      aiOn ? { open: openPage === 'oggi', onOpen: () => setOpenPage('oggi') } : null
                     }
                     segretarioViews={
-                      segretarioConfigured && segretarioViewCounts
+                      aiOn && segretarioViewCounts
                         ? SEGRETARIO_VIEWS.map((view) => ({
                             view,
                             count: segretarioViewCounts[view]
                           }))
                         : []
                     }
-                    topics={
-                      segretarioConfigured && topicsLabel
-                        ? { label: topicsLabel, items: topics }
-                        : null
-                    }
-                    savedSearches={segretarioConfigured ? savedSearches : []}
+                    projects={aiOn ? projects : null}
+                    onCreateProject={(title) => void createProject(title)}
+                    savedSearches={aiOn ? savedSearches : []}
                     accountLabel={selectedAccountLabel}
                     folders={folders}
                     unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
@@ -4870,17 +5006,34 @@ function App(): React.JSX.Element {
                         messageRef={summaryToMessageRef(messageForViewer)}
                       />
                     )}
-                    <ThreadBriefPanel
-                      key={`${messageForViewer.accountId}:${messageForViewer.threadId}`}
-                      accountId={messageForViewer.accountId}
-                      threadId={messageForViewer.threadId}
-                      topics={topicsLabel ? { label: topicsLabel, items: topics } : null}
-                      onOpenTopic={(topicId) => selectFolder(segretarioTopicPath(topicId))}
-                      accountEmail={(accountId) =>
-                        accounts.find((account) => account.id === accountId)?.email
-                      }
-                      onTakeUpReadyDraft={takeUpReadyDraft}
-                    />
+                    {aiOn && (
+                      <MessageWorkPanel
+                        key={`${messageForViewer.accountId}:${messageForViewer.messageKey}`}
+                        accountId={messageForViewer.accountId}
+                        messageKey={messageForViewer.messageKey}
+                        threadId={messageForViewer.threadId}
+                        projects={projects}
+                        onOpenProject={(projectId) =>
+                          selectFolder(segretarioProjectPath(projectId))
+                        }
+                        accountEmail={(accountId) =>
+                          accounts.find((account) => account.id === accountId)?.email
+                        }
+                        onTakeUpReply={takeUpReply}
+                        onRemind={(commitment) => void remindAbout(commitment)}
+                        onActOnProposal={(proposal) => {
+                          const action = extensionRenderer.proposalActions?.[proposal.kind]
+
+                          if (action) {
+                            extensionRenderer.runCommand?.(action.commandId, {
+                              selection: extensionSelection,
+                              openPrimaryActionDialog: () => setExtensionPrimaryDialogOpen(true),
+                              hostHooks: extensionHostHooks
+                            })
+                          }
+                        }}
+                      />
+                    )}
                   </>
                 )
               }
@@ -4963,7 +5116,7 @@ function App(): React.JSX.Element {
             />
           }
           page={
-            openPage === 'oggi' && segretarioConfigured ? (
+            openPage === 'oggi' && aiOn ? (
               <TodayPage
                 canWrite={segretario.status?.keyState === 'ready'}
                 atWindowTopRight={!segretarioOpen}
@@ -4973,7 +5126,7 @@ function App(): React.JSX.Element {
               <AgendaPage
                 atWindowTopRight={!segretarioOpen}
                 calendarConnected={calendarConnected}
-                showDue={segretarioConfigured}
+                showDue={aiOn}
                 onOpenMessage={openMessageRef}
               />
             ) : undefined
@@ -5020,7 +5173,9 @@ function App(): React.JSX.Element {
             onSendRequested={handleComposerSendRequested}
             onSummaryChange={(summary) => updateComposeSummary(session.id, summary)}
             canAskSegretario={
-              segretario.status?.keyState === 'ready' || segretario.status?.keyState === 'unchecked'
+              aiOn &&
+              (segretario.status?.keyState === 'ready' ||
+                segretario.status?.keyState === 'unchecked')
             }
           />
         ))}

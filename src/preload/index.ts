@@ -137,17 +137,60 @@ const segretarioApi: SegretarioApi = {
   removeKey: async () => invoke(SEGRETARIO_IPC.removeKey),
   checkKey: async () => invoke(SEGRETARIO_IPC.checkKey),
   getPreferences: async () => invoke(SEGRETARIO_IPC.getPreferences),
+  setPreferences: async (preferences) => invoke(SEGRETARIO_IPC.setPreferences, preferences),
   getSpending: async () => invoke(SEGRETARIO_IPC.getSpending),
+  getEngineState: async () => invoke(SEGRETARIO_IPC.getEngineState),
+  retryFailedWork: async () => invoke(SEGRETARIO_IPC.retryFailedWork),
   listMemory: async () => invoke(SEGRETARIO_IPC.listMemory),
   writeMemory: async (path, content) => invoke(SEGRETARIO_IPC.writeMemory, path, content),
   deleteMemory: async (path) => invoke(SEGRETARIO_IPC.deleteMemory, path),
+  memoryHistory: async (path) => invoke(SEGRETARIO_IPC.memoryHistory, path),
+  restoreMemory: async (path, revision) => invoke(SEGRETARIO_IPC.restoreMemory, path, revision),
   forgetEverything: async () => invoke(SEGRETARIO_IPC.forgetEverything),
   listLearning: async () => invoke(SEGRETARIO_IPC.listLearning),
-  lastKeptUpAt: async () => invoke(SEGRETARIO_IPC.lastKeptUpAt),
-  relearnAccount: async (accountId) => invoke(SEGRETARIO_IPC.relearnAccount, accountId),
+  startConoscimi: async (accountIds) => invoke(SEGRETARIO_IPC.startConoscimi, accountIds),
   draftSent: async (draftId, writtenText) => invoke(SEGRETARIO_IPC.draftSent, draftId, writtenText),
-  setPreferences: async (preferences) => invoke(SEGRETARIO_IPC.setPreferences, preferences),
-  listActivities: async () => invoke(SEGRETARIO_IPC.listActivities),
+  getRowWork: async (messages) => invoke(SEGRETARIO_IPC.getRowWork, messages),
+  filingContext: async (messages) => invoke(SEGRETARIO_IPC.filingContext, messages),
+  getMessageWork: async (accountId, messageKey) =>
+    invoke(SEGRETARIO_IPC.getMessageWork, accountId, messageKey),
+  setCommitmentStatus: async (id, status, options) =>
+    invoke(SEGRETARIO_IPC.setCommitmentStatus, id, status, options),
+  editCommitment: async (id, changes) => invoke(SEGRETARIO_IPC.editCommitment, id, changes),
+  openCommitment: async (message, input) => invoke(SEGRETARIO_IPC.openCommitment, message, input),
+  markHandled: async (messages) => invoke(SEGRETARIO_IPC.markHandled, messages),
+  undoChange: async (activityId, eventId, index) =>
+    invoke(SEGRETARIO_IPC.undoChange, activityId, eventId, index),
+  replySource: async (accountId, messageKey) =>
+    invoke(SEGRETARIO_IPC.replySource, accountId, messageKey),
+  takeUpReply: async (accountId, messageKey, draftId) =>
+    invoke(SEGRETARIO_IPC.takeUpReply, accountId, messageKey, draftId),
+  discardReply: async (accountId, messageKey) =>
+    invoke(SEGRETARIO_IPC.discardReply, accountId, messageKey),
+  decideProposal: async (id, accepted, result) =>
+    invoke(SEGRETARIO_IPC.decideProposal, id, accepted, result),
+  getToday: async () => invoke(SEGRETARIO_IPC.getToday),
+  refreshToday: async () => invoke(SEGRETARIO_IPC.refreshToday),
+  getDue: async (throughDay) => invoke(SEGRETARIO_IPC.getDue, throughDay),
+  assistWriting: async (request) => invoke(SEGRETARIO_IPC.assistWriting, request),
+  reviewDraft: async (request) => invoke(SEGRETARIO_IPC.reviewDraft, request),
+  askMail: async (question) => invoke(SEGRETARIO_IPC.askMail, question),
+  listSavedSearches: async () => invoke(SEGRETARIO_IPC.listSavedSearches),
+  saveSearch: async (id) => invoke(SEGRETARIO_IPC.saveSearch, id),
+  removeSavedSearch: async (id) => invoke(SEGRETARIO_IPC.removeSavedSearch, id),
+  listProjects: async (options) => invoke(SEGRETARIO_IPC.listProjects, options),
+  getProject: async (id) => invoke(SEGRETARIO_IPC.getProject, id),
+  refreshProject: async (id) => invoke(SEGRETARIO_IPC.refreshProject, id),
+  createProject: async (title) => invoke(SEGRETARIO_IPC.createProject, title),
+  updateProject: async (id, change) => invoke(SEGRETARIO_IPC.updateProject, id, change),
+  mergeProjects: async (keepId, otherIds) => invoke(SEGRETARIO_IPC.mergeProjects, keepId, otherIds),
+  setConversationProject: async (thread, projectId, linked) =>
+    invoke(SEGRETARIO_IPC.setConversationProject, thread, projectId, linked),
+  conversationProjects: async (threads) => invoke(SEGRETARIO_IPC.conversationProjects, threads),
+  openProjectFolder: async (id) => invoke(SEGRETARIO_IPC.openProjectFolder, id),
+  onWorkChanged: (listener) => subscribe(SEGRETARIO_IPC.workChanged, listener),
+  onEngineChanged: (listener) => subscribe(SEGRETARIO_IPC.engineChanged, listener),
+  listActivities: async (options) => invoke(SEGRETARIO_IPC.listActivities, options),
   getActivity: async (id) => invoke(SEGRETARIO_IPC.getActivity, id),
   startActivity: async (text, context) => invoke(SEGRETARIO_IPC.startActivity, text, context),
   sendMessage: async (id, text, context) => invoke(SEGRETARIO_IPC.sendMessage, id, text, context),
@@ -159,43 +202,10 @@ const segretarioApi: SegretarioApi = {
   completeCompose: async (requestId, result) =>
     invoke(SEGRETARIO_IPC.completeCompose, requestId, result),
   onStatusChanged: (listener) => subscribe(SEGRETARIO_IPC.statusChanged, listener),
+  onPreferencesChanged: (listener) => subscribe(SEGRETARIO_IPC.preferencesChanged, listener),
   onActivityEvent: (listener) => subscribe(SEGRETARIO_IPC.activityEvent, listener),
   onComposeRequest: (listener) => subscribe(SEGRETARIO_IPC.composeRequest, listener),
-  onShowRequest: (listener) => subscribe(SEGRETARIO_IPC.showRequest, listener),
-  getNotes: async (messages) => invoke(SEGRETARIO_IPC.getNotes, messages),
-  getThreadBrief: async (accountId, threadId) =>
-    invoke(SEGRETARIO_IPC.getThreadBrief, accountId, threadId),
-  closeCommitment: async (id) => invoke(SEGRETARIO_IPC.closeCommitment, id),
-  dismissNote: async (accountId, messageKey) =>
-    invoke(SEGRETARIO_IPC.dismissNote, accountId, messageKey),
-  dismissConversations: async (messages) => invoke(SEGRETARIO_IPC.dismissConversations, messages),
-  onNotesChanged: (listener) => subscribe(SEGRETARIO_IPC.notesChanged, listener),
-  readyDraftSource: async (accountId, messageKey) =>
-    invoke(SEGRETARIO_IPC.readyDraftSource, accountId, messageKey),
-  takeUpReadyDraft: async (accountId, messageKey, draftId) =>
-    invoke(SEGRETARIO_IPC.takeUpReadyDraft, accountId, messageKey, draftId),
-  discardReadyDraft: async (accountId, messageKey) =>
-    invoke(SEGRETARIO_IPC.discardReadyDraft, accountId, messageKey),
-  getBriefing: async () => invoke(SEGRETARIO_IPC.getBriefing),
-  getDue: async (throughDay) => invoke(SEGRETARIO_IPC.getDue, throughDay),
-  assistWriting: async (request) => invoke(SEGRETARIO_IPC.assistWriting, request),
-  writeBriefingOpening: async () => invoke(SEGRETARIO_IPC.writeBriefingOpening),
-  topicsLabel: async () => invoke(SEGRETARIO_IPC.topicsLabel),
-  listTopics: async () => invoke(SEGRETARIO_IPC.listTopics),
-  getTopic: async (id) => invoke(SEGRETARIO_IPC.getTopic, id),
-  writeTopicState: async (id) => invoke(SEGRETARIO_IPC.writeTopicState, id),
-  setConversationTopic: async (accountId, threadId, topicId) =>
-    invoke(SEGRETARIO_IPC.setConversationTopic, accountId, threadId, topicId),
-  updateTopic: async (id, change) => invoke(SEGRETARIO_IPC.updateTopic, id, change),
-  createTopic: async (title) => invoke(SEGRETARIO_IPC.createTopic, title),
-  conversationTopics: async (threads) => invoke(SEGRETARIO_IPC.conversationTopics, threads),
-  filingHint: async (threads) => invoke(SEGRETARIO_IPC.filingHint, threads),
-  reviewDraft: async (request) => invoke(SEGRETARIO_IPC.reviewDraft, request),
-  askMail: async (question) => invoke(SEGRETARIO_IPC.askMail, question),
-  listSavedSearches: async () => invoke(SEGRETARIO_IPC.listSavedSearches),
-  saveSearch: async (id) => invoke(SEGRETARIO_IPC.saveSearch, id),
-  removeSavedSearch: async (id) => invoke(SEGRETARIO_IPC.removeSavedSearch, id),
-  openTopicFolder: async (id) => invoke(SEGRETARIO_IPC.openTopicFolder, id)
+  onShowRequest: (listener) => subscribe(SEGRETARIO_IPC.showRequest, listener)
 }
 
 const calendarApi: CalendarApi = {

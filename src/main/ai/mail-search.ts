@@ -81,7 +81,10 @@ export interface SearchScope {
 export function searchScope(
   accounts: ReadonlyArray<MailAccount>,
   foldersByAccount: ReadonlyMap<string, ReadonlyArray<MailFolder>>,
-  query: Pick<AgentSearchQuery, 'accounts' | 'folder'>
+  query: Pick<AgentSearchQuery, 'accounts' | 'folder'> & {
+    /** The Trash and Spam too, which a search leaves out unless asked. */
+    everywhere?: boolean
+  }
 ): SearchScope {
   const wanted = (query.accounts ?? []).map((email) => email.trim().toLowerCase()).filter(Boolean)
   const scope: SearchScope = { mailboxes: new Map(), folders: new Map(), accountEmails: new Map() }
@@ -112,7 +115,7 @@ export function searchScope(
       paths = folders
         .filter((folder) => {
           const folderRoleName = folderRole(folder)
-          return folderRoleName !== '\\Junk' && folderRoleName !== '\\Trash'
+          return query.everywhere || (folderRoleName !== '\\Junk' && folderRoleName !== '\\Trash')
         })
         .map((folder) => folder.path)
     }

@@ -337,12 +337,16 @@ export class CommitmentStore {
 
     const current = await this.require(id)
 
-    if (current.status === status && current.until === until) {
+    const unchanged = current.status === status && current.until === until
+
+    // The same status again is nothing — unless it answers a question asked about it.
+    if (unchanged && current.question === null) {
       return { record: current, historyId: null }
     }
 
-    const action =
-      status === 'aperta'
+    const action = unchanged
+      ? 'conferma'
+      : status === 'aperta'
         ? 'riapri'
         : status === 'rinviata'
           ? 'rinvia'

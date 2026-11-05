@@ -121,6 +121,10 @@ export type SegretarioErrorCode =
   | 'timeout'
   | 'bad-request'
   | 'cancelled'
+  /** A run stopped without leaving what its task asks for. */
+  | 'incomplete'
+  /** A run took more steps than any task should. */
+  | 'too-long'
 
 /** A failure of the Segretario's service, with what to tell the user. */
 export class SegretarioError extends Error {

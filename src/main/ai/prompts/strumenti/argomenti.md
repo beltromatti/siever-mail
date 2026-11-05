@@ -1,5 +1,0 @@
-Gli argomenti: le questioni che durano (un lavoro, un progetto, una trattativa; nell'edizione di un'azienda, le sue pratiche), in cui metti le conversazioni mentre leggi la posta. Ogni argomento ha un riferimento breve (a1, a2…) che puoi usare come link.
-
-- `azione: "elenco"`: quelli in corso, i più mossi di recente per primi, con di cosa si tratta, quante conversazioni e quante cose aperte. Con `cerca` (un numero di pratica, un cliente, una parola) cerca tra tutti, anche quelli fermi o chiusi.
-- `azione: "leggi"`, con `argomento`: a che punto è (se l'hai già scritto), le cose aperte e le sue conversazioni, ognuna con il suo ultimo messaggio e la tua nota. È il modo più rapido per rispondere a "a che punto è la pratica…?": dopo, se serve, leggi i messaggi.
-- `azione: "sposta"`, con `mail` e `argomento`: mette la conversazione di quel messaggio nell'argomento, come scelta dell'utente (non la sposterai più da solo). `argomento: "nessuno"` la toglie da ogni argomento. Fallo solo quando l'utente lo chiede o lo conferma.

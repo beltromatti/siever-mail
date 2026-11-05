@@ -36,7 +36,8 @@ export function AppRail({
   onSelectItem: (id: string) => void
   syncSummary: SyncSummary | null
   /** The Segretario's panel: open or not, and whether something waits in it. */
-  segretario: { open: boolean; attention: boolean; onToggle: () => void }
+  /** The Segretario's button; null with the AI off. */
+  segretario: { open: boolean; attention: boolean; onToggle: () => void } | null
   onOpenSettings: () => void
 }): React.JSX.Element {
   return (
@@ -86,25 +87,27 @@ export function AppRail({
       <div className="flex-1" />
 
       <div className="window-no-drag flex flex-col items-center gap-1">
-        <ActionTooltip label="Segretario" commandId="segretario" side="right">
-          <button
-            type="button"
-            aria-label="Segretario"
-            aria-pressed={segretario.open}
-            onClick={segretario.onToggle}
-            className={cn(
-              'focus-visible:ring-ring/60 relative mb-1 grid size-9 place-items-center rounded-[9px] transition-colors outline-none focus-visible:ring-2',
-              segretario.open
-                ? 'bg-ai-soft text-ai-star shadow-[inset_0_0_0_1px_hsl(var(--ai-line)/0.6)]'
-                : 'text-faint-foreground hover:bg-hover hover:text-ai-star'
-            )}
-          >
-            <CompassStar className="size-[19px]" />
-            {segretario.attention && !segretario.open && (
-              <span className="bg-urgent ring-background absolute top-[7px] right-[7px] size-[7px] rounded-full ring-2" />
-            )}
-          </button>
-        </ActionTooltip>
+        {segretario && (
+          <ActionTooltip label="Segretario" commandId="segretario" side="right">
+            <button
+              type="button"
+              aria-label="Segretario"
+              aria-pressed={segretario.open}
+              onClick={segretario.onToggle}
+              className={cn(
+                'focus-visible:ring-ring/60 relative mb-1 grid size-9 place-items-center rounded-[9px] transition-colors outline-none focus-visible:ring-2',
+                segretario.open
+                  ? 'bg-ai-soft text-ai-star shadow-[inset_0_0_0_1px_hsl(var(--ai-line)/0.6)]'
+                  : 'text-faint-foreground hover:bg-hover hover:text-ai-star'
+              )}
+            >
+              <CompassStar className="size-[19px]" />
+              {segretario.attention && !segretario.open && (
+                <span className="bg-urgent ring-background absolute top-[7px] right-[7px] size-[7px] rounded-full ring-2" />
+              )}
+            </button>
+          </ActionTooltip>
+        )}
         {syncSummary && (
           <Tooltip>
             <TooltipTrigger asChild>

@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronRight, LoaderCircle, RotateCcw, Trash2 } from 'lucide-react'
+import { ChevronRight, History, LoaderCircle, RotateCcw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@renderer/components/ui/button'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
-import { Switch } from '@renderer/components/ui/switch'
 import { Textarea } from '@renderer/components/ui/textarea'
 import { cn } from '@renderer/lib/utils'
-import type { AccountLearning, MemoryNote, SegretarioPreferences } from '@shared/segretario'
+import type { ConnectionLearning, MemoryNote, MemoryVersion } from '@shared/segretario'
 
 const WHEN = new Intl.DateTimeFormat('it-IT', {
   day: 'numeric',
@@ -16,11 +15,19 @@ const WHEN = new Intl.DateTimeFormat('it-IT', {
   minute: '2-digit'
 })
 
-const LEARNING_STATE: Readonly<Record<AccountLearning['state'], string>> = {
+const LEARNING_STATE: Readonly<Record<ConnectionLearning['state'], string>> = {
   waiting: 'Da conoscere',
   running: 'Al lavoro…',
-  done: 'Conosciuto',
-  stopped: 'Fermato'
+  done: 'Conosciuta'
+}
+
+const VERSION_ACTIONS: Readonly<Record<string, string>> = {
+  scrivi: 'scritta',
+  modifica: 'corretta',
+  inserisci: 'ampliata',
+  rinomina: 'rinominata',
+  elimina: 'cancellata',
+  ripristina: 'ripristinata'
 }
 
 /** A note's first line: what it is about, as the index shows it. */
@@ -41,11 +48,13 @@ function errorText(error: unknown): string | undefined {
 function NoteRow({
   note,
   onSave,
-  onDelete
+  onDelete,
+  onRestore
 }: {
   note: MemoryNote
   onSave: (content: string) => Promise<void>
   onDelete: () => Promise<void>
+  onRestore: (revision: number) => Promise<void>
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState(note.content)
@@ -62,6 +71,15 @@ function NoteRow({
   }
 
   const changed = draft !== note.content
+  const [versions, setVersions] = useState<MemoryVersion[] | null>(null)
+
+  const showHistory = async (): Promise<void> => {
+    try {
+      setVersions(versions ? null : await window.segretarioApi.memoryHistory(note.path))
+    } catch (error) {
+      toast.error('La storia non si legge', { description: errorText(error) })
+    }
+  }
 
   const save = async (): Promise<void> => {
     setSaving(true)
@@ -94,6 +112,7 @@ function NoteRow({
           </span>
         </span>
         <span className="text-faint-foreground shrink-0 text-[11px]">
+          {note.updatedBy === 'utente' ? 'corretta da te, ' : ''}
           {WHEN.format(note.updatedAt)}
         </span>
       </button>
@@ -119,6 +138,10 @@ function NoteRow({
               Annulla
             </Button>
             <div className="flex-1" />
+            <Button variant="ghost" size="sm" disabled={saving} onClick={() => void showHistory()}>
+              <History className="size-3.5" />
+              {versions ? 'Nascondi la storia' : 'Storia'}
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -130,6 +153,36 @@ function NoteRow({
               Dimentica questa nota
             </Button>
           </div>
+          {versions && (
+            <ul className="flex flex-col gap-1 border-t pt-2">
+              {versions.length === 0 && (
+                <li className="text-muted-foreground text-[11.5px]">
+                  Nessuna versione precedente.
+                </li>
+              )}
+              {versions.map((version) => (
+                <li key={version.revision} className="flex items-center gap-2 text-[11.5px]">
+                  <span className="text-muted-foreground min-w-0 flex-1 truncate">
+                    {WHEN.format(version.at)} · {VERSION_ACTIONS[version.action] ?? version.action}
+                    {version.actor === 'utente'
+                      ? ' da te'
+                      : version.actor === 'segretario'
+                        ? ' dal Segretario'
+                        : ''}
+                  </span>
+                  {version.revision !== note.revision && version.content !== null && (
+                    <button
+                      type="button"
+                      onClick={() => void onRestore(version.revision).then(() => setVersions(null))}
+                      className="text-foreground focus-visible:ring-ring/60 shrink-0 rounded-sm font-semibold outline-none hover:underline focus-visible:ring-2"
+                    >
+                      Ripristina
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </div>
@@ -137,32 +190,27 @@ function NoteRow({
 }
 
 /**
- * Impostazioni › Cosa so di te: whether the Segretario learns from the
- * user, how far it has got with each account, and its notes — every one
- * readable, correctable and deletable, because what it believes about the
- * user is the user's to see.
+ * Impostazioni › Cosa so di te: how far the Segretario knows each
+ * connection — Conoscimi, to be done again when the user wants — and its
+ * notes: every one readable, correctable, restorable to an earlier
+ * version and deletable, because what it believes about the user is the
+ * user's to see.
  */
 export function MemorySection(): React.JSX.Element {
-  const [preferences, setPreferences] = useState<SegretarioPreferences | null>(null)
-  const [learning, setLearning] = useState<AccountLearning[] | null>(null)
+  const [learning, setLearning] = useState<ConnectionLearning[] | null>(null)
   const [notes, setNotes] = useState<MemoryNote[] | null>(null)
-  const [keptUpAt, setKeptUpAt] = useState<number | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const { confirm, dialog: confirmDialog } = useConfirmDialog()
   const reloadTimer = useRef<number | null>(null)
 
   const reload = useCallback(async (): Promise<void> => {
-    const [storedPreferences, storedLearning, storedNotes, storedKeptUpAt] = await Promise.all([
-      window.segretarioApi.getPreferences(),
+    const [storedLearning, storedNotes] = await Promise.all([
       window.segretarioApi.listLearning(),
-      window.segretarioApi.listMemory(),
-      window.segretarioApi.lastKeptUpAt()
+      window.segretarioApi.listMemory()
     ])
-    setPreferences(storedPreferences)
     setLearning(storedLearning)
     setNotes(storedNotes)
-    setKeptUpAt(storedKeptUpAt)
   }, [])
 
   useEffect(() => {
@@ -195,26 +243,16 @@ export function MemorySection(): React.JSX.Element {
     }
   }, [reload])
 
-  const changeLearning = async (enabled: boolean): Promise<void> => {
-    if (!preferences) {
-      return
-    }
-
+  const conoscimi = async (): Promise<void> => {
     try {
-      setPreferences(
-        await window.segretarioApi.setPreferences({ ...preferences, learning: enabled })
-      )
+      await window.segretarioApi.startConoscimi()
       setLearning(await window.segretarioApi.listLearning())
+      toast('Conoscimi è cominciato', {
+        description:
+          'Lo segui nel pannello del Segretario: aggiorna quello che sa, senza cancellarlo.'
+      })
     } catch (error) {
-      toast.error('Impostazione non salvata', { description: errorText(error) })
-    }
-  }
-
-  const relearn = async (account: AccountLearning): Promise<void> => {
-    try {
-      setLearning(await window.segretarioApi.relearnAccount(account.accountId))
-    } catch (error) {
-      toast.error('Non riesco a ricominciare', { description: errorText(error) })
+      toast.error('Conoscimi non è partito', { description: errorText(error) })
     }
   }
 
@@ -222,7 +260,7 @@ export function MemorySection(): React.JSX.Element {
     const confirmed = await confirm({
       title: 'Dimenticare tutto?',
       description:
-        'Il Segretario cancella tutte le sue note su di te, sulle persone e sulle questioni. Se l’apprendimento è attivo, ricomincia a conoscerti da capo.',
+        'Il Segretario cancella tutte le sue note su di te, sulle persone e sulle questioni, e cosa sa delle connessioni: Conoscimi è da rifare. Le cose aperte, i progetti e le note dei messaggi restano.',
       confirmLabel: 'Dimentica tutto',
       cancelLabel: 'Annulla',
       destructive: true
@@ -252,7 +290,7 @@ export function MemorySection(): React.JSX.Element {
     )
   }
 
-  if (!preferences || !learning || !notes) {
+  if (!learning || !notes) {
     return (
       <div className="text-muted-foreground mt-4 flex items-center gap-2 text-[12px]">
         <LoaderCircle className="size-4 animate-spin" />
@@ -261,61 +299,54 @@ export function MemorySection(): React.JSX.Element {
     )
   }
 
+  const running = learning.some((connection) => connection.state === 'running')
+
   return (
     <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
       <div className="settings-group flex flex-col gap-3">
-        <label
-          htmlFor="segretario-learning"
-          className="flex cursor-pointer items-center justify-between gap-3"
-        >
-          <span className="min-w-0">
-            <span className="block text-[12px] font-medium">Impara a conoscermi</span>
-            <span className="text-muted-foreground block text-[11px]">
-              Legge la posta che hai scritto da ogni account e prende appunti; poi impara da come
-              correggi le sue bozze e, ogni giorno, dalla posta che arriva. Gli appunti restano su
-              questo computer.
-              {preferences.learning === null && ' Non hai ancora deciso.'}
-            </span>
-          </span>
-          <Switch
-            id="segretario-learning"
-            checked={preferences.learning === true}
-            onCheckedChange={(enabled) => void changeLearning(enabled)}
-          />
-        </label>
-
-        {preferences.learning === true && (
-          <div className="flex flex-col gap-1.5">
-            {learning.map((account) => (
-              <div
-                key={account.accountId}
-                className="bg-hover flex items-center gap-3 rounded-md px-3 py-2"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[12px] font-medium">{account.email}</span>
-                  <span className="text-muted-foreground block text-[11px]">
-                    {account.state === 'done' && account.finishedAt
-                      ? `${LEARNING_STATE.done} ${WHEN.format(account.finishedAt)}`
-                      : account.state === 'waiting'
-                        ? 'Comincia quando la posta recente di questo account è indicizzata.'
-                        : LEARNING_STATE[account.state]}
-                  </span>
-                </span>
-                {(account.state === 'done' || account.state === 'stopped') && (
-                  <Button variant="outline" size="sm" onClick={() => void relearn(account)}>
-                    <RotateCcw className="size-3.5" />
-                    {account.state === 'done' ? 'Rifai' : 'Riprendi'}
-                  </Button>
-                )}
-              </div>
-            ))}
-            <p className="text-muted-foreground px-1 text-[11px]">
-              {keptUpAt
-                ? `Al passo con la posta: l'ultima volta ${WHEN.format(keptUpAt)}. Ci torna ogni giorno, quando c'è abbastanza di nuovo.`
-                : 'Al passo con la posta: una volta conosciuti gli account, ogni giorno rilegge cosa è arrivato e aggiorna le note.'}
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="eyebrow">Conoscimi</p>
+            <p className="text-muted-foreground mt-1 text-[11px]">
+              Il Segretario legge la tua posta, i tuoi calendari e le tue cartelle per capire chi
+              sei, come lavori, con chi e su cosa, e prende appunti. Rifarlo aggiorna quello che sa,
+              senza cancellarlo.
             </p>
           </div>
-        )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            disabled={running}
+            onClick={() => void conoscimi()}
+          >
+            {running ? (
+              <LoaderCircle className="size-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="size-3.5" />
+            )}
+            {learning.some((connection) => connection.state === 'done')
+              ? 'Rifai Conoscimi'
+              : 'Fatti conoscere'}
+          </Button>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {learning.map((connection) => (
+            <div
+              key={connection.accountId}
+              className="bg-hover flex items-center gap-3 rounded-md px-3 py-2"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12px] font-medium">{connection.email}</span>
+                <span className="text-muted-foreground block text-[11px]">
+                  {connection.state === 'done' && connection.finishedAt
+                    ? `${LEARNING_STATE.done} ${WHEN.format(connection.finishedAt)}`
+                    : LEARNING_STATE[connection.state]}
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="settings-group flex flex-col gap-2">
@@ -324,7 +355,8 @@ export function MemorySection(): React.JSX.Element {
             <p className="eyebrow">Note</p>
             <p className="text-muted-foreground mt-1 text-[11px]">
               Quello che il Segretario sa: di te, del tuo modo di scrivere, delle persone e delle
-              questioni. Le scrive e le aggiorna lui mentre lavora; correggile quando sbaglia.
+              questioni. Le scrive e le aggiorna lui mentre lavora; correggile quando sbaglia: da lì
+              impara.
             </p>
           </div>
           {notes.length > 0 && (
@@ -366,6 +398,13 @@ export function MemorySection(): React.JSX.Element {
                   setNotes(await window.segretarioApi.deleteMemory(note.path))
                 } catch (error) {
                   toast.error('Nota non cancellata', { description: errorText(error) })
+                }
+              }}
+              onRestore={async (revision) => {
+                try {
+                  setNotes(await window.segretarioApi.restoreMemory(note.path, revision))
+                } catch (error) {
+                  toast.error('Versione non ripristinata', { description: errorText(error) })
                 }
               }}
             />

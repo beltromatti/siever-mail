@@ -41,12 +41,15 @@ export function eventTimeLabel(event: CalendarEvent, day: Date): string {
 export function EventLine({
   event,
   day,
-  now
+  now,
+  prep
 }: {
   event: CalendarEvent
   /** The day it is listed under. */
   day: Date
   now: number
+  /** How to prepare for it, as the Segretario wrote it. */
+  prep?: string
 }): React.JSX.Element {
   const over = !event.allDay && Date.parse(event.end) < now
 
@@ -94,6 +97,11 @@ export function EventLine({
                 Entra nella call
               </button>
             )}
+          </span>
+        )}
+        {prep && (
+          <span className="voice text-muted-foreground border-ai-line mt-1 border-l-2 pl-2.5 text-[13.5px] leading-[1.45] whitespace-pre-line">
+            {prep}
           </span>
         )}
       </span>

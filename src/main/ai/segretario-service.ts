@@ -1,195 +1,100 @@
 import { randomUUID } from 'node:crypto'
-import { dirname, isAbsolute, relative, sep } from 'node:path'
 
 import type { PrismaClient } from '@prisma/client'
 
-import { logMainError } from '@main/utils/error-utils'
-import type { SegretarioView } from '@shared/folders'
-import type { MailAccount, MailAddress, MessageRef } from '@shared/models'
-import { deriveSenderKey } from '@shared/sender'
+import extensionMain from '@app/extension/main'
+import type { MessageRef } from '@shared/models'
 import {
   SEGRETARIO_IPC,
+  TASK_LABELS,
   type ActivityDetail,
-  type NoteState,
   type ActivityEntry,
-  type AccountLearning,
-  type AskedMail,
-  type SavedSearch,
   type ActivityEvent,
-  type ActivityKind,
-  type ActivityStatus,
   type ActivitySummary,
+  type AskedMail,
+  type Commitment,
+  type CommitmentKind,
+  type CommitmentStatus,
   type ComposeResult,
   type ComposeSpec,
-  type HandleLink,
-  type Briefing,
-  type BriefingItem,
-  type CommitmentKind,
+  type ConnectionLearning,
+  type DayLine,
+  type FilingContext,
+  type EngineState,
   type MemoryNote,
+  type MemoryVersion,
   type MessageNote,
-  type NotePriority,
-  type NotesChange,
-  type ReadyDraftKind,
+  type MessageRowWork,
+  type MessageWork,
+  type Project,
+  type ProjectDetail,
+  type ProjectLabel,
+  type Proposal,
   type ReviewRequest,
-  type ThreadBrief,
-  type Topic,
-  type TopicDetail,
-  type WritingRequest,
+  type SavedSearch,
   type SegretarioContext,
   type SegretarioPreferences,
   type SegretarioSpending,
   type SegretarioStatus,
   type SendOutcome,
-  type ShowRequest
+  type TodayPage,
+  type WorkChange,
+  type WritingRequest
 } from '@shared/segretario'
 
-import extensionMain from '@app/extension/main'
-
-import { AiStore, type StoredEvent } from './ai-store'
-import {
-  buildConversation,
-  handleRecords,
-  type ApprovalPayload,
-  type AssistantPayload,
-  type ClearingPayload,
-  type CompactionPayload,
-  type ContextPayload,
-  type ErrorPayload,
-  type ToolPayload,
-  type UserPayload
-} from './agent/conversation'
+import { logMainError } from '../utils/error-utils'
+import type { ContextPayload, ChangesPayload, UserPayload } from './agent/conversation'
+import { handleRecords } from './agent/conversation'
+import { entryOf, firstLine } from './agent/entries'
 import { HandleRegistry, type HandleRecord } from './agent/handles'
+import { AgentRunner } from './agent/runner'
 import {
   ToolInputError,
-  type SegretarioMailPort,
-  type SegretarioTool,
   type SegretarioCalendarPort,
-  type SegretarioWorkPort,
-  type ToolContext
+  type SegretarioMailPort,
+  type SegretarioPagePort
 } from './agent/tool-types'
+import { AiStore } from './ai-store'
+import { periodWords, searchPeriod, type AskedSearch } from './ask-mail'
+import { SegretarioEngine } from './engine/engine'
+import { WorkQueue } from './engine/work-queue'
+import { folderQueryLabel, searchMail, searchScope } from './mail-search'
+import { MAX_NOTE_CHARS, normalizeMemoryPath, Notebook } from './memory/notebook'
+import { OpenRouterClient, SegretarioError, type ChatUsage, type FetchFunction } from './openrouter'
+import { PROMPTS } from './prompts'
+import { Registry, type RegistryView } from './registry/registry'
 import {
-  OpenRouterClient,
-  SegretarioError,
-  type ChatUsage,
-  type FetchFunction,
-  type ToolCall
-} from './openrouter'
-import { folderQueryLabel, searchMail, searchScope, threadMessages } from './mail-search'
-import {
-  ASK_MAIL_SCHEMA,
-  askMailRequest,
-  parseAskedSearch,
-  periodWords,
-  searchPeriod,
-  type AskedSearch
-} from './ask-mail'
-import { nameForm, saysAnyName } from './topic-names'
-import { TopicStore, type CatalogTopic } from './topic-store'
-import {
-  parseReadyDraft,
-  parseWriting,
-  READY_DRAFT_SCHEMA,
-  readyDraftRequest,
-  WRITING_SCHEMA,
-  writingRequest,
-  type TopicAround
-} from './ready-drafts'
-import { fillTemplate, PROMPTS } from './prompts'
-import {
-  namedTopicIndexes,
-  namedTopicLine,
-  parseTriage,
-  topicCatalog,
-  TRIAGE_SCHEMA,
-  TRIAGE_WINDOW_DAYS,
-  triageRequest,
-  type TriageMessage,
-  type TriageResult
-} from './triage'
-import { SEGRETARIO_TOOLS, toolDefinitions } from './tools'
-import {
-  clip,
-  comparableText,
-  formatAddresses,
-  formatDateTime,
-  shortDate,
-  withoutQuotedHistory
-} from './tools/format'
-import { parseReview, REVIEW_SCHEMA, reviewRequest } from './review'
-import { MAX_NOTE_CHARS, memoryIndex, normalizeMemoryPath } from './tools/memory-tool'
+  OWED_KINDS,
+  RegistryRefusal,
+  SYSTEM,
+  USER,
+  type CommitmentRecord,
+  type NoteRecord,
+  type ProjectSummary
+} from './registry/types'
+import { prismaSql } from './sql'
+import { contextBlock, nowLine } from './tasks/context'
+import { prepareSearch, prepareReview, prepareWriting } from './tasks/interactive'
+import { prepareConoscimi } from './tasks/memory-work'
+import { startRun, type RunStarter } from './tasks/start-run'
+import { SEGRETARIO_TOOLS } from './tools'
+import { localDay } from './tools/day'
+import { comparableText, formatDateTime, shortDate } from './tools/format'
 
-/** Model turns one message of the user may take, at most: a safeguard, not a plan. */
-const MAX_STEPS_PER_TURN = 80
-/** How much the model may write in one turn: a long draft fits. */
-const MAX_TOKENS_PER_TURN = 16_000
-/** From this size of conversation, old tool results make room (see `buildConversation`). */
-const CLEAR_TOOL_RESULTS_AT = 60_000
-/** Tool results kept whole when the others are cleared. */
-const RECENT_TOOL_RESULTS_KEPT = 8
-/** From this size, the older part of the conversation is summarised. */
-const COMPACT_AT = 140_000
-/** How long the page has to open a draft it was asked for. */
-const COMPOSE_TIMEOUT_MS = 30_000
-/** The key and its credit are looked at again this often while the app runs. */
 const KEY_RECHECK_MS = 20 * 60 * 1000
-/** How often it looks whether there is work to begin on its own. */
-const OWN_WORK_CHECK_MS = 60_000
-/** An account is got to know once this many recent days of its mail are indexed. */
-const LEARNING_READY_DAYS = 90
-/** Reflections come at most this often, and only with something new to learn from. */
-const REFLECTION_INTERVAL_MS = 6 * 60 * 60 * 1000
-/** Keeping the memory up with the mail: about once a day, once this much has been read since. */
-const KEEP_UP_INTERVAL_MS = 20 * 60 * 60 * 1000
-const KEEP_UP_MIN_NOTES = 12
-/** The notes it is shown, the newest. */
-const KEEP_UP_NOTES_SHOWN = 150
-/** Corrections a reflection takes in at once; the rest wait for the next. */
-const LESSONS_PER_REFLECTION = 20
-/** A draft it wrote and nobody sent is forgotten after this. */
+/** How long a draft the Segretario wrote is remembered, to learn from what the user sends. */
 const DRAFT_RECORD_TTL_MS = 90 * 24 * 60 * 60 * 1000
-/** How often the extension's topics are read again: a new pratica folder appears within this. */
-const EXTENSION_TOPICS_SYNC_MS = 10 * 60 * 1000
-/** Past this many conversations waiting to be read, the day's page just says it is reading. */
-const TRIAGE_BACKLOG_COUNTED = 200
-/** How many things open in a conversation's topic triage is shown, the latest. */
-const TOPIC_OPEN_SHOWN = 20
-/** How many of the topic's other conversations a reply is told of, the latest. */
-const TOPIC_AROUND_SHOWN = 8
-/** How many of the topic's other conversations, moved on since a message read late, it is told of. */
-const TOPIC_LATER_SHOWN = 6
-/** How many of the sender's recent conversations are looked at, and how many still open shown. */
-const SENDER_THREADS_LOOKED = 12
-const SENDER_OPEN_SHOWN = 5
-/** A note that still asks something of the user, or waits on someone. */
-const STILL_OPEN_STATES: ReadonlySet<NoteState> = new Set(['da_rispondere', 'da_fare', 'in_attesa'])
-/** How many messages a search asked in words lists, the most relevant first. */
+/** How long the diary keeps the work done alone. */
+const DIARY_KEPT_MS = 21 * 24 * 60 * 60 * 1000
+const COMPOSE_TIMEOUT_MS = 30_000
+/** How long a reread before sending may take: past it, the message goes as it is. */
+const REVIEW_TIMEOUT_MS = 12_000
+/** How long the writing in the editor and the search asked in words may take at most. */
+const INLINE_TIMEOUT_MS = 90_000
 const ASK_MAIL_LIMIT = 200
-/** How many of those searches are kept, for their lists to be opened again. */
 const ASKED_SEARCHES_KEPT = 20
-/** How long the user's own message waits, without a date for what it asked, before a reminder is prepared. */
-const FOLLOW_UP_AFTER_DAYS = 3
-/** Past this, a conversation the user stopped chasing is not chased for them. */
-const FOLLOW_UP_WINDOW_DAYS = 30
-/** How often triage looks for messages without a note. */
-const TRIAGE_CHECK_MS = 20_000
-/** Messages taken per look, and read side by side. */
-const TRIAGE_BATCH = 12
-const TRIAGE_CONCURRENCY = 3
-/** A message whose note failed this many times is left alone until the app starts again. */
-const TRIAGE_ATTEMPTS = 2
-/** The messages of a conversation triage reads before the one it annotates. */
-const TRIAGE_EARLIER_MESSAGES = 5
-/** Notes on the people involved that triage reads, at most. */
-const TRIAGE_PEOPLE_NOTES = 3
-/** Lines a section of the day shows, at most. */
-const BRIEFING_LINES = 15
-/** Replies prepared per look, one after the other. */
-const READY_DRAFT_BATCH = 4
-/** The user's own replies to the same person a prepared reply learns the voice from. */
-const READY_DRAFT_EXAMPLES = 3
-/** The core notes the context block carries whole; the others are in the index. */
-const CORE_NOTES = ['tu.md', 'stile.md']
-const STREAM_FLUSH_MS = 60
+const WEEK_DAYS = 7
+const DAY_MS = 24 * 60 * 60 * 1000
 
 const EMPTY_STATUS: SegretarioStatus = {
   keyState: 'missing',
@@ -200,142 +105,229 @@ const EMPTY_STATUS: SegretarioStatus = {
   modelName: null
 }
 
-interface RunningActivity {
-  kind: ActivityKind
-  controller: AbortController
-  approvals: Map<
-    string,
-    {
-      eventId: number
-      payload: ApprovalPayload
-      resolve: (answer: { approved: boolean; outcome?: SendOutcome }) => void
-      reject: (error: Error) => void
-    }
-  >
-  /** The calls that failed in this run, by tool and arguments: one is not made again as it was. */
-  failedCalls: Set<string>
+/** What spending is shown under, beside the tasks. */
+const PURPOSE_LABELS: Readonly<Record<string, string>> = {
+  ...TASK_LABELS,
+  compattazione: 'Riassunti dei lavori lunghi',
+  titolo: 'Titoli dei lavori',
+  attivita: 'Richieste (prima versione)',
+  smistamento: 'Lettura della posta (prima versione)',
+  'risposta-pronta': 'Risposte pronte (prima versione)',
+  sollecito: 'Solleciti (prima versione)',
+  oggi: 'La giornata (prima versione)',
+  argomento: 'Argomenti (prima versione)',
+  scrittura: TASK_LABELS.scrittura
 }
+
+const PRIORITY_ORDER = { alta: 0, media: 1, bassa: 2 } as const
 
 export interface SegretarioServiceOptions {
   database: { storeClient(): Promise<PrismaClient> }
   mail: SegretarioMailPort
+  calendar: SegretarioCalendarPort
   fetch: FetchFunction
   /** Sends an event to the window. */
   send(channel: string, payload: unknown): void
-  /** Whether it reads each new message as it comes — not without a working key, nor with triage off. */
+  /** Whether new mail is read as it comes — the AI on, with a working key. */
   onReadingChange(reading: boolean): void
-  /** A message's note, written as it read it. */
+  /** A message's note, written as it was read: an alert waiting for it is let go. */
   onNoteWritten(note: MessageNote): void
-  calendar: SegretarioCalendarPort
+}
+
+function noteOf(record: NoteRecord): MessageNote {
+  return {
+    accountId: record.accountId,
+    messageKey: record.messageKey,
+    threadId: record.threadId,
+    direction: record.direction,
+    summary: record.summary,
+    nature: record.nature,
+    priority: record.priority,
+    reason: record.reason,
+    due: record.due,
+    messageDate: record.messageDate,
+    twinAccountId: record.twinAccountId,
+    writtenBy: record.writtenBy
+  }
+}
+
+function commitmentOf(record: CommitmentRecord): Commitment {
+  return {
+    id: record.id,
+    accountId: record.accountId,
+    threadId: record.threadId,
+    messageKey: record.messageKey,
+    kind: record.kind,
+    text: record.text,
+    due: record.due,
+    status: record.status,
+    until: record.until,
+    setBy: record.setBy,
+    reason: record.reason,
+    evidenceKey: record.evidenceKey,
+    question: record.question,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
+  }
+}
+
+function projectOf(summary: ProjectSummary): Project {
+  return {
+    id: summary.id,
+    title: summary.title,
+    description: summary.description,
+    state: summary.state,
+    stateAt: summary.stateAt,
+    stale: summary.staleSince !== null,
+    origin: summary.origin,
+    hidden: summary.hiddenAt !== null,
+    closed: summary.closedAt !== null,
+    conversations: summary.conversations,
+    openCommitments: summary.openCommitments,
+    lastMessageAt: summary.lastMessageAt
+  }
+}
+
+/** A refusal of the registry is the user's to read: a plain error. */
+function plainly<T>(work: Promise<T>): Promise<T> {
+  return work.catch((error: unknown) => {
+    throw error instanceof RegistryRefusal ? new Error(error.message) : error
+  })
 }
 
 /**
- * The Segretario at work: its key and credit, the activities it runs side
- * by side, and the loop each one turns — the model writes, calls its tools,
- * reads what they found, and goes on until the work is done. The harness
- * is deliberately plain: the model decides how to work; what is kept here
- * is what cannot be left to it — the user's confirmation before anything
- * leaves, the log every activity is rebuilt from, the size of what the
- * model reads.
+ * The Segretario, as the rest of the app speaks to it: the key and the one
+ * switch, the user's work as the interface shows and changes it, the
+ * conversations of the panel, the help in the editor and in the search,
+ * the memory, getting to know the connections. Underneath, one agent — the
+ * runner — woken by the engine for the work it does alone and by the user
+ * for the rest, over one registry and one notebook.
  */
 export class SegretarioService {
   private store: AiStore | null = null
-  private topics: TopicStore | null = null
-  private topicsTimer: NodeJS.Timeout | null = null
-  private topicsSyncing: Promise<void> = Promise.resolve()
+  private registry: Registry | null = null
+  private notebook: Notebook | null = null
+  private runner: AgentRunner | null = null
+  private engine: SegretarioEngine | null = null
   private readonly client: OpenRouterClient
   private status: SegretarioStatus = EMPTY_STATUS
-  private readonly running = new Map<string, RunningActivity>()
+  private recheckTimer: ReturnType<typeof setInterval> | null = null
+  private readonly opened = Promise.withResolvers<void>()
   private readonly composeRequests = new Map<
     string,
     { resolve: (draftId: string) => void; reject: (error: Error) => void }
   >()
-  private readonly tools: ReadonlyArray<SegretarioTool> = SEGRETARIO_TOOLS
-  private readonly toolsByName = new Map(this.tools.map((tool) => [tool.name, tool]))
-  private recheckTimer: ReturnType<typeof setInterval> | null = null
-  private readonly opened = Promise.withResolvers<void>()
-  /** Resolves once the extension is in, its topics read: triage files against them. */
-  private readonly extensionIn = Promise.withResolvers<void>()
-  private ownWorkTimer: NodeJS.Timeout | null = null
-  private consideringOwnWork = false
-  private triageTimer: NodeJS.Timeout | null = null
-  private triaging = false
-  /** Messages whose note failed, by account and key, with the attempts made. */
-  private readonly triageFailures = new Map<string, number>()
-  private preparing = false
-  private gisting = false
-  /** The searches asked in words, the latest last, with what each found. */
+  /** Searches asked this session, the latest few: their lists, to open and to keep. */
   private readonly searches = new Map<
     string,
     { asked: AskedMail; search: AskedSearch; refs: MessageRef[] }
   >()
-  /** A message come to several of the user's accounts, while one copy is being read: by its copies. */
-  private readonly copiesBeingRead = new Map<string, Promise<void>>()
-  /** What the app was last told of `onReadingChange`; null before it was told. */
   private reading: boolean | null = null
-  /** Messages whose prepared reply failed, by account and key, with the attempts made. */
-  private readonly readyDraftFailures = new Map<string, number>()
-
-  /** What the tools reach of the topics and of what is open: the same as the page's. */
-  private readonly workPort: SegretarioWorkPort = {
-    topicsLabel: () => this.topicsLabel(),
-    listTopics: () => this.listTopics(),
-    getTopic: (id) => this.getTopic(id),
-    conversationTopics: (threads) => this.conversationTopics(threads),
-    fileConversation: (accountId, threadId, topicId) =>
-      this.setConversationTopic(accountId, threadId, topicId),
-    openCommitments: async () =>
-      this.requireStore().openCommitmentsIn(await this.options.mail.includedAccountIds()),
-    closeCommitment: async (id) => {
-      const closed = await this.requireStore().closeCommitment(id)
-
-      if (closed) {
-        this.emitNotes({
-          accountId: closed.accountId,
-          messageKeys: [],
-          threadIds: [closed.threadId]
-        })
-      }
-
-      return closed !== null
-    },
-    replyWritten: async (accountId, messageKey) => {
-      const used = await this.requireStore().closeReadyDraft(accountId, messageKey, 'usata')
-
-      if (used) {
-        this.emitNotes({ accountId, messageKeys: [messageKey], threadIds: [used.threadId] })
-      }
-    }
-  }
+  private engineStateTimer: NodeJS.Timeout | null = null
 
   constructor(private readonly options: SegretarioServiceOptions) {
     this.client = new OpenRouterClient(options.fetch)
   }
 
-  /** Resolves once `open` has run: what the page asks for waits on it. */
   whenReady(): Promise<void> {
     return this.opened.promise
   }
 
   async open(): Promise<void> {
-    const client = await this.options.database.storeClient()
-    const store = new AiStore(client)
+    // The database is open, and the tables shaped (see `ensureAiSchema`).
+    const sql = prismaSql(await this.options.database.storeClient())
+    const store = new AiStore(sql)
+    const notebook = new Notebook(sql)
+    const registry = new Registry(sql, {
+      changed: (change, actor) => {
+        this.runner?.recordChange(change, actor)
+        this.workChanged({
+          accountIds: change.accountId ? [change.accountId] : [],
+          threadIds: change.threadIds,
+          messageKeys: change.messageKeys,
+          projectIds: change.projectIds
+        })
+
+        if (change.object === 'nota' && change.accountId && change.messageKeys[0]) {
+          void this.noteWritten(change.accountId, change.messageKeys[0])
+        }
+      },
+      lesson: (kind, payload) => {
+        void store
+          .addLesson(kind, payload)
+          .catch((error: unknown) => logMainError('A lesson could not be kept', error))
+      }
+    })
+    const page: SegretarioPagePort = {
+      compose: (spec, signal) => this.requestCompose(spec, signal),
+      show: (request) => this.options.send(SEGRETARIO_IPC.showRequest, request),
+      showSearch: async (search, question) => {
+        const entry = await this.keepSearch(search, question)
+        this.options.send(SEGRETARIO_IPC.showRequest, { kind: 'search', search: entry })
+        return entry.count
+      }
+    }
+    const runner = new AgentRunner({
+      client: this.client,
+      store,
+      registry,
+      notebook,
+      tools: SEGRETARIO_TOOLS,
+      mail: this.options.mail,
+      calendar: this.options.calendar,
+      page,
+      requireKey: () => this.requireKey(),
+      emit: (event) => this.emit(event),
+      recordUsage: (activityId, purpose, result) => this.recordUsage(activityId, purpose, result)
+    })
+
     this.store = store
-    this.topics = new TopicStore(client)
+    this.notebook = notebook
+    this.registry = registry
+    this.runner = runner
+    this.engine = new SegretarioEngine({
+      store,
+      registry,
+      notebook,
+      runner,
+      mail: this.options.mail,
+      calendar: this.options.calendar,
+      queue: new WorkQueue(sql),
+      emit: (event) => this.emit(event),
+      ready: () => this.ready(),
+      onStateChange: () => this.engineChanged(),
+      onPause: (reason) => {
+        if (reason) {
+          void this.checkKey()
+        }
+
+        this.engineChanged()
+      }
+    })
     this.status = (await store.getStoredStatus()) ?? EMPTY_STATUS
 
-    // Work a quit cut short cannot go on by itself: it says so, and waits
-    // for the user to pick it up again.
+    // A conversation a quit cut short cannot go on by itself: it says so, and
+    // waits for the user. Work done alone starts over from the queue.
     for (const activity of await store.listUnfinished()) {
-      await store.appendEvent<ErrorPayload>(activity.id, 'error', {
-        code: 'interrupted',
-        message: 'Interrotto: SIEVER Mail è stato chiuso mentre lavoravo. Scrivimi per riprendere.'
-      })
-      await store.updateActivity(activity.id, { status: 'failed', unseen: true })
-      await this.afterOwnWork(activity.id, activity.kind, 'failed')
+      if (activity.visibility === 'pannello') {
+        const event = await store.appendEvent(activity.id, 'error', {
+          code: 'interrupted',
+          message:
+            'Interrotto: SIEVER Mail è stato chiuso mentre lavoravo. Scrivimi per riprendere.'
+        })
+        void event
+        await store.updateActivity(activity.id, { status: 'failed', unseen: true })
+
+        if (activity.task === 'conoscimi') {
+          await store.endLearning(activity.id, false)
+        }
+      } else {
+        await store.updateActivity(activity.id, { status: 'cancelled' })
+      }
     }
 
     await store.pruneDrafts(Date.now() - DRAFT_RECORD_TTL_MS)
+    await store.pruneActivities(DIARY_KEPT_MS)
 
     if (this.status.keyState !== 'missing') {
       void this.checkKey()
@@ -346,41 +338,9 @@ export class SegretarioService {
         void this.checkKey()
       }
     }, KEY_RECHECK_MS)
-    this.ownWorkTimer = setInterval(() => void this.considerOwnWork(), OWN_WORK_CHECK_MS)
-    this.triageTimer = setInterval(() => void this.triageRound(), TRIAGE_CHECK_MS)
-    this.topicsTimer = setInterval(() => void this.syncExtensionTopics(), EXTENSION_TOPICS_SYNC_MS)
+    await this.engine.start()
     await this.sayWhetherReading()
     this.opened.resolve()
-  }
-
-  /** The extension installed — or failed to: its topics are read, and triage may begin. */
-  async extensionInstalled(): Promise<void> {
-    await this.syncExtensionTopics()
-    this.extensionIn.resolve()
-  }
-
-  /** The extension says its topics changed: read again, once the extension is in. */
-  extensionTopicsChanged(): void {
-    void this.extensionIn.promise.then(() => this.syncExtensionTopics())
-  }
-
-  /** The extension's topics (a company's pratiche), brought in step with the Segretario's. */
-  private syncExtensionTopics(): Promise<void> {
-    const read = extensionMain.assistant?.topics
-
-    if (!read) {
-      return Promise.resolve()
-    }
-
-    // One reading at a time: two would race to add the same pratica.
-    this.topicsSyncing = this.topicsSyncing.then(async () => {
-      try {
-        await this.requireTopics().syncExtensionTopics(await read())
-      } catch (error) {
-        logMainError('Segretario: the extension topics could not be read', error)
-      }
-    })
-    return this.topicsSyncing
   }
 
   async stop(): Promise<void> {
@@ -389,52 +349,66 @@ export class SegretarioService {
       this.recheckTimer = null
     }
 
-    if (this.ownWorkTimer) {
-      clearInterval(this.ownWorkTimer)
-      this.ownWorkTimer = null
-    }
-
-    if (this.triageTimer) {
-      clearInterval(this.triageTimer)
-      this.triageTimer = null
-    }
-
-    if (this.topicsTimer) {
-      clearInterval(this.topicsTimer)
-      this.topicsTimer = null
-    }
-
-    for (const activity of this.running.values()) {
-      activity.controller.abort()
-    }
+    this.runner?.cancelAll()
+    await this.engine?.stop()
   }
 
-  private requireStore(): AiStore {
-    if (!this.store) {
+  /** New mail may be there to read, or the work changed: the engine looks now. */
+  mailChanged(): void {
+    this.engine?.wake()
+  }
+
+  private require<T>(value: T | null): T {
+    if (value === null) {
       throw new Error('Il Segretario non è ancora pronto.')
     }
 
-    return this.store
+    return value
   }
 
-  private requireTopics(): TopicStore {
-    if (!this.topics) {
-      throw new Error('Il Segretario non è ancora pronto.')
+  private get db(): {
+    store: AiStore
+    registry: Registry
+    notebook: Notebook
+    runner: AgentRunner
+    engine: SegretarioEngine
+  } {
+    return {
+      store: this.require(this.store),
+      registry: this.require(this.registry),
+      notebook: this.require(this.notebook),
+      runner: this.require(this.runner),
+      engine: this.require(this.engine)
     }
-
-    return this.topics
   }
 
-  /* ─────────────────────────────── key and credit ─────────────────────────────── */
+  private starter(): RunStarter {
+    const { store, runner, notebook } = this.db
+    return {
+      store,
+      runner,
+      sources: { mail: this.options.mail, calendar: this.options.calendar, notebook },
+      emit: (event) => this.emit(event)
+    }
+  }
+
+  /* ─────────────────────────────── key and switch ─────────────────────────────── */
 
   getStatus(): SegretarioStatus {
     return this.status
   }
 
-  /** Tells the app whether new mail is read as it comes, when that changed. */
+  /** Whether the Segretario works: the AI on, a key that answers (or could not be checked). */
+  private async ready(): Promise<boolean> {
+    return (
+      (this.status.keyState === 'ready' || this.status.keyState === 'unchecked') &&
+      (await this.db.store.getPreferences()).enabled
+    )
+  }
+
   private async sayWhetherReading(): Promise<void> {
     const reading =
-      this.status.keyState === 'ready' && (await this.requireStore().getPreferences()).triage
+      this.status.keyState === 'ready' && (await this.db.store.getPreferences()).enabled
 
     if (reading !== this.reading) {
       this.reading = reading
@@ -445,13 +419,13 @@ export class SegretarioService {
   private async setStatus(status: SegretarioStatus): Promise<SegretarioStatus> {
     const becameReady = status.keyState === 'ready' && this.status.keyState !== 'ready'
     this.status = status
-    await this.requireStore().setStoredStatus(status)
+    await this.db.store.setStoredStatus(status)
     this.options.send(SEGRETARIO_IPC.statusChanged, status)
     await this.sayWhetherReading()
 
     if (becameReady) {
-      void this.considerOwnWork()
-      void this.triageRound()
+      this.engine?.resume()
+      this.engine?.wake()
     }
 
     return status
@@ -484,18 +458,20 @@ export class SegretarioService {
       }
     }
 
-    await this.requireStore().setApiKey(key, status)
+    await this.db.store.setApiKey(key, status)
     return this.setStatus(status)
   }
 
   async removeKey(): Promise<SegretarioStatus> {
-    await this.requireStore().setApiKey(null, EMPTY_STATUS)
+    this.runner?.cancelAll()
+    this.engine?.cancelRunning()
+    await this.db.store.setApiKey(null, EMPTY_STATUS)
     return this.setStatus(EMPTY_STATUS)
   }
 
   /** Asks OpenRouter again about the key and its credit. */
   async checkKey(): Promise<SegretarioStatus> {
-    const key = await this.requireStore().getApiKey()
+    const key = await this.db.store.getApiKey()
 
     if (!key) {
       return this.setStatus(EMPTY_STATUS)
@@ -553,12 +529,12 @@ export class SegretarioService {
 
   /** The key, or the reason the Segretario cannot work now. */
   private async requireKey(): Promise<string> {
-    const key = await this.requireStore().getApiKey()
+    const key = await this.db.store.getApiKey()
 
     if (!key) {
       throw new SegretarioError(
         'no-key',
-        'Per lavorare mi serve una chiave OpenRouter: inseriscila in Impostazioni → Segretario.'
+        'Per lavorare mi serve una chiave OpenRouter: inseriscila in Impostazioni › Segretario.'
       )
     }
 
@@ -566,36 +542,59 @@ export class SegretarioService {
   }
 
   getPreferences(): Promise<SegretarioPreferences> {
-    return this.requireStore().getPreferences()
+    return this.db.store.getPreferences()
   }
 
+  /**
+   * The one switch. Off: every run stops, nothing is read or prepared, and
+   * what was learnt is kept. On: the engine catches up with what came meanwhile.
+   */
   async setPreferences(preferences: SegretarioPreferences): Promise<SegretarioPreferences> {
-    const stored = await this.requireStore().setPreferences(preferences)
+    const stored = await this.db.store.setPreferences(preferences)
+    this.options.send(SEGRETARIO_IPC.preferencesChanged, stored)
+
+    if (!stored.enabled) {
+      this.runner?.cancelAll()
+      this.engine?.cancelRunning()
+    }
+
     await this.sayWhetherReading()
-    void this.considerOwnWork()
-    void this.triageRound()
+    this.engine?.wake()
+    this.engineChanged()
     return stored
   }
 
-  /** What the Segretario has cost today and this month, by the local calendar. */
+  /** What the Segretario has cost today, this month, and in the last thirty days by function. */
   async getSpending(): Promise<SegretarioSpending> {
     const now = new Date()
-    const store = this.requireStore()
-    const [today, thisMonth] = await Promise.all([
+    const { store } = this.db
+    const [today, thisMonth, byPurpose] = await Promise.all([
       store.spentSince(new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()),
-      store.spentSince(new Date(now.getFullYear(), now.getMonth(), 1).getTime())
+      store.spentSince(new Date(now.getFullYear(), now.getMonth(), 1).getTime()),
+      store.spentByPurpose(Date.now() - 30 * DAY_MS)
     ])
+    const byLabel = new Map<string, number>()
 
-    return { today, thisMonth }
+    for (const entry of byPurpose) {
+      const label = PURPOSE_LABELS[entry.purpose] ?? entry.purpose
+      byLabel.set(label, (byLabel.get(label) ?? 0) + entry.cost)
+    }
+
+    return {
+      today,
+      thisMonth,
+      byFunction: [...byLabel.entries()]
+        .map(([label, cost]) => ({ purpose: label, label, cost }))
+        .sort((a, b) => b.cost - a.cost)
+    }
   }
 
-  /** What the model was paid for, so far: every call goes through here. */
   private async recordUsage(
     activityId: string | null,
     purpose: string,
     result: { usage: ChatUsage; model: string | null; provider: string | null }
   ): Promise<void> {
-    await this.requireStore().recordUsage({
+    await this.db.store.recordUsage({
       activityId,
       purpose,
       model: result.model,
@@ -604,14 +603,1231 @@ export class SegretarioService {
     })
   }
 
-  /* ───────────────────────────────── activities ───────────────────────────────── */
+  async getEngineState(): Promise<EngineState> {
+    return this.db.engine.state()
+  }
 
-  listActivities(): Promise<ActivitySummary[]> {
-    return this.requireStore().listActivities()
+  async retryFailedWork(): Promise<EngineState> {
+    await this.db.engine.queue.retryFailed()
+    this.db.engine.wake()
+    return this.getEngineState()
+  }
+
+  /** The first reading is prepared with the user waiting: more runs at once. */
+  setPreparing(preparing: boolean): void {
+    this.engine?.setPreparing(preparing)
+  }
+
+  /** Tells the window the engine's state, at most a few times a second. */
+  private engineChanged(): void {
+    if (this.engineStateTimer) {
+      return
+    }
+
+    this.engineStateTimer = setTimeout(() => {
+      this.engineStateTimer = null
+      void this.getEngineState()
+        .then((state) => this.options.send(SEGRETARIO_IPC.engineChanged, state))
+        .catch(() => undefined)
+    }, 400)
+  }
+
+  private workChanged(change: WorkChange): void {
+    this.options.send(SEGRETARIO_IPC.workChanged, change)
+  }
+
+  private async noteWritten(accountId: string, messageKey: string): Promise<void> {
+    const note = await this.registry?.notes.get(accountId, messageKey)
+
+    if (note) {
+      this.options.onNoteWritten(noteOf(note))
+    }
+  }
+
+  /* ───────────────────────────────── the memory ───────────────────────────────── */
+
+  async listMemory(): Promise<MemoryNote[]> {
+    return (await this.db.notebook.list()).map((note) => ({
+      path: note.path,
+      content: note.content,
+      updatedAt: note.updatedAt,
+      revision: note.revision,
+      updatedBy: note.updatedBy === 'utente' ? 'utente' : 'segretario'
+    }))
+  }
+
+  /** A note as the user corrected it: a version like any other, and a lesson. */
+  async writeMemory(path: string, content: string): Promise<MemoryNote[]> {
+    if (content.length > MAX_NOTE_CHARS) {
+      throw new Error('La nota è troppo lunga: dividila in più note.')
+    }
+
+    const normalized = normalizeMemoryPath(path)
+    const before = await this.db.notebook.read(normalized)
+    await plainly(this.db.notebook.write(normalized, content, USER))
+
+    if (before) {
+      await this.db.store.addLesson('memoria_corretta', {
+        nota: normalized,
+        prima: before.content,
+        dopo: content
+      })
+    }
+
+    return this.listMemory()
+  }
+
+  async deleteMemory(path: string): Promise<MemoryNote[]> {
+    await this.db.notebook.delete(normalizeMemoryPath(path), USER)
+    return this.listMemory()
+  }
+
+  async memoryHistory(path: string): Promise<MemoryVersion[]> {
+    return (await this.db.notebook.history(normalizeMemoryPath(path))).map((version) => ({
+      revision: version.revision,
+      content: version.content,
+      action: version.action,
+      actor: version.actor,
+      at: version.at
+    }))
+  }
+
+  async restoreMemory(path: string, revision: number): Promise<MemoryNote[]> {
+    await plainly(this.db.notebook.restore(normalizeMemoryPath(path), revision, USER))
+    return this.listMemory()
+  }
+
+  /** Forgets what it learnt, and that it knows the connections: Conoscimi is to be done again. */
+  async forgetEverything(): Promise<void> {
+    await this.db.notebook.clear()
+    await this.db.store.resetLearning()
+  }
+
+  /* ──────────────────────── getting to know the connections ──────────────────────── */
+
+  async listLearning(): Promise<ConnectionLearning[]> {
+    const accounts = await this.options.mail.listAccounts()
+    const rows = new Map((await this.db.store.listLearning()).map((row) => [row.accountId, row]))
+
+    return accounts.map((account) => {
+      const row = rows.get(account.id)
+      return {
+        accountId: account.id,
+        email: account.email,
+        state: !row
+          ? 'waiting'
+          : row.finishedAt !== null
+            ? 'done'
+            : row.activityId && this.runner?.isRunning(row.activityId)
+              ? 'running'
+              : 'waiting',
+        activityId: row?.activityId ?? null,
+        finishedAt: row?.finishedAt ?? null
+      }
+    })
+  }
+
+  /**
+   * Conoscimi: the Segretario gets to know these connections — all of them
+   * when none are named — building on what it already knows. The user
+   * watches it in the panel; it may not act on anything outside.
+   */
+  async startConoscimi(accountIds?: string[]): Promise<ActivitySummary> {
+    await this.requireKey()
+    const accounts = await this.options.mail.listAccounts()
+    const chosen =
+      accountIds && accountIds.length > 0
+        ? accounts.filter((account) => accountIds.includes(account.id))
+        : accounts
+
+    if (chosen.length === 0) {
+      throw new Error('Non ci sono connessioni da conoscere.')
+    }
+
+    const { store } = this.db
+    const data = await prepareConoscimi(
+      { mail: this.options.mail, store },
+      chosen.map((account) => account.id)
+    )
+    const created = Promise.withResolvers<string>()
+
+    void startRun(this.starter(), {
+      task: 'conoscimi',
+      background: true,
+      visibility: 'pannello',
+      data,
+      shown: 'Fatti conoscere',
+      onCreated: async (activityId) => {
+        await store.startLearning(
+          chosen.map((account) => account.id),
+          activityId
+        )
+        created.resolve(activityId)
+      }
+    })
+      .then((result) => store.endLearning(result.activityId, result.status === 'done'))
+      .catch((error: unknown) => {
+        logMainError('Conoscimi failed', error)
+        created.reject(error instanceof Error ? error : new Error(String(error)))
+      })
+
+    const activity = await store.getActivity(await created.promise)
+    return activity!
+  }
+
+  /**
+   * A draft went out. When the Segretario had written it, what the user
+   * changed — or that they changed nothing — is kept for the next reflection.
+   */
+  async draftSent(draftId: string, writtenText: string): Promise<void> {
+    const { store } = this.db
+    const draft = await store.takeDraft(draftId)
+
+    if (!draft) {
+      return
+    }
+
+    await store.addLesson(
+      comparableText(draft.text) === comparableText(writtenText) ? 'confermata' : 'correzione',
+      {
+        accountId: draft.accountId,
+        written: draft.text,
+        sent: writtenText
+      }
+    )
+  }
+
+  /** A connection was removed: what was kept about it alone goes, and the next reflection hears of it. */
+  async forgetAccount(accountId: string, email: string): Promise<void> {
+    const { store, notebook } = this.db
+
+    for (const row of await store.listLearning()) {
+      if (row.accountId === accountId && row.activityId) {
+        this.runner?.cancel(row.activityId)
+      }
+    }
+
+    await store.forgetAccount(accountId)
+    await notebook.delete(normalizeMemoryPath(`account/${email}`), SYSTEM)
+    await store.addLesson('account-rimosso', { email })
+    this.workChanged({ accountIds: [accountId], threadIds: [], messageKeys: [], projectIds: [] })
+  }
+
+  /** Everything but the key and the settings, for "Elimina tutti i dati". */
+  async clearData(): Promise<void> {
+    this.runner?.cancelAll()
+    this.engine?.cancelRunning()
+    await this.db.store.clearData()
+    this.searches.clear()
+  }
+
+  /* ──────────────────────────────── the user's work ──────────────────────────────── */
+
+  /** What the rows of these messages show: the note, what is owed or awaited from each, the reply. */
+  async getRowWork(
+    messages: ReadonlyArray<{ accountId: string; messageKey: string }>
+  ): Promise<MessageRowWork[]> {
+    const { registry } = this.db
+    const notes = new Map(
+      (await registry.notes.many(messages)).map((note) => [
+        `${note.accountId}\u0000${note.messageKey}`,
+        note
+      ])
+    )
+    const rows: MessageRowWork[] = []
+
+    for (const accountId of new Set(messages.map((message) => message.accountId))) {
+      const keys = messages
+        .filter((message) => message.accountId === accountId)
+        .map((message) => message.messageKey)
+      const work = await registry.rowWork(accountId, keys)
+
+      for (const messageKey of keys) {
+        const note = notes.get(`${accountId}\u0000${messageKey}`)
+        const open = work.get(messageKey)
+
+        if (note || open) {
+          rows.push({
+            accountId,
+            messageKey,
+            note: note ? noteOf(note) : null,
+            owed: open?.owed ?? null,
+            awaited: open?.awaited ?? false,
+            reply: open?.reply ?? null,
+            saved: open?.saved ? (extensionMain.assistant?.savedCopyLabel ?? 'Salvato') : null
+          })
+        }
+      }
+    }
+
+    return rows
+  }
+
+  /** What the reader shows of a message: its note, its conversation's commitments and projects, the reply, copies, proposals. */
+  async getMessageWork(accountId: string, messageKey: string): Promise<MessageWork> {
+    const { registry } = this.db
+    const note = await registry.notes.get(accountId, messageKey)
+    const location = (await this.options.mail.locate(accountId, [messageKey])).get(messageKey)
+    const threadId = note?.threadId ?? location?.threadId ?? null
+    const thread = threadId ? { accountId, threadId } : null
+    // The reply and the proposals are the conversation's: whichever of its messages is open shows them.
+    const [commitments, links, replies, copies, proposals] = await Promise.all([
+      thread ? registry.commitments.ofThreads([thread]) : Promise.resolve([]),
+      thread ? registry.projects.linksOf([thread]) : Promise.resolve([]),
+      thread ? registry.replies.liveOfThreads([thread]) : Promise.resolve([]),
+      registry.copies.ofMessages(accountId, [messageKey]),
+      registry.proposals.open(
+        thread ? { threads: [thread] } : { messages: [{ accountId, messageKey }] }
+      )
+    ])
+    const reply = [...replies].sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null
+    const projects = (
+      await Promise.all(
+        links.filter((link) => !link.rejected).map((link) => registry.projects.get(link.projectId))
+      )
+    ).filter((project) => project !== null)
+    const label = extensionMain.assistant?.savedCopyLabel ?? 'Salvato'
+
+    return {
+      note: note ? noteOf(note) : null,
+      commitments: commitments.map(commitmentOf),
+      projects: projects.map((project) => ({ id: project!.id, title: project!.title })),
+      reply:
+        reply && (reply.status === 'pronta' || reply.status === 'da_rivedere')
+          ? {
+              accountId,
+              messageKey: reply.messageKey,
+              kind: reply.kind,
+              text: reply.text,
+              doubts: reply.doubts,
+              status: reply.status,
+              staleReason: reply.staleReason
+            }
+          : null,
+      copies: copies.map((copy) => ({
+        label,
+        destination: copy.destination,
+        savedAt: copy.savedAt
+      })),
+      proposals: proposals.map((proposal) => this.proposalOf(proposal))
+    }
+  }
+
+  private proposalOf(proposal: {
+    id: string
+    kind: string
+    title: string
+    payload: Record<string, unknown>
+    accountId: string | null
+    messageKey: string | null
+    createdAt: number
+  }): Proposal {
+    return {
+      id: proposal.id,
+      kind: proposal.kind,
+      title: proposal.title,
+      payload: proposal.payload,
+      accountId: proposal.accountId,
+      messageKey: proposal.messageKey,
+      createdAt: proposal.createdAt
+    }
+  }
+
+  async setCommitmentStatus(
+    id: number,
+    status: CommitmentStatus,
+    options: { until?: string; reason?: string } = {}
+  ): Promise<Commitment> {
+    const { record } = await plainly(
+      this.db.registry.setCommitmentStatus(id, status, USER, {
+        until: options.until ?? null,
+        reason: options.reason ?? null
+      })
+    )
+    return commitmentOf(record)
+  }
+
+  async editCommitment(
+    id: number,
+    changes: { text?: string; due?: string | null; kind?: CommitmentKind }
+  ): Promise<Commitment> {
+    const { record } = await plainly(this.db.registry.editCommitment(id, changes, USER))
+    return commitmentOf(record)
+  }
+
+  async openCommitment(
+    message: { accountId: string; messageKey: string },
+    input: { kind: CommitmentKind; text: string; due: string | null }
+  ): Promise<Commitment> {
+    const location = (await this.options.mail.locate(message.accountId, [message.messageKey])).get(
+      message.messageKey
+    )
+
+    if (!location) {
+      throw new Error('Il messaggio non è più nella posta.')
+    }
+
+    const { record } = await plainly(
+      this.db.registry.openCommitment({ ...message, threadId: location.threadId }, input, USER)
+    )
+    return commitmentOf(record)
+  }
+
+  /**
+   * "Segna come gestito": what the conversations of these messages ask of
+   * the user is done — a decision of theirs, kept. What they wait for
+   * stays open. Resolves with how many conversations changed.
+   */
+  async markHandled(
+    messages: ReadonlyArray<{ accountId: string; messageKey: string }>
+  ): Promise<number> {
+    const { registry } = this.db
+    const threads = new Map<string, { accountId: string; threadId: string }>()
+
+    for (const accountId of new Set(messages.map((message) => message.accountId))) {
+      const keys = messages
+        .filter((message) => message.accountId === accountId)
+        .map((message) => message.messageKey)
+
+      for (const location of (await this.options.mail.locate(accountId, keys)).values()) {
+        threads.set(`${accountId}\u0000${location.threadId}`, {
+          accountId,
+          threadId: location.threadId
+        })
+      }
+    }
+
+    let changed = 0
+
+    for (const thread of threads.values()) {
+      const owed = await registry.commitments.open({ threads: [thread], kinds: OWED_KINDS })
+
+      for (const record of owed) {
+        await registry.setCommitmentStatus(record.id, 'fatta', USER, {
+          reason: 'Segnata come gestita.'
+        })
+      }
+
+      if (owed.length > 0) {
+        changed += 1
+      }
+    }
+
+    return changed
+  }
+
+  /** Undoes a change a run made, from its page of the diary. */
+  async undoChange(activityId: string, eventId: number, index: number): Promise<void> {
+    const { store, registry } = this.db
+    const event = await store.getEvent(eventId)
+
+    if (!event || event.activityId !== activityId || event.type !== 'changes') {
+      throw new Error('Questa modifica non c’è più.')
+    }
+
+    const payload = event.payload as ChangesPayload
+    const change = payload.changes[index]
+    const undo = change?.undo
+
+    if (!undo) {
+      throw new Error('Questa modifica non si può annullare da qui.')
+    }
+
+    if (change.undoneAt !== undefined) {
+      throw new Error('Questa modifica è già stata annullata.')
+    }
+
+    switch (undo.kind) {
+      case 'impegno':
+        await plainly(registry.undoCommitment(undo.historyId, USER))
+        break
+      case 'progetto-collegamento':
+        await plainly(
+          undo.linked
+            ? registry.unlinkThread(
+                undo.projectId,
+                { accountId: undo.accountId, threadId: undo.threadId },
+                USER
+              )
+            : registry.linkThread(
+                undo.projectId,
+                { accountId: undo.accountId, threadId: undo.threadId },
+                USER
+              )
+        )
+        break
+      case 'risposta':
+        await registry.setReplyStatus(undo.accountId, undo.messageKey, 'scartata', USER)
+        break
+      case 'evento-creato':
+        await this.options.calendar.remove(undo.eventKey)
+        break
+      case 'evento-modificato':
+        await this.options.calendar.update(undo.eventKey, undo.before)
+        break
+      case 'evento-eliminato':
+        await this.options.calendar.create(undo.event)
+        break
+    }
+
+    const updated: ChangesPayload = {
+      changes: payload.changes.map((candidate, at) =>
+        at === index ? { ...candidate, undoneAt: Date.now() } : candidate
+      )
+    }
+    await store.updateEvent(eventId, updated)
+    const entry = entryOf({ ...event, payload: updated })
+
+    if (entry) {
+      this.emit({ type: 'entry', activityId, entry })
+    }
+  }
+
+  async replySource(accountId: string, messageKey: string): Promise<MessageRef | null> {
+    return (await this.options.mail.locate(accountId, [messageKey])).get(messageKey)?.ref ?? null
+  }
+
+  /** The user took a prepared reply up: it became their draft, learnt from like the others. */
+  async takeUpReply(accountId: string, messageKey: string, draftId: string): Promise<void> {
+    const { registry, store } = this.db
+    const reply = await registry.replies.get(accountId, messageKey)
+    await registry.setReplyStatus(accountId, messageKey, 'usata', USER)
+
+    if (reply) {
+      await store.recordDraft({ draftId, activityId: reply.runId, accountId, text: reply.text })
+    }
+  }
+
+  async discardReply(accountId: string, messageKey: string): Promise<void> {
+    await this.db.registry.setReplyStatus(accountId, messageKey, 'scartata', USER)
+  }
+
+  /**
+   * The user's word on a proposal. An event: accepted, it is put in the
+   * calendar as proposed — the user's own act, invitations included.
+   * An extension's: the extension did what it proposes; this records how.
+   */
+  async decideProposal(
+    id: string,
+    accepted: boolean,
+    result?: Record<string, unknown>
+  ): Promise<void> {
+    const { registry } = this.db
+    const proposal = await registry.proposals.get(id)
+
+    if (!proposal || proposal.status !== 'aperta') {
+      throw new Error('Questa proposta non è più in attesa.')
+    }
+
+    if (accepted && proposal.kind === 'evento') {
+      const payload = proposal.payload as {
+        title: string
+        start: string
+        end: string
+        allDay: boolean
+        location: string | null
+        description: string | null
+        attendees: string[]
+        calendar: string | null
+        eventKey: string | null
+      }
+      const calendars = (await this.options.calendar.calendars()).filter(
+        (calendar) => calendar.writable
+      )
+      const calendar =
+        calendars.find(
+          (candidate) =>
+            payload.calendar &&
+            `${candidate.name} ${candidate.account}`
+              .toLowerCase()
+              .includes(payload.calendar.toLowerCase())
+        ) ??
+        calendars.find((candidate) => candidate.primary) ??
+        calendars[0]
+
+      if (payload.eventKey) {
+        const updated = await this.options.calendar.update(payload.eventKey, {
+          title: payload.title,
+          start: payload.start,
+          end: payload.end,
+          allDay: payload.allDay,
+          location: payload.location,
+          description: payload.description,
+          attendees: payload.attendees
+        })
+        await registry.decideProposal(id, 'accettata', { eventKey: updated.key, ...result })
+        return
+      }
+
+      if (!calendar) {
+        throw new Error(
+          'Nessun calendario collegato in cui metterlo: collegalo in Impostazioni › Connessioni.'
+        )
+      }
+
+      const created = await this.options.calendar.create({
+        calendarKey: calendar.key,
+        title: payload.title,
+        start: payload.start,
+        end: payload.end,
+        allDay: payload.allDay,
+        location: payload.location,
+        description: payload.description,
+        attendees: payload.attendees,
+        origin: { by: 'segretario', accountId: proposal.accountId, messageKey: proposal.messageKey }
+      })
+      await registry.decideProposal(id, 'accettata', { eventKey: created.key, ...result })
+      return
+    }
+
+    await registry.decideProposal(id, accepted ? 'accettata' : 'scartata', result ?? null)
+  }
+
+  /* ─────────────────────────────── copies saved outside ─────────────────────────────── */
+
+  /** Copies an extension saved outside the mail: facts on each message, and where the user files. */
+  async copiesSaved(
+    entries: ReadonlyArray<{
+      ref: MessageRef
+      messageKey: string
+      threadId: string
+      fromAddress: string | null
+      destination: string
+      files: string[]
+    }>
+  ): Promise<void> {
+    await this.db.registry.saveCopies(
+      entries.map((entry) => ({
+        accountId: entry.ref.accountId,
+        messageKey: entry.messageKey,
+        threadId: entry.threadId,
+        source: extensionMain.id,
+        destination: entry.destination,
+        files: entry.files,
+        fromAddress: entry.fromAddress
+      })),
+      USER
+    )
+  }
+
+  /**
+   * Where messages about to be saved outside the mail are likely to go —
+   * as earlier ones of their conversations, or else of their senders — and
+   * what the Segretario proposes for them.
+   */
+  async filingContext(
+    messages: ReadonlyArray<{
+      accountId: string
+      messageKey: string
+      threadId: string
+      from: string | null
+    }>
+  ): Promise<FilingContext> {
+    const { registry } = this.db
+    const threads = [
+      ...new Map(
+        messages.map((message) => [`${message.accountId}\u0000${message.threadId}`, message])
+      ).values()
+    ].map(({ accountId, threadId }) => ({ accountId, threadId }))
+    const latest = (
+      copies: ReadonlyArray<{ destination: string; savedAt: number }>
+    ): string | null => [...copies].sort((a, b) => b.savedAt - a.savedAt)[0]?.destination ?? null
+    const senders = [
+      ...new Set(
+        messages.flatMap((message) => (message.from ? [message.from.trim().toLowerCase()] : []))
+      )
+    ]
+
+    return {
+      savedBefore:
+        latest(await registry.copies.ofThreads(threads)) ??
+        (senders.length > 0 ? latest(await registry.copies.fromSenders(senders, '')) : null),
+      proposals: (
+        await registry.proposals.open({
+          messages: messages.map(({ accountId, messageKey }) => ({ accountId, messageKey }))
+        })
+      ).map((proposal) => this.proposalOf(proposal))
+    }
+  }
+
+  /** The copies of a message saved outside the mail. */
+  async copiesOf(
+    accountId: string,
+    messageKey: string
+  ): Promise<Array<{ destination: string; files: string[] }>> {
+    return (await this.db.registry.copies.ofMessages(accountId, [messageKey])).map((copy) => ({
+      destination: copy.destination,
+      files: copy.files
+    }))
+  }
+
+  /** Which of these messages of an account were saved outside the mail, with what label. */
+  async savedCopies(
+    accountId: string,
+    messageKeys: ReadonlyArray<string>
+  ): Promise<Map<string, string>> {
+    const label = extensionMain.assistant?.savedCopyLabel ?? 'Salvato'
+    return new Map(
+      (await this.db.registry.copies.ofMessages(accountId, messageKeys)).map((copy) => [
+        copy.messageKey,
+        label
+      ])
+    )
+  }
+
+  /* ───────────────────────────────── views ───────────────────────────────── */
+
+  /** The messages a view holds, by key, across all accounts. */
+  viewKeys(view: RegistryView): Promise<Array<{ accountId: string; messageKey: string }>> {
+    return this.db.registry.viewKeys(view)
+  }
+
+  /** The messages with something open or a reply waiting: the "Attivi" filter. */
+  activeKeys(
+    accountIds?: ReadonlyArray<string>
+  ): Promise<Array<{ accountId: string; messageKey: string }>> {
+    return this.db.registry.allActiveKeys(accountIds)
+  }
+
+  /** The conversations of a project. */
+  projectThreads(projectId: string): Promise<Array<{ accountId: string; threadId: string }>> {
+    return this.db.registry.projects.threadsOf(projectId)
+  }
+
+  /* ──────────────────────────────── the day ──────────────────────────────── */
+
+  /**
+   * Lines of the day, from what is open and prepared: each with its
+   * message — in the folder the user thinks of it in, never one only in
+   * the Trash or Spam (what is open from those is set aside).
+   */
+  private async dayLines(
+    records: ReadonlyArray<CommitmentRecord>,
+    replies: ReadonlyArray<{
+      accountId: string
+      messageKey: string
+      kind: 'risposta' | 'sollecito'
+    }> = []
+  ): Promise<{ commitments: Map<number, DayLine>; replies: DayLine[] }> {
+    const { registry } = this.db
+    const own = new Set(
+      (await this.options.mail.listAccounts()).map((account) => account.email.toLowerCase())
+    )
+    const wanted = [
+      ...records.map((record) => ({ accountId: record.accountId, messageKey: record.messageKey })),
+      ...replies
+    ]
+    const summaries = new Map<
+      string,
+      { ref: MessageRef; subject: string; from: string; dateIso: string }
+    >()
+
+    for (const accountId of new Set(wanted.map((item) => item.accountId))) {
+      const found = await this.options.mail.messageSummaries(
+        accountId,
+        wanted.filter((item) => item.accountId === accountId).map((item) => item.messageKey)
+      )
+
+      for (const [key, summary] of found) {
+        const sender = summary.from[0]
+        summaries.set(`${accountId}\u0000${key}`, {
+          ref: summary.ref,
+          subject: summary.subject,
+          from:
+            sender && own.has(sender.address.toLowerCase())
+              ? 'Tu'
+              : sender?.name || sender?.address || '',
+          dateIso: summary.dateIso
+        })
+      }
+    }
+
+    const notes = new Map(
+      (await registry.notes.many(wanted)).map((note) => [
+        `${note.accountId}\u0000${note.messageKey}`,
+        note
+      ])
+    )
+    const lines = new Map<number, DayLine>()
+
+    for (const record of records) {
+      const summary = summaries.get(`${record.accountId}\u0000${record.messageKey}`)
+
+      if (summary) {
+        lines.set(record.id, {
+          text: record.text,
+          priority: notes.get(`${record.accountId}\u0000${record.messageKey}`)?.priority ?? null,
+          due: record.due,
+          commitment: commitmentOf(record),
+          ref: summary.ref,
+          messageKey: record.messageKey,
+          subject: summary.subject,
+          from: summary.from,
+          date: summary.dateIso
+        })
+      }
+    }
+
+    const replyLines: DayLine[] = []
+
+    for (const reply of replies) {
+      const summary = summaries.get(`${reply.accountId}\u0000${reply.messageKey}`)
+      const note = notes.get(`${reply.accountId}\u0000${reply.messageKey}`)
+
+      if (summary) {
+        replyLines.push({
+          text: note?.summary ?? summary.subject,
+          priority: note?.priority ?? null,
+          due: note?.due ?? null,
+          commitment: null,
+          readyKind: reply.kind,
+          ref: summary.ref,
+          messageKey: reply.messageKey,
+          subject: summary.subject,
+          from: summary.from,
+          date: summary.dateIso
+        })
+      }
+    }
+
+    return { commitments: lines, replies: replyLines }
+  }
+
+  async getToday(): Promise<TodayPage> {
+    const { registry, engine } = this.db
+    const now = new Date()
+    const today = localDay(now)
+    const weekEnd = localDay(new Date(now.getFullYear(), now.getMonth(), now.getDate() + WEEK_DAYS))
+    const [open, replies, proposals, letter, state] = await Promise.all([
+      registry.commitments.open(),
+      registry.replies.withStatus(['pronta']),
+      registry.proposals.open(),
+      registry.day.letter(today),
+      engine.state()
+    ])
+    const { commitments, replies: ready } = await this.dayLines(open, replies)
+    const byPriority = (a: DayLine, b: DayLine): number =>
+      (a.due ?? '9999').localeCompare(b.due ?? '9999') ||
+      PRIORITY_ORDER[a.priority ?? 'media'] - PRIORITY_ORDER[b.priority ?? 'media']
+    const owed = open.filter((record) => OWED_KINDS.includes(record.kind))
+    const lineOf = (record: CommitmentRecord): DayLine[] => {
+      const line = commitments.get(record.id)
+      return line ? [line] : []
+    }
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const events = await this.options.calendar
+      .events(startOfDay.toISOString(), new Date(startOfDay.getTime() + DAY_MS).toISOString())
+      .catch(() => [])
+
+    return {
+      day: today,
+      letter: letter?.text ?? null,
+      letterAt: letter?.writtenAt ?? null,
+      reading: Math.max(0, state.reading.total - state.reading.read),
+      today: owed
+        .filter((record) => record.due !== null && record.due <= today)
+        .flatMap(lineOf)
+        .sort(byPriority),
+      week: owed
+        .filter((record) => record.due !== null && record.due > today && record.due <= weekEnd)
+        .flatMap(lineOf)
+        .sort(byPriority),
+      waiting: owed
+        .filter((record) => record.due === null || record.due > weekEnd)
+        .flatMap(lineOf)
+        .sort(byPriority),
+      awaited: open
+        .filter((record) => record.kind === 'aspetti')
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .flatMap(lineOf),
+      ready,
+      questions: open.filter((record) => record.question !== null).flatMap(lineOf),
+      proposals: proposals.map((proposal) => this.proposalOf(proposal)),
+      preps: Object.fromEntries(await registry.day.preps(events.map((event) => event.key)))
+    }
+  }
+
+  async refreshToday(): Promise<void> {
+    await this.db.engine.refreshDay()
+  }
+
+  /** What is due from today through a day: the calendar's deadlines. */
+  async getDue(throughDay: string): Promise<DayLine[]> {
+    const open = await this.db.registry.commitments.open({ dueBy: throughDay })
+    const { commitments } = await this.dayLines(open)
+    return open.flatMap((record) => {
+      const line = commitments.get(record.id)
+      return line ? [line] : []
+    })
+  }
+
+  /* ───────────────────────────────── projects ───────────────────────────────── */
+
+  async listProjects(options: { includeHidden?: boolean } = {}): Promise<Project[]> {
+    return (
+      await this.db.registry.projects.list({
+        includeHidden: options.includeHidden,
+        includeClosed: options.includeHidden
+      })
+    ).map(projectOf)
+  }
+
+  async getProject(id: string): Promise<ProjectDetail | null> {
+    const { registry } = this.db
+    const summary = await registry.projects.summary(id)
+
+    if (!summary) {
+      return null
+    }
+
+    const threads = await registry.projects.threadsOf(id)
+    const [items, notes, resources] = await Promise.all([
+      registry.commitments.ofThreads(threads),
+      registry.notes.ofThreads(threads),
+      registry.projects.resources(id)
+    ])
+    const latest = new Map<string, NoteRecord>()
+
+    for (const note of notes) {
+      const key = `${note.accountId}\u0000${note.threadId}`
+      const known = latest.get(key)
+
+      if (!known || note.messageDate > known.messageDate) {
+        latest.set(key, note)
+      }
+    }
+
+    const own = new Set(
+      (await this.options.mail.listAccounts()).map((account) => account.email.toLowerCase())
+    )
+    const messages: DayLine[] = []
+
+    for (const note of [...latest.values()].sort((a, b) =>
+      b.messageDate.localeCompare(a.messageDate)
+    )) {
+      const summary = (
+        await this.options.mail.messageSummaries(note.accountId, [note.messageKey])
+      ).get(note.messageKey)
+
+      if (summary) {
+        const sender = summary.from[0]
+        messages.push({
+          text: note.summary,
+          priority: note.priority,
+          due: note.due,
+          commitment: null,
+          ref: summary.ref,
+          messageKey: note.messageKey,
+          subject: summary.subject,
+          from:
+            sender && own.has(sender.address.toLowerCase())
+              ? 'Tu'
+              : sender?.name || sender?.address || '',
+          date: summary.dateIso
+        })
+      }
+    }
+
+    return {
+      ...projectOf(summary),
+      resources: resources.map((resource) => ({
+        kind: resource.kind,
+        location: resource.location,
+        label: resource.label
+      })),
+      commitments: items.map(commitmentOf),
+      messages
+    }
+  }
+
+  async refreshProject(id: string): Promise<void> {
+    await this.db.engine.refreshProject(id)
+  }
+
+  async createProject(title: string): Promise<Project> {
+    const { record } = await plainly(this.db.registry.createProject(title, USER))
+    return projectOf((await this.db.registry.projects.summary(record.id))!)
+  }
+
+  async updateProject(
+    id: string,
+    change: { title?: string; hidden?: boolean; closed?: boolean }
+  ): Promise<Project | null> {
+    const { registry } = this.db
+
+    if (change.title !== undefined) {
+      await plainly(registry.renameProject(id, change.title, USER))
+    }
+
+    if (change.hidden !== undefined) {
+      await registry.setProjectHidden(id, change.hidden, USER)
+    }
+
+    if (change.closed !== undefined) {
+      await registry.setProjectClosed(id, change.closed, USER)
+    }
+
+    const summary = await registry.projects.summary(id)
+    return summary ? projectOf(summary) : null
+  }
+
+  async mergeProjects(keepId: string, otherIds: string[]): Promise<Project | null> {
+    await plainly(this.db.registry.mergeProjects(keepId, otherIds, USER))
+    const summary = await this.db.registry.projects.summary(keepId)
+    return summary ? projectOf(summary) : null
+  }
+
+  async setConversationProject(
+    thread: { accountId: string; threadId: string },
+    projectId: string,
+    linked: boolean
+  ): Promise<void> {
+    await plainly(
+      linked
+        ? this.db.registry.linkThread(projectId, thread, USER)
+        : this.db.registry.unlinkThread(projectId, thread, USER)
+    )
+  }
+
+  async conversationProjects(
+    threads: ReadonlyArray<{ accountId: string; threadId: string }>
+  ): Promise<ProjectLabel[][]> {
+    const { registry } = this.db
+    const links = await registry.projects.linksOf(threads)
+    const titles = new Map<string, string>()
+
+    for (const id of new Set(links.map((link) => link.projectId))) {
+      const project = await registry.projects.get(id)
+
+      if (project && project.hiddenAt === null) {
+        titles.set(id, project.title)
+      }
+    }
+
+    return threads.map((thread) =>
+      links
+        .filter(
+          (link) =>
+            !link.rejected &&
+            link.accountId === thread.accountId &&
+            link.threadId === thread.threadId &&
+            titles.has(link.projectId)
+        )
+        .map((link) => ({ id: link.projectId, title: titles.get(link.projectId)! }))
+    )
+  }
+
+  /** The folder linked to a project, to open it. */
+  async projectFolder(id: string): Promise<string> {
+    const folder = (await this.db.registry.projects.resources(id)).find(
+      (resource) => resource.kind === 'cartella'
+    )
+
+    if (!folder) {
+      throw new Error('Questo progetto non ha una cartella collegata.')
+    }
+
+    return folder.location
+  }
+
+  /* ───────────────────────── writing, rereading, searching ───────────────────────── */
+
+  /**
+   * The message being written, written or rewritten as the user asks — by
+   * the Segretario, which may look things up while the user waits. What
+   * comes back is kept as its draft, so what the user changes is learnt from.
+   */
+  async assistWriting(request: WritingRequest): Promise<{ text: string }> {
+    await this.requireKey()
+    const data = await prepareWriting({ mail: this.options.mail }, request)
+    const result = await startRun(this.starter(), {
+      task: 'scrittura',
+      background: false,
+      visibility: 'nascosta',
+      data,
+      shown: request.instruction,
+      editor: { draftId: request.draftId, selection: request.selectedText },
+      signal: AbortSignal.timeout(INLINE_TIMEOUT_MS),
+      missing: async (run) =>
+        run.results.editorText
+          ? null
+          : 'Scrivi il testo nel messaggio con `scrivi_bozza` (il solo `testo`).'
+    })
+    const text = result.run.results.editorText
+
+    if (!text) {
+      throw new Error(result.error?.message ?? 'Non sono riuscito a scrivere il testo.')
+    }
+
+    if (!request.selectedText) {
+      await this.db.store.recordDraft({
+        draftId: request.draftId,
+        activityId: result.activityId,
+        accountId: request.accountId,
+        text
+      })
+    }
+
+    return { text }
+  }
+
+  /** Rereads a message about to be sent: what the user would want to correct first, a line each. */
+  async reviewDraft(request: ReviewRequest): Promise<string[]> {
+    await this.requireKey()
+    const data = await prepareReview({ mail: this.options.mail }, request)
+    const result = await startRun(this.starter(), {
+      task: 'revisione',
+      background: false,
+      visibility: 'nascosta',
+      data,
+      signal: AbortSignal.timeout(REVIEW_TIMEOUT_MS),
+      missing: async (run) => (run.results.review ? null : 'Dai l’esito con `revisione`.')
+    })
+    return result.run.results.review ?? []
+  }
+
+  /**
+   * A search asked in words: the Segretario finds the search that shows
+   * what the user means, and its list is kept for the page to open.
+   */
+  async askMail(question: string): Promise<AskedMail> {
+    await this.requireKey()
+    const data = await prepareSearch({ mail: this.options.mail }, question)
+    const result = await startRun(this.starter(), {
+      task: 'ricerca',
+      background: false,
+      visibility: 'nascosta',
+      data,
+      shown: question,
+      signal: AbortSignal.timeout(INLINE_TIMEOUT_MS),
+      missing: async (run) =>
+        run.results.search ? null : 'Mostra la ricerca con `mostra` (`ricerca`).'
+    })
+    const search = result.run.results.search
+
+    if (!search) {
+      throw new Error(result.error?.message ?? 'Non sono riuscito a capire cosa cercare.')
+    }
+
+    return this.keepSearch(search, question)
+  }
+
+  /** A search run over every account's mail as it is now, kept for this session. */
+  private async keepSearch(search: AskedSearch, question: string): Promise<AskedMail> {
+    const refs = await this.runSearch(search)
+    const entry: AskedMail = {
+      id: randomUUID(),
+      question,
+      summary: search.summary || question,
+      how: [
+        search.text ? `«${search.text}»` : null,
+        search.folder ? `in ${folderQueryLabel(search.folder)}` : null,
+        search.account ? `di ${search.account}` : null,
+        search.period
+          ? periodWords(search.period)
+          : search.from && search.to
+            ? `dal ${shortDate(search.from)} al ${shortDate(search.to)}`
+            : search.from
+              ? `dal ${shortDate(search.from)}`
+              : search.to
+                ? `fino al ${shortDate(search.to)}`
+                : null,
+        search.unreadOnly ? 'non letti' : null,
+        search.withAttachments ? 'con allegati' : null
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      count: refs.length
+    }
+
+    this.searches.set(entry.id, { asked: entry, search, refs })
+
+    for (const id of [...this.searches.keys()].slice(0, -ASKED_SEARCHES_KEPT)) {
+      this.searches.delete(id)
+    }
+
+    return entry
+  }
+
+  private async runSearch(search: AskedSearch): Promise<MessageRef[]> {
+    const mail = this.options.mail
+    const accounts = await mail.listAccounts()
+    const folders = new Map(
+      await Promise.all(
+        accounts.map(async (account) => [account.id, await mail.listFolders(account.id)] as const)
+      )
+    )
+    const scope = searchScope(accounts, folders, {
+      accounts: search.account ? [search.account] : [],
+      folder: search.folder ?? undefined
+    })
+    // A period from today is counted from today, each time it runs.
+    const { from, to } = searchPeriod(search, new Date())
+    const hits = await searchMail(await mail.searchClient(), scope, {
+      text: search.text || undefined,
+      from: from ?? undefined,
+      to: to ?? undefined,
+      unreadOnly: search.unreadOnly,
+      withAttachments: search.withAttachments,
+      limit: ASK_MAIL_LIMIT
+    })
+    return hits.map((hit) => hit.ref)
+  }
+
+  /** What a search's list holds: one kept as a folder, run again now; one asked this session, what it found. */
+  async searchRefs(id: string): Promise<MessageRef[] | undefined> {
+    const saved = (await this.db.store.listSavedSearches()).find((entry) => entry.id === id)
+
+    if (saved) {
+      return this.runSearch(JSON.parse(saved.search) as AskedSearch)
+    }
+
+    return this.searches.get(id)?.refs
+  }
+
+  async listSavedSearches(): Promise<SavedSearch[]> {
+    return (await this.db.store.listSavedSearches()).map(({ id, question, summary, how }) => ({
+      id,
+      question,
+      summary,
+      how
+    }))
+  }
+
+  async saveSearch(id: string): Promise<SavedSearch[]> {
+    const asked = this.searches.get(id)
+
+    if (!asked) {
+      throw new Error('Questa ricerca non c’è più: chiedila di nuovo per tenerla.')
+    }
+
+    await this.db.store.saveSearch({
+      id,
+      question: asked.asked.question,
+      summary: asked.asked.summary,
+      how: asked.asked.how,
+      search: JSON.stringify(asked.search)
+    })
+    return this.listSavedSearches()
+  }
+
+  async removeSavedSearch(id: string): Promise<SavedSearch[]> {
+    await this.db.store.removeSavedSearch(id)
+    return this.listSavedSearches()
+  }
+
+  /* ───────────────────────────────── the panel ───────────────────────────────── */
+
+  async listActivities(options: { diary?: boolean } = {}): Promise<ActivitySummary[]> {
+    const all = await this.db.store.listActivities()
+    return all.filter(
+      (activity) =>
+        activity.visibility === 'pannello' || (options.diary && activity.visibility === 'diario')
+    )
   }
 
   async getActivity(id: string): Promise<ActivityDetail | null> {
-    const store = this.requireStore()
+    const { store } = this.db
     const summary = await store.getActivity(id)
 
     if (!summary) {
@@ -621,57 +1837,70 @@ export class SegretarioService {
     const entries = (await store.listEvents(id))
       .map(entryOf)
       .filter((entry): entry is ActivityEntry => entry !== null)
-
     return { ...summary, entries }
   }
 
   async startActivity(text: string, context: SegretarioContext): Promise<ActivitySummary> {
-    const store = this.requireStore()
+    const { store, notebook } = this.db
     await this.requireKey()
     const id = randomUUID()
     const summary = await store.createActivity({
       id,
-      kind: 'richiesta',
+      task: 'richiesta',
       title: firstLine(text),
-      status: 'running'
+      status: 'running',
+      visibility: 'pannello'
     })
 
     this.emit({ type: 'summary', activity: summary })
-    await store.appendEvent<ContextPayload>(id, 'context', { text: await this.contextBlock() })
+    await store.appendEvent<ContextPayload>(id, 'context', {
+      text: `${PROMPTS.tasks.richiesta}\n\n---\n\n${await contextBlock({ mail: this.options.mail, calendar: this.options.calendar, notebook })}`
+    })
     const request = await this.appendUserMessage(id, text, context)
     void this.nameActivity(id, request)
-    void this.runTurn(id)
+    void this.converse(id)
     return summary
   }
 
   async sendMessage(id: string, text: string, context: SegretarioContext): Promise<void> {
-    const store = this.requireStore()
+    const { store, runner } = this.db
 
-    if (this.running.has(id)) {
+    if (runner.isRunning(id)) {
       throw new Error('Sto ancora lavorando su questo: aspetta che finisca o fermami.')
     }
 
-    if (!(await store.getActivity(id))) {
+    const activity = await store.getActivity(id)
+
+    if (!activity) {
       throw new Error('Questo lavoro non esiste più.')
     }
 
     await this.requireKey()
     await this.appendUserMessage(id, text, context)
-    void this.runTurn(id)
+    void this.converse(id, activity.task === 'richiesta' ? 'richiesta' : activity.task)
+  }
+
+  /** One turn of a conversation in the panel: the user is there, so it may ask and act. */
+  private async converse(id: string, task: ActivitySummary['task'] = 'richiesta'): Promise<void> {
+    try {
+      await this.db.runner.run({ activityId: id, task, background: task === 'conoscimi' })
+    } catch (error) {
+      logMainError('A conversation with the Segretario failed', error, { activityId: id })
+    }
   }
 
   async cancelActivity(id: string): Promise<void> {
-    this.running.get(id)?.controller.abort()
+    this.runner?.cancel(id)
   }
 
   async removeActivity(id: string): Promise<void> {
-    this.running.get(id)?.controller.abort()
-    await this.requireStore().deleteActivity(id)
+    this.runner?.cancel(id)
+    await this.db.store.deleteActivity(id)
     this.emit({ type: 'removed', activityId: id })
   }
 
   async markActivitySeen(id: string): Promise<void> {
-    const summary = await this.requireStore().updateActivity(id, { unseen: false })
+    const summary = await this.db.store.updateActivity(id, { unseen: false })
 
     if (summary) {
       this.emit({ type: 'summary', activity: summary })
@@ -684,13 +1913,7 @@ export class SegretarioService {
     approved: boolean,
     outcome?: SendOutcome
   ): Promise<void> {
-    const pending = this.running.get(activityId)?.approvals.get(approvalId)
-
-    if (!pending) {
-      throw new Error('Questa conferma non è più in attesa.')
-    }
-
-    pending.resolve({ approved, outcome })
+    await this.db.runner.resolveApproval(activityId, approvalId, approved, outcome)
   }
 
   /** The page opened the draft a compose request asked for, or could not. */
@@ -710,2466 +1933,26 @@ export class SegretarioService {
     }
   }
 
-  /** Everything but the key and the settings, for "Elimina tutti i dati". */
-  async clearData(): Promise<void> {
-    for (const id of [...this.running.keys()]) {
-      this.running.get(id)?.controller.abort()
-    }
-
-    await this.requireStore().clearData()
-    await this.requireTopics().clear()
-    await this.syncExtensionTopics()
-  }
-
-  /* ─────────────────────────── notes on the mail ─────────────────────────── */
-
-  getNotes(
-    messages: ReadonlyArray<{ accountId: string; messageKey: string }>
-  ): Promise<MessageNote[]> {
-    return this.requireStore().getNotes(messages)
-  }
-
-  async getThreadBrief(accountId: string, threadId: string): Promise<ThreadBrief> {
-    const [brief, link] = await Promise.all([
-      this.requireStore().threadBrief(accountId, threadId),
-      this.requireTopics().threadTopic(accountId, threadId)
-    ])
-
-    return {
-      ...brief,
-      topic: link
-        ? { id: link.topic.id, title: link.topic.title, folderPath: link.topic.folderPath }
-        : null
-    }
-  }
-
-  /* ───────────────────────── writing with the user ───────────────────────── */
-
-  /**
-   * The message being written, written or rewritten as the user asks: from
-   * the conversation answered, what is known of the user, their style and
-   * the people they write to. What comes back is kept as the Segretario's
-   * draft, so what the user changes before sending is learnt from.
-   */
-  /**
-   * A search asked in words, made into one of the search's own by one
-   * quick call and run over every account: its list is kept for the page
-   * to open, the latest few of them.
-   */
-  async askMail(question: string): Promise<AskedMail> {
-    const key = await this.requireKey()
-    const mail = this.options.mail
-    const accounts = await mail.listAccounts()
-    const result = await this.client.chat(key, {
-      messages: [
-        { role: 'system', content: PROMPTS.askMail },
-        {
-          role: 'user',
-          content: askMailRequest({
-            today: new Date(),
-            accounts: accounts.map((account) => account.email),
-            question
-          })
-        }
-      ],
-      reasoningEffort: 'none',
-      maxTokens: 400,
-      responseSchema: { name: 'ricerca', schema: ASK_MAIL_SCHEMA }
-    })
-
-    await this.recordUsage(null, 'ricerca', result)
-    const asked = parseAskedSearch(result.content)
-    const refs = await this.runAskedSearch(asked)
-    const entry: AskedMail = {
-      id: randomUUID(),
-      question,
-      summary: asked.summary || question,
-      how: [
-        asked.text ? `«${asked.text}»` : null,
-        asked.folder ? `in ${folderQueryLabel(asked.folder)}` : null,
-        asked.account ? `di ${asked.account}` : null,
-        asked.period
-          ? periodWords(asked.period)
-          : asked.from && asked.to
-            ? `dal ${shortDate(asked.from)} al ${shortDate(asked.to)}`
-            : asked.from
-              ? `dal ${shortDate(asked.from)}`
-              : asked.to
-                ? `fino al ${shortDate(asked.to)}`
-                : null,
-        asked.unreadOnly ? 'non letti' : null,
-        asked.withAttachments ? 'con allegati' : null
-      ]
-        .filter(Boolean)
-        .join(' · '),
-      count: refs.length
-    }
-
-    this.searches.set(entry.id, { asked: entry, search: asked, refs })
-
-    for (const id of [...this.searches.keys()].slice(0, -ASKED_SEARCHES_KEPT)) {
-      this.searches.delete(id)
-    }
-
-    return entry
-  }
-
-  /** A search asked in words, run over every account's mail as it is now. */
-  private async runAskedSearch(asked: AskedSearch): Promise<MessageRef[]> {
-    const mail = this.options.mail
-    const accounts = await mail.listAccounts()
-    const folders = new Map(
-      await Promise.all(
-        accounts.map(async (account) => [account.id, await mail.listFolders(account.id)] as const)
-      )
-    )
-    const scope = searchScope(accounts, folders, {
-      accounts: asked.account ? [asked.account] : [],
-      folder: asked.folder ?? undefined
-    })
-    // A period from today is counted from today, each time it runs.
-    const { from, to } = searchPeriod(asked, new Date())
-    const hits = await searchMail(await mail.searchClient(), scope, {
-      text: asked.text || undefined,
-      from: from ?? undefined,
-      to: to ?? undefined,
-      unreadOnly: asked.unreadOnly,
-      withAttachments: asked.withAttachments,
-      limit: ASK_MAIL_LIMIT
-    })
-    return hits.map((hit) => hit.ref)
-  }
-
-  /**
-   * What a search's list holds: a search kept as a folder, run again now;
-   * one asked this session, what it found; undefined for one no longer kept.
-   */
-  async searchRefs(id: string): Promise<MessageRef[] | undefined> {
-    const saved = (await this.requireStore().listSavedSearches()).find((entry) => entry.id === id)
-
-    if (saved) {
-      return this.runAskedSearch(JSON.parse(saved.search) as AskedSearch)
-    }
-
-    return this.searches.get(id)?.refs
-  }
-
-  async listSavedSearches(): Promise<SavedSearch[]> {
-    return (await this.requireStore().listSavedSearches()).map(
-      ({ id, question, summary, how }) => ({ id, question, summary, how })
-    )
-  }
-
-  /** Keeps a search asked this session as a folder: from now on it is run again each time it opens. */
-  async saveSearch(id: string): Promise<SavedSearch[]> {
-    const asked = this.searches.get(id)
-
-    if (!asked) {
-      throw new Error('Questa ricerca non c’è più: chiedila di nuovo per tenerla.')
-    }
-
-    await this.requireStore().saveSearch({
-      id,
-      question: asked.asked.question,
-      summary: asked.asked.summary,
-      how: asked.asked.how,
-      search: JSON.stringify(asked.search)
-    })
-    return this.listSavedSearches()
-  }
-
-  async removeSavedSearch(id: string): Promise<SavedSearch[]> {
-    await this.requireStore().removeSavedSearch(id)
-    return this.listSavedSearches()
-  }
-
-  /** Rereads a message about to be sent: the mistakes the user would want to correct first. */
-  async reviewDraft(request: ReviewRequest): Promise<string[]> {
-    const key = await this.requireKey()
-    const account = (await this.options.mail.listAccounts()).find(
-      (candidate) => candidate.id === request.accountId
-    )
-
-    if (!account) {
-      return []
-    }
-
-    const answered = request.replyTo ? await this.options.mail.readMessage(request.replyTo) : null
-    const result = await this.client.chat(key, {
-      messages: [
-        { role: 'system', content: PROMPTS.review },
-        {
-          role: 'user',
-          content: reviewRequest({
-            today: new Date(),
-            from: `${account.displayName} <${account.email}>`,
-            to: request.to,
-            cc: request.cc,
-            subject: request.subject,
-            attachments: request.attachments,
-            writtenText: request.writtenText,
-            answered: answered
-              ? {
-                  from: formatAddresses(answered.from, 1),
-                  date: formatDateTime(answered.date),
-                  text: withoutQuotedHistory(answered.textForReading).text
-                }
-              : null
-          })
-        }
-      ],
-      reasoningEffort: 'none',
-      maxTokens: 600,
-      responseSchema: { name: 'revisione', schema: REVIEW_SCHEMA }
-    })
-
-    await this.recordUsage(null, 'revisione', result)
-    return parseReview(result.content)
-  }
-
-  async assistWriting(request: WritingRequest): Promise<{ text: string }> {
-    const store = this.requireStore()
-    const key = await this.requireKey()
-    const accounts = await this.options.mail.listAccounts()
-    const account = accounts.find((candidate) => candidate.id === request.accountId)
-
-    if (!account) {
-      throw new Error('L’account da cui scrivi non c’è più.')
-    }
-
-    const notes = await store.listMemory()
-    const own = new Set(accounts.map((candidate) => candidate.email.toLowerCase()))
-    const original = request.replyTo ? await this.options.mail.readMessage(request.replyTo) : null
-    const conversation =
-      request.replyTo && original
-        ? await this.conversationFor(
-            {
-              ref: request.replyTo,
-              messageKey: original.messageKey,
-              threadId: original.threadId,
-              dateIso: original.date
-            },
-            account,
-            own,
-            notes
-          )
-        : null
-    const recipients = request.to.map((address) => address.toLowerCase())
-    const people =
-      conversation?.people ??
-      notes
-        .filter(
-          (note) =>
-            note.path.startsWith('persone/') &&
-            recipients.some((address) => note.content.toLowerCase().includes(address))
-        )
-        .slice(0, TRIAGE_PEOPLE_NOTES)
-    const accountNote = notes.find(
-      (note) => note.path === normalizeMemoryPath(`account/${account.email}`)
-    )
-    const tu = notes.find((note) => note.path === 'tu.md')
-    const style = notes.find((note) => note.path === 'stile.md')
-
-    const result = await this.client.chat(key, {
-      messages: [
-        {
-          role: 'system',
-          content: [
-            PROMPTS.writing,
-            tu ? `# Chi è l'utente\n\n${tu.content.trim()}` : null,
-            style ? `# Come scrive l'utente\n\n${style.content.trim()}` : null
-          ]
-            .filter(Boolean)
-            .join('\n\n')
-        },
-        {
-          role: 'user',
-          content: writingRequest({
-            today: new Date(),
-            accountEmail: account.email,
-            accountName: account.displayName,
-            accountNote: accountNote?.content ?? null,
-            people,
-            subject: request.subject,
-            to: request.to,
-            thread: conversation?.thread ?? null,
-            writtenText: request.writtenText,
-            selectedText: request.selectedText,
-            instruction: request.instruction,
-            topic: original ? await this.topicAround(account.id, original.threadId) : null
-          })
-        }
-      ],
-      reasoningEffort: 'low',
-      maxTokens: 8000,
-      responseSchema: { name: 'testo', schema: WRITING_SCHEMA }
-    })
-
-    await this.recordUsage(null, 'scrittura', result)
-    const text = parseWriting(result.content)
-
-    // A passage rewritten in the user's own text leaves the rest theirs: only
-    // a message it wrote whole is learnt from.
-    if (!request.selectedText) {
-      await store.recordDraft({
-        draftId: request.draftId,
-        activityId: null,
-        accountId: account.id,
-        text
-      })
-    }
-
-    return { text }
-  }
-
-  /* ──────────────────────────────── topics ──────────────────────────────── */
-
-  /** Messages an extension filed outside the mail: what is open in them is kept, and where they went. */
-  async messagesArchived(
-    entries: ReadonlyArray<{
-      accountId: string
-      messageKey: string
-      threadId: string
-      folder: string
-      fromAddress: string | null
-    }>
-  ): Promise<void> {
-    await this.whenReady()
-    await this.requireStore().saveArchived(entries)
-
-    for (const accountId of new Set(entries.map((entry) => entry.accountId))) {
-      const ofAccount = entries.filter((entry) => entry.accountId === accountId)
-      this.emitNotes({
-        accountId,
-        messageKeys: ofAccount.map((entry) => entry.messageKey),
-        threadIds: [...new Set(ofAccount.map((entry) => entry.threadId))]
-      })
-    }
-  }
-
-  /** Which of these messages of an account were filed outside the mail. */
-  async archivedKeys(accountId: string, messageKeys: ReadonlyArray<string>): Promise<Set<string>> {
-    if (messageKeys.length === 0 || !this.store) {
-      return new Set()
-    }
-
-    return this.store.archivedKeys(accountId, messageKeys)
-  }
-
-  /** A topic's conversations among some accounts', for its list. */
-  async topicThreads(
-    topicId: string,
-    accountIds: ReadonlyArray<string>
-  ): Promise<Array<{ accountId: string; threadId: string }>> {
-    await this.whenReady()
-    return this.requireTopics().threadsOf(topicId, accountIds)
-  }
-
-  async getTopicsLabel(): Promise<string> {
-    return this.topicsLabel()
-  }
-
-  async listTopics(): Promise<Topic[]> {
-    return this.requireTopics().listTopics(await this.options.mail.includedAccountIds())
-  }
-
-  /**
-   * A topic with its conversations — each by its latest message, the
-   * newest first — and what is open in them.
-   */
-  async getTopic(id: string): Promise<TopicDetail | null> {
-    const topics = this.requireTopics()
-    const accountIds = await this.options.mail.includedAccountIds()
-    const summary = (await topics.listTopics(accountIds)).find((topic) => topic.id === id)
-
-    if (!summary) {
-      return null
-    }
-
-    const store = this.requireStore()
-    const threads = await topics.threadsOf(id, accountIds)
-    const [notes, commitments] = await Promise.all([
-      store.latestNotes(threads),
-      store.commitmentsOf(threads)
-    ])
-    const messages: BriefingItem[] = []
-
-    for (const accountId of new Set(notes.map((note) => note.accountId))) {
-      const ofAccount = notes.filter((note) => note.accountId === accountId)
-      const summaries = await this.options.mail.messageSummaries(
-        accountId,
-        ofAccount.map((note) => note.messageKey)
-      )
-
-      for (const note of ofAccount) {
-        const message = summaries.get(note.messageKey)
-
-        if (message) {
-          messages.push({
-            text: note.summary,
-            priority: note.priority,
-            due: note.due,
-            commitmentKind: null,
-            ref: message.ref,
-            messageKey: note.messageKey,
-            subject: message.subject,
-            from: message.from[0]?.name || message.from[0]?.address || '',
-            date: message.dateIso
-          })
-        }
-      }
-    }
-
-    return {
-      ...summary,
-      messages: messages.sort((a, b) => b.date.localeCompare(a.date)),
-      commitments
-    }
-  }
-
-  /** Writes where a topic stands, from its conversations' notes and what is open in them. */
-  async writeTopicState(id: string): Promise<TopicDetail | null> {
-    const topic = await this.getTopic(id)
-
-    if (!topic) {
-      return null
-    }
-
-    const key = await this.requireKey()
-    const material = [
-      `Oggi è ${new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(new Date())}.`,
-      `# ${topic.title}${topic.description ? `\n${topic.description}` : ''}`,
-      `## Le conversazioni, dalla più recente\n${
-        topic.messages
-          .slice(0, 30)
-          .map(
-            (item) =>
-              `- ${formatDateTime(item.date)} · ${item.from} · «${item.subject}»: ${item.text}${item.due ? ` (entro ${item.due})` : ''}`
-          )
-          .join('\n') || '- nessuna'
-      }`,
-      `## Cose aperte e chiuse di recente\n${
-        topic.commitments
-          .map(
-            (commitment) =>
-              `- [${commitment.status}] ${commitment.kind}: ${commitment.text}${commitment.due ? ` (entro ${commitment.due})` : ''}`
-          )
-          .join('\n') || '- nessuna'
-      }`
-    ].join('\n\n')
-
-    const result = await this.client.chat(key, {
-      messages: [
-        { role: 'system', content: PROMPTS.topicState },
-        { role: 'user', content: material }
-      ],
-      reasoningEffort: 'none',
-      maxTokens: 1200
-    })
-
-    await this.recordUsage(null, 'argomento', result)
-
-    if (result.finishReason === 'length' || !result.content.trim()) {
-      throw new Error('Il punto della questione non è venuto intero: riprova.')
-    }
-
-    await this.requireTopics().setState(id, result.content.trim())
-    return this.getTopic(id)
-  }
-
-  /** The user files a conversation into a topic, or out of any: the Segretario keeps to it. */
-  async setConversationTopic(
-    accountId: string,
-    threadId: string,
-    topicId: string | null
-  ): Promise<void> {
-    const topics = this.requireTopics()
-    const before = (await topics.threadTopic(accountId, threadId))?.topic.id ?? null
-
-    await topics.link(accountId, threadId, topicId, 'utente')
-
-    // What either topic is about is learnt again, from what it now holds.
-    if (before !== topicId) {
-      for (const changed of [before, topicId]) {
-        if (changed) {
-          await topics.forgetGist(changed)
-        }
-      }
-    }
-
-    this.emitNotes({ accountId, messageKeys: [], threadIds: [threadId] })
-    void this.writeTopicGists()
-  }
-
-  conversationTopics(
-    threads: ReadonlyArray<{ accountId: string; threadId: string }>
-  ): Promise<Array<string | null>> {
-    return this.requireTopics().topicIdsOf(threads)
-  }
-
-  async filingHint(
-    messages: ReadonlyArray<{ accountId: string; threadId: string; from: string | null }>
-  ): Promise<{ topicKey: string | null; destination: string | null }> {
-    const threads = messages.map(({ accountId, threadId }) => ({ accountId, threadId }))
-    const topicIds = await this.requireTopics().topicIdsOf(threads)
-    const shared = new Set(topicIds)
-    const topicId = shared.size === 1 ? topicIds[0] : null
-    const topic = topicId ? await this.requireTopics().getTopic(topicId) : null
-
-    if (!topic?.externalKey) {
-      return { topicKey: null, destination: null }
-    }
-
-    // The folder a message went into is its day's, under the subfolder chosen:
-    // where the conversation went before, else where its sender's mail goes in this pratica.
-    const store = this.requireStore()
-    const filed =
-      (await store.latestArchivedFolder(threads)) ??
-      (topic.folderPath
-        ? await store.latestArchivedFrom(
-            [
-              ...new Set(
-                messages.flatMap((message) => (message.from ? [message.from.toLowerCase()] : []))
-              )
-            ],
-            `${topic.folderPath}${sep}`
-          )
-        : null)
-    const destination =
-      filed && topic.folderPath ? relative(topic.folderPath, dirname(filed)) : null
-
-    return {
-      topicKey: topic.externalKey,
-      destination:
-        destination !== null && !destination.startsWith('..') && !isAbsolute(destination)
-          ? destination.split(sep).join('/')
-          : null
-    }
-  }
-
-  async createTopic(title: string): Promise<Topic> {
-    const id = await this.requireTopics().createTopic(title, 'utente')
-    const topic = (await this.listTopics()).find((candidate) => candidate.id === id)
-
-    if (!topic) {
-      throw new Error('Non sono riuscito a crearlo.')
-    }
-
-    return topic
-  }
-
-  /** A topic's folder, as stored — never a path the page sends. */
-  async topicFolder(id: string): Promise<string> {
-    const folderPath = (await this.requireTopics().getTopic(id))?.folderPath
-
-    if (!folderPath) {
-      throw new Error('Non ha una cartella.')
-    }
-
-    return folderPath
-  }
-
-  async updateTopic(
-    id: string,
-    change: { title?: string; archived?: boolean }
-  ): Promise<Topic | null> {
-    await this.requireTopics().update(id, change)
-    return (await this.listTopics()).find((topic) => topic.id === id) ?? null
-  }
-
-  /* ──────────────────────────────── the day ──────────────────────────────── */
-
-  /**
-   * The day as the Segretario sees it ("Oggi"), across the accounts
-   * "Tutti gli account" gathers: what is due today or overdue, what is due
-   * this week, who waits on the user, what the user waits on, the replies
-   * prepared — each line from a note or a thing open, with its message.
-   */
-  async getBriefing(): Promise<Briefing> {
-    const store = this.requireStore()
-    const { dated, undated, awaited, ready } = await this.briefingLines()
-    const day = localDay(new Date())
-    const weekEnd = localDay(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000))
-    const byDue = (a: BriefingItem, b: BriefingItem): number =>
-      (a.due ?? '').localeCompare(b.due ?? '') || priorityRank(a) - priorityRank(b)
-    const byWeight = (a: BriefingItem, b: BriefingItem): number =>
-      priorityRank(a) - priorityRank(b) || b.date.localeCompare(a.date)
-    const [opening, reading] = await Promise.all([store.briefingOpening(day), this.triageBacklog()])
-    const briefing = {
-      day,
-      opening: opening?.text ?? null,
-      openingAt: opening?.createdAt ?? null,
-      openingBehind: 0,
-      reading,
-      today: dated.filter((item) => item.due !== null && item.due <= day).sort(byDue),
-      week: dated
-        .filter((item) => item.due !== null && item.due > day && item.due <= weekEnd)
-        .sort(byDue)
-        .slice(0, BRIEFING_LINES),
-      // Further on, a date says less than who waits: with those without one.
-      waiting: [...undated, ...dated.filter((item) => item.due !== null && item.due > weekEnd)]
-        .sort(byWeight)
-        .slice(0, BRIEFING_LINES),
-      awaited: awaited.sort((a, b) => a.date.localeCompare(b.date)).slice(0, BRIEFING_LINES),
-      ready
-    }
-
-    if (opening) {
-      const basis = new Set(opening.basis)
-      briefing.openingBehind = briefingBasis(briefing).filter((key) => !basis.has(key)).length
-    }
-
-    return briefing
-  }
-
-  /** What is due from today to `throughDay` (AAAA-MM-GG, included): the agenda's deadlines beside its events. */
-  async getDue(throughDay: string): Promise<BriefingItem[]> {
-    const day = localDay(new Date())
-    const { dated } = await this.briefingLines()
-
-    return dated
-      .filter((item) => item.due !== null && item.due >= day && item.due <= throughDay)
-      .sort((a, b) => (a.due ?? '').localeCompare(b.due ?? '') || priorityRank(a) - priorityRank(b))
-  }
-
-  /**
-   * The day's lines, each opening its message: what is open with a date
-   * (a thing owed, or a conversation's note that has one), the
-   * conversations that ask something without one, what the user waits
-   * on, and the replies prepared.
-   */
-  private async briefingLines(): Promise<{
-    dated: BriefingItem[]
-    undated: BriefingItem[]
-    awaited: BriefingItem[]
-    ready: BriefingItem[]
-  }> {
-    const store = this.requireStore()
-    const mail = this.options.mail
-    const accountIds = await mail.includedAccountIds()
-    const [notes, commitments, ready, accounts] = await Promise.all([
-      store.openConversationNotes(accountIds),
-      store.openCommitmentsIn(accountIds),
-      store.readyDraftsIn(accountIds),
-      mail.listAccounts()
-    ])
-    // A line the user wrote, from whichever of their accounts, is theirs: "Tu".
-    const own = new Set(accounts.map((account) => account.email.toLowerCase()))
-    const id = (accountId: string, key: string): string => `${accountId}\u0000${key}`
-
-    // Who wrote each message, what about, where it is: asked for once per account.
-    const keys = new Map<string, Set<string>>()
-    const want = (accountId: string, messageKey: string): void => {
-      keys.set(accountId, (keys.get(accountId) ?? new Set()).add(messageKey))
-    }
-
-    for (const item of [...notes, ...commitments, ...ready]) {
-      want(item.accountId, item.messageKey)
-    }
-
-    const summaries = new Map<
-      string,
-      { ref: MessageRef; subject: string; from: MailAddress[]; dateIso: string }
-    >()
-
-    for (const [accountId, messageKeys] of keys) {
-      for (const [key, summary] of await mail.messageSummaries(accountId, [...messageKeys])) {
-        summaries.set(id(accountId, key), summary)
-      }
-    }
-
-    const noteOfThread = new Map(notes.map((note) => [id(note.accountId, note.threadId), note]))
-    const noteOfMessage = new Map(notes.map((note) => [id(note.accountId, note.messageKey), note]))
-    const line = (
-      accountId: string,
-      messageKey: string,
-      text: string,
-      priority: NotePriority | null,
-      due: string | null,
-      commitmentKind: CommitmentKind | null
-    ): BriefingItem | null => {
-      const summary = summaries.get(id(accountId, messageKey))
-
-      return summary
-        ? {
-            text,
-            priority,
-            due,
-            commitmentKind,
-            ref: summary.ref,
-            messageKey,
-            subject: summary.subject,
-            from:
-              summary.from[0] && own.has(summary.from[0].address.toLowerCase())
-                ? 'Tu'
-                : summary.from[0]?.name || summary.from[0]?.address || '',
-            date: summary.dateIso
-          }
-        : null
-    }
-
-    const dated: BriefingItem[] = []
-    const undated: BriefingItem[] = []
-    const awaited: BriefingItem[] = []
-    const datedThreads = new Set<string>()
-    const awaitedThreads = new Set<string>()
-    const place = (item: BriefingItem | null): void => {
-      if (item?.due) {
-        dated.push(item)
-      } else if (item) {
-        undated.push(item)
-      }
-    }
-
-    for (const commitment of commitments) {
-      const thread = id(commitment.accountId, commitment.threadId)
-      const priority = noteOfThread.get(thread)?.priority ?? null
-
-      if (commitment.kind === 'aspetti') {
-        awaitedThreads.add(thread)
-        const item = line(
-          commitment.accountId,
-          commitment.messageKey,
-          commitment.text,
-          priority,
-          commitment.due,
-          commitment.kind
-        )
-
-        if (item) {
-          awaited.push({ ...item, commitmentId: commitment.id })
-        }
-      } else if (commitment.due) {
-        datedThreads.add(thread)
-        const item = line(
-          commitment.accountId,
-          commitment.messageKey,
-          commitment.text,
-          priority,
-          commitment.due,
-          commitment.kind
-        )
-        place(item && { ...item, commitmentId: commitment.id })
-      }
-    }
-
-    for (const note of notes) {
-      const thread = id(note.accountId, note.threadId)
-
-      if (note.state === 'in_attesa') {
-        if (!awaitedThreads.has(thread)) {
-          const item = line(
-            note.accountId,
-            note.messageKey,
-            note.summary,
-            note.priority,
-            note.due,
-            null
-          )
-
-          if (item) {
-            awaited.push(item)
-          }
-        }
-      } else if (!datedThreads.has(thread)) {
-        place(line(note.accountId, note.messageKey, note.summary, note.priority, note.due, null))
-      }
-    }
-
-    return {
-      dated,
-      undated,
-      awaited,
-      ready: ready
-        .map((draft): BriefingItem | null => {
-          const note = noteOfMessage.get(id(draft.accountId, draft.messageKey))
-          const item = line(
-            draft.accountId,
-            draft.messageKey,
-            note?.summary ?? summaries.get(id(draft.accountId, draft.messageKey))?.subject ?? '',
-            note?.priority ?? null,
-            note?.due ?? null,
-            null
-          )
-          return item && { ...item, readyKind: draft.kind }
-        })
-        .filter((item): item is BriefingItem => item !== null)
-    }
-  }
-
-  /**
-   * How many messages of the last two weeks triage has still to read: the
-   * day is not written about while they wait, on the first launch or after
-   * a holiday.
-   */
-  private async triageBacklog(): Promise<number> {
-    if (this.status.keyState !== 'ready' || !(await this.requireStore().getPreferences()).triage) {
-      return 0
-    }
-
-    const since = new Date(Date.now() - TRIAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString()
-    const threads = await this.options.mail.untriagedThreads(since, TRIAGE_BACKLOG_COUNTED)
-    return threads.reduce(
-      (count, thread) =>
-        count +
-        thread.messages.filter(
-          (message) =>
-            (this.triageFailures.get(`${thread.accountId}\u0000${message.messageKey}`) ?? 0) <
-            TRIAGE_ATTEMPTS
-        ).length,
-      0
-    )
-  }
-
-  /** Writes the top of the day again, from the day as it stands. */
-  async writeBriefingOpening(): Promise<Briefing> {
-    const store = this.requireStore()
-    const key = await this.requireKey()
-    const briefing = await this.getBriefing()
-    const tu = (await store.listMemory()).find((note) => note.path === 'tu.md')
-    const section = (title: string, items: ReadonlyArray<BriefingItem>): string =>
-      `## ${title}\n${
-        items.length > 0
-          ? items
-              .slice(0, 10)
-              .map(
-                (item) =>
-                  `- ${item.text}${item.due ? ` (entro ${item.due})` : ''}${item.priority === 'alta' ? ' [importante]' : ''} — ${item.from}, «${item.subject}»`
-              )
-              .join('\n')
-          : '- niente'
-      }`
-    const now = new Date()
-    const agenda = await this.options.calendar.events(
-      new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(),
-      new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString()
-    )
-    const time = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
-    const material = [
-      `Oggi è ${new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(now)}.`,
-      agenda.length > 0
-        ? `## In agenda oggi\n${agenda
-            .map(
-              (event) =>
-                `- ${event.allDay ? 'tutto il giorno' : `${time.format(new Date(event.start))}–${time.format(new Date(event.end))}`}: ${event.title}${event.location ? ` (${event.location})` : ''}${event.myResponse === 'needsAction' ? ' [invito ancora senza risposta]' : ''}`
-            )
-            .join('\n')}`
-        : null,
-      section('Da fare oggi o scaduto', briefing.today),
-      section('In scadenza questa settimana', briefing.week),
-      section('Ti aspettano (senza data)', briefing.waiting),
-      section('Aspetti tu', briefing.awaited),
-      section('Risposte pronte', briefing.ready)
-    ]
-      .filter(Boolean)
-      .join('\n\n')
-
-    const result = await this.client.chat(key, {
-      messages: [
-        {
-          role: 'system',
-          content: tu
-            ? `${PROMPTS.briefing}\n\n# Chi è l'utente\n\n${tu.content.trim()}`
-            : PROMPTS.briefing
-        },
-        { role: 'user', content: material }
-      ],
-      reasoningEffort: 'none',
-      maxTokens: 1200
-    })
-
-    await this.recordUsage(null, 'oggi', result)
-
-    // A paragraph cut short is not the day's: it is not kept.
-    if (result.finishReason === 'length' || !result.content.trim()) {
-      throw new Error('Il punto della giornata non è venuto intero: riprova.')
-    }
-
-    await store.saveBriefingOpening(briefing.day, result.content.trim(), briefingBasis(briefing))
-    return this.getBriefing()
-  }
-
-  /** The messages a view of the Segretario's holds, one per conversation (see `AiStore.viewMessages`). */
-  viewMessages(
-    view: SegretarioView,
-    accountIds: ReadonlyArray<string>
-  ): Promise<Array<{ accountId: string; messageKey: string }>> {
-    return this.requireStore().viewMessages(view, accountIds)
-  }
-
-  async readyDraftSource(accountId: string, messageKey: string): Promise<MessageRef | null> {
-    return (await this.options.mail.refForKey(accountId, messageKey))?.ref ?? null
-  }
-
-  async takeUpReadyDraft(accountId: string, messageKey: string, draftId: string): Promise<void> {
-    const store = this.requireStore()
-    const used = await store.closeReadyDraft(accountId, messageKey, 'usata')
-
-    if (used) {
-      await store.recordDraft({ draftId, activityId: null, accountId, text: used.text })
-      this.emitNotes({ accountId, messageKeys: [messageKey], threadIds: [used.threadId] })
-    }
-  }
-
-  async discardReadyDraft(accountId: string, messageKey: string): Promise<void> {
-    const discarded = await this.requireStore().closeReadyDraft(accountId, messageKey, 'scartata')
-
-    if (discarded) {
-      this.emitNotes({ accountId, messageKeys: [messageKey], threadIds: [discarded.threadId] })
-    }
-  }
-
-  async closeCommitment(id: number): Promise<void> {
-    const closed = await this.requireStore().closeCommitment(id)
-
-    if (closed) {
-      this.emitNotes({ accountId: closed.accountId, messageKeys: [], threadIds: [closed.threadId] })
-    }
-  }
-
-  async dismissNote(accountId: string, messageKey: string): Promise<void> {
-    const note = await this.requireStore().dismissNote(accountId, messageKey)
-
-    if (note) {
-      this.emitNotes({ accountId, messageKeys: [messageKey], threadIds: [note.threadId] })
-    }
-  }
-
-  /**
-   * The conversations of a selection, dealt with: each one's latest note
-   * marked handled and what was owed in it closed — "Segna come gestito",
-   * many at once. Resolves with how many conversations it was.
-   */
-  async dismissConversations(
-    messages: ReadonlyArray<{ accountId: string; messageKey: string }>
-  ): Promise<number> {
-    const store = this.requireStore()
-    const threads = new Map(
-      (await store.getNotes(messages)).map((note) => [
-        `${note.accountId}\u0000${note.threadId}`,
-        { accountId: note.accountId, threadId: note.threadId }
-      ])
-    )
-    const latest = await store.latestNotes([...threads.values()])
-
-    for (const note of latest) {
-      await this.dismissNote(note.accountId, note.messageKey)
-    }
-
-    return latest.length
-  }
-
-  private emitNotes(change: NotesChange): void {
-    this.options.send(SEGRETARIO_IPC.notesChanged, change)
-  }
-
-  /**
-   * Writes the note of every message of the last two weeks, received or
-   * sent, that has none and whose text is indexed — the newest first, a
-   * few at a time. Each note is one quick call, without reasoning, held to
-   * the schema the views read.
-   */
-  private async triageRound(): Promise<void> {
-    if (this.triaging || !this.store || this.status.keyState !== 'ready') {
-      return
-    }
-
-    this.triaging = true
-
-    try {
-      await this.extensionIn.promise
-      const store = this.store
-
-      while ((await store.getPreferences()).triage && this.status.keyState === 'ready') {
-        const since = new Date(Date.now() - TRIAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000)
-        const failing = (accountId: string, messageKey: string): boolean =>
-          (this.triageFailures.get(`${accountId}\u0000${messageKey}`) ?? 0) >= TRIAGE_ATTEMPTS
-        const threads = (
-          await this.options.mail.untriagedThreads(
-            since.toISOString(),
-            TRIAGE_BATCH + this.triageFailures.size
-          )
-        )
-          .map((thread) => ({
-            ...thread,
-            messages: thread.messages.filter(
-              (message) => !failing(thread.accountId, message.messageKey)
-            )
-          }))
-          .filter((thread) => thread.messages.length > 0)
-          .slice(0, TRIAGE_BATCH)
-
-        if (threads.length === 0) {
-          return
-        }
-
-        const key = await this.requireKey()
-        const accounts = await this.options.mail.listAccounts()
-        const notes = await store.listMemory()
-        // The topics conversations are filed into: read once a round, grown as it creates them.
-        const catalog = await this.requireTopics().catalog()
-        const queue = await this.triageLanes(threads, catalog, accounts)
-        let reachable = true
-
-        // Lanes side by side: a pratica's conversations one after the other in
-        // one lane, so what one opens the next sees; within a conversation,
-        // its messages in the order they were written. An answer that does
-        // not hold is asked for again at once, not after the messages that
-        // follow it.
-        await Promise.all(
-          Array.from({ length: TRIAGE_CONCURRENCY }, async () => {
-            for (let lane = queue.shift(); lane && reachable; lane = queue.shift()) {
-              for (const thread of lane) {
-                for (const message of thread.messages) {
-                  const failures = (): number =>
-                    this.triageFailures.get(
-                      `${message.ref.accountId}\u0000${message.messageKey}`
-                    ) ?? 0
-
-                  let before: number
-
-                  // Again only when this very attempt failed, and while attempts are left.
-                  do {
-                    before = failures()
-                    reachable = await this.triageOne(
-                      { ...message, threadId: thread.threadId },
-                      key,
-                      accounts,
-                      notes,
-                      catalog
-                    )
-                  } while (reachable && failures() > before && failures() < TRIAGE_ATTEMPTS)
-
-                  if (!reachable) {
-                    break
-                  }
-                }
-
-                if (!reachable) {
-                  break
-                }
-              }
-            }
-          })
-        )
-
-        // OpenRouter out of reach, or the key refused: the next look tries again.
-        if (!reachable) {
-          return
-        }
-      }
-    } catch (error) {
-      logMainError('Segretario: triage round failed', error)
-    } finally {
-      this.triaging = false
-      // With the notes written, the replies they call for, and what the topics turned out to be.
-      void this.prepareReadyDrafts()
-      void this.writeTopicGists()
-    }
-  }
-
-  /**
-   * The conversations to read, in lanes: those of the same topic — filed
-   * in it already, or naming it in their subject — or from the same sender
-   * in one lane, read one after the other, so the same thing is not opened
-   * twice by two of them read at once, and a repeat finds what it repeats;
-   * the others each in their own.
-   */
-  private async triageLanes<
-    T extends {
-      accountId: string
-      threadId: string
-      messages: ReadonlyArray<{ messageKey: string; dateIso: string }>
-    }
-  >(
-    threads: ReadonlyArray<T>,
-    catalog: ReadonlyArray<CatalogTopic>,
-    accounts: ReadonlyArray<MailAccount>
-  ): Promise<T[][]> {
-    const own = new Set(accounts.map((account) => account.email.toLowerCase()))
-    const filed = await this.requireTopics().topicIdsOf(threads)
-    const ties = threads.map((): string[] => [])
-
-    for (const accountId of new Set(threads.map((thread) => thread.accountId))) {
-      const summaries = await this.options.mail.messageSummaries(
-        accountId,
-        threads.flatMap((thread) =>
-          thread.accountId === accountId ? thread.messages.map((message) => message.messageKey) : []
-        )
-      )
-
-      threads.forEach((thread, index) => {
-        if (thread.accountId !== accountId) {
-          return
-        }
-
-        const read = thread.messages.flatMap((message) => {
-          const summary = summaries.get(message.messageKey)
-          return summary ? [summary] : []
-        })
-        const named = namedTopicIndexes(
-          catalog,
-          read.slice(0, 1).map((summary) => ({ subject: summary.subject, text: '' }))
-        )
-        const topic = filed[index] ?? (named.length === 1 ? catalog[named[0]].id : null)
-        const senders = read
-          .map((summary) => deriveSenderKey(summary.from))
-          .filter((sender) => sender && !own.has(sender))
-
-        ties[index] = [
-          ...(topic ? [`topic\u0000${topic}`] : []),
-          ...senders.map((sender) => `from\u0000${accountId}\u0000${sender}`)
-        ]
-      })
-    }
-
-    // Conversations sharing a topic or a sender, however linked, are one lane.
-    const lane = threads.map((_thread, index) => index)
-    const laneOf = (index: number): number =>
-      lane[index] === index ? index : (lane[index] = laneOf(lane[index]))
-    const firstWith = new Map<string, number>()
-
-    ties.forEach((keys, index) => {
-      for (const key of keys) {
-        const other = firstWith.get(key)
-
-        if (other === undefined) {
-          firstWith.set(key, index)
-        } else {
-          lane[laneOf(index)] = laneOf(other)
-        }
-      }
-    })
-
-    const lanes = new Map<number, T[]>()
-
-    threads.forEach((thread, index) => {
-      lanes.set(laneOf(index), [...(lanes.get(laneOf(index)) ?? []), thread])
-    })
-
-    // In a lane, the conversations in the order they began: an obligation is
-    // read where it starts, before the replies that answer it.
-    return [...lanes.values()].map((members) =>
-      [...members].sort((a, b) =>
-        (a.messages[0]?.dateIso ?? '').localeCompare(b.messages[0]?.dateIso ?? '')
-      )
-    )
-  }
-
-  /**
-   * A line on what each topic is about — the job, for whom, the suppliers
-   * and offices in it — learnt from its mail: the catalogue triage files
-   * against shows it, so a message that does not name its topic still
-   * finds it. Written once a topic has conversations, again as they double.
-   */
-  private async writeTopicGists(): Promise<void> {
-    if (this.gisting || !this.topics || this.status.keyState !== 'ready') {
-      return
-    }
-
-    this.gisting = true
-
-    try {
-      const topics = this.topics
-      const accountIds = await this.options.mail.includedAccountIds()
-      const catalog = await topics.catalog()
-
-      for (const { id, conversations } of await topics.needingGist()) {
-        const topic = await this.getTopic(id)
-
-        if (!topic || this.status.keyState !== 'ready') {
-          continue
-        }
-
-        // A topic with names — a pratica — learns what it is about only from
-        // the conversations that name it, or that the user filed in it: one
-        // the Segretario filed there by a guess teaches nothing, or a wrong
-        // guess would teach itself.
-        const names = catalog.find((entry) => entry.id === id)?.names ?? []
-        const filedByUser = new Set(
-          names.length > 0
-            ? (
-                await this.requireStore().latestNotes(
-                  (await topics.threadsOf(id, accountIds)).filter(
-                    (link) => link.linkedBy === 'utente'
-                  )
-                )
-              ).map((note) => `${note.accountId}\u0000${note.messageKey}`)
-            : []
-        )
-        const evidence =
-          names.length > 0
-            ? topic.messages.filter(
-                (message) =>
-                  saysAnyName(nameForm(message.subject), names) ||
-                  filedByUser.has(`${message.ref.accountId}\u0000${message.messageKey}`)
-              )
-            : topic.messages
-
-        if (evidence.length === 0) {
-          continue
-        }
-
-        const result = await this.client.chat(await this.requireKey(), {
-          messages: [
-            { role: 'system', content: PROMPTS.topicGist },
-            {
-              role: 'user',
-              content: [
-                `# ${topic.title}${topic.description ? `\n${topic.description}` : ''}`,
-                `## Le conversazioni\n${evidence
-                  .slice(0, 20)
-                  .map((item) => `- ${item.from} · «${item.subject}»: ${item.text}`)
-                  .join('\n')}`
-              ].join('\n\n')
-            }
-          ],
-          reasoningEffort: 'none',
-          maxTokens: 200
-        })
-
-        await this.recordUsage(null, 'argomento', result)
-        const gist = result.content.replace(/\s+/g, ' ').trim().replace(/\.$/, '')
-
-        if (result.finishReason !== 'length' && gist) {
-          await topics.setGist(id, clip(gist, 300).text, conversations)
-        }
-      }
-    } catch (error) {
-      logMainError('Segretario: a topic gist could not be written', error)
-    } finally {
-      this.gisting = false
-    }
-  }
-
-  /**
-   * Prepares, one at a time, the replies the user will want: for each
-   * conversation that waits on the user's answer and matters, the reply in
-   * their voice, from the conversation, what is known of the person and how
-   * the user writes to them. It stays a proposal until the user takes it up.
-   */
-  private async prepareReadyDrafts(): Promise<void> {
-    if (this.preparing || !this.store || this.status.keyState !== 'ready') {
-      return
-    }
-
-    this.preparing = true
-
-    try {
-      const store = this.store
-
-      while ((await store.getPreferences()).readyDrafts && this.status.keyState === 'ready') {
-        const now = Date.now()
-        const since = new Date(now - TRIAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000)
-        const fresh = (item: { accountId: string; messageKey: string }): boolean =>
-          (this.readyDraftFailures.get(`${item.accountId}\u0000${item.messageKey}`) ?? 0) <
-          TRIAGE_ATTEMPTS
-        // The replies first: someone waits on the user. Then the reminders.
-        const replies = (
-          await store.messagesWantingReadyDraft(
-            since.toISOString(),
-            READY_DRAFT_BATCH + this.readyDraftFailures.size
-          )
-        ).filter(fresh)
-        const wanted: Array<{
-          accountId: string
-          messageKey: string
-          threadId: string
-          kind: ReadyDraftKind
-        }> =
-          replies.length > 0
-            ? replies.map((item) => ({ ...item, kind: 'risposta' }))
-            : (
-                await store.messagesWantingFollowUp({
-                  sinceIso: new Date(
-                    now - FOLLOW_UP_WINDOW_DAYS * 24 * 60 * 60 * 1000
-                  ).toISOString(),
-                  waitedSinceIso: new Date(
-                    now - FOLLOW_UP_AFTER_DAYS * 24 * 60 * 60 * 1000
-                  ).toISOString(),
-                  today: localDay(new Date(now)),
-                  limit: READY_DRAFT_BATCH + this.readyDraftFailures.size
-                })
-              )
-                .filter(fresh)
-                .map((item) => ({ ...item, kind: 'sollecito' }))
-
-        if (wanted.length === 0) {
-          return
-        }
-
-        const key = await this.requireKey()
-        const accounts = await this.options.mail.listAccounts()
-        const notes = await store.listMemory()
-
-        for (const item of wanted.slice(0, READY_DRAFT_BATCH)) {
-          if (!(await this.prepareReadyDraft(item, key, accounts, notes))) {
-            return
-          }
-        }
-      }
-    } catch (error) {
-      logMainError('Segretario: preparing replies failed', error)
-    } finally {
-      this.preparing = false
-    }
-  }
-
-  private async prepareReadyDraft(
-    item: { accountId: string; messageKey: string; threadId: string; kind: ReadyDraftKind },
-    key: string,
-    accounts: ReadonlyArray<MailAccount>,
-    notes: ReadonlyArray<{ path: string; content: string }>
-  ): Promise<boolean> {
-    const failureKey = `${item.accountId}\u0000${item.messageKey}`
-
-    try {
-      const store = this.requireStore()
-      const account = accounts.find((candidate) => candidate.id === item.accountId)
-      const located = await this.options.mail.refForKey(item.accountId, item.messageKey)
-      const [note] = await store.getNotes([item])
-      const awaited =
-        item.kind === 'sollecito'
-          ? (await store.openCommitments(item.accountId, item.threadId)).filter(
-              (commitment) => commitment.kind === 'aspetti'
-            )
-          : undefined
-
-      if (!account || !located || !note) {
-        // Gone meanwhile: the account, the message, its note.
-        this.readyDraftFailures.set(failureKey, TRIAGE_ATTEMPTS)
-        return true
-      }
-
-      const own = new Set(accounts.map((candidate) => candidate.email.toLowerCase()))
-      const { target, thread, people, accountNote } = await this.conversationFor(
-        { ...item, ref: located.ref, dateIso: located.dateIso },
-        account,
-        own,
-        notes
-      )
-      // A reply is written to who wrote; a reminder to whom the user wrote.
-      const person = (item.kind === 'sollecito' ? target.to : target.from)[0]?.address
-      const examples = person ? await this.repliesTo(account, accounts, person) : []
-      const tu = notes.find((candidate) => candidate.path === 'tu.md')
-      const style = notes.find((candidate) => candidate.path === 'stile.md')
-
-      const result = await this.client.chat(key, {
-        messages: [
-          {
-            role: 'system',
-            content: [
-              item.kind === 'sollecito' ? PROMPTS.followUp : PROMPTS.readyDraft,
-              tu ? `# Chi è l'utente\n\n${tu.content.trim()}` : null,
-              style ? `# Come scrive l'utente\n\n${style.content.trim()}` : null
-            ]
-              .filter(Boolean)
-              .join('\n\n')
-          },
-          {
-            role: 'user',
-            content: readyDraftRequest({
-              today: new Date(),
-              accountEmail: account.email,
-              accountName: account.displayName,
-              accountNote: accountNote?.content ?? null,
-              people,
-              note: { summary: note.summary, due: note.due },
-              thread,
-              examples,
-              awaited,
-              topic: await this.topicAround(item.accountId, item.threadId)
-            })
-          }
-        ],
-        reasoningEffort: 'low',
-        // Reasoning counts against it: room for the thinking and a long reply.
-        maxTokens: 8000,
-        responseSchema: { name: 'risposta', schema: READY_DRAFT_SCHEMA }
-      })
-
-      await this.recordUsage(
-        null,
-        item.kind === 'sollecito' ? 'sollecito' : 'risposta-pronta',
-        result
-      )
-      const draft = parseReadyDraft(result.content)
-
-      await store.saveReadyDraft({ ...item, text: draft.text, doubts: draft.doubts })
-      this.readyDraftFailures.delete(failureKey)
-      this.emitNotes({
-        accountId: item.accountId,
-        messageKeys: [item.messageKey],
-        threadIds: [item.threadId]
-      })
-      return true
-    } catch (error) {
-      if (error instanceof SegretarioError) {
-        if (error.code === 'no-credit' || error.code === 'invalid-key') {
-          void this.checkKey()
-          return false
-        }
-
-        if (error.retryable) {
-          return false
-        }
-      }
-
-      const attempts = (this.readyDraftFailures.get(failureKey) ?? 0) + 1
-      this.readyDraftFailures.set(failureKey, attempts)
-
-      if (attempts === TRIAGE_ATTEMPTS) {
-        logMainError('Segretario: a reply could not be prepared', error, {
-          messageKey: item.messageKey
-        })
-      }
-
-      return true
-    }
-  }
-
-  /** The user's latest replies to someone from an account: how they write to them. */
-  private async repliesTo(
-    account: MailAccount,
-    accounts: ReadonlyArray<MailAccount>,
-    address: string
-  ): Promise<Array<{ date: string; subject: string; text: string }>> {
-    const mail = this.options.mail
-    const scope = searchScope(
-      accounts,
-      new Map([[account.id, await mail.listFolders(account.id)]]),
-      {
-        accounts: [account.email],
-        folder: 'inviata'
-      }
-    )
-    const hits = await searchMail(await mail.searchClient(), scope, {
-      text: `a:${address}`,
-      limit: READY_DRAFT_EXAMPLES
-    })
-    const examples: Array<{ date: string; subject: string; text: string }> = []
-
-    for (const hit of hits) {
-      const message = await mail.readMessage(hit.ref)
-      examples.push({
-        date: formatDateTime(message.date),
-        subject: message.subject,
-        text: withoutQuotedHistory(message.textForReading).text
-      })
-    }
-
-    return examples
-  }
-
-  /** What topics are called in this build: the extension's word, or "Argomenti". */
-  private topicsLabel(): string {
-    return extensionMain.assistant?.topicsLabel ?? 'Argomenti'
-  }
-
-  /**
-   * Files a conversation where triage said: a topic of the catalogue, a new
-   * one — made once, even when two conversations name it together — or
-   * none, which leaves any filing as it is.
-   */
-  private async fileIntoTopic(
-    accountId: string,
-    threadId: string,
-    answer: TriageResult['topic'],
-    catalog: CatalogTopic[],
-    /** The one topic the conversation names, if it names one alone: a pratica, by number or client. */
-    namedTopicId: string | null,
-    /** Whether the user takes part in the conversation: only such a one starts a topic. */
-    takesPart: () => Promise<boolean>
-  ): Promise<void> {
-    if (!answer) {
-      return
-    }
-
-    const topics = this.requireTopics()
-    let topicId: string | null = null
-
-    if ('key' in answer) {
-      topicId = catalog[Number(answer.key.slice(1)) - 1]?.id ?? null
-    } else {
-      // A "new" topic whose title names a known one — "Prat2451 – ordine" — is that one.
-      topicId =
-        catalog.find((topic) => topic.title.toLowerCase() === answer.create.toLowerCase())?.id ??
-        (await topics.extensionTopicNamedBy(answer.create))
-    }
-
-    // A pratica the conversation names beats a guess: a topic the Segretario made, or would make.
-    if (namedTopicId && topicId !== namedTopicId) {
-      const chosen = topicId ? await topics.getTopic(topicId) : null
-
-      if (!chosen || chosen.origin === 'segretario') {
-        topicId = namedTopicId
-      }
-    }
-
-    // A matter is one the user deals in: a service's notices, however they ask, start none.
-    if (!topicId && 'create' in answer && (await takesPart())) {
-      topicId = await topics.createTopic(answer.create, 'segretario')
-      catalog.push({
-        id: topicId,
-        title: answer.create,
-        description: null,
-        current: true,
-        names: []
-      })
-    }
-
-    if (topicId) {
-      await topics.link(accountId, threadId, topicId, 'segretario')
-    }
-  }
-
-  /**
-   * Where the topic of a conversation — a pratica — stands in its other
-   * conversations: the latest of each, and what is open in them. What is
-   * written there must not contradict what happened elsewhere. Null for a
-   * conversation in no topic.
-   */
-  private async topicAround(accountId: string, threadId: string): Promise<TopicAround | null> {
-    const topics = this.requireTopics()
-    const store = this.requireStore()
-    const filed = await topics.threadTopic(accountId, threadId)
-
-    if (!filed) {
-      return null
-    }
-
-    const others = (
-      await topics.threadsOf(filed.topic.id, await this.options.mail.includedAccountIds())
-    ).filter((other) => other.accountId !== accountId || other.threadId !== threadId)
-    const [notes, commitments] = await Promise.all([
-      store.latestNotes(others),
-      store.commitmentsOf(others)
-    ])
-
-    return {
-      title: filed.topic.title,
-      latest: notes
-        .filter((note) => note.state !== 'rumore')
-        .sort((a, b) => b.messageDate.localeCompare(a.messageDate))
-        .slice(0, TOPIC_AROUND_SHOWN)
-        .map((note) => ({ date: note.messageDate, summary: note.summary })),
-      open: commitments
-        .filter((commitment) => commitment.status === 'aperto')
-        .slice(-TOPIC_OPEN_SHOWN)
-    }
-  }
-
-  /**
-   * A message as the work done ahead reads it: the conversation up to it,
-   * what is known of the account and of the people involved.
-   */
-  private async conversationFor(
-    item: { ref: MessageRef; messageKey: string; threadId: string; dateIso: string },
-    account: MailAccount,
-    own: ReadonlySet<string>,
-    notes: ReadonlyArray<{ path: string; content: string }>
-  ): Promise<{
-    target: Awaited<ReturnType<SegretarioMailPort['readMessage']>>
-    thread: TriageMessage[]
-    people: Array<{ path: string; content: string }>
-    accountNote: { path: string; content: string } | undefined
-  }> {
-    const mail = this.options.mail
-    const target = await mail.readMessage(item.ref)
-    const earlier = (
-      await threadMessages(
-        await mail.searchClient(),
-        account.id,
-        item.threadId,
-        await mail.listFolders(account.id),
-        item.dateIso
-      )
-    ).filter((ref) => !(ref.folderPath === item.ref.folderPath && ref.uid === item.ref.uid))
-    const thread: TriageMessage[] = []
-
-    for (const ref of earlier.slice(-TRIAGE_EARLIER_MESSAGES)) {
-      const message = await mail.readMessage(ref)
-
-      if (message.messageKey !== item.messageKey) {
-        thread.push(triageMessage(message, false))
-      }
-    }
-
-    thread.push(triageMessage(target, true))
-
-    const addresses = new Set(
-      thread
-        .flatMap((message) => [...message.from, ...message.to, ...message.cc])
-        .map((address) => address.address.toLowerCase())
-        .filter((address) => !own.has(address))
-    )
-
-    return {
-      target,
-      thread,
-      people: notes
-        .filter(
-          (note) =>
-            note.path.startsWith('persone/') &&
-            [...addresses].some((address) => note.content.toLowerCase().includes(address))
-        )
-        .slice(0, TRIAGE_PEOPLE_NOTES),
-      accountNote: notes.find(
-        (note) => note.path === normalizeMemoryPath(`account/${account.email}`)
-      )
-    }
-  }
-
-  private async triageOne(
-    item: { ref: MessageRef; messageKey: string; threadId: string; dateIso: string },
-    key: string,
-    accounts: ReadonlyArray<MailAccount>,
-    notes: ReadonlyArray<{ path: string; content: string }>,
-    catalog: CatalogTopic[]
-  ): Promise<boolean> {
-    const failureKey = `${item.ref.accountId}\u0000${item.messageKey}`
-    const account = accounts.find((candidate) => candidate.id === item.ref.accountId)
-
-    if (!account) {
-      return true
-    }
-
-    const reading = Promise.withResolvers<void>()
-    let copies: string | null = null
-    // Once its note is kept, the message is read: what fails after is not read again.
-    let saved = false
-
-    try {
-      const store = this.requireStore()
-
-      // Come to another of the user's accounts too, and read there: the same note, nothing opened twice.
-      const elsewhere = await this.options.mail.sameMessageElsewhere(item.ref)
-      // Two copies read at once would both be read: one waits for the other, then copies it.
-      copies =
-        elsewhere.length > 0
-          ? [...elsewhere, { accountId: account.id, messageKey: item.messageKey }]
-              .map((copy) => `${copy.accountId}\u0000${copy.messageKey}`)
-              .sort()
-              .join('\u0001')
-          : null
-
-      while (copies && this.copiesBeingRead.has(copies)) {
-        await this.copiesBeingRead.get(copies)
-      }
-
-      // Taken at once, with nothing awaited since the look: no other copy slips in between.
-      if (copies) {
-        this.copiesBeingRead.set(copies, reading.promise)
-      }
-
-      const twin = await store.noteToCopy(elsewhere)
-
-      if (twin) {
-        const twinThread = elsewhere.find((copy) => copy.accountId === twin.accountId)
-        const note = {
-          ...twin,
-          accountId: account.id,
-          messageKey: item.messageKey,
-          threadId: item.threadId,
-          messageDate: item.dateIso,
-          twinAccountId: twin.accountId
-        }
-
-        await store.saveTriage(note, { opened: [], updated: [], closed: [] })
-        saved = true
-
-        if (twinThread) {
-          const [topicId] = await this.requireTopics().topicIdsOf([twinThread])
-
-          if (topicId) {
-            await this.requireTopics().link(account.id, item.threadId, topicId, 'segretario')
-          }
-        }
-
-        this.triageFailures.delete(failureKey)
-        this.options.onNoteWritten({ ...note, dismissedAt: null })
-        this.emitNotes({
-          accountId: account.id,
-          messageKeys: [item.messageKey],
-          threadIds: [item.threadId]
-        })
-        return true
-      }
-
-      const own = new Set(accounts.map((candidate) => candidate.email.toLowerCase()))
-      const { target, thread, people, accountNote } = await this.conversationFor(
-        item,
-        account,
-        own,
-        notes
-      )
-      const tu = notes.find((note) => note.path === 'tu.md')
-      const open = await store.openCommitments(account.id, item.threadId)
-      const fromUser = target.from.some((address) => own.has(address.address.toLowerCase()))
-      const topics = this.requireTopics()
-      const filed = await topics.threadTopic(account.id, item.threadId)
-      const filedIndex = filed ? catalog.findIndex((topic) => topic.id === filed.topic.id) : -1
-      const named = namedTopicIndexes(catalog, thread)
-      const topic = filed?.topic ?? (named.length === 1 ? catalog[named[0]] : null)
-      const others = topic
-        ? (await topics.threadsOf(topic.id, await this.options.mail.includedAccountIds())).filter(
-            (other) => other.accountId !== account.id || other.threadId !== item.threadId
-          )
-        : []
-      // What is open in the rest of its topic: the same thing is not opened twice in a pratica.
-      const openInTopic = (await store.commitmentsOf(others))
-        .filter((commitment) => commitment.status === 'aperto')
-        .slice(-TOPIC_OPEN_SHOWN)
-      // Read late, after the topic moved on: what it asked may be done or past.
-      const laterInTopic = (await store.latestNotes(others))
-        .filter((note) => note.messageDate > item.dateIso)
-        .sort((a, b) => b.messageDate.localeCompare(a.messageDate))
-        .slice(0, TOPIC_LATER_SHOWN)
-      // What is still open with the sender elsewhere, before or after it — read
-      // late, the repeat may be read before what it repeats: the same alert,
-      // the same request again.
-      const sender = deriveSenderKey(target.from)
-      const senderThreads =
-        fromUser || !sender
-          ? []
-          : (
-              await this.options.mail.threadsFromSender(
-                account.id,
-                sender,
-                new Date(Date.now() - TRIAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString(),
-                SENDER_THREADS_LOOKED
-              )
-            )
-              .filter(
-                (threadId) =>
-                  threadId !== item.threadId &&
-                  !others.some(
-                    (other) => other.accountId === account.id && other.threadId === threadId
-                  )
-              )
-              .map((threadId) => ({ accountId: account.id, threadId }))
-      const senderItems = (await store.commitmentsOf(senderThreads)).filter(
-        (commitment) => commitment.status === 'aperto'
-      )
-      const fromSender = (await store.latestNotes(senderThreads))
-        .filter(
-          (note) =>
-            note.dismissedAt === null &&
-            note.twinAccountId === null &&
-            (STILL_OPEN_STATES.has(note.state) ||
-              senderItems.some((commitment) => commitment.threadId === note.threadId))
-        )
-        .slice(0, SENDER_OPEN_SHOWN)
-        .map((note) => ({
-          note,
-          items: senderItems.filter((commitment) => commitment.threadId === note.threadId)
-        }))
-
-      const result = await this.client.chat(key, {
-        messages: [
-          {
-            role: 'system',
-            content: [
-              PROMPTS.triage,
-              tu ? `# Cosa sai dell'utente\n\n${tu.content.trim()}` : null,
-              topicCatalog(this.topicsLabel(), catalog)
-            ]
-              .filter(Boolean)
-              .join('\n\n')
-          },
-          {
-            role: 'user',
-            content: triageRequest({
-              today: new Date(),
-              accountEmail: account.email,
-              accountName: account.displayName,
-              otherAccounts: accounts
-                .filter((candidate) => candidate.id !== account.id)
-                .map((candidate) => candidate.email),
-              accountNote: accountNote?.content ?? null,
-              fromUser,
-              people,
-              open,
-              thread,
-              named: named.map((index) => namedTopicLine(catalog, index)),
-              openInTopic:
-                topic && openInTopic.length > 0 ? { title: topic.title, items: openInTopic } : null,
-              fromSender:
-                fromSender.length > 0
-                  ? {
-                      sender,
-                      conversations: fromSender.map(({ note, items }) => ({
-                        date: note.messageDate,
-                        summary: note.summary,
-                        items
-                      }))
-                    }
-                  : null,
-              laterInTopic:
-                topic && laterInTopic.length > 0
-                  ? {
-                      title: topic.title,
-                      notes: laterInTopic.map((note) => ({
-                        date: note.messageDate,
-                        summary: note.summary
-                      }))
-                    }
-                  : null,
-              topicsLabel: this.topicsLabel(),
-              currentTopic:
-                filed && filedIndex >= 0
-                  ? {
-                      key: `T${filedIndex + 1}`,
-                      title: filed.topic.title,
-                      byUser: filed.linkedBy === 'utente'
-                    }
-                  : null
-            })
-          }
-        ],
-        // A moment's thought where something is open already: telling the same
-        // obligation in other words, or made precise, from a new one takes it.
-        // Reasoning counts against the tokens.
-        ...(open.length > 0 ||
-        openInTopic.length > 0 ||
-        laterInTopic.length > 0 ||
-        fromSender.length > 0
-          ? { reasoningEffort: 'low' as const, maxTokens: 4000 }
-          : { reasoningEffort: 'none' as const, maxTokens: 1000 }),
-        responseSchema: { name: 'nota', schema: TRIAGE_SCHEMA }
-      })
-
-      await this.recordUsage(null, 'smistamento', result)
-      const triage = parseTriage(result.content)
-      // It touches only what it was shown: the conversation's open things, its topic's, the sender's.
-      const shownElsewhere = [...openInTopic, ...fromSender.flatMap(({ items }) => items)]
-      const touchable = (id: number): boolean =>
-        open.some((commitment) => commitment.id === id) ||
-        shownElsewhere.some((commitment) => commitment.id === id)
-      // Noise carries no matter, whatever it seems to repeat.
-      const repeated = [...new Set(triage.state === 'rumore' ? [] : triage.repeats)].flatMap(
-        (place) =>
-          fromSender[place]
-            ? [
-                {
-                  threadId: fromSender[place].note.threadId,
-                  messageKey: fromSender[place].note.messageKey,
-                  messageDate: fromSender[place].note.messageDate
-                }
-              ]
-            : []
-      )
-
-      const carried = await store.saveTriage(
-        {
-          accountId: account.id,
-          messageKey: item.messageKey,
-          threadId: item.threadId,
-          direction: fromUser ? 'out' : 'in',
-          summary: triage.summary,
-          state: triage.state,
-          priority: triage.priority,
-          reason: triage.reason,
-          due: triage.due,
-          messageDate: item.dateIso,
-          twinAccountId: null
-        },
-        {
-          // What it says of the message holds: noise opens nothing, and what is
-          // only to know asks nothing of the user — at most something awaited.
-          opened:
-            triage.state === 'rumore'
-              ? []
-              : triage.state === 'informativo'
-                ? triage.opened.filter((item) => item.kind === 'aspetti')
-                : triage.opened,
-          updated: triage.updated.filter((change) => touchable(change.id)),
-          closed: triage.closed.filter(touchable),
-          repeated
-        }
-      )
-      saved = true
-      // Other conversations changed — things closed or made precise there, or now carried here: their readers follow.
-      for (const changed of shownElsewhere.filter(
-        (commitment) =>
-          triage.closed.includes(commitment.id) ||
-          triage.updated.some((change) => change.id === commitment.id)
-      )) {
-        this.emitNotes({
-          accountId: changed.accountId,
-          messageKeys: [],
-          threadIds: [changed.threadId]
-        })
-      }
-      for (const conversation of carried) {
-        this.emitNotes({
-          accountId: account.id,
-          messageKeys: [conversation.messageKey],
-          threadIds: [conversation.threadId]
-        })
-      }
-      // Noise belongs to no matter, whatever words it shares with one.
-      if (triage.state !== 'rumore') {
-        await this.fileIntoTopic(
-          account.id,
-          item.threadId,
-          triage.topic,
-          catalog,
-          named.length === 1 ? catalog[named[0]].id : null,
-          async () => {
-            const senders = [
-              ...new Set(
-                thread.flatMap((message) =>
-                  message.from.map((address) => address.address.toLowerCase())
-                )
-              )
-            ]
-            // They wrote in it, or have written to who did.
-            return (
-              senders.some((address) => own.has(address)) ||
-              (await this.options.mail.userWroteTo(senders))
-            )
-          }
-        )
-      }
-      this.triageFailures.delete(failureKey)
-      this.options.onNoteWritten({
-        accountId: account.id,
-        messageKey: item.messageKey,
-        threadId: item.threadId,
-        direction: fromUser ? 'out' : 'in',
-        summary: triage.summary,
-        state: triage.state,
-        priority: triage.priority,
-        reason: triage.reason,
-        due: triage.due,
-        messageDate: item.dateIso,
-        dismissedAt: null,
-        twinAccountId: null
-      })
-      this.emitNotes({
-        accountId: account.id,
-        messageKeys: [item.messageKey],
-        threadIds: [item.threadId]
-      })
-      return true
-    } catch (error) {
-      // Not the message's fault: the network, OpenRouter, the key. It waits for the next look.
-      if (error instanceof SegretarioError) {
-        if (error.code === 'no-credit' || error.code === 'invalid-key') {
-          void this.checkKey()
-          return false
-        }
-
-        if (error.retryable && !saved) {
-          return false
-        }
-      }
-
-      if (saved) {
-        logMainError('Segretario: a note was kept, what follows it failed', error, {
-          messageKey: item.messageKey
-        })
-        this.triageFailures.delete(failureKey)
-        return true
-      }
-
-      const attempts = (this.triageFailures.get(failureKey) ?? 0) + 1
-      this.triageFailures.set(failureKey, attempts)
-
-      if (attempts === TRIAGE_ATTEMPTS) {
-        logMainError('Segretario: a message could not be annotated', error, {
-          messageKey: item.messageKey
-        })
-      }
-
-      return true
-    } finally {
-      if (copies && this.copiesBeingRead.get(copies) === reading.promise) {
-        this.copiesBeingRead.delete(copies)
-      }
-
-      reading.resolve()
-    }
-  }
-
-  /* ──────────────────────────────── its memory ──────────────────────────────── */
-
-  async listMemory(): Promise<MemoryNote[]> {
-    return (await this.requireStore().listMemory()).map((note) => ({
-      path: note.path,
-      content: note.content,
-      updatedAt: note.updatedAt
-    }))
-  }
-
-  /** A note as the user corrected it. */
-  async writeMemory(path: string, content: string): Promise<MemoryNote[]> {
-    if (content.length > MAX_NOTE_CHARS) {
-      throw new Error('La nota è troppo lunga: dividila in più note.')
-    }
-
-    await this.requireStore().writeMemory(normalizeMemoryPath(path), content)
-    return this.listMemory()
-  }
-
-  async deleteMemory(path: string): Promise<MemoryNote[]> {
-    await this.requireStore().deleteMemory(normalizeMemoryPath(path))
-    return this.listMemory()
-  }
-
-  /** Forgets everything it learnt, and begins getting to know every account again. */
-  async forgetEverything(): Promise<void> {
-    const store = this.requireStore()
-
-    for (const running of this.running.values()) {
-      if (running.kind !== 'richiesta') {
-        running.controller.abort()
-      }
-    }
-
-    await store.clearMemory()
-    await store.resetLearning()
-    void this.considerOwnWork()
-  }
-
-  /* ──────────────────────── getting to know the user ──────────────────────── */
-
-  /** When "Al passo" last began: the memory brought up to date with the mail. */
-  async lastKeptUpAt(): Promise<number | null> {
-    return this.requireStore().lastActivityAt('aggiornamento')
-  }
-
-  async listLearning(): Promise<AccountLearning[]> {
-    const accounts = await this.options.mail.listAccounts()
-    const rows = new Map(
-      (await this.requireStore().listLearning()).map((row) => [row.accountId, row])
-    )
-
-    return accounts.map((account) => {
-      const row = rows.get(account.id)
-      const state: AccountLearning['state'] = !row
-        ? 'waiting'
-        : row.finishedAt !== null
-          ? 'done'
-          : row.activityId && this.running.has(row.activityId)
-            ? 'running'
-            : 'stopped'
-
-      return {
-        accountId: account.id,
-        email: account.email,
-        state,
-        activityId: row?.activityId ?? null,
-        finishedAt: row?.finishedAt ?? null
-      }
-    })
-  }
-
-  /** Gets to know an account again, from the start. */
-  async relearnAccount(accountId: string): Promise<AccountLearning[]> {
-    const store = this.requireStore()
-    const row = (await store.listLearning()).find((item) => item.accountId === accountId)
-
-    if (row?.activityId) {
-      this.running.get(row.activityId)?.controller.abort()
-    }
-
-    await store.resetLearning(accountId)
-    void this.considerOwnWork()
-    return this.listLearning()
-  }
-
-  /**
-   * A draft went out. When the Segretario had written it, what the user
-   * changed — or that they changed nothing — is kept for the next
-   * reflection.
-   */
-  async draftSent(draftId: string, writtenText: string): Promise<void> {
-    const store = this.requireStore()
-    const draft = await store.takeDraft(draftId)
-
-    if (!draft || (await store.getPreferences()).learning !== true) {
-      return
-    }
-
-    if (comparableText(draft.text) === comparableText(writtenText)) {
-      await store.addLesson('confermata', { accountId: draft.accountId })
-    } else {
-      await store.addLesson('correzione', {
-        accountId: draft.accountId,
-        written: draft.text,
-        sent: writtenText
-      })
-    }
-  }
-
-  /** An account was removed: what was learnt about it alone goes, and the next reflection hears of it. */
-  async forgetAccount(accountId: string, email: string): Promise<void> {
-    const store = this.requireStore()
-    const row = (await store.listLearning()).find((item) => item.accountId === accountId)
-
-    if (row?.activityId) {
-      this.running.get(row.activityId)?.controller.abort()
-    }
-
-    await store.forgetAccount(accountId, normalizeMemoryPath(`account/${email}`))
-    await this.requireTopics().forgetAccount(accountId)
-
-    if ((await store.getPreferences()).learning === true) {
-      await store.addLesson('account-rimosso', { email })
-    }
-  }
-
-  /* ───────────────────────── work it begins itself ───────────────────────── */
-
-  /**
-   * Begins what it does on its own, one thing at a time, when it may: a key
-   * that answers and the user's yes to learning. First it gets to know each
-   * account whose recent mail is indexed; then, with corrections to learn
-   * from and the user not waiting on it, it reflects.
-   */
-  private async considerOwnWork(): Promise<void> {
-    if (this.consideringOwnWork || !this.store || this.status.keyState !== 'ready') {
-      return
-    }
-
-    this.consideringOwnWork = true
-
-    try {
-      const running = [...this.running.values()].map((activity) => activity.kind)
-
-      if (
-        (await this.store.getPreferences()).learning !== true ||
-        running.includes('conoscerti') ||
-        running.includes('riflessione') ||
-        running.includes('aggiornamento')
-      ) {
-        return
-      }
-
-      // One thing at a time, and never while the user is asking something.
-      if (
-        !(await this.beginLearning()) &&
-        !running.includes('richiesta') &&
-        !(await this.beginReflection())
-      ) {
-        await this.beginKeepingUp()
-      }
-    } catch (error) {
-      logMainError('Segretario: own work could not begin', error)
-    } finally {
-      this.consideringOwnWork = false
-    }
-  }
-
-  private async beginLearning(): Promise<boolean> {
-    const store = this.requireStore()
-    const accounts = await this.options.mail.listAccounts()
-    const rows = new Map((await store.listLearning()).map((row) => [row.accountId, row]))
-
-    for (const account of accounts) {
-      if (
-        rows.has(account.id) ||
-        !(await this.options.mail.recentMailIndexed(account.id, LEARNING_READY_DAYS))
-      ) {
-        continue
-      }
-
-      const known = accounts.filter(
-        (other) => other.id !== account.id && rows.get(other.id)?.finishedAt
-      )
-      const id = await this.beginOwnActivity(
-        'conoscerti',
-        `Conoscerti · ${account.email}`,
-        `Comincio a conoscerti da ${account.email}: leggo la posta che hai scritto e prendo appunti.`,
-        fillTemplate(PROMPTS.learning, {
-          account: account.email,
-          nome: account.displayName,
-          altri_account:
-            known.length > 0
-              ? `Conosci già ${known.map((other) => other.email).join(', ')}: rileggi le loro note prima di scrivere, perché tutto resti coerente.`
-              : ''
-        })
-      )
-
-      await store.startLearning(account.id, id)
-      void this.runTurn(id)
-      return true
-    }
-
-    return false
-  }
-
-  private async beginReflection(): Promise<boolean> {
-    const store = this.requireStore()
-    const lessons = (await store.pendingLessons()).slice(0, LESSONS_PER_REFLECTION)
-    const last = await store.lastActivityAt('riflessione')
-
-    if (
-      !lessons.some((lesson) => lesson.kind !== 'confermata') ||
-      (last !== null && Date.now() - last < REFLECTION_INTERVAL_MS)
-    ) {
-      return false
-    }
-
-    const emails = new Map(
-      (await this.options.mail.listAccounts()).map((account) => [account.id, account.email])
-    )
-    const confirmed = new Map<string, number>()
-    const parts: string[] = []
-
-    for (const lesson of lessons) {
-      const payload = lesson.payload as {
-        accountId?: string
-        email?: string
-        written?: string
-        sent?: string
-      }
-      const from = emails.get(payload.accountId ?? '') ?? 'un account rimosso'
-      const when = formatDateTime(new Date(lesson.createdAt).toISOString())
-
-      switch (lesson.kind) {
-        case 'correzione':
-          parts.push(
-            [
-              `## Bozza da ${from}, mandata ${when}`,
-              'Avevi scritto:',
-              quoteBlock(payload.written ?? ''),
-              "L'utente ha mandato:",
-              quoteBlock(payload.sent ?? '')
-            ].join('\n\n')
-          )
-          break
-        case 'confermata':
-          confirmed.set(from, (confirmed.get(from) ?? 0) + 1)
-          break
-        case 'account-rimosso':
-          parts.push(`## Account rimosso\n\n${payload.email} è stato rimosso ${when}.`)
-          break
-      }
-    }
-
-    for (const [from, count] of confirmed) {
-      parts.push(
-        `## Bozze mandate così com'erano\n\n${count === 1 ? 'Una bozza' : `${count} bozze`} da ${from}.`
-      )
-    }
-
-    const id = await this.beginOwnActivity(
-      'riflessione',
-      'Riflessione',
-      'Rimetto in ordine quello che ho imparato dalle ultime bozze che hai mandato.',
-      fillTemplate(PROMPTS.reflection, { materiale: parts.join('\n\n') })
-    )
-
-    await store.claimLessons(
-      lessons.map((lesson) => lesson.id),
-      id
-    )
-    void this.runTurn(id)
-    return true
-  }
-
-  /**
-   * Keeps the memory up with the mail: about once a day, when enough has
-   * been read since the last time, the notes it wrote on what matters —
-   * who wrote, about what — go to work that updates what it knows of the
-   * people, the accounts and the user. Once every account is known.
-   */
-  private async beginKeepingUp(): Promise<boolean> {
-    const store = this.requireStore()
-    const accounts = await this.options.mail.listAccounts()
-    const learnt = new Map((await store.listLearning()).map((row) => [row.accountId, row]))
-    const known = accounts.map((account) => learnt.get(account.id)?.finishedAt ?? null)
-
-    if (known.length === 0 || known.some((finishedAt) => finishedAt === null)) {
-      return false
-    }
-
-    const last = await store.lastActivityAt('aggiornamento')
-
-    if (last !== null && Date.now() - last < KEEP_UP_INTERVAL_MS) {
-      return false
-    }
-
-    const since = last ?? Math.max(...known.map(Number))
-    const { notes, total } = await store.notesWrittenSince(since, KEEP_UP_NOTES_SHOWN)
-
-    if (total < KEEP_UP_MIN_NOTES) {
-      return false
-    }
-
-    const sections: string[] = []
-
-    for (const account of accounts) {
-      const ofAccount = notes.filter((note) => note.accountId === account.id)
-
-      if (ofAccount.length === 0) {
-        continue
-      }
-
-      const summaries = await this.options.mail.messageSummaries(
-        account.id,
-        ofAccount.map((note) => note.messageKey)
-      )
-
-      sections.push(
-        [
-          `## ${account.email}`,
-          ...ofAccount.map((note) => {
-            const from = summaries.get(note.messageKey)?.from ?? []
-            const who = note.direction === 'out' ? "scritto dall'utente" : formatAddresses(from, 1)
-            return `- ${formatDateTime(note.messageDate)} · ${who} · ${note.state.replace('_', ' ')}: ${note.summary}`
-          })
-        ].join('\n')
-      )
-    }
-
-    const id = await this.beginOwnActivity(
-      'aggiornamento',
-      'Al passo',
-      'Rileggo la posta degli ultimi giorni e aggiorno quello che so di te e delle persone.',
-      fillTemplate(PROMPTS.keepingUp, {
-        dal: formatDateTime(new Date(since).toISOString()),
-        materiale: `${sections.join('\n\n')}${
-          total > notes.length ? `\n\n(Le più recenti ${notes.length} di ${total}.)` : ''
-        }`
-      })
-    )
-
-    void this.runTurn(id)
-    return true
-  }
-
-  /** An activity it began on its own, with the goal it set out with. */
-  private async beginOwnActivity(
-    kind: ActivityKind,
-    title: string,
-    shown: string,
-    goal: string
-  ): Promise<string> {
-    const store = this.requireStore()
-    const id = randomUUID()
-    const summary = await store.createActivity({ id, kind, title, status: 'running' })
-
-    this.emit({ type: 'summary', activity: summary })
-    await store.appendEvent<ContextPayload>(id, 'context', { text: await this.contextBlock() })
-    const event = await store.appendEvent<UserPayload>(id, 'user', {
-      text: shown,
-      forModel: `[${formatDateTime(new Date().toISOString())}]\n\n${goal}`,
-      handles: [],
-      origin: 'segretario'
-    })
-
-    this.emitEntry(id, event)
-    return id
-  }
-
-  /** What follows from the end of work it began itself. */
-  private async afterOwnWork(id: string, kind: ActivityKind, ended: ActivityStatus): Promise<void> {
-    const store = this.requireStore()
-
-    switch (kind) {
-      case 'conoscerti':
-        // Stopped by the user, it waits for them; failed, it begins again later.
-        if (ended !== 'cancelled') {
-          await store.endLearning(id, ended === 'done')
-        }
-        return
-      case 'riflessione':
-        await store.endReflection(id, ended === 'done')
-        return
-      // When it began is what says when it is due again (`beginKeepingUp`).
-      case 'aggiornamento':
-      case 'richiesta':
-        return
-    }
-  }
-
   private emit(event: ActivityEvent): void {
     this.options.send(SEGRETARIO_IPC.activityEvent, event)
   }
 
-  private async emitSummary(id: string): Promise<void> {
-    const summary = await this.requireStore().getActivity(id)
-
-    if (summary) {
-      this.emit({ type: 'summary', activity: summary })
-    }
-  }
-
-  private emitEntry(activityId: string, event: StoredEvent): void {
-    const entry = entryOf(event)
-
-    if (entry) {
-      this.emit({ type: 'entry', activityId, entry })
-    }
-  }
-
-  /**
-   * The context block an activity begins with (`contesto.md`): the date,
-   * the accounts, the memory's index and its core notes, with the note of
-   * each account. The model reads the rest of the memory when it needs it.
-   */
-  private async contextBlock(): Promise<string> {
-    const store = this.requireStore()
-    const [accounts, signatures] = await Promise.all([
-      this.options.mail.listAccounts(),
-      this.options.mail.accountSignatures()
-    ])
-    const notes = await store.listMemory()
-    const now = new Date()
-    const accountNotes = notes.filter((note) => note.path.startsWith('account/'))
-    const core = [
-      ...CORE_NOTES.map((path) => notes.find((note) => note.path === path)).filter(
-        (note): note is NonNullable<typeof note> => note !== undefined
-      ),
-      ...accountNotes
-    ]
-
-    return fillTemplate(PROMPTS.context, {
-      data: new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(now),
-      ora: new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(now),
-      fuso: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      account:
-        accounts.length === 0
-          ? '(nessun account)'
-          : accounts
-              .map((account) => {
-                const signature = signatures.get(account.id)
-                return [
-                  `- ${account.email} — ${account.displayName}`,
-                  signature
-                    ? `  Firma dell'utente da questo account: «${clip(signature.replace(/\s+/g, ' '), 400).text}»`
-                    : '  Nessuna firma per questo account.'
-                ].join('\n')
-              })
-              .join('\n'),
-      indice_memoria: await memoryIndex(store),
-      note_principali: core.map((note) => `### ${note.path}\n\n${note.content.trim()}`).join('\n\n')
-    })
-  }
-
-  /**
-   * The user's words, with the moment and what they are looking at, as the
-   * model reads them — and as it returns them.
-   */
+  /** The user's words, with the moment and what they are looking at, as the model reads them. */
   private async appendUserMessage(
     id: string,
     text: string,
     context: SegretarioContext
   ): Promise<string> {
-    const store = this.requireStore()
+    const { store } = this.db
     const handles = new HandleRegistry(handleRecords(await store.listEvents(id)))
     const added: HandleRecord[] = []
-    const lines = [`[${formatDateTime(new Date().toISOString())}]`]
+    const lines = [nowLine()]
 
     if (context.messages.length > 0) {
       const described = await this.describeMessages(context.messages, handles, added)
       lines.push(
         context.messages.length === 1
-          ? `L'utente sta guardando: ${described[0]}`
+          ? `L'utente sta guardando: ${described[0] ?? 'un messaggio'}`
           : `L'utente ha selezionato ${context.messages.length} messaggi:\n${described.map((line) => `- ${line}`).join('\n')}`
       )
     } else if (context.folderLabel) {
@@ -3184,8 +1967,12 @@ export class SegretarioService {
       forModel,
       handles: added
     })
+    const entry = entryOf(event)
 
-    this.emitEntry(id, event)
+    if (entry) {
+      this.emit({ type: 'entry', activityId: id, entry })
+    }
+
     return forModel
   }
 
@@ -3210,11 +1997,7 @@ export class SegretarioService {
     return lines
   }
 
-  /**
-   * A short title for the activity, written by the model while it starts
-   * working, from the request as the model reads it: "riassumimi" says
-   * little without the message the user was looking at.
-   */
+  /** A short title for a conversation, from the request as the model reads it. */
   private async nameActivity(id: string, request: string): Promise<void> {
     try {
       const key = await this.requireKey()
@@ -3234,300 +2017,14 @@ export class SegretarioService {
         .slice(0, 80)
 
       if (title) {
-        await this.requireStore().updateActivity(id, { title })
-        await this.emitSummary(id)
+        const summary = await this.db.store.updateActivity(id, { title })
+
+        if (summary) {
+          this.emit({ type: 'summary', activity: summary })
+        }
       }
     } catch (error) {
       logMainError('Naming an activity failed', error)
-    }
-  }
-
-  /**
-   * One turn of an activity: the model works until it has nothing left to
-   * call — or the user stops it, or it needs them.
-   */
-  private async runTurn(id: string): Promise<void> {
-    const store = this.requireStore()
-    const kind = (await store.getActivity(id))?.kind ?? 'richiesta'
-    const activity: RunningActivity = {
-      kind,
-      controller: new AbortController(),
-      approvals: new Map(),
-      failedCalls: new Set()
-    }
-    let ended: ActivityStatus = 'failed'
-    const { signal } = activity.controller
-    this.running.set(id, activity)
-    await store.updateActivity(id, { status: 'running' })
-    await this.emitSummary(id)
-
-    try {
-      const key = await this.requireKey()
-      const tools = toolDefinitions(this.tools)
-
-      for (let step = 0; step < MAX_STEPS_PER_TURN; step += 1) {
-        const events = await store.listEvents(id)
-        const handles = new HandleRegistry(handleRecords(events))
-        let streamed = ''
-        let flushTimer: ReturnType<typeof setTimeout> | null = null
-
-        const result = await this.client.chat(
-          key,
-          {
-            messages: buildConversation(PROMPTS.system, events),
-            tools,
-            reasoningEffort: 'low',
-            maxTokens: MAX_TOKENS_PER_TURN,
-            sessionId: id
-          },
-          {
-            signal,
-            onText: (text) => {
-              streamed += text
-              flushTimer ??= setTimeout(() => {
-                flushTimer = null
-                this.emit({ type: 'stream', activityId: id, text: streamed })
-              }, STREAM_FLUSH_MS)
-            }
-          }
-        )
-
-        if (flushTimer) {
-          clearTimeout(flushTimer)
-        }
-
-        await this.recordUsage(id, 'attivita', result)
-        const assistant = await store.appendEvent<AssistantPayload>(id, 'assistant', {
-          content: result.content,
-          toolCalls: result.toolCalls,
-          reasoningDetails: result.reasoningDetails
-        })
-
-        this.emit({ type: 'stream', activityId: id, text: '' })
-        this.emitEntry(id, assistant)
-
-        if (result.toolCalls.length === 0) {
-          break
-        }
-
-        await Promise.all(result.toolCalls.map((call) => this.runTool(id, call, handles, activity)))
-        await this.manageContext(id, key, result.usage.promptTokens, signal)
-
-        if (step === MAX_STEPS_PER_TURN - 1) {
-          const event = await store.appendEvent<ErrorPayload>(id, 'error', {
-            code: 'too-long',
-            message:
-              'Mi sono fermato: il lavoro stava richiedendo troppi passaggi. Dimmi come proseguire.'
-          })
-          this.emitEntry(id, event)
-        }
-      }
-
-      // A reflection, or keeping up with the mail, is quiet work on its memory:
-      // there to read, never waiting to be seen.
-      await store.updateActivity(id, {
-        status: 'done',
-        unseen: kind !== 'riflessione' && kind !== 'aggiornamento'
-      })
-      ended = 'done'
-    } catch (raw) {
-      const error = raw instanceof SegretarioError ? raw : null
-
-      if (signal.aborted || error?.code === 'cancelled') {
-        await store.updateActivity(id, { status: 'cancelled' })
-        ended = 'cancelled'
-      } else {
-        const message =
-          error?.message ??
-          (raw instanceof Error ? raw.message : 'Qualcosa è andato storto mentre lavoravo.')
-
-        if (!error) {
-          logMainError('Segretario activity failed', raw, { activityId: id })
-        }
-
-        const event = await store.appendEvent<ErrorPayload>(id, 'error', {
-          code: error?.code ?? 'internal',
-          message
-        })
-        this.emitEntry(id, event)
-        await store.updateActivity(id, { status: 'failed', unseen: true })
-
-        if (error?.code === 'no-credit' || error?.code === 'invalid-key') {
-          void this.checkKey()
-        }
-      }
-    } finally {
-      for (const approval of activity.approvals.values()) {
-        approval.reject(new SegretarioError('cancelled', 'Interrotto.'))
-      }
-
-      this.running.delete(id)
-      await this.emitSummary(id)
-      await this.afterOwnWork(id, kind, ended)
-      void this.considerOwnWork()
-    }
-  }
-
-  private async runTool(
-    activityId: string,
-    call: ToolCall,
-    handles: HandleRegistry,
-    activity: RunningActivity
-  ): Promise<void> {
-    const store = this.requireStore()
-    const tool = this.toolsByName.get(call.function.name)
-    let args: Record<string, unknown> = {}
-    let argsProblem: string | null = null
-
-    try {
-      const parsed = call.function.arguments.trim() ? JSON.parse(call.function.arguments) : {}
-      args = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
-    } catch {
-      argsProblem = 'Gli argomenti non sono JSON valido: riprova.'
-    }
-
-    const payload: ToolPayload = {
-      callId: call.id,
-      name: call.function.name,
-      args,
-      status: 'running',
-      summary: tool ? tool.running(args) : call.function.name,
-      handles: []
-    }
-    const event = await store.appendEvent(activityId, 'tool', payload)
-    this.emitEntry(activityId, event)
-
-    const finish = async (changes: Partial<ToolPayload>): Promise<void> => {
-      Object.assign(payload, changes)
-      await store.updateEvent(event.id, payload)
-      this.emitEntry(activityId, { ...event, payload })
-    }
-
-    if (!tool || argsProblem) {
-      await finish({
-        status: 'error',
-        summary: tool ? 'Argomenti non validi' : `Strumento sconosciuto: ${call.function.name}`,
-        result: argsProblem ?? `Non esiste lo strumento «${call.function.name}».`
-      })
-      return
-    }
-
-    // A call that failed, made again as it was, fails again: said so instead of tried.
-    const signature = `${tool.name}\u0000${JSON.stringify(
-      Object.keys(args)
-        .sort()
-        .map((name) => [name, args[name]])
-    )}`
-
-    if (activity.failedCalls.has(signature)) {
-      await finish({
-        status: 'error',
-        summary: 'Già provato così',
-        result:
-          "Hai già fatto esattamente questa chiamata e non è riuscita: non ripeterla uguale. Rileggi l'errore, rifalla con tutti gli argomenti che servono, o chiedi all'utente."
-      })
-      return
-    }
-
-    const context: ToolContext = {
-      activityId,
-      signal: activity.controller.signal,
-      handles,
-      newHandles: [],
-      mail: this.options.mail,
-      work: this.workPort,
-      calendar: this.options.calendar,
-      store,
-      page: {
-        compose: (spec, signal) => this.requestCompose(spec, signal),
-        show: (request: ShowRequest) => this.options.send(SEGRETARIO_IPC.showRequest, request)
-      },
-      requestApproval: (request) => this.requestApproval(activityId, call.id, request, activity)
-    }
-
-    try {
-      const outcome = await tool.execute(args, context)
-
-      if (outcome.failed) {
-        activity.failedCalls.add(signature)
-      }
-
-      await finish({
-        status: outcome.failed ? 'error' : 'done',
-        summary: outcome.summary,
-        result: outcome.content,
-        messages: outcome.messages,
-        files: outcome.files,
-        handles: context.newHandles
-      })
-    } catch (error) {
-      if (error instanceof SegretarioError && error.code === 'cancelled') {
-        await finish({ status: 'error', summary: 'Interrotto', result: 'Interrotto.' })
-        throw error
-      }
-
-      const message = error instanceof Error ? error.message : String(error)
-      activity.failedCalls.add(signature)
-
-      if (!(error instanceof ToolInputError)) {
-        logMainError(`Segretario tool ${tool.name} failed`, error, { activityId })
-      }
-
-      await finish({
-        status: 'error',
-        summary: `Non riuscito: ${message.slice(0, 120)}`,
-        result: `Errore: ${message}`,
-        handles: context.newHandles
-      })
-    }
-  }
-
-  private async requestApproval(
-    activityId: string,
-    callId: string,
-    request: Omit<ApprovalPayload, 'approvalId' | 'status' | 'callId'>,
-    activity: RunningActivity
-  ): Promise<{ approved: boolean; outcome?: SendOutcome }> {
-    const store = this.requireStore()
-    const payload: ApprovalPayload = {
-      ...request,
-      approvalId: randomUUID(),
-      status: 'pending',
-      callId
-    }
-    const event = await store.appendEvent(activityId, 'approval', payload)
-    this.emitEntry(activityId, event)
-    await store.updateActivity(activityId, { status: 'waiting', unseen: true })
-    await this.emitSummary(activityId)
-
-    try {
-      const answer = await new Promise<{ approved: boolean; outcome?: SendOutcome }>(
-        (resolve, reject) => {
-          activity.approvals.set(payload.approvalId, {
-            eventId: event.id,
-            payload,
-            resolve,
-            reject
-          })
-          activity.controller.signal.addEventListener(
-            'abort',
-            () => reject(new SegretarioError('cancelled', 'Interrotto.')),
-            { once: true }
-          )
-        }
-      )
-
-      payload.status = answer.approved ? 'approved' : 'rejected'
-      return answer
-    } catch (error) {
-      payload.status = 'rejected'
-      throw error
-    } finally {
-      activity.approvals.delete(payload.approvalId)
-      await store.updateEvent(event.id, payload)
-      this.emitEntry(activityId, { ...event, payload })
-      await store.updateActivity(activityId, { status: 'running' })
-      await this.emitSummary(activityId)
     }
   }
 
@@ -3558,208 +2055,5 @@ export class SegretarioService {
       )
       this.options.send(SEGRETARIO_IPC.composeRequest, { requestId, spec })
     })
-  }
-
-  /**
-   * Keeps what the model reads within reach: past a size, old tool results
-   * are cleared in one stroke; past a larger one, the older part of the
-   * conversation is summarised (`compattazione.md`) and the summary takes
-   * its place. The log keeps everything.
-   */
-  private async manageContext(
-    id: string,
-    key: string,
-    promptTokens: number,
-    signal: AbortSignal
-  ): Promise<void> {
-    const store = this.requireStore()
-
-    if (promptTokens >= COMPACT_AT) {
-      const events = await store.listEvents(id)
-      const result = await this.client.chat(
-        key,
-        {
-          messages: [
-            ...buildConversation(PROMPTS.system, events),
-            { role: 'user', content: PROMPTS.compaction }
-          ],
-          tools: toolDefinitions(this.tools),
-          toolChoice: 'none',
-          reasoningEffort: 'low',
-          maxTokens: 8_000,
-          sessionId: id
-        },
-        { signal }
-      )
-
-      await this.recordUsage(id, 'compattazione', result)
-      const event = await store.appendEvent<CompactionPayload>(id, 'compaction', {
-        summary: result.content.trim(),
-        coveredUntil: events[events.length - 1]?.id ?? 0
-      })
-      this.emitEntry(id, event)
-      return
-    }
-
-    if (promptTokens >= CLEAR_TOOL_RESULTS_AT) {
-      const events = await store.listEvents(id)
-      const cleared = events
-        .filter((event) => event.type === 'clearing')
-        .reduce(
-          (boundary, event) => Math.max(boundary, (event.payload as ClearingPayload).before),
-          0
-        )
-      const tools = events.filter((event) => event.type === 'tool' && event.id >= cleared)
-
-      if (tools.length > RECENT_TOOL_RESULTS_KEPT) {
-        await store.appendEvent<ClearingPayload>(id, 'clearing', {
-          before: tools[tools.length - RECENT_TOOL_RESULTS_KEPT].id
-        })
-      }
-    }
-  }
-}
-
-function firstLine(text: string): string {
-  const line = text.trim().split('\n')[0] ?? ''
-  return line.length > 60 ? `${line.slice(0, 57)}…` : line || 'Nuovo lavoro'
-}
-
-/** The names an event gave, as the page links them. */
-function handleLinks(records: ReadonlyArray<HandleRecord> | undefined): HandleLink[] {
-  return (records ?? []).map(({ handle, target }): HandleLink => {
-    switch (target.kind) {
-      case 'message':
-        return { handle, kind: 'message', ref: target.ref }
-      case 'draft':
-        return { handle, kind: 'draft', draftId: target.draftId }
-      case 'topic':
-        return { handle, kind: 'topic', topicId: target.topicId, title: target.title }
-      case 'event':
-        return { handle, kind: 'event', eventKey: target.eventKey, title: target.title }
-      case 'file':
-        return target.file.kind === 'path'
-          ? { handle, kind: 'file', fileName: target.file.fileName, path: target.file.path }
-          : {
-              handle,
-              kind: 'file',
-              fileName: target.file.fileName,
-              ref: target.file.ref,
-              attachmentId: target.file.attachmentId
-            }
-    }
-  })
-}
-
-/** What the page shows of a stored event; null for those it does not show. */
-/** What the top of the day is written from: the lines that ask something of the user, by key. */
-function briefingBasis(briefing: Pick<Briefing, 'today' | 'week' | 'waiting' | 'ready'>): string[] {
-  return [...briefing.today, ...briefing.week, ...briefing.waiting, ...briefing.ready].map(
-    (item) => `${item.ref.accountId}\u0000${item.messageKey}\u0000${item.text}`
-  )
-}
-
-/** A day by the local calendar, AAAA-MM-GG. */
-function localDay(date: Date): string {
-  const pad = (value: number): string => String(value).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
-}
-
-const PRIORITY_ORDER: Readonly<Record<NotePriority, number>> = { alta: 0, media: 1, bassa: 2 }
-
-function priorityRank(item: { priority: NotePriority | null }): number {
-  return item.priority ? PRIORITY_ORDER[item.priority] : 1
-}
-
-/** A message as triage reads it: who, when, what — its own words, without the quoted history. */
-function triageMessage(
-  message: {
-    date: string
-    from: MailAddress[]
-    to: MailAddress[]
-    cc: MailAddress[]
-    subject: string
-    textForReading: string
-  },
-  target: boolean
-): TriageMessage {
-  return {
-    date: message.date,
-    from: message.from,
-    to: message.to,
-    cc: message.cc,
-    subject: message.subject,
-    text: withoutQuotedHistory(message.textForReading).text,
-    target
-  }
-}
-
-/** Text set as a Markdown quote. */
-function quoteBlock(text: string): string {
-  return text
-    .trim()
-    .split('\n')
-    .map((line) => `> ${line}`)
-    .join('\n')
-}
-
-function entryOf(event: StoredEvent): ActivityEntry | null {
-  switch (event.type) {
-    case 'user': {
-      const payload = event.payload as UserPayload
-      return {
-        kind: 'user',
-        id: event.id,
-        text: payload.text,
-        context: payload.context,
-        ...(payload.origin ? { origin: payload.origin } : {}),
-        at: event.createdAt,
-        handles: handleLinks(payload.handles)
-      }
-    }
-    case 'assistant': {
-      const payload = event.payload as AssistantPayload
-      return payload.content.trim()
-        ? { kind: 'assistant', id: event.id, text: payload.content, at: event.createdAt }
-        : null
-    }
-    case 'tool': {
-      const payload = event.payload as ToolPayload
-      return {
-        kind: 'tool',
-        id: event.id,
-        at: event.createdAt,
-        handles: handleLinks(payload.handles),
-        tool: {
-          callId: payload.callId,
-          name: payload.name,
-          status: payload.status,
-          summary: payload.summary,
-          messages: payload.messages,
-          files: payload.files
-        }
-      }
-    }
-    case 'approval': {
-      const { approvalId, kind, title, status, draft, details, confirmLabel } =
-        event.payload as ApprovalPayload
-      return {
-        kind: 'approval',
-        id: event.id,
-        approval: { approvalId, kind, title, status, draft, details, confirmLabel },
-        at: event.createdAt
-      }
-    }
-    case 'compaction':
-      return { kind: 'compaction', id: event.id, at: event.createdAt }
-    case 'error':
-      return {
-        kind: 'error',
-        id: event.id,
-        message: (event.payload as ErrorPayload).message,
-        at: event.createdAt
-      }
-    default:
-      return null
   }
 }

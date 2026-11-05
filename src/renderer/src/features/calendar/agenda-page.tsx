@@ -5,9 +5,9 @@ import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { cn } from '@renderer/lib/utils'
 import type { MessageRef } from '@shared/models'
-import type { BriefingItem } from '@shared/segretario'
+import type { DayLine } from '@shared/segretario'
 
-import { COMMITMENT_LABELS } from '@renderer/features/segretario/message-notes'
+import { COMMITMENT_LABELS } from '@renderer/features/segretario/row-work'
 
 import { isOn, startOfDay } from './calendar-days'
 import { EventLine } from './event-line'
@@ -29,7 +29,7 @@ function DueLine({
   item,
   onOpen
 }: {
-  item: BriefingItem
+  item: DayLine
   onOpen: (ref: MessageRef) => void
 }): React.JSX.Element {
   return (
@@ -41,7 +41,7 @@ function DueLine({
       >
         <span className="text-ai flex items-center gap-1.5 text-[11.5px] font-semibold whitespace-nowrap">
           <CompassStar className="text-ai-star size-3" />
-          {item.commitmentKind ? COMMITMENT_LABELS[item.commitmentKind] : 'Dalla posta'}
+          {item.commitment ? COMMITMENT_LABELS[item.commitment.kind] : 'Dalla posta'}
         </span>
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="text-foreground text-[14px] leading-[1.35]">{item.text}</span>
@@ -87,10 +87,10 @@ export function AgendaPage({
     today.toISOString(),
     new Date(today.getFullYear(), today.getMonth(), today.getDate() + AGENDA_DAYS).toISOString()
   )
-  const [due, setDue] = useState<BriefingItem[]>([])
+  const [due, setDue] = useState<DayLine[]>([])
   const [syncing, setSyncing] = useState(false)
 
-  // The deadlines follow the notes as they are written.
+  // The deadlines follow the work as it changes.
   useEffect(() => {
     if (!showDue) {
       return
@@ -103,7 +103,7 @@ export function AgendaPage({
     let timer: number | null = null
 
     load()
-    const unsubscribe = window.segretarioApi.onNotesChanged(() => {
+    const unsubscribe = window.segretarioApi.onWorkChanged(() => {
       if (timer !== null) {
         window.clearTimeout(timer)
       }
@@ -213,7 +213,7 @@ export function AgendaPage({
                       ))}
                       {dueOfDay.map((item) => (
                         <DueLine
-                          key={`${item.ref.accountId}\u0000${item.messageKey}\u0000${item.commitmentId ?? ''}`}
+                          key={`${item.ref.accountId}\u0000${item.messageKey}\u0000${item.commitment?.id ?? ''}`}
                           item={item}
                           onOpen={onOpenMessage}
                         />

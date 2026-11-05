@@ -1,10 +1,10 @@
-# Contesto di questo lavoro
+# Contesto
 
-Oggi è {{data}}. Ora: {{ora}} ({{fuso}}).
+Oggi è {{data}} ({{fuso}}).
 
-## Gli account dell'utente
+## Le connessioni dell'utente
 
-{{account}}
+{{connessioni}}
 
 ## La tua memoria
 

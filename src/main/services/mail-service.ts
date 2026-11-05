@@ -62,7 +62,7 @@ import {
   folderForRole,
   folderRole,
   segretarioSearch,
-  segretarioTopic,
+  segretarioProject,
   segretarioView,
   SEGRETARIO_VIEWS,
   UNIFIED_FOLDER_ROLES,
@@ -95,7 +95,7 @@ import { SegretarioService } from '@main/ai/segretario-service'
 import { CalendarService } from '@main/calendar/calendar-service'
 import { parseInvitation } from '@main/calendar/ics'
 import { isIcsAttachment, type MessageInvitation } from '@shared/calendar'
-import type { SegretarioMailPort } from '@main/ai/agent/tool-types'
+import type { MessageLocation, SegretarioMailPort } from '@main/ai/agent/tool-types'
 import { AppBadge } from './app-badge'
 import { DraftService, draftRefKey } from './drafts'
 import { AppDatabase, type MessageListView } from './database'
@@ -369,6 +369,25 @@ function mailboxesOf(
   return [...seen.values()]
 }
 
+/**
+ * The folders of an account the Segretario reads — every one but the
+ * Trash, Spam and Bozze — and the drafts' own, to leave drafts out where
+ * a folder lists them too (Gmail's All Mail).
+ */
+function segretarioFolders(folders: ReadonlyArray<MailFolder>): {
+  read: string[]
+  drafts: string[]
+} {
+  const roles = folders.map((folder) => ({ path: folder.path, role: folderRole(folder) }))
+
+  return {
+    read: roles
+      .filter(({ role }) => role !== '\\Trash' && role !== '\\Junk' && role !== '\\Drafts')
+      .map(({ path }) => path),
+    drafts: roles.filter(({ role }) => role === '\\Drafts').map(({ path }) => path)
+  }
+}
+
 export class MailService {
   private readonly database: AppDatabase
   private readonly googleOAuthService: GoogleOAuthService
@@ -421,13 +440,15 @@ export class MailService {
       onReadingChange: (reading) => this.engine.setSegretarioReading(reading),
       onNoteWritten: (note) => this.engine.noteWritten(note),
       calendar: {
-        connectedAccountIds: async () =>
-          (await this.calendar.listConnections())
-            .filter((connection) => connection.state === 'connected')
-            .map((connection) => connection.accountId),
+        calendars: () => this.calendar.calendars(),
         events: (fromIso, toIso) => this.calendar.events(fromIso, toIso),
+        event: (eventKey) => this.calendar.event(eventKey),
         create: (event) => this.calendar.create(event),
-        respond: (eventKey, response) => this.calendar.respond(eventKey, response)
+        update: (eventKey, change) => this.calendar.update(eventKey, change),
+        remove: (eventKey) => this.calendar.remove(eventKey),
+        respond: (eventKey, response) => this.calendar.respond(eventKey, response),
+        changesSince: (afterId, limit) => this.calendar.changesSince(afterId, limit),
+        latestChangeId: () => this.calendar.latestChangeId()
       }
     })
   }
@@ -449,7 +470,7 @@ export class MailService {
           ])
         ),
       listFolders: (accountId) => this.database.listFolders(accountId),
-      untriagedThreads: async (sinceIso, limit) => {
+      unreadConversations: async (sinceIso, limit) => {
         const threads: Array<{
           accountId: string
           threadId: string
@@ -458,17 +479,13 @@ export class MailService {
         }> = []
 
         for (const account of await this.database.getAccounts()) {
-          const folders = await this.database.listFolders(account.id)
-          const paths = (['\\Inbox', '\\Sent'] as const)
-            .map((role) => folderForRole(folders, role)?.path)
-            .filter((path): path is string => path !== undefined)
-          const newest = await this.database.listUntriaged(account.id, paths, sinceIso, limit)
-          const threadIds = [...new Set(newest.map((row) => row.threadId))].slice(0, limit)
+          const folders = segretarioFolders(await this.database.listFolders(account.id))
+          const newest = await this.database.listUnnoted(account.id, folders, sinceIso, limit)
 
-          for (const threadId of threadIds) {
-            const rows = await this.database.listUntriaged(
+          for (const threadId of [...new Set(newest.map((row) => row.threadId))]) {
+            const rows = await this.database.listUnnoted(
               account.id,
-              paths,
+              folders,
               sinceIso,
               limit,
               threadId
@@ -492,14 +509,29 @@ export class MailService {
           .slice(0, limit)
           .map(({ accountId, threadId, messages }) => ({ accountId, threadId, messages }))
       },
-      includedAccountIds: () => this.segretarioAccountIds(),
+      readingProgress: async (sinceIso) => {
+        let read = 0
+        let total = 0
+
+        for (const account of await this.database.getAccounts()) {
+          const progress = await this.database.noteProgress(
+            account.id,
+            segretarioFolders(await this.database.listFolders(account.id)),
+            sinceIso
+          )
+          read += progress.read
+          total += progress.total
+        }
+
+        return { read, total }
+      },
       threadsFromSender: (accountId, address, sinceIso, limit) =>
         this.database.threadsFromSender(accountId, address.trim().toLowerCase(), sinceIso, limit),
       userWroteTo: async (addresses) => {
         const sent = await Promise.all(
-          (await this.segretarioAccountIds()).map(async (accountId) => {
-            const path = folderForRole(await this.database.listFolders(accountId), '\\Sent')?.path
-            return path ? [{ accountId, folderPath: path }] : []
+          (await this.database.getAccounts()).map(async (account) => {
+            const path = folderForRole(await this.database.listFolders(account.id), '\\Sent')?.path
+            return path ? [{ accountId: account.id, folderPath: path }] : []
           })
         )
         return this.database.anySentTo(sent.flat(), addresses)
@@ -511,15 +543,18 @@ export class MailService {
           ? this.database.sameMessageElsewhere(
               ref.accountId,
               messageId,
-              await this.segretarioAccountIds()
+              (await this.database.getAccounts()).map((account) => account.id)
             )
           : []
       },
       messageSummaries: (accountId, messageKeys) => this.bestRowsByKey(accountId, messageKeys),
-      refForKey: async (accountId, messageKey) => {
-        const best = (await this.bestRowsByKey(accountId, [messageKey])).get(messageKey)
-        return best ? { ref: best.ref, dateIso: best.dateIso } : null
-      },
+      locate: (accountId, messageKeys) => this.locateMessages(accountId, messageKeys),
+      threadKeys: async (accountId, threadId) =>
+        this.database.threadMessageKeys(
+          accountId,
+          threadId,
+          segretarioFolders(await this.database.listFolders(accountId)).read
+        ),
       recentMailIndexed: async (accountId, days) =>
         this.database.recentMailIndexed(
           accountId,
@@ -745,7 +780,7 @@ export class MailService {
     const mailEngineHandle: ExtensionMailEngineHandle = {
       fetchMessageRawSources: (refs, onMessage) =>
         this.engine.fetchMessageRawSources(refs, onMessage),
-      moveMessagesToTrash: (refs, options) => this.engine.moveMessagesToTrash(refs, options)
+      archiveMessages: (refs) => this.archiveByIdentity(refs)
     }
 
     const context: ExtensionMainContext = {
@@ -756,38 +791,59 @@ export class MailService {
       mailEngine: mailEngineHandle,
       getMainWindow: getAppWindow,
       recordRecentFiles: (paths, activity) => this.recordRecentFiles(paths, activity),
-      topicsChanged: () => this.segretario.extensionTopicsChanged(),
-      // Bookkeeping: the archive never fails for it.
-      messagesArchived: async (entries) => {
+      // Bookkeeping: the copy is made whatever happens to its record here.
+      copiesSaved: async (entries) => {
         const refKey = (ref: MessageRef): string =>
           `${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`
 
         try {
+          await this.segretario.whenReady()
           const identities = new Map(
             (await this.database.messageIdentities(entries.map((entry) => entry.ref))).map(
               (identity) => [refKey(identity.ref), identity]
             )
           )
 
-          await this.segretario.messagesArchived(
+          await this.segretario.copiesSaved(
             entries.flatMap((entry) => {
               const identity = identities.get(refKey(entry.ref))
               return identity
                 ? [
                     {
-                      accountId: entry.ref.accountId,
+                      ref: entry.ref,
                       messageKey: identity.messageKey,
                       threadId: identity.threadId,
-                      folder: entry.folder,
-                      fromAddress: identity.fromAddress
+                      fromAddress: identity.fromAddress,
+                      destination: entry.destination,
+                      files: entry.files
                     }
                   ]
                 : []
             })
           )
         } catch (error) {
-          logMainError('Segretario: archived messages could not be recorded', error)
+          logMainError('Copies saved outside the mail could not be recorded', error)
         }
+      },
+      savedCopies: async (refs) => {
+        await this.segretario.whenReady()
+        const identities = await this.database.messageIdentities(refs)
+        const copies: Array<{ ref: MessageRef; destination: string; files: string[] }> = []
+
+        for (const identity of identities) {
+          for (const copy of await this.segretario.copiesOf(
+            identity.ref.accountId,
+            identity.messageKey
+          )) {
+            copies.push({ ref: identity.ref, destination: copy.destination, files: copy.files })
+          }
+        }
+
+        return copies
+      },
+      proposalDecided: async (id, accepted, result) => {
+        await this.segretario.whenReady()
+        await this.segretario.decideProposal(id, accepted, result ?? undefined)
       },
       adoptShortcutOverride: async (commandId, chord) => {
         const preferences = await this.database.getUiPreferences()
@@ -801,12 +857,8 @@ export class MailService {
       }
     }
 
-    try {
-      await extension.install(context)
-      this.extension = extension
-    } finally {
-      await this.segretario.extensionInstalled()
-    }
+    await extension.install(context)
+    this.extension = extension
   }
 
   async bootstrap(): Promise<AppBootstrap> {
@@ -925,11 +977,12 @@ export class MailService {
     return folders
   }
 
-  /** How many conversations each view of the Segretario's holds, as its list would show them. */
+  /** How many messages each view of the Segretario's holds, as its list shows them. */
   async getSegretarioViewCounts(): Promise<Record<SegretarioView, number>> {
     const counts = await Promise.all(
       SEGRETARIO_VIEWS.map(
-        async (view) => [view, (await this.segretarioViewRefs(view)).length] as const
+        async (view) =>
+          [view, (await this.refsOfKeys(await this.segretario.viewKeys(view))).length] as const
       )
     )
     return Object.fromEntries(counts) as Record<SegretarioView, number>
@@ -1013,6 +1066,7 @@ export class MailService {
       sort: options?.sort,
       grouping: options?.grouping,
       filter: options?.filter,
+      activeKeys: options?.filter === 'active' ? await this.segretario.activeKeys() : undefined,
       serverMatches: options?.serverMatches
         ? messageRefsSchema.parse(options.serverMatches)
         : undefined,
@@ -1079,83 +1133,100 @@ export class MailService {
     }
   }
 
-  /** The messages a list of the Segretario's holds — a view or a topic — or undefined for a folder. */
+  /** The messages a list of the Segretario's holds — a view, a project, a search — or undefined for a folder. */
   private async segretarioListRefs(folderPath: string): Promise<MessageRef[] | undefined> {
     const view = segretarioView(folderPath)
 
     if (view) {
-      return this.segretarioViewRefs(view)
+      return this.refsOfKeys(await this.segretario.viewKeys(view))
     }
 
-    const topicId = segretarioTopic(folderPath)
+    const projectId = segretarioProject(folderPath)
 
-    if (topicId) {
-      return this.segretarioTopicRefs(topicId)
+    if (projectId) {
+      return this.segretarioProjectRefs(projectId)
     }
 
     const searchId = segretarioSearch(folderPath)
     return searchId ? ((await this.segretario.searchRefs(searchId)) ?? []) : undefined
   }
 
-  /**
-   * The messages of a topic: every message of its conversations, across
-   * the accounts "Tutti gli account" gathers, each once, in the folder the
-   * user thinks of it in.
-   */
-  private async segretarioTopicRefs(topicId: string): Promise<MessageRef[]> {
-    const accountIds = await this.segretarioAccountIds()
-    const threads = await this.segretario.topicThreads(topicId, accountIds)
-    const refs: MessageRef[] = []
+  /** The messages of a project: every message of its conversations, its whole story, wherever filed. */
+  private async segretarioProjectRefs(projectId: string): Promise<MessageRef[]> {
+    const threads = await this.segretario.projectThreads(projectId)
+    const keys: Array<{ accountId: string; messageKey: string }> = []
 
-    for (const accountId of accountIds) {
+    for (const accountId of new Set(threads.map((thread) => thread.accountId))) {
       const threadIds = threads
         .filter((thread) => thread.accountId === accountId)
         .map((thread) => thread.threadId)
 
-      if (threadIds.length > 0) {
-        const keys = await this.database.listMessageKeysOfThreads(accountId, threadIds)
-
-        for (const summary of (await this.bestRowsByKey(accountId, keys)).values()) {
-          refs.push(summary.ref)
-        }
+      for (const messageKey of await this.database.listMessageKeysOfThreads(accountId, threadIds)) {
+        keys.push({ accountId, messageKey })
       }
     }
 
-    return refs
-  }
-
-  /** The accounts the Segretario's lists gather: those of Tutti gli account. */
-  private async segretarioAccountIds(): Promise<string[]> {
-    return [
-      ...new Set(
-        (await this.engine.resolveUnifiedMailboxes('\\Inbox')).map((mailbox) => mailbox.accountId)
-      )
-    ]
+    return this.refsOfKeys(keys)
   }
 
   /**
-   * The messages a view of the Segretario's holds: the conversations its
-   * notes chose, across the accounts "Tutti gli account" gathers, each as
-   * one row in the folder the user thinks of it in — never one thrown away.
+   * Messages by key, across accounts, each as one row in the folder the
+   * user thinks of it in; those only in the Trash or Spam are left out.
    */
-  private async segretarioViewRefs(view: SegretarioView): Promise<MessageRef[]> {
-    const accountIds = await this.segretarioAccountIds()
-    const chosen = await this.segretario.viewMessages(view, accountIds)
+  private async refsOfKeys(
+    keys: ReadonlyArray<{ accountId: string; messageKey: string }>
+  ): Promise<MessageRef[]> {
     const refs: MessageRef[] = []
 
-    for (const accountId of accountIds) {
-      const keys = chosen
-        .filter((item) => item.accountId === accountId)
-        .map((item) => item.messageKey)
+    for (const accountId of new Set(keys.map((key) => key.accountId))) {
+      const ofAccount = keys
+        .filter((key) => key.accountId === accountId)
+        .map((key) => key.messageKey)
 
-      if (keys.length > 0) {
-        for (const summary of (await this.bestRowsByKey(accountId, keys)).values()) {
-          refs.push(summary.ref)
-        }
+      for (const summary of (await this.bestRowsByKey(accountId, ofAccount)).values()) {
+        refs.push(summary.ref)
       }
     }
 
     return refs
+  }
+
+  /**
+   * Where messages are, by key: each in the folder the user thinks of it
+   * in, or — when it is only in the Trash or Spam — there, set aside. Those
+   * in no folder are not in the map: gone.
+   */
+  private async locateMessages(
+    accountId: string,
+    messageKeys: ReadonlyArray<string>
+  ): Promise<Map<string, MessageLocation>> {
+    const folders = await this.database.listFolders(accountId)
+    const located = new Map<string, { rank: number; location: MessageLocation }>()
+
+    for (const row of await this.database.listMessageRowsByKey(accountId, messageKeys)) {
+      const folder = folders.find((candidate) => candidate.path === row.folderPath)
+      const role = folder ? folderRole(folder) : null
+      const setAside = role === '\\Trash' || role === '\\Junk'
+      // Anywhere else comes before the Trash and Spam; then the folder the user looks in first.
+      const rank = (setAside ? 100 : 0) + folderDisplayRank(folder)
+      const known = located.get(row.messageKey)
+
+      if (!known || rank < known.rank) {
+        located.set(row.messageKey, {
+          rank,
+          location: {
+            ref: { accountId, folderPath: row.folderPath, uid: row.uid },
+            threadId: row.threadId,
+            dateIso: row.dateIso,
+            subject: row.subject,
+            from: row.from,
+            setAside
+          }
+        })
+      }
+    }
+
+    return new Map([...located].map(([key, { location }]) => [key, location]))
   }
 
   /**
@@ -1169,51 +1240,12 @@ export class MailService {
   ): Promise<
     Map<string, { ref: MessageRef; subject: string; from: MailAddress[]; dateIso: string }>
   > {
-    const folders = await this.database.listFolders(accountId)
-    const best = new Map<
-      string,
-      {
-        rank: number
-        summary: { ref: MessageRef; subject: string; from: MailAddress[]; dateIso: string }
-      }
-    >()
-
-    const trashed = new Map<
-      string,
-      { ref: MessageRef; subject: string; from: MailAddress[]; dateIso: string }
-    >()
-
-    for (const row of await this.database.listMessageRowsByKey(accountId, messageKeys)) {
-      const folder = folders.find((candidate) => candidate.path === row.folderPath)
-      const role = folder ? folderRole(folder) : null
-      const rank = folderDisplayRank(folder)
-      const known = best.get(row.messageKey)
-      const summary = {
-        ref: { accountId, folderPath: row.folderPath, uid: row.uid },
-        subject: row.subject,
-        from: row.from,
-        dateIso: row.dateIso
-      }
-
-      if (role === '\\Trash') {
-        trashed.set(row.messageKey, summary)
-      } else if (role !== '\\Junk' && (!known || rank < known.rank)) {
-        best.set(row.messageKey, { rank, summary })
-      }
-    }
-
-    // A message filed into a pratica left the mail for the Trash, but what
-    // is open in it is not done: it is found there while the Trash keeps it.
-    const archived = await this.segretario.archivedKeys(
-      accountId,
-      [...trashed.keys()].filter((key) => !best.has(key))
+    const located = await this.locateMessages(accountId, messageKeys)
+    return new Map(
+      [...located]
+        .filter(([, location]) => !location.setAside)
+        .map(([key, { ref, subject, from, dateIso }]) => [key, { ref, subject, from, dateIso }])
     )
-
-    for (const key of archived) {
-      best.set(key, { rank: Number.MAX_SAFE_INTEGER, summary: trashed.get(key)! })
-    }
-
-    return new Map([...best].map(([key, { summary }]) => [key, summary]))
   }
 
   /** The mailboxes a list shows: one folder, those "Tutti gli account" gathers for a role, or a view's. */
@@ -1401,6 +1433,69 @@ export class MailService {
     const payload = messageRefsSchema.parse(refs)
     await this.ensureAccountsExist(payload)
     return this.withDraftsLeaving(payload, (acting) => this.engine.deleteMessages(acting))
+  }
+
+  /**
+   * Archives messages by what they are rather than the row shown: on Gmail
+   * archiving is leaving the inbox, so the message's inbox row is archived
+   * — one not in the inbox is archived already, and its labels stay; on
+   * other servers it is moved to the archive folder, unless it is there.
+   * What could not be archived is reported by the refs given.
+   */
+  private async archiveByIdentity(refs: ReadonlyArray<MessageRef>): Promise<MessagesActionResult> {
+    const identities = await this.database.messageIdentities(refs)
+    const acting = new Map<string, MessageRef[]>()
+    const refKey = (ref: MessageRef): string =>
+      `${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`
+
+    for (const accountId of new Set(identities.map((identity) => identity.ref.accountId))) {
+      const folders = await this.database.listFolders(accountId)
+      const archive = folderForRole(folders, '\\Archive')
+      const inbox = folderForRole(folders, '\\Inbox')
+      const ofAccount = identities.filter((identity) => identity.ref.accountId === accountId)
+
+      if (archive?.specialUse?.toLowerCase() === '\\all') {
+        const rows = await this.database.listMessageRowsByKey(
+          accountId,
+          ofAccount.map((identity) => identity.messageKey)
+        )
+
+        for (const identity of ofAccount) {
+          const inInbox = rows.filter(
+            (row) => row.messageKey === identity.messageKey && row.folderPath === inbox?.path
+          )
+
+          if (inInbox.length > 0) {
+            acting.set(
+              refKey(identity.ref),
+              inInbox.map((row) => ({ accountId, folderPath: row.folderPath, uid: row.uid }))
+            )
+          }
+        }
+      } else {
+        for (const identity of ofAccount) {
+          if (identity.ref.folderPath !== archive?.path) {
+            acting.set(refKey(identity.ref), [identity.ref])
+          }
+        }
+      }
+    }
+
+    const moving = [...acting.values()].flat()
+
+    if (moving.length === 0) {
+      return { failed: [] }
+    }
+
+    const result = await this.archiveMessages(moving)
+    const failedRows = new Set(result.failed.map(refKey))
+
+    return {
+      failed: refs.filter((ref) =>
+        (acting.get(refKey(ref)) ?? []).some((row) => failedRows.has(refKey(row)))
+      ),
+      error: result.error
+    }
   }
 
   async archiveMessages(refs: MessageRef[]): Promise<MessagesActionResult> {

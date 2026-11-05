@@ -173,7 +173,7 @@ describe('NotificationManager', () => {
   describe('while the Segretario reads the mail', () => {
     const note = (
       uid: number,
-      state: MessageNote['state'],
+      nature: MessageNote['nature'],
       priority: MessageNote['priority']
     ): MessageNote => ({
       accountId: 'a1',
@@ -181,13 +181,13 @@ describe('NotificationManager', () => {
       threadId: `t${uid}`,
       direction: 'in',
       summary: `Nota ${uid}`,
-      state,
+      nature,
       priority,
       reason: '',
       due: null,
       messageDate: '2026-10-28T08:00:00.000Z',
-      dismissedAt: null,
-      twinAccountId: null
+      twinAccountId: null,
+      writtenBy: 'segretario'
     })
 
     beforeEach(() => manager.setSegretarioReading(true))

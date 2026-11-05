@@ -1,28 +1,7 @@
-import { z } from 'zod'
-
 import { clip } from './tools/format'
 
 /** How many days ahead the calendar given with a message reaches: dates in it are checked against it. */
 const CALENDAR_DAYS = 45
-
-/** What the model hands back when it rereads a message before it goes. */
-export const REVIEW_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['problemi'],
-  properties: { problemi: { type: 'array', items: { type: 'string' } } }
-} as const
-
-const reviewAnswer = z.object({ problemi: z.array(z.string().trim()) })
-
-/** The problems found, each a short line; none when it can go as it is. */
-export function parseReview(content: string): string[] {
-  return reviewAnswer
-    .parse(JSON.parse(content))
-    .problemi.filter(Boolean)
-    .slice(0, 4)
-    .map((problem) => clip(problem.replace(/\s+/g, ' '), 240).text)
-}
 
 const CALENDAR_DAY = new Intl.DateTimeFormat('it-IT', {
   weekday: 'short',

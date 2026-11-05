@@ -20,7 +20,7 @@ import {
   resolveSelectionIntent,
   summaryToMessageRef
 } from '@renderer/lib/message-selection'
-import { NoteLine, noteKey } from '@renderer/features/segretario/message-notes'
+import { hasWorkLine, rowWorkKey, WorkLine } from '@renderer/features/segretario/row-work'
 import { cn, formatByteSize, formatDateTimeLabel } from '@renderer/lib/utils'
 import {
   defaultSortDirection,
@@ -32,7 +32,7 @@ import { MESSAGE_TABLE_ROW_HEIGHT_PX } from './message-list-metrics'
 import { MessageListEmpty } from './message-list-empty'
 import { VirtualMessageRows } from './virtual-message-rows'
 
-import { threadKey } from '@renderer/features/segretario/conversation-topics'
+import { threadKey } from '@renderer/features/segretario/conversation-projects'
 
 import type { MessageListViewProps } from './message-list-view'
 import {
@@ -42,7 +42,8 @@ import {
   MessageSectionHeading,
   primaryAddressLabel,
   recipientsLabel,
-  TopicTag,
+  ProjectTag,
+  SavedTag,
   UnreadDot
 } from './message-list-shared'
 import { MessageListHeader } from './message-list-header'
@@ -73,7 +74,7 @@ const SORTABLE_COLUMNS: ReadonlyArray<SortableColumn> = [
 export function MessageTable(props: MessageListViewProps): React.JSX.Element {
   const {
     messages,
-    notes,
+    rowWork,
     sections,
     emptyState,
     selection,
@@ -95,7 +96,7 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
     onRowDragEnd,
     onToggleFlag,
     onSelectSection,
-    topicTags
+    projectTags
   } = props
   const selectedKeys = useMemo(
     () => new Set(selection.selectedRefs.map(messageRefKey)),
@@ -203,7 +204,7 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
             const key = messageRefKey(messageRef)
             const isSelected = selectedKeys.has(key)
             const isCursor = key === cursorKey
-            const note = notes.get(noteKey(message))
+            const work = rowWork.get(rowWorkKey(message))
 
             return (
               <div
@@ -286,11 +287,14 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
                   >
                     <HighlightedText text={message.subject} terms={highlightTerms.subject} />
                   </span>
-                  {topicTags?.get(threadKey(message)) && (
-                    <TopicTag label={topicTags.get(threadKey(message)) ?? ''} />
+                  {projectTags?.get(threadKey(message)) && (
+                    <ProjectTag label={projectTags.get(threadKey(message)) ?? ''} />
                   )}
+                  {work?.saved && <SavedTag label={work.saved} />}
                   {/* The Segretario's word, after the subject, where the table has room. */}
-                  {note && <NoteLine note={note} className="flex-1 basis-0 text-[11.5px]" />}
+                  {work && hasWorkLine(work) && (
+                    <WorkLine work={work} className="flex-1 basis-0 text-[11.5px]" />
+                  )}
                 </span>
 
                 <span

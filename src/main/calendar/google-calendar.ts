@@ -1,13 +1,23 @@
 import { google, type calendar_v3 } from 'googleapis'
 
-import type { CalendarResponse, NewCalendarEvent } from '@shared/calendar'
+import type { CalendarResponse, EventOrigin } from '@shared/calendar'
 
-import { SyncTokenExpired, type CalendarProvider, type ProviderEvent } from './calendar-provider'
+import {
+  SyncTokenExpired,
+  type CalendarProvider,
+  type ProviderEvent,
+  type ProviderEventInput
+} from './calendar-provider'
 
 /** Events read and written, on every calendar the user has. */
 export const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar'
 
 const PAGE_SIZE = 250
+
+/** Where an event put there by the Segretario says so, in the private properties only this user's copy carries. */
+const ORIGIN_BY = 'sieverBy'
+const ORIGIN_ACCOUNT = 'sieverAccount'
+const ORIGIN_MESSAGE = 'sieverMessage'
 
 const RESPONSES = new Set<CalendarResponse>(['accepted', 'tentative', 'declined', 'needsAction'])
 
@@ -94,7 +104,37 @@ function eventOf(event: calendar_v3.Schema$Event, selfEmail: string): ProviderEv
       event.conferenceData?.entryPoints?.find((entry) => entry.entryPointType === 'video')?.uri ??
       null,
     htmlLink: event.htmlLink ?? null,
+    origin: originOf(event),
     cancelled: event.status === 'cancelled'
+  }
+}
+
+function originOf(event: calendar_v3.Schema$Event): EventOrigin | null {
+  const properties = event.extendedProperties?.private
+
+  return properties?.[ORIGIN_BY] === 'segretario'
+    ? {
+        by: 'segretario',
+        accountId: properties[ORIGIN_ACCOUNT] || null,
+        messageKey: properties[ORIGIN_MESSAGE] || null
+      }
+    : null
+}
+
+/** An event's fields as Google takes them, times in the user's time zone. */
+function bodyOf(event: ProviderEventInput): calendar_v3.Schema$Event {
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const when = (value: string): calendar_v3.Schema$EventDateTime =>
+    event.allDay
+      ? { date: value.slice(0, 10), dateTime: null }
+      : { dateTime: value, timeZone, date: null }
+
+  return {
+    summary: event.title,
+    location: event.location,
+    description: event.description,
+    start: when(event.start),
+    end: when(event.end)
   }
 }
 
@@ -108,8 +148,15 @@ export class GoogleCalendarProvider implements CalendarProvider {
     this.selfEmail = selfEmail.toLowerCase()
   }
 
-  async listCalendars(): Promise<Array<{ calendarId: string; name: string; primary: boolean }>> {
-    const calendars: Array<{ calendarId: string; name: string; primary: boolean }> = []
+  async listCalendars(): Promise<
+    Array<{ calendarId: string; name: string; primary: boolean; writable: boolean }>
+  > {
+    const calendars: Array<{
+      calendarId: string
+      name: string
+      primary: boolean
+      writable: boolean
+    }> = []
     let pageToken: string | undefined
 
     try {
@@ -122,7 +169,8 @@ export class GoogleCalendarProvider implements CalendarProvider {
             calendars.push({
               calendarId: item.id,
               name: item.summaryOverride ?? item.summary ?? item.id,
-              primary: Boolean(item.primary)
+              primary: Boolean(item.primary),
+              writable: item.accessRole === 'owner' || item.accessRole === 'writer'
             })
           }
         }
@@ -180,34 +228,96 @@ export class GoogleCalendarProvider implements CalendarProvider {
     return { events, syncToken }
   }
 
-  async create(calendarId: string, event: NewCalendarEvent): Promise<ProviderEvent> {
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
-    const when = (value: string): calendar_v3.Schema$EventDateTime =>
-      event.allDay ? { date: value.slice(0, 10) } : { dateTime: value, timeZone }
-
+  async create(
+    calendarId: string,
+    event: ProviderEventInput,
+    origin: EventOrigin | null
+  ): Promise<ProviderEvent> {
     try {
       const { data } = await this.api.events.insert({
         calendarId,
         sendUpdates: event.attendees.length > 0 ? 'all' : 'none',
         requestBody: {
-          summary: event.title,
-          location: event.location ?? undefined,
-          description: event.description ?? undefined,
-          start: when(event.start),
-          end: when(event.end),
-          attendees: event.attendees.map((email) => ({ email }))
+          ...bodyOf(event),
+          attendees: event.attendees.map((email) => ({ email })),
+          extendedProperties: origin
+            ? {
+                private: {
+                  [ORIGIN_BY]: origin.by,
+                  ...(origin.accountId ? { [ORIGIN_ACCOUNT]: origin.accountId } : {}),
+                  ...(origin.messageKey ? { [ORIGIN_MESSAGE]: origin.messageKey } : {})
+                }
+              }
+            : undefined
         }
       })
-      const created = eventOf(data, this.selfEmail)
-
-      if (!created) {
-        throw new Error('Google non ha restituito l’evento creato.')
-      }
-
-      return { ...created, calendarId }
+      return this.provided(calendarId, data, 'Google non ha restituito l’evento creato.')
     } catch (error) {
       throw readableError(error)
     }
+  }
+
+  async update(
+    calendarId: string,
+    eventId: string,
+    event: ProviderEventInput,
+    notify: boolean
+  ): Promise<ProviderEvent> {
+    try {
+      const { data: current } = await this.api.events.get({ calendarId, eventId })
+      const wanted = new Set(event.attendees.map((email) => email.toLowerCase()))
+      const kept = (current.attendees ?? []).filter(
+        (attendee) =>
+          attendee.self ||
+          attendee.email?.toLowerCase() === this.selfEmail ||
+          wanted.has(attendee.email?.toLowerCase() ?? '')
+      )
+      const known = new Set(kept.map((attendee) => attendee.email?.toLowerCase()))
+      const { data } = await this.api.events.patch({
+        calendarId,
+        eventId,
+        sendUpdates: notify ? 'all' : 'none',
+        requestBody: {
+          ...bodyOf(event),
+          // Those still invited keep their answers; the user's own entry stays.
+          attendees: [
+            ...kept,
+            ...event.attendees
+              .filter((email) => !known.has(email.toLowerCase()))
+              .map((email) => ({ email }))
+          ]
+        }
+      })
+      return this.provided(calendarId, data, 'Google non ha restituito l’evento.')
+    } catch (error) {
+      throw readableError(error)
+    }
+  }
+
+  async remove(calendarId: string, eventId: string, notify: boolean): Promise<void> {
+    try {
+      await this.api.events.delete({ calendarId, eventId, sendUpdates: notify ? 'all' : 'none' })
+    } catch (error) {
+      const status = statusCode(error)
+
+      if (status !== 404 && status !== 410) {
+        throw readableError(error)
+      }
+    }
+  }
+
+  private provided(
+    calendarId: string,
+    data: calendar_v3.Schema$Event,
+    missing: string
+  ): ProviderEvent {
+    const event = eventOf(data, this.selfEmail)
+
+    if (!event) {
+      throw new Error(missing)
+    }
+
+    return { ...event, calendarId }
   }
 
   async respond(
@@ -228,13 +338,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
         sendUpdates: 'all',
         requestBody: { attendees }
       })
-      const answered = eventOf(data, this.selfEmail)
-
-      if (!answered) {
-        throw new Error('Google non ha restituito l’evento.')
-      }
-
-      return { ...answered, calendarId }
+      return this.provided(calendarId, data, 'Google non ha restituito l’evento.')
     } catch (error) {
       throw readableError(error)
     }

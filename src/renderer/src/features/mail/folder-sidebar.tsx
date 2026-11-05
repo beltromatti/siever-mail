@@ -15,15 +15,15 @@ import {
 } from 'lucide-react'
 
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
-import { TopicPickerPopover } from '@renderer/features/segretario/topic-picker'
+import { ProjectPickerPopover } from '@renderer/features/segretario/project-picker'
 import { buildFolderTree, folderNodeLabel, type FolderTreeNode } from '@renderer/lib/folder-tree'
 import { cn, formatCount } from '@renderer/lib/utils'
 import {
   folderRole,
   folderRoleLabel,
-  segretarioTopic,
+  segretarioProject,
   segretarioSearchPath,
-  segretarioTopicPath,
+  segretarioProjectPath,
   segretarioViewLabel,
   segretarioViewPath,
   unifiedFolderPath,
@@ -31,12 +31,12 @@ import {
   type SegretarioView
 } from '@shared/folders'
 import type { MailFolder, UnifiedFolderSummary } from '@shared/models'
-import type { SavedSearch, Topic } from '@shared/segretario'
+import type { Project, SavedSearch } from '@shared/segretario'
 
 import { folderIcon, ROLE_ICONS } from './folder-icons'
 
-/** How many topics in corso the sidebar lists; the others are a search away. */
-const TOPICS_SHOWN = 8
+/** How many projects in corso the sidebar lists; the others are a search away. */
+const PROJECTS_SHOWN = 8
 
 const VIEW_ICONS: Readonly<Record<SegretarioView, typeof Inbox>> = {
   'da-gestire': ListTodo,
@@ -56,6 +56,7 @@ export type FolderMenuTarget =
   | { kind: 'role'; summary: UnifiedFolderSummary }
   /** The account's section, for a folder at its top. */
   | { kind: 'account' }
+  | { kind: 'project'; project: Project }
 
 interface FolderSidebarProps {
   /** The Segretario's day, "Oggi": shown with its views, open or not. */
@@ -65,10 +66,12 @@ interface FolderSidebarProps {
   /** The Segretario's views and how many conversations each holds; none without the Segretario. */
   segretarioViews: ReadonlyArray<{ view: SegretarioView; count: number }>
   /**
-   * The topics — a company's pratiche — with their name: those in corso
-   * listed, every one a search away. Null without the Segretario.
+   * The projects: those in corso listed, the latest moved first, every one
+   * a search away. Null without the Segretario.
    */
-  topics: { label: string; items: ReadonlyArray<Topic> } | null
+  projects: ReadonlyArray<Project> | null
+  /** Makes a project, from the search, and opens it. */
+  onCreateProject: (title: string) => void
   /** The searches asked in words that the user kept as folders. */
   savedSearches: ReadonlyArray<SavedSearch>
   /** The account the dropdown above has open, whose folders the tree shows. */
@@ -278,21 +281,26 @@ export function FolderSidebar({
   selectedFolderPath,
   onSelectFolder,
   onFolderContextMenu,
-  topics,
+  projects,
+  onCreateProject,
   messageDrop
 }: FolderSidebarProps): React.JSX.Element {
   const tree = useMemo(() => buildFolderTree(folders), [folders])
-  const [topicSearchOpen, setTopicSearchOpen] = useState(false)
-  const openTopicId = segretarioTopic(selectedFolderPath)
+  const [projectSearchOpen, setProjectSearchOpen] = useState(false)
+  const openProjectId = segretarioProject(selectedFolderPath)
   // In corso: those with conversations, the most recently moved first — the open one always.
-  const shownTopics = useMemo(
+  const shownProjects = useMemo(
     () =>
-      (topics?.items ?? [])
-        .filter((topic) => topic.id === openTopicId || (!topic.archived && topic.conversations > 0))
-        .slice(0, TOPICS_SHOWN),
-    [openTopicId, topics]
+      [...(projects ?? [])]
+        .filter(
+          (project) =>
+            project.id === openProjectId ||
+            (!project.hidden && !project.closed && project.conversations > 0)
+        )
+        .sort((a, b) => (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? ''))
+        .slice(0, PROJECTS_SHOWN),
+    [openProjectId, projects]
   )
-  const topicsBrought = (topics?.items ?? []).some((topic) => topic.origin === 'extension')
   // The folder dragged messages are over, to show where they would land.
   const [dropHoverKey, setDropHoverKey] = useState<string | null>(null)
 
@@ -376,8 +384,9 @@ export function FolderSidebar({
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-px px-2 pb-3">
           {(segretarioViews.length > 0 || agenda || savedSearches.length > 0) && (
-            <section aria-label="Segretario">
-              <SectionHeading>Segretario</SectionHeading>
+            // With the AI off only the agenda is here: the calendar's, not the Segretario's.
+            <section aria-label={today ? 'Segretario' : 'Calendario'}>
+              <SectionHeading>{today ? 'Segretario' : 'Calendario'}</SectionHeading>
               {today && (
                 <FolderRow
                   icon={Sun}
@@ -436,48 +445,48 @@ export function FolderSidebar({
             </section>
           )}
 
-          {topics && (
-            <section aria-label={topics.label}>
-              <SectionHeading>{topics.label}</SectionHeading>
-              {shownTopics.map((topic) => {
-                const path = segretarioTopicPath(topic.id)
-                // Among an extension's topics, one it did not bring is set apart: not (yet) one of them.
-                const ownAmongBrought = topicsBrought && topic.origin !== 'extension'
+          {projects && (
+            <section aria-label="Progetti">
+              <SectionHeading>Progetti</SectionHeading>
+              {shownProjects.map((project) => {
+                const path = segretarioProjectPath(project.id)
 
                 return (
                   <FolderRow
                     key={path}
-                    icon={ownAmongBrought ? Layers : Briefcase}
-                    name={topic.title}
-                    hint={`${topic.title}${
-                      ownAmongBrought
-                        ? topic.origin === 'utente'
-                          ? ' (creato da te)'
-                          : ' (creato dal Segretario)'
-                        : ''
-                    } — ${formatCount(topic.conversations, 'conversazione', 'conversazioni')}${
-                      topic.openCommitments > 0
-                        ? `, ${formatCount(topic.openCommitments, 'cosa aperta', 'cose aperte')}`
+                    icon={project.origin === 'utente' ? Layers : Briefcase}
+                    name={project.title}
+                    hint={`${project.title}${project.origin === 'utente' ? ' (creato da te)' : ''} — ${formatCount(
+                      project.conversations,
+                      'conversazione',
+                      'conversazioni'
+                    )}${
+                      project.openCommitments > 0
+                        ? `, ${formatCount(project.openCommitments, 'cosa aperta', 'cose aperte')}`
                         : ''
                     }`}
-                    messageCount={topic.conversations}
+                    messageCount={project.conversations}
                     unseenCount={0}
-                    badge={topic.openCommitments}
+                    badge={project.openCommitments}
                     active={selectedFolderPath === path}
                     onSelect={() => onSelectFolder(path)}
+                    onContextMenu={() => onFolderContextMenu({ kind: 'project', project })}
                   />
                 )
               })}
-              <TopicPickerPopover
-                open={topicSearchOpen}
-                onOpenChange={setTopicSearchOpen}
+              <ProjectPickerPopover
+                open={projectSearchOpen}
+                onOpenChange={setProjectSearchOpen}
                 side="right"
-                topics={topics.items}
-                label={topics.label}
-                currentId={openTopicId}
-                onPick={(topic) => {
-                  setTopicSearchOpen(false)
-                  onSelectFolder(segretarioTopicPath(topic.id))
+                projects={projects}
+                linkedIds={[]}
+                onToggle={(project) => {
+                  setProjectSearchOpen(false)
+                  onSelectFolder(segretarioProjectPath(project.id))
+                }}
+                onCreate={(title) => {
+                  setProjectSearchOpen(false)
+                  onCreateProject(title)
                 }}
                 trigger={
                   <button
@@ -485,7 +494,11 @@ export function FolderSidebar({
                     className="text-faint-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring/60 flex h-7 w-full items-center gap-2 rounded-[6px] pr-2 pl-[18px] text-left text-[12.5px] font-medium outline-none focus-visible:ring-2"
                   >
                     <Search className="size-[15px] shrink-0" strokeWidth={1.7} />
-                    <span className="min-w-0 flex-1 truncate">Cerca tra tutte…</span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {projects.length > shownProjects.length
+                        ? 'Cerca tra tutti…'
+                        : 'Cerca o crea…'}
+                    </span>
                   </button>
                 }
               />

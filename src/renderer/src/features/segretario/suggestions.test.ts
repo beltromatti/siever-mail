@@ -1,53 +1,46 @@
 import { describe, expect, it } from 'vitest'
 
-import type { MessageNote } from '@shared/segretario'
+import type { MessageRowWork } from '@shared/segretario'
 
 import { segretarioSuggestions } from './suggestions'
 
-const note = (state: MessageNote['state']): MessageNote => ({
+const work = (change: Partial<MessageRowWork>): MessageRowWork => ({
   accountId: 'a',
   messageKey: 'k',
-  threadId: 't',
-  direction: 'in',
-  summary: '',
-  state,
-  priority: 'media',
-  reason: '',
-  due: null,
-  messageDate: '2026-10-28T08:00:00.000Z',
-  dismissedAt: null,
-  twinAccountId: null
+  note: null,
+  owed: null,
+  awaited: false,
+  reply: null,
+  saved: null,
+  ...change
 })
 
 const base = {
   selectionCount: 1,
-  note: null,
+  work: null,
   messageOpen: false,
-  topic: null,
-  topicsLabel: 'Pratiche',
-  readyReply: false,
+  project: null,
   calendarConnected: false
 }
 
 describe('segretarioSuggestions', () => {
-  it('offers to go through the reply prepared for a message that waits on the user', () => {
+  it('offers to go through the reply prepared for a message that asks the user something', () => {
     expect(
       segretarioSuggestions({
         ...base,
         messageOpen: true,
-        note: note('da_rispondere'),
-        readyReply: true
+        work: work({ owed: { kind: 'ti_chiedono', due: null }, reply: 'pronta' })
       })[0]
     ).toBe('Rivedi con me la risposta pronta')
-    expect(segretarioSuggestions({ ...base, messageOpen: true, note: note('in_attesa') })[0]).toBe(
-      'Prepara un sollecito'
-    )
+    expect(
+      segretarioSuggestions({ ...base, messageOpen: true, work: work({ awaited: true }) })[0]
+    ).toBe('Prepara un sollecito')
   })
 
-  it('asks where a pratica stands from its list, and keeps to four', () => {
+  it('asks where a project stands from its list, and keeps to four', () => {
     const suggestions = segretarioSuggestions({
       ...base,
-      topic: 'Prat2451 · CASEIFICIO VALLI',
+      project: 'Prat2451 · CASEIFICIO VALLI',
       calendarConnected: true
     })
 

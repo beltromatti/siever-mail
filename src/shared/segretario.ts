@@ -2,13 +2,16 @@ import type { MessageRef } from './models'
 
 /**
  * The Segretario: SIEVER Mail's agent. What the main process and the page
- * say to each other about it — the key, the credit, the activities and
- * what happens in them.
+ * say to each other about it — the key and the switch, the user's work as
+ * the Segretario keeps it (notes, commitments, projects, replies,
+ * proposals), its runs and what happens in them.
  */
+
+/* ──────────────────────────────── key and switch ──────────────────────────────── */
 
 /** Where the OpenRouter key stands, as the last check found it. */
 export type SegretarioKeyState =
-  /** No key saved: the Segretario is off. */
+  /** No key saved: the AI is off. */
   | 'missing'
   /** Saved and answered; `credit` says how much is left. */
   | 'ready'
@@ -22,12 +25,9 @@ export type SegretarioKeyState =
 export interface SegretarioCredit {
   /** What can still be spent, in dollars: the lower of the account's balance and the key's limit. */
   available: number
-  /** The account's balance (credits bought less usage), when OpenRouter says it. */
   balance: number | null
-  /** The key's own limit and what is left of it, when it has one. */
   keyLimit: number | null
   keyRemaining: number | null
-  /** When the key's limit starts again: daily, weekly, monthly. */
   keyLimitReset: string | null
 }
 
@@ -36,71 +36,78 @@ export interface SegretarioStatus {
   /** The key as OpenRouter labels it ("sk-or-v1-9b6…138"), never the key itself. */
   keyLabel: string | null
   credit: SegretarioCredit | null
-  /** When it was last checked, epoch ms. */
   checkedAt: number | null
-  /** What went wrong at the last check, in the user's words. */
   problem: string | null
-  /** The model in use, as OpenRouter names it ("DeepSeek: DeepSeek V4.1 Flash 1017"). */
+  /** The model in use, as OpenRouter names it. */
   modelName: string | null
 }
 
-/** What the Segretario does on its own; each can be switched off (see Impostazioni → Segretario). */
+/**
+ * The AI is one switch: on, every function of the Segretario is there; off,
+ * SIEVER Mail is a mail and calendar client with no trace of it, and what it
+ * learnt is kept.
+ */
 export interface SegretarioPreferences {
-  /** Reads every message as it arrives: what it asks, by when, how it matters. */
-  triage: boolean
-  /** Prepares replies, in the user's voice, to the messages that need one. */
-  readyDrafts: boolean
-  /**
-   * Gets to know the user — reads what they wrote from each account — and
-   * keeps learning from how they correct its drafts. Null until the user
-   * has said yes or no: it reads their mail on its own, so it asks first.
-   */
-  learning: boolean | null
-  /** Rereads each message as it is sent, for what the user would want to correct first. */
-  reviewBeforeSend: boolean
+  enabled: boolean
 }
 
-export const DEFAULT_SEGRETARIO_PREFERENCES: SegretarioPreferences = {
-  triage: true,
-  readyDrafts: true,
-  learning: null,
-  reviewBeforeSend: true
+export const DEFAULT_SEGRETARIO_PREFERENCES: SegretarioPreferences = { enabled: true }
+
+/** What the Segretario costs, in dollars, as OpenRouter billed each call. */
+export interface SegretarioSpending {
+  today: number
+  thisMonth: number
+  /** The last thirty days, by what it was spent on, the most first. */
+  byFunction: Array<{ purpose: string; label: string; cost: number }>
 }
 
-/* ─────────────────────────── notes on the mail ─────────────────────────── */
+/** Where the Segretario's own work stands: what it reads, what waits, what failed. */
+export interface EngineState {
+  /** The key was refused or the credit ran out: nothing runs until the user acts. */
+  paused: string | null
+  /** Of the messages of the last thirty days the Segretario reads, how many it has read. */
+  reading: { read: number; total: number }
+  /** Units of work waiting or running, by task. */
+  queued: Partial<Record<TaskKind, number>>
+  running: Partial<Record<TaskKind, number>>
+  /** Units of work left failed after their attempts. */
+  failed: number
+}
 
-/** Where a message leaves the user, as the Segretario read it. */
-export type NoteState = 'da_rispondere' | 'da_fare' | 'in_attesa' | 'informativo' | 'rumore'
+/* ─────────────────────────────── the user's work ─────────────────────────────── */
+
+/** Who changed something: the user, the Segretario, or the app itself. */
+export type WorkActor = 'utente' | 'segretario' | 'sistema'
+
+/** What a message asked of the user when it came, as the Segretario read it. */
+export type NoteNature = 'da_rispondere' | 'da_fare' | 'in_attesa' | 'informativo' | 'rumore'
 export type NotePriority = 'alta' | 'media' | 'bassa'
 
 /**
- * What the Segretario wrote next to a message when it arrived (or left):
- * the one thing that counts, where it leaves the user, how much it matters.
- * Kept by the message's stable key, whatever folder holds it.
+ * What the Segretario wrote next to a message when it came (or left): the
+ * one thing that counts, what it asked of the user, how much it matters.
+ * History: what is still to do lives in the commitments.
  */
 export interface MessageNote {
   accountId: string
   messageKey: string
   threadId: string
-  /** Received, or written by the user. */
   direction: 'in' | 'out'
   summary: string
-  state: NoteState
+  nature: NoteNature
   priority: NotePriority
   reason: string
-  /** By when, AAAA-MM-GG. */
   due: string | null
   messageDate: string
-  /** The user said it is handled. */
-  dismissedAt: number | null
-  /**
-   * The same message came to another of the user's accounts, and is
-   * followed there: this note copies that one's, and opens nothing.
-   */
+  /** The same message came to another of the user's accounts: this copies that note. */
   twinAccountId: string | null
+  writtenBy: WorkActor
 }
 
 export type CommitmentKind = 'ti_chiedono' | 'hai_promesso' | 'aspetti' | 'da_fare'
+
+/** Open until done, not needed, or put off to a day; any of them can be opened again. */
+export type CommitmentStatus = 'aperta' | 'fatta' | 'non_serve' | 'rinviata'
 
 /** Something open between the user and someone: asked, promised, awaited, to do. */
 export interface Commitment {
@@ -112,144 +119,182 @@ export interface Commitment {
   kind: CommitmentKind
   text: string
   due: string | null
-  status: 'aperto' | 'chiuso'
+  status: CommitmentStatus
+  /** For `rinviata`: the day it opens again. */
+  until: string | null
+  /** Who made its last change of status, why, and the message that showed it. */
+  setBy: WorkActor
+  reason: string | null
+  evidenceKey: string | null
+  /** A question the Segretario asks the user about it: is it still open? */
+  question: string | null
   createdAt: number
-  closedAt: number | null
-  /** Closed by a later message the Segretario read, or by the user. */
-  closedBy: 'segretario' | 'utente' | null
+  updatedAt: number
 }
 
-/** A conversation as the reader shows it: its latest note, what is open in it, the reply prepared. */
-export interface ThreadBrief {
-  note: MessageNote | null
-  /** The topic it belongs to, if any. */
-  topic: Pick<Topic, 'id' | 'title' | 'folderPath'> | null
-  commitments: Commitment[]
-  /** A reply the Segretario prepared ahead for the latest message, until taken up or set aside. */
-  readyDraft: { messageKey: string; kind: ReadyDraftKind; text: string; doubts: string } | null
-  /** Where it was filed outside the mail — a pratica's folder — and when; null if it was not. */
-  archived: { folder: string; at: number } | null
+/** A project a conversation is in, for a row's badge and the reader. */
+export interface ProjectLabel {
+  id: string
+  title: string
 }
 
-/** A reply to a message that waits on the user, or a reminder after the user's own that waits too long. */
-export type ReadyDraftKind = 'risposta' | 'sollecito'
+/** A reply prepared ahead, while it waits for the user. */
+export interface PreparedReply {
+  accountId: string
+  messageKey: string
+  kind: 'risposta' | 'sollecito'
+  text: string
+  doubts: string
+  /** `da_rivedere` when the conversation moved on after it was written. */
+  status: 'pronta' | 'da_rivedere'
+  staleReason: string | null
+}
 
-/* ──────────────────────────────── topics ──────────────────────────────── */
+/** Something the Segretario recommends and leaves the user to decide. */
+export interface Proposal {
+  id: string
+  /** `evento`, or an extension's own (`archivia_siever`). */
+  kind: string
+  title: string
+  payload: Record<string, unknown>
+  accountId: string | null
+  messageKey: string | null
+  createdAt: number
+}
+
+/** A copy of a message saved outside the mail by an extension, as the message shows it. */
+export interface SavedCopyInfo {
+  /** What it is called: "Archiviato Siever". */
+  label: string
+  destination: string
+  savedAt: number
+}
 
 /**
- * A matter that lasts — a job, a project, a negotiation; in a company's
- * build, a pratica of its archive — and the conversations that belong to
- * it, across the accounts. The Segretario files conversations into topics
- * as they arrive and keeps a word on where each stands.
+ * What the reader shows of a message: its note, what is open (and settled
+ * lately) in its conversation, its projects, the reply prepared, the copies
+ * saved, the proposals waiting.
  */
-export interface Topic {
+export interface MessageWork {
+  note: MessageNote | null
+  commitments: Commitment[]
+  projects: ProjectLabel[]
+  reply: PreparedReply | null
+  copies: SavedCopyInfo[]
+  proposals: Proposal[]
+}
+
+/**
+ * What a message's row in a list shows of the Segretario's work: its note
+ * — what it said — and what is open from it now, which is what decides.
+ */
+export interface MessageRowWork {
+  accountId: string
+  messageKey: string
+  note: MessageNote | null
+  /** The first of what the user owes from it, the soonest due first; null when nothing is owed. */
+  owed: { kind: CommitmentKind; due: string | null } | null
+  /** Something is awaited from it. */
+  awaited: boolean
+  /** A reply prepared for it: ready, or to look at again. */
+  reply: 'pronta' | 'da_rivedere' | null
+  /** A copy of it saved outside the mail by an extension, by its label ("Archiviato Siever"); null when none. */
+  saved: string | null
+}
+
+/** Where messages about to be saved outside the mail are likely to go, and what is proposed for them. */
+export interface FilingContext {
+  /** The latest destination of a copy of an earlier message of their conversations, or else of their senders. */
+  savedBefore: string | null
+  /** The proposals open on these messages, every kind: an extension takes its own. */
+  proposals: Proposal[]
+}
+
+/* ──────────────────────────────── projects ──────────────────────────────── */
+
+/**
+ * A matter that lasts — a job, a practice, a negotiation, a match to
+ * organise — and the conversations, folders and commitments that belong
+ * to it, across the accounts.
+ */
+export interface Project {
   id: string
   title: string
   description: string | null
-  /** Where its files are, when it has a folder: a pratica's, on the archive. */
-  folderPath: string | null
-  /** Brought by the extension (a pratica), made by the Segretario, or by the user. */
-  origin: 'extension' | 'segretario' | 'utente'
-  /** The extension's key for it ("pratica:2451"); null for the Segretario's and the user's own. */
-  externalKey: string | null
-  /** What it is about in a line, as the Segretario learnt it from its mail; null until it has. */
-  gist: string | null
-  /** Where it stands, as the Segretario last wrote it; null until written. */
+  /** "Il punto": where it stands, as last written; null until written. */
   state: string | null
   stateAt: number | null
-  lastActivityAt: number | null
+  /** Something moved after "Il punto" was written. */
+  stale: boolean
+  origin: WorkActor
+  hidden: boolean
+  closed: boolean
   conversations: number
   openCommitments: number
-  archived: boolean
+  lastMessageAt: string | null
 }
 
-export interface TopicDetail extends Topic {
-  /** Its conversations, each by its latest message, the newest first. */
-  messages: BriefingItem[]
+export interface ProjectDetail extends Project {
+  resources: Array<{ kind: 'cartella' | 'link'; location: string; label: string | null }>
   commitments: Commitment[]
+  /** Its conversations, each by its latest message, the newest first. */
+  messages: DayLine[]
 }
 
-/** A line of the day's page: a conversation that asks something, or a thing open in one. */
-export interface BriefingItem {
-  /** What it is, as the Segretario put it. */
+/* ──────────────────────────────── the day ──────────────────────────────── */
+
+/** A line of the day's page, of the agenda and of a project: a message, with what makes it count. */
+export interface DayLine {
   text: string
   priority: NotePriority | null
   due: string | null
-  /** For a thing open: asked, promised, awaited, to do. */
-  commitmentKind: CommitmentKind | null
-  /** For a text prepared: a reply, or a reminder. */
-  readyKind?: ReadyDraftKind
-  /** For a thing open: its id, to tick it off. */
-  commitmentId?: number
+  commitment: Commitment | null
+  readyKind?: 'risposta' | 'sollecito'
   ref: MessageRef
-  /** The message's key in its account: the same in every folder it is in. */
   messageKey: string
   subject: string
-  /** Who wrote the message, as a name: "Tu" when it is the user, from any of their accounts. */
+  /** Who wrote it, as a name: "Tu" when it is the user, from any of their accounts. */
   from: string
   date: string
 }
 
 /** The day as the Segretario sees it: "Oggi". */
-export interface Briefing {
-  /** AAAA-MM-GG, local. */
+export interface TodayPage {
   day: string
-  /** What it writes at the top of the day; null until written. */
-  opening: string | null
-  openingAt: number | null
-  /** How many lines came since the opening was written: past zero, it is behind the day. */
-  openingBehind: number
-  /** Messages triage has still to read: while there are, the day is not written about. */
+  /** The letter at the top, and when it was written; null until written. */
+  letter: string | null
+  letterAt: number | null
+  /** Messages still to be read: while there are, the day is not complete. */
   reading: number
   /** What is due today, or overdue. */
-  today: BriefingItem[]
+  today: DayLine[]
   /** What is due in the next seven days. */
-  week: BriefingItem[]
-  /** Who waits on the user, without a date. */
-  waiting: BriefingItem[]
+  week: DayLine[]
+  /** What the user owes, without a date or later. */
+  waiting: DayLine[]
   /** What the user waits on, the longest first. */
-  awaited: BriefingItem[]
-  /** Replies prepared, to look at. */
-  ready: BriefingItem[]
+  awaited: DayLine[]
+  /** Replies and reminders prepared, to look at. */
+  ready: DayLine[]
+  /** What the Segretario asks the user about: is it still open? */
+  questions: DayLine[]
+  proposals: Proposal[]
+  /** Today's meetings with what the Segretario prepared for them, by event key. */
+  preps: Record<string, string>
 }
+
+/* ──────────────────────────────── writing ──────────────────────────────── */
 
 /** What the user asks of the Segretario while writing a message. */
 export interface WritingRequest {
-  /** The draft being written, kept so what the user changes afterwards is learnt from. */
   draftId: string
   accountId: string
-  /** "Scrivi la risposta", "più breve", "in inglese"… */
   instruction: string
-  /** What is written so far, without the signature and the quote. */
   writtenText: string
-  /** A passage the user selected: only it is rewritten, and what comes back takes its place. */
   selectedText: string | null
   subject: string
   to: string[]
-  /** The message answered or forwarded, for its conversation. */
   replyTo: MessageRef | null
-}
-
-/** A search asked in words, as it was run: the list it makes. */
-export interface AskedMail {
-  id: string
-  question: string
-  /** What it looks for, in a few words: the list's title. */
-  summary: string
-  /** How it was searched, in the search's own terms: «offerta» · da settembre · con allegati. */
-  how: string
-  count: number
-}
-
-/**
- * A search asked in words that the user kept as a folder: it lives in the
- * sidebar and is run again, over the mail as it is then, each time it opens.
- */
-export interface SavedSearch {
-  id: string
-  question: string
-  summary: string
-  how: string
 }
 
 /** A message about to be sent, for the Segretario to reread. */
@@ -258,88 +303,121 @@ export interface ReviewRequest {
   to: string[]
   cc: string[]
   subject: string
-  /** What the user wrote, without the signature and the quote. */
   writtenText: string
-  /** The names of the files it carries. */
   attachments: string[]
-  /** The message it answers, if it answers one. */
   replyTo: MessageRef | null
 }
 
-/** Notes were written or changed: the views showing these refresh. */
-export interface NotesChange {
-  accountId: string
-  messageKeys: string[]
-  threadIds: string[]
+/** A search asked in words, as it was run: the list it makes. */
+export interface AskedMail {
+  id: string
+  question: string
+  summary: string
+  how: string
+  count: number
 }
 
-/** A note of the Segretario's memory, as Impostazioni shows it. */
+/** A search asked in words that the user kept as a folder. */
+export interface SavedSearch {
+  id: string
+  question: string
+  summary: string
+  how: string
+}
+
+/** The user's work changed: the views showing these refresh. */
+export interface WorkChange {
+  accountIds: string[]
+  threadIds: string[]
+  messageKeys: string[]
+  projectIds: string[]
+}
+
+/* ──────────────────────────────── memory ──────────────────────────────── */
+
 export interface MemoryNote {
-  /** "tu.md", "persone/anna-rossi.md". */
   path: string
   content: string
   updatedAt: number
+  revision: number
+  /** Who wrote it last: the user, or the Segretario. */
+  updatedBy: 'utente' | 'segretario'
 }
 
-/** Where getting to know an account stands. */
-export interface AccountLearning {
+export interface MemoryVersion {
+  revision: number
+  content: string | null
+  action: string
+  actor: string
+  at: number
+}
+
+/** Where getting to know a connection stands. */
+export interface ConnectionLearning {
   accountId: string
   email: string
-  /**
-   * `waiting`: not begun — the user has not agreed, or the account's recent
-   * mail is still being indexed; `running`; `done`; `stopped`: the user
-   * stopped it, and it waits for them to begin it again.
-   */
-  state: 'waiting' | 'running' | 'done' | 'stopped'
+  state: 'waiting' | 'running' | 'done'
   activityId: string | null
   finishedAt: number | null
 }
 
-/** What the Segretario has cost, in dollars, as OpenRouter billed each call. */
-export interface SegretarioSpending {
-  today: number
-  thisMonth: number
-}
-
-/* ─────────────────────────────── activities ─────────────────────────────── */
+/* ──────────────────────────────── runs ──────────────────────────────── */
 
 /**
- * A piece of work of the Segretario: asked by the user, or begun on its own
- * (getting to know an account, a reflection). Activities run side by side.
+ * The moments the Segretario is woken in: one identity, many runs. Each is
+ * a goal (`prompts/compiti/<task>.md`), the data it starts from, what it may
+ * do without asking, and what it must leave.
  */
-export type ActivityStatus =
-  /** At work. */
-  | 'running'
-  /** Needs the user: a confirmation, or an answer. */
-  | 'waiting'
-  /** Finished; the user can write to it again. */
-  | 'done'
-  /** Stopped by an error it could not get past. */
-  | 'failed'
-  /** Stopped by the user. */
-  | 'cancelled'
+export type TaskKind =
+  | 'richiesta'
+  | 'lettura'
+  | 'giornata'
+  | 'punto'
+  | 'calendario'
+  | 'scrittura'
+  | 'revisione'
+  | 'ricerca'
+  | 'conoscimi'
+  | 'riflessione'
+  | 'al_passo'
 
-export type ActivityKind = 'richiesta' | 'conoscerti' | 'riflessione' | 'aggiornamento'
+/** What a task is called for the user. */
+export const TASK_LABELS: Readonly<Record<TaskKind, string>> = {
+  richiesta: 'Richiesta',
+  lettura: 'Lettura della posta',
+  giornata: 'La giornata',
+  punto: 'Il punto di un progetto',
+  calendario: 'Calendario',
+  scrittura: 'Scrittura',
+  revisione: 'Revisione',
+  ricerca: 'Ricerca in parole',
+  conoscimi: 'Conoscimi',
+  riflessione: 'Riflessione',
+  al_passo: 'Al passo'
+}
+
+export type ActivityStatus = 'running' | 'waiting' | 'done' | 'failed' | 'cancelled'
+
+/** Where a run shows: the panel (the user's requests, Conoscimi), the diary (work on its own), nowhere (inline help). */
+export type ActivityVisibility = 'pannello' | 'diario' | 'nascosta'
 
 export interface ActivitySummary {
   id: string
-  kind: ActivityKind
+  task: TaskKind
   title: string
   status: ActivityStatus
   createdAt: number
   updatedAt: number
-  /** Something happened the user has not seen yet. */
   unseen: boolean
-  /** What it cost so far, in dollars. */
   cost: number
+  visibility: ActivityVisibility
 }
 
 /** What the user is looking at when they write: the Segretario reads it as context. */
 export interface SegretarioContext {
-  /** The message open in the reader, or the selection. */
   messages: MessageRef[]
-  /** The account the user is in, and the folder or view. */
   accountId: string | null
+  /** The folder, view, project or page in sight: "Posta in arrivo", "Progetto Hotel Lido", "Oggi". */
   folderLabel: string | null
 }
 
@@ -348,26 +426,19 @@ export interface ToolActivity {
   callId: string
   name: string
   status: 'running' | 'done' | 'error'
-  /** "Cercato «Hera» da lunedì · 9 conversazioni". */
   summary: string
-  /** Messages it found or read, to open with a click. */
   messages?: MessageRef[]
-  /** Files it read. */
   files?: string[]
 }
 
 /** Something the Segretario wants the user to confirm before it happens. */
 export interface ApprovalRequest {
   approvalId: string
-  /** A draft to send, or something else to do — an extension's action. */
   kind: 'send' | 'action'
-  /** One line for the card's header. */
   title: string
   status: 'pending' | 'approved' | 'rejected'
-  /** For an action: what will happen, a line each, and the word on its button. */
   details?: string[]
   confirmLabel?: string
-  /** The draft to send: the card shows exactly what goes out. */
   draft?: {
     draftId: string
     accountId: string
@@ -379,10 +450,7 @@ export interface ApprovalRequest {
   }
 }
 
-/**
- * What a short name the Segretario writes stands for — `m4` a message,
- * `f2` a file or attachment, `b1` a draft — for the page to make a link of.
- */
+/** What a short name the Segretario writes stands for, for the page to make a link of. */
 export type HandleLink =
   | { handle: string; kind: 'message'; ref: MessageRef }
   | {
@@ -394,8 +462,21 @@ export type HandleLink =
       attachmentId?: string
     }
   | { handle: string; kind: 'draft'; draftId: string }
-  | { handle: string; kind: 'topic'; topicId: string; title: string }
+  | { handle: string; kind: 'project'; projectId: string; title: string }
   | { handle: string; kind: 'event'; eventKey: string; title: string }
+
+/** A change a run made to the user's work, as its page of the diary shows it. */
+export interface WorkChangeLine {
+  object:
+    'nota' | 'impegno' | 'progetto' | 'risposta' | 'proposta' | 'copia' | 'evento' | 'giornata'
+  label: string
+  undoable: boolean
+  /** The user undid it. */
+  undone: boolean
+  accountId: string | null
+  messageKeys: string[]
+  projectIds: string[]
+}
 
 /** What the page shows of an activity, in order. */
 export type ActivityEntry =
@@ -412,6 +493,7 @@ export type ActivityEntry =
   | { kind: 'assistant'; id: number; text: string; at: number }
   | { kind: 'tool'; id: number; tool: ToolActivity; at: number; handles: HandleLink[] }
   | { kind: 'approval'; id: number; approval: ApprovalRequest; at: number }
+  | { kind: 'changes'; id: number; changes: WorkChangeLine[]; at: number }
   | { kind: 'compaction'; id: number; at: number }
   | { kind: 'error'; id: number; message: string; at: number }
 
@@ -423,36 +505,22 @@ export interface ActivityDetail extends ActivitySummary {
 export type ActivityEvent =
   | { type: 'summary'; activity: ActivitySummary }
   | { type: 'entry'; activityId: string; entry: ActivityEntry }
-  /** Text the Segretario is writing now, not yet a whole entry. */
   | { type: 'stream'; activityId: string; text: string }
   | { type: 'removed'; activityId: string }
 
 /* ────────────────────────── the page's part of the work ────────────────────────── */
 
-/**
- * A message the Segretario writes for the user, handed to the page to open
- * as a draft in the composer — exactly as the user's own reply, forward or
- * new message would be: signature, quote, thread, account. Its text
- * becomes the lines the user writes on; the draft is kept and filed in
- * Bozze at once, and waits in the dock.
- */
+/** A message the Segretario writes for the user, handed to the page to open as a draft. */
 export interface ComposeSpec {
   kind: 'reply' | 'replyAll' | 'forward' | 'new'
-  /** The message answered or forwarded. */
   source?: MessageRef
-  /** For a new message, the account it goes out from. */
   accountId?: string
-  /** When given, in place of the reply's own recipients. */
   to?: string[]
   cc?: string[]
   bcc?: string[]
-  /** For a new message; replies and forwards keep the original's. */
   subject?: string
-  /** What the message says, as plain text: blank lines between paragraphs. */
   text: string
-  /** Files to attach, by path. */
   attachments?: Array<{ path: string; name: string }>
-  /** A draft the Segretario already wrote, to be rewritten in place. */
   draftId?: string
 }
 
@@ -461,8 +529,11 @@ export type ComposeResult = { draftId: string } | { error: string }
 /** What the Segretario wants the user to see, in the main window. */
 export type ShowRequest =
   | { kind: 'message'; ref: MessageRef }
-  | { kind: 'search'; query: string; accountId: string | null; folderPath: string | null }
   | { kind: 'draft'; draftId: string }
+  /** A search it ran, kept for the session: the list to open. */
+  | { kind: 'search'; search: AskedMail }
+  | { kind: 'project'; projectId: string }
+  | { kind: 'day'; day: string }
 
 /** How an approved send went, as the page reports it. */
 export type SendOutcome = { sent: true } | { sent: false; error: string }
@@ -477,42 +548,49 @@ export const SEGRETARIO_IPC = {
   getPreferences: 'segretario:get-preferences',
   setPreferences: 'segretario:set-preferences',
   getSpending: 'segretario:get-spending',
+  getEngineState: 'segretario:get-engine-state',
+  retryFailedWork: 'segretario:retry-failed-work',
   listMemory: 'segretario:list-memory',
   writeMemory: 'segretario:write-memory',
   deleteMemory: 'segretario:delete-memory',
+  memoryHistory: 'segretario:memory-history',
+  restoreMemory: 'segretario:restore-memory',
   forgetEverything: 'segretario:forget-everything',
   listLearning: 'segretario:list-learning',
-  lastKeptUpAt: 'segretario:last-kept-up-at',
-  relearnAccount: 'segretario:relearn-account',
+  startConoscimi: 'segretario:start-conoscimi',
   draftSent: 'segretario:draft-sent',
-  getNotes: 'segretario:get-notes',
-  getThreadBrief: 'segretario:get-thread-brief',
-  closeCommitment: 'segretario:close-commitment',
-  dismissNote: 'segretario:dismiss-note',
-  dismissConversations: 'segretario:dismiss-conversations',
+  getRowWork: 'segretario:get-row-work',
+  filingContext: 'segretario:filing-context',
+  getMessageWork: 'segretario:get-message-work',
+  setCommitmentStatus: 'segretario:set-commitment-status',
+  editCommitment: 'segretario:edit-commitment',
+  openCommitment: 'segretario:open-commitment',
+  markHandled: 'segretario:mark-handled',
+  undoChange: 'segretario:undo-change',
+  replySource: 'segretario:reply-source',
+  takeUpReply: 'segretario:take-up-reply',
+  discardReply: 'segretario:discard-reply',
+  decideProposal: 'segretario:decide-proposal',
+  getToday: 'segretario:get-today',
+  refreshToday: 'segretario:refresh-today',
   getDue: 'segretario:get-due',
-  takeUpReadyDraft: 'segretario:take-up-ready-draft',
-  discardReadyDraft: 'segretario:discard-ready-draft',
-  readyDraftSource: 'segretario:ready-draft-source',
-  getBriefing: 'segretario:get-briefing',
   assistWriting: 'segretario:assist-writing',
-  listTopics: 'segretario:list-topics',
-  getTopic: 'segretario:get-topic',
-  writeTopicState: 'segretario:write-topic-state',
-  setConversationTopic: 'segretario:set-conversation-topic',
-  updateTopic: 'segretario:update-topic',
-  topicsLabel: 'segretario:topics-label',
-  createTopic: 'segretario:create-topic',
-  conversationTopics: 'segretario:conversation-topics',
-  filingHint: 'segretario:filing-hint',
   reviewDraft: 'segretario:review-draft',
   askMail: 'segretario:ask-mail',
   listSavedSearches: 'segretario:list-saved-searches',
   saveSearch: 'segretario:save-search',
   removeSavedSearch: 'segretario:remove-saved-search',
-  openTopicFolder: 'segretario:open-topic-folder',
-  writeBriefingOpening: 'segretario:write-briefing-opening',
-  notesChanged: 'segretario:notes-changed',
+  listProjects: 'segretario:list-projects',
+  getProject: 'segretario:get-project',
+  refreshProject: 'segretario:refresh-project',
+  createProject: 'segretario:create-project',
+  updateProject: 'segretario:update-project',
+  mergeProjects: 'segretario:merge-projects',
+  setConversationProject: 'segretario:set-conversation-project',
+  conversationProjects: 'segretario:conversation-projects',
+  openProjectFolder: 'segretario:open-project-folder',
+  workChanged: 'segretario:work-changed',
+  engineChanged: 'segretario:engine-changed',
   listActivities: 'segretario:list-activities',
   getActivity: 'segretario:get-activity',
   startActivity: 'segretario:start-activity',
@@ -523,6 +601,7 @@ export const SEGRETARIO_IPC = {
   resolveApproval: 'segretario:resolve-approval',
   completeCompose: 'segretario:complete-compose',
   statusChanged: 'segretario:status-changed',
+  preferencesChanged: 'segretario:preferences-changed',
   activityEvent: 'segretario:activity-event',
   composeRequest: 'segretario:compose-request',
   showRequest: 'segretario:show-request'
@@ -533,118 +612,129 @@ export interface SegretarioApi {
   /** Checks a key with OpenRouter and, if it answers, keeps it encrypted. */
   saveKey: (key: string) => Promise<SegretarioStatus>
   removeKey: () => Promise<SegretarioStatus>
-  /** Asks OpenRouter again about the key and its credit. */
   checkKey: () => Promise<SegretarioStatus>
   getPreferences: () => Promise<SegretarioPreferences>
   setPreferences: (preferences: SegretarioPreferences) => Promise<SegretarioPreferences>
   getSpending: () => Promise<SegretarioSpending>
+  getEngineState: () => Promise<EngineState>
+  /** Tries the work that failed again, now. */
+  retryFailedWork: () => Promise<EngineState>
   listMemory: () => Promise<MemoryNote[]>
   /** Writes a note as the user corrected it. */
   writeMemory: (path: string, content: string) => Promise<MemoryNote[]>
   deleteMemory: (path: string) => Promise<MemoryNote[]>
-  /** Empties the memory and starts getting to know every account again. */
+  memoryHistory: (path: string) => Promise<MemoryVersion[]>
+  restoreMemory: (path: string, revision: number) => Promise<MemoryNote[]>
+  /** Empties the memory and what the Segretario knows of every connection. */
   forgetEverything: () => Promise<void>
-  listLearning: () => Promise<AccountLearning[]>
-  /** When the memory was last brought up to date with the mail read since; null if never. */
-  lastKeptUpAt: () => Promise<number | null>
-  /** Gets to know one account again, from the start. */
-  relearnAccount: (accountId: string) => Promise<AccountLearning[]>
+  listLearning: () => Promise<ConnectionLearning[]>
   /**
-   * A draft went out: what the user wrote in it, without the signature and
-   * the quote. When the Segretario had written it, the difference is what
-   * it learns from.
+   * Starts Conoscimi on these connections (all when none are given): the
+   * Segretario gets to know them, building on what it knows. Resolves with
+   * the run, which the page shows as it goes.
    */
+  startConoscimi: (accountIds?: string[]) => Promise<ActivitySummary>
+  /** A draft went out: what the user wrote in it, to learn from when the Segretario had written it. */
   draftSent: (draftId: string, writtenText: string) => Promise<void>
-  /** The notes of these messages, those that have one. */
-  getNotes: (messages: Array<{ accountId: string; messageKey: string }>) => Promise<MessageNote[]>
-  getThreadBrief: (accountId: string, threadId: string) => Promise<ThreadBrief>
-  /** The user closed something open: done, or no longer needed. */
-  closeCommitment: (id: number) => Promise<void>
-  /** The user said a message is handled: it leaves "Da gestire". */
-  dismissNote: (accountId: string, messageKey: string) => Promise<void>
-  /** "Segna come gestito" for the conversations of these messages; resolves with how many. */
-  dismissConversations: (
+  /** What the rows of these messages show: the note, what is owed or awaited, the reply. */
+  getRowWork: (
+    messages: ReadonlyArray<{ accountId: string; messageKey: string }>
+  ) => Promise<MessageRowWork[]>
+  getMessageWork: (accountId: string, messageKey: string) => Promise<MessageWork>
+  /**
+   * For messages about to be saved outside the mail (an extension's
+   * archive): where earlier messages of their conversations — or else of
+   * their senders — were saved, and what the Segretario proposes for them.
+   */
+  filingContext: (
+    messages: ReadonlyArray<{
+      accountId: string
+      messageKey: string
+      threadId: string
+      from: string | null
+    }>
+  ) => Promise<FilingContext>
+  /** Done, not needed, put off until a day, or open again. */
+  setCommitmentStatus: (
+    id: number,
+    status: CommitmentStatus,
+    options?: { until?: string; reason?: string }
+  ) => Promise<Commitment>
+  /** The user corrects what a commitment says. */
+  editCommitment: (
+    id: number,
+    changes: { text?: string; due?: string | null; kind?: CommitmentKind }
+  ) => Promise<Commitment>
+  /** The user opens a commitment on a message. */
+  openCommitment: (
+    message: { accountId: string; messageKey: string },
+    input: { kind: CommitmentKind; text: string; due: string | null }
+  ) => Promise<Commitment>
+  /** "Segna come gestito": what these messages ask of the user is done; what they wait for stays. */
+  markHandled: (
     messages: ReadonlyArray<{ accountId: string; messageKey: string }>
   ) => Promise<number>
-  onNotesChanged: (listener: (change: NotesChange) => void) => () => void
-  /** Where the message a prepared reply answers is, to open the reply on it. */
-  readyDraftSource: (accountId: string, messageKey: string) => Promise<MessageRef | null>
+  /** Undoes a change a run made: its page of the diary, the change's place on it. */
+  undoChange: (activityId: string, eventId: number, index: number) => Promise<void>
+  replySource: (accountId: string, messageKey: string) => Promise<MessageRef | null>
   /** The user took a prepared reply up: it became draft `draftId`, and is learnt from like the others. */
-  takeUpReadyDraft: (accountId: string, messageKey: string, draftId: string) => Promise<void>
-  discardReadyDraft: (accountId: string, messageKey: string) => Promise<void>
-  getBriefing: () => Promise<Briefing>
-  /** What is due from today through a day (AAAA-MM-GG): the agenda's deadlines. */
-  getDue: (throughDay: string) => Promise<BriefingItem[]>
-  /** What topics are called in this build: "Argomenti", or the extension's word ("Pratiche"). */
-  topicsLabel: () => Promise<string>
-  listTopics: () => Promise<Topic[]>
-  getTopic: (id: string) => Promise<TopicDetail | null>
-  /** Writes again where the topic stands, from its conversations and what is open in them. */
-  writeTopicState: (id: string) => Promise<TopicDetail | null>
-  /** Files a conversation into a topic, or out of any (null): the user's choice is kept. */
-  setConversationTopic: (
-    accountId: string,
-    threadId: string,
-    topicId: string | null
-  ) => Promise<void>
-  /** The topic each conversation is in, by id, in the order asked; null for one in none. */
-  conversationTopics: (
-    threads: ReadonlyArray<{ accountId: string; threadId: string }>
-  ) => Promise<Array<string | null>>
-  /**
-   * Where these messages are kept, for an extension's filing: the extension
-   * topic their conversations all share, and the subfolder of its folder
-   * their earlier messages were filed in — or, for a new conversation, where
-   * their sender's mail goes in it.
-   */
-  filingHint: (
-    messages: ReadonlyArray<{ accountId: string; threadId: string; from: string | null }>
-  ) => Promise<{ topicKey: string | null; destination: string | null }>
-  /**
-   * A search asked in words — "l'offerta di Gallo di settembre con il PDF"
-   * — made into one of the search's own, and run: its list's id, what it
-   * looks for, and how many it found.
-   */
+  takeUpReply: (accountId: string, messageKey: string, draftId: string) => Promise<void>
+  discardReply: (accountId: string, messageKey: string) => Promise<void>
+  /** The user accepted a proposal — with what they changed — or set it aside. */
+  decideProposal: (id: string, accepted: boolean, result?: Record<string, unknown>) => Promise<void>
+  getToday: () => Promise<TodayPage>
+  /** Asks the Segretario to look at the day again now. */
+  refreshToday: () => Promise<void>
+  /** What is due from today through a day: the calendar's deadlines. */
+  getDue: (throughDay: string) => Promise<DayLine[]>
+  assistWriting: (request: WritingRequest) => Promise<{ text: string }>
+  reviewDraft: (request: ReviewRequest) => Promise<string[]>
   askMail: (question: string) => Promise<AskedMail>
   listSavedSearches: () => Promise<SavedSearch[]>
-  /** Keeps a search asked this session as a folder; resolves with every one kept. */
   saveSearch: (id: string) => Promise<SavedSearch[]>
   removeSavedSearch: (id: string) => Promise<SavedSearch[]>
-  /** Rereads a message about to be sent: what the user would want to correct first, a line each. */
-  reviewDraft: (request: ReviewRequest) => Promise<string[]>
-  /** A topic the user makes, by its title. */
-  createTopic: (title: string) => Promise<Topic>
-  /** Opens a topic's folder — a pratica's, on the archive — in Finder or Explorer. */
-  openTopicFolder: (id: string) => Promise<void>
-  /** Renames, archives or brings back a topic. */
-  updateTopic: (id: string, change: { title?: string; archived?: boolean }) => Promise<Topic | null>
-  /** Writes or rewrites the message being written, as asked: the whole text, ready to send. */
-  assistWriting: (request: WritingRequest) => Promise<{ text: string }>
-  /** Writes the day's opening again, from the day as it stands. */
-  writeBriefingOpening: () => Promise<Briefing>
-  listActivities: () => Promise<ActivitySummary[]>
+  listProjects: (options?: { includeHidden?: boolean }) => Promise<Project[]>
+  getProject: (id: string) => Promise<ProjectDetail | null>
+  /** "Il punto" is behind: the Segretario writes it again, now. */
+  refreshProject: (id: string) => Promise<void>
+  createProject: (title: string) => Promise<Project>
+  /** Renames, hides or brings back, closes or reopens a project: the user's word, kept. */
+  updateProject: (
+    id: string,
+    change: { title?: string; hidden?: boolean; closed?: boolean }
+  ) => Promise<Project | null>
+  mergeProjects: (keepId: string, otherIds: string[]) => Promise<Project | null>
+  /** Puts a conversation in a project, or takes it out of one: the user's word, kept. */
+  setConversationProject: (
+    thread: { accountId: string; threadId: string },
+    projectId: string,
+    linked: boolean
+  ) => Promise<void>
+  /** The projects each conversation is in, in the order asked. */
+  conversationProjects: (
+    threads: ReadonlyArray<{ accountId: string; threadId: string }>
+  ) => Promise<ProjectLabel[][]>
+  openProjectFolder: (id: string) => Promise<void>
+  onWorkChanged: (listener: (change: WorkChange) => void) => () => void
+  onEngineChanged: (listener: (state: EngineState) => void) => () => void
+  /** The panel's activities: the user's requests and Conoscimi; with `diary`, the work done alone too. */
+  listActivities: (options?: { diary?: boolean }) => Promise<ActivitySummary[]>
   getActivity: (id: string) => Promise<ActivityDetail | null>
-  /** Begins a new activity with what the user asked. */
   startActivity: (text: string, context: SegretarioContext) => Promise<ActivitySummary>
-  /** Writes to an activity: an answer, a correction, a new request on the same thread. */
   sendMessage: (id: string, text: string, context: SegretarioContext) => Promise<void>
   cancelActivity: (id: string) => Promise<void>
   removeActivity: (id: string) => Promise<void>
   markActivitySeen: (id: string) => Promise<void>
-  /**
-   * The user's answer to a confirmation. For a send, the page sends the
-   * draft itself — through the composer, as any message goes — and reports
-   * how it went.
-   */
   resolveApproval: (
     activityId: string,
     approvalId: string,
     approved: boolean,
     outcome?: SendOutcome
   ) => Promise<void>
-  /** The page opened the draft a compose request asked for, or could not. */
   completeCompose: (requestId: string, result: ComposeResult) => Promise<void>
   onStatusChanged: (listener: (status: SegretarioStatus) => void) => () => void
+  /** The AI was switched on or off, here or in another window. */
+  onPreferencesChanged: (listener: (preferences: SegretarioPreferences) => void) => () => void
   onActivityEvent: (listener: (event: ActivityEvent) => void) => () => void
   onComposeRequest: (
     listener: (request: { requestId: string; spec: ComposeSpec }) => void

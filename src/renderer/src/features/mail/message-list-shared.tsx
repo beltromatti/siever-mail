@@ -171,12 +171,8 @@ export function FlagToggle({
   )
 }
 
-/**
- * The account a message came to, on the rows of Tutti gli account. As quiet as the date
- * beside it, but always there: it is the account a reply or a move acts on.
- */
-/** A conversation's pratica, or topic, on its row. */
-export function TopicTag({
+/** The projects of a conversation, on its row: the first by its code or short name, and how many more. */
+export function ProjectTag({
   label,
   className
 }: {
@@ -196,6 +192,22 @@ export function TopicTag({
   )
 }
 
+/** A copy of the message saved outside the mail by an extension, on its row: "Archiviato Siever". */
+export function SavedTag({ label }: { label: string }): React.JSX.Element {
+  return (
+    <span
+      className="text-muted-foreground bg-hover inline-block max-w-[40%] shrink-0 truncate rounded-[4px] px-1 align-middle text-[10.5px] leading-4 font-semibold shadow-[inset_0_0_0_1px_hsl(var(--border))]"
+      title={label}
+    >
+      {label}
+    </span>
+  )
+}
+
+/**
+ * The account a message came to, on the rows of Tutti gli account. As quiet as the date
+ * beside it, but always there: it is the account a reply or a move acts on.
+ */
 export function AccountTag({
   label,
   className

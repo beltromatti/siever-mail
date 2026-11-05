@@ -1,5 +1,6 @@
 import { placeholders, type Sql } from '../sql'
 import { CommitmentStore } from './commitments'
+import { DayStore } from './day'
 import { NoteStore, type NoteInput } from './notes'
 import { ProjectStore } from './projects'
 import { CopyStore, ProposalStore } from './proposals'
@@ -21,15 +22,17 @@ import {
   type ReplyRecord,
   type ReplyStatus,
   type SavedCopy,
-  type ThreadRef
+  type ThreadRef,
+  SYSTEM,
+  USER
 } from './types'
 
 /** A view of the Segretario's, by what it holds. */
 export type RegistryView = 'da-gestire' | 'in-attesa' | 'bozze-pronte'
 
 export interface RegistryHooks {
-  /** Something changed: the views showing it refresh, the diary records it. */
-  changed(change: RegistryChange): void
+  /** Something changed, by whom: the views showing it refresh, the run's diary records it. */
+  changed(change: RegistryChange, actor: Actor): void
   /** The user corrected or decided something: a lesson for the reflection. */
   lesson(kind: string, payload: Record<string, unknown>): void
 }
@@ -63,6 +66,7 @@ export class Registry {
   readonly replies: ReplyStore
   readonly proposals: ProposalStore
   readonly copies: CopyStore
+  readonly day: DayStore
 
   constructor(
     private readonly sql: Sql,
@@ -74,6 +78,7 @@ export class Registry {
     this.replies = new ReplyStore(sql)
     this.proposals = new ProposalStore(sql)
     this.copies = new CopyStore(sql)
+    this.day = new DayStore(sql)
   }
 
   /* ─────────────────────────────── notes ─────────────────────────────── */
@@ -97,16 +102,19 @@ export class Registry {
 
     return {
       record,
-      change: this.emit({
-        object: 'nota',
-        action: created ? 'scritta' : 'corretta',
-        label: `${created ? 'Nota' : 'Nota corretta'}: ${record.summary}`,
-        accountId: anchor.accountId,
-        threadIds: [anchor.threadId],
-        messageKeys: [anchor.messageKey],
-        projectIds,
-        id: `${anchor.accountId}:${anchor.messageKey}`
-      })
+      change: this.emit(
+        {
+          object: 'nota',
+          action: created ? 'scritta' : 'corretta',
+          label: `${created ? 'Nota' : 'Nota corretta'}: ${record.summary}`,
+          accountId: anchor.accountId,
+          threadIds: [anchor.threadId],
+          messageKeys: [anchor.messageKey],
+          projectIds,
+          id: `${anchor.accountId}:${anchor.messageKey}`
+        },
+        actor
+      )
     }
   }
 
@@ -127,17 +135,20 @@ export class Registry {
     return {
       record,
       created,
-      change: this.emit({
-        object: 'impegno',
-        action: 'aperta',
-        label: `Aperta (${KIND_WORDS[record.kind]}): ${record.text}`,
-        accountId: record.accountId,
-        threadIds: [record.threadId],
-        messageKeys: [record.messageKey],
-        projectIds,
-        id: record.id,
-        undo: historyId ? { kind: 'impegno', itemId: record.id, historyId } : undefined
-      })
+      change: this.emit(
+        {
+          object: 'impegno',
+          action: 'aperta',
+          label: `Aperta (${KIND_WORDS[record.kind]}): ${record.text}`,
+          accountId: record.accountId,
+          threadIds: [record.threadId],
+          messageKeys: [record.messageKey],
+          projectIds,
+          id: record.id,
+          undo: historyId ? { kind: 'impegno', itemId: record.id, historyId } : undefined
+        },
+        actor
+      )
     }
   }
 
@@ -165,17 +176,20 @@ export class Registry {
 
     return {
       record,
-      change: this.emit({
-        object: 'impegno',
-        action: 'aggiornata',
-        label: `Precisata: ${record.text}${record.due ? ` (entro il ${record.due})` : ''}`,
-        accountId: record.accountId,
-        threadIds: [record.threadId],
-        messageKeys: [record.messageKey],
-        projectIds,
-        id: record.id,
-        undo: { kind: 'impegno', itemId: record.id, historyId }
-      })
+      change: this.emit(
+        {
+          object: 'impegno',
+          action: 'aggiornata',
+          label: `Precisata: ${record.text}${record.due ? ` (entro il ${record.due})` : ''}`,
+          accountId: record.accountId,
+          threadIds: [record.threadId],
+          messageKeys: [record.messageKey],
+          projectIds,
+          id: record.id,
+          undo: { kind: 'impegno', itemId: record.id, historyId }
+        },
+        actor
+      )
     }
   }
 
@@ -200,13 +214,24 @@ export class Registry {
     const projectIds = await this.projects.markStaleByThreads([record])
 
     if (actor.by === 'utente' && before) {
-      // What teaches: a thing the Segretario opened that was not needed, one it closed that was not done.
-      if (status === 'non_serve' || (status === 'aperta' && before.setBy === 'segretario')) {
+      // What teaches: a thing the Segretario opened that was not needed, one it closed that was
+      // not done, the answer to what it asked.
+      if (
+        status === 'non_serve' ||
+        (status === 'aperta' && before.status !== 'aperta' && before.setBy === 'segretario')
+      ) {
         this.hooks.lesson(status === 'non_serve' ? 'impegno_non_serve' : 'impegno_riaperto', {
           tipo: record.kind,
           testo: record.text,
           prima: before.status,
           motivo: options.reason ?? null
+        })
+      } else if (before.question) {
+        this.hooks.lesson('domanda_risposta', {
+          tipo: record.kind,
+          testo: record.text,
+          domanda: before.question,
+          risposta: status === before.status ? 'ancora aperta' : STATUS_LABELS[status]
         })
       }
     }
@@ -214,17 +239,20 @@ export class Registry {
     const until = status === 'rinviata' && record.until ? ` fino al ${record.until}` : ''
     return {
       record,
-      change: this.emit({
-        object: 'impegno',
-        action: status,
-        label: `${STATUS_LABELS[status]}${until}: ${record.text}`,
-        accountId: record.accountId,
-        threadIds: [record.threadId],
-        messageKeys: [record.messageKey],
-        projectIds,
-        id: record.id,
-        undo: { kind: 'impegno', itemId: record.id, historyId }
-      })
+      change: this.emit(
+        {
+          object: 'impegno',
+          action: status,
+          label: `${before?.status === status ? 'Ancora aperta' : STATUS_LABELS[status]}${until}: ${record.text}`,
+          accountId: record.accountId,
+          threadIds: [record.threadId],
+          messageKeys: [record.messageKey],
+          projectIds,
+          id: record.id,
+          undo: { kind: 'impegno', itemId: record.id, historyId }
+        },
+        actor
+      )
     }
   }
 
@@ -240,17 +268,20 @@ export class Registry {
       if (historyId !== null) {
         const projectIds = await this.projects.markStaleByThreads([record])
         changes.push(
-          this.emit({
-            object: 'impegno',
-            action: 'unita',
-            label: `Unita a #${keepId}: ${record.text}`,
-            accountId: record.accountId,
-            threadIds: [record.threadId],
-            messageKeys: [record.messageKey],
-            projectIds,
-            id: record.id,
-            undo: { kind: 'impegno', itemId: record.id, historyId }
-          })
+          this.emit(
+            {
+              object: 'impegno',
+              action: 'unita',
+              label: `Unita a #${keepId}: ${record.text}`,
+              accountId: record.accountId,
+              threadIds: [record.threadId],
+              messageKeys: [record.messageKey],
+              projectIds,
+              id: record.id,
+              undo: { kind: 'impegno', itemId: record.id, historyId }
+            },
+            actor
+          )
         )
       }
     }
@@ -268,16 +299,19 @@ export class Registry {
 
     if (moved.length > 0) {
       await this.projects.markStaleByThreads([to, ...from])
-      this.emit({
-        object: 'impegno',
-        action: 'spostate',
-        label: `${moved.length === 1 ? 'Spostata' : `Spostate ${moved.length} cose`} sul messaggio più recente`,
-        accountId: to.accountId,
-        threadIds: [to.threadId, ...from.map((thread) => thread.threadId)],
-        messageKeys: [to.messageKey, ...moved.map((record) => record.messageKey)],
-        projectIds: [],
-        id: to.messageKey
-      })
+      this.emit(
+        {
+          object: 'impegno',
+          action: 'spostate',
+          label: `${moved.length === 1 ? 'Spostata' : `Spostate ${moved.length} cose`} sul messaggio più recente`,
+          accountId: to.accountId,
+          threadIds: [to.threadId, ...from.map((thread) => thread.threadId)],
+          messageKeys: [to.messageKey, ...moved.map((record) => record.messageKey)],
+          projectIds: [],
+          id: to.messageKey
+        },
+        actor
+      )
     }
 
     return moved
@@ -291,34 +325,41 @@ export class Registry {
     }
 
     await this.projects.markStaleByThreads([undone.record])
-    this.emit({
-      object: 'impegno',
-      action: 'annullata',
-      label: `Annullato: ${undone.record.text}`,
-      accountId: undone.record.accountId,
-      threadIds: [undone.record.threadId],
-      messageKeys: [undone.record.messageKey],
-      projectIds: [],
-      id: undone.record.id
-    })
+    this.emit(
+      {
+        object: 'impegno',
+        action: 'annullata',
+        label: `Annullato: ${undone.record.text}`,
+        accountId: undone.record.accountId,
+        threadIds: [undone.record.threadId],
+        messageKeys: [undone.record.messageKey],
+        projectIds: [],
+        id: undone.record.id
+      },
+      actor
+    )
     return undone.record
   }
 
   /** What was put off until today is open again. */
   async wakeDeferred(today: string): Promise<CommitmentRecord[]> {
     const woken = await this.commitments.wakeDeferred(today)
+    const actor = SYSTEM
 
     for (const record of woken) {
-      this.emit({
-        object: 'impegno',
-        action: 'aperta',
-        label: `Di nuovo aperta: ${record.text}`,
-        accountId: record.accountId,
-        threadIds: [record.threadId],
-        messageKeys: [record.messageKey],
-        projectIds: [],
-        id: record.id
-      })
+      this.emit(
+        {
+          object: 'impegno',
+          action: 'aperta',
+          label: `Di nuovo aperta: ${record.text}`,
+          accountId: record.accountId,
+          threadIds: [record.threadId],
+          messageKeys: [record.messageKey],
+          projectIds: [],
+          id: record.id
+        },
+        actor
+      )
     }
 
     return woken
@@ -334,16 +375,19 @@ export class Registry {
     const result = await this.projects.create(title, actor, options)
 
     if (result.created) {
-      this.emit({
-        object: 'progetto',
-        action: 'creato',
-        label: `Nuovo progetto: ${result.record.title}`,
-        accountId: null,
-        threadIds: [],
-        messageKeys: [],
-        projectIds: [result.record.id],
-        id: result.record.id
-      })
+      this.emit(
+        {
+          object: 'progetto',
+          action: 'creato',
+          label: `Nuovo progetto: ${result.record.title}`,
+          accountId: null,
+          threadIds: [],
+          messageKeys: [],
+          projectIds: [result.record.id],
+          id: result.record.id
+        },
+        actor
+      )
     }
 
     return result
@@ -360,20 +404,21 @@ export class Registry {
     this.emitProject(
       record,
       'rinominato',
-      `Progetto rinominato: ${before?.title ?? ''} → ${record.title}`
+      `Progetto rinominato: ${before?.title ?? ''} → ${record.title}`,
+      actor
     )
     return record
   }
 
   async describeProject(id: string, description: string, actor: Actor): Promise<ProjectRecord> {
     const record = await this.projects.describe(id, description, actor)
-    this.emitProject(record, 'descritto', `Di cosa si tratta: ${record.title}`)
+    this.emitProject(record, 'descritto', `Di cosa si tratta: ${record.title}`, actor)
     return record
   }
 
   async setProjectState(id: string, state: string, actor: Actor): Promise<ProjectRecord> {
     const record = await this.projects.setState(id, state, actor)
-    this.emitProject(record, 'punto', `Il punto aggiornato: ${record.title}`)
+    this.emitProject(record, 'punto', `Il punto aggiornato: ${record.title}`, actor)
     return record
   }
 
@@ -387,7 +432,8 @@ export class Registry {
     this.emitProject(
       record,
       hidden ? 'nascosto' : 'mostrato',
-      `${hidden ? 'Nascosto' : 'Di nuovo visibile'}: ${record.title}`
+      `${hidden ? 'Nascosto' : 'Di nuovo visibile'}: ${record.title}`,
+      actor
     )
     return record
   }
@@ -397,7 +443,8 @@ export class Registry {
     this.emitProject(
       record,
       closed ? 'chiuso' : 'riaperto',
-      `${closed ? 'Concluso' : 'Riaperto'}: ${record.title}`
+      `${closed ? 'Concluso' : 'Riaperto'}: ${record.title}`,
+      actor
     )
     return record
   }
@@ -419,16 +466,19 @@ export class Registry {
       })
     }
 
-    this.emit({
-      object: 'progetto',
-      action: 'uniti',
-      label: `Uniti in ${record.title}: ${dropped.map((project) => project.title).join(', ')}`,
-      accountId: null,
-      threadIds: [],
-      messageKeys: [],
-      projectIds: [record.id, ...dropIds],
-      id: record.id
-    })
+    this.emit(
+      {
+        object: 'progetto',
+        action: 'uniti',
+        label: `Uniti in ${record.title}: ${dropped.map((project) => project.title).join(', ')}`,
+        accountId: null,
+        threadIds: [],
+        messageKeys: [],
+        projectIds: [record.id, ...dropIds],
+        id: record.id
+      },
+      actor
+    )
     return record
   }
 
@@ -449,23 +499,26 @@ export class Registry {
       this.hooks.lesson('progetto_conversazione', { progetto: project?.title, azione: 'messa' })
     }
 
-    return this.emit({
-      object: 'progetto',
-      action: 'collegata',
-      label: `Conversazione in ${project?.title ?? 'un progetto'}`,
-      accountId: thread.accountId,
-      threadIds: [thread.threadId],
-      messageKeys: [],
-      projectIds: [projectId],
-      id: projectId,
-      undo: {
-        kind: 'progetto-collegamento',
-        projectId,
+    return this.emit(
+      {
+        object: 'progetto',
+        action: 'collegata',
+        label: `Conversazione in ${project?.title ?? 'un progetto'}`,
         accountId: thread.accountId,
-        threadId: thread.threadId,
-        linked: true
-      }
-    })
+        threadIds: [thread.threadId],
+        messageKeys: [],
+        projectIds: [projectId],
+        id: projectId,
+        undo: {
+          kind: 'progetto-collegamento',
+          projectId,
+          accountId: thread.accountId,
+          threadId: thread.threadId,
+          linked: true
+        }
+      },
+      actor
+    )
   }
 
   async unlinkThread(
@@ -484,23 +537,26 @@ export class Registry {
       return null
     }
 
-    return this.emit({
-      object: 'progetto',
-      action: 'tolta',
-      label: `Conversazione tolta da ${project?.title ?? 'un progetto'}`,
-      accountId: thread.accountId,
-      threadIds: [thread.threadId],
-      messageKeys: [],
-      projectIds: [projectId],
-      id: projectId,
-      undo: {
-        kind: 'progetto-collegamento',
-        projectId,
+    return this.emit(
+      {
+        object: 'progetto',
+        action: 'tolta',
+        label: `Conversazione tolta da ${project?.title ?? 'un progetto'}`,
         accountId: thread.accountId,
-        threadId: thread.threadId,
-        linked: false
-      }
-    })
+        threadIds: [thread.threadId],
+        messageKeys: [],
+        projectIds: [projectId],
+        id: projectId,
+        undo: {
+          kind: 'progetto-collegamento',
+          projectId,
+          accountId: thread.accountId,
+          threadId: thread.threadId,
+          linked: false
+        }
+      },
+      actor
+    )
   }
 
   async addProjectResource(
@@ -510,30 +566,36 @@ export class Registry {
   ): Promise<void> {
     await this.projects.addResource(projectId, resource, actor)
     const project = await this.projects.get(projectId)
-    this.emit({
-      object: 'progetto',
-      action: 'risorsa',
-      label: `Collegata a ${project?.title ?? 'un progetto'}: ${resource.label ?? resource.location}`,
-      accountId: null,
-      threadIds: [],
-      messageKeys: [],
-      projectIds: [projectId],
-      id: projectId
-    })
+    this.emit(
+      {
+        object: 'progetto',
+        action: 'risorsa',
+        label: `Collegata a ${project?.title ?? 'un progetto'}: ${resource.label ?? resource.location}`,
+        accountId: null,
+        threadIds: [],
+        messageKeys: [],
+        projectIds: [projectId],
+        id: projectId
+      },
+      actor
+    )
   }
 
   async removeProjectResource(projectId: string, location: string, actor: Actor): Promise<void> {
     await this.projects.removeResource(projectId, location, actor)
-    this.emit({
-      object: 'progetto',
-      action: 'risorsa-tolta',
-      label: `Tolta: ${location}`,
-      accountId: null,
-      threadIds: [],
-      messageKeys: [],
-      projectIds: [projectId],
-      id: projectId
-    })
+    this.emit(
+      {
+        object: 'progetto',
+        action: 'risorsa-tolta',
+        label: `Tolta: ${location}`,
+        accountId: null,
+        threadIds: [],
+        messageKeys: [],
+        projectIds: [projectId],
+        id: projectId
+      },
+      actor
+    )
   }
 
   /* ──────────────────────────── replies prepared ──────────────────────────── */
@@ -547,24 +609,27 @@ export class Registry {
     const { record, created } = await this.replies.save(anchor, input, actor)
     return {
       record,
-      change: this.emit({
-        object: 'risposta',
-        action: created ? 'preparata' : 'riscritta',
-        label: `${record.kind === 'sollecito' ? 'Sollecito' : 'Risposta'} ${created ? 'preparata' : 'riscritta'}`,
-        accountId: anchor.accountId,
-        threadIds: [anchor.threadId],
-        messageKeys: [anchor.messageKey],
-        projectIds: [],
-        id: `${anchor.accountId}:${anchor.messageKey}`,
-        undo: before
-          ? undefined
-          : {
-              kind: 'risposta',
-              accountId: anchor.accountId,
-              messageKey: anchor.messageKey,
-              status: 'scartata'
-            }
-      })
+      change: this.emit(
+        {
+          object: 'risposta',
+          action: created ? 'preparata' : 'riscritta',
+          label: `${record.kind === 'sollecito' ? 'Sollecito' : 'Risposta'} ${created ? 'preparata' : 'riscritta'}`,
+          accountId: anchor.accountId,
+          threadIds: [anchor.threadId],
+          messageKeys: [anchor.messageKey],
+          projectIds: [],
+          id: `${anchor.accountId}:${anchor.messageKey}`,
+          undo: before
+            ? undefined
+            : {
+                kind: 'risposta',
+                accountId: anchor.accountId,
+                messageKey: anchor.messageKey,
+                status: 'scartata'
+              }
+        },
+        actor
+      )
     }
   }
 
@@ -586,25 +651,28 @@ export class Registry {
       this.hooks.lesson('risposta_scartata', { tipo: record.kind, testo: record.text })
     }
 
-    this.emit({
-      object: 'risposta',
-      action: status,
-      label:
-        status === 'pronta'
-          ? 'Risposta confermata'
-          : status === 'da_rivedere'
-            ? `Risposta da rivedere${options.reason ? `: ${options.reason}` : ''}`
-            : status === 'scartata'
-              ? 'Risposta scartata'
-              : status === 'usata'
-                ? 'Risposta usata'
-                : 'Risposta superata',
-      accountId,
-      threadIds: [record.threadId],
-      messageKeys: [messageKey],
-      projectIds: [],
-      id: `${accountId}:${messageKey}`
-    })
+    this.emit(
+      {
+        object: 'risposta',
+        action: status,
+        label:
+          status === 'pronta'
+            ? 'Risposta confermata'
+            : status === 'da_rivedere'
+              ? `Risposta da rivedere${options.reason ? `: ${options.reason}` : ''}`
+              : status === 'scartata'
+                ? 'Risposta scartata'
+                : status === 'usata'
+                  ? 'Risposta usata'
+                  : 'Risposta superata',
+        accountId,
+        threadIds: [record.threadId],
+        messageKeys: [messageKey],
+        projectIds: [],
+        id: `${accountId}:${messageKey}`
+      },
+      actor
+    )
     return record
   }
 
@@ -615,18 +683,22 @@ export class Registry {
     reason: string
   ): Promise<ReplyRecord[]> {
     const stale = await this.replies.markStaleBefore(thread, beforeIso, reason)
+    const actor = SYSTEM
 
     if (stale.length > 0) {
-      this.emit({
-        object: 'risposta',
-        action: 'da_rivedere',
-        label: `Da rivedere: ${reason}`,
-        accountId: thread.accountId,
-        threadIds: [thread.threadId],
-        messageKeys: stale.map((reply) => reply.messageKey),
-        projectIds: [],
-        id: `${thread.accountId}:${thread.threadId}`
-      })
+      this.emit(
+        {
+          object: 'risposta',
+          action: 'da_rivedere',
+          label: `Da rivedere: ${reason}`,
+          accountId: thread.accountId,
+          threadIds: [thread.threadId],
+          messageKeys: stale.map((reply) => reply.messageKey),
+          projectIds: [],
+          id: `${thread.accountId}:${thread.threadId}`
+        },
+        actor
+      )
     }
 
     return stale
@@ -646,16 +718,19 @@ export class Registry {
     actor: Actor
   ): Promise<ProposalRecord> {
     const { record, created } = await this.proposals.propose(input, actor)
-    this.emit({
-      object: 'proposta',
-      action: created ? 'proposta' : 'aggiornata',
-      label: `Proposta: ${record.title}`,
-      accountId: record.accountId,
-      threadIds: record.threadId ? [record.threadId] : [],
-      messageKeys: record.messageKey ? [record.messageKey] : [],
-      projectIds: [],
-      id: record.id
-    })
+    this.emit(
+      {
+        object: 'proposta',
+        action: created ? 'proposta' : 'aggiornata',
+        label: `Proposta: ${record.title}`,
+        accountId: record.accountId,
+        threadIds: record.threadId ? [record.threadId] : [],
+        messageKeys: record.messageKey ? [record.messageKey] : [],
+        projectIds: [],
+        id: record.id
+      },
+      actor
+    )
     return record
   }
 
@@ -665,40 +740,47 @@ export class Registry {
     result: Record<string, unknown> | null = null
   ): Promise<ProposalRecord> {
     const record = await this.proposals.decide(id, status, result)
+    const actor = USER
     this.hooks.lesson(status === 'accettata' ? 'proposta_accettata' : 'proposta_scartata', {
       tipo: record.kind,
       proposta: record.title,
       dati: record.payload,
       scelta: result
     })
-    this.emit({
-      object: 'proposta',
-      action: status,
-      label: `${status === 'accettata' ? 'Accettata' : 'Scartata'}: ${record.title}`,
-      accountId: record.accountId,
-      threadIds: record.threadId ? [record.threadId] : [],
-      messageKeys: record.messageKey ? [record.messageKey] : [],
-      projectIds: [],
-      id: record.id
-    })
+    this.emit(
+      {
+        object: 'proposta',
+        action: status,
+        label: `${status === 'accettata' ? 'Accettata' : 'Scartata'}: ${record.title}`,
+        accountId: record.accountId,
+        threadIds: record.threadId ? [record.threadId] : [],
+        messageKeys: record.messageKey ? [record.messageKey] : [],
+        projectIds: [],
+        id: record.id
+      },
+      actor
+    )
     return record
   }
 
-  async saveCopies(copies: ReadonlyArray<Omit<SavedCopy, 'savedAt'>>): Promise<void> {
+  async saveCopies(copies: ReadonlyArray<Omit<SavedCopy, 'savedAt'>>, actor: Actor): Promise<void> {
     await this.copies.save(copies)
 
     for (const accountId of new Set(copies.map((copy) => copy.accountId))) {
       const mine = copies.filter((copy) => copy.accountId === accountId)
-      this.emit({
-        object: 'copia',
-        action: 'salvata',
-        label: `Salvat${mine.length === 1 ? 'o' : 'i'} in ${mine[0].destination}`,
-        accountId,
-        threadIds: [...new Set(mine.map((copy) => copy.threadId))],
-        messageKeys: mine.map((copy) => copy.messageKey),
-        projectIds: [],
-        id: mine[0].messageKey
-      })
+      this.emit(
+        {
+          object: 'copia',
+          action: 'salvata',
+          label: `Salvat${mine.length === 1 ? 'o' : 'i'} in ${mine[0].destination}`,
+          accountId,
+          threadIds: [...new Set(mine.map((copy) => copy.threadId))],
+          messageKeys: mine.map((copy) => copy.messageKey),
+          projectIds: [],
+          id: mine[0].messageKey
+        },
+        actor
+      )
     }
   }
 
@@ -738,6 +820,92 @@ export class Registry {
         ...(accountIds ?? [])
       )
     )
+  }
+
+  /**
+   * What is open from each of these messages of an account, the reply
+   * prepared for it, whether a copy of it was saved outside: what their
+   * rows show.
+   */
+  async rowWork(
+    accountId: string,
+    messageKeys: ReadonlyArray<string>
+  ): Promise<
+    Map<
+      string,
+      {
+        owed: { kind: CommitmentKind; due: string | null } | null
+        awaited: boolean
+        reply: 'pronta' | 'da_rivedere' | null
+        saved: boolean
+      }
+    >
+  > {
+    const work = new Map<
+      string,
+      {
+        owed: { kind: CommitmentKind; due: string | null } | null
+        awaited: boolean
+        reply: 'pronta' | 'da_rivedere' | null
+        saved: boolean
+      }
+    >()
+
+    if (messageKeys.length === 0) {
+      return work
+    }
+
+    const entry = (key: string): NonNullable<ReturnType<typeof work.get>> => {
+      const known = work.get(key) ?? { owed: null, awaited: false, reply: null, saved: false }
+      work.set(key, known)
+      return known
+    }
+    // The soonest due first, those without a date last.
+    const items = await this.sql.all<{
+      message_key: string
+      kind: CommitmentKind
+      due: string | null
+    }>(
+      `SELECT message_key, kind, due FROM ai_items
+       WHERE account_id = ? AND status = 'aperta' AND message_key IN (${placeholders(messageKeys)})
+       ORDER BY due IS NULL, due`,
+      accountId,
+      ...messageKeys
+    )
+
+    for (const item of items) {
+      const known = entry(item.message_key)
+
+      if (item.kind === 'aspetti') {
+        known.awaited = true
+      } else if (!known.owed) {
+        known.owed = { kind: item.kind, due: item.due }
+      }
+    }
+
+    const replies = await this.sql.all<{ message_key: string; status: 'pronta' | 'da_rivedere' }>(
+      `SELECT message_key, status FROM ai_ready_drafts
+       WHERE account_id = ? AND status IN ('pronta', 'da_rivedere') AND message_key IN (${placeholders(messageKeys)})`,
+      accountId,
+      ...messageKeys
+    )
+
+    for (const reply of replies) {
+      entry(reply.message_key).reply = reply.status
+    }
+
+    const copies = await this.sql.all<{ message_key: string }>(
+      `SELECT DISTINCT message_key FROM ai_saved_copies
+       WHERE account_id = ? AND message_key IN (${placeholders(messageKeys)})`,
+      accountId,
+      ...messageKeys
+    )
+
+    for (const copy of copies) {
+      entry(copy.message_key).saved = true
+    }
+
+    return work
   }
 
   /** Which of these messages of an account have something open, or a reply waiting: the "Attivi". */
@@ -857,22 +1025,63 @@ export class Registry {
 
   /* ───────────────────────────── internals ───────────────────────────── */
 
-  private emit(change: RegistryChange): RegistryChange {
-    this.hooks.changed(change)
+  /* ──────────────────────────────── the day ──────────────────────────────── */
+
+  /** The letter at the top of Oggi, for a day. */
+  async saveLetter(day: string, text: string, actor: Actor): Promise<void> {
+    await this.day.saveLetter(day, text)
+    this.emit(
+      {
+        object: 'giornata',
+        action: 'lettera',
+        label: 'Scritta la lettera di oggi',
+        accountId: null,
+        threadIds: [],
+        messageKeys: [],
+        projectIds: [],
+        id: day
+      },
+      actor
+    )
+  }
+
+  /** How to prepare for a meeting, under the event. */
+  async savePrep(eventKey: string, title: string, text: string, actor: Actor): Promise<void> {
+    await this.day.savePrep(eventKey, text, actor.runId ?? null)
+    this.emit(
+      {
+        object: 'giornata',
+        action: 'preparazione',
+        label: `Preparata la riunione: ${title}`,
+        accountId: null,
+        threadIds: [],
+        messageKeys: [],
+        projectIds: [],
+        id: eventKey
+      },
+      actor
+    )
+  }
+
+  private emit(change: RegistryChange, actor: Actor): RegistryChange {
+    this.hooks.changed(change, actor)
     return change
   }
 
-  private emitProject(record: ProjectRecord, action: string, label: string): void {
-    this.emit({
-      object: 'progetto',
-      action,
-      label,
-      accountId: null,
-      threadIds: [],
-      messageKeys: [],
-      projectIds: [record.id],
-      id: record.id
-    })
+  private emitProject(record: ProjectRecord, action: string, label: string, actor: Actor): void {
+    this.emit(
+      {
+        object: 'progetto',
+        action,
+        label,
+        accountId: null,
+        threadIds: [],
+        messageKeys: [],
+        projectIds: [record.id],
+        id: record.id
+      },
+      actor
+    )
   }
 
   private mapKeys(rows: unknown[]): Array<{ accountId: string; messageKey: string }> {

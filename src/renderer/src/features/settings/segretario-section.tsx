@@ -14,11 +14,14 @@ import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { Input } from '@renderer/components/ui/input'
 import { Switch } from '@renderer/components/ui/switch'
 import { cn } from '@renderer/lib/utils'
-import type {
-  SegretarioKeyState,
-  SegretarioPreferences,
-  SegretarioSpending,
-  SegretarioStatus
+import {
+  TASK_LABELS,
+  type EngineState,
+  type SegretarioKeyState,
+  type SegretarioPreferences,
+  type SegretarioSpending,
+  type SegretarioStatus,
+  type TaskKind
 } from '@shared/segretario'
 
 const KEYS_URL = 'https://openrouter.ai/settings/keys'
@@ -64,6 +67,64 @@ function openExternal(url: string): void {
   void window.mailApi.openExternalUrl(url)
 }
 
+/** Where the Segretario's own work stands: what it has read, what waits, what failed. */
+function EngineLine({
+  engine,
+  retrying,
+  onRetry
+}: {
+  engine: EngineState
+  retrying: boolean
+  onRetry: () => void
+}): React.JSX.Element {
+  const busy = (Object.entries(engine.running) as Array<[TaskKind, number]>).filter(
+    ([, count]) => count > 0
+  )
+  const waiting = Object.values(engine.queued).reduce((total, count) => total + (count ?? 0), 0)
+
+  return (
+    <div className="text-muted-foreground flex flex-col gap-1 text-[11.5px]">
+      {engine.paused && (
+        <p className="text-destructive-soft-foreground flex items-start gap-2">
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+          <span className="min-w-0">Fermo: {engine.paused}</span>
+        </p>
+      )}
+      <p>
+        Posta degli ultimi trenta giorni: letti{' '}
+        <span className="text-foreground tabular font-medium">
+          {engine.reading.read.toLocaleString('it-IT')}
+        </span>{' '}
+        messaggi su {engine.reading.total.toLocaleString('it-IT')}.
+      </p>
+      {(busy.length > 0 || waiting > 0) && (
+        <p>
+          {busy.length > 0 &&
+            `Al lavoro: ${busy.map(([task, count]) => `${TASK_LABELS[task].toLowerCase()}${count > 1 ? ` (${count})` : ''}`).join(', ')}. `}
+          {waiting > 0 && `${waiting.toLocaleString('it-IT')} in coda.`}
+        </p>
+      )}
+      {engine.failed > 0 && (
+        <p className="flex items-center gap-2">
+          <span>
+            {engine.failed === 1
+              ? 'Un lavoro non è riuscito dopo tre tentativi.'
+              : `${engine.failed.toLocaleString('it-IT')} lavori non sono riusciti dopo tre tentativi.`}
+          </span>
+          <button
+            type="button"
+            disabled={retrying}
+            onClick={onRetry}
+            className="text-foreground focus-visible:ring-ring/60 rounded-sm font-semibold underline-offset-2 outline-none hover:underline focus-visible:ring-2 disabled:opacity-50"
+          >
+            Riprova
+          </button>
+        </p>
+      )}
+    </div>
+  )
+}
+
 /**
  * Impostazioni › Segretario: the user's own OpenRouter key — checked when
  * given, kept encrypted like the accounts' passwords — what is left of the
@@ -74,6 +135,8 @@ export function SegretarioSection(): React.JSX.Element {
   const [status, setStatus] = useState<SegretarioStatus | null>(null)
   const [spending, setSpending] = useState<SegretarioSpending | null>(null)
   const [preferences, setPreferences] = useState<SegretarioPreferences | null>(null)
+  const [engine, setEngine] = useState<EngineState | null>(null)
+  const [retrying, setRetrying] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [keyInput, setKeyInput] = useState('')
   const [replacing, setReplacing] = useState(false)
@@ -87,13 +150,15 @@ export function SegretarioSection(): React.JSX.Element {
     Promise.all([
       window.segretarioApi.getStatus(),
       window.segretarioApi.getSpending(),
-      window.segretarioApi.getPreferences()
+      window.segretarioApi.getPreferences(),
+      window.segretarioApi.getEngineState()
     ])
-      .then(([storedStatus, storedSpending, storedPreferences]) => {
+      .then(([storedStatus, storedSpending, storedPreferences, engineState]) => {
         if (current) {
           setStatus(storedStatus)
           setSpending(storedSpending)
           setPreferences(storedPreferences)
+          setEngine(engineState)
         }
       })
       .catch((error: unknown) => {
@@ -103,12 +168,26 @@ export function SegretarioSection(): React.JSX.Element {
       })
 
     const unsubscribe = window.segretarioApi.onStatusChanged(setStatus)
+    const unsubscribeEngine = window.segretarioApi.onEngineChanged(setEngine)
 
     return () => {
       current = false
       unsubscribe()
+      unsubscribeEngine()
     }
   }, [])
+
+  const retryFailed = async (): Promise<void> => {
+    setRetrying(true)
+
+    try {
+      setEngine(await window.segretarioApi.retryFailedWork())
+    } catch (error) {
+      toast.error('Non riprovato', { description: errorText(error) })
+    } finally {
+      setRetrying(false)
+    }
+  }
 
   const saveKey = async (): Promise<void> => {
     setBusy('save')
@@ -392,73 +471,49 @@ export function SegretarioSection(): React.JSX.Element {
               <span className="tabular text-[15px] font-medium">{dollars(spending.thisMonth)}</span>
             </p>
           </div>
+          {spending.byFunction.length > 0 && (
+            <ul className="text-muted-foreground flex flex-col gap-0.5 text-[11.5px]">
+              {spending.byFunction.slice(0, 8).map((entry) => (
+                <li key={entry.purpose} className="flex justify-between gap-3">
+                  <span className="min-w-0 truncate">{entry.label}</span>
+                  <span className="tabular shrink-0">{dollars(entry.cost)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           <p className="text-muted-foreground text-[11px]">
-            Quello che OpenRouter ha addebitato per il lavoro del Segretario su questo computer.
+            Quello che OpenRouter ha addebitato per il lavoro del Segretario su questo computer; per
+            funzione, negli ultimi trenta giorni.
           </p>
         </div>
       )}
 
       {hasKey && preferences && (
-        <div className="settings-group flex flex-col gap-2">
-          <p className="eyebrow">Lavoro in anticipo</p>
+        <div className="settings-group flex flex-col gap-3">
           <label
-            htmlFor="segretario-triage"
+            htmlFor="segretario-enabled"
             className="flex cursor-pointer items-center justify-between gap-3"
           >
             <span className="min-w-0">
-              <span className="block text-[12px] font-medium">
-                Leggi ogni messaggio che arriva o che mando
-              </span>
+              <span className="block text-[12px] font-medium">Funzioni AI</span>
               <span className="text-muted-foreground block text-[11px]">
-                Accanto a ogni messaggio delle ultime due settimane scrive cosa vuole da te, entro
-                quando e quanto conta, e tiene il conto di cosa ti chiedono, cosa hai promesso e
-                cosa aspetti.
+                Il Segretario legge la posta che arriva e quella degli ultimi trenta giorni, tiene
+                il conto di cosa ti chiedono, cosa hai promesso e cosa aspetti, riconosce i
+                progetti, prepara le risposte, scrive la giornata e rilegge i messaggi prima che
+                partano. Spente, SIEVER Mail resta un normale client di posta e calendario: quello
+                che ha imparato resta.
               </span>
             </span>
             <Switch
-              id="segretario-triage"
-              checked={preferences.triage}
-              onCheckedChange={(triage) => void changePreferences({ triage })}
+              id="segretario-enabled"
+              checked={preferences.enabled}
+              onCheckedChange={(enabled) => void changePreferences({ enabled })}
             />
           </label>
-          <label
-            htmlFor="segretario-ready-drafts"
-            className="flex cursor-pointer items-center justify-between gap-3"
-          >
-            <span className="min-w-0">
-              <span className="block text-[12px] font-medium">
-                Prepara le risposte che mi servono
-              </span>
-              <span className="text-muted-foreground block text-[11px]">
-                Per i messaggi importanti che aspettano una tua risposta, la scrive in anticipo nel
-                tuo stile; la trovi nel lettore e la usi solo se vuoi.
-              </span>
-            </span>
-            <Switch
-              id="segretario-ready-drafts"
-              checked={preferences.readyDrafts}
-              disabled={!preferences.triage}
-              onCheckedChange={(readyDrafts) => void changePreferences({ readyDrafts })}
-            />
-          </label>
-          <label
-            htmlFor="segretario-review"
-            className="flex cursor-pointer items-center justify-between gap-3"
-          >
-            <span className="min-w-0">
-              <span className="block text-[12px] font-medium">Rileggi prima di inviare</span>
-              <span className="text-muted-foreground block text-[11px]">
-                Quando premi Invia, ti avvisa se manca l&apos;allegato di cui parli, se salti una
-                domanda, se un giorno non corrisponde alla data o se è rimasto qualcosa da
-                completare. Se è tutto a posto, il messaggio parte e basta.
-              </span>
-            </span>
-            <Switch
-              id="segretario-review"
-              checked={preferences.reviewBeforeSend}
-              onCheckedChange={(reviewBeforeSend) => void changePreferences({ reviewBeforeSend })}
-            />
-          </label>
+
+          {preferences.enabled && engine && (
+            <EngineLine engine={engine} retrying={retrying} onRetry={() => void retryFailed()} />
+          )}
         </div>
       )}
 

@@ -983,7 +983,8 @@ export function MailComposer({
     setReviewing(true)
 
     try {
-      if (!(await window.segretarioApi.getPreferences()).reviewBeforeSend) {
+      // Rereading is one of the AI functions: with them off, the message goes as it is.
+      if (!(await window.segretarioApi.getPreferences()).enabled) {
         return []
       }
 

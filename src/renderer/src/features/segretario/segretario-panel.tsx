@@ -2,25 +2,31 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   AlertCircle,
   ArrowUp,
+  BookOpen,
   Briefcase,
   CalendarDays,
-  ChartColumn,
   Check,
+  ChevronRight,
   Eye,
   FileSearch,
-  FileText,
+  FolderArchive,
   FolderInput,
+  History,
   ListTodo,
   LoaderCircle,
   Mail,
   MailOpen,
+  MessageSquareReply,
   NotebookPen,
   Paperclip,
   PenLine,
   Plus,
   Search,
   Send,
+  SpellCheck,
   Square,
+  StickyNote,
+  Sun,
   X
 } from 'lucide-react'
 
@@ -30,13 +36,14 @@ import { IconButton } from '@renderer/components/ui/icon-button'
 import { ShortcutKeys } from '@renderer/components/ui/shortcut-keys'
 import { useCommandKeys } from '@renderer/lib/command-shortcuts'
 import { cn } from '@renderer/lib/utils'
-import type {
-  ActivityEntry,
-  ActivityStatus,
-  ActivitySummary,
-  ApprovalRequest,
-  HandleLink,
-  SegretarioContext
+import {
+  TASK_LABELS,
+  type ActivityEntry,
+  type ActivityStatus,
+  type ActivitySummary,
+  type ApprovalRequest,
+  type HandleLink,
+  type SegretarioContext
 } from '@shared/segretario'
 
 import { SegretarioText } from './segretario-text'
@@ -50,19 +57,22 @@ export interface SegretarioContextChip {
 
 const TOOL_ICONS: Readonly<Record<string, typeof Search>> = {
   cerca_posta: Search,
-  panoramica: ChartColumn,
-  leggi_posta: MailOpen,
-  leggi_allegato: Paperclip,
   cerca_file: FileSearch,
-  leggi_file: FileText,
+  leggi: MailOpen,
+  nota: StickyNote,
+  impegni: ListTodo,
+  progetti: Briefcase,
+  risposta: MessageSquareReply,
   scrivi_bozza: PenLine,
   invia_bozza: Send,
   organizza: FolderInput,
-  memoria: NotebookPen,
-  argomenti: Briefcase,
-  impegni: ListTodo,
   calendario: CalendarDays,
-  mostra: Eye
+  memoria: NotebookPen,
+  oggi: Sun,
+  revisione: SpellCheck,
+  mostra: Eye,
+  diario: History,
+  archivio_pratiche: FolderArchive
 }
 
 /** A draft's text holds no short names: its links are the message's own. */
@@ -269,6 +279,194 @@ function ApprovalCard({
   )
 }
 
+/** What a run changed in the user's work, a line each, with an undo where there is one. */
+function ChangesBlock({
+  activityId,
+  entry
+}: {
+  activityId: string
+  entry: Extract<ActivityEntry, { kind: 'changes' }>
+}): React.JSX.Element | null {
+  const [undoing, setUndoing] = useState<number | null>(null)
+  const [problem, setProblem] = useState<string | null>(null)
+
+  if (entry.changes.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="border-ai-line flex flex-col gap-1 border-l-2 pl-3">
+      <p className="text-ai text-[11.5px] font-semibold">Cosa ho cambiato</p>
+      <ul className="flex flex-col gap-0.5">
+        {entry.changes.map((change, index) => (
+          <li key={index} className="flex items-baseline gap-2 text-[12px] leading-[1.45]">
+            <span
+              className={cn(
+                'min-w-0 flex-1',
+                change.undone ? 'text-faint-foreground line-through' : 'text-foreground'
+              )}
+            >
+              {change.label}
+            </span>
+            {change.undone ? (
+              <span className="text-faint-foreground shrink-0 text-[11px]">annullato</span>
+            ) : (
+              change.undoable && (
+                <button
+                  type="button"
+                  disabled={undoing !== null}
+                  onClick={() => {
+                    setUndoing(index)
+                    setProblem(null)
+                    void window.segretarioApi
+                      .undoChange(activityId, entry.id, index)
+                      .catch((error: unknown) =>
+                        setProblem(error instanceof Error ? error.message : 'Non si è annullata.')
+                      )
+                      .finally(() => setUndoing(null))
+                  }}
+                  className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/60 shrink-0 rounded-sm text-[11.5px] font-semibold outline-none focus-visible:ring-2 disabled:opacity-50"
+                >
+                  {undoing === index ? <LoaderCircle className="size-3 animate-spin" /> : 'Annulla'}
+                </button>
+              )
+            )}
+          </li>
+        ))}
+      </ul>
+      {problem && <p className="text-destructive-soft-foreground text-[11.5px]">{problem}</p>}
+    </div>
+  )
+}
+
+const DIARY_DAY = new Intl.DateTimeFormat('it-IT', {
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long'
+})
+const DIARY_TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
+
+/** "Oggi", "Ieri", or the day: what a group of the diary is headed by. */
+function diaryDayLabel(at: number, now = new Date()): string {
+  const day = new Date(at)
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const startOfDay = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime()
+
+  if (startOfDay === start) {
+    return 'Oggi'
+  }
+
+  return startOfDay === start - 24 * 60 * 60 * 1000 ? 'Ieri' : DIARY_DAY.format(day)
+}
+
+/**
+ * The work the Segretario did on its own, day by day: what it read, the
+ * day it wrote, the projects it brought up to date, what it learnt. Runs
+ * of the same task are gathered — "Lettura della posta · 14" — and open
+ * one by one, each with what it changed and its undo.
+ */
+function DiaryView({
+  diary,
+  onSelect
+}: {
+  diary: ReadonlyArray<ActivitySummary> | null
+  onSelect: (id: string) => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
+
+  if (!diary) {
+    return (
+      <div className="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-[12.5px]">
+        <LoaderCircle className="size-4 animate-spin" />
+        Apro il diario…
+      </div>
+    )
+  }
+
+  if (diary.length === 0) {
+    return (
+      <p className="voice text-muted-foreground flex-1 px-5 pt-6 text-[15px] leading-[1.45]">
+        Qui trovi quello che faccio da solo: leggere la posta che arriva, scrivere la giornata,
+        aggiornare i progetti. Per ora non ho ancora lavorato.
+      </p>
+    )
+  }
+
+  const days = new Map<string, Map<string, ActivitySummary[]>>()
+
+  for (const activity of diary) {
+    const day = diaryDayLabel(activity.createdAt)
+    const tasks = days.get(day) ?? new Map<string, ActivitySummary[]>()
+    tasks.set(activity.task, [...(tasks.get(activity.task) ?? []), activity])
+    days.set(day, tasks)
+  }
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      {[...days].map(([day, tasks]) => (
+        <section key={day} className="mb-3 flex flex-col gap-0.5">
+          <h3 className="eyebrow px-2 pb-1 first-letter:uppercase">{day}</h3>
+          {[...tasks].map(([task, runs]) => {
+            const key = `${day}\u0000${task}`
+            const expanded = runs.length === 1 || open.has(key)
+
+            return (
+              <div key={key} className="flex flex-col">
+                {runs.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOpen((current) => {
+                        const next = new Set(current)
+
+                        if (!next.delete(key)) {
+                          next.add(key)
+                        }
+
+                        return next
+                      })
+                    }
+                    className="text-muted-foreground hover:bg-hover focus-visible:ring-ring/60 flex h-[30px] items-center gap-2 rounded-[7px] px-2 text-left text-[12.5px] font-medium outline-none focus-visible:ring-2"
+                  >
+                    <ChevronRight
+                      className={cn(
+                        'size-3.5 shrink-0 transition-transform',
+                        expanded && 'rotate-90'
+                      )}
+                    />
+                    <span className="min-w-0 flex-1 truncate">{TASK_LABELS[task]}</span>
+                    <span className="text-faint-foreground tabular-nums">{runs.length}</span>
+                  </button>
+                )}
+                {expanded &&
+                  runs.map((run) => (
+                    <button
+                      key={run.id}
+                      type="button"
+                      onClick={() => onSelect(run.id)}
+                      className={cn(
+                        'text-muted-foreground hover:bg-hover focus-visible:ring-ring/60 flex h-[30px] items-center gap-2 rounded-[7px] px-2 text-left text-[12.5px] outline-none focus-visible:ring-2',
+                        runs.length > 1 && 'pl-7'
+                      )}
+                    >
+                      <span className="grid w-3.5 shrink-0 place-items-center">
+                        <StatusMark status={run.status} />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{run.title}</span>
+                      <span className="text-faint-foreground shrink-0 text-[11px] tabular-nums">
+                        {DIARY_TIME.format(run.createdAt)}
+                      </span>
+                    </button>
+                  ))}
+              </div>
+            )
+          })}
+        </section>
+      ))}
+    </div>
+  )
+}
+
 function Thread({
   state,
   onOpen,
@@ -356,6 +554,10 @@ function Thread({
                   onOpenDraft={onOpenDraft}
                 />
               )
+            case 'changes':
+              return state.selectedId ? (
+                <ChangesBlock key={entry.id} activityId={state.selectedId} entry={entry} />
+              ) : null
             case 'compaction':
               return (
                 <p key={entry.id} className="text-faint-foreground text-center text-[11.5px]">
@@ -387,61 +589,20 @@ function Thread({
   )
 }
 
-/**
- * Getting to know the user means reading what they wrote, on its own: it
- * asks first, once, and says what it will do and where the notes go.
- */
-function LearningInvitation({
-  onAnswer
-}: {
-  onAnswer: (learning: boolean) => Promise<void>
-}): React.JSX.Element {
-  const [answering, setAnswering] = useState(false)
-  const answer = (learning: boolean): void => {
-    setAnswering(true)
-    void onAnswer(learning).finally(() => setAnswering(false))
-  }
-
-  return (
-    <div className="sheet flex flex-col gap-2.5 rounded-[10px] p-3.5">
-      <p className="voice text-foreground text-[15px] leading-[1.45]">
-        Posso imparare a conoscerti?
-      </p>
-      <p className="text-muted-foreground text-[12px] leading-[1.5]">
-        Leggo la posta che hai scritto da ogni account, un account alla volta, e prendo appunti su
-        di te, sulle persone che contano e su come scrivi; poi imparo dalle correzioni che fai alle
-        mie bozze. Gli appunti restano su questo computer: li trovi, e li correggi, in Impostazioni
-        → Cosa so di te. Costa pochi centesimi.
-      </p>
-      <div className="flex gap-1.5 pt-0.5">
-        <Button size="sm" disabled={answering} onClick={() => answer(true)}>
-          Sì, impara a conoscermi
-        </Button>
-        <Button variant="ghost" size="sm" disabled={answering} onClick={() => answer(false)}>
-          Non ora
-        </Button>
-      </div>
-    </div>
-  )
-}
-
 function Introduction({
   onSuggest,
-  suggestions,
-  askLearning
+  suggestions
 }: {
   onSuggest: (text: string) => void
   suggestions: ReadonlyArray<string>
-  /** Asks whether it may get to know the user, until they answer. */
-  askLearning: ((learning: boolean) => Promise<void>) | null
 }): React.JSX.Element {
   return (
     <div className="flex min-h-0 flex-1 flex-col justify-end gap-4 overflow-y-auto px-5 pb-4">
       <p className="voice text-foreground text-[17px] leading-[1.45]">
-        Sono il tuo segretario. Posso cercare e leggere tutta la tua posta e i tuoi file,
-        riassumerti una questione, preparare le risposte nel tuo stile e mettere in ordine.
+        Sono il tuo segretario. Leggo la posta mentre arriva e tengo il conto di quello che resta da
+        fare; chiedimi di cercare, riassumere una questione, preparare una risposta nel tuo stile,
+        mettere in ordine o fissare un appuntamento.
       </p>
-      {askLearning && <LearningInvitation onAnswer={askLearning} />}
       <div className="flex flex-col items-start gap-1.5">
         {suggestions.map((suggestion) => (
           <button
@@ -512,7 +673,10 @@ export function SegretarioPanel({
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const panelKeys = useCommandKeys('segretario')
+  const [showDiary, setShowDiary] = useState(false)
   const selected = state.activities.find((activity) => activity.id === state.selectedId) ?? null
+  // A run of the diary on screen is read, not continued: what is written starts a new request.
+  const onDiaryRun = state.selectedId !== null && selected === null
   const working = selected?.status === 'running' || selected?.status === 'waiting'
   const ready = state.status?.keyState === 'ready' || state.status?.keyState === 'unchecked'
 
@@ -545,10 +709,9 @@ export function SegretarioPanel({
     setError(null)
 
     try {
-      await state.send(
-        trimmed,
-        contextChip && !contextDetached ? contextChip.context : EMPTY_CONTEXT
-      )
+      const context = contextChip && !contextDetached ? contextChip.context : EMPTY_CONTEXT
+      await (onDiaryRun ? state.start(trimmed, context) : state.send(trimmed, context))
+      setShowDiary(false)
       setText('')
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito a cominciare.')
@@ -574,9 +737,25 @@ export function SegretarioPanel({
         <div className="flex-1" />
         <div className="window-no-drag flex items-center gap-0.5">
           <IconButton
+            label={showDiary ? 'Chiudi il diario' : 'Diario: il lavoro fatto da solo'}
+            className={cn('size-[28px]', showDiary ? 'text-foreground' : 'text-faint-foreground')}
+            onClick={() => {
+              if (!showDiary) {
+                void state.loadDiary()
+              }
+
+              setShowDiary((shown) => !shown)
+            }}
+          >
+            <BookOpen className="size-4" />
+          </IconButton>
+          <IconButton
             label="Nuovo lavoro"
             className="text-faint-foreground size-[28px]"
-            onClick={() => state.select(null)}
+            onClick={() => {
+              setShowDiary(false)
+              state.select(null)
+            }}
           >
             <Plus className="size-4" />
           </IconButton>
@@ -600,7 +779,10 @@ export function SegretarioPanel({
               key={activity.id}
               activity={activity}
               selected={activity.id === state.selectedId}
-              onSelect={() => state.select(activity.id)}
+              onSelect={() => {
+                setShowDiary(false)
+                state.select(activity.id)
+              }}
             />
           ))}
         </nav>
@@ -610,6 +792,14 @@ export function SegretarioPanel({
       state.status.keyState === 'missing' ||
       state.status.keyState === 'invalid' ? (
         <SetupNotice problem={state.status?.problem ?? null} onOpenSettings={onOpenSettings} />
+      ) : showDiary ? (
+        <DiaryView
+          diary={state.diary}
+          onSelect={(id) => {
+            setShowDiary(false)
+            state.select(id)
+          }}
+        />
       ) : state.selectedId ? (
         <Thread
           state={state}
@@ -623,11 +813,6 @@ export function SegretarioPanel({
         <Introduction
           suggestions={suggestions}
           onSuggest={(suggestion) => void submit(suggestion)}
-          askLearning={
-            state.status?.keyState === 'ready' && state.preferences?.learning === null
-              ? state.setLearning
-              : null
-          }
         />
       )}
 
@@ -665,7 +850,13 @@ export function SegretarioPanel({
                   void submit(text)
                 }
               }}
-              placeholder={selected ? 'Rispondi o chiedi altro…' : 'Chiedi o affida un lavoro…'}
+              placeholder={
+                selected
+                  ? 'Rispondi o chiedi altro…'
+                  : onDiaryRun
+                    ? 'Chiedimi di questo lavoro…'
+                    : 'Chiedi o affida un lavoro…'
+              }
               className="placeholder:text-faint-foreground block w-full resize-none bg-transparent px-1 py-1 text-[13px] leading-[1.45] outline-none"
             />
             <div className="flex items-center justify-between gap-2 pt-1">

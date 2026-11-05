@@ -1,4 +1,4 @@
-import type { CalendarEvent, CalendarResponse, NewCalendarEvent } from '@shared/calendar'
+import type { CalendarEvent, CalendarResponse, EventOrigin } from '@shared/calendar'
 
 /** An event as a provider gives it: what the app keeps, and whether it was cancelled. */
 export type ProviderEvent = Omit<CalendarEvent, 'key' | 'accountId' | 'calendarName'> & {
@@ -14,9 +14,23 @@ export type ProviderEvent = Omit<CalendarEvent, 'key' | 'accountId' | 'calendarN
  * Microsoft 365 calendar (Graph) takes the same shape once Microsoft
  * accounts sign in with OAuth.
  */
+/** An event as it is written to the provider: every field, as it should be after the write. */
+export interface ProviderEventInput {
+  title: string
+  start: string
+  end: string
+  allDay: boolean
+  location: string | null
+  description: string | null
+  /** The addresses invited, the user's own excluded. */
+  attendees: string[]
+}
+
 export interface CalendarProvider {
-  /** The calendars the user shows in the provider's own calendar. */
-  listCalendars(): Promise<Array<{ calendarId: string; name: string; primary: boolean }>>
+  /** The calendars the user shows in the provider's own calendar, and whether events can be written in each. */
+  listCalendars(): Promise<
+    Array<{ calendarId: string; name: string; primary: boolean; writable: boolean }>
+  >
   /**
    * The events of a calendar: every one between two instants, or — with
    * the token a previous read left — what changed since, cancelled ones
@@ -26,7 +40,21 @@ export interface CalendarProvider {
     calendarId: string,
     since: { syncToken: string } | { fromIso: string; toIso: string }
   ): Promise<{ events: ProviderEvent[]; syncToken: string | null }>
-  create(calendarId: string, event: NewCalendarEvent): Promise<ProviderEvent>
+  /** Adds an event; whoever is invited gets the provider's invitation. */
+  create(
+    calendarId: string,
+    event: ProviderEventInput,
+    origin: EventOrigin | null
+  ): Promise<ProviderEvent>
+  /** Rewrites an event as given; `notify` tells the guests. */
+  update(
+    calendarId: string,
+    eventId: string,
+    event: ProviderEventInput,
+    notify: boolean
+  ): Promise<ProviderEvent>
+  /** Takes an event away; `notify` tells the guests. An event already gone is no error. */
+  remove(calendarId: string, eventId: string, notify: boolean): Promise<void>
   /** Answers an invitation as the user; the organizer is told. */
   respond(
     calendarId: string,

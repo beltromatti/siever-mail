@@ -1,4 +1,4 @@
-Prepara un messaggio per l'utente: una risposta, un inoltro o un messaggio nuovo. La bozza viene salvata nelle Bozze dell'account e aperta sulla scrivania dell'utente, che la rivede, la corregge e la invia. Non parte mai da sola.
+Scrive un messaggio vero per l'utente: una risposta, un inoltro o un messaggio nuovo, salvato nelle Bozze dell'account e aperto davanti a lui, che lo rivede, lo corregge e lo invia. Non parte mai da solo. Quando l'utente sta scrivendo e ti chiede di scrivere per lui, invece, scrive nel messaggio che ha aperto.
 
 Parametri:
 
@@ -8,7 +8,7 @@ Parametri:
 - `a`, `cc`, `ccn`: indirizzi. Per le risposte puoi ometterli: valgono quelli della risposta; se li indichi, sostituiscono quelli predefiniti.
 - `oggetto`: per un messaggio nuovo; per risposte e inoltri si usa quello del messaggio.
 - `testo`: il corpo del messaggio, scritto come lo scriverebbe l'utente. Testo semplice: righe vuote tra i paragrafi; `**grassetto**` e elenchi con `- ` solo se l'utente li usa. Senza firma: la aggiunge il programma.
-- `allegati`: riferimenti di file (f1…) trovati sul computer o allegati di altri messaggi da allegare.
-- `bozza`: il riferimento di una bozza già preparata (b1…), o di un messaggio trovato in Bozze (m…), per correggerla invece di farne una nuova.
+- `allegati`: riferimenti di file (f1…) trovati sul computer o allegati di altri messaggi.
+- `bozza`: il riferimento di una bozza già scritta (b1…), o di un messaggio trovato in Bozze (m…), per correggerla invece di farne una nuova.
 
-Restituisce il riferimento della bozza (b1, b2…). Per inviarla serve `invia_bozza`, che chiede conferma all'utente.
+Restituisce il riferimento della bozza (b1, b2…). Per inviarla serve `invia_bozza`, che chiede conferma all'utente. Se c'era una risposta preparata per quel messaggio, conta come usata.

@@ -1,24 +1,20 @@
-import type { MessageNote } from '@shared/segretario'
+import type { MessageRowWork } from '@shared/segretario'
 
 /** Past these, the panel's suggestions stop: they are a start, not a menu. */
 const SUGGESTIONS_SHOWN = 4
 
 /**
  * What the Segretario offers to do, from what the user is looking at: the
- * message open and what its note says, the pratica whose list is open,
+ * message open and what is open in it, the project whose list is open,
  * the selection, the day. Written as the user would ask it.
  */
 export function segretarioSuggestions(context: {
   selectionCount: number
-  /** The note of the message open, when one is. */
-  note: MessageNote | null
+  /** What the Segretario has on the message open, when one is. */
+  work: MessageRowWork | null
   messageOpen: boolean
-  /** The topic whose list is open, by title. */
-  topic: string | null
-  /** "Pratiche", "Argomenti". */
-  topicsLabel: string | null
-  /** A reply prepared for the message open. */
-  readyReply: boolean
+  /** The project whose list is open, by name. */
+  project: string | null
   calendarConnected: boolean
 }): string[] {
   const suggestions: string[] = []
@@ -30,22 +26,20 @@ export function segretarioSuggestions(context: {
       'Mettili in ordine nelle cartelle giuste'
     )
   } else if (context.messageOpen) {
-    const note = context.note
+    const work = context.work
 
-    if (note?.state === 'da_rispondere') {
-      suggestions.push(
-        context.readyReply ? 'Rivedi con me la risposta pronta' : 'Prepara la risposta'
-      )
-    } else if (note?.state === 'in_attesa') {
-      suggestions.push('Prepara un sollecito')
-    } else if (note?.state === 'da_fare') {
-      suggestions.push('Cosa mi chiede di fare, e per quando?')
+    if (work?.owed?.kind === 'ti_chiedono') {
+      suggestions.push(work.reply ? 'Rivedi con me la risposta pronta' : 'Prepara la risposta')
+    } else if (work?.owed) {
+      suggestions.push('Cosa devo fare, e per quando?')
+    } else if (work?.awaited) {
+      suggestions.push(work.reply ? 'Rivedi con me il sollecito' : 'Prepara un sollecito')
     }
 
     suggestions.push('Riassumimi la conversazione')
 
-    if (context.topic) {
-      suggestions.push(`A che punto è ${context.topic}?`)
+    if (context.project) {
+      suggestions.push(`A che punto è ${context.project}?`)
     }
 
     if (context.calendarConnected) {
@@ -54,9 +48,9 @@ export function segretarioSuggestions(context: {
 
     suggestions.push('Trova le email e i file collegati')
   } else {
-    if (context.topic) {
+    if (context.project) {
       suggestions.push(
-        `A che punto è ${context.topic}?`,
+        `A che punto è ${context.project}?`,
         'Cosa resta da fare qui, e chi deve muoversi?'
       )
     }
@@ -67,10 +61,8 @@ export function segretarioSuggestions(context: {
       suggestions.push('Cosa ho in agenda questa settimana?')
     }
 
-    if (!context.topic && context.topicsLabel) {
-      suggestions.push(
-        `Quali ${context.topicsLabel.toLowerCase()} si sono mosse di più questa settimana?`
-      )
+    if (!context.project) {
+      suggestions.push('Quali progetti si sono mossi di più questa settimana?')
     }
 
     suggestions.push('Quali scadenze ho nelle prossime settimane?')

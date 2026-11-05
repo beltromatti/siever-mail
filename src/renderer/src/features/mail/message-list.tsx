@@ -13,8 +13,8 @@ import {
   resolveSelectionIntent,
   summaryToMessageRef
 } from '@renderer/lib/message-selection'
-import { threadKey } from '@renderer/features/segretario/conversation-topics'
-import { NoteLine, noteKey } from '@renderer/features/segretario/message-notes'
+import { threadKey } from '@renderer/features/segretario/conversation-projects'
+import { hasWorkLine, rowWorkKey, WorkLine } from '@renderer/features/segretario/row-work'
 import { cn, formatDateLabel } from '@renderer/lib/utils'
 import type { MailMessageSummary } from '@shared/models'
 
@@ -26,7 +26,8 @@ import {
   HighlightedText,
   MessageSectionHeading,
   primaryAddressLabel,
-  TopicTag,
+  ProjectTag,
+  SavedTag,
   UnreadDot
 } from './message-list-shared'
 import { MessageListHeader } from './message-list-header'
@@ -40,7 +41,7 @@ const SECTION_HEADING_HEIGHT_PX = 30
 export function MessageList(props: MessageListViewProps): React.JSX.Element {
   const {
     messages,
-    notes,
+    rowWork,
     sections,
     emptyState,
     selection,
@@ -60,7 +61,7 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
     onRowDragEnd,
     onToggleFlag,
     onSelectSection,
-    topicTags
+    projectTags
   } = props
   const selectedKeys = useMemo(
     () => new Set(selection.selectedRefs.map(messageRefKey)),
@@ -112,8 +113,8 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
             const isCursor = key === cursorKey
             const primaryLabel = primaryAddressLabel(message, primaryAddressMode)
             const accountLabel = accountLabels?.get(message.accountId)
-            const note = notes.get(noteKey(message))
-            const topicTag = topicTags?.get(threadKey(message))
+            const work = rowWork.get(rowWorkKey(message))
+            const projectTag = projectTags?.get(threadKey(message))
 
             return (
               <div
@@ -180,7 +181,8 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
                     >
                       <HighlightedText text={message.subject} terms={highlightTerms.subject} />
                     </p>
-                    {topicTag && <TopicTag label={topicTag} />}
+                    {projectTag && <ProjectTag label={projectTag} />}
+                    {work?.saved && <SavedTag label={work.saved} />}
                     <AttachmentMark present={message.hasAttachments} />
                     <FlagToggle
                       flagged={message.isFlagged}
@@ -188,9 +190,9 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
                     />
                   </div>
 
-                  {note ? (
+                  {work && hasWorkLine(work) ? (
                     <p className="mt-px flex min-w-0 text-[12px] leading-4">
-                      <NoteLine note={note} />
+                      <WorkLine work={work} />
                     </p>
                   ) : message.previewHydrated ? (
                     <p className="text-faint-foreground mt-px min-w-0 truncate text-[12px] leading-4">

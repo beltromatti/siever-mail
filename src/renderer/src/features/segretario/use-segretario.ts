@@ -11,7 +11,7 @@ import type {
 
 export interface SegretarioState {
   status: SegretarioStatus | null
-  /** What it does on its own, as the user set it; null while loading. */
+  /** The one switch, as the user set it; null while loading. */
   preferences: SegretarioPreferences | null
   activities: ActivitySummary[]
   /** The activity on screen, null for a new one. */
@@ -36,8 +36,9 @@ export interface SegretarioState {
     outcome?: Parameters<typeof window.segretarioApi.resolveApproval>[3]
   ): Promise<void>
   refreshStatus(): Promise<void>
-  /** The user's answer to getting to know them. */
-  setLearning(learning: boolean): Promise<void>
+  /** The work it did on its own, the latest first; null until asked for. */
+  diary: ActivitySummary[] | null
+  loadDiary(): Promise<void>
 }
 
 function sortActivities(activities: ActivitySummary[]): ActivitySummary[] {
@@ -66,6 +67,7 @@ export function useSegretario(visible: boolean): SegretarioState {
   const [status, setStatus] = useState<SegretarioStatus | null>(null)
   const [preferences, setPreferences] = useState<SegretarioPreferences | null>(null)
   const [activities, setActivities] = useState<ActivitySummary[]>([])
+  const [diary, setDiary] = useState<ActivitySummary[] | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [entries, setEntries] = useState<ActivityEntry[] | null>(null)
   const [streams, setStreams] = useState<Record<string, string>>({})
@@ -82,15 +84,22 @@ export function useSegretario(visible: boolean): SegretarioState {
     void window.segretarioApi.listActivities().then((list) => setActivities(sortActivities(list)))
 
     const offStatus = window.segretarioApi.onStatusChanged(setStatus)
+    const offPreferences = window.segretarioApi.onPreferencesChanged(setPreferences)
     const offEvents = window.segretarioApi.onActivityEvent((event) => {
       switch (event.type) {
         case 'summary': {
-          setActivities((current) =>
+          // The panel lists the user's requests and Conoscimi; the diary, the work done alone.
+          const upsert = (current: ActivitySummary[]): ActivitySummary[] =>
             sortActivities([
               ...current.filter((activity) => activity.id !== event.activity.id),
               event.activity
             ])
-          )
+
+          if (event.activity.visibility === 'pannello') {
+            setActivities(upsert)
+          } else if (event.activity.visibility === 'diario') {
+            setDiary((current) => (current ? upsert(current) : current))
+          }
 
           if (
             event.activity.unseen &&
@@ -111,6 +120,9 @@ export function useSegretario(visible: boolean): SegretarioState {
           break
         case 'removed':
           setActivities((current) => current.filter((activity) => activity.id !== event.activityId))
+          setDiary(
+            (current) => current?.filter((activity) => activity.id !== event.activityId) ?? null
+          )
 
           if (selectedRef.current === event.activityId) {
             selectedRef.current = null
@@ -123,6 +135,7 @@ export function useSegretario(visible: boolean): SegretarioState {
 
     return () => {
       offStatus()
+      offPreferences()
       offEvents()
     }
   }, [])
@@ -190,13 +203,10 @@ export function useSegretario(visible: boolean): SegretarioState {
     return map
   }, [entries])
 
-  const setLearning = useCallback(
-    async (learning: boolean): Promise<void> => {
-      const current = preferences ?? (await window.segretarioApi.getPreferences())
-      setPreferences(await window.segretarioApi.setPreferences({ ...current, learning }))
-    },
-    [preferences]
-  )
+  const loadDiary = useCallback(async (): Promise<void> => {
+    const all = await window.segretarioApi.listActivities({ diary: true })
+    setDiary(sortActivities(all.filter((activity) => activity.visibility === 'diario')))
+  }, [])
 
   return {
     status,
@@ -215,6 +225,7 @@ export function useSegretario(visible: boolean): SegretarioState {
     resolveApproval: async (activityId, approvalId, approved, outcome) =>
       window.segretarioApi.resolveApproval(activityId, approvalId, approved, outcome),
     refreshStatus: async () => setStatus(await window.segretarioApi.checkKey()),
-    setLearning
+    diary,
+    loadDiary
   }
 }

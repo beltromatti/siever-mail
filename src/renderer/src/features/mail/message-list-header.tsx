@@ -24,6 +24,9 @@ const FILTER_OPTIONS: ReadonlyArray<{ value: MessageListFilter; label: string }>
   { value: 'flagged', label: 'Contrassegnati' }
 ]
 
+/** With the Segretario on: what has something open, or a reply waiting, wherever it is. */
+const ACTIVE_FILTER = { value: 'active', label: 'Attivi' } as const
+
 /**
  * The top of the message list: what it shows and how many, the controls
  * for its order and selection, and below them the search and the filter.
@@ -50,6 +53,7 @@ export type MessageListHeaderProps = Pick<
   | 'searchScopeLabel'
   | 'filter'
   | 'onFilterChange'
+  | 'showActiveFilter'
   | 'askSegretario'
 > & {
   selectedCount: number
@@ -75,12 +79,14 @@ export function MessageListHeader({
   searchScopeLabel,
   filter,
   onFilterChange,
+  showActiveFilter,
   askSegretario,
   selectedCount,
   canSelectAll
 }: MessageListHeaderProps): React.JSX.Element {
   const searchKeys = useCommandKeys('search')
-  const activeFilter = FILTER_OPTIONS.find((option) => option.value === filter)
+  const filterOptions = showActiveFilter ? [...FILTER_OPTIONS, ACTIVE_FILTER] : FILTER_OPTIONS
+  const activeFilter = filterOptions.find((option) => option.value === filter)
 
   return (
     <header className="shrink-0 border-b">
@@ -234,7 +240,7 @@ export function MessageListHeader({
               value={filter}
               onValueChange={(next) => onFilterChange(next as MessageListFilter)}
             >
-              {FILTER_OPTIONS.map((option) => (
+              {filterOptions.map((option) => (
                 <DropdownMenuRadioItem key={option.value} value={option.value}>
                   {option.label}
                 </DropdownMenuRadioItem>

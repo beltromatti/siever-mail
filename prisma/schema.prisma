@@ -208,83 +208,6 @@ model Draft {
   @@map("drafts")
 }
 
-/// The Segretario's settings: one row. The OpenRouter key is kept encrypted
-/// with the system keychain (`safeStorage`), like the accounts' passwords.
-model AiSettings {
-  id                 Int     @id
-  encryptedApiKey    String? @map("encrypted_api_key")
-  /// What the last check of the key found (see `SegretarioStatus`), as JSON.
-  keyStatusJson      String  @default("{}") @map("key_status_json")
-  preferencesJson    String  @default("{}") @map("preferences_json")
-  updatedAt          BigInt  @map("updated_at")
-
-  @@map("ai_settings")
-}
-
-/// What each call to the model cost, for Impostazioni → Segretario.
-model AiUsage {
-  id               Int     @id @default(autoincrement())
-  createdAt        BigInt  @map("created_at")
-  activityId       String? @map("activity_id")
-  /// What the call was for: an activity, sorting mail, learning, compacting.
-  purpose          String
-  model            String?
-  provider         String?
-  promptTokens     Int     @map("prompt_tokens")
-  cachedTokens     Int     @map("cached_tokens")
-  completionTokens Int     @map("completion_tokens")
-  reasoningTokens  Int     @map("reasoning_tokens")
-  cost             Float
-
-  @@index([createdAt], map: "idx_ai_usage_created")
-  @@map("ai_usage")
-}
-
-/// A piece of the Segretario's work, asked by the user or begun on its own.
-model AiActivity {
-  id          String    @id
-  kind        String
-  title       String
-  status      String
-  createdAt   BigInt    @map("created_at")
-  updatedAt   BigInt    @map("updated_at")
-  unseen      Boolean   @default(false)
-  cost        Float     @default(0)
-  events      AiEvent[]
-
-  @@index([updatedAt], map: "idx_ai_activities_updated")
-  @@map("ai_activities")
-}
-
-/// What happened in an activity, in order, never rewritten: the user's
-/// words, the model's turns with their tool calls and reasoning, the tools'
-/// results, confirmations, compactions. The conversation the model reads is
-/// rebuilt from it.
-model AiEvent {
-  id          Int        @id @default(autoincrement())
-  activityId  String     @map("activity_id")
-  type        String
-  payloadJson String     @map("payload_json")
-  createdAt   BigInt     @map("created_at")
-  activity    AiActivity @relation(fields: [activityId], references: [id], onDelete: Cascade)
-
-  @@index([activityId, id], map: "idx_ai_events_activity")
-  @@map("ai_events")
-}
-
-/// The Segretario's notebook: what it knows of the user, their accounts,
-/// people and matters, as documents it writes and the user can read and
-/// correct (Impostazioni → Segretario).
-model AiMemory {
-  path      String @id
-  content   String
-  createdAt BigInt @map("created_at")
-  updatedAt BigInt @map("updated_at")
-  readAt    BigInt @map("read_at")
-
-  @@map("ai_memory")
-}
-
 model RecentFile {
   path     String @id
   activity String
@@ -312,8 +235,149 @@ model AppPreference {
   @@map("app_preferences")
 }
 
-/// Getting to know each account: when the Segretario began, in which
-/// activity, and when it finished. An account without a row is still to know.
+/// The Segretario's tables are created and migrated by `src/main/ai/schema.ts`
+/// (versioned in `ai_meta`), and read with SQL by the registry, the notebook,
+/// the work queue and `AiStore`: these models describe them. User data, kept
+/// across updates; "Elimina tutti i dati" empties them.
+
+/// The schema's version, and other facts about the tables themselves.
+model AiMeta {
+  key   String @id
+  value String
+
+  @@map("ai_meta")
+}
+
+/// The Segretario's settings: one row. The OpenRouter key is kept encrypted
+/// with the system keychain (`safeStorage`), like the accounts' passwords.
+model AiSettings {
+  id                 Int     @id
+  encryptedApiKey    String? @map("encrypted_api_key")
+  /// What the last check of the key found (see `SegretarioStatus`), as JSON.
+  keyStatusJson      String  @default("{}") @map("key_status_json")
+  /// `SegretarioPreferences` (the one switch), as JSON.
+  preferencesJson    String  @default("{}") @map("preferences_json")
+  updatedAt          BigInt  @map("updated_at")
+
+  @@map("ai_settings")
+}
+
+/// What each call to the model cost, by task, for Impostazioni → Segretario.
+model AiUsage {
+  id               Int     @id @default(autoincrement())
+  createdAt        BigInt  @map("created_at")
+  activityId       String? @map("activity_id")
+  /// The task of the run (`TaskKind`), or `compattazione`, `titolo`.
+  purpose          String
+  model            String?
+  provider         String?
+  promptTokens     Int     @map("prompt_tokens")
+  cachedTokens     Int     @map("cached_tokens")
+  completionTokens Int     @map("completion_tokens")
+  reasoningTokens  Int     @map("reasoning_tokens")
+  cost             Float
+
+  @@index([createdAt], map: "idx_ai_usage_created")
+  @@map("ai_usage")
+}
+
+/// One run of the Segretario — asked by the user, or woken by the engine —
+/// and its page in the panel or the diary.
+model AiActivity {
+  id          String    @id
+  /// The task, as first written (kept for old rows); `task` says it now.
+  kind        String
+  task        String?
+  title       String
+  status      String
+  /// `pannello` (a conversation), `diario` (work done alone), `nascosta`.
+  visibility  String    @default("pannello")
+  /// The unit of `ai_work` it runs, for work done alone.
+  workId      String?   @map("work_id")
+  /// What it was woken for (`WorkScope`), as JSON.
+  scopeJson   String?   @map("scope_json")
+  createdAt   BigInt    @map("created_at")
+  updatedAt   BigInt    @map("updated_at")
+  unseen      Boolean   @default(false)
+  cost        Float     @default(0)
+  events      AiEvent[]
+
+  @@index([updatedAt], map: "idx_ai_activities_updated")
+  @@map("ai_activities")
+}
+
+/// What happened in a run, in order, never rewritten: the task and context,
+/// the user's words, the model's turns with their tool calls, the tools'
+/// results, confirmations, compactions, the changes made. The conversation
+/// the model reads is rebuilt from it.
+model AiEvent {
+  id          Int        @id @default(autoincrement())
+  activityId  String     @map("activity_id")
+  type        String
+  payloadJson String     @map("payload_json")
+  createdAt   BigInt     @map("created_at")
+  activity    AiActivity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  @@index([activityId, id], map: "idx_ai_events_activity")
+  @@map("ai_events")
+}
+
+/// The units of work the engine wakes the Segretario for: one waiting per
+/// scope (a partial unique index on `scope_key`), retried with a pause,
+/// taken up again after a restart.
+model AiWork {
+  id         String  @id
+  task       String
+  scopeKey   String  @map("scope_key")
+  scopeJson  String  @map("scope_json")
+  priority   Int
+  /// `in_coda`, `al_lavoro`, `fatto`, `da_riprovare`, `fallito`, `annullato`.
+  status     String
+  attempts   Int     @default(0)
+  notBefore  BigInt  @map("not_before")
+  activityId String? @map("activity_id")
+  lastError  String? @map("last_error")
+  createdAt  BigInt  @map("created_at")
+  updatedAt  BigInt  @map("updated_at")
+
+  @@index([status, priority, notBefore], map: "idx_ai_work_status")
+  @@map("ai_work")
+}
+
+/// The Segretario's notebook: what it knows of the user, their connections,
+/// people and matters, as notes it writes and the user can read, correct and
+/// restore (Impostazioni → Segretario).
+model AiMemory {
+  path      String  @id
+  content   String
+  createdAt BigInt  @map("created_at")
+  updatedAt BigInt  @map("updated_at")
+  readAt    BigInt  @map("read_at")
+  revision  Int     @default(1)
+  /// `utente`, or the run that wrote it last.
+  updatedBy String? @map("updated_by")
+
+  @@map("ai_memory")
+}
+
+/// Every version a note had, the last ones: who changed it and how.
+model AiMemoryHistory {
+  id       Int     @id @default(autoincrement())
+  path     String
+  revision Int
+  /// The note as it was after the change; null once deleted.
+  content  String?
+  action   String
+  actor    String
+  runId    String? @map("run_id")
+  at       BigInt
+
+  @@index([path, id], map: "idx_ai_memory_history_path")
+  @@map("ai_memory_history")
+}
+
+/// Getting to know each connection: when Conoscimi began, in which run, and
+/// when it finished. A connection without a finished row is still to know.
 model AiLearning {
   accountId  String  @id @map("account_id")
   activityId String? @map("activity_id")
@@ -323,9 +387,9 @@ model AiLearning {
   @@map("ai_learning")
 }
 
-/// What the next reflection takes in: how the user corrected a draft the
-/// Segretario wrote, an account removed. `reflection_id` is the reflection
-/// that took it in.
+/// What the next reflection takes in: the user's corrections and decisions
+/// (a draft changed before sending, a commitment not needed, a project
+/// renamed, a proposal set aside…). `reflection_id` is the run that took it in.
 model AiLesson {
   id           Int     @id @default(autoincrement())
   kind         String
@@ -341,7 +405,7 @@ model AiLesson {
 /// compared with this.
 model AiDraft {
   draftId    String  @id @map("draft_id")
-  /// The activity that wrote it; null for a reply prepared ahead and taken up.
+  /// The run that wrote it, or prepared the reply taken up.
   activityId String? @map("activity_id")
   accountId  String @map("account_id")
   text       String
@@ -353,73 +417,215 @@ model AiDraft {
   @@map("ai_drafts")
 }
 
-/// What the Segretario wrote next to a message: the one thing that counts,
-/// where it leaves the user, how much it matters. By the message's stable
-/// key: it outlives moves and a rebuilt cache. User data.
+/// What a message said when it came: its note. Historical — corrected when
+/// wrong, not rewritten as the matter moves on. By the message's stable key.
 model AiNote {
-  accountId    String  @map("account_id")
-  messageKey   String  @map("message_key")
-  threadId     String  @map("thread_id")
-  direction    String
-  summary      String
-  state        String
-  priority     String
-  reason       String
-  due          String?
-  messageDate  String  @map("message_date")
-  createdAt    BigInt  @map("created_at")
-  dismissedAt  BigInt? @map("dismissed_at")
-  /// The other account of the user's this same message came to, whose note this copies: followed there.
+  accountId     String  @map("account_id")
+  messageKey    String  @map("message_key")
+  threadId      String  @map("thread_id")
+  direction     String
+  summary       String
+  /// Its nature (`NoteNature`): asks a reply, asks to do, awaited, informs, noise.
+  nature        String  @map("state")
+  priority      String
+  reason        String
+  due           String?
+  messageDate   String  @map("message_date")
+  createdAt     BigInt  @map("created_at")
+  updatedAt     BigInt? @map("updated_at")
+  /// Unused since the registry: what is open decides the views.
+  dismissedAt   BigInt? @map("dismissed_at")
+  /// The other account this same message came to, whose note this copies.
   twinAccountId String? @map("twin_account_id")
+  revision      Int     @default(1)
+  runId         String? @map("run_id")
+  /// `utente` once the user corrected it: no run alone writes over it.
+  writtenBy     String  @default("segretario") @map("written_by")
 
   @@id([accountId, messageKey])
   @@index([accountId, threadId], map: "idx_ai_notes_thread")
-  @@index([state, messageDate], map: "idx_ai_notes_state")
+  @@index([nature, messageDate], map: "idx_ai_notes_state")
   @@map("ai_notes")
 }
 
-/// Something open between the user and someone, as the Segretario keeps
-/// count: asked of them, promised, awaited, to do. User data.
+/// Something open between the user and someone — asked of them, promised,
+/// awaited, to do — with its life: open, done, not needed, put off.
 model AiItem {
-  id         Int     @id @default(autoincrement())
-  accountId  String  @map("account_id")
-  threadId   String  @map("thread_id")
-  messageKey String  @map("message_key")
-  kind       String
-  text       String
-  due        String?
-  status     String
-  createdAt  BigInt  @map("created_at")
-  closedAt   BigInt? @map("closed_at")
-  closedBy   String? @map("closed_by")
+  id          Int     @id @default(autoincrement())
+  accountId   String  @map("account_id")
+  threadId    String  @map("thread_id")
+  messageKey  String  @map("message_key")
+  kind        String
+  text        String
+  due         String?
+  /// `aperta`, `fatta`, `non_serve`, `rinviata` (until `until`).
+  status      String
+  until       String?
+  createdAt   BigInt  @map("created_at")
+  updatedAt   BigInt? @map("updated_at")
+  closedAt    BigInt? @map("closed_at")
+  /// Who set the status last: `utente`, `segretario`, `sistema`.
+  closedBy    String? @map("closed_by")
+  reason      String?
+  /// The message that proves the last change.
+  evidenceKey String? @map("evidence_key")
+  createdBy   String  @default("segretario") @map("created_by")
+  runId       String? @map("run_id")
+  /// What the Segretario asks the user about it, when it cannot tell.
+  question    String?
+  revision    Int     @default(1)
 
   @@index([accountId, threadId], map: "idx_ai_items_thread")
   @@index([status, due], map: "idx_ai_items_status")
   @@map("ai_items")
 }
 
-/// A reply the Segretario prepared ahead for a message that waits on the
-/// user: a local proposal until the user takes it up (`usata`) or sets it
-/// aside (`scartata`). User data.
+/// Every change a commitment went through, to show it and to undo it.
+model AiItemHistory {
+  id         Int     @id @default(autoincrement())
+  itemId     Int     @map("item_id")
+  at         BigInt
+  actor      String
+  runId      String? @map("run_id")
+  action     String
+  beforeJson String? @map("before_json")
+  afterJson  String  @map("after_json")
+  reason     String?
+
+  @@index([itemId, id], map: "idx_ai_item_history_item")
+  @@index([runId], map: "idx_ai_item_history_run")
+  @@map("ai_item_history")
+}
+
+/// A reply or a reminder the Segretario prepared ahead, local until the user
+/// takes it up: ready, to look at again, used, discarded, overtaken.
 model AiReadyDraft {
-  accountId  String @map("account_id")
-  messageKey String @map("message_key")
-  threadId   String @map("thread_id")
-  /// A reply to a message that waits on the user, or a reminder after the user's own ('sollecito').
-  kind       String @default("risposta")
-  text       String
-  doubts     String
-  status     String
-  createdAt  BigInt @map("created_at")
+  accountId   String  @map("account_id")
+  messageKey  String  @map("message_key")
+  threadId    String  @map("thread_id")
+  /// `risposta`, or `sollecito` after the user's own message.
+  kind        String  @default("risposta")
+  text        String
+  doubts      String
+  /// `pronta`, `da_rivedere`, `usata`, `scartata`, `superata`.
+  status      String
+  staleReason String? @map("stale_reason")
+  createdAt   BigInt  @map("created_at")
+  updatedAt   BigInt? @map("updated_at")
+  revision    Int     @default(1)
+  runId       String? @map("run_id")
 
   @@id([accountId, messageKey])
   @@index([status], map: "idx_ai_ready_drafts_status")
   @@map("ai_ready_drafts")
 }
 
-/// A message an extension filed outside the mail (ARCHIVIA SIEVER, into a pratica) before taking it out.
+/// A matter that lasts — a job, a project; a pratica in the company build —
+/// found by the Segretario or made by the user, with "Il punto".
+model AiProject {
+  id          String  @id
+  title       String
+  /// Who named it: a name the user gave is not changed by a run alone.
+  titleBy     String  @map("title_by")
+  description String?
+  /// "Il punto": how things stand, and when it was written.
+  state       String?
+  stateAt     BigInt? @map("state_at")
+  /// Since when "Il punto" is behind what happened.
+  staleSince  BigInt? @map("stale_since")
+  origin      String
+  hiddenAt    BigInt? @map("hidden_at")
+  closedAt    BigInt? @map("closed_at")
+  activeAt    BigInt? @map("active_at")
+  revision    Int     @default(1)
+  createdAt   BigInt  @map("created_at")
+  updatedAt   BigInt  @map("updated_at")
+
+  @@map("ai_projects")
+}
+
+/// Which conversations a project holds; one may be in more than one. A link
+/// the user took away stays as `rejected`, so no run alone makes it again.
+model AiProjectThread {
+  projectId String @map("project_id")
+  accountId String @map("account_id")
+  threadId  String @map("thread_id")
+  linkedBy  String @map("linked_by")
+  rejected  Int    @default(0)
+  createdAt BigInt @map("created_at")
+
+  @@id([projectId, accountId, threadId])
+  @@index([accountId, threadId], map: "idx_ai_project_threads_thread")
+  @@map("ai_project_threads")
+}
+
+/// What a project points to outside the mail: a folder today, drives later.
+model AiProjectResource {
+  id        Int     @id @default(autoincrement())
+  projectId String  @map("project_id")
+  kind      String
+  location  String
+  label     String?
+  addedBy   String  @map("added_by")
+  createdAt BigInt  @map("created_at")
+
+  @@unique([projectId, location])
+  @@map("ai_project_resources")
+}
+
+/// Something the Segretario advises and the user decides: an event with
+/// guests, an extension's action (ARCHIVIA SIEVER).
+model AiProposal {
+  id          String  @id
+  kind        String
+  accountId   String? @map("account_id")
+  messageKey  String? @map("message_key")
+  threadId    String? @map("thread_id")
+  title       String
+  payloadJson String  @map("payload_json")
+  /// `aperta`, `accettata`, `scartata`, `superata`.
+  status      String
+  runId       String? @map("run_id")
+  createdAt   BigInt  @map("created_at")
+  decidedAt   BigInt? @map("decided_at")
+  resultJson  String? @map("result_json")
+
+  @@index([status, kind], map: "idx_ai_proposals_status")
+  @@index([accountId, messageKey], map: "idx_ai_proposals_message")
+  @@map("ai_proposals")
+}
+
+/// A message an extension saved a copy of outside the mail, and where.
+model AiSavedCopy {
+  accountId   String  @map("account_id")
+  messageKey  String  @map("message_key")
+  threadId    String  @map("thread_id")
+  /// The extension that saved it.
+  source      String
+  destination String
+  filesJson   String  @map("files_json")
+  /// Who wrote it, lower case: where their next message goes is learnt from it.
+  fromAddress String? @map("from_address")
+  savedAt     BigInt  @map("saved_at")
+
+  @@id([accountId, messageKey, destination])
+  @@index([accountId, threadId], map: "idx_ai_saved_copies_thread")
+  @@map("ai_saved_copies")
+}
+
+/// A message last seen gone from the cache: past a while with every folder
+/// synced, it is taken as deleted and what came of it is settled.
+model AiGone {
+  accountId  String @map("account_id")
+  messageKey String @map("message_key")
+  since      BigInt
+
+  @@id([accountId, messageKey])
+  @@map("ai_gone")
+}
+
 /// A search asked in words that the user kept as a folder: what the question
-/// became in the search's own terms, run again each time it is opened. User data.
+/// became in the search's own terms, run again each time it is opened.
 model AiSavedSearch {
   id         String @id
   question   String
@@ -434,72 +640,25 @@ model AiSavedSearch {
   @@map("ai_saved_searches")
 }
 
-model AiArchived {
-  accountId  String @map("account_id")
-  messageKey String @map("message_key")
-  threadId   String @map("thread_id")
-  /// The folder it went into.
-  folder     String
-  /// Who wrote it, lower case: where their next message goes is guessed from it.
-  fromAddress String? @map("from_address")
-  archivedAt BigInt @map("archived_at")
-
-  @@id([accountId, messageKey])
-  @@index([accountId, threadId], map: "idx_ai_archived_thread")
-  @@map("ai_archived")
-}
-
-/// What the Segretario wrote at the top of a day ("Oggi"), by local day.
+/// The letter at the top of a day ("Oggi"), by local day.
 model AiBriefing {
   day       String @id
   text      String
-  /// JSON list of the lines it was written from: those added since make it behind.
+  /// Unused since the registry: kept for old rows.
   basis     String
   createdAt BigInt @map("created_at")
 
   @@map("ai_briefings")
 }
 
-/// A matter that lasts — a job, a project; a pratica in a company build —
-/// which conversations are filed into. User data.
-model AiTopic {
-  id           String  @id
-  /// The extension's key for a topic it brings ("pratica:<id>"); null for the Segretario's own.
-  externalKey  String? @unique @map("external_key")
-  title        String
-  description  String?
-  folderPath   String? @map("folder_path")
-  /// JSON list of the words that name it in mail ("Prat2451", the client), the extension's.
-  aliases      String?
-  /// Its place in the extension's list, the most recent first; null for the Segretario's own.
-  rank         Int?
-  /// When a conversation last joined it, or it was made; null for a pratica never seen in mail.
-  activeAt     BigInt? @map("active_at")
-  /// What it is about in a line, as the Segretario learnt it from its mail: the catalogue shows it.
-  gist         String?
-  /// How many conversations it had when the gist was written: it is written again as they double.
-  gistConversations Int? @map("gist_conversations")
-  origin       String
-  state        String?
-  stateAt      BigInt? @map("state_at")
-  archivedAt   BigInt? @map("archived_at")
-  createdAt    BigInt  @map("created_at")
-  updatedAt    BigInt  @map("updated_at")
+/// How the user may prepare for an event, as the day's run wrote it.
+model AiEventPrep {
+  eventKey  String  @id @map("event_key")
+  text      String
+  runId     String? @map("run_id")
+  writtenAt BigInt  @map("written_at")
 
-  @@map("ai_topics")
-}
-
-/// Which topic a conversation belongs to: one at most. A link the user made is kept.
-model AiTopicThread {
-  accountId String @map("account_id")
-  threadId  String @map("thread_id")
-  topicId   String @map("topic_id")
-  linkedBy  String @map("linked_by")
-  createdAt BigInt @map("created_at")
-
-  @@id([accountId, threadId])
-  @@index([topicId], map: "idx_ai_topic_threads_topic")
-  @@map("ai_topic_threads")
+  @@map("ai_event_preps")
 }
 
 /// An account whose calendar is connected: its own token, for the calendar alone.
@@ -520,12 +679,32 @@ model CalendarCalendar {
   calendarId String  @map("calendar_id")
   name       String
   isPrimary  Int     @map("is_primary")
+  /// Whether events can be written in it (the user owns it or may edit it).
+  writable   Int     @default(1)
   syncToken  String? @map("sync_token")
   /// How far ahead its events were read: past it, they are read again.
   windowEnd  BigInt? @map("window_end")
 
   @@id([accountId, calendarId])
   @@map("calendar_calendars")
+}
+
+/// What changed in the calendars not through this app — a new event, one
+/// moved, one cancelled, an answer to an invitation — as the sync found it:
+/// what the Segretario looks at. Kept a month.
+model CalendarChange {
+  id         Int     @id @default(autoincrement())
+  accountId  String  @map("account_id")
+  eventKey   String  @map("event_key")
+  /// `nuovo`, `cambiato`, `annullato`.
+  kind       String
+  /// The event before and after (`CalendarEvent`), as JSON; null where there is none.
+  beforeJson String? @map("before_json")
+  afterJson  String? @map("after_json")
+  at         BigInt
+
+  @@index([at], map: "idx_calendar_changes_at")
+  @@map("calendar_changes")
 }
 
 /// An event of a connected calendar — an instance, for a recurring one.
@@ -549,6 +728,8 @@ model CalendarEvent {
   myResponse    String? @map("my_response")
   meetLink      String? @map("meet_link")
   htmlLink      String? @map("html_link")
+  /// Put there by the Segretario (`EventOrigin`), as the provider's private properties say.
+  originJson    String? @map("origin_json")
 
   @@index([startsAt, endsAt], map: "idx_calendar_events_range")
   @@index([accountId, iCalUid], map: "idx_calendar_events_uid")

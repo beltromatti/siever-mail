@@ -8,7 +8,7 @@ import type {
   MessageRef
 } from '@shared/models'
 
-import type { MessageNote } from '@shared/segretario'
+import type { MessageRowWork } from '@shared/segretario'
 
 import type { MessageListEmptyState } from './message-list-empty'
 import type { MessageHighlightTerms, PrimaryAddressMode } from './message-list-shared'
@@ -22,12 +22,11 @@ import type { MessageHighlightTerms, PrimaryAddressMode } from './message-list-s
 export interface MessageListViewProps {
   title: string
   /**
-   * Each conversation's topic as a tag — its pratica — by account and
-   * thread (see `threadKey`); null where it would say nothing, as in a
-   * topic's own list.
+   * Each conversation's projects as a tag, by account and thread (see
+   * `threadKey`); null where it would say nothing, as in a project's own list.
    */
-  topicTags: ReadonlyMap<string, string> | null
-  /** Under the header, above the rows: what the Segretario says of a topic's list. */
+  projectTags: ReadonlyMap<string, string> | null
+  /** Under the header, above the rows: what the Segretario says of a project's list. */
   banner?: React.ReactNode
   /**
    * Hands what is typed in the search to the Segretario, to search as it
@@ -45,14 +44,16 @@ export interface MessageListViewProps {
   searchScopeLabel: string
   filter: MessageListFilter
   onFilterChange: (next: MessageListFilter) => void
+  /** The Segretario is on: the filter offers "Attivi". */
+  showActiveFilter: boolean
   /**
    * The list is the pane in the window's top right corner (the outlook
    * layout): on Windows its header keeps clear of the window's buttons.
    */
   atWindowTopRight: boolean
   messages: MailMessageSummary[]
-  /** The Segretario's notes of these messages, by account and message key (see `noteKey`). */
-  notes: ReadonlyMap<string, MessageNote>
+  /** What the Segretario has on these messages, by account and message key (see `rowWorkKey`). */
+  rowWork: ReadonlyMap<string, MessageRowWork>
   sections: MessageSection[]
   /** What the list holds, said under its title: "9.796 messaggi", "12 risultati". */
   countLabel: string

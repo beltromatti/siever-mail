@@ -85,10 +85,10 @@ function senderList(messages: ReadonlyArray<MailMessageSummary>): string {
 }
 
 /** What deserves an alert of its own: it asks something of the user and matters. */
-function noteMatters(note: Pick<MessageNote, 'state' | 'priority'>): boolean {
+function noteMatters(note: Pick<MessageNote, 'nature' | 'priority'>): boolean {
   return (
-    (note.state === 'da_rispondere' || note.state === 'da_fare') &&
-    (note.priority === 'alta' || (note.state === 'da_rispondere' && note.priority === 'media'))
+    (note.nature === 'da_rispondere' || note.nature === 'da_fare') &&
+    (note.priority === 'alta' || (note.nature === 'da_rispondere' && note.priority === 'media'))
   )
 }
 

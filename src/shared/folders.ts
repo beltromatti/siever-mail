@@ -137,10 +137,10 @@ export function unifiedFolderRole(path: string | null | undefined): FolderRole |
 }
 
 /**
- * The Segretario's views: the conversations its notes say ask something of
- * the user (`da-gestire`), those where the user waits on someone
- * (`in-attesa`), and the messages it prepared a reply for
- * (`bozze-pronte`), across the accounts "Tutti gli account" gathers.
+ * The Segretario's views, computed from what is open: the messages
+ * something the user owes comes from (`da-gestire`), those the user waits
+ * on (`in-attesa`), and those with a reply ready (`bozze-pronte`) — in
+ * whichever folder they are filed, across every account.
  */
 export type SegretarioView = 'da-gestire' | 'in-attesa' | 'bozze-pronte'
 
@@ -178,17 +178,17 @@ export function segretarioViewLabel(view: SegretarioView): string {
   return SEGRETARIO_VIEW_LABELS[view]
 }
 
-const SEGRETARIO_TOPIC_PREFIX = '__segretario__:argomento:'
+const SEGRETARIO_PROJECT_PREFIX = '__segretario__:progetto:'
 
-/** The list of a topic — a pratica — as a folder: every message of its conversations. */
-export function segretarioTopicPath(topicId: string): string {
-  return `${SEGRETARIO_TOPIC_PREFIX}${topicId}`
+/** The list of a project as a folder: every message of its conversations, wherever filed. */
+export function segretarioProjectPath(projectId: string): string {
+  return `${SEGRETARIO_PROJECT_PREFIX}${projectId}`
 }
 
-/** The topic a path opens, by id, or null. */
-export function segretarioTopic(path: string | null | undefined): string | null {
-  return path?.startsWith(SEGRETARIO_TOPIC_PREFIX)
-    ? path.slice(SEGRETARIO_TOPIC_PREFIX.length) || null
+/** The project a path opens, by id, or null. */
+export function segretarioProject(path: string | null | undefined): string | null {
+  return path?.startsWith(SEGRETARIO_PROJECT_PREFIX)
+    ? path.slice(SEGRETARIO_PROJECT_PREFIX.length) || null
     : null
 }
 
@@ -206,11 +206,11 @@ export function segretarioSearch(path: string | null | undefined): string | null
     : null
 }
 
-/** Whether a path is a list the Segretario makes: a view, a topic, a search asked in words. */
+/** Whether a path is a list the Segretario makes: a view, a project, a search asked in words. */
 export function isSegretarioList(path: string | null | undefined): boolean {
   return (
     segretarioView(path) !== null ||
-    segretarioTopic(path) !== null ||
+    segretarioProject(path) !== null ||
     segretarioSearch(path) !== null
   )
 }

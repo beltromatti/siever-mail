@@ -18,12 +18,7 @@ const contextSchema = z.object({
   folderLabel: z.string().max(200).nullable()
 })
 
-const preferencesSchema = z.object({
-  triage: z.boolean(),
-  readyDrafts: z.boolean(),
-  learning: z.boolean().nullable(),
-  reviewBeforeSend: z.boolean()
-})
+const preferencesSchema = z.object({ enabled: z.boolean() }).strict()
 
 const reviewRequestSchema = z.object({
   accountId: z.string().min(1),
@@ -48,9 +43,42 @@ const writingRequestSchema = z.object({
   replyTo: messageRefSchema.nullable()
 })
 
-const messageKeysSchema = z
-  .array(z.object({ accountId: z.string().min(1), messageKey: z.string().min(1) }))
-  .max(1000)
+const idSchema = z.string().min(1).max(100)
+const messageKeySchema = z.string().min(1).max(1000)
+const messageSchema = z.object({ accountId: idSchema, messageKey: messageKeySchema })
+const messageKeysSchema = z.array(messageSchema).max(1000)
+const threadSchema = z.object({ accountId: idSchema, threadId: z.string().min(1).max(1000) })
+const daySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Una data AAAA-MM-GG.')
+const commitmentIdSchema = z.number().int().positive()
+const commitmentKindSchema = z.enum(['ti_chiedono', 'hai_promesso', 'aspetti', 'da_fare'])
+const commitmentTextSchema = z.string().trim().min(1, 'Scrivi cosa c’è da fare.').max(500)
+const projectTitleSchema = z.string().trim().min(1, 'Dai un nome.').max(120)
+
+const commitmentStatusSchema = z.enum(['aperta', 'fatta', 'non_serve', 'rinviata'])
+const statusOptionsSchema = z
+  .object({ until: daySchema.optional(), reason: z.string().trim().max(500).optional() })
+  .strict()
+  .optional()
+
+const commitmentChangeSchema = z
+  .object({
+    text: commitmentTextSchema.optional(),
+    due: daySchema.nullable().optional(),
+    kind: commitmentKindSchema.optional()
+  })
+  .strict()
+
+const newCommitmentSchema = z
+  .object({ kind: commitmentKindSchema, text: commitmentTextSchema, due: daySchema.nullable() })
+  .strict()
+
+const projectChangeSchema = z
+  .object({
+    title: projectTitleSchema.optional(),
+    hidden: z.boolean().optional(),
+    closed: z.boolean().optional()
+  })
+  .strict()
 
 const sendOutcomeSchema = z.union([
   z.object({ sent: z.literal(true) }),
@@ -62,15 +90,7 @@ const composeResultSchema = z.union([
   z.object({ error: z.string().max(2000) })
 ])
 
-const topicChangeSchema = z
-  .object({
-    title: z.string().trim().min(1, 'Dai un nome.').max(120).optional(),
-    archived: z.boolean().optional()
-  })
-  .strict()
-
 const textSchema = z.string().trim().min(1, 'Scrivi qualcosa al Segretario.').max(20_000)
-const idSchema = z.string().min(1).max(100)
 
 /**
  * The Segretario's channels. Each waits for it to be open — after the
@@ -95,6 +115,7 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
     })
   }
 
+  // The key and the one switch.
   handle(SEGRETARIO_IPC.getStatus, () => segretario.getStatus())
   handle(SEGRETARIO_IPC.saveKey, (key: unknown) =>
     segretario.saveKey(z.string().max(500).parse(key))
@@ -102,7 +123,14 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.removeKey, () => segretario.removeKey())
   handle(SEGRETARIO_IPC.checkKey, () => segretario.checkKey())
   handle(SEGRETARIO_IPC.getPreferences, () => segretario.getPreferences())
+  handle(SEGRETARIO_IPC.setPreferences, (preferences: unknown) =>
+    segretario.setPreferences(preferencesSchema.parse(preferences))
+  )
   handle(SEGRETARIO_IPC.getSpending, () => segretario.getSpending())
+  handle(SEGRETARIO_IPC.getEngineState, () => segretario.getEngineState())
+  handle(SEGRETARIO_IPC.retryFailedWork, () => segretario.retryFailedWork())
+
+  // The memory, and getting to know the connections.
   handle(SEGRETARIO_IPC.listMemory, () => segretario.listMemory())
   handle(SEGRETARIO_IPC.writeMemory, (path: unknown, content: unknown) =>
     segretario.writeMemory(memoryPathSchema.parse(path), z.string().parse(content))
@@ -110,96 +138,36 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.deleteMemory, (path: unknown) =>
     segretario.deleteMemory(memoryPathSchema.parse(path))
   )
+  handle(SEGRETARIO_IPC.memoryHistory, (path: unknown) =>
+    segretario.memoryHistory(memoryPathSchema.parse(path))
+  )
+  handle(SEGRETARIO_IPC.restoreMemory, (path: unknown, revision: unknown) =>
+    segretario.restoreMemory(
+      memoryPathSchema.parse(path),
+      z.number().int().positive().parse(revision)
+    )
+  )
   handle(SEGRETARIO_IPC.forgetEverything, () => segretario.forgetEverything())
   handle(SEGRETARIO_IPC.listLearning, () => segretario.listLearning())
-  handle(SEGRETARIO_IPC.lastKeptUpAt, () => segretario.lastKeptUpAt())
-  handle(SEGRETARIO_IPC.relearnAccount, (accountId: unknown) =>
-    segretario.relearnAccount(idSchema.parse(accountId))
+  handle(SEGRETARIO_IPC.startConoscimi, (accountIds: unknown) =>
+    segretario.startConoscimi(z.array(idSchema).max(100).optional().parse(accountIds))
   )
-  handle(SEGRETARIO_IPC.getNotes, (messages: unknown) =>
-    segretario.getNotes(messageKeysSchema.parse(messages))
+  handle(SEGRETARIO_IPC.draftSent, (draftId: unknown, writtenText: unknown) =>
+    segretario.draftSent(idSchema.parse(draftId), z.string().max(200_000).parse(writtenText))
   )
-  handle(SEGRETARIO_IPC.getThreadBrief, (accountId: unknown, threadId: unknown) =>
-    segretario.getThreadBrief(idSchema.parse(accountId), z.string().min(1).parse(threadId))
+
+  // The user's work.
+  handle(SEGRETARIO_IPC.getRowWork, (messages: unknown) =>
+    segretario.getRowWork(messageKeysSchema.parse(messages))
   )
-  handle(SEGRETARIO_IPC.closeCommitment, (id: unknown) =>
-    segretario.closeCommitment(z.number().int().positive().parse(id))
-  )
-  handle(SEGRETARIO_IPC.dismissNote, (accountId: unknown, messageKey: unknown) =>
-    segretario.dismissNote(idSchema.parse(accountId), z.string().min(1).parse(messageKey))
-  )
-  handle(SEGRETARIO_IPC.dismissConversations, (messages: unknown) =>
-    segretario.dismissConversations(messageKeysSchema.parse(messages))
-  )
-  handle(SEGRETARIO_IPC.readyDraftSource, (accountId: unknown, messageKey: unknown) =>
-    segretario.readyDraftSource(idSchema.parse(accountId), z.string().min(1).parse(messageKey))
-  )
-  handle(
-    SEGRETARIO_IPC.takeUpReadyDraft,
-    (accountId: unknown, messageKey: unknown, draftId: unknown) =>
-      segretario.takeUpReadyDraft(
-        idSchema.parse(accountId),
-        z.string().min(1).parse(messageKey),
-        idSchema.parse(draftId)
-      )
-  )
-  handle(SEGRETARIO_IPC.discardReadyDraft, (accountId: unknown, messageKey: unknown) =>
-    segretario.discardReadyDraft(idSchema.parse(accountId), z.string().min(1).parse(messageKey))
-  )
-  handle(SEGRETARIO_IPC.getBriefing, () => segretario.getBriefing())
-  handle(SEGRETARIO_IPC.getDue, (throughDay: unknown) =>
-    segretario.getDue(
-      z
-        .string()
-        .regex(/^\d{4}-\d{2}-\d{2}$/)
-        .parse(throughDay)
-    )
-  )
-  handle(SEGRETARIO_IPC.assistWriting, (request: unknown) =>
-    segretario.assistWriting(writingRequestSchema.parse(request))
-  )
-  handle(SEGRETARIO_IPC.writeBriefingOpening, () => segretario.writeBriefingOpening())
-  handle(SEGRETARIO_IPC.topicsLabel, () => segretario.getTopicsLabel())
-  handle(SEGRETARIO_IPC.listTopics, () => segretario.listTopics())
-  handle(SEGRETARIO_IPC.getTopic, (id: unknown) => segretario.getTopic(idSchema.parse(id)))
-  handle(SEGRETARIO_IPC.writeTopicState, (id: unknown) =>
-    segretario.writeTopicState(idSchema.parse(id))
-  )
-  handle(
-    SEGRETARIO_IPC.setConversationTopic,
-    (accountId: unknown, threadId: unknown, topicId: unknown) =>
-      segretario.setConversationTopic(
-        idSchema.parse(accountId),
-        z.string().min(1).parse(threadId),
-        idSchema.nullable().parse(topicId)
-      )
-  )
-  handle(SEGRETARIO_IPC.conversationTopics, (threads: unknown) =>
-    segretario.conversationTopics(
-      z
-        .array(z.object({ accountId: idSchema, threadId: z.string().min(1) }))
-        .max(1000)
-        .parse(threads)
-    )
-  )
-  handle(SEGRETARIO_IPC.listSavedSearches, () => segretario.listSavedSearches())
-  handle(SEGRETARIO_IPC.saveSearch, (id: unknown) => segretario.saveSearch(idSchema.parse(id)))
-  handle(SEGRETARIO_IPC.removeSavedSearch, (id: unknown) =>
-    segretario.removeSavedSearch(idSchema.parse(id))
-  )
-  handle(SEGRETARIO_IPC.askMail, (question: unknown) =>
-    segretario.askMail(z.string().trim().min(2, 'Scrivi cosa cerchi.').max(1000).parse(question))
-  )
-  handle(SEGRETARIO_IPC.reviewDraft, (request: unknown) =>
-    segretario.reviewDraft(reviewRequestSchema.parse(request))
-  )
-  handle(SEGRETARIO_IPC.filingHint, (messages: unknown) =>
-    segretario.filingHint(
+  handle(SEGRETARIO_IPC.filingContext, (messages: unknown) =>
+    segretario.filingContext(
       z
         .array(
           z.object({
             accountId: idSchema,
-            threadId: z.string().min(1),
+            messageKey: messageKeySchema,
+            threadId: z.string().min(1).max(1000),
             from: z.string().max(500).nullable()
           })
         )
@@ -207,12 +175,113 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
         .parse(messages)
     )
   )
-  handle(SEGRETARIO_IPC.createTopic, (title: unknown) =>
-    segretario.createTopic(z.string().trim().min(1, 'Dai un nome.').max(120).parse(title))
+  handle(SEGRETARIO_IPC.getMessageWork, (accountId: unknown, messageKey: unknown) =>
+    segretario.getMessageWork(idSchema.parse(accountId), messageKeySchema.parse(messageKey))
   )
-  handle(SEGRETARIO_IPC.openTopicFolder, async (id: unknown) => {
-    // The archive is on a share a restart may have left unmounted: reached first.
-    const folderPath = await segretario.topicFolder(idSchema.parse(id))
+  handle(SEGRETARIO_IPC.setCommitmentStatus, (id: unknown, status: unknown, options: unknown) =>
+    segretario.setCommitmentStatus(
+      commitmentIdSchema.parse(id),
+      commitmentStatusSchema.parse(status),
+      statusOptionsSchema.parse(options)
+    )
+  )
+  handle(SEGRETARIO_IPC.editCommitment, (id: unknown, changes: unknown) =>
+    segretario.editCommitment(commitmentIdSchema.parse(id), commitmentChangeSchema.parse(changes))
+  )
+  handle(SEGRETARIO_IPC.openCommitment, (message: unknown, input: unknown) =>
+    segretario.openCommitment(messageSchema.parse(message), newCommitmentSchema.parse(input))
+  )
+  handle(SEGRETARIO_IPC.markHandled, (messages: unknown) =>
+    segretario.markHandled(messageKeysSchema.parse(messages))
+  )
+  handle(SEGRETARIO_IPC.undoChange, (activityId: unknown, eventId: unknown, index: unknown) =>
+    segretario.undoChange(
+      idSchema.parse(activityId),
+      z.number().int().positive().parse(eventId),
+      z.number().int().nonnegative().parse(index)
+    )
+  )
+  handle(SEGRETARIO_IPC.replySource, (accountId: unknown, messageKey: unknown) =>
+    segretario.replySource(idSchema.parse(accountId), messageKeySchema.parse(messageKey))
+  )
+  handle(SEGRETARIO_IPC.takeUpReply, (accountId: unknown, messageKey: unknown, draftId: unknown) =>
+    segretario.takeUpReply(
+      idSchema.parse(accountId),
+      messageKeySchema.parse(messageKey),
+      idSchema.parse(draftId)
+    )
+  )
+  handle(SEGRETARIO_IPC.discardReply, (accountId: unknown, messageKey: unknown) =>
+    segretario.discardReply(idSchema.parse(accountId), messageKeySchema.parse(messageKey))
+  )
+  handle(SEGRETARIO_IPC.decideProposal, (id: unknown, accepted: unknown, result: unknown) =>
+    segretario.decideProposal(
+      idSchema.parse(id),
+      z.boolean().parse(accepted),
+      z.record(z.string(), z.unknown()).optional().parse(result)
+    )
+  )
+
+  // The day.
+  handle(SEGRETARIO_IPC.getToday, () => segretario.getToday())
+  handle(SEGRETARIO_IPC.refreshToday, () => segretario.refreshToday())
+  handle(SEGRETARIO_IPC.getDue, (throughDay: unknown) =>
+    segretario.getDue(daySchema.parse(throughDay))
+  )
+
+  // Writing, rereading, searching.
+  handle(SEGRETARIO_IPC.assistWriting, (request: unknown) =>
+    segretario.assistWriting(writingRequestSchema.parse(request))
+  )
+  handle(SEGRETARIO_IPC.reviewDraft, (request: unknown) =>
+    segretario.reviewDraft(reviewRequestSchema.parse(request))
+  )
+  handle(SEGRETARIO_IPC.askMail, (question: unknown) =>
+    segretario.askMail(z.string().trim().min(2, 'Scrivi cosa cerchi.').max(1000).parse(question))
+  )
+  handle(SEGRETARIO_IPC.listSavedSearches, () => segretario.listSavedSearches())
+  handle(SEGRETARIO_IPC.saveSearch, (id: unknown) => segretario.saveSearch(idSchema.parse(id)))
+  handle(SEGRETARIO_IPC.removeSavedSearch, (id: unknown) =>
+    segretario.removeSavedSearch(idSchema.parse(id))
+  )
+
+  // Projects.
+  handle(SEGRETARIO_IPC.listProjects, (options: unknown) =>
+    segretario.listProjects(
+      z.object({ includeHidden: z.boolean().optional() }).strict().optional().parse(options)
+    )
+  )
+  handle(SEGRETARIO_IPC.getProject, (id: unknown) => segretario.getProject(idSchema.parse(id)))
+  handle(SEGRETARIO_IPC.refreshProject, (id: unknown) =>
+    segretario.refreshProject(idSchema.parse(id))
+  )
+  handle(SEGRETARIO_IPC.createProject, (title: unknown) =>
+    segretario.createProject(projectTitleSchema.parse(title))
+  )
+  handle(SEGRETARIO_IPC.updateProject, (id: unknown, change: unknown) =>
+    segretario.updateProject(idSchema.parse(id), projectChangeSchema.parse(change))
+  )
+  handle(SEGRETARIO_IPC.mergeProjects, (keepId: unknown, otherIds: unknown) =>
+    segretario.mergeProjects(
+      idSchema.parse(keepId),
+      z.array(idSchema).min(1).max(50).parse(otherIds)
+    )
+  )
+  handle(
+    SEGRETARIO_IPC.setConversationProject,
+    (thread: unknown, projectId: unknown, linked: unknown) =>
+      segretario.setConversationProject(
+        threadSchema.parse(thread),
+        idSchema.parse(projectId),
+        z.boolean().parse(linked)
+      )
+  )
+  handle(SEGRETARIO_IPC.conversationProjects, (threads: unknown) =>
+    segretario.conversationProjects(z.array(threadSchema).max(1000).parse(threads))
+  )
+  handle(SEGRETARIO_IPC.openProjectFolder, async (id: unknown) => {
+    // The archive may be on a share a restart left unmounted: reached first.
+    const folderPath = await segretario.projectFolder(idSchema.parse(id))
     await ensurePathReachable(folderPath)
     const failure = await shell.openPath(folderPath)
 
@@ -220,16 +289,13 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
       throw new Error(`La cartella non si apre: ${failure}`)
     }
   })
-  handle(SEGRETARIO_IPC.updateTopic, (id: unknown, change: unknown) =>
-    segretario.updateTopic(idSchema.parse(id), topicChangeSchema.parse(change))
+
+  // The panel.
+  handle(SEGRETARIO_IPC.listActivities, (options: unknown) =>
+    segretario.listActivities(
+      z.object({ diary: z.boolean().optional() }).strict().optional().parse(options)
+    )
   )
-  handle(SEGRETARIO_IPC.draftSent, (draftId: unknown, writtenText: unknown) =>
-    segretario.draftSent(idSchema.parse(draftId), z.string().max(200_000).parse(writtenText))
-  )
-  handle(SEGRETARIO_IPC.setPreferences, (preferences: unknown) =>
-    segretario.setPreferences(preferencesSchema.parse(preferences))
-  )
-  handle(SEGRETARIO_IPC.listActivities, () => segretario.listActivities())
   handle(SEGRETARIO_IPC.getActivity, (id: unknown) => segretario.getActivity(idSchema.parse(id)))
   handle(SEGRETARIO_IPC.startActivity, (text: unknown, context: unknown) =>
     segretario.startActivity(textSchema.parse(text), contextSchema.parse(context))

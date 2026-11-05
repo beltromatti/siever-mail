@@ -1,6 +1,7 @@
 import type { ApprovalRequest, SegretarioContext } from '@shared/segretario'
 
 import type { StoredEvent } from '../ai-store'
+import type { RegistryChange } from '../registry/types'
 import type { ChatMessage, ContentPart, ToolCall } from '../openrouter'
 import type { HandleRecord } from './handles'
 
@@ -56,6 +57,12 @@ export interface ClearingPayload {
 export interface ErrorPayload {
   message: string
   code: string
+}
+
+/** What a run changed in the user's work, recorded when it ends: its page in the diary. */
+export interface ChangesPayload {
+  /** `undoneAt`: the user undid it from the diary. */
+  changes: Array<RegistryChange & { undoneAt?: number }>
 }
 
 /** A tool result taken out of the conversation for room: where to get it back. */

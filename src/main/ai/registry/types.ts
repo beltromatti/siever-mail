@@ -6,6 +6,8 @@
  * in tables with invariants, and change only through the registry.
  */
 
+import type { EventChange, NewCalendarEvent } from '@shared/calendar'
+
 /** Who changed something: the user, the Segretario (in a run), or the app itself. */
 export type ActorKind = 'utente' | 'segretario' | 'sistema'
 
@@ -233,7 +235,8 @@ export interface SavedCopy extends MessageAnchor {
  * `undo` is what puts it back, when it can be put back.
  */
 export interface RegistryChange {
-  object: 'nota' | 'impegno' | 'progetto' | 'risposta' | 'proposta' | 'copia'
+  object:
+    'nota' | 'impegno' | 'progetto' | 'risposta' | 'proposta' | 'copia' | 'evento' | 'giornata'
   action: string
   /** One line for the diary: "Aperta: mandare il computo a Giulia". */
   label: string
@@ -256,6 +259,12 @@ export type UndoSpec =
       linked: boolean
     }
   | { kind: 'risposta'; accountId: string; messageKey: string; status: ReplyStatus }
+  /** An event the Segretario put in the calendar: undone, it goes. */
+  | { kind: 'evento-creato'; eventKey: string }
+  /** An event it changed: undone, it is as it was. */
+  | { kind: 'evento-modificato'; eventKey: string; before: EventChange }
+  /** An event it took away: undone, it is put back as it was. */
+  | { kind: 'evento-eliminato'; event: NewCalendarEvent }
 
 /** A change was refused: the conflict or the rule, said so the model can act on it. */
 export class RegistryRefusal extends Error {

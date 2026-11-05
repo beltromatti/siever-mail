@@ -275,6 +275,17 @@ export class WorkQueue {
   }
 
   /** Whether a scope failed for good lately: not asked for again until the user says so. */
+  /** Whether work for a scope is waiting or running: work done once at a time is not asked again. */
+  async busy(scopeKey: string): Promise<boolean> {
+    return (
+      (await this.sql.get(
+        `SELECT 1 AS found FROM ai_work WHERE scope_key = ?
+         AND status IN ('in_coda', 'da_riprovare', 'al_lavoro') LIMIT 1`,
+        scopeKey
+      )) !== null
+    )
+  }
+
   async failedSince(scopeKeys: ReadonlyArray<string>, sinceMs: number): Promise<Set<string>> {
     if (scopeKeys.length === 0) {
       return new Set()

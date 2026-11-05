@@ -6,6 +6,8 @@ import { PrismaClient, Prisma } from '@prisma/client'
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3'
 
 import extensionMain from '@app/extension/main'
+import { ensureAiSchema } from '@main/ai/schema'
+import { prismaSql } from '@main/ai/sql'
 import { logMainError } from '@main/utils/error-utils'
 import { sanitizeShortcutOverrides } from '@shared/commands'
 import { upgradeMailFontStacksInHtml } from '@shared/mail-fonts'
@@ -123,8 +125,10 @@ export interface MessageListView {
   filter?: MessageListFilter
   /** Messages a server search found for `query`, matches like the cache's own. */
   serverMatches?: ReadonlyArray<MessageRef>
-  /** The only messages the list may hold: a view of the Segretario's, chosen by its notes. */
+  /** The only messages the list may hold: a list of the Segretario's (a view, a project, a search). */
   onlyRefs?: ReadonlyArray<MessageRef>
+  /** For the `active` filter: the messages with something open or a reply waiting, by key. */
+  activeKeys?: ReadonlyArray<{ accountId: string; messageKey: string }>
 }
 
 export interface FolderSyncState {
@@ -427,6 +431,22 @@ function buildMessageConstraints(
   }
 
   return constraints
+}
+
+/** Messages by key, account by account. */
+function buildMessageKeysWhere(
+  keys: ReadonlyArray<{ accountId: string; messageKey: string }>
+): Prisma.MessageWhereInput[] {
+  const byAccount = new Map<string, string[]>()
+
+  for (const key of keys) {
+    byAccount.set(key.accountId, [...(byAccount.get(key.accountId) ?? []), key.messageKey])
+  }
+
+  return [...byAccount].map(([accountId, messageKeys]) => ({
+    accountId,
+    messageKey: { in: messageKeys }
+  }))
 }
 
 /** Messages a server search found, folder by folder. */
@@ -2674,238 +2694,6 @@ export class AppDatabase {
     }
   }
 
-  /** The Segretario's tables (see the `Ai*` models): user data, kept across updates. */
-  private async ensureSegretarioTables(): Promise<void> {
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_settings (
-        id INTEGER PRIMARY KEY,
-        encrypted_api_key TEXT,
-        key_status_json TEXT NOT NULL DEFAULT '{}',
-        preferences_json TEXT NOT NULL DEFAULT '{}',
-        updated_at INTEGER NOT NULL
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_usage (
-        id INTEGER PRIMARY KEY,
-        created_at INTEGER NOT NULL,
-        activity_id TEXT,
-        purpose TEXT NOT NULL,
-        model TEXT,
-        provider TEXT,
-        prompt_tokens INTEGER NOT NULL,
-        cached_tokens INTEGER NOT NULL,
-        completion_tokens INTEGER NOT NULL,
-        reasoning_tokens INTEGER NOT NULL,
-        cost REAL NOT NULL
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage(created_at)'
-    )
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_activities (
-        id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL,
-        title TEXT NOT NULL,
-        status TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        unseen INTEGER NOT NULL DEFAULT 0,
-        cost REAL NOT NULL DEFAULT 0
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_ai_activities_updated ON ai_activities(updated_at)'
-    )
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_events (
-        id INTEGER PRIMARY KEY,
-        activity_id TEXT NOT NULL REFERENCES ai_activities(id) ON DELETE CASCADE,
-        type TEXT NOT NULL,
-        payload_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_ai_events_activity ON ai_events(activity_id, id)'
-    )
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_memory (
-        path TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        read_at INTEGER NOT NULL
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_learning (
-        account_id TEXT PRIMARY KEY,
-        activity_id TEXT,
-        started_at INTEGER NOT NULL,
-        finished_at INTEGER
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_lessons (
-        id INTEGER PRIMARY KEY,
-        kind TEXT NOT NULL,
-        payload_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        reflection_id TEXT
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_ai_lessons_reflection ON ai_lessons(reflection_id)'
-    )
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_notes (
-        account_id TEXT NOT NULL,
-        message_key TEXT NOT NULL,
-        thread_id TEXT NOT NULL,
-        direction TEXT NOT NULL,
-        summary TEXT NOT NULL,
-        state TEXT NOT NULL,
-        priority TEXT NOT NULL,
-        reason TEXT NOT NULL,
-        due TEXT,
-        message_date TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        dismissed_at INTEGER,
-        twin_account_id TEXT,
-        PRIMARY KEY (account_id, message_key)
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_ai_notes_thread ON ai_notes(account_id, thread_id)'
-    )
-    await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_ai_notes_state ON ai_notes(state, message_date)'
-    )
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_items (
-        id INTEGER PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        thread_id TEXT NOT NULL,
-        message_key TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        text TEXT NOT NULL,
-        due TEXT,
-        status TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        closed_at INTEGER,
-        closed_by TEXT
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_ai_items_thread ON ai_items(account_id, thread_id)'
-    )
-    await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_ai_items_status ON ai_items(status, due)'
-    )
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_topics (
-        id TEXT PRIMARY KEY,
-        external_key TEXT UNIQUE,
-        title TEXT NOT NULL,
-        description TEXT,
-        folder_path TEXT,
-        aliases TEXT,
-        rank INTEGER,
-        active_at INTEGER,
-        gist TEXT,
-        gist_conversations INTEGER,
-        origin TEXT NOT NULL,
-        state TEXT,
-        state_at INTEGER,
-        archived_at INTEGER,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_topic_threads (
-        account_id TEXT NOT NULL,
-        thread_id TEXT NOT NULL,
-        topic_id TEXT NOT NULL,
-        linked_by TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (account_id, thread_id)
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_ai_topic_threads_topic ON ai_topic_threads(topic_id)'
-    )
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_archived (
-        account_id TEXT NOT NULL,
-        message_key TEXT NOT NULL,
-        thread_id TEXT NOT NULL,
-        folder TEXT NOT NULL,
-        from_address TEXT,
-        archived_at INTEGER NOT NULL,
-        PRIMARY KEY (account_id, message_key)
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_ai_archived_thread ON ai_archived(account_id, thread_id)'
-    )
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_saved_searches (
-        id TEXT PRIMARY KEY,
-        question TEXT NOT NULL,
-        summary TEXT NOT NULL,
-        how TEXT NOT NULL,
-        search_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_briefings (
-        day TEXT PRIMARY KEY,
-        text TEXT NOT NULL,
-        basis TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_ready_drafts (
-        account_id TEXT NOT NULL,
-        message_key TEXT NOT NULL,
-        thread_id TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'risposta',
-        text TEXT NOT NULL,
-        doubts TEXT NOT NULL,
-        status TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (account_id, message_key)
-      )
-    `)
-    await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_ai_ready_drafts_status ON ai_ready_drafts(status)'
-    )
-    await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS ai_drafts (
-        draft_id TEXT PRIMARY KEY,
-        activity_id TEXT,
-        account_id TEXT NOT NULL,
-        text TEXT NOT NULL,
-        snapshot TEXT,
-        created_at INTEGER NOT NULL
-      )
-    `)
-
-    // Kept before the Segretario remembered how it left a draft.
-    const draftColumns = (await this.prisma.$queryRawUnsafe(
-      'PRAGMA table_info(ai_drafts)'
-    )) as Array<{ name?: string }>
-
-    if (!draftColumns.some((column) => column.name === 'snapshot')) {
-      await this.prisma.$executeRawUnsafe('ALTER TABLE ai_drafts ADD COLUMN snapshot TEXT')
-    }
-  }
-
   /** The calendars' tables (see the `Calendar*` models): a copy of the provider's, kept in step. */
   private async ensureCalendarTables(): Promise<void> {
     await this.prisma.$executeRawUnsafe(`
@@ -2923,6 +2711,7 @@ export class AppDatabase {
         calendar_id TEXT NOT NULL,
         name TEXT NOT NULL,
         is_primary INTEGER NOT NULL,
+        writable INTEGER NOT NULL DEFAULT 1,
         sync_token TEXT,
         window_end INTEGER,
         PRIMARY KEY (account_id, calendar_id)
@@ -2947,7 +2736,8 @@ export class AppDatabase {
         organizer TEXT,
         my_response TEXT,
         meet_link TEXT,
-        html_link TEXT
+        html_link TEXT,
+        origin_json TEXT
       )
     `)
     await this.prisma.$executeRawUnsafe(
@@ -2956,6 +2746,41 @@ export class AppDatabase {
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_calendar_events_uid ON calendar_events(account_id, ical_uid)'
     )
+
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS calendar_changes (
+        id INTEGER PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        event_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        before_json TEXT,
+        after_json TEXT,
+        at INTEGER NOT NULL
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_calendar_changes_at ON calendar_changes(at)'
+    )
+
+    // Kept before calendars said whether they take events, and events who put them there.
+    const columns = async (table: string): Promise<Set<string>> =>
+      new Set(
+        (
+          (await this.prisma.$queryRawUnsafe(`PRAGMA table_info(${table})`)) as Array<{
+            name: string
+          }>
+        ).map((column) => column.name)
+      )
+
+    if (!(await columns('calendar_calendars')).has('writable')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE calendar_calendars ADD COLUMN writable INTEGER NOT NULL DEFAULT 1'
+      )
+    }
+
+    if (!(await columns('calendar_events')).has('origin_json')) {
+      await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_events ADD COLUMN origin_json TEXT')
+    }
   }
 
   /**
@@ -3492,6 +3317,11 @@ export class AppDatabase {
       constraints.push(refs.length > 0 ? { OR: refs } : { uid: { in: [] } })
     }
 
+    if (view.filter === 'active') {
+      const active = buildMessageKeysWhere(view.activeKeys ?? [])
+      constraints.push(active.length > 0 ? { OR: active } : { uid: { in: [] } })
+    }
+
     return {
       where: constraints.length > 0 ? { ...mailboxWhere, AND: constraints } : mailboxWhere,
       // The unified inbox spans multiple (accountId, folderPath) pairs, so
@@ -3748,12 +3578,13 @@ export class AppDatabase {
 
   /**
    * Messages the Segretario has written no note for, in the folders given
-   * (an account's inbox and sent mail), since `sinceIso`, whose text the
-   * index already has: the newest first, each message once.
+   * (an account's every folder but the Trash, Spam and Bozze), since
+   * `sinceIso`, whose text the index already has — never a draft, which
+   * Gmail lists in All Mail too: the newest first, each message once.
    */
-  async listUntriaged(
+  async listUnnoted(
     accountId: string,
-    folderPaths: ReadonlyArray<string>,
+    folders: { read: ReadonlyArray<string>; drafts: ReadonlyArray<string> },
     sinceIso: string,
     limit: number,
     /** Only this conversation's. */
@@ -3769,10 +3600,11 @@ export class AppDatabase {
   > {
     await this.ready
 
-    if (folderPaths.length === 0) {
+    if (folders.read.length === 0) {
       return []
     }
 
+    const drafts = folders.drafts.length > 0 ? [...folders.drafts] : ['']
     const rows = await this.prisma.$queryRaw<
       Array<{
         folderPath: string
@@ -3786,7 +3618,7 @@ export class AppDatabase {
         m.thread_id AS threadId, m.date_iso AS dateIso
       FROM messages m
       WHERE m.account_id = ${accountId}
-        AND m.folder_path IN (${Prisma.join([...folderPaths])})
+        AND m.folder_path IN (${Prisma.join([...folders.read])})
         AND m.date_iso >= ${sinceIso}
         AND (${threadId ?? null} IS NULL OR m.thread_id = ${threadId ?? null})
         AND EXISTS (
@@ -3797,8 +3629,13 @@ export class AppDatabase {
           SELECT 1 FROM ai_notes n
           WHERE n.account_id = m.account_id AND n.message_key = m.message_key
         )
+        AND NOT EXISTS (
+          SELECT 1 FROM messages d
+          WHERE d.account_id = m.account_id AND d.message_key = m.message_key
+            AND d.folder_path IN (${Prisma.join(drafts)})
+        )
       ORDER BY m.date_iso DESC
-      LIMIT ${limit * 2}
+      LIMIT ${limit * 3}
     `
     const seen = new Set<string>()
 
@@ -3806,6 +3643,61 @@ export class AppDatabase {
       .filter((row) => !seen.has(row.messageKey) && seen.add(row.messageKey))
       .slice(0, limit)
       .map((row) => ({ ...row, uid: Number(row.uid) }))
+  }
+
+  /**
+   * Of an account's messages the Segretario reads since a date — in these
+   * folders, never a draft — how many there are, and how many it has read.
+   */
+  async noteProgress(
+    accountId: string,
+    folders: { read: ReadonlyArray<string>; drafts: ReadonlyArray<string> },
+    sinceIso: string
+  ): Promise<{ read: number; total: number }> {
+    await this.ready
+
+    if (folders.read.length === 0) {
+      return { read: 0, total: 0 }
+    }
+
+    const drafts = folders.drafts.length > 0 ? [...folders.drafts] : ['']
+    const [row] = await this.prisma.$queryRaw<
+      Array<{ total: number | bigint; noted: number | bigint }>
+    >`
+      SELECT COUNT(DISTINCT m.message_key) AS total, COUNT(DISTINCT n.message_key) AS noted
+      FROM messages m
+      LEFT JOIN ai_notes n ON n.account_id = m.account_id AND n.message_key = m.message_key
+      WHERE m.account_id = ${accountId}
+        AND m.folder_path IN (${Prisma.join([...folders.read])})
+        AND m.date_iso >= ${sinceIso}
+        AND NOT EXISTS (
+          SELECT 1 FROM messages d
+          WHERE d.account_id = m.account_id AND d.message_key = m.message_key
+            AND d.folder_path IN (${Prisma.join(drafts)})
+        )
+    `
+
+    return { read: Number(row?.noted ?? 0), total: Number(row?.total ?? 0) }
+  }
+
+  /** The keys of a conversation's messages in these folders, the oldest first, each once. */
+  async threadMessageKeys(
+    accountId: string,
+    threadId: string,
+    folderPaths: ReadonlyArray<string>
+  ): Promise<string[]> {
+    await this.ready
+
+    if (folderPaths.length === 0) {
+      return []
+    }
+
+    const rows = await this.prisma.message.findMany({
+      where: { accountId, threadId, folderPath: { in: [...folderPaths] } },
+      select: { messageKey: true, dateIso: true },
+      orderBy: { dateIso: 'asc' }
+    })
+    return [...new Set(rows.map((row) => row.messageKey))]
   }
 
   /** The key and conversation of each message, where it is now; those not in the cache are left out. */
@@ -3956,6 +3848,7 @@ export class AppDatabase {
       folderPath: string
       uid: number
       messageKey: string
+      threadId: string
       dateIso: string
       subject: string
       from: MailAddress[]
@@ -3969,6 +3862,7 @@ export class AppDatabase {
         folderPath: true,
         uid: true,
         messageKey: true,
+        threadId: true,
         dateIso: true,
         subject: true,
         fromJson: true
@@ -4697,7 +4591,7 @@ export class AppDatabase {
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_contacts_name_normalized ON contacts(name_normalized)'
     )
-    await this.ensureSegretarioTables()
+    await ensureAiSchema(prismaSql(this.prisma))
     await this.ensureCalendarTables()
     await this.prisma.$executeRawUnsafe(`
       INSERT OR IGNORE INTO app_preferences(id, unified_inbox_included_account_ids, updated_at)

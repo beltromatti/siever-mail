@@ -43,6 +43,15 @@ export interface CalendarEvent {
   meetLink: string | null
   /** The event in the provider's calendar, to open it there. */
   htmlLink: string | null
+  /** Put there by the Segretario, from a message: it may take it away again, and says where it came from. */
+  origin: EventOrigin | null
+}
+
+/** Who put an event in the calendar, when it was the Segretario, and from which message. */
+export interface EventOrigin {
+  by: 'segretario'
+  accountId: string | null
+  messageKey: string | null
 }
 
 /** A calendar of an account, and whether its events are shown. */
@@ -65,17 +74,46 @@ export interface CalendarConnection {
   calendars: CalendarInfo[]
 }
 
-/** A new event, as the Segretario proposes it and the user confirms it. */
+/** The key a calendar goes by, for `NewCalendarEvent.calendarKey`: its account's and its own id. */
+export function calendarKey(accountId: string, calendarId: string): string {
+  return `${accountId}\u0000${calendarId}`
+}
+
+/** A new event: in which calendar (`calendarKey`), when, where, with whom. */
 export interface NewCalendarEvent {
-  accountId: string
+  calendarKey: string
   title: string
   start: string
   end: string
   allDay: boolean
   location: string | null
   description: string | null
-  /** Addresses to invite; they get Google's invitation. */
+  /** Addresses to invite; they get the provider's invitation. */
   attendees: string[]
+  origin?: EventOrigin | null
+}
+
+/** Something that changed in a calendar not through this app, as the sync found it. */
+export interface CalendarChange {
+  id: number
+  kind: 'nuovo' | 'cambiato' | 'annullato'
+  /** The event as it is now — as it was, for one cancelled. */
+  event: CalendarEvent
+  /** As it was before, for one changed or cancelled. */
+  before: CalendarEvent | null
+  at: number
+}
+
+/** What changes in an event: only the fields given. */
+export interface EventChange {
+  title?: string
+  start?: string
+  end?: string
+  allDay?: boolean
+  location?: string | null
+  description?: string | null
+  /** The whole list of addresses invited, in place of the old one. */
+  attendees?: string[]
 }
 
 /** The invitation a message carries, as the reader shows it. */

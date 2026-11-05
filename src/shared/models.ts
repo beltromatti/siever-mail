@@ -135,7 +135,8 @@ export type MessageGroupingMode = 'none' | 'auto' | 'sender'
  * Deliberately not persisted: a filter that survives a restart is how people
  * end up convinced their mail has disappeared.
  */
-export type MessageListFilter = 'all' | 'unread' | 'flagged'
+/** `active`: what has something open or a reply waiting, when the Segretario is on. */
+export type MessageListFilter = 'all' | 'unread' | 'flagged' | 'active'
 
 export const DEFAULT_MESSAGE_LIST_FILTER: MessageListFilter = 'all'
 

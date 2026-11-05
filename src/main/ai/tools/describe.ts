@@ -1,0 +1,183 @@
+import type { MessageRef } from '@shared/models'
+
+import type { CommitmentRecord, NoteRecord, ProjectSummary, ReplyRecord } from '../registry/types'
+import { seenKey, type ToolContext } from '../agent/tool-types'
+import { shortDate } from './format'
+
+const KIND_WORDS: Record<CommitmentRecord['kind'], string> = {
+  ti_chiedono: 'ti chiedono',
+  hai_promesso: 'hai promesso',
+  aspetti: 'aspetti',
+  da_fare: 'da fare'
+}
+
+const NATURE_WORDS: Record<NoteRecord['nature'], string> = {
+  da_rispondere: 'chiede una risposta',
+  da_fare: 'chiede di fare qualcosa',
+  in_attesa: 'si aspetta qualcosa da altri',
+  informativo: 'informativo',
+  rumore: 'rumore'
+}
+
+const ACTOR_WORDS = {
+  utente: "dall'utente",
+  segretario: 'da te',
+  sistema: 'dal programma'
+} as const
+
+/** A commitment in a line: its number, kind, words, date and where it stands — and who decided. */
+export function commitmentLine(record: CommitmentRecord): string {
+  const status =
+    record.status === 'aperta'
+      ? 'aperta'
+      : record.status === 'rinviata'
+        ? `rinviata fino al ${record.until}`
+        : `${record.status === 'fatta' ? 'fatta' : 'non serve'} ${ACTOR_WORDS[record.setBy]} il ${shortDate(
+            new Date(record.updatedAt).toISOString()
+          )}${record.reason ? ` («${record.reason}»)` : ''}`
+
+  return `#${record.id} ${KIND_WORDS[record.kind]} · «${record.text}»${record.due ? ` · entro ${record.due}` : ''} · ${status}${
+    record.question ? ` · domanda all'utente: ${record.question}` : ''
+  }`
+}
+
+/** A note in a line, as the Segretario wrote it. */
+export function noteLine(note: NoteRecord): string {
+  return `«${note.summary}» · ${NATURE_WORDS[note.nature]} · importanza ${note.priority}${
+    note.reason ? ` (${note.reason})` : ''
+  }${note.due ? ` · da fare entro ${note.due}` : ''}${note.writtenBy === 'utente' ? ' · corretta dall’utente' : ''}`
+}
+
+export function replyLines(reply: ReplyRecord): string[] {
+  return [
+    `${reply.kind === 'sollecito' ? 'Il sollecito' : 'La risposta'} che hai preparato (${
+      reply.status === 'pronta'
+        ? "pronta, l'utente la vede nel lettore"
+        : `da rivedere: ${reply.staleReason ?? 'la conversazione è andata avanti'}`
+    }):`,
+    `«${reply.text}»`,
+    ...(reply.doubts ? [`I tuoi dubbi: ${reply.doubts}`] : [])
+  ]
+}
+
+/** A project in a line, with its short name for links and later calls. */
+export function projectLine(
+  context: Pick<ToolContext, 'handles' | 'newHandles'> & { run: Pick<ToolContext['run'], 'seen'> },
+  project: ProjectSummary
+): string {
+  const handle = context.handles.name(
+    { kind: 'project', projectId: project.id, title: project.title },
+    context.newHandles
+  )
+  context.run.seen.set(seenKey('project', project.id), project.revision)
+  return `${handle} ${project.title}${project.description ? ` — ${project.description}` : ''} · ${
+    project.conversations
+  } conversazioni · ${project.openCommitments} cose aperte${project.hiddenAt ? ' · nascosto' : ''}${
+    project.closedAt ? ' · concluso' : ''
+  }`
+}
+
+/** Remembers what this run saw of commitments, for its later writes to be checked against. */
+export function rememberCommitments(
+  context: { run: Pick<ToolContext['run'], 'seen'> },
+  records: ReadonlyArray<CommitmentRecord>
+): void {
+  for (const record of records) {
+    context.run.seen.set(seenKey('item', record.id), record.revision)
+  }
+}
+
+/**
+ * What the Segretario already made of a message and its conversation: its
+ * note, what is open (and what was settled lately, so it is not opened
+ * again), the projects, the reply prepared, the drafts written in answer,
+ * the copies saved, the proposals — so the work builds on it, not beside it.
+ */
+export async function messageWork(
+  context: ToolContext,
+  ref: MessageRef,
+  messageKey: string,
+  threadId: string,
+  options: { withConversation: boolean } = { withConversation: true }
+): Promise<string[]> {
+  const thread = { accountId: ref.accountId, threadId }
+  const [note, items, links, reply, drafts, copies, proposals] = await Promise.all([
+    context.registry.notes.get(ref.accountId, messageKey),
+    options.withConversation
+      ? context.registry.commitments.ofThreads([thread])
+      : Promise.resolve([]),
+    context.registry.projects.linksOf([thread]),
+    context.registry.replies.get(ref.accountId, messageKey),
+    context.mail.draftsReplyingTo(ref),
+    context.registry.copies.ofMessages(ref.accountId, [messageKey]),
+    context.registry.proposals.open({ messages: [{ accountId: ref.accountId, messageKey }] })
+  ])
+  const projects = (
+    await Promise.all(
+      links
+        .filter((link) => !link.rejected)
+        .map((link) => context.registry.projects.summary(link.projectId))
+    )
+  ).filter((project): project is ProjectSummary => project !== null)
+  const lines: string[] = []
+
+  if (note) {
+    context.run.seen.set(seenKey('note', ref.accountId, messageKey), note.revision)
+    lines.push(`La tua nota: ${noteLine(note)}`)
+  } else {
+    lines.push('Non l’hai ancora letto: nessuna nota.')
+  }
+
+  if (items.length > 0) {
+    rememberCommitments(context, items)
+    lines.push(
+      'Cose aperte della conversazione (e chiuse di recente):',
+      ...items.map((item) => `  ${commitmentLine(item)}`)
+    )
+  }
+
+  if (projects.length > 0) {
+    lines.push(`Progetti: ${projects.map((project) => projectLine(context, project)).join('; ')}`)
+  }
+
+  const rejected = links.filter((link) => link.rejected)
+
+  if (rejected.length > 0) {
+    const titles = await Promise.all(
+      rejected.map((link) => context.registry.projects.get(link.projectId))
+    )
+    lines.push(
+      `L'utente ha detto che non è di: ${titles
+        .map((project) => project?.title)
+        .filter(Boolean)
+        .join(', ')}.`
+    )
+  }
+
+  if (reply && (reply.status === 'pronta' || reply.status === 'da_rivedere')) {
+    context.run.seen.set(seenKey('reply', ref.accountId, messageKey), reply.revision)
+    lines.push(...replyLines(reply))
+  } else if (reply?.status === 'scartata') {
+    lines.push("Una risposta che avevi preparato l'utente l'ha scartata.")
+  }
+
+  if (drafts.length > 0) {
+    lines.push(
+      `Già in Bozze, in risposta: ${drafts
+        .map((draftId) => context.handles.name({ kind: 'draft', draftId }, context.newHandles))
+        .join(', ')} — per correggerla o inviarla usa quella, non scriverne un'altra.`
+    )
+  }
+
+  for (const copy of copies) {
+    lines.push(
+      `Salvato fuori dalla posta (${copy.source}): ${copy.destination}, il ${shortDate(new Date(copy.savedAt).toISOString())}.`
+    )
+  }
+
+  for (const proposal of proposals) {
+    lines.push(`Proposta tua in attesa dell'utente: ${proposal.title}.`)
+  }
+
+  return lines
+}

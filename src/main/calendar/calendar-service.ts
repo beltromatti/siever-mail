@@ -1,4 +1,4 @@
-import type { CalendarEvent as CalendarEventRow, PrismaClient } from '@prisma/client'
+import type { CalendarEvent as CalendarEventRow, Prisma, PrismaClient } from '@prisma/client'
 import type { BrowserWindow } from 'electron'
 
 import type { GoogleOAuthService } from '@main/services/google-oauth'
@@ -6,15 +6,24 @@ import { decryptSecret, encryptSecret } from '@main/services/secure-storage'
 import { logMainError } from '@main/utils/error-utils'
 import {
   CALENDAR_IPC,
+  calendarKey,
   type CalendarAttendee,
+  type CalendarChange,
   type CalendarConnection,
   type CalendarEvent,
   type CalendarResponse,
+  type EventChange,
+  type EventOrigin,
   type NewCalendarEvent
 } from '@shared/calendar'
 import type { MailAccount } from '@shared/models'
 
-import { SyncTokenExpired, type CalendarProvider, type ProviderEvent } from './calendar-provider'
+import {
+  SyncTokenExpired,
+  type CalendarProvider,
+  type ProviderEvent,
+  type ProviderEventInput
+} from './calendar-provider'
 import { GOOGLE_CALENDAR_SCOPE, GoogleCalendarProvider } from './google-calendar'
 
 /** How often the calendars are read again for what changed. */
@@ -25,6 +34,8 @@ const WINDOW_BACK_MS = 60 * 24 * 60 * 60 * 1000
 const WINDOW_AHEAD_MS = 365 * 24 * 60 * 60 * 1000
 /** Less than this ahead, the window is read again from today, so the months coming are in it. */
 const WINDOW_MIN_AHEAD_MS = 180 * 24 * 60 * 60 * 1000
+/** How long what changed in the calendars is kept for the Segretario to look at. */
+const CHANGES_KEPT_MS = 30 * 24 * 60 * 60 * 1000
 
 export interface CalendarServiceOptions {
   database: {
@@ -39,6 +50,82 @@ export interface CalendarServiceOptions {
 
 function eventKey(accountId: string, calendarId: string, eventId: string): string {
   return `${accountId}\u0000${calendarId}\u0000${eventId}`
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** The local day an instant falls on, AAAA-MM-GG. */
+function localDayOf(instant: number): string {
+  const date = new Date(instant)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+/** A day AAAA-MM-GG moved by some days. */
+function shiftDay(day: string, days: number): string {
+  const [year, month, date] = day.split('-').map(Number)
+  return localDayOf(new Date(year, month - 1, date + days).getTime())
+}
+
+/** Whether what the user sees of an event is different: its time, words, place, people and answers. */
+function differs(row: CalendarEventRow, event: ProviderEvent): boolean {
+  return (
+    row.title !== event.title ||
+    row.start !== event.start ||
+    row.end !== event.end ||
+    (row.allDay === 1) !== event.allDay ||
+    row.location !== event.location ||
+    row.description !== event.description ||
+    row.attendeesJson !== JSON.stringify(event.attendees) ||
+    row.myResponse !== event.myResponse
+  )
+}
+
+/**
+ * An event with a change applied, every field as it should be after it.
+ * Moving only the start keeps the length; turning a timed event into an
+ * all-day one keeps its days; the other way round needs the times.
+ */
+function changedEvent(
+  current: CalendarEvent & { startsAt: number; endsAt: number },
+  change: EventChange
+): ProviderEventInput {
+  const allDay = change.allDay ?? current.allDay
+  let start = change.start ?? null
+  let end = change.end ?? null
+
+  if (allDay !== current.allDay && !(start && end)) {
+    if (!allDay) {
+      throw new Error('Per dare un orario a un evento di tutto il giorno servono inizio e fine.')
+    }
+
+    start ??= localDayOf(current.startsAt)
+    end ??= shiftDay(localDayOf(current.endsAt - 1), 1)
+  }
+
+  if (start && !end) {
+    end = allDay
+      ? shiftDay(start, Math.max(1, Math.round((current.endsAt - current.startsAt) / DAY_MS)))
+      : new Date(Date.parse(start) + (current.endsAt - current.startsAt)).toISOString()
+  }
+
+  start ??= current.start
+  end ??= current.end
+
+  if (allDay ? end <= start : Date.parse(end) <= Date.parse(start)) {
+    throw new Error('La fine dell’evento deve venire dopo l’inizio.')
+  }
+
+  return {
+    title: change.title ?? current.title,
+    start,
+    end,
+    allDay,
+    location: change.location !== undefined ? change.location : current.location,
+    description: change.description !== undefined ? change.description : current.description,
+    attendees:
+      change.attendees ??
+      current.attendees.filter((attendee) => !attendee.self).map((attendee) => attendee.email)
+  }
 }
 
 function eventOfRow(row: CalendarEventRow, calendarName: string): CalendarEvent {
@@ -59,7 +146,8 @@ function eventOfRow(row: CalendarEventRow, calendarName: string): CalendarEvent 
     organizer: row.organizer,
     myResponse: (row.myResponse as CalendarResponse | null) ?? null,
     meetLink: row.meetLink,
-    htmlLink: row.htmlLink
+    htmlLink: row.htmlLink,
+    origin: row.originJson ? (JSON.parse(row.originJson) as EventOrigin) : null
   }
 }
 
@@ -185,6 +273,7 @@ export class CalendarService {
     const prisma = this.requirePrisma()
 
     await prisma.$transaction([
+      prisma.calendarChange.deleteMany({ where: { accountId } }),
       prisma.calendarEvent.deleteMany({ where: { accountId } }),
       prisma.calendarCalendar.deleteMany({ where: { accountId } }),
       prisma.calendarAccount.deleteMany({ where: { accountId } })
@@ -196,6 +285,7 @@ export class CalendarService {
     const prisma = this.requirePrisma()
 
     await prisma.$transaction([
+      prisma.calendarChange.deleteMany(),
       prisma.calendarEvent.deleteMany(),
       prisma.calendarCalendar.deleteMany()
     ])
@@ -208,6 +298,9 @@ export class CalendarService {
     }
 
     const connected = await this.prisma.calendarAccount.findMany({ select: { accountId: true } })
+    await this.prisma.calendarChange.deleteMany({
+      where: { at: { lt: BigInt(Date.now() - CHANGES_KEPT_MS) } }
+    })
     await Promise.all(connected.map((row) => this.sync(row.accountId)))
   }
 
@@ -255,9 +348,14 @@ export class CalendarService {
             accountId,
             calendarId: calendar.calendarId,
             name: calendar.name,
-            isPrimary: calendar.primary ? 1 : 0
+            isPrimary: calendar.primary ? 1 : 0,
+            writable: calendar.writable ? 1 : 0
           },
-          update: { name: calendar.name, isPrimary: calendar.primary ? 1 : 0 }
+          update: {
+            name: calendar.name,
+            isPrimary: calendar.primary ? 1 : 0,
+            writable: calendar.writable ? 1 : 0
+          }
         })
         await this.syncCalendar(provider, accountId, calendar.calendarId, stored ?? null)
       }
@@ -300,7 +398,8 @@ export class CalendarService {
         const { events, syncToken } = await provider.changes(calendarId, {
           syncToken: stored.syncToken
         })
-        await this.applyChanges(accountId, events)
+        // What changed since the last read was done elsewhere — or here, and then it is no change.
+        await this.applyChanges(accountId, events, { logChanges: true })
         await prisma.calendarCalendar.update({
           where: { accountId_calendarId: { accountId, calendarId } },
           data: { syncToken }
@@ -327,47 +426,147 @@ export class CalendarService {
     })
   }
 
+  /**
+   * Keeps events as the provider gives them. With `logChanges`, what is
+   * new, different or cancelled compared with what was kept is noted in
+   * `calendar_changes`, for the Segretario: the app's own writes were kept
+   * already, so they show no difference.
+   */
   private async applyChanges(
     accountId: string,
-    events: ReadonlyArray<ProviderEvent>
+    events: ReadonlyArray<ProviderEvent>,
+    options: { logChanges?: boolean } = {}
   ): Promise<void> {
     const prisma = this.requirePrisma()
-
-    await prisma.$transaction(
-      events.map((event) => {
-        const key = eventKey(accountId, event.calendarId, event.eventId)
-
-        if (event.cancelled) {
-          return prisma.calendarEvent.deleteMany({ where: { key } })
-        }
-
-        const data = {
-          accountId,
-          calendarId: event.calendarId,
-          eventId: event.eventId,
-          iCalUid: event.iCalUid,
-          title: event.title,
-          start: event.start,
-          end: event.end,
-          allDay: event.allDay ? 1 : 0,
-          startsAt: BigInt(event.startsAt),
-          endsAt: BigInt(event.endsAt),
-          location: event.location,
-          description: event.description,
-          attendeesJson: JSON.stringify(event.attendees),
-          organizer: event.organizer,
-          myResponse: event.myResponse,
-          meetLink: event.meetLink,
-          htmlLink: event.htmlLink
-        }
-
-        return prisma.calendarEvent.upsert({
-          where: { key },
-          create: { key, ...data },
-          update: data
-        })
+    const keyOf = (event: ProviderEvent): string =>
+      eventKey(accountId, event.calendarId, event.eventId)
+    const kept = options.logChanges
+      ? new Map(
+          (
+            await prisma.calendarEvent.findMany({
+              where: { key: { in: events.map(keyOf) } }
+            })
+          ).map((row) => [row.key, row])
+        )
+      : new Map<string, CalendarEventRow>()
+    const names = options.logChanges
+      ? new Map(
+          (await prisma.calendarCalendar.findMany({ where: { accountId } })).map((calendar) => [
+            calendar.calendarId,
+            calendar.name
+          ])
+        )
+      : new Map<string, string>()
+    const snapshot = (event: ProviderEvent): string =>
+      JSON.stringify({
+        ...event,
+        key: keyOf(event),
+        accountId,
+        calendarName: names.get(event.calendarId) ?? '',
+        startsAt: undefined,
+        endsAt: undefined,
+        cancelled: undefined
       })
-    )
+    const now = BigInt(Date.now())
+    const writes: Prisma.PrismaPromise<unknown>[] = []
+
+    for (const event of events) {
+      const key = keyOf(event)
+      const before = kept.get(key)
+
+      if (options.logChanges) {
+        const kind = event.cancelled
+          ? before
+            ? 'annullato'
+            : null
+          : !before
+            ? 'nuovo'
+            : differs(before, event)
+              ? 'cambiato'
+              : null
+
+        if (kind) {
+          writes.push(
+            prisma.calendarChange.create({
+              data: {
+                accountId,
+                eventKey: key,
+                kind,
+                beforeJson: before
+                  ? JSON.stringify(eventOfRow(before, names.get(before.calendarId) ?? ''))
+                  : null,
+                afterJson: event.cancelled ? null : snapshot(event),
+                at: now
+              }
+            })
+          )
+        }
+      }
+
+      if (event.cancelled) {
+        writes.push(prisma.calendarEvent.deleteMany({ where: { key } }))
+        continue
+      }
+
+      const data = {
+        accountId,
+        calendarId: event.calendarId,
+        eventId: event.eventId,
+        iCalUid: event.iCalUid,
+        title: event.title,
+        start: event.start,
+        end: event.end,
+        allDay: event.allDay ? 1 : 0,
+        startsAt: BigInt(event.startsAt),
+        endsAt: BigInt(event.endsAt),
+        location: event.location,
+        description: event.description,
+        attendeesJson: JSON.stringify(event.attendees),
+        organizer: event.organizer,
+        myResponse: event.myResponse,
+        meetLink: event.meetLink,
+        htmlLink: event.htmlLink,
+        originJson: event.origin ? JSON.stringify(event.origin) : null
+      }
+
+      writes.push(
+        prisma.calendarEvent.upsert({ where: { key }, create: { key, ...data }, update: data })
+      )
+    }
+
+    await prisma.$transaction(writes)
+  }
+
+  /** What changed in the calendars elsewhere after a point, the oldest first. */
+  async changesSince(afterId: number, limit: number): Promise<CalendarChange[]> {
+    const rows = await this.requirePrisma().calendarChange.findMany({
+      where: { id: { gt: afterId } },
+      orderBy: { id: 'asc' },
+      take: limit
+    })
+
+    return rows.flatMap((row) => {
+      const before = row.beforeJson ? (JSON.parse(row.beforeJson) as CalendarEvent) : null
+      const after = row.afterJson ? (JSON.parse(row.afterJson) as CalendarEvent) : null
+      const event = after ?? before
+      return event
+        ? [
+            {
+              id: row.id,
+              kind: row.kind as CalendarChange['kind'],
+              event,
+              before,
+              at: Number(row.at)
+            }
+          ]
+        : []
+    })
+  }
+
+  /** The point the changes noted so far reach. */
+  async latestChangeId(): Promise<number> {
+    const row = await this.requirePrisma().calendarChange.findFirst({ orderBy: { id: 'desc' } })
+    return row?.id ?? 0
   }
 
   private async providerFor(accountId: string): Promise<CalendarProvider | null> {
@@ -447,22 +646,97 @@ export class CalendarService {
     return this.eventOrThrow(eventKey(row.accountId, row.calendarId, answered.eventId))
   }
 
-  /** Adds an event to the account's main calendar; whoever is invited gets Google's invitation. */
+  /** The calendars events can be written in, every connected account's, the main one first. */
+  async calendars(): Promise<
+    Array<{ key: string; name: string; account: string; primary: boolean; writable: boolean }>
+  > {
+    const [rows, accounts] = await Promise.all([
+      this.requirePrisma().calendarCalendar.findMany({
+        orderBy: [{ isPrimary: 'desc' }, { name: 'asc' }]
+      }),
+      this.options.database.getAccounts()
+    ])
+    const emails = new Map(accounts.map((account) => [account.id, account.email]))
+
+    return rows.map((row) => ({
+      key: calendarKey(row.accountId, row.calendarId),
+      name: row.name,
+      account: emails.get(row.accountId) ?? '',
+      primary: row.isPrimary === 1,
+      writable: row.writable === 1
+    }))
+  }
+
+  /** An event by its key, as it is now; null when it is no longer in the calendar. */
+  async event(key: string): Promise<CalendarEvent | null> {
+    return this.eventOrThrow(key).catch(() => null)
+  }
+
+  /** Adds an event to a calendar; whoever is invited gets the provider's invitation. */
   async create(event: NewCalendarEvent): Promise<CalendarEvent> {
     const prisma = this.requirePrisma()
-    const provider = await this.providerFor(event.accountId)
-    const primary = await prisma.calendarCalendar.findFirst({
-      where: { accountId: event.accountId, isPrimary: 1 }
-    })
+    const calendar = (await prisma.calendarCalendar.findMany()).find(
+      (candidate) => calendarKey(candidate.accountId, candidate.calendarId) === event.calendarKey
+    )
+    const provider = calendar ? await this.providerFor(calendar.accountId) : null
 
-    if (!provider || !primary) {
-      throw new Error('Il calendario di questo account non è collegato.')
+    if (!provider || !calendar) {
+      throw new Error('Questo calendario non è più collegato.')
     }
 
-    const created = await provider.create(primary.calendarId, event)
-    await this.applyChanges(event.accountId, [created])
+    if (calendar.writable !== 1) {
+      throw new Error(`Nel calendario «${calendar.name}» non si possono aggiungere eventi.`)
+    }
+
+    const created = await provider.create(calendar.calendarId, event, event.origin ?? null)
+    await this.applyChanges(calendar.accountId, [created])
     this.options.send(CALENDAR_IPC.changed, null)
-    return this.eventOrThrow(eventKey(event.accountId, primary.calendarId, created.eventId))
+    return this.eventOrThrow(eventKey(calendar.accountId, calendar.calendarId, created.eventId))
+  }
+
+  /** Changes an event as given; whoever is invited, before or now, is told. */
+  async update(key: string, change: EventChange): Promise<CalendarEvent> {
+    const { row, provider } = await this.writable(key)
+    const current = {
+      ...(await this.eventOrThrow(key)),
+      startsAt: Number(row.startsAt),
+      endsAt: Number(row.endsAt)
+    }
+    const next = changedEvent(current, change)
+    const notify = next.attendees.length > 0 || current.attendees.some((attendee) => !attendee.self)
+    const updated = await provider.update(row.calendarId, row.eventId, next, notify)
+
+    await this.applyChanges(row.accountId, [updated])
+    this.options.send(CALENDAR_IPC.changed, null)
+    return this.eventOrThrow(key)
+  }
+
+  /** Takes an event away; whoever is invited is told. */
+  async remove(key: string): Promise<void> {
+    const { row, provider } = await this.writable(key)
+    const attendees = JSON.parse(row.attendeesJson) as CalendarAttendee[]
+
+    await provider.remove(
+      row.calendarId,
+      row.eventId,
+      attendees.some((attendee) => !attendee.self)
+    )
+    await this.requirePrisma().calendarEvent.deleteMany({ where: { key } })
+    this.options.send(CALENDAR_IPC.changed, null)
+  }
+
+  /** An event, with the provider to write it through. */
+  private async writable(
+    key: string
+  ): Promise<{ row: CalendarEventRow; provider: CalendarProvider }> {
+    const row = await this.requirePrisma().calendarEvent.findUnique({ where: { key } })
+    const provider = row ? await this.providerFor(row.accountId) : null
+
+    if (!row || !provider) {
+      throw new Error('L’evento non c’è più nel calendario.')
+    }
+
+    return { row, provider }
   }
 
   private async eventOrThrow(key: string): Promise<CalendarEvent> {

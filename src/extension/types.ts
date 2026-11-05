@@ -128,24 +128,26 @@ export interface ExtensionMain {
 }
 
 export interface ExtensionAssistant {
-  /** Joins the Segretario's system prompt, after the host's. */
-  readonly systemPrompt?: string
-  /** What the topics it brings are called, in the sidebar and the prompts: "Pratiche". */
-  readonly topicsLabel?: string
   /**
-   * The lasting matters the extension knows — a company's job folders —
-   * which the Segretario files conversations into alongside its own: the
-   * most recent first, since the first ones are those it offers for every
-   * message. Read again from time to time: one no longer listed leaves the
-   * catalogue — forgotten when no conversation is in it, closed otherwise.
+   * What the Segretario must know of the company the build is for — how
+   * its work and its projects are organised and named, where its archive
+   * is — in Italian, in the words of the host's prompts. Joined to the
+   * Segretario's identity in every run, so it is read when a run starts:
+   * it may say what the user configured (a folder). Never the projects
+   * themselves: the Segretario finds those, as in the public build.
    */
-  topics?(): Promise<ReadonlyArray<ExtensionTopic>>
+  instructions?(): Promise<string>
   /**
    * Tools the extension gives the Segretario, after the host's: what only
    * it can do — ARCHIVIA SIEVER files messages into a pratica. Each says,
    * in its description, in Italian, what it does and how it is called.
    */
   readonly tools?: ReadonlyArray<ExtensionAssistantTool>
+  /**
+   * What a copy the extension saves outside the mail is called on the
+   * message it came from, a word or two: "Archiviato Siever".
+   */
+  readonly savedCopyLabel?: string
 }
 
 export interface ExtensionAssistantTool {
@@ -162,17 +164,54 @@ export interface ExtensionAssistantTool {
   ): Promise<ExtensionToolResult>
 }
 
+/** A message as an extension's tool knows it: where it is, what it is, who wrote it. */
+export interface ExtensionMessage {
+  ref: MessageRef
+  /** Its stable key in its account (see `message-identity.ts`). */
+  messageKey: string
+  threadId: string
+  subject: string
+  dateIso: string
+  /** Who wrote it, lower case. */
+  fromAddress: string | null
+}
+
 export interface ExtensionToolContext {
+  /** The message a short name the model wrote (`m4`) stands for; null when it names none. */
+  message(handle: string): Promise<ExtensionMessage | null>
   /**
-   * The message a short name the model wrote (`m4`) stands for, with its
-   * subject and date; null when it names none.
+   * The Segretario is working on its own, nobody at the screen: it may
+   * look and propose, never act on what others share — `confirm` is not
+   * there to ask; `propose` is.
    */
-  message(handle: string): Promise<{ ref: MessageRef; subject: string; dateIso: string } | null>
+  background: boolean
   /**
    * Asks the user, on the Segretario's card, before it is done: what will
-   * happen, a line each, and the word on the button. Resolves with the answer.
+   * happen, a line each, and the word on the button. Resolves with the
+   * answer; always false in the background.
    */
   confirm(request: { title: string; details: string[]; confirmLabel: string }): Promise<boolean>
+  /**
+   * Leaves the user a proposal on a message: one click away, in the
+   * reader and in Oggi, and the extension's own to carry out (see
+   * `ExtensionRenderer.proposalActions`). Proposing again on the same
+   * message and kind updates it.
+   */
+  propose(input: {
+    kind: string
+    title: string
+    payload: Record<string, unknown>
+    message: ExtensionMessage
+  }): Promise<void>
+  /** Where the user saved mail lately with this extension, the newest first: their habits. */
+  recentCopies(limit: number): Promise<
+    ReadonlyArray<{
+      destination: string
+      subject: string
+      fromAddress: string | null
+      savedAt: number
+    }>
+  >
   signal: AbortSignal
 }
 
@@ -183,22 +222,6 @@ export interface ExtensionToolResult {
   summary: string
   /** It did not do what was asked: the content says why, the line shows it. */
   failed?: boolean
-}
-
-export interface ExtensionTopic {
-  /** Stable across reads: "pratica:<id>". */
-  key: string
-  /** "Prat2451 · CASEIFICIO VALLI". */
-  title: string
-  description?: string
-  /** Its folder, when it has one: the Segretario reads it, the user opens it. */
-  folderPath?: string
-  /**
-   * How mail names it, when it does by more than its title — "Prat2451",
-   * "pratica 2451", the client: a conversation that says one of these is
-   * offered the topic even when it is not among the most recent.
-   */
-  aliases?: ReadonlyArray<string>
 }
 
 export interface ExtensionMainContext {
@@ -216,17 +239,32 @@ export interface ExtensionMainContext {
    */
   recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void>
   /**
-   * Messages the extension filed outside the mail — ARCHIVIA SIEVER, into a
-   * pratica — before taking them out of it: the Segretario keeps what is
-   * open in them, and says where they went. Called while they are still
-   * where `ref` says.
+   * Copies of messages the extension saved outside the mail — ARCHIVIA
+   * SIEVER's, into a pratica — once they are written: the host keeps them
+   * as facts on each message (the label, wherever the message goes) and
+   * the Segretario learns where the user files. Called while the messages
+   * are still where `ref` says.
    */
-  messagesArchived(entries: ReadonlyArray<{ ref: MessageRef; folder: string }>): Promise<void>
+  copiesSaved(
+    entries: ReadonlyArray<{ ref: MessageRef; destination: string; files: string[] }>
+  ): Promise<void>
   /**
-   * The topics `assistant.topics()` lists changed — a new root, a folder
-   * found: the Segretario reads them again now rather than at its next look.
+   * The copies of these messages the extension saved before, each by the
+   * message's `ref` as given: where, and the files. What is saved already
+   * is not saved again.
    */
-  topicsChanged(): void
+  savedCopies(
+    refs: ReadonlyArray<MessageRef>
+  ): Promise<Array<{ ref: MessageRef; destination: string; files: string[] }>>
+  /**
+   * What the user did with one of the extension's proposals: accepted,
+   * with what they changed (to learn from), or set aside.
+   */
+  proposalDecided(
+    id: string,
+    accepted: boolean,
+    result: Record<string, unknown> | null
+  ): Promise<void>
   /**
    * Gives one of the extension's commands a chord the user chose before the
    * host managed shortcuts, unless they have since chosen one in Settings ›
@@ -250,8 +288,8 @@ export interface ExtensionDatabaseHandle {
 
 /**
  * Minimal mail-engine surface offered to extensions: the raw messages, for
- * filing them elsewhere, and the way to put them in the Trash after. The
- * extension depends on this contract only, never on the engine itself.
+ * saving a copy elsewhere, and archiving them after, as the provider means
+ * it. The extension depends on this contract only, never on the engine itself.
  */
 export interface ExtensionMailEngineHandle {
   /**
@@ -274,14 +312,12 @@ export interface ExtensionMailEngineHandle {
     ) => Promise<void>
   ): Promise<{ missing: MessageRef[] }>
   /**
-   * Moves messages to their account's Trash, in one command per folder,
-   * read first when asked: what a flow that filed them elsewhere does with
-   * the originals. Resolves with the ones that could not be moved.
+   * Archives messages as their provider means it, by what they are rather
+   * than where they are shown: on Gmail they leave the inbox (their labels
+   * stay), elsewhere they go to the archive folder. A message archived
+   * already is no failure. Resolves with the ones that could not be archived.
    */
-  moveMessagesToTrash(
-    refs: ReadonlyArray<MessageRef>,
-    options?: { markAsSeenBeforeMove?: boolean }
-  ): Promise<MessagesActionResult>
+  archiveMessages(refs: ReadonlyArray<MessageRef>): Promise<MessagesActionResult>
 }
 
 /* ────────────────────────── renderer ────────────────────────── */
@@ -326,6 +362,13 @@ export interface ExtensionRenderer {
    * extension declares no commands.
    */
   runCommand?(commandId: string, context: ExtensionCommandContext): boolean
+  /**
+   * The Segretario's proposals the extension acts on, by kind (the one it
+   * gave `propose`): what the button on the proposal says, and the command
+   * it runs on the message the proposal is for — whose dialog fills itself
+   * in from `selection.proposals`.
+   */
+  readonly proposalActions?: Readonly<Record<string, { label: string; commandId: string }>>
 }
 
 /** What an extension command acts on: the same as a toolbar action. */
@@ -352,17 +395,26 @@ export interface ExtensionSelectionContext {
   /** Whether multi-select mode is currently active. */
   multiSelectActive: boolean
   /**
-   * The extension topic the selected conversations are filed in, when the
-   * Segretario filed them all in the same one ("pratica:2451"); null
-   * otherwise, and in a build without the Segretario.
+   * Where a copy of an earlier message of the selected conversations was
+   * saved by the extension — or, for a new conversation, of one from the
+   * same sender — the latest: the destination it reported. Null without
+   * one, and with the AI off.
    */
-  topicKey: string | null
+  savedBefore: string | null
   /**
-   * The subfolder of that topic's folder the earlier messages of these
-   * conversations were filed in ("CORRISPONDENZA") — or, for a new
-   * conversation, the one its sender's mail goes to in that topic.
+   * The Segretario's proposals open on the selected messages, every kind:
+   * the extension takes its own (one it made with `propose`) to fill its
+   * dialog in. Empty with the AI off.
    */
-  filedIn: string | null
+  proposals: ReadonlyArray<ExtensionProposal>
+}
+
+/** A proposal of the Segretario's on a message, as the extension's dialog reads it. */
+export interface ExtensionProposal {
+  id: string
+  kind: string
+  payload: Record<string, unknown>
+  messageKey: string | null
 }
 
 export interface SettingsTabDescriptor {
