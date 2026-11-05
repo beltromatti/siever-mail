@@ -2409,6 +2409,7 @@ function App(): React.JSX.Element {
   const [selectionFiling, setSelectionFiling] = useState<{
     selection: ReadonlyArray<MailMessageSummary>
     savedBefore: string | null
+    projectFolders: ExtensionSelectionContext['projectFolders']
     proposals: ExtensionSelectionContext['proposals']
   } | null>(null)
 
@@ -2448,6 +2449,7 @@ function App(): React.JSX.Element {
       summaries: selectedSummaries,
       multiSelectActive: selection.selectedRefs.length > 1,
       savedBefore: filing?.savedBefore ?? null,
+      projectFolders: filing?.projectFolders ?? [],
       proposals: filing?.proposals ?? []
     }
   }, [aiOn, selectedSummaries, selection.selectedRefs, selectionFiling])

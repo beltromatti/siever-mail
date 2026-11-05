@@ -879,8 +879,9 @@ idempotent: asked again, it queues nothing twice. In order:
 - the day, as in the table above;
 - the calendar's changes, once they settled for two minutes, those from
   yesterday to two months ahead (the first time, the past is passed over);
-- the projects behind on "Il punto", the latest moved first, ten at most,
-  each not more often than once an hour;
+- "Il punto" of the projects behind on it: at once for one that has none,
+  else once a day from the morning, the latest moved first, ten at most —
+  a project the user opens behind has it written then;
 - the reflection, and keeping up once a dozen notes on messages that say
   something came since and twenty hours passed.
 
@@ -1283,8 +1284,10 @@ with it: their habits) and an abort signal.
 
 The selection handed to toolbar actions, commands and the primary dialog
 carries `savedBefore` — where a copy of an earlier message of the selected
-conversations, or else of the same sender, was saved — and the Segretario's
-open `proposals` on the selected messages; both are empty with the AI off.
+conversations, or else of the same sender, was saved — `projectFolders`,
+the folders linked to the projects those conversations are in, and the
+Segretario's open `proposals` on the selected messages; all are empty with
+the AI off.
 Renderer surfaces get `ExtensionHostHooks`:
 `optimisticallyRemoveMessages(refs, action, fallbackErrorMessage)` takes the
 rows out of the list at once and puts back the ones the action reports

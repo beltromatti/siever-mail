@@ -111,6 +111,21 @@ export const memoryTool: SegretarioTool = {
         return { content: await notebook.index(), summary: 'Riletto l’indice della memoria' }
       }
 
+      if (!rawPath) {
+        // The model now and then fills every other parameter and forgets this one: it is told
+        // where the text it wants to change is, so the next call lands.
+        const first = objectListArg(args, 'modifiche')[0]?.vecchio
+        const holders =
+          command === 'modifica' && typeof first === 'string' && first
+            ? (await notebook.list()).filter((note) => note.content.includes(first))
+            : []
+        throw new ToolInputError(
+          holders.length > 0
+            ? `Manca \`percorso\`: il testo da sostituire è in ${holders.map((note) => note.path).join(', ')}.`
+            : 'Manca `percorso`: la nota su cui lavorare (`leggi` senza percorso dà l’indice).'
+        )
+      }
+
       const path = normalizeMemoryPath(rawPath ?? '')
 
       switch (command) {

@@ -57,8 +57,7 @@ const PREPARING_CONCURRENCY = 8
 const DAY_STARTS_AT_HOUR = 6
 /** The letter is looked at again when it is this old and the day moved since. */
 const LETTER_STALE_MS = 3 * 60 * 60 * 1000
-/** "Il punto" is not written again more often than this. */
-const PROJECT_STATE_MIN_INTERVAL_MS = 60 * 60 * 1000
+/** Projects whose "Il punto" one planning queues at most. */
 const PROJECT_STATES_PLANNED = 10
 const REFLECTION_INTERVAL_MS = 6 * 60 * 60 * 1000
 const KEEP_UP_INTERVAL_MS = 20 * 60 * 60 * 1000
@@ -403,9 +402,12 @@ export class SegretarioEngine {
         continue
       }
 
-      const newest = conversation.messages[conversation.messages.length - 1].dateIso
+      const newest = Date.parse(conversation.messages[conversation.messages.length - 1].dateIso)
       const oldest = conversation.messages[0].dateIso
-      const recent = Date.parse(newest) > now.getTime() - NEW_MAIL_DAYS * DAY_MS
+      const recent = newest > now.getTime() - NEW_MAIL_DAYS * DAY_MS
+      // A burst is gathered from its newest message on, not from this planning: planning again
+      // while the unit waits does not push its start further (a clock ahead waits no longer).
+      const burstLeft = Math.min(BURST_MS, Math.max(0, newest + BURST_MS - now.getTime()))
 
       // A reply prepared before these messages no longer knows them: it is to be looked at again.
       await registry.markRepliesStale(conversation, oldest, 'la conversazione è andata avanti')
@@ -414,7 +416,7 @@ export class SegretarioEngine {
         scopeKey,
         scope: { accountId: conversation.accountId, threadId: conversation.threadId },
         priority: recent ? PRIORITY.newMail : PRIORITY.backlog,
-        delayMs: recent ? BURST_MS : 0
+        delayMs: recent ? burstLeft : 0
       })
     }
 
@@ -464,12 +466,15 @@ export class SegretarioEngine {
     // The calendar changed elsewhere: once the changes settle, the Segretario looks at those that matter now.
     await this.planCalendar()
 
-    // Projects whose "Il punto" is behind, those moved lately first, not more often than once an hour.
+    // "Il punto" of a project moved since it was written: at once for one that has none, else
+    // once a day, from the morning, those moved lately first. A project the user opens behind
+    // has it written then (`refreshProject`): no project is rewritten every time it moves.
+    const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
     const stale = (await registry.projects.stale())
       .filter(
         (project) =>
           project.stateAt === null ||
-          now.getTime() - project.stateAt > PROJECT_STATE_MIN_INTERVAL_MS
+          (now.getHours() >= DAY_STARTS_AT_HOUR && project.stateAt < today0)
       )
       .slice(0, PROJECT_STATES_PLANNED)
 

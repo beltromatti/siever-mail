@@ -2,7 +2,8 @@ I progetti dell'utente: le questioni che durano — un lavoro, una pratica, una 
 
 `azione` e i suoi parametri:
 
-- `elenco` — quelli in corso, i più mossi di recente per primi; con `cerca` (un nome, un numero, un cliente) cerca tra tutti, anche nascosti e conclusi; `tutti: true` li mostra tutti.
+- `elenco` — quelli in corso, i più mossi di recente per primi; `tutti: true` li mostra tutti.
+- `cerca` — con `cerca` (un nome, un numero, un cliente): cerca tra tutti, anche nascosti e conclusi.
 - `crea` — con `titolo` (come lo chiamerebbe l'utente: le sue convenzioni), `descrizione` (di cosa si tratta) e, se vuoi, `mail` (i messaggi le cui conversazioni ne fanno parte). Se esiste già un progetto con quel nome, restituisce quello.
 - `collega` / `scollega` — con `progetto` e `mail` (riferimenti m…: le loro conversazioni) oppure `ricerca` (`testo`, e se vuoi `account`, `dal`, `al`: tutte le conversazioni trovate, per la storia di un progetto). Una conversazione può stare in più progetti.
 - `rinomina` — con `progetto` e `titolo`.

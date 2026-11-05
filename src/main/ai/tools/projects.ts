@@ -18,6 +18,7 @@ import { countOf } from './format'
 
 const ACTIONS = [
   'elenco',
+  'cerca',
   'crea',
   'collega',
   'scollega',
@@ -132,15 +133,20 @@ export const projectsTool: SegretarioTool = {
     },
     required: ['azione']
   },
-  running: (args) => (args.azione === 'elenco' ? 'Guardo i progetti…' : 'Aggiorno i progetti…'),
+  running: (args) =>
+    args.azione === 'elenco' || args.azione === 'cerca'
+      ? 'Guardo i progetti…'
+      : 'Aggiorno i progetti…',
   async execute(args, context) {
     const action = requireString(args, 'azione') as (typeof ACTIONS)[number]
     const actor = context.run.actor
 
     try {
       switch (action) {
-        case 'elenco': {
-          const query = stringArg(args, 'cerca')
+        case 'elenco':
+        case 'cerca': {
+          const query =
+            stringArg(args, 'cerca') ?? (action === 'cerca' ? stringArg(args, 'testo') : undefined)
           const projects = query
             ? await context.registry.projects.search(query)
             : await context.registry.projects.list({
@@ -355,9 +361,7 @@ export const projectsTool: SegretarioTool = {
           return { content: `Collegata ${folder}.`, summary: `Collegata una cartella al progetto` }
         }
         default:
-          throw new ToolInputError(
-            `\`azione\` è una di: ${ACTIONS.join(', ')}. Per cercare un progetto: \`elenco\` con \`cerca\`.`
-          )
+          throw new ToolInputError(`\`azione\` è una di: ${ACTIONS.join(', ')}.`)
       }
     } catch (error) {
       if (error instanceof RegistryRefusal) {

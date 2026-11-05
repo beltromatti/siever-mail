@@ -210,6 +210,8 @@ export interface MessageRowWork {
 export interface FilingContext {
   /** The latest destination of a copy of an earlier message of their conversations, or else of their senders. */
   savedBefore: string | null
+  /** The folders linked to the projects their conversations are in: where their work is kept. */
+  projectFolders: string[]
   /** The proposals open on these messages, every kind: an extension takes its own. */
   proposals: Proposal[]
 }

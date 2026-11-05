@@ -403,6 +403,12 @@ export interface ExtensionSelectionContext {
    */
   savedBefore: string | null
   /**
+   * The folders linked to the projects the selected conversations are in —
+   * where their work is kept, as the Segretario or the user linked them.
+   * Empty without, and with the AI off.
+   */
+  projectFolders: ReadonlyArray<string>
+  /**
    * The Segretario's proposals open on the selected messages, every kind:
    * the extension takes its own (one it made with `propose`) to fill its
    * dialog in. Empty with the AI off.

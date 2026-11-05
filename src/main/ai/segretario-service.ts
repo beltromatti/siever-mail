@@ -1387,10 +1387,27 @@ export class SegretarioService {
       )
     ]
 
+    const projectIds = [
+      ...new Set(
+        (await registry.projects.linksOf(threads))
+          .filter((link) => !link.rejected)
+          .map((link) => link.projectId)
+      )
+    ]
+    const resources = await Promise.all(projectIds.map((id) => registry.projects.resources(id)))
+
     return {
       savedBefore:
         latest(await registry.copies.ofThreads(threads)) ??
         (senders.length > 0 ? latest(await registry.copies.fromSenders(senders, '')) : null),
+      projectFolders: [
+        ...new Set(
+          resources
+            .flat()
+            .filter((resource) => resource.kind === 'cartella')
+            .map((resource) => resource.location)
+        )
+      ],
       proposals: (
         await registry.proposals.open({
           messages: messages.map(({ accountId, messageKey }) => ({ accountId, messageKey }))
