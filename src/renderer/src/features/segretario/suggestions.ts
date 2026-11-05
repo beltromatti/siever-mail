@@ -6,7 +6,8 @@ const SUGGESTIONS_SHOWN = 4
 /**
  * What the Segretario offers to do, from what the user is looking at: the
  * message open and what is open in it, the project whose list is open,
- * the selection, the day. Written as the user would ask it.
+ * the selection, the calendar and its event open. Written as the user
+ * would ask it.
  */
 export function segretarioSuggestions(context: {
   selectionCount: number
@@ -16,10 +17,24 @@ export function segretarioSuggestions(context: {
   /** The project whose list is open, by name. */
   project: string | null
   calendarConnected: boolean
+  /** The calendar in front, and whether one of its events is open. */
+  calendar?: { eventOpen: boolean } | null
 }): string[] {
   const suggestions: string[] = []
 
-  if (context.selectionCount > 1) {
+  if (context.calendar?.eventOpen) {
+    suggestions.push(
+      'Preparami a questo appuntamento',
+      'Trova le email e i file collegati',
+      'Quando sono libero per spostarlo?'
+    )
+  } else if (context.calendar) {
+    suggestions.push(
+      'Cosa ho in agenda questa settimana?',
+      'Quando sono libero nei prossimi giorni?',
+      'Quali scadenze ho nelle prossime settimane?'
+    )
+  } else if (context.selectionCount > 1) {
     suggestions.push(
       'Riassumimi questi messaggi',
       'Cosa devo fare con questi?',

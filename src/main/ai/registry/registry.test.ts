@@ -239,6 +239,25 @@ describe('Registry', () => {
       ])
     })
 
+    it('takes away a project made by mistake, not one the user has worked on', async () => {
+      const mistake = await registry.createProject('x', CHAT)
+      await registry.linkThread(mistake.record.id, ANNA, CHAT)
+      expect(changes.at(-2)?.undo).toEqual({
+        kind: 'progetto-creato',
+        projectId: mistake.record.id
+      })
+
+      await registry.removeProject(mistake.record.id, USER)
+      expect(await registry.projects.get(mistake.record.id)).toBeNull()
+      expect(await registry.projects.linksOf([ANNA])).toEqual([])
+
+      const kept = await registry.createProject('Partita del giovedì', CHAT)
+      await registry.linkThread(kept.record.id, ANNA, USER)
+      await expect(registry.removeProject(kept.record.id, USER)).rejects.toBeInstanceOf(
+        RegistryRefusal
+      )
+    })
+
     it('says "Il punto" is behind once something moves in the project', async () => {
       const { record } = await registry.createProject('Prat2470', BACKGROUND)
       await registry.linkThread(record.id, ANNA, BACKGROUND)

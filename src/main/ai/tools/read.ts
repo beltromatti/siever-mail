@@ -493,7 +493,7 @@ export const readTool: SegretarioTool = {
       }
       default:
         throw new ToolInputError(
-          `Non conosco «${reference}»: usa un riferimento ricevuto (m…, f…, e…, p…, b…) o il percorso completo di un file.`
+          `Non conosco «${reference}»: in questa conversazione non l'hai ricevuto. I riferimenti (m…, f…, e…, p…, b…) arrivano dagli strumenti: un messaggio da \`cerca_posta\`, un progetto da \`progetti\`, un evento da \`calendario\`. Un file si legge anche dal suo percorso completo.`
         )
     }
   }

@@ -10,6 +10,7 @@ import {
   type CalendarAttendee,
   type CalendarChange,
   type CalendarConnection,
+  type CalendarListEntry,
   type CalendarEvent,
   type CalendarResponse,
   type EventChange,
@@ -349,12 +350,14 @@ export class CalendarService {
             calendarId: calendar.calendarId,
             name: calendar.name,
             isPrimary: calendar.primary ? 1 : 0,
-            writable: calendar.writable ? 1 : 0
+            writable: calendar.writable ? 1 : 0,
+            color: calendar.color
           },
           update: {
             name: calendar.name,
             isPrimary: calendar.primary ? 1 : 0,
-            writable: calendar.writable ? 1 : 0
+            writable: calendar.writable ? 1 : 0,
+            color: calendar.color
           }
         })
         await this.syncCalendar(provider, accountId, calendar.calendarId, stored ?? null)
@@ -646,10 +649,8 @@ export class CalendarService {
     return this.eventOrThrow(eventKey(row.accountId, row.calendarId, answered.eventId))
   }
 
-  /** The calendars events can be written in, every connected account's, the main one first. */
-  async calendars(): Promise<
-    Array<{ key: string; name: string; account: string; primary: boolean; writable: boolean }>
-  > {
+  /** Every connected calendar, the main ones first: for the Calendario app and the Segretario. */
+  async calendars(): Promise<CalendarListEntry[]> {
     const [rows, accounts] = await Promise.all([
       this.requirePrisma().calendarCalendar.findMany({
         orderBy: [{ isPrimary: 'desc' }, { name: 'asc' }]
@@ -660,11 +661,35 @@ export class CalendarService {
 
     return rows.map((row) => ({
       key: calendarKey(row.accountId, row.calendarId),
-      name: row.name,
+      accountId: row.accountId,
       account: emails.get(row.accountId) ?? '',
+      name: row.name,
       primary: row.isPrimary === 1,
-      writable: row.writable === 1
+      writable: row.writable === 1,
+      color: row.color,
+      hidden: row.hidden === 1
     }))
+  }
+
+  /** Shows or hides a calendar's events in the Calendario app: a choice of this computer's. */
+  async setCalendarHidden(key: string, hidden: boolean): Promise<CalendarListEntry[]> {
+    const prisma = this.requirePrisma()
+    const calendar = (await prisma.calendarCalendar.findMany()).find(
+      (candidate) => calendarKey(candidate.accountId, candidate.calendarId) === key
+    )
+
+    if (!calendar) {
+      throw new Error('Questo calendario non è più collegato.')
+    }
+
+    await prisma.calendarCalendar.update({
+      where: {
+        accountId_calendarId: { accountId: calendar.accountId, calendarId: calendar.calendarId }
+      },
+      data: { hidden: hidden ? 1 : 0 }
+    })
+    this.options.send(CALENDAR_IPC.changed, null)
+    return this.calendars()
   }
 
   /** An event by its key, as it is now; null when it is no longer in the calendar. */

@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import {
   Briefcase,
-  CalendarDays,
   ChevronDown,
   ChevronRight,
   Hourglass,
@@ -10,7 +9,6 @@ import {
   PenLine,
   ScanSearch,
   Search,
-  Sun,
   type Inbox
 } from 'lucide-react'
 
@@ -59,10 +57,6 @@ export type FolderMenuTarget =
   | { kind: 'project'; project: Project }
 
 interface FolderSidebarProps {
-  /** The Segretario's day, "Oggi": shown with its views, open or not. */
-  today: { open: boolean; onOpen: () => void } | null
-  /** The agenda of the connected calendars; null when none is connected. */
-  agenda: { open: boolean; onOpen: () => void } | null
   /** The Segretario's views and how many conversations each holds; none without the Segretario. */
   segretarioViews: ReadonlyArray<{ view: SegretarioView; count: number }>
   /**
@@ -271,8 +265,6 @@ function SectionHeading({ children }: { children: React.ReactNode }): React.JSX.
  * others as a tree whose branches fold away.
  */
 export function FolderSidebar({
-  today,
-  agenda,
   segretarioViews,
   savedSearches,
   accountLabel,
@@ -383,32 +375,9 @@ export function FolderSidebar({
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-px px-2 pb-3">
-          {(segretarioViews.length > 0 || agenda || savedSearches.length > 0) && (
-            // With the AI off only the agenda is here: the calendar's, not the Segretario's.
-            <section aria-label={today ? 'Segretario' : 'Calendario'}>
-              <SectionHeading>{today ? 'Segretario' : 'Calendario'}</SectionHeading>
-              {today && (
-                <FolderRow
-                  icon={Sun}
-                  name="Oggi"
-                  messageCount={0}
-                  unseenCount={0}
-                  badge={0}
-                  active={today.open}
-                  onSelect={today.onOpen}
-                />
-              )}
-              {agenda && (
-                <FolderRow
-                  icon={CalendarDays}
-                  name="Agenda"
-                  messageCount={0}
-                  unseenCount={0}
-                  badge={0}
-                  active={agenda.open}
-                  onSelect={agenda.onOpen}
-                />
-              )}
+          {(segretarioViews.length > 0 || savedSearches.length > 0) && (
+            <section aria-label="Segretario">
+              <SectionHeading>Segretario</SectionHeading>
               {segretarioViews.map(({ view, count }) => {
                 const path = segretarioViewPath(view)
 

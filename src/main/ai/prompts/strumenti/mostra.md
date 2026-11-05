@@ -5,5 +5,6 @@ Parametri (uno):
 - `messaggio`: il riferimento di un messaggio da aprire nel lettore.
 - `bozza`: il riferimento di una bozza da aprire.
 - `progetto`: il riferimento di un progetto da aprire.
+- `evento`: il riferimento di un evento da aprire nel calendario, con i suoi dettagli.
 - `giorno`: un giorno (AAAA-MM-GG) da aprire nel calendario.
 - `ricerca`: una lista di messaggi da mostrare, che l'utente può tenere come cartella — `titolo` (il nome della lista), `testo` (con la sintassi di `cerca_posta`), e se servono `account`, `cartella`, `non_lette`, `con_allegati`, un periodo fisso (`dal`, `al`) oppure contato da oggi (`periodo`: `oggi`, `ieri`, `questa_settimana`, `settimana_scorsa`, `questo_mese`, `mese_scorso`, `ultimi_giorni` con `giorni`), così la lista si sposta con i giorni.

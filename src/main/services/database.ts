@@ -2712,6 +2712,8 @@ export class AppDatabase {
         name TEXT NOT NULL,
         is_primary INTEGER NOT NULL,
         writable INTEGER NOT NULL DEFAULT 1,
+        color TEXT,
+        hidden INTEGER NOT NULL DEFAULT 0,
         sync_token TEXT,
         window_end INTEGER,
         PRIMARY KEY (account_id, calendar_id)
@@ -2775,6 +2777,18 @@ export class AppDatabase {
     if (!(await columns('calendar_calendars')).has('writable')) {
       await this.prisma.$executeRawUnsafe(
         'ALTER TABLE calendar_calendars ADD COLUMN writable INTEGER NOT NULL DEFAULT 1'
+      )
+    }
+
+    const calendarColumns = await columns('calendar_calendars')
+
+    if (!calendarColumns.has('color')) {
+      await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_calendars ADD COLUMN color TEXT')
+    }
+
+    if (!calendarColumns.has('hidden')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE calendar_calendars ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0'
       )
     }
 

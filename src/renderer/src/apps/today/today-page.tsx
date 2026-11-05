@@ -8,13 +8,13 @@ import { cn } from '@renderer/lib/utils'
 import type { MessageRef } from '@shared/models'
 import type { DayLine, TodayPage as Today } from '@shared/segretario'
 
-import { isOn, startOfDay } from '@renderer/features/calendar/calendar-days'
+import { isOnDay, startOfDay } from '@renderer/features/calendar/calendar-dates'
 import { EventLine } from '@renderer/features/calendar/event-line'
 import { useCalendarEvents } from '@renderer/features/calendar/use-calendar'
 
-import { CommitmentRow } from './commitment-row'
-import { ProposalCard } from './message-work'
-import { COMMITMENT_LABELS, dueLabel } from './row-work'
+import { CommitmentRow } from '@renderer/features/segretario/commitment-row'
+import { ProposalCard } from '@renderer/features/segretario/message-work'
+import { COMMITMENT_LABELS, dueLabel } from '@renderer/features/segretario/row-work'
 
 const DAY_TITLE = new Intl.DateTimeFormat('it-IT', {
   weekday: 'long',
@@ -292,7 +292,7 @@ export function TodayPage({
         return count > 0 ? [{ ...section, count }] : []
       })
     : []
-  const meetings = agenda?.filter((event) => isOn(event, today)) ?? []
+  const meetings = agenda?.filter((event) => isOnDay(event, today)) ?? []
 
   return (
     <div className="paper flex h-full min-h-0 flex-col">

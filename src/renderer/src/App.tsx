@@ -12,6 +12,9 @@ import {
 
 import {
   AlertTriangle,
+  BookUser,
+  Briefcase,
+  CalendarDays,
   LoaderCircle,
   LogIn,
   Mail,
@@ -19,6 +22,7 @@ import {
   PenLine,
   Plus,
   Square,
+  Sun,
   X
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -59,8 +63,14 @@ import {
 import { useSegretario } from '@renderer/features/segretario/use-segretario'
 import { rowWorkKey, savedOnly, useRowWork } from '@renderer/features/segretario/row-work'
 import { MessageWorkPanel } from '@renderer/features/segretario/message-work'
-import { TodayPage } from '@renderer/features/segretario/today-page'
-import { AgendaPage } from '@renderer/features/calendar/agenda-page'
+import { TodayPage } from '@renderer/apps/today/today-page'
+import {
+  CalendarApp,
+  type CalendarFocus,
+  type CalendarSight
+} from '@renderer/apps/calendar/calendar-app'
+import { dayKey, dayOfKey, eventSpan } from '@renderer/features/calendar/calendar-dates'
+import { ComingSoonApp } from '@renderer/apps/coming-soon'
 import { InvitationCard } from '@renderer/features/calendar/invitation-card'
 import { isIcsAttachment } from '@shared/calendar'
 import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
@@ -397,18 +407,21 @@ function useMailBootstrap(): {
   return { accounts, capabilities, loading, error, setAccounts, reload }
 }
 
-/** The places of the app, in the rail. */
-const RAIL_ITEMS: ReadonlyArray<RailItem> = [{ id: 'mail', label: 'Posta', icon: Mail }]
+/** The apps of the rail. Oggi is the Segretario's, there only with the AI on. */
+type AppId = 'oggi' | 'mail' | 'calendar' | 'contacts' | 'projects'
+
+const RAIL_ITEMS: ReadonlyArray<RailItem & { id: AppId }> = [
+  { id: 'oggi', label: 'Oggi', icon: Sun },
+  { id: 'mail', label: 'Posta', icon: Mail },
+  { id: 'calendar', label: 'Calendario', icon: CalendarDays },
+  { id: 'contacts', label: 'Contatti', icon: BookUser, soon: true },
+  { id: 'projects', label: 'Progetti', icon: Briefcase, soon: true }
+]
 
 /** The most messages a request to the Segretario carries along. */
 const SEGRETARIO_CONTEXT_LIMIT = 200
 /** Conversations marked handled per request: a selection of any size goes in these. */
 const MARK_HANDLED_BATCH = 1000
-
-/** A day as the Segretario writes it: AAAA-MM-GG, local. */
-function localDayKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
 
 function AppFrame({
   children,
@@ -581,14 +594,17 @@ function App(): React.JSX.Element {
   /** Sends the Segretario asked for, waiting to hear how they went, by draft. */
   const segretarioSendWaitersRef = useRef(new Map<string, (outcome: SendOutcome) => void>())
   const [segretarioOpen, setSegretarioOpen] = useState(false)
-  /** The Segretario's day, "Oggi", in the place of the list and the reader. */
-  // Whether any account's calendar is connected: the agenda is shown then.
+  // Whether any account's calendar is connected: what the Segretario suggests knows it.
   const { connections: calendarConnections } = useCalendarConnections()
   const calendarConnected = Boolean(
     calendarConnections?.some((connection) => connection.state === 'connected')
   )
-  // A page in the place of the list and the reader: the day ("Oggi"), or the agenda.
-  const [openPage, setOpenPage] = useState<'oggi' | 'agenda' | null>(null)
+  // The app in front: the mail, or another in its place. The calendar opens where it is asked to.
+  const [activeApp, setActiveApp] = useState<AppId>('mail')
+  const [calendarFocus, setCalendarFocus] = useState<{ focus: CalendarFocus; at: number } | null>(
+    null
+  )
+  const [calendarSight, setCalendarSight] = useState<CalendarSight | null>(null)
   const segretario = useSegretario(segretarioOpen)
   const assistantInset = useAssistantInset(segretarioOpen)
   // The AI on: a key, and the one switch up. Off, nothing of the Segretario shows.
@@ -597,6 +613,31 @@ function App(): React.JSX.Element {
   )
   // The panel is there with the AI on — and, before a key is given, to ask for one.
   const segretarioOffered = aiOn || segretario.status?.keyState === 'missing'
+  // Oggi is the Segretario's: with the AI off the rail goes without it, and the mail takes its place.
+  const railItems = aiOn ? RAIL_ITEMS : RAIL_ITEMS.filter((item) => item.id !== 'oggi')
+  const shownApp: AppId = activeApp === 'oggi' && !aiOn ? 'mail' : activeApp
+
+  /** The calendar, opened on a day — and on an event of it, its panel open. */
+  const openCalendar = useCallback((focus: CalendarFocus): void => {
+    setCalendarFocus({ focus, at: Date.now() })
+    setActiveApp('calendar')
+  }, [])
+
+  /** The calendar on an event the Segretario points to, as the calendar has it now. */
+  const openCalendarEvent = useCallback(
+    async (eventKey: string): Promise<void> => {
+      const event = await window.calendarApi.event(eventKey)
+
+      if (!event) {
+        toast.error('L’evento non è più nel calendario.')
+        openCalendar({ day: new Date() })
+        return
+      }
+
+      openCalendar({ day: new Date(eventSpan(event).start), eventKey })
+    },
+    [openCalendar]
+  )
   const fetchedRowWork = useRowWork(messages)
   // With the AI off the rows keep only what an extension saved: nothing of the Segretario shows.
   const rowWork = useMemo(
@@ -1224,8 +1265,6 @@ function App(): React.JSX.Element {
   }, [refreshCurrentFolder])
 
   // The Segretario's views follow its work: their counts, and the list when one is open.
-  // The Agenda holds the calendar's events and the mail's deadlines: either is enough for it.
-  const agendaAvailable = calendarConnected || aiOn
   const viewCountsTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
@@ -1770,7 +1809,7 @@ function App(): React.JSX.Element {
       setSearch('')
       setSelectedAccountId(ref.accountId)
       setSelectedFolderPath(ref.folderPath)
-      setOpenPage(null)
+      setActiveApp('mail')
     },
     [cancelInFlightWork]
   )
@@ -2867,7 +2906,7 @@ function App(): React.JSX.Element {
   /** Opens a folder — of the account, or of "Tutti gli account" — showing all its messages. */
   const selectFolder = useCallback(
     (folderPath: string): void => {
-      setOpenPage(null)
+      setActiveApp('mail')
       setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
 
       // The folder already open stays as it is: emptying it here left the
@@ -3750,12 +3789,19 @@ function App(): React.JSX.Element {
           case 'project':
             selectFolder(segretarioProjectPath(request.projectId))
             return
+          case 'event':
+            void openCalendarEvent(request.eventKey)
+            return
           case 'day':
-            setOpenPage(request.day === localDayKey(new Date()) && aiOn ? 'oggi' : 'agenda')
+            if (request.day === dayKey(new Date()) && aiOn) {
+              setActiveApp('oggi')
+            } else {
+              openCalendar({ day: dayOfKey(request.day) })
+            }
             return
         }
       }),
-    [aiOn, openDraftById, openMessageRef, selectFolder]
+    [aiOn, openCalendar, openCalendarEvent, openDraftById, openMessageRef, selectFolder]
   )
 
   /**
@@ -3936,10 +3982,10 @@ function App(): React.JSX.Element {
           selectFolder(segretarioProjectPath(link.projectId))
           return
         case 'event':
-          setOpenPage('agenda')
+          void openCalendarEvent(link.eventKey)
       }
     },
-    [openDraftById, openMessageRef, selectFolder]
+    [openCalendarEvent, openDraftById, openMessageRef, selectFolder]
   )
 
   const addressActions = useMemo<AddressActions>(
@@ -4490,7 +4536,7 @@ function App(): React.JSX.Element {
     })
     setShowWelcomeGate(false)
     // The day opens on what the Segretario saw in it.
-    setOpenPage(aiOn ? 'oggi' : null)
+    setActiveApp(aiOn ? 'oggi' : 'mail')
   }, [aiOn, accounts])
 
   /** Starts the guided setup of a case, kept as it goes. */
@@ -4722,32 +4768,35 @@ function App(): React.JSX.Element {
           : currentFolder
             ? folderDisplayName(currentFolder)
             : 'Conversazioni'
-  // A page over the lists — the day, the agenda — is what the user looks at, not the selection under it.
+  // Another app than the mail is what the user looks at, not the selection left in the mail.
   const shownPage =
-    openPage === 'oggi' && aiOn
-      ? 'Oggi'
-      : openPage === 'agenda' && agendaAvailable
-        ? 'Agenda'
-        : null
+    shownApp === 'mail' ? null : (RAIL_ITEMS.find((item) => item.id === shownApp)?.label ?? null)
   // What the user is looking at goes along with what they ask the Segretario.
   const segretarioContextRefs = shownPage
     ? []
     : selection.selectedRefs.slice(0, SEGRETARIO_CONTEXT_LIMIT)
+  // In the calendar, what it shows: the days, and the event open.
+  const calendarInSight = shownApp === 'calendar' ? calendarSight : null
   const segretarioContext: SegretarioContextChip = {
     context: {
       messages: segretarioContextRefs,
       accountId: selectedAccountId,
-      folderLabel: shownPage ?? currentViewLabel
+      folderLabel: calendarInSight?.label ?? shownPage ?? currentViewLabel,
+      eventKey: calendarInSight?.event?.key ?? null
     },
-    label: shownPage
-      ? shownPage
-      : selection.selectedRefs.length > 1
-        ? selection.selectedRefs.length > SEGRETARIO_CONTEXT_LIMIT
-          ? `I primi ${SEGRETARIO_CONTEXT_LIMIT} dei ${selection.selectedRefs.length.toLocaleString('it-IT')} messaggi selezionati`
-          : `${selection.selectedRefs.length} messaggi selezionati`
-        : messageForViewer
-          ? `«${messageForViewer.subject || 'Senza oggetto'}»${messageForViewer.from[0] ? ` — ${messageForViewer.from[0].name || messageForViewer.from[0].address}` : ''}`
-          : currentViewLabel
+    label: calendarInSight
+      ? calendarInSight.event
+        ? `«${calendarInSight.event.title}»`
+        : calendarInSight.label
+      : shownPage
+        ? shownPage
+        : selection.selectedRefs.length > 1
+          ? selection.selectedRefs.length > SEGRETARIO_CONTEXT_LIMIT
+            ? `I primi ${SEGRETARIO_CONTEXT_LIMIT} dei ${selection.selectedRefs.length.toLocaleString('it-IT')} messaggi selezionati`
+            : `${selection.selectedRefs.length} messaggi selezionati`
+          : messageForViewer
+            ? `«${messageForViewer.subject || 'Senza oggetto'}»${messageForViewer.from[0] ? ` — ${messageForViewer.from[0].name || messageForViewer.from[0].address}` : ''}`
+            : currentViewLabel
   }
   const viewerWork = messageForViewer ? (rowWork.get(rowWorkKey(messageForViewer)) ?? null) : null
   const segretarioSuggestionList = segretarioSuggestions({
@@ -4755,7 +4804,8 @@ function App(): React.JSX.Element {
     work: shownPage ? null : viewerWork,
     messageOpen: !shownPage && Boolean(messageForViewer),
     project: shownPage ? null : (currentProject?.title ?? null),
-    calendarConnected
+    calendarConnected,
+    calendar: calendarInSight ? { eventOpen: calendarInSight.event !== null } : null
   })
   const filterNouns =
     messageFilter === 'unread'
@@ -4956,9 +5006,15 @@ function App(): React.JSX.Element {
           readerExpanded={isMessageExpanded}
           rail={
             <AppRail
-              items={RAIL_ITEMS}
-              activeItemId="mail"
-              onSelectItem={() => undefined}
+              items={railItems}
+              activeItemId={shownApp}
+              onSelectItem={(id) => {
+                const app = railItems.find((item) => item.id === id)
+
+                if (app) {
+                  setActiveApp(app.id)
+                }
+              }}
               syncSummary={syncSummary}
               segretario={
                 segretarioOffered
@@ -5001,7 +5057,6 @@ function App(): React.JSX.Element {
                   selectedAccountId={selectedAccountId}
                   removingAccountId={removingAccountId}
                   onSelectAccount={(accountId) => {
-                    setOpenPage(null)
                     cancelInFlightWork()
                     setSelectedAccountId(accountId)
                     setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
@@ -5018,9 +5073,6 @@ function App(): React.JSX.Element {
                   </div>
                 ) : (
                   <FolderSidebar
-                    today={
-                      aiOn ? { open: openPage === 'oggi', onOpen: () => setOpenPage('oggi') } : null
-                    }
                     segretarioViews={
                       aiOn && segretarioViewCounts
                         ? SEGRETARIO_VIEWS.map((view) => ({
@@ -5035,12 +5087,7 @@ function App(): React.JSX.Element {
                     accountLabel={selectedAccountLabel}
                     folders={folders}
                     unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
-                    agenda={
-                      agendaAvailable
-                        ? { open: openPage === 'agenda', onOpen: () => setOpenPage('agenda') }
-                        : null
-                    }
-                    selectedFolderPath={openPage ? null : selectedFolderPath}
+                    selectedFolderPath={selectedFolderPath}
                     messageDrop={messageDrop}
                     onSelectFolder={selectFolder}
                     onFolderContextMenu={(target) => void openFolderContextMenu(target)}
@@ -5188,19 +5235,50 @@ function App(): React.JSX.Element {
               addressActions={addressActions}
             />
           }
-          page={
-            openPage === 'oggi' && aiOn ? (
+          app={
+            shownApp === 'oggi' ? (
               <TodayPage
                 canWrite={segretario.status?.keyState === 'ready'}
                 atWindowTopRight={!segretarioOpen}
                 onOpenMessage={openMessageRef}
               />
-            ) : openPage === 'agenda' && agendaAvailable ? (
-              <AgendaPage
+            ) : shownApp === 'calendar' ? (
+              <CalendarApp
+                key={calendarFocus?.at}
+                aiOn={aiOn}
+                focus={calendarFocus?.focus}
+                onSight={setCalendarSight}
                 atWindowTopRight={!segretarioOpen}
-                calendarConnected={calendarConnected}
-                showDue={aiOn}
                 onOpenMessage={openMessageRef}
+                onOpenConnections={() => {
+                  setSettingsSection('accounts')
+                  setSettingsOpen(true)
+                }}
+              />
+            ) : shownApp === 'contacts' ? (
+              <ComingSoonApp
+                title="Contatti"
+                icon={BookUser}
+                atWindowTopRight={!segretarioOpen}
+                lead="Le persone e gli enti con cui lavori, in un posto solo, con quello che il Segretario sa di ciascuno."
+                points={[
+                  'Dalla posta, dai calendari e dalle rubriche delle connessioni.',
+                  'Per ognuno: le conversazioni, gli appuntamenti, i progetti in comune e le cose aperte.',
+                  'Quello che il Segretario ha capito di loro, scritto da lui e corretto da te.'
+                ]}
+              />
+            ) : shownApp === 'projects' ? (
+              <ComingSoonApp
+                title="Progetti"
+                icon={Briefcase}
+                atWindowTopRight={!segretarioOpen}
+                lead="Ogni progetto con tutto ciò che gli appartiene, ovunque si trovi."
+                points={[
+                  'Le mail, gli allegati, gli appuntamenti e le persone del progetto, insieme.',
+                  'La sua cartella sul computer o sui dischi di rete, e in futuro i file su Google Drive e OneDrive.',
+                  'Niente viene copiato o spostato: il progetto mostra le cose dove sono.',
+                  'Intanto i progetti del Segretario sono nella barra laterale della Posta.'
+                ]}
               />
             ) : undefined
           }

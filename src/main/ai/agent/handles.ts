@@ -47,6 +47,9 @@ function identityOf(target: HandleTarget): string {
   }
 }
 
+/** A name written the way the model writes it in a link — `progetto:p1`, `mail:m4` — is the name. */
+const LINK_FORM = /^(?:mail|file|bozza|progetto|evento)\s*:\s*([a-z]\d+)$/
+
 const PREFIX: Readonly<Record<HandleTarget['kind'], string>> = {
   message: 'm',
   file: 'f',
@@ -88,7 +91,8 @@ export class HandleRegistry {
   }
 
   resolve(handle: string): HandleTarget | null {
-    return this.byHandle.get(handle.trim().toLowerCase()) ?? null
+    const written = handle.trim().toLowerCase()
+    return this.byHandle.get(LINK_FORM.exec(written)?.[1] ?? written) ?? null
   }
 
   message(handle: string): { ref: MessageRef; messageKey: string } | null {

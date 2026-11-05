@@ -259,6 +259,12 @@ export type UndoSpec =
       linked: boolean
     }
   | { kind: 'risposta'; accountId: string; messageKey: string; status: ReplyStatus }
+  /** A project the Segretario made: undone, it goes, unless the user has worked on it since. */
+  | { kind: 'progetto-creato'; projectId: string }
+  /** A project it renamed: undone, it has its old name. */
+  | { kind: 'progetto-rinominato'; projectId: string; title: string }
+  /** A project it hid or showed again: undone, it is as it was. */
+  | { kind: 'progetto-nascosto'; projectId: string; hidden: boolean }
   /** An event the Segretario put in the calendar: undone, it goes. */
   | { kind: 'evento-creato'; eventKey: string }
   /** An event it changed: undone, it is as it was. */

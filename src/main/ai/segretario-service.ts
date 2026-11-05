@@ -81,6 +81,7 @@ import { prepareSearch, prepareReview, prepareWriting } from './tasks/interactiv
 import { prepareConoscimi } from './tasks/memory-work'
 import { startRun, type RunStarter } from './tasks/start-run'
 import { SEGRETARIO_TOOLS } from './tools'
+import { eventLine } from './tools/calendar'
 import { localDay } from './tools/day'
 import { comparableText, formatDateTime, shortDate } from './tools/format'
 
@@ -1102,6 +1103,15 @@ export class SegretarioService {
       case 'risposta':
         await registry.setReplyStatus(undo.accountId, undo.messageKey, 'scartata', USER)
         break
+      case 'progetto-creato':
+        await plainly(registry.removeProject(undo.projectId, USER))
+        break
+      case 'progetto-rinominato':
+        await plainly(registry.renameProject(undo.projectId, undo.title, USER))
+        break
+      case 'progetto-nascosto':
+        await plainly(registry.setProjectHidden(undo.projectId, !undo.hidden, USER))
+        break
       case 'evento-creato':
         await this.options.calendar.remove(undo.eventKey)
         break
@@ -1143,6 +1153,15 @@ export class SegretarioService {
 
   async discardReply(accountId: string, messageKey: string): Promise<void> {
     await this.db.registry.setReplyStatus(accountId, messageKey, 'scartata', USER)
+  }
+
+  /** How to prepare for an event, as written for it (by the day's work, or asked in the chat). */
+  async eventPrep(eventKey: string): Promise<{ text: string; writtenAt: number } | null> {
+    return this.db.registry.day.prep(eventKey)
+  }
+
+  async listProposals(): Promise<Proposal[]> {
+    return (await this.db.registry.proposals.open()).map((proposal) => this.proposalOf(proposal))
   }
 
   /**
@@ -1997,6 +2016,13 @@ export class SegretarioService {
         context.messages.length === 1
           ? `L'utente sta guardando: ${described[0] ?? 'un messaggio'}`
           : `L'utente ha selezionato ${context.messages.length} messaggi:\n${described.map((line) => `- ${line}`).join('\n')}`
+      )
+    } else if (context.eventKey) {
+      const event = await this.options.calendar.event(context.eventKey)
+      lines.push(
+        event
+          ? `L'utente ${context.folderLabel ? `è in ${context.folderLabel} e ` : ''}sta guardando l'evento:\n${eventLine(event, { handles, newHandles: added })}`
+          : `L'utente è in: ${context.folderLabel ?? 'Calendario'}.`
       )
     } else if (context.folderLabel) {
       lines.push(`L'utente è in: ${context.folderLabel}.`)

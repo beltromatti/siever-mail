@@ -27,9 +27,15 @@ export interface ProviderEventInput {
 }
 
 export interface CalendarProvider {
-  /** The calendars the user shows in the provider's own calendar, and whether events can be written in each. */
+  /** The calendars the user shows in the provider's own calendar, whether events can be written in each, their colour. */
   listCalendars(): Promise<
-    Array<{ calendarId: string; name: string; primary: boolean; writable: boolean }>
+    Array<{
+      calendarId: string
+      name: string
+      primary: boolean
+      writable: boolean
+      color: string | null
+    }>
   >
   /**
    * The events of a calendar: every one between two instants, or — with

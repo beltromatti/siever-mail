@@ -149,13 +149,20 @@ export class GoogleCalendarProvider implements CalendarProvider {
   }
 
   async listCalendars(): Promise<
-    Array<{ calendarId: string; name: string; primary: boolean; writable: boolean }>
+    Array<{
+      calendarId: string
+      name: string
+      primary: boolean
+      writable: boolean
+      color: string | null
+    }>
   > {
     const calendars: Array<{
       calendarId: string
       name: string
       primary: boolean
       writable: boolean
+      color: string | null
     }> = []
     let pageToken: string | undefined
 
@@ -170,7 +177,10 @@ export class GoogleCalendarProvider implements CalendarProvider {
               calendarId: item.id,
               name: item.summaryOverride ?? item.summary ?? item.id,
               primary: Boolean(item.primary),
-              writable: item.accessRole === 'owner' || item.accessRole === 'writer'
+              writable: item.accessRole === 'owner' || item.accessRole === 'writer',
+              color: /^#[0-9a-f]{6}$/i.test(item.backgroundColor ?? '')
+                ? item.backgroundColor!
+                : null
             })
           }
         }

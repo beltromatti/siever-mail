@@ -15,6 +15,8 @@ export interface RailItem {
   icon: LucideIcon
   /** A dot on the icon: something there wants the user. */
   attention?: boolean
+  /** Not here yet: it opens on what it will be. */
+  soon?: boolean
 }
 
 /**
@@ -35,8 +37,7 @@ export function AppRail({
   activeItemId: string
   onSelectItem: (id: string) => void
   syncSummary: SyncSummary | null
-  /** The Segretario's panel: open or not, and whether something waits in it. */
-  /** The Segretario's button; null with the AI off. */
+  /** The Segretario's panel, open or not and whether something waits in it; null with the AI off. */
   segretario: { open: boolean; attention: boolean; onToggle: () => void } | null
   onOpenSettings: () => void
 }): React.JSX.Element {
@@ -78,7 +79,12 @@ export function AppRail({
                   )}
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="right">{item.label}</TooltipContent>
+              <TooltipContent side="right">
+                {item.label}
+                {item.soon && (
+                  <span className="text-muted-foreground font-normal"> · in arrivo</span>
+                )}
+              </TooltipContent>
             </Tooltip>
           )
         })}

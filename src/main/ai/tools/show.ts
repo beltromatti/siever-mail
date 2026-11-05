@@ -57,6 +57,7 @@ export const showTool: SegretarioTool = {
       messaggio: { type: 'string' },
       bozza: { type: 'string' },
       progetto: { type: 'string' },
+      evento: { type: 'string' },
       giorno: { type: 'string' },
       ricerca: {
         type: 'object',
@@ -117,6 +118,7 @@ export const showTool: SegretarioTool = {
     const messageHandle = stringArg(args, 'messaggio')
     const draftHandle = stringArg(args, 'bozza')
     const projectHandle = stringArg(args, 'progetto')
+    const eventHandle = stringArg(args, 'evento')
     const day = stringArg(args, 'giorno')
 
     if (messageHandle) {
@@ -156,6 +158,19 @@ export const showTool: SegretarioTool = {
       return { content: 'Progetto aperto.', summary: `Aperto ${project.title}` }
     }
 
+    if (eventHandle) {
+      const event = context.handles.event(eventHandle)
+
+      if (!event) {
+        throw new ToolInputError(
+          `Non conosco l'evento «${eventHandle}»: usa un riferimento e… ricevuto da \`calendario\`.`
+        )
+      }
+
+      context.page.show({ kind: 'event', eventKey: event.eventKey })
+      return { content: 'Evento aperto nel calendario.', summary: `Aperto ${event.title}` }
+    }
+
     if (day) {
       if (!ISO_DAY.test(day)) {
         throw new ToolInputError('`giorno` va scritto come AAAA-MM-GG.')
@@ -168,6 +183,8 @@ export const showTool: SegretarioTool = {
       }
     }
 
-    throw new ToolInputError('Indica `messaggio`, `bozza`, `progetto`, `giorno` o `ricerca`.')
+    throw new ToolInputError(
+      'Indica `messaggio`, `bozza`, `progetto`, `evento`, `giorno` o `ricerca`.'
+    )
   }
 }

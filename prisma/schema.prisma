@@ -681,6 +681,10 @@ model CalendarCalendar {
   isPrimary  Int     @map("is_primary")
   /// Whether events can be written in it (the user owns it or may edit it).
   writable   Int     @default(1)
+  /// Its colour in the provider, `#rrggbb`.
+  color      String?
+  /// Hidden by the user in the Calendario app.
+  hidden     Int     @default(0)
   syncToken  String? @map("sync_token")
   /// How far ahead its events were read: past it, they are read again.
   windowEnd  BigInt? @map("window_end")

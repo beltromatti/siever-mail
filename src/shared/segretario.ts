@@ -466,6 +466,8 @@ export interface SegretarioContext {
   accountId: string | null
   /** The folder, view, project or page in sight: "Posta in arrivo", "Progetto Hotel Lido", "Oggi". */
   folderLabel: string | null
+  /** The calendar's event open in front of the user, by its key. */
+  eventKey?: string | null
 }
 
 /** A step a tool took, as the user sees it: one line, and what it touched. */
@@ -580,6 +582,7 @@ export type ShowRequest =
   /** A search it ran, kept for the session: the list to open. */
   | { kind: 'search'; search: AskedMail }
   | { kind: 'project'; projectId: string }
+  | { kind: 'event'; eventKey: string }
   | { kind: 'day'; day: string }
 
 /** How an approved send went, as the page reports it. */
@@ -623,6 +626,8 @@ export const SEGRETARIO_IPC = {
   takeUpReply: 'segretario:take-up-reply',
   discardReply: 'segretario:discard-reply',
   decideProposal: 'segretario:decide-proposal',
+  listProposals: 'segretario:list-proposals',
+  eventPrep: 'segretario:event-prep',
   getToday: 'segretario:get-today',
   refreshToday: 'segretario:refresh-today',
   getDue: 'segretario:get-due',
@@ -740,6 +745,10 @@ export interface SegretarioApi {
   /** The user took a prepared reply up: it became draft `draftId`, and is learnt from like the others. */
   takeUpReply: (accountId: string, messageKey: string, draftId: string) => Promise<void>
   discardReply: (accountId: string, messageKey: string) => Promise<void>
+  /** The proposals waiting for the user, the newest first: events among them show in the calendar. */
+  listProposals: () => Promise<Proposal[]>
+  /** How to prepare for an event, as the Segretario wrote it, and when; null when it has not. */
+  eventPrep: (eventKey: string) => Promise<{ text: string; writtenAt: number } | null>
   /** The user accepted a proposal — with what they changed — or set it aside. */
   decideProposal: (id: string, accepted: boolean, result?: Record<string, unknown>) => Promise<void>
   getToday: () => Promise<TodayPage>

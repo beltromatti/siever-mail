@@ -269,6 +269,30 @@ export class ProjectStore {
   }
 
   /**
+   * Takes away a project made by mistake, with what was filed in it — not
+   * one the user has worked on since: that one is hidden or merged instead.
+   */
+  async remove(id: string): Promise<ProjectRecord> {
+    const current = await this.require(id)
+    const byUser = await this.sql.get<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM ai_project_threads WHERE project_id = ? AND linked_by = 'utente'`,
+      id
+    )
+
+    if (current.titleBy === 'utente' || (byUser?.n ?? 0) > 0) {
+      throw new RegistryRefusal(
+        `Su «${current.title}» hai già lavorato tu: nascondilo o uniscilo a un altro.`,
+        current
+      )
+    }
+
+    await this.sql.run('DELETE FROM ai_project_threads WHERE project_id = ?', id)
+    await this.sql.run('DELETE FROM ai_project_resources WHERE project_id = ?', id)
+    await this.sql.run('DELETE FROM ai_projects WHERE id = ?', id)
+    return current
+  }
+
+  /**
    * Several projects that are one: the first keeps its name, takes the
    * others' conversations and resources; the others go.
    */

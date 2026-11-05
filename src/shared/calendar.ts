@@ -62,6 +62,22 @@ export interface CalendarInfo {
   primary: boolean
 }
 
+/** A calendar as the Calendario app lists it: its key, whose, its colour, whether it is shown and takes events. */
+export interface CalendarListEntry {
+  /** `calendarKey(accountId, calendarId)`. */
+  key: string
+  accountId: string
+  /** The connection it comes with, by its address. */
+  account: string
+  name: string
+  primary: boolean
+  writable: boolean
+  /** The colour the provider gives it, `#rrggbb`; null when it gives none. */
+  color: string | null
+  /** The user hid it in the Calendario app: its events are not shown. */
+  hidden: boolean
+}
+
 /** An account's calendar, as Settings shows it. */
 export interface CalendarConnection {
   accountId: string
@@ -131,9 +147,15 @@ export const CALENDAR_IPC = {
   connect: 'calendar:connect',
   disconnect: 'calendar:disconnect',
   events: 'calendar:events',
+  event: 'calendar:event',
   eventByUid: 'calendar:event-by-uid',
   invitation: 'calendar:invitation',
   respond: 'calendar:respond',
+  calendars: 'calendar:calendars',
+  setCalendarHidden: 'calendar:set-calendar-hidden',
+  create: 'calendar:create',
+  update: 'calendar:update',
+  remove: 'calendar:remove',
   syncNow: 'calendar:sync-now',
   changed: 'calendar:changed'
 } as const
@@ -145,6 +167,8 @@ export interface CalendarApi {
   disconnect: (accountId: string) => Promise<CalendarConnection[]>
   /** The events between two instants, every connected calendar's, in order. */
   events: (fromIso: string, toIso: string) => Promise<CalendarEvent[]>
+  /** One event by its key, as the calendar has it now; null once it is gone. */
+  event: (eventKey: string) => Promise<CalendarEvent | null>
   /** The event an invitation in mail is for, when it is in a connected calendar. */
   eventByUid: (accountId: string, iCalUid: string) => Promise<CalendarEvent | null>
   /**
@@ -157,6 +181,16 @@ export interface CalendarApi {
     eventKey: string,
     response: Exclude<CalendarResponse, 'needsAction'>
   ) => Promise<CalendarEvent>
+  /** Every connected calendar, the main ones first. */
+  calendars: () => Promise<CalendarListEntry[]>
+  /** Shows or hides a calendar's events in the Calendario app. */
+  setCalendarHidden: (calendarKey: string, hidden: boolean) => Promise<CalendarListEntry[]>
+  /** A new event; whoever is invited gets the provider's invitation. */
+  create: (event: NewCalendarEvent) => Promise<CalendarEvent>
+  /** Changes an event; whoever is invited is told. */
+  update: (eventKey: string, change: EventChange) => Promise<CalendarEvent>
+  /** Takes an event away; whoever is invited is told. */
+  remove: (eventKey: string) => Promise<void>
   syncNow: () => Promise<void>
   /** The events changed: what shows them reads them again. */
   onChanged: (listener: () => void) => () => void

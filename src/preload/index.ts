@@ -172,6 +172,8 @@ const segretarioApi: SegretarioApi = {
     invoke(SEGRETARIO_IPC.takeUpReply, accountId, messageKey, draftId),
   discardReply: async (accountId, messageKey) =>
     invoke(SEGRETARIO_IPC.discardReply, accountId, messageKey),
+  listProposals: async () => invoke(SEGRETARIO_IPC.listProposals),
+  eventPrep: async (eventKey) => invoke(SEGRETARIO_IPC.eventPrep, eventKey),
   decideProposal: async (id, accepted, result) =>
     invoke(SEGRETARIO_IPC.decideProposal, id, accepted, result),
   getToday: async () => invoke(SEGRETARIO_IPC.getToday),
@@ -218,9 +220,16 @@ const calendarApi: CalendarApi = {
   connect: async (accountId) => invoke(CALENDAR_IPC.connect, accountId),
   disconnect: async (accountId) => invoke(CALENDAR_IPC.disconnect, accountId),
   events: async (fromIso, toIso) => invoke(CALENDAR_IPC.events, fromIso, toIso),
+  event: async (eventKey) => invoke(CALENDAR_IPC.event, eventKey),
   eventByUid: async (accountId, iCalUid) => invoke(CALENDAR_IPC.eventByUid, accountId, iCalUid),
   invitation: async (ref) => invoke(CALENDAR_IPC.invitation, ref),
   respond: async (eventKey, response) => invoke(CALENDAR_IPC.respond, eventKey, response),
+  calendars: async () => invoke(CALENDAR_IPC.calendars),
+  setCalendarHidden: async (calendarKey, hidden) =>
+    invoke(CALENDAR_IPC.setCalendarHidden, calendarKey, hidden),
+  create: async (event) => invoke(CALENDAR_IPC.create, event),
+  update: async (eventKey, change) => invoke(CALENDAR_IPC.update, eventKey, change),
+  remove: async (eventKey) => invoke(CALENDAR_IPC.remove, eventKey),
   syncNow: async () => invoke(CALENDAR_IPC.syncNow),
   onChanged: (listener) => subscribe(CALENDAR_IPC.changed, () => listener())
 }

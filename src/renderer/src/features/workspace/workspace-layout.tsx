@@ -100,8 +100,12 @@ export interface WorkspaceLayoutProps {
   notice: ReactNode
   /** The Segretario's panel, on the right edge when it is open. */
   assistant: ReactNode
-  /** A page in the place of the list and the reader: the Segretario's "Oggi". */
-  page?: ReactNode
+  /**
+   * Another app in the place of the mail — Oggi, the Calendario, the ones
+   * to come — with its own columns: only the rail and the Segretario's
+   * panel stay.
+   */
+  app?: ReactNode
   /**
    * Reading pane takes the whole workspace: the folder tree steps aside and
    * the message list moves into the side column.
@@ -122,24 +126,21 @@ export function WorkspaceLayout({
   reader,
   notice,
   assistant,
-  page,
+  app,
   readerExpanded
 }: WorkspaceLayoutProps): React.JSX.Element {
   const assistantTrack = assistant ? ` ${ASSISTANT_WIDTH}` : ''
 
-  if (page) {
+  if (app) {
     return (
       <div
         className="grid h-full min-h-0"
-        style={{ gridTemplateColumns: `auto ${SIDEBAR_WIDTH} minmax(0, 1fr)${assistantTrack}` }}
+        style={{ gridTemplateColumns: `auto minmax(0, 1fr)${assistantTrack}` }}
       >
         {rail}
-        <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r">
-          {sidebar}
-        </aside>
         <div className="flex min-h-0 min-w-0 flex-col">
           {notice}
-          <div className="min-h-0 flex-1">{page}</div>
+          <div className="min-h-0 flex-1">{app}</div>
         </div>
         {assistant && <div className="min-h-0 min-w-0">{assistant}</div>}
       </div>

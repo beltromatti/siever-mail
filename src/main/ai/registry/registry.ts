@@ -23,6 +23,7 @@ import {
   type ReplyStatus,
   type SavedCopy,
   type ThreadRef,
+  type UndoSpec,
   SYSTEM,
   USER
 } from './types'
@@ -384,13 +385,21 @@ export class Registry {
           threadIds: [],
           messageKeys: [],
           projectIds: [result.record.id],
-          id: result.record.id
+          id: result.record.id,
+          undo: { kind: 'progetto-creato', projectId: result.record.id }
         },
         actor
       )
     }
 
     return result
+  }
+
+  /** Takes away a project made by mistake (the undo of its creation). */
+  async removeProject(id: string, actor: Actor): Promise<ProjectRecord> {
+    const record = await this.projects.remove(id)
+    this.emitProject(record, 'eliminato', `Tolto il progetto: ${record.title}`, actor)
+    return record
   }
 
   async renameProject(id: string, title: string, actor: Actor): Promise<ProjectRecord> {
@@ -405,7 +414,10 @@ export class Registry {
       record,
       'rinominato',
       `Progetto rinominato: ${before?.title ?? ''} → ${record.title}`,
-      actor
+      actor,
+      before && before.title !== record.title
+        ? { kind: 'progetto-rinominato', projectId: id, title: before.title }
+        : undefined
     )
     return record
   }
@@ -433,7 +445,8 @@ export class Registry {
       record,
       hidden ? 'nascosto' : 'mostrato',
       `${hidden ? 'Nascosto' : 'Di nuovo visibile'}: ${record.title}`,
-      actor
+      actor,
+      { kind: 'progetto-nascosto', projectId: id, hidden }
     )
     return record
   }
@@ -1068,7 +1081,13 @@ export class Registry {
     return change
   }
 
-  private emitProject(record: ProjectRecord, action: string, label: string, actor: Actor): void {
+  private emitProject(
+    record: ProjectRecord,
+    action: string,
+    label: string,
+    actor: Actor,
+    undo?: UndoSpec
+  ): void {
     this.emit(
       {
         object: 'progetto',
@@ -1078,7 +1097,8 @@ export class Registry {
         threadIds: [],
         messageKeys: [],
         projectIds: [record.id],
-        id: record.id
+        id: record.id,
+        undo
       },
       actor
     )

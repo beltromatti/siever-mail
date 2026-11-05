@@ -828,7 +828,11 @@ export function SegretarioPanel({
           <div className="sheet rounded-[12px] p-2 pb-1.5">
             {contextChip && !contextDetached && (
               <span className="bg-hover text-muted-foreground mb-1.5 inline-flex max-w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-[11.5px]">
-                <Mail className="size-3 shrink-0" />
+                {contextChip.context.eventKey ? (
+                  <CalendarDays className="size-3 shrink-0" />
+                ) : (
+                  <Mail className="size-3 shrink-0" />
+                )}
                 <span className="truncate">{contextChip.label}</span>
                 <button
                   type="button"

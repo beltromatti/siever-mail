@@ -15,7 +15,8 @@ const messageRefSchema = z.object({
 const contextSchema = z.object({
   messages: z.array(messageRefSchema).max(200),
   accountId: z.string().nullable(),
-  folderLabel: z.string().max(200).nullable()
+  folderLabel: z.string().max(200).nullable(),
+  eventKey: z.string().max(2000).nullable().optional()
 })
 
 const preferencesSchema = z.object({ enabled: z.boolean() }).strict()
@@ -240,6 +241,10 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   )
   handle(SEGRETARIO_IPC.discardReply, (accountId: unknown, messageKey: unknown) =>
     segretario.discardReply(idSchema.parse(accountId), messageKeySchema.parse(messageKey))
+  )
+  handle(SEGRETARIO_IPC.listProposals, () => segretario.listProposals())
+  handle(SEGRETARIO_IPC.eventPrep, (eventKey: unknown) =>
+    segretario.eventPrep(z.string().min(1).max(2000).parse(eventKey))
   )
   handle(SEGRETARIO_IPC.decideProposal, (id: unknown, accepted: unknown, result: unknown) =>
     segretario.decideProposal(

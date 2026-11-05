@@ -37,6 +37,15 @@ describe('segretarioSuggestions', () => {
     ).toBe('Prepara un sollecito')
   })
 
+  it('offers to prepare the event open in the calendar', () => {
+    expect(segretarioSuggestions({ ...base, calendar: { eventOpen: true } })[0]).toBe(
+      'Preparami a questo appuntamento'
+    )
+    expect(segretarioSuggestions({ ...base, calendar: { eventOpen: false } })[0]).toBe(
+      'Cosa ho in agenda questa settimana?'
+    )
+  })
+
   it('asks where a project stands from its list, and keeps to four', () => {
     const suggestions = segretarioSuggestions({
       ...base,
