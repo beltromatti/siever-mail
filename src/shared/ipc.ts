@@ -42,6 +42,7 @@ import type {
   SetMessagesKeywordInput,
   UiPreferences
 } from './models'
+import type { DiscoveredMailSettings } from './connections'
 
 export const IPC_CHANNELS = {
   bootstrap: 'app:bootstrap',
@@ -50,6 +51,8 @@ export const IPC_CHANNELS = {
   setUiPreferences: 'app:set-ui-preferences',
   addGoogleAccount: 'account:add-google',
   addImapAccount: 'account:add-imap',
+  addMicrosoftAccount: 'account:add-microsoft',
+  discoverMailSettings: 'account:discover-settings',
   markAccountLastViewed: 'account:mark-last-viewed',
   removeAccount: 'account:remove',
   setActiveMailboxContext: 'app:set-active-mailbox-context',
@@ -140,8 +143,13 @@ export interface DesktopMailApi {
   getUiPreferences: () => Promise<UiPreferences>
   /** Persists the whole record and echoes back what was actually stored. */
   setUiPreferences: (preferences: UiPreferences) => Promise<UiPreferences>
-  addGoogleAccount: () => Promise<MailAccount>
+  /** A Google account, in one consent: its mail, and its calendar when asked. */
+  addGoogleAccount: (options: { calendar: boolean }) => Promise<MailAccount>
   addImapAccount: (input: AddImapAccountInput) => Promise<MailAccount>
+  /** A Microsoft account, in one consent in the browser: its mail, and its calendar when asked. */
+  addMicrosoftAccount: (options: { calendar: boolean }) => Promise<MailAccount>
+  /** A mailbox's servers found from its address alone; null when nothing tells them. */
+  discoverMailSettings: (address: string) => Promise<DiscoveredMailSettings | null>
   markAccountLastViewed: (accountId: string) => Promise<void>
   removeAccount: (accountId: string) => Promise<void>
   setActiveMailboxContext: (context: ActiveMailboxContext | null) => Promise<void>

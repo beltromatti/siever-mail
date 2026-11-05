@@ -45,7 +45,7 @@ export async function contextBlock(sources: ContextSources): Promise<string> {
   })
   const calendarLines = calendars.map(
     (calendar) =>
-      `- Calendario: «${calendar.name}» di ${calendar.account}${calendar.primary ? ' (principale)' : ''}${calendar.writable ? '' : ' (sola lettura)'}`
+      `- Calendario: «${calendar.name}» di ${calendar.connection}${calendar.primary ? ' (principale)' : ''}${calendar.writable ? '' : ' (sola lettura)'}`
   )
 
   return fillTemplate(PROMPTS.context, {

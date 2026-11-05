@@ -53,7 +53,11 @@ const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
 // The variables the packaged app reads at runtime (src/main/config/env.ts).
 // Only these leave the developer's `.env` for the bundle: anything else in
 // it — a personal API key used while developing — stays on this machine.
-const RUNTIME_ENV_KEYS = ['GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET']
+const RUNTIME_ENV_KEYS = [
+  'GOOGLE_OAUTH_CLIENT_ID',
+  'GOOGLE_OAUTH_CLIENT_SECRET',
+  'MICROSOFT_OAUTH_CLIENT_ID'
+]
 const RUNTIME_ENV_FILE = '.env.runtime'
 
 const ALL_LOCAL_TARGET_IDS = ['macos-arm64', 'macos-x64', 'windows-x64']

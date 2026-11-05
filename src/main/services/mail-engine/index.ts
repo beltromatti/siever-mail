@@ -19,7 +19,7 @@ import { folderForRole, UNIFIED_FOLDER_ROLES, type FolderRole } from '@shared/fo
 import type { MessageNote } from '@shared/segretario'
 
 import type { AppDatabase } from '../database'
-import type { GoogleOAuthService } from '../google-oauth'
+import type { MailTokens } from '../mail-tokens'
 import { decryptSecret } from '../secure-storage'
 
 import {
@@ -33,7 +33,7 @@ import { NotificationManager } from './notifications'
 
 export interface MailEngineDependencies {
   database: AppDatabase
-  googleOAuthService: GoogleOAuthService
+  tokens: MailTokens
   getMainWindow: () => BrowserWindow | null
   /** The unread messages of every account's Posta in arrivo, whenever a count may have changed. */
   onInboxUnreadChange: (count: number) => void
@@ -544,11 +544,7 @@ export class MailEngine {
       secret: decryptSecret(stored.encryptedSecret)
     }
 
-    const connection = new AccountConnection(
-      this.deps.database,
-      this.deps.googleOAuthService,
-      account
-    )
+    const connection = new AccountConnection(this.deps.database, this.deps.tokens, account)
 
     connection.on('state', (snapshot) => {
       const state: AccountConnectionState = { accountId, ...snapshot }

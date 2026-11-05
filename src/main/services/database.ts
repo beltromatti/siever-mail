@@ -1681,6 +1681,12 @@ export class AppDatabase {
     }
   }
 
+  /** The account's access, renewed (a provider that rotates its tokens): kept encrypted as it comes. */
+  async setAccountSecret(accountId: string, encryptedSecret: string): Promise<void> {
+    await this.ready
+    await this.prisma.account.updateMany({ where: { id: accountId }, data: { encryptedSecret } })
+  }
+
   /**
    * A new account starts with the first account's signature — in whatever
    * format it is stored, so a legacy one still gets upgraded on read — or,
@@ -2694,20 +2700,61 @@ export class AppDatabase {
     }
   }
 
-  /** The calendars' tables (see the `Calendar*` models): a copy of the provider's, kept in step. */
+  /**
+   * The calendars' tables (see the `Calendar*` models): the calendar
+   * connections, each on its own — Google, Microsoft, CalDAV, a link — and a
+   * copy of their calendars and events, kept in step.
+   */
   private async ensureCalendarTables(): Promise<void> {
+    const columns = async (table: string): Promise<Set<string>> =>
+      new Set(
+        (
+          (await this.prisma.$queryRawUnsafe(`PRAGMA table_info(${table})`)) as Array<{
+            name: string
+          }>
+        ).map((column) => column.name)
+      )
+
     await this.prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS calendar_accounts (
-        account_id TEXT PRIMARY KEY,
-        encrypted_token TEXT NOT NULL,
+      CREATE TABLE IF NOT EXISTS calendar_connections (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        label TEXT NOT NULL,
+        mail_account_id TEXT,
+        server_url TEXT,
+        username TEXT,
+        encrypted_secret TEXT,
         connected_at INTEGER NOT NULL,
         last_sync_at INTEGER,
         problem TEXT
       )
     `)
+
+    // Until 2.0 a calendar was a Google mail account's: each becomes a connection of its own,
+    // with the account's id, so its events keep their keys.
+    if ((await columns('calendar_accounts')).size > 0) {
+      await this.prisma.$executeRawUnsafe(`
+        INSERT OR IGNORE INTO calendar_connections (
+          id, provider, label, mail_account_id, encrypted_secret, connected_at, last_sync_at, problem
+        )
+        SELECT c.account_id, 'google', COALESCE(a.email, c.account_id), a.id, c.encrypted_token,
+          c.connected_at, c.last_sync_at, c.problem
+        FROM calendar_accounts c LEFT JOIN accounts a ON a.id = c.account_id
+      `)
+      await this.prisma.$executeRawUnsafe('DROP TABLE calendar_accounts')
+    }
+
+    for (const table of ['calendar_calendars', 'calendar_events', 'calendar_changes']) {
+      if ((await columns(table)).has('account_id')) {
+        await this.prisma.$executeRawUnsafe(
+          `ALTER TABLE ${table} RENAME COLUMN account_id TO connection_id`
+        )
+      }
+    }
+
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS calendar_calendars (
-        account_id TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
         calendar_id TEXT NOT NULL,
         name TEXT NOT NULL,
         is_primary INTEGER NOT NULL,
@@ -2716,13 +2763,13 @@ export class AppDatabase {
         hidden INTEGER NOT NULL DEFAULT 0,
         sync_token TEXT,
         window_end INTEGER,
-        PRIMARY KEY (account_id, calendar_id)
+        PRIMARY KEY (connection_id, calendar_id)
       )
     `)
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS calendar_events (
         key TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
         calendar_id TEXT NOT NULL,
         event_id TEXT NOT NULL,
         ical_uid TEXT,
@@ -2745,14 +2792,31 @@ export class AppDatabase {
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_calendar_events_range ON calendar_events(starts_at, ends_at)'
     )
+    // An invitation's event is looked for by its UID in every calendar connected.
+    await this.prisma.$executeRawUnsafe('DROP INDEX IF EXISTS idx_calendar_events_uid')
     await this.prisma.$executeRawUnsafe(
-      'CREATE INDEX IF NOT EXISTS idx_calendar_events_uid ON calendar_events(account_id, ical_uid)'
+      'CREATE INDEX IF NOT EXISTS idx_calendar_events_ical_uid ON calendar_events(ical_uid)'
+    )
+
+    // A CalDAV calendar's objects as the server has them: to sync them, and to change them in place.
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS calendar_objects (
+        connection_id TEXT NOT NULL,
+        calendar_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        etag TEXT,
+        data TEXT NOT NULL,
+        PRIMARY KEY (connection_id, url)
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_calendar_objects_calendar ON calendar_objects(connection_id, calendar_id)'
     )
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS calendar_changes (
         id INTEGER PRIMARY KEY,
-        account_id TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
         event_key TEXT NOT NULL,
         kind TEXT NOT NULL,
         before_json TEXT,
@@ -2765,14 +2829,6 @@ export class AppDatabase {
     )
 
     // Kept before calendars said whether they take events, and events who put them there.
-    const columns = async (table: string): Promise<Set<string>> =>
-      new Set(
-        (
-          (await this.prisma.$queryRawUnsafe(`PRAGMA table_info(${table})`)) as Array<{
-            name: string
-          }>
-        ).map((column) => column.name)
-      )
 
     if (!(await columns('calendar_calendars')).has('writable')) {
       await this.prisma.$executeRawUnsafe(

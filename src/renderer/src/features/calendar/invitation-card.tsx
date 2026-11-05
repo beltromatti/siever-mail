@@ -32,8 +32,9 @@ const ANSWERS: ReadonlyArray<{
 
 /**
  * The invitation a message carries, at the top of the reader: what and
- * when, and the answer given in the account's calendar — the organizer is
- * told, as Google Calendar tells them.
+ * when, and the answer — given in the calendar the event is in, which
+ * tells the organizer; or, the event in no calendar reached here, sent to
+ * the organizer by mail, as calendars answer one another.
  */
 export function InvitationCard({
   messageRef
@@ -43,6 +44,8 @@ export function InvitationCard({
   const [invitation, setInvitation] = useState<MessageInvitation | null>(null)
   const [answering, setAnswering] = useState<CalendarResponse | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
+  // The answer sent by mail, here: the event is in no calendar that would show it.
+  const [mailed, setMailed] = useState<Exclude<CalendarResponse, 'needsAction'> | null>(null)
 
   const { accountId, folderPath, uid } = messageRef
 
@@ -67,7 +70,21 @@ export function InvitationCard({
     return null
   }
 
+  const answer = (
+    response: Exclude<CalendarResponse, 'needsAction'>,
+    send: () => Promise<void>
+  ): void => {
+    setAnswering(response)
+    setProblem(null)
+    void send()
+      .catch((error: unknown) =>
+        setProblem(error instanceof Error ? error.message : 'Non è andata.')
+      )
+      .finally(() => setAnswering(null))
+  }
+
   const event = invitation.event
+  const timing = event ?? invitation.when
   const cancelled = invitation.method === 'CANCEL'
   const title = event?.title ?? invitation.summary ?? 'Invito'
 
@@ -90,57 +107,87 @@ export function InvitationCard({
           </span>
         )}
       </div>
-      {event && (
+      {timing && (
         <p className="text-muted-foreground first-letter:uppercase">
-          {event.allDay
-            ? WHEN_DAY.format(new Date(`${event.start}T00:00`))
-            : WHEN.format(new Date(event.start))}
-          {event.location && ` · ${event.location}`}
+          {timing.allDay
+            ? WHEN_DAY.format(new Date(`${timing.start}T00:00`))
+            : WHEN.format(new Date(timing.start))}
+          {timing.location && ` · ${timing.location}`}
         </p>
       )}
       {cancelled ? (
         <p className="text-muted-foreground">L’evento è stato annullato dall’organizzatore.</p>
-      ) : !invitation.calendarConnected ? (
-        <p className="text-muted-foreground">
-          Collega il calendario di questo account in Impostazioni › Account per rispondere da qui.
-        </p>
-      ) : !event ? (
-        <p className="text-muted-foreground">
-          Non è ancora nel calendario: compare al prossimo aggiornamento.
-        </p>
-      ) : (
+      ) : event ? (
         event.myResponse !== null && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {ANSWERS.map(({ response, label }) => (
-              <Button
-                key={response}
-                size="sm"
-                variant={event.myResponse === response ? 'default' : 'outline'}
-                disabled={answering !== null}
-                onClick={() => {
-                  setAnswering(response)
-                  setProblem(null)
-                  void window.calendarApi
-                    .respond(event.key, response)
-                    .then((answered) => setInvitation({ ...invitation, event: answered }))
-                    .catch((error: unknown) =>
-                      setProblem(error instanceof Error ? error.message : 'Non è andata.')
-                    )
-                    .finally(() => setAnswering(null))
-                }}
-              >
-                {answering === response ? (
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                ) : (
-                  event.myResponse === response && <Check className="size-3.5" />
-                )}
-                {label}
-              </Button>
-            ))}
-          </div>
+          <Answers
+            given={event.myResponse}
+            answering={answering}
+            onAnswer={(response) =>
+              answer(response, async () => {
+                const answered = await window.calendarApi.respond(event.key, response)
+                setInvitation({ ...invitation, event: answered })
+              })
+            }
+          />
         )
+      ) : invitation.answerByMail ? (
+        <>
+          <Answers
+            given={mailed}
+            answering={answering}
+            onAnswer={(response) =>
+              answer(response, async () => {
+                await window.calendarApi.respondByMail(messageRef, response)
+                setMailed(response)
+              })
+            }
+          />
+          <p className="text-muted-foreground text-[11.5px]">
+            {mailed
+              ? `Risposta mandata per mail a ${invitation.organizer}.`
+              : `Non è in un calendario collegato: la risposta va per mail a ${invitation.organizer}.`}
+          </p>
+        </>
+      ) : (
+        <p className="text-muted-foreground">
+          {invitation.calendarConnected
+            ? 'Non è ancora nel calendario: compare al prossimo aggiornamento.'
+            : 'Collega un calendario per vederlo qui.'}
+        </p>
       )}
       {problem && <p className="text-destructive-soft-foreground text-[11.5px]">{problem}</p>}
     </section>
+  )
+}
+
+/** The three answers, the one given marked. */
+function Answers({
+  given,
+  answering,
+  onAnswer
+}: {
+  given: CalendarResponse | null
+  answering: CalendarResponse | null
+  onAnswer: (response: Exclude<CalendarResponse, 'needsAction'>) => void
+}): React.JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {ANSWERS.map(({ response, label }) => (
+        <Button
+          key={response}
+          size="sm"
+          variant={given === response ? 'default' : 'outline'}
+          disabled={answering !== null}
+          onClick={() => onAnswer(response)}
+        >
+          {answering === response ? (
+            <LoaderCircle className="size-3.5 animate-spin" />
+          ) : (
+            given === response && <Check className="size-3.5" />
+          )}
+          {label}
+        </Button>
+      ))}
+    </div>
   )
 }

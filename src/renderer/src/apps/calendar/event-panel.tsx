@@ -212,7 +212,9 @@ export function EventPanel({
           <p className="text-muted-foreground flex items-center gap-2 text-[12px]">
             <CalendarDays className="size-3.5 shrink-0" />
             {calendar.name}
-            {calendar.account && calendar.account !== calendar.name ? ` · ${calendar.account}` : ''}
+            {calendar.connection && calendar.connection !== calendar.name
+              ? ` · ${calendar.connection}`
+              : ''}
           </p>
         )}
 

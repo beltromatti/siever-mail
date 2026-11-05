@@ -14,7 +14,7 @@ import type {
   MailAddress
 } from '@shared/models'
 
-import type { GoogleOAuthService } from '../google-oauth'
+import type { MailTokens } from '../mail-tokens'
 
 export interface AccountWithSecret extends MailAccount {
   secret: string
@@ -67,6 +67,8 @@ export interface OutgoingMessagePayload {
   headers?: Record<string, string>
   /** A draft keeps its Bcc header; a message sent never carries it. */
   keepBcc?: boolean
+  /** An iCalendar part (`text/calendar; method=…`): an invitation's answer (iMIP). */
+  icalEvent?: { method: string; content: string }
 }
 
 function parseInlineMediaDataUrl(dataUrl: string): { mimeType: string; content: Buffer } | null {
@@ -287,12 +289,7 @@ function smtpConnection(
   return { host, port, ...smtpEncryption(secure), getSocket: openSmtpSocket }
 }
 
-export async function verifyImapAccount(
-  input: AddImapAccountInput,
-  googleOAuthService: GoogleOAuthService
-): Promise<void> {
-  void googleOAuthService
-
+export async function verifyImapAccount(input: AddImapAccountInput): Promise<void> {
   const client = new ImapFlow({
     host: input.imapHost,
     port: input.imapPort,
@@ -349,7 +346,7 @@ export async function verifyImapAccount(
 
 export async function resolveImapAuth(
   account: AccountWithSecret,
-  googleOAuthService: GoogleOAuthService
+  tokens: MailTokens
 ): Promise<{ user: string; pass?: string; accessToken?: string }> {
   if (account.authType === 'password') {
     return {
@@ -358,7 +355,7 @@ export async function resolveImapAuth(
     }
   }
 
-  const accessToken = await googleOAuthService.getAccessToken(account.secret)
+  const accessToken = await tokens.accessToken(account)
 
   return {
     user: account.username,
@@ -368,7 +365,7 @@ export async function resolveImapAuth(
 
 export async function createSmtpTransport(
   account: AccountWithSecret,
-  googleOAuthService: GoogleOAuthService
+  tokens: MailTokens
 ): Promise<nodemailer.Transporter> {
   if (account.authType === 'password') {
     return nodemailer.createTransport({
@@ -380,7 +377,7 @@ export async function createSmtpTransport(
     })
   }
 
-  const accessToken = await googleOAuthService.getAccessToken(account.secret)
+  const accessToken = await tokens.accessToken(account)
 
   return nodemailer.createTransport({
     ...smtpConnection(account.smtpHost, account.smtpPort, account.smtpSecure),

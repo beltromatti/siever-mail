@@ -1,9 +1,10 @@
 import type { MessageRef } from './models'
 
 /**
- * The calendars of the user's accounts, kept in step with their provider —
- * Google Calendar for a Google account — and read by the day's page, the
- * reader's invitations and the Segretario.
+ * The user's calendar connections — a Google or Microsoft account, a
+ * CalDAV server such as iCloud, a calendar's link — each on its own, apart
+ * from the mail: their calendars kept in step with the provider and read by
+ * the Calendario, Oggi, the reader's invitations and the Segretario.
  */
 
 export type CalendarResponse = 'accepted' | 'tentative' | 'declined' | 'needsAction'
@@ -18,9 +19,10 @@ export interface CalendarAttendee {
 }
 
 export interface CalendarEvent {
-  /** Unique across accounts and calendars: what the app names the event by. */
+  /** Unique across connections and calendars: what the app names the event by. */
   key: string
-  accountId: string
+  /** The calendar connection it comes from. */
+  connectionId: string
   calendarId: string
   calendarName: string
   /** The provider's id, an instance's own for a recurring event. */
@@ -54,9 +56,9 @@ export interface EventOrigin {
   messageKey: string | null
 }
 
-/** A calendar of an account, and whether its events are shown. */
+/** A calendar of a connection. */
 export interface CalendarInfo {
-  accountId: string
+  connectionId: string
   calendarId: string
   name: string
   primary: boolean
@@ -64,11 +66,11 @@ export interface CalendarInfo {
 
 /** A calendar as the Calendario app lists it: its key, whose, its colour, whether it is shown and takes events. */
 export interface CalendarListEntry {
-  /** `calendarKey(accountId, calendarId)`. */
+  /** `calendarKey(connectionId, calendarId)`. */
   key: string
-  accountId: string
-  /** The connection it comes with, by its address. */
-  account: string
+  connectionId: string
+  /** The connection it comes from, by its address or its name. */
+  connection: string
   name: string
   primary: boolean
   writable: boolean
@@ -78,21 +80,28 @@ export interface CalendarListEntry {
   hidden: boolean
 }
 
-/** An account's calendar, as Settings shows it. */
+/** Who a calendar connection is with: Google, Microsoft, a CalDAV server (iCloud too), a link. */
+export type CalendarProviderKind = 'google' | 'microsoft' | 'caldav' | 'ics'
+
+/** A calendar connection, as Settings shows it. */
 export interface CalendarConnection {
-  accountId: string
-  email: string
-  /** `available`: it could be connected (a Google account) and is not. */
-  state: 'available' | 'connected'
+  id: string
+  provider: CalendarProviderKind
+  /** The account it reads — an address — or, for a link, the name it was given. */
+  label: string
+  /** The mail connection that came with the same access, when there is one. */
+  mailAccountId: string | null
+  /** The CalDAV server or the link, for those. */
+  serverUrl: string | null
   lastSyncAt: number | null
   /** What went wrong at the last sync, in the user's words; null when it went. */
   problem: string | null
   calendars: CalendarInfo[]
 }
 
-/** The key a calendar goes by, for `NewCalendarEvent.calendarKey`: its account's and its own id. */
-export function calendarKey(accountId: string, calendarId: string): string {
-  return `${accountId}\u0000${calendarId}`
+/** The key a calendar goes by, for `NewCalendarEvent.calendarKey`: its connection's and its own id. */
+export function calendarKey(connectionId: string, calendarId: string): string {
+  return `${connectionId}\u0000${calendarId}`
 }
 
 /** A new event: in which calendar (`calendarKey`), when, where, with whom. */
@@ -138,19 +147,29 @@ export interface MessageInvitation {
   summary: string | null
   /** Its event in the account's connected calendar; null until it is there, or with none connected. */
   event: CalendarEvent | null
-  /** Whether the account's calendar is connected: answering is done there. */
+  /** Whether any calendar is connected: answering is done there when the event is in one. */
   calendarConnected: boolean
+  /** Who invites, by address. */
+  organizer: string | null
+  /** When and where, as the invitation says it: for one in no calendar reached here. */
+  when: Pick<CalendarEvent, 'start' | 'end' | 'allDay' | 'location'> | null
+  /** The event is in no calendar reached here: the answer goes to the organizer by mail (iMIP). */
+  answerByMail: boolean
 }
 
 export const CALENDAR_IPC = {
   listConnections: 'calendar:list-connections',
-  connect: 'calendar:connect',
+  connectGoogle: 'calendar:connect-google',
+  connectMicrosoft: 'calendar:connect-microsoft',
+  addIcs: 'calendar:add-ics',
+  addCalDav: 'calendar:add-caldav',
   disconnect: 'calendar:disconnect',
   events: 'calendar:events',
   event: 'calendar:event',
   eventByUid: 'calendar:event-by-uid',
   invitation: 'calendar:invitation',
   respond: 'calendar:respond',
+  respondByMail: 'calendar:respond-by-mail',
   calendars: 'calendar:calendars',
   setCalendarHidden: 'calendar:set-calendar-hidden',
   create: 'calendar:create',
@@ -162,15 +181,37 @@ export const CALENDAR_IPC = {
 
 export interface CalendarApi {
   listConnections: () => Promise<CalendarConnection[]>
-  /** Asks Google for the calendar of an account, in its own window; resolves once its events are in. */
-  connect: (accountId: string) => Promise<CalendarConnection[]>
-  disconnect: (accountId: string) => Promise<CalendarConnection[]>
+  /**
+   * Asks Google for a calendar, in its own window: the calendar of a Google
+   * mail connection (`mailAccountId`), or of any Google account — the
+   * calendar alone. Resolves once its events are in.
+   */
+  connectGoogle: (mailAccountId: string | null) => Promise<CalendarConnection[]>
+  /** Asks Microsoft for a calendar, in the browser: of a Microsoft mail connection, or alone. */
+  connectMicrosoft: (mailAccountId: string | null) => Promise<CalendarConnection[]>
+  /**
+   * Subscribes to a calendar published at a link (`https://` or `webcal://`),
+   * read only; named as the user says, or as the calendar calls itself.
+   */
+  addIcs: (link: string, name: string | null) => Promise<CalendarConnection[]>
+  /** A calendar on a CalDAV server (iCloud, Fastmail, Nextcloud), with a user name and an (app) password. */
+  addCalDav: (input: {
+    serverUrl: string
+    username: string
+    password: string
+    label: string
+  }) => Promise<CalendarConnection[]>
+  /** Forgets a calendar connection here; the provider keeps the calendar as it is. */
+  disconnect: (connectionId: string) => Promise<CalendarConnection[]>
   /** The events between two instants, every connected calendar's, in order. */
   events: (fromIso: string, toIso: string) => Promise<CalendarEvent[]>
   /** One event by its key, as the calendar has it now; null once it is gone. */
   event: (eventKey: string) => Promise<CalendarEvent | null>
-  /** The event an invitation in mail is for, when it is in a connected calendar. */
-  eventByUid: (accountId: string, iCalUid: string) => Promise<CalendarEvent | null>
+  /**
+   * The event an invitation in mail is for, in any calendar connected —
+   * the one that came with the mail's own account first.
+   */
+  eventByUid: (iCalUid: string, mailAccountId: string | null) => Promise<CalendarEvent | null>
   /**
    * The invitation a message carries, if it carries one: what it asks
    * (REQUEST, CANCEL…), its title, and its event in a connected calendar.
@@ -181,6 +222,11 @@ export interface CalendarApi {
     eventKey: string,
     response: Exclude<CalendarResponse, 'needsAction'>
   ) => Promise<CalendarEvent>
+  /** Answers an invitation in no connected calendar: by mail to its organizer, from the account it came to. */
+  respondByMail: (
+    ref: MessageRef,
+    response: Exclude<CalendarResponse, 'needsAction'>
+  ) => Promise<void>
   /** Every connected calendar, the main ones first. */
   calendars: () => Promise<CalendarListEntry[]>
   /** Shows or hides a calendar's events in the Calendario app. */

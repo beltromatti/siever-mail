@@ -8,21 +8,21 @@ datasource db {
 }
 
 model Account {
-  id              String    @id
+  id              String         @id
   type            String
-  email           String    @unique
-  displayName     String    @map("display_name")
-  imapHost        String    @map("imap_host")
-  imapPort        Int       @map("imap_port")
-  imapSecure      Boolean   @map("imap_secure")
-  smtpHost        String    @map("smtp_host")
-  smtpPort        Int       @map("smtp_port")
-  smtpSecure      Boolean   @map("smtp_secure")
+  email           String         @unique
+  displayName     String         @map("display_name")
+  imapHost        String         @map("imap_host")
+  imapPort        Int            @map("imap_port")
+  imapSecure      Boolean        @map("imap_secure")
+  smtpHost        String         @map("smtp_host")
+  smtpPort        Int            @map("smtp_port")
+  smtpSecure      Boolean        @map("smtp_secure")
   username        String
-  authType        String    @map("auth_type")
-  encryptedSecret String    @map("encrypted_secret")
-  createdAt       BigInt    @map("created_at")
-  updatedAt       BigInt    @map("updated_at")
+  authType        String         @map("auth_type")
+  encryptedSecret String         @map("encrypted_secret")
+  createdAt       BigInt         @map("created_at")
+  updatedAt       BigInt         @map("updated_at")
   folders         Folder[]
   messages        Message[]
   messageBodies   MessageBody[]
@@ -33,21 +33,21 @@ model Account {
 }
 
 model Folder {
-  id             String  @id
-  accountId      String  @map("account_id")
-  path           String
-  name           String
-  delimiter      String?
-  specialUse     String? @map("special_use")
-  messageCount   Int     @default(0) @map("message_count")
-  unseenCount    Int     @default(0) @map("unseen_count")
-  uidValidity    String? @map("uid_validity")
-  highestModseq  String? @map("highest_modseq")
-  lastKnownUid   Int?    @map("last_known_uid")
-  uidNext        Int?    @map("uid_next")
-  lastSyncedAt   BigInt? @map("last_synced_at")
-  updatedAt      BigInt  @map("updated_at")
-  account        Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  id            String  @id
+  accountId     String  @map("account_id")
+  path          String
+  name          String
+  delimiter     String?
+  specialUse    String? @map("special_use")
+  messageCount  Int     @default(0) @map("message_count")
+  unseenCount   Int     @default(0) @map("unseen_count")
+  uidValidity   String? @map("uid_validity")
+  highestModseq String? @map("highest_modseq")
+  lastKnownUid  Int?    @map("last_known_uid")
+  uidNext       Int?    @map("uid_next")
+  lastSyncedAt  BigInt? @map("last_synced_at")
+  updatedAt     BigInt  @map("updated_at")
+  account       Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@unique([accountId, path])
   @@index([accountId], map: "idx_folders_account")
@@ -55,39 +55,39 @@ model Folder {
 }
 
 model Message {
-  id              String  @id
-  accountId       String  @map("account_id")
-  folderPath      String  @map("folder_path")
+  id              String      @id
+  accountId       String      @map("account_id")
+  folderPath      String      @map("folder_path")
   uid             Int
   /// Who the message is, whichever folder holds it (see `message-identity.ts`).
-  messageKey      String  @map("message_key")
+  messageKey      String      @map("message_key")
   /// The conversation: the server's thread, or the message that started it.
-  threadId        String  @map("thread_id")
-  messageId       String? @map("message_id")
+  threadId        String      @map("thread_id")
+  messageId       String?     @map("message_id")
   subject         String
-  subjectSort     String  @default("") @map("subject_sort")
-  fromJson        String  @map("from_json")
-  toJson          String  @map("to_json")
-  ccJson          String  @map("cc_json")
-  bccJson         String  @default("[]") @map("bcc_json")
-  dateIso         String  @map("date_iso")
+  subjectSort     String      @default("") @map("subject_sort")
+  fromJson        String      @map("from_json")
+  toJson          String      @map("to_json")
+  ccJson          String      @map("cc_json")
+  bccJson         String      @default("[]") @map("bcc_json")
+  dateIso         String      @map("date_iso")
   preview         String
-  previewHydrated Boolean @default(false) @map("preview_hydrated")
-  flagsJson       String  @map("flags_json")
-  isRead          Boolean @map("is_read")
-  isFlagged       Boolean @default(false) @map("is_flagged")
-  senderName      String  @default("") @map("sender_name")
-  senderKey       String  @default("") @map("sender_key")
-  senderLabel     String  @default("") @map("sender_label")
-  senderSort      String  @default("") @map("sender_sort")
-  hasAttachments  Boolean @map("has_attachments")
+  previewHydrated Boolean     @default(false) @map("preview_hydrated")
+  flagsJson       String      @map("flags_json")
+  isRead          Boolean     @map("is_read")
+  isFlagged       Boolean     @default(false) @map("is_flagged")
+  senderName      String      @default("") @map("sender_name")
+  senderKey       String      @default("") @map("sender_key")
+  senderLabel     String      @default("") @map("sender_label")
+  senderSort      String      @default("") @map("sender_sort")
+  hasAttachments  Boolean     @map("has_attachments")
   size            Int
-  searchFrom      String  @default("") @map("search_from")
-  searchTo        String  @default("") @map("search_to")
-  searchSubject   String  @default("") @map("search_subject")
-  searchPreview   String  @default("") @map("search_preview")
-  updatedAt       BigInt  @map("updated_at")
-  account         Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  searchFrom      String      @default("") @map("search_from")
+  searchTo        String      @default("") @map("search_to")
+  searchSubject   String      @default("") @map("search_subject")
+  searchPreview   String      @default("") @map("search_preview")
+  updatedAt       BigInt      @map("updated_at")
+  account         Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
   searchHits      SearchHit[]
 
   @@unique([accountId, folderPath, uid])
@@ -251,13 +251,13 @@ model AiMeta {
 /// The Segretario's settings: one row. The OpenRouter key is kept encrypted
 /// with the system keychain (`safeStorage`), like the accounts' passwords.
 model AiSettings {
-  id                 Int     @id
-  encryptedApiKey    String? @map("encrypted_api_key")
+  id              Int     @id
+  encryptedApiKey String? @map("encrypted_api_key")
   /// What the last check of the key found (see `SegretarioStatus`), as JSON.
-  keyStatusJson      String  @default("{}") @map("key_status_json")
+  keyStatusJson   String  @default("{}") @map("key_status_json")
   /// `SegretarioPreferences` (the one switch), as JSON.
-  preferencesJson    String  @default("{}") @map("preferences_json")
-  updatedAt          BigInt  @map("updated_at")
+  preferencesJson String  @default("{}") @map("preferences_json")
+  updatedAt       BigInt  @map("updated_at")
 
   @@map("ai_settings")
 }
@@ -284,23 +284,23 @@ model AiUsage {
 /// One run of the Segretario — asked by the user, or woken by the engine —
 /// and its page in the panel or the diary.
 model AiActivity {
-  id          String    @id
+  id         String    @id
   /// The task, as first written (kept for old rows); `task` says it now.
-  kind        String
-  task        String?
-  title       String
-  status      String
+  kind       String
+  task       String?
+  title      String
+  status     String
   /// `pannello` (a conversation), `diario` (work done alone), `nascosta`.
-  visibility  String    @default("pannello")
+  visibility String    @default("pannello")
   /// The unit of `ai_work` it runs, for work done alone.
-  workId      String?   @map("work_id")
+  workId     String?   @map("work_id")
   /// What it was woken for (`WorkScope`), as JSON.
-  scopeJson   String?   @map("scope_json")
-  createdAt   BigInt    @map("created_at")
-  updatedAt   BigInt    @map("updated_at")
-  unseen      Boolean   @default(false)
-  cost        Float     @default(0)
-  events      AiEvent[]
+  scopeJson  String?   @map("scope_json")
+  createdAt  BigInt    @map("created_at")
+  updatedAt  BigInt    @map("updated_at")
+  unseen     Boolean   @default(false)
+  cost       Float     @default(0)
+  events     AiEvent[]
 
   @@index([updatedAt], map: "idx_ai_activities_updated")
   @@map("ai_activities")
@@ -407,12 +407,12 @@ model AiDraft {
   draftId    String  @id @map("draft_id")
   /// The run that wrote it, or prepared the reply taken up.
   activityId String? @map("activity_id")
-  accountId  String @map("account_id")
+  accountId  String  @map("account_id")
   text       String
   /// The whole draft as the Segretario left it — words, recipients, subject,
   /// files — as JSON: while it is still exactly so, the draft is its own to rewrite.
   snapshot   String?
-  createdAt  BigInt @map("created_at")
+  createdAt  BigInt  @map("created_at")
 
   @@map("ai_drafts")
 }
@@ -627,15 +627,15 @@ model AiGone {
 /// A search asked in words that the user kept as a folder: what the question
 /// became in the search's own terms, run again each time it is opened.
 model AiSavedSearch {
-  id         String @id
-  question   String
+  id        String @id
+  question  String
   /// The folder's name.
-  summary    String
+  summary   String
   /// How it searches, in the search's terms: «offerta» · da settembre.
-  how        String
+  how       String
   /// The search itself (`AskedSearch`), as JSON.
-  search     String @map("search_json")
-  createdAt  BigInt @map("created_at")
+  search    String @map("search_json")
+  createdAt BigInt @map("created_at")
 
   @@map("ai_saved_searches")
 }
@@ -661,51 +661,75 @@ model AiEventPrep {
   @@map("ai_event_preps")
 }
 
-/// An account whose calendar is connected: its own token, for the calendar alone.
-model CalendarAccount {
-  accountId      String  @id @map("account_id")
-  encryptedToken String  @map("encrypted_token")
-  connectedAt    BigInt  @map("connected_at")
-  lastSyncAt     BigInt? @map("last_sync_at")
+/// A calendar connection, on its own: a Google or Microsoft account, a CalDAV server, a link.
+model CalendarConnection {
+  id              String  @id
+  /// `google`, `microsoft`, `caldav` (iCloud among them) or `ics` (a link, read only).
+  provider        String
+  /// The account it reads — an address — or, for a link, the name the user gave it.
+  label           String
+  /// The mail connection that came with the same access, when there is one: how they are shown together.
+  mailAccountId   String? @map("mail_account_id")
+  /// The CalDAV server, or the link of the calendar.
+  serverUrl       String? @map("server_url")
+  username        String?
+  /// The token, or the password, encrypted; none for a public link.
+  encryptedSecret String? @map("encrypted_secret")
+  connectedAt     BigInt  @map("connected_at")
+  lastSyncAt      BigInt? @map("last_sync_at")
   /// What went wrong at the last sync, in the user's words.
-  problem        String?
+  problem         String?
 
-  @@map("calendar_accounts")
+  @@map("calendar_connections")
 }
 
-/// A calendar of a connected account, and where its sync stands.
+/// A calendar of a connection, and where its sync stands.
 model CalendarCalendar {
-  accountId  String  @map("account_id")
-  calendarId String  @map("calendar_id")
-  name       String
-  isPrimary  Int     @map("is_primary")
+  connectionId String  @map("connection_id")
+  calendarId   String  @map("calendar_id")
+  name         String
+  isPrimary    Int     @map("is_primary")
   /// Whether events can be written in it (the user owns it or may edit it).
-  writable   Int     @default(1)
+  writable     Int     @default(1)
   /// Its colour in the provider, `#rrggbb`.
-  color      String?
+  color        String?
   /// Hidden by the user in the Calendario app.
-  hidden     Int     @default(0)
-  syncToken  String? @map("sync_token")
+  hidden       Int     @default(0)
+  syncToken    String? @map("sync_token")
   /// How far ahead its events were read: past it, they are read again.
-  windowEnd  BigInt? @map("window_end")
+  windowEnd    BigInt? @map("window_end")
 
-  @@id([accountId, calendarId])
+  @@id([connectionId, calendarId])
   @@map("calendar_calendars")
+}
+
+/// A CalDAV calendar's object (one event, a series with its exceptions) as the server has it.
+model CalendarObject {
+  connectionId String  @map("connection_id")
+  calendarId   String  @map("calendar_id")
+  url          String
+  etag         String?
+  /// The iCalendar text.
+  data         String
+
+  @@id([connectionId, url])
+  @@index([connectionId, calendarId], map: "idx_calendar_objects_calendar")
+  @@map("calendar_objects")
 }
 
 /// What changed in the calendars not through this app — a new event, one
 /// moved, one cancelled, an answer to an invitation — as the sync found it:
 /// what the Segretario looks at. Kept a month.
 model CalendarChange {
-  id         Int     @id @default(autoincrement())
-  accountId  String  @map("account_id")
-  eventKey   String  @map("event_key")
+  id           Int     @id @default(autoincrement())
+  connectionId String  @map("connection_id")
+  eventKey     String  @map("event_key")
   /// `nuovo`, `cambiato`, `annullato`.
-  kind       String
+  kind         String
   /// The event before and after (`CalendarEvent`), as JSON; null where there is none.
-  beforeJson String? @map("before_json")
-  afterJson  String? @map("after_json")
-  at         BigInt
+  beforeJson   String? @map("before_json")
+  afterJson    String? @map("after_json")
+  at           BigInt
 
   @@index([at], map: "idx_calendar_changes_at")
   @@map("calendar_changes")
@@ -714,7 +738,7 @@ model CalendarChange {
 /// An event of a connected calendar — an instance, for a recurring one.
 model CalendarEvent {
   key           String  @id
-  accountId     String  @map("account_id")
+  connectionId  String  @map("connection_id")
   calendarId    String  @map("calendar_id")
   eventId       String  @map("event_id")
   iCalUid       String? @map("ical_uid")
@@ -736,6 +760,6 @@ model CalendarEvent {
   originJson    String? @map("origin_json")
 
   @@index([startsAt, endsAt], map: "idx_calendar_events_range")
-  @@index([accountId, iCalUid], map: "idx_calendar_events_uid")
+  @@index([iCalUid], map: "idx_calendar_events_ical_uid")
   @@map("calendar_events")
 }

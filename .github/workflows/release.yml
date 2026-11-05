@@ -81,6 +81,7 @@ jobs:
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          MICROSOFT_OAUTH_CLIENT_ID: ${{ secrets.MICROSOFT_OAUTH_CLIENT_ID }}
         run: npm ci
 
       - name: Materialise .env from secrets
@@ -89,6 +90,7 @@ jobs:
           {
             echo "GOOGLE_OAUTH_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}"
             echo "GOOGLE_OAUTH_CLIENT_SECRET=${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}"
+            echo "MICROSOFT_OAUTH_CLIENT_ID=${{ secrets.MICROSOFT_OAUTH_CLIENT_ID }}"
           } > .env
 
       # ── macOS code signing setup ──────────────────────────────────────
@@ -160,6 +162,7 @@ jobs:
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          MICROSOFT_OAUTH_CLIENT_ID: ${{ secrets.MICROSOFT_OAUTH_CLIENT_ID }}
           # APPLE_API_KEY (path) is exported by the previous step via
           # $GITHUB_ENV. The other two come from secrets directly and
           # only ever appear in macOS matrix runs.

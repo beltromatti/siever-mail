@@ -45,10 +45,10 @@ export function useCalendarList(): {
 
 /** The calendar an event is in, of those listed. */
 export function calendarOf(
-  event: Pick<CalendarEvent, 'accountId' | 'calendarId'>,
+  event: Pick<CalendarEvent, 'connectionId' | 'calendarId'>,
   calendars: ReadonlyArray<CalendarListEntry> | null
 ): CalendarListEntry | undefined {
-  const key = calendarKey(event.accountId, event.calendarId)
+  const key = calendarKey(event.connectionId, event.calendarId)
   return calendars?.find((calendar) => calendar.key === key)
 }
 

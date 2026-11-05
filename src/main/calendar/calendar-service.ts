@@ -1,7 +1,10 @@
 import type { CalendarEvent as CalendarEventRow, Prisma, PrismaClient } from '@prisma/client'
+import { randomUUID } from 'node:crypto'
+
 import type { BrowserWindow } from 'electron'
 
 import type { GoogleOAuthService } from '@main/services/google-oauth'
+import { MICROSOFT_GRAPH_SCOPES, type MicrosoftOAuthService } from '@main/services/microsoft-oauth'
 import { decryptSecret, encryptSecret } from '@main/services/secure-storage'
 import { logMainError } from '@main/utils/error-utils'
 import {
@@ -12,6 +15,7 @@ import {
   type CalendarConnection,
   type CalendarListEntry,
   type CalendarEvent,
+  type CalendarProviderKind,
   type CalendarResponse,
   type EventChange,
   type EventOrigin,
@@ -25,7 +29,15 @@ import {
   type ProviderEvent,
   type ProviderEventInput
 } from './calendar-provider'
+import {
+  CalDavCalendarProvider,
+  type CalendarObjectStore,
+  type StoredObject
+} from './caldav-calendar'
 import { GOOGLE_CALENDAR_SCOPE, GoogleCalendarProvider } from './google-calendar'
+import { GraphCalendarProvider } from './graph-calendar'
+import { calendarNameOf } from './icalendar'
+import { calendarText, feedUrl, IcsCalendarProvider, type Fetch } from './ics-calendar'
 
 /** How often the calendars are read again for what changed. */
 const SYNC_EVERY_MS = 5 * 60 * 1000
@@ -44,13 +56,21 @@ export interface CalendarServiceOptions {
     getAccounts(): Promise<MailAccount[]>
   }
   oauth: GoogleOAuthService
+  microsoft: MicrosoftOAuthService
+  /** The network, as the app reaches it (its proxy, its certificates). */
+  fetch: Fetch
   /** Sends an event to the window. */
   send(channel: string, payload: unknown): void
   parentWindow(): BrowserWindow | null
 }
 
-function eventKey(accountId: string, calendarId: string, eventId: string): string {
-  return `${accountId}\u0000${calendarId}\u0000${eventId}`
+/** Whether two addresses are the same mailbox: the case of an address does not matter. */
+function sameAddress(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase()
+}
+
+function eventKey(connectionId: string, calendarId: string, eventId: string): string {
+  return `${connectionId}\u0000${calendarId}\u0000${eventId}`
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -132,7 +152,7 @@ function changedEvent(
 function eventOfRow(row: CalendarEventRow, calendarName: string): CalendarEvent {
   return {
     key: row.key,
-    accountId: row.accountId,
+    connectionId: row.connectionId,
     calendarId: row.calendarId,
     calendarName,
     eventId: row.eventId,
@@ -153,11 +173,11 @@ function eventOfRow(row: CalendarEventRow, calendarName: string): CalendarEvent 
 }
 
 /**
- * The calendars of the user's accounts, kept here in step with their
- * provider: connected one account at a time — the user grants it in
- * Google's own window — read again every few minutes for what changed,
- * and read by the day's page, the reader and the Segretario from here.
- * A calendar has its own token: the account's mail never depends on it.
+ * The calendar connections, each on its own — a Google account, and the
+ * providers to come — their calendars kept here in step with the provider:
+ * read again every few minutes for what changed, and read by the
+ * Calendario, Oggi, the reader and the Segretario from here. A connection
+ * has its own access: the mail never depends on it, nor it on the mail.
  */
 export class CalendarService {
   private prisma: PrismaClient | null = null
@@ -188,97 +208,344 @@ export class CalendarService {
     return this.prisma
   }
 
-  /** Every account whose calendar can be connected, and how each stands. */
+  /** The calendar connections, and how each stands. */
   async listConnections(): Promise<CalendarConnection[]> {
     const prisma = this.requirePrisma()
-    const [accounts, connected, calendars] = await Promise.all([
-      this.options.database.getAccounts(),
-      prisma.calendarAccount.findMany(),
+    const [connections, calendars] = await Promise.all([
+      prisma.calendarConnection.findMany({ orderBy: { connectedAt: 'asc' } }),
       prisma.calendarCalendar.findMany({ orderBy: [{ isPrimary: 'desc' }, { name: 'asc' }] })
     ])
 
-    return accounts
-      .filter((account) => account.type === 'gmail')
-      .map((account) => {
-        const row = connected.find((candidate) => candidate.accountId === account.id)
-        return {
-          accountId: account.id,
-          email: account.email,
-          state: row ? 'connected' : 'available',
-          lastSyncAt: row?.lastSyncAt ? Number(row.lastSyncAt) : null,
-          problem: row?.problem ?? null,
-          calendars: calendars
-            .filter((calendar) => calendar.accountId === account.id)
-            .map((calendar) => ({
-              accountId: account.id,
-              calendarId: calendar.calendarId,
-              name: calendar.name,
-              primary: calendar.isPrimary === 1
-            }))
-        }
-      })
+    return connections.map((connection) => ({
+      id: connection.id,
+      provider: connection.provider as CalendarProviderKind,
+      label: connection.label,
+      mailAccountId: connection.mailAccountId,
+      serverUrl: connection.serverUrl,
+      lastSyncAt: connection.lastSyncAt ? Number(connection.lastSyncAt) : null,
+      problem: connection.problem,
+      calendars: calendars
+        .filter((calendar) => calendar.connectionId === connection.id)
+        .map((calendar) => ({
+          connectionId: connection.id,
+          calendarId: calendar.calendarId,
+          name: calendar.name,
+          primary: calendar.isPrimary === 1
+        }))
+    }))
   }
 
   /**
-   * Asks Google for the account's calendar, in Google's window, the account
-   * already chosen; resolves once its events are in.
+   * Asks Google for a calendar, in Google's window: the calendar of a
+   * Google mail connection — that account already chosen — or, with none,
+   * of the account the user picks, the calendar alone. Resolves once its
+   * events are in.
    */
-  async connect(accountId: string): Promise<CalendarConnection[]> {
-    const account = (await this.options.database.getAccounts()).find(
-      (candidate) => candidate.id === accountId
-    )
+  async connectGoogle(mailAccountId: string | null): Promise<CalendarConnection[]> {
+    const account = mailAccountId
+      ? (await this.options.database.getAccounts()).find(
+          (candidate) => candidate.id === mailAccountId
+        )
+      : undefined
 
-    if (!account || account.type !== 'gmail') {
-      throw new Error('Il calendario si collega per un account Google.')
+    if (mailAccountId && account?.type !== 'gmail') {
+      throw new Error('Il calendario di Google si collega per un account Google.')
     }
 
     const granted = await this.options.oauth.authorize(this.options.parentWindow() ?? undefined, {
       scopes: [GOOGLE_CALENDAR_SCOPE],
-      loginHint: account.email,
-      title: `Collega il calendario di ${account.email}`
+      loginHint: account?.email,
+      title: account ? `Collega il calendario di ${account.email}` : 'Collega un calendario Google'
     })
 
-    if (granted.email.toLowerCase() !== account.email.toLowerCase()) {
+    if (account && granted.email.toLowerCase() !== account.email.toLowerCase()) {
       throw new Error(
         `Hai scelto ${granted.email} in Google: per questo calendario serve ${account.email}.`
       )
     }
 
-    if (!granted.scopes.includes(GOOGLE_CALENDAR_SCOPE)) {
+    await this.addGoogle(granted.email, granted.refreshToken, granted.scopes)
+    return this.listConnections()
+  }
+
+  /**
+   * Keeps the calendar of a Google account the user granted — on its own,
+   * or with the account's mail in one consent — and reads its events in.
+   * The account's mail connection, when there is one, goes with it.
+   */
+  async addGoogle(
+    email: string,
+    refreshToken: string,
+    scopes: ReadonlyArray<string>
+  ): Promise<void> {
+    if (!scopes.includes(GOOGLE_CALENDAR_SCOPE)) {
       throw new Error(
         "Google non ha dato l'accesso al calendario: rifallo lasciando selezionata la casella del calendario."
       )
     }
 
+    const prisma = this.requirePrisma()
+    const mail = (await this.options.database.getAccounts()).find(
+      (candidate) => candidate.type === 'gmail' && sameAddress(candidate.email, email)
+    )
+    const existing = (
+      await prisma.calendarConnection.findMany({ where: { provider: 'google' } })
+    ).find((connection) => sameAddress(connection.label, email))
+    // A calendar connected before keeps its id, and so its events their keys.
+    const id = existing?.id ?? mail?.id ?? randomUUID()
     const now = BigInt(Date.now())
-    const encryptedToken = encryptSecret(granted.refreshToken)
+    const fields = {
+      label: email,
+      mailAccountId: mail?.id ?? null,
+      encryptedSecret: encryptSecret(refreshToken),
+      connectedAt: now,
+      problem: null
+    }
 
-    await this.requirePrisma().calendarAccount.upsert({
-      where: { accountId },
-      create: { accountId, encryptedToken, connectedAt: now },
-      update: { encryptedToken, connectedAt: now, problem: null }
+    await prisma.calendarConnection.upsert({
+      where: { id },
+      create: { id, provider: 'google', ...fields },
+      update: fields
     })
-    await this.sync(accountId)
+    await this.sync(id)
+  }
+
+  /**
+   * Asks Microsoft for a calendar, in the browser: of a mail connection
+   * signed in with Microsoft — that account suggested — or of any Microsoft
+   * account, the calendar alone. Resolves once its events are in.
+   */
+  async connectMicrosoft(mailAccountId: string | null): Promise<CalendarConnection[]> {
+    const account = mailAccountId
+      ? (await this.options.database.getAccounts()).find(
+          (candidate) => candidate.id === mailAccountId
+        )
+      : undefined
+    const granted = await this.options.microsoft.authorize(account?.email)
+
+    if (account && !sameAddress(granted.email, account.email)) {
+      throw new Error(
+        `Hai scelto ${granted.email} in Microsoft: per questo calendario serve ${account.email}.`
+      )
+    }
+
+    await this.addMicrosoft(granted.email, granted.secret)
     return this.listConnections()
   }
 
-  /** Forgets an account's calendar here; Google keeps it as it is. */
-  async disconnect(accountId: string): Promise<CalendarConnection[]> {
-    await this.forgetAccount(accountId)
+  /**
+   * Keeps the calendar of a Microsoft account the user granted — alone, or
+   * with its mail in the same consent — and reads its events in.
+   */
+  async addMicrosoft(email: string, secret: string): Promise<void> {
+    const prisma = this.requirePrisma()
+    const mail = (await this.options.database.getAccounts()).find(
+      (candidate) =>
+        candidate.type === 'imap' &&
+        candidate.authType === 'oauth' &&
+        sameAddress(candidate.email, email)
+    )
+    const existing = (
+      await prisma.calendarConnection.findMany({ where: { provider: 'microsoft' } })
+    ).find((connection) => sameAddress(connection.label, email))
+    const id = existing?.id ?? randomUUID()
+    const fields = {
+      label: email,
+      mailAccountId: mail?.id ?? null,
+      encryptedSecret: encryptSecret(secret),
+      connectedAt: BigInt(Date.now()),
+      problem: null
+    }
+
+    await prisma.calendarConnection.upsert({
+      where: { id },
+      create: { id, provider: 'microsoft', ...fields },
+      update: fields
+    })
+    await this.sync(id)
+  }
+
+  /**
+   * A calendar on a CalDAV server — iCloud, Fastmail, Nextcloud — signed in
+   * with a user name and an (app) password, once the server took them and
+   * showed its calendars. Resolves once its events are in.
+   */
+  async addCalDav(input: {
+    serverUrl: string
+    username: string
+    password: string
+    label: string
+  }): Promise<CalendarConnection[]> {
+    const prisma = this.requirePrisma()
+    const url = new URL(input.serverUrl.trim())
+    const serverUrl = url.toString()
+
+    // The password goes in every request: in the clear only to a server on this computer.
+    if (
+      url.protocol !== 'https:' &&
+      !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+    ) {
+      throw new Error('L’indirizzo del server comincia con https://.')
+    }
+
+    const known = (
+      await prisma.calendarConnection.findMany({ where: { provider: 'caldav' } })
+    ).find(
+      (connection) =>
+        connection.serverUrl === serverUrl && sameAddress(connection.username ?? '', input.username)
+    )
+    const id = known?.id ?? randomUUID()
+    const probe = new CalDavCalendarProvider({
+      serverUrl,
+      username: input.username.trim(),
+      password: input.password,
+      fetch: this.options.fetch,
+      store: this.objectStore(id)
+    })
+
+    if ((await probe.listCalendars()).length === 0) {
+      throw new Error('Su questo server non ci sono calendari di eventi.')
+    }
+
+    const fields = {
+      label: input.label.trim() || input.username.trim(),
+      mailAccountId: null,
+      serverUrl,
+      username: input.username.trim(),
+      encryptedSecret: encryptSecret(input.password),
+      connectedAt: BigInt(Date.now()),
+      problem: null
+    }
+
+    await prisma.calendarConnection.upsert({
+      where: { id },
+      create: { id, provider: 'caldav', ...fields },
+      update: fields
+    })
+    await this.sync(id)
+    return this.listConnections()
+  }
+
+  /** A connection's CalDAV objects, kept in `calendar_objects`. */
+  private objectStore(connectionId: string): CalendarObjectStore {
+    const prisma = this.requirePrisma()
+    const rowOf = (object: { url: string; etag: string | null; data: string }): StoredObject => ({
+      url: object.url,
+      etag: object.etag,
+      data: object.data
+    })
+
+    return {
+      list: async (calendarId) =>
+        (await prisma.calendarObject.findMany({ where: { connectionId, calendarId } })).map(rowOf),
+      get: async (url) => {
+        const row = await prisma.calendarObject.findUnique({
+          where: { connectionId_url: { connectionId, url } }
+        })
+        return row ? rowOf(row) : null
+      },
+      put: async (calendarId, objects) => {
+        await prisma.$transaction(
+          objects.map((object) =>
+            prisma.calendarObject.upsert({
+              where: { connectionId_url: { connectionId, url: object.url } },
+              create: { connectionId, calendarId, ...object },
+              update: { calendarId, etag: object.etag, data: object.data }
+            })
+          )
+        )
+      },
+      remove: async (urls) => {
+        for (let at = 0; at < urls.length; at += 500) {
+          await prisma.calendarObject.deleteMany({
+            where: { connectionId, url: { in: urls.slice(at, at + 500) } }
+          })
+        }
+      },
+      replace: async (calendarId, objects) => {
+        await prisma.$transaction([
+          prisma.calendarObject.deleteMany({ where: { connectionId, calendarId } }),
+          ...objects.map((object) =>
+            prisma.calendarObject.create({ data: { connectionId, calendarId, ...object } })
+          )
+        ])
+      }
+    }
+  }
+
+  /**
+   * Subscribes to a calendar published at a link — read only — once the
+   * link proved to be a calendar. The link often carries a secret: it is
+   * kept encrypted, and shown by its server only.
+   */
+  async addIcs(link: string, name: string | null): Promise<CalendarConnection[]> {
+    const prisma = this.requirePrisma()
+    const url = feedUrl(link)
+    const subscribed = await prisma.calendarConnection.findMany({ where: { provider: 'ics' } })
+
+    if (
+      subscribed.some(
+        (connection) =>
+          connection.encryptedSecret && decryptSecret(connection.encryptedSecret) === url
+      )
+    ) {
+      throw new Error('Questo calendario è già collegato.')
+    }
+
+    const response = await this.options.fetch(url, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(30_000)
+    })
+
+    if (!response.ok) {
+      throw new Error(`Il link del calendario non risponde (${response.status}).`)
+    }
+
+    const text = await calendarText(response)
+
+    if (!/BEGIN:VCALENDAR/i.test(text)) {
+      throw new Error('A quel link non c’è un calendario (.ics).')
+    }
+
+    const id = randomUUID()
+    await prisma.calendarConnection.create({
+      data: {
+        id,
+        provider: 'ics',
+        label: name?.trim() || calendarNameOf(text) || new URL(url).hostname,
+        serverUrl: new URL(url).origin,
+        encryptedSecret: encryptSecret(url),
+        connectedAt: BigInt(Date.now())
+      }
+    })
+    await this.sync(id)
+    return this.listConnections()
+  }
+
+  /** Forgets a calendar connection here — its calendars and events; the provider keeps them. */
+  async disconnect(connectionId: string): Promise<CalendarConnection[]> {
+    const prisma = this.requirePrisma()
+
+    await prisma.$transaction([
+      prisma.calendarChange.deleteMany({ where: { connectionId } }),
+      prisma.calendarEvent.deleteMany({ where: { connectionId } }),
+      prisma.calendarObject.deleteMany({ where: { connectionId } }),
+      prisma.calendarCalendar.deleteMany({ where: { connectionId } }),
+      prisma.calendarConnection.deleteMany({ where: { id: connectionId } })
+    ])
     this.options.send(CALENDAR_IPC.changed, null)
     return this.listConnections()
   }
 
-  /** An account removed, or its calendar disconnected: what was kept of it goes. */
-  async forgetAccount(accountId: string): Promise<void> {
-    const prisma = this.requirePrisma()
-
-    await prisma.$transaction([
-      prisma.calendarChange.deleteMany({ where: { accountId } }),
-      prisma.calendarEvent.deleteMany({ where: { accountId } }),
-      prisma.calendarCalendar.deleteMany({ where: { accountId } }),
-      prisma.calendarAccount.deleteMany({ where: { accountId } })
-    ])
+  /**
+   * A mail connection removed: a calendar that came with it stays — it has
+   * its own access — and stands alone from now on.
+   */
+  async mailAccountRemoved(accountId: string): Promise<void> {
+    await this.requirePrisma().calendarConnection.updateMany({
+      where: { mailAccountId: accountId },
+      data: { mailAccountId: null }
+    })
   }
 
   /** "Elimina tutti i dati": the events go, the connections stay and read them anew. */
@@ -288,6 +555,7 @@ export class CalendarService {
     await prisma.$transaction([
       prisma.calendarChange.deleteMany(),
       prisma.calendarEvent.deleteMany(),
+      prisma.calendarObject.deleteMany(),
       prisma.calendarCalendar.deleteMany()
     ])
     void this.syncAll()
@@ -298,29 +566,29 @@ export class CalendarService {
       return
     }
 
-    const connected = await this.prisma.calendarAccount.findMany({ select: { accountId: true } })
+    const connected = await this.prisma.calendarConnection.findMany({ select: { id: true } })
     await this.prisma.calendarChange.deleteMany({
       where: { at: { lt: BigInt(Date.now() - CHANGES_KEPT_MS) } }
     })
-    await Promise.all(connected.map((row) => this.sync(row.accountId)))
+    await Promise.all(connected.map((row) => this.sync(row.id)))
   }
 
-  /** Reads an account's calendars for what changed — one sync at a time for each account. */
-  sync(accountId: string): Promise<void> {
-    const running = this.syncing.get(accountId)
+  /** Reads a connection's calendars for what changed — one sync at a time for each. */
+  sync(connectionId: string): Promise<void> {
+    const running = this.syncing.get(connectionId)
 
     if (running) {
       return running
     }
 
-    const sync = this.syncAccount(accountId).finally(() => this.syncing.delete(accountId))
-    this.syncing.set(accountId, sync)
+    const sync = this.syncConnection(connectionId).finally(() => this.syncing.delete(connectionId))
+    this.syncing.set(connectionId, sync)
     return sync
   }
 
-  private async syncAccount(accountId: string): Promise<void> {
+  private async syncConnection(connectionId: string): Promise<void> {
     const prisma = this.requirePrisma()
-    const provider = await this.providerFor(accountId)
+    const provider = await this.providerFor(connectionId)
 
     if (!provider) {
       return
@@ -329,14 +597,14 @@ export class CalendarService {
     try {
       const calendars = await provider.listCalendars()
       const listed = new Set(calendars.map((calendar) => calendar.calendarId))
-      const known = await prisma.calendarCalendar.findMany({ where: { accountId } })
+      const known = await prisma.calendarCalendar.findMany({ where: { connectionId } })
 
       // A calendar the user no longer shows takes its events with it.
       for (const gone of known.filter((calendar) => !listed.has(calendar.calendarId))) {
         await prisma.$transaction([
-          prisma.calendarEvent.deleteMany({ where: { accountId, calendarId: gone.calendarId } }),
+          prisma.calendarEvent.deleteMany({ where: { connectionId, calendarId: gone.calendarId } }),
           prisma.calendarCalendar.delete({
-            where: { accountId_calendarId: { accountId, calendarId: gone.calendarId } }
+            where: { connectionId_calendarId: { connectionId, calendarId: gone.calendarId } }
           })
         ])
       }
@@ -344,9 +612,9 @@ export class CalendarService {
       for (const calendar of calendars) {
         const stored = known.find((candidate) => candidate.calendarId === calendar.calendarId)
         await prisma.calendarCalendar.upsert({
-          where: { accountId_calendarId: { accountId, calendarId: calendar.calendarId } },
+          where: { connectionId_calendarId: { connectionId, calendarId: calendar.calendarId } },
           create: {
-            accountId,
+            connectionId,
             calendarId: calendar.calendarId,
             name: calendar.name,
             isPrimary: calendar.primary ? 1 : 0,
@@ -360,17 +628,17 @@ export class CalendarService {
             color: calendar.color
           }
         })
-        await this.syncCalendar(provider, accountId, calendar.calendarId, stored ?? null)
+        await this.syncCalendar(provider, connectionId, calendar.calendarId, stored ?? null)
       }
 
-      await prisma.calendarAccount.update({
-        where: { accountId },
+      await prisma.calendarConnection.update({
+        where: { id: connectionId },
         data: { lastSyncAt: BigInt(Date.now()), problem: null }
       })
     } catch (error) {
-      logMainError('Calendar sync failed', error, { accountId })
-      await prisma.calendarAccount.updateMany({
-        where: { accountId },
+      logMainError('Calendar sync failed', error, { connectionId })
+      await prisma.calendarConnection.updateMany({
+        where: { id: connectionId },
         data: { problem: error instanceof Error ? error.message : String(error) }
       })
     }
@@ -385,7 +653,7 @@ export class CalendarService {
    */
   private async syncCalendar(
     provider: CalendarProvider,
-    accountId: string,
+    connectionId: string,
     calendarId: string,
     stored: { syncToken: string | null; windowEnd: bigint | null } | null
   ): Promise<void> {
@@ -402,9 +670,9 @@ export class CalendarService {
           syncToken: stored.syncToken
         })
         // What changed since the last read was done elsewhere — or here, and then it is no change.
-        await this.applyChanges(accountId, events, { logChanges: true })
+        await this.applyChanges(connectionId, events, { logChanges: true })
         await prisma.calendarCalendar.update({
-          where: { accountId_calendarId: { accountId, calendarId } },
+          where: { connectionId_calendarId: { connectionId, calendarId } },
           data: { syncToken }
         })
         return
@@ -421,10 +689,29 @@ export class CalendarService {
       toIso: new Date(windowEnd).toISOString()
     })
 
-    await prisma.calendarEvent.deleteMany({ where: { accountId, calendarId } })
-    await this.applyChanges(accountId, events)
+    // Kept as read, then what is no longer there goes: an event the Segretario put
+    // there keeps saying so, where the provider does not give it back.
+    await this.applyChanges(connectionId, events)
+    const read = new Set(
+      events
+        .filter((event) => !event.cancelled)
+        .map((event) => eventKey(connectionId, event.calendarId, event.eventId))
+    )
+    const gone = (
+      await prisma.calendarEvent.findMany({
+        where: { connectionId, calendarId },
+        select: { key: true }
+      })
+    )
+      .map((row) => row.key)
+      .filter((key) => !read.has(key))
+
+    for (let at = 0; at < gone.length; at += 500) {
+      await prisma.calendarEvent.deleteMany({ where: { key: { in: gone.slice(at, at + 500) } } })
+    }
+
     await prisma.calendarCalendar.update({
-      where: { accountId_calendarId: { accountId, calendarId } },
+      where: { connectionId_calendarId: { connectionId, calendarId } },
       data: { syncToken, windowEnd: BigInt(windowEnd) }
     })
   }
@@ -436,13 +723,13 @@ export class CalendarService {
    * already, so they show no difference.
    */
   private async applyChanges(
-    accountId: string,
+    connectionId: string,
     events: ReadonlyArray<ProviderEvent>,
     options: { logChanges?: boolean } = {}
   ): Promise<void> {
     const prisma = this.requirePrisma()
     const keyOf = (event: ProviderEvent): string =>
-      eventKey(accountId, event.calendarId, event.eventId)
+      eventKey(connectionId, event.calendarId, event.eventId)
     const kept = options.logChanges
       ? new Map(
           (
@@ -454,7 +741,7 @@ export class CalendarService {
       : new Map<string, CalendarEventRow>()
     const names = options.logChanges
       ? new Map(
-          (await prisma.calendarCalendar.findMany({ where: { accountId } })).map((calendar) => [
+          (await prisma.calendarCalendar.findMany({ where: { connectionId } })).map((calendar) => [
             calendar.calendarId,
             calendar.name
           ])
@@ -464,7 +751,7 @@ export class CalendarService {
       JSON.stringify({
         ...event,
         key: keyOf(event),
-        accountId,
+        connectionId,
         calendarName: names.get(event.calendarId) ?? '',
         startsAt: undefined,
         endsAt: undefined,
@@ -492,7 +779,7 @@ export class CalendarService {
           writes.push(
             prisma.calendarChange.create({
               data: {
-                accountId,
+                connectionId,
                 eventKey: key,
                 kind,
                 beforeJson: before
@@ -512,7 +799,7 @@ export class CalendarService {
       }
 
       const data = {
-        accountId,
+        connectionId,
         calendarId: event.calendarId,
         eventId: event.eventId,
         iCalUid: event.iCalUid,
@@ -533,7 +820,12 @@ export class CalendarService {
       }
 
       writes.push(
-        prisma.calendarEvent.upsert({ where: { key }, create: { key, ...data }, update: data })
+        prisma.calendarEvent.upsert({
+          where: { key },
+          create: { key, ...data },
+          // A provider that does not give the origin back (Graph, as it syncs) leaves it as kept.
+          update: { ...data, originJson: data.originJson ?? undefined }
+        })
       )
     }
 
@@ -572,20 +864,66 @@ export class CalendarService {
     return row?.id ?? 0
   }
 
-  private async providerFor(accountId: string): Promise<CalendarProvider | null> {
-    const [row, account] = await Promise.all([
-      this.requirePrisma().calendarAccount.findUnique({ where: { accountId } }),
-      this.options.database
-        .getAccounts()
-        .then((accounts) => accounts.find((candidate) => candidate.id === accountId))
-    ])
+  /** The provider a connection speaks through, with its access; null when it is gone. */
+  private async providerFor(connectionId: string): Promise<CalendarProvider | null> {
+    const connection = await this.requirePrisma().calendarConnection.findUnique({
+      where: { id: connectionId }
+    })
 
-    return row && account
-      ? new GoogleCalendarProvider(
-          this.options.oauth.client(decryptSecret(row.encryptedToken)),
-          account.email
-        )
-      : null
+    if (!connection) {
+      return null
+    }
+
+    switch (connection.provider as CalendarProviderKind) {
+      case 'google':
+        return connection.encryptedSecret
+          ? new GoogleCalendarProvider(
+              this.options.oauth.client(decryptSecret(connection.encryptedSecret)),
+              connection.label
+            )
+          : null
+      case 'microsoft': {
+        const secret = connection.encryptedSecret
+
+        return secret
+          ? new GraphCalendarProvider(
+              () =>
+                this.options.microsoft.accessToken(
+                  decryptSecret(secret),
+                  MICROSOFT_GRAPH_SCOPES,
+                  async (renewed) => {
+                    await this.requirePrisma().calendarConnection.updateMany({
+                      where: { id: connectionId },
+                      data: { encryptedSecret: encryptSecret(renewed) }
+                    })
+                  }
+                ),
+              connection.label,
+              this.options.fetch
+            )
+          : null
+      }
+      case 'caldav':
+        return connection.encryptedSecret && connection.serverUrl && connection.username
+          ? new CalDavCalendarProvider({
+              serverUrl: connection.serverUrl,
+              username: connection.username,
+              password: decryptSecret(connection.encryptedSecret),
+              fetch: this.options.fetch,
+              store: this.objectStore(connectionId)
+            })
+          : null
+      case 'ics':
+        return connection.encryptedSecret
+          ? new IcsCalendarProvider(
+              decryptSecret(connection.encryptedSecret),
+              connection.label,
+              this.options.fetch
+            )
+          : null
+      default:
+        return null
+    }
   }
 
   /** The events between two instants, every connected calendar's, in order. */
@@ -603,30 +941,43 @@ export class CalendarService {
     ])
     const names = new Map(
       calendars.map((calendar) => [
-        `${calendar.accountId}\u0000${calendar.calendarId}`,
+        `${calendar.connectionId}\u0000${calendar.calendarId}`,
         calendar.name
       ])
     )
 
     return rows.map((row) =>
-      eventOfRow(row, names.get(`${row.accountId}\u0000${row.calendarId}`) ?? '')
+      eventOfRow(row, names.get(`${row.connectionId}\u0000${row.calendarId}`) ?? '')
     )
   }
 
-  /** The event an invitation is for, in the account's calendars; the earliest instance of a series. */
-  async eventByUid(accountId: string, iCalUid: string): Promise<CalendarEvent | null> {
+  /**
+   * The event an invitation is for, in any calendar connected — the one
+   * that came with the mail's account first — the earliest instance of a
+   * series still to come.
+   */
+  async eventByUid(iCalUid: string, mailAccountId: string | null): Promise<CalendarEvent | null> {
     const prisma = this.requirePrisma()
-    const row = await prisma.calendarEvent.findFirst({
-      where: { accountId, iCalUid, endsAt: { gt: BigInt(Date.now()) } },
-      orderBy: { startsAt: 'asc' }
-    })
+    const [rows, own] = await Promise.all([
+      prisma.calendarEvent.findMany({
+        where: { iCalUid, endsAt: { gt: BigInt(Date.now()) } },
+        orderBy: { startsAt: 'asc' }
+      }),
+      mailAccountId
+        ? prisma.calendarConnection.findMany({ where: { mailAccountId }, select: { id: true } })
+        : Promise.resolve([])
+    ])
+    const ownIds = new Set(own.map((connection) => connection.id))
+    const row = rows.find((candidate) => ownIds.has(candidate.connectionId)) ?? rows[0]
 
     if (!row) {
       return null
     }
 
     const calendar = await prisma.calendarCalendar.findUnique({
-      where: { accountId_calendarId: { accountId, calendarId: row.calendarId } }
+      where: {
+        connectionId_calendarId: { connectionId: row.connectionId, calendarId: row.calendarId }
+      }
     })
     return eventOfRow(row, calendar?.name ?? '')
   }
@@ -637,32 +988,31 @@ export class CalendarService {
   ): Promise<CalendarEvent> {
     const prisma = this.requirePrisma()
     const row = await prisma.calendarEvent.findUnique({ where: { key } })
-    const provider = row ? await this.providerFor(row.accountId) : null
+    const provider = row ? await this.providerFor(row.connectionId) : null
 
     if (!row || !provider) {
       throw new Error('L’evento non c’è più nel calendario.')
     }
 
     const answered = await provider.respond(row.calendarId, row.eventId, response)
-    await this.applyChanges(row.accountId, [answered])
+    await this.applyChanges(row.connectionId, [answered])
     this.options.send(CALENDAR_IPC.changed, null)
-    return this.eventOrThrow(eventKey(row.accountId, row.calendarId, answered.eventId))
+    return this.eventOrThrow(eventKey(row.connectionId, row.calendarId, answered.eventId))
   }
 
   /** Every connected calendar, the main ones first: for the Calendario app and the Segretario. */
   async calendars(): Promise<CalendarListEntry[]> {
-    const [rows, accounts] = await Promise.all([
-      this.requirePrisma().calendarCalendar.findMany({
-        orderBy: [{ isPrimary: 'desc' }, { name: 'asc' }]
-      }),
-      this.options.database.getAccounts()
+    const prisma = this.requirePrisma()
+    const [rows, connections] = await Promise.all([
+      prisma.calendarCalendar.findMany({ orderBy: [{ isPrimary: 'desc' }, { name: 'asc' }] }),
+      prisma.calendarConnection.findMany({ select: { id: true, label: true } })
     ])
-    const emails = new Map(accounts.map((account) => [account.id, account.email]))
+    const labels = new Map(connections.map((connection) => [connection.id, connection.label]))
 
     return rows.map((row) => ({
-      key: calendarKey(row.accountId, row.calendarId),
-      accountId: row.accountId,
-      account: emails.get(row.accountId) ?? '',
+      key: calendarKey(row.connectionId, row.calendarId),
+      connectionId: row.connectionId,
+      connection: labels.get(row.connectionId) ?? '',
       name: row.name,
       primary: row.isPrimary === 1,
       writable: row.writable === 1,
@@ -675,7 +1025,7 @@ export class CalendarService {
   async setCalendarHidden(key: string, hidden: boolean): Promise<CalendarListEntry[]> {
     const prisma = this.requirePrisma()
     const calendar = (await prisma.calendarCalendar.findMany()).find(
-      (candidate) => calendarKey(candidate.accountId, candidate.calendarId) === key
+      (candidate) => calendarKey(candidate.connectionId, candidate.calendarId) === key
     )
 
     if (!calendar) {
@@ -684,7 +1034,10 @@ export class CalendarService {
 
     await prisma.calendarCalendar.update({
       where: {
-        accountId_calendarId: { accountId: calendar.accountId, calendarId: calendar.calendarId }
+        connectionId_calendarId: {
+          connectionId: calendar.connectionId,
+          calendarId: calendar.calendarId
+        }
       },
       data: { hidden: hidden ? 1 : 0 }
     })
@@ -701,9 +1054,9 @@ export class CalendarService {
   async create(event: NewCalendarEvent): Promise<CalendarEvent> {
     const prisma = this.requirePrisma()
     const calendar = (await prisma.calendarCalendar.findMany()).find(
-      (candidate) => calendarKey(candidate.accountId, candidate.calendarId) === event.calendarKey
+      (candidate) => calendarKey(candidate.connectionId, candidate.calendarId) === event.calendarKey
     )
-    const provider = calendar ? await this.providerFor(calendar.accountId) : null
+    const provider = calendar ? await this.providerFor(calendar.connectionId) : null
 
     if (!provider || !calendar) {
       throw new Error('Questo calendario non è più collegato.')
@@ -714,9 +1067,9 @@ export class CalendarService {
     }
 
     const created = await provider.create(calendar.calendarId, event, event.origin ?? null)
-    await this.applyChanges(calendar.accountId, [created])
+    await this.applyChanges(calendar.connectionId, [created])
     this.options.send(CALENDAR_IPC.changed, null)
-    return this.eventOrThrow(eventKey(calendar.accountId, calendar.calendarId, created.eventId))
+    return this.eventOrThrow(eventKey(calendar.connectionId, calendar.calendarId, created.eventId))
   }
 
   /** Changes an event as given; whoever is invited, before or now, is told. */
@@ -731,7 +1084,7 @@ export class CalendarService {
     const notify = next.attendees.length > 0 || current.attendees.some((attendee) => !attendee.self)
     const updated = await provider.update(row.calendarId, row.eventId, next, notify)
 
-    await this.applyChanges(row.accountId, [updated])
+    await this.applyChanges(row.connectionId, [updated])
     this.options.send(CALENDAR_IPC.changed, null)
     return this.eventOrThrow(key)
   }
@@ -755,7 +1108,7 @@ export class CalendarService {
     key: string
   ): Promise<{ row: CalendarEventRow; provider: CalendarProvider }> {
     const row = await this.requirePrisma().calendarEvent.findUnique({ where: { key } })
-    const provider = row ? await this.providerFor(row.accountId) : null
+    const provider = row ? await this.providerFor(row.connectionId) : null
 
     if (!row || !provider) {
       throw new Error('L’evento non c’è più nel calendario.')
@@ -773,7 +1126,9 @@ export class CalendarService {
     }
 
     const calendar = await prisma.calendarCalendar.findUnique({
-      where: { accountId_calendarId: { accountId: row.accountId, calendarId: row.calendarId } }
+      where: {
+        connectionId_calendarId: { connectionId: row.connectionId, calendarId: row.calendarId }
+      }
     })
     return eventOfRow(row, calendar?.name ?? '')
   }

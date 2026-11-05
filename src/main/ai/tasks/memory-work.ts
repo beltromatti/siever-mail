@@ -1,3 +1,6 @@
+import type { CalendarConnection } from '@shared/calendar'
+import { calendarLearningKey } from '@shared/segretario'
+
 import type { SegretarioMailPort } from '../agent/tool-types'
 import type { AiStore } from '../ai-store'
 import type { Registry } from '../registry/registry'
@@ -27,10 +30,25 @@ function quoteBlock(text: string): string {
     .join('\n')
 }
 
-/** What Conoscimi starts from: the connections to know now, and those already known. */
+const PROVIDER_WORDS: Readonly<Record<CalendarConnection['provider'], string>> = {
+  google: 'Google',
+  microsoft: 'Microsoft',
+  caldav: 'CalDAV',
+  ics: 'un link, in sola lettura'
+}
+
+function calendarLine(connection: CalendarConnection): string {
+  const names = connection.calendars.map((calendar) => `«${calendar.name}»`).join(', ')
+  return `- calendario ${connection.label} (${PROVIDER_WORDS[connection.provider]})${names ? `: ${names}` : ''}`
+}
+
+/**
+ * What Conoscimi starts from: the connections to know now — mailboxes and
+ * calendars, by their `ConnectionLearning` keys — and those already known.
+ */
 export async function prepareConoscimi(
-  deps: { mail: SegretarioMailPort; store: AiStore },
-  accountIds: ReadonlyArray<string>
+  deps: { mail: SegretarioMailPort; store: AiStore; calendars: CalendarConnection[] },
+  keys: ReadonlyArray<string>
 ): Promise<StartingData> {
   const accounts = await deps.mail.listAccounts()
   const known = new Set(
@@ -38,21 +56,35 @@ export async function prepareConoscimi(
       .filter((row) => row.finishedAt !== null)
       .map((row) => row.accountId)
   )
-  const now = accounts.filter((account) => accountIds.includes(account.id))
-  const before = accounts.filter(
-    (account) => !accountIds.includes(account.id) && known.has(account.id)
+  const asked = new Set(keys)
+  const now = accounts.filter((account) => asked.has(account.id))
+  const before = accounts.filter((account) => !asked.has(account.id) && known.has(account.id))
+  const calendarsNow = deps.calendars.filter((connection) =>
+    asked.has(calendarLearningKey(connection.id))
   )
+  const calendarsBefore = deps.calendars.filter(
+    (connection) =>
+      !asked.has(calendarLearningKey(connection.id)) &&
+      (known.has(calendarLearningKey(connection.id)) ||
+        (connection.mailAccountId !== null && known.has(connection.mailAccountId)))
+  )
+  const everything = now.length === accounts.length && calendarsNow.length === deps.calendars.length
 
   return {
-    title:
-      now.length === accounts.length
-        ? 'Conoscimi'
-        : `Conoscimi · ${now.map((account) => account.email).join(', ')}`,
+    title: everything
+      ? 'Conoscimi'
+      : `Conoscimi · ${[...now.map((account) => account.email), ...calendarsNow.map((connection) => connection.label)].join(', ')}`,
     data: [
       nowLine(),
-      `## Da conoscere ora\n\n${now.map((account) => `- ${account.email} (${account.displayName})`).join('\n')}`,
-      before.length > 0
-        ? `## Già conosciute (la memoria le descrive): integra, non ricominciare\n\n${before.map((account) => `- ${account.email}`).join('\n')}`
+      `## Da conoscere ora\n\n${[
+        ...now.map((account) => `- posta ${account.email} (${account.displayName})`),
+        ...calendarsNow.map(calendarLine)
+      ].join('\n')}`,
+      before.length + calendarsBefore.length > 0
+        ? `## Già conosciute (la memoria le descrive): integra, non ricominciare\n\n${[
+            ...before.map((account) => `- posta ${account.email}`),
+            ...calendarsBefore.map(calendarLine)
+          ].join('\n')}`
         : '',
       'Comincia.'
     ]

@@ -1,7 +1,7 @@
 import type { CalendarEvent, CalendarResponse, EventOrigin } from '@shared/calendar'
 
 /** An event as a provider gives it: what the app keeps, and whether it was cancelled. */
-export type ProviderEvent = Omit<CalendarEvent, 'key' | 'accountId' | 'calendarName'> & {
+export type ProviderEvent = Omit<CalendarEvent, 'key' | 'connectionId' | 'calendarName'> & {
   /** Its start and end as instants — an all-day event's by local midnight — for ranges. */
   startsAt: number
   endsAt: number

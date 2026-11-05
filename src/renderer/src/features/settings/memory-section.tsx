@@ -325,11 +325,11 @@ export function MemorySection({
         <div className="flex flex-col gap-1.5">
           {learning.map((connection) => (
             <div
-              key={connection.accountId}
+              key={connection.key}
               className="bg-hover flex items-center gap-3 rounded-md px-3 py-2"
             >
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12px] font-medium">{connection.email}</span>
+                <span className="block truncate text-[12px] font-medium">{connection.label}</span>
                 <span className="text-muted-foreground block text-[11px]">
                   {connection.state === 'done' && connection.finishedAt
                     ? `${LEARNING_STATE.done} ${WHEN.format(connection.finishedAt)}`

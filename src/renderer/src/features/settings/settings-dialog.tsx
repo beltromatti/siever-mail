@@ -7,8 +7,6 @@ import {
   FolderOpen,
   Keyboard,
   LoaderCircle,
-  LogOut,
-  Mail,
   Monitor,
   Moon,
   NotebookPen,
@@ -22,11 +20,9 @@ import {
 } from 'lucide-react'
 
 import extensionRenderer from '@app/extension/renderer'
-import { Badge } from '@renderer/components/ui/badge'
 import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
-import { CalendarConnectionLine } from '@renderer/features/calendar/calendar-connection'
-import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
+import { ConnectionsList } from '@renderer/features/connections/connections-list'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import {
   Dialog,
@@ -51,7 +47,9 @@ import { MemorySection } from '@renderer/features/settings/memory-section'
 import { SegretarioSection } from '@renderer/features/settings/segretario-section'
 import { ShortcutsSection } from '@renderer/features/settings/shortcuts-section'
 import { cn } from '@renderer/lib/utils'
+import type { CalendarConnection } from '@shared/calendar'
 import type {
+  AccountConnectionState,
   DataStorageBreakdown,
   MailAccount,
   MailLayoutMode,
@@ -84,6 +82,9 @@ interface SettingsDialogProps {
   /** The section to show as it opens; without one it opens where it was left. */
   initialSectionId?: SettingsSectionId | null
   accounts: MailAccount[]
+  /** How each mail connection stands. */
+  mailStates: Readonly<Record<string, AccountConnectionState | undefined>>
+  googleReady: boolean
   selectedAccountId: string | null
   removingAccountId: string | null
   clearingAccountDataId: string | null
@@ -92,7 +93,8 @@ interface SettingsDialogProps {
   uiPreferences: UiPreferences
   /** Persists a subset of the preferences and adopts the stored result. */
   onUiPreferencesChange: (patch: Partial<UiPreferences>) => void
-  onRemoveAccount: (accountId: string) => void
+  /** Removes a mail connection and the calendars given, after asking the user. */
+  onRemoveAccount: (accountId: string, calendars: ReadonlyArray<CalendarConnection>) => void
   onClearAccountData: (accountId: string) => void
   onClearDatabaseData: () => void
   onAddAccount: () => void
@@ -107,9 +109,10 @@ interface SettingsDialogProps {
 const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'accounts',
-    label: 'Account',
-    title: 'Account',
-    description: 'Configura e gestisci gli account email collegati.',
+    label: 'Connessioni',
+    title: 'Connessioni',
+    description:
+      'La posta e i calendari collegati, ognuno una connessione a sé, raggruppati per accesso.',
     icon: AtSign
   },
   {
@@ -295,6 +298,8 @@ export function SettingsDialog({
   onOpenChange,
   initialSectionId,
   accounts,
+  mailStates,
+  googleReady,
   selectedAccountId,
   removingAccountId,
   clearingAccountDataId,
@@ -344,7 +349,6 @@ export function SettingsDialog({
 
   const activeSection =
     SETTINGS_SECTIONS.find((section) => section.id === activeSectionId) ?? SETTINGS_SECTIONS[0]
-  const calendars = useCalendarConnections()
 
   useEffect(() => {
     if (!open || activeSectionId !== 'preferences') {
@@ -687,68 +691,14 @@ export function SettingsDialog({
             <p className="text-muted-foreground mt-1 text-[12.5px]">{activeSection.description}</p>
             {activeSectionId === 'accounts' ? (
               <div className="mt-3 flex min-h-0 flex-1 flex-col gap-2.5">
-                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
-                  {accounts.length === 0 ? (
-                    <div className="border-border text-muted-foreground rounded-md border border-dashed px-3 py-4 text-[12px]">
-                      Nessun account collegato.
-                    </div>
-                  ) : (
-                    accounts.map((account) => (
-                      <div key={account.id} className="settings-group flex items-start gap-3">
-                        <div className="bg-primary/15 text-primary mt-0.5 rounded-md p-1.5">
-                          <Mail className="size-4" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="truncate text-[12px] font-semibold">
-                              {account.displayName}
-                            </p>
-                            {account.id === selectedAccountId && (
-                              <Badge variant="muted" className="h-5 px-1.5 text-[10px]">
-                                Attivo
-                              </Badge>
-                            )}
-                          </div>
-                          <p className="text-muted-foreground truncate text-[11px]">
-                            {account.email}
-                          </p>
-                          {calendars.connections
-                            ?.filter((connection) => connection.accountId === account.id)
-                            .map((connection) => (
-                              <CalendarConnectionLine
-                                key={connection.accountId}
-                                connection={connection}
-                                onChange={calendars.setConnections}
-                              />
-                            ))}
-                        </div>
-                        <div className="mt-0.5 flex shrink-0 items-center gap-1">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="text-muted-foreground hover:text-destructive"
-                                  aria-label={`Disconnetti account ${account.email}`}
-                                  disabled={anyAccountMutationInFlight}
-                                  onClick={() => onRemoveAccount(account.id)}
-                                >
-                                  {removingAccountId === account.id ? (
-                                    <LoaderCircle className="size-4 animate-spin" />
-                                  ) : (
-                                    <LogOut className="size-4" />
-                                  )}
-                                </Button>
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">Disconnetti account</TooltipContent>
-                          </Tooltip>
-                        </div>
-                      </div>
-                    ))
-                  )}
+                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                  <ConnectionsList
+                    accounts={accounts}
+                    mailStates={mailStates}
+                    removingAccountId={removingAccountId}
+                    googleReady={googleReady}
+                    onRemoveMail={onRemoveAccount}
+                  />
                 </div>
                 <Button
                   type="button"
@@ -759,7 +709,7 @@ export function SettingsDialog({
                   onClick={onAddAccount}
                 >
                   <Plus className="size-4" />
-                  Aggiungi account
+                  Aggiungi una connessione
                 </Button>
               </div>
             ) : activeSectionId === 'preferences' ? (

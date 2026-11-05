@@ -29,7 +29,7 @@ import { folderForRole, folderRoleLabel, type FolderRole } from '@shared/folders
 import { deriveSenderKey, deriveSenderName } from '@shared/sender'
 
 import type { AppDatabase, FolderSyncState } from '../database'
-import type { GoogleOAuthService } from '../google-oauth'
+import type { MailTokens } from '../mail-tokens'
 
 import {
   fetchedIdentity,
@@ -392,7 +392,7 @@ export class AccountConnection extends EventEmitter {
 
   constructor(
     private readonly database: AppDatabase,
-    private readonly googleOAuthService: GoogleOAuthService,
+    private readonly tokens: MailTokens,
     private account: AccountWithSecret
   ) {
     super()
@@ -401,9 +401,7 @@ export class AccountConnection extends EventEmitter {
       database,
       isConnected: () => this.status === 'connected',
       openClient: async () => {
-        const client = this.buildClient(
-          await resolveImapAuth(this.account, this.googleOAuthService)
-        )
+        const client = this.buildClient(await resolveImapAuth(this.account, this.tokens))
         await client.connect()
         return client
       },
@@ -1815,7 +1813,7 @@ export class AccountConnection extends EventEmitter {
 
         // Auth is resolved once and reused for both clients — for OAuth this
         // means we don't burn two token refreshes on every reconnect.
-        const auth = await resolveImapAuth(this.account, this.googleOAuthService)
+        const auth = await resolveImapAuth(this.account, this.tokens)
 
         primary = this.buildClient(auth)
         sync = this.buildClient(auth)

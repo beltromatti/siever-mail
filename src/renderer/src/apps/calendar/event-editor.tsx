@@ -82,7 +82,7 @@ function initialForm(target: EditorTarget, calendars: ReadonlyArray<CalendarList
   const end = localDateTime(event.allDay ? addDays(new Date(span.end), -1).getTime() : span.end)
 
   return {
-    calendarKey: calendarKey(event.accountId, event.calendarId),
+    calendarKey: calendarKey(event.connectionId, event.calendarId),
     title: event.title,
     allDay: event.allDay,
     startDate: start.date,
@@ -246,8 +246,8 @@ export function EventEditor({
                       <span className="flex items-center gap-2">
                         <span className="size-2 rounded-full" style={dotStyle(calendar.color)} />
                         {calendar.name}
-                        {calendar.account !== calendar.name && (
-                          <span className="text-muted-foreground">{calendar.account}</span>
+                        {calendar.connection !== calendar.name && (
+                          <span className="text-muted-foreground">{calendar.connection}</span>
                         )}
                       </span>
                     </SelectItem>

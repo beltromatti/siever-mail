@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import { Resolver } from 'node:dns/promises'
 import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { mkdirSync } from 'node:fs'
+import { connect as netConnect } from 'node:net'
 import { basename, join } from 'node:path'
+import { connect as tlsConnect } from 'node:tls'
 
 import { app, BrowserWindow, dialog, ipcMain, net, shell } from 'electron'
 import { NodeHtmlMarkdown } from 'node-html-markdown'
@@ -15,6 +18,7 @@ import type {
 import { z } from 'zod'
 
 import type { RuntimeConfig } from '@main/config/env'
+import type { DiscoveredMailSettings } from '@shared/connections'
 import { logMainError } from '@main/utils/error-utils'
 import type {
   AccountConnectionState,
@@ -93,15 +97,20 @@ import { APP_ID } from '@main/app-identity'
 import { getAppWindow } from '@main/app-window'
 import { SegretarioService } from '@main/ai/segretario-service'
 import { CalendarService } from '@main/calendar/calendar-service'
+import { GOOGLE_CALENDAR_SCOPE } from '@main/calendar/google-calendar'
+import { invitationParties, invitationReply, occurrenceIn } from '@main/calendar/icalendar'
 import { parseInvitation } from '@main/calendar/ics'
-import { isIcsAttachment, type MessageInvitation } from '@shared/calendar'
+import { isIcsAttachment, type CalendarResponse, type MessageInvitation } from '@shared/calendar'
 import type { MessageLocation, SegretarioMailPort } from '@main/ai/agent/tool-types'
 import { AppBadge } from './app-badge'
 import { DraftService, draftRefKey } from './drafts'
 import { AppDatabase, type MessageListView } from './database'
 import { finalizeUpgradeMigration } from './data-migration'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
-import { GoogleOAuthService } from './google-oauth'
+import { GOOGLE_MAIL_SCOPE, GoogleOAuthService } from './google-oauth'
+import { discoverMailSettings } from './mail-discovery'
+import { MailTokenBroker } from './mail-tokens'
+import { MicrosoftOAuthService } from './microsoft-oauth'
 import { MailEngine } from './mail-engine'
 import { indexedFolderPaths } from './mail-engine/mail-indexer'
 import { imapSearchGroups } from './mail-engine/server-search'
@@ -109,7 +118,9 @@ import {
   buildRawOutgoingMessage,
   createOutgoingMessagePayload,
   createSmtpTransport,
-  verifyImapAccount
+  verifyImapAccount,
+  type AccountWithSecret,
+  type OutgoingMessagePayload
 } from './mail-engine/mail-transport'
 import { updateAppMenuShortcuts } from '../app-menu'
 import { applyThemeMode } from '../theme'
@@ -369,6 +380,43 @@ function mailboxesOf(
   return [...seen.values()]
 }
 
+/** Whether a mail server answers at an address and port, encrypted from the first byte or not, within a few seconds. */
+function serverAnswers(host: string, port: number, secure: boolean): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = secure
+      ? tlsConnect({ host, port, servername: host, timeout: 4_000 })
+      : netConnect({ host, port, timeout: 4_000 })
+    const done = (answered: boolean): void => {
+      socket.destroy()
+      resolve(answered)
+    }
+
+    socket.once(secure ? 'secureConnect' : 'connect', () => done(true))
+    socket.once('timeout', () => done(false))
+    socket.once('error', () => done(false))
+  })
+}
+
+/** How an answer to an invitation is said, in its subject and in its line, as calendars say it. */
+const INVITATION_ANSWERS: Readonly<
+  Record<Exclude<CalendarResponse, 'needsAction'>, { subject: string; body: string }>
+> = {
+  accepted: { subject: 'Accettato', body: 'ha accettato' },
+  tentative: { subject: 'Accettato provvisoriamente', body: 'ha accettato provvisoriamente' },
+  declined: { subject: 'Rifiutato', body: 'ha rifiutato' }
+}
+
+/** A mailbox signed in with Microsoft: IMAP with OAuth, not Gmail. */
+function isMicrosoftAccount(account: Pick<MailAccount, 'type' | 'authType'>): boolean {
+  return account.type === 'imap' && account.authType === 'oauth'
+}
+
+/** The server turned SMTP sign-in off for the organisation or the mailbox (5.7.139). */
+function smtpTurnedOff(error: unknown): boolean {
+  const text = `${(error as { response?: string } | null)?.response ?? ''} ${error instanceof Error ? error.message : ''}`
+  return /5\.7\.139|SmtpClientAuthentication is disabled/i.test(text)
+}
+
 /**
  * The folders of an account the Segretario reads — every one but the
  * Trash, Spam and Bozze — and the drafts' own, to leave drafts out where
@@ -391,6 +439,9 @@ function segretarioFolders(folders: ReadonlyArray<MailFolder>): {
 export class MailService {
   private readonly database: AppDatabase
   private readonly googleOAuthService: GoogleOAuthService
+  private readonly microsoftOAuthService: MicrosoftOAuthService
+  /** The tokens of the mailboxes signed in with Google or Microsoft. */
+  private readonly tokens: MailTokenBroker
   private readonly engine: MailEngine
   private readonly badge: AppBadge
   private readonly drafts: DraftService
@@ -409,10 +460,16 @@ export class MailService {
     const dbPath = join(userDataPath, 'siever-mail.sqlite')
     this.database = new AppDatabase(dbPath)
     this.googleOAuthService = new GoogleOAuthService(config)
+    this.microsoftOAuthService = new MicrosoftOAuthService(config)
+    this.tokens = new MailTokenBroker(
+      this.googleOAuthService,
+      this.microsoftOAuthService,
+      (accountId, secret) => this.database.setAccountSecret(accountId, encryptSecret(secret))
+    )
     this.badge = new AppBadge(getAppWindow)
     this.engine = new MailEngine({
       database: this.database,
-      googleOAuthService: this.googleOAuthService,
+      tokens: this.tokens,
       getMainWindow: getAppWindow,
       onInboxUnreadChange: (count) => this.badge.setCount(count)
     })
@@ -429,6 +486,8 @@ export class MailService {
     this.calendar = new CalendarService({
       database: this.database,
       oauth: this.googleOAuthService,
+      microsoft: this.microsoftOAuthService,
+      fetch: (input, init) => net.fetch(input, init),
       send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload),
       parentWindow: () => getAppWindow()
     })
@@ -441,6 +500,7 @@ export class MailService {
       onNoteWritten: (note) => this.engine.noteWritten(note),
       calendar: {
         calendars: () => this.calendar.calendars(),
+        connections: () => this.calendar.listConnections(),
         events: (fromIso, toIso) => this.calendar.events(fromIso, toIso),
         event: (eventKey) => this.calendar.event(eventKey),
         create: (event) => this.calendar.create(event),
@@ -864,7 +924,8 @@ export class MailService {
   async bootstrap(): Promise<AppBootstrap> {
     return {
       capabilities: {
-        googleOAuthReady: this.googleOAuthService.isConfigured()
+        googleOAuthReady: this.googleOAuthService.isConfigured(),
+        microsoftOAuthReady: this.microsoftOAuthService.isConfigured()
       },
       accounts: await this.database.getAccounts()
     }
@@ -873,7 +934,7 @@ export class MailService {
   async addImapAccount(input: AddImapAccountInput): Promise<MailAccount> {
     const payload = imapAccountSchema.parse(input)
 
-    await verifyImapAccount(payload, this.googleOAuthService)
+    await verifyImapAccount(payload)
 
     const account = await this.database.createAccount({
       id: randomUUID(),
@@ -898,12 +959,43 @@ export class MailService {
     return account
   }
 
-  async addGoogleAccount(parentWindow?: BrowserWindow): Promise<MailAccount> {
+  /**
+   * A Google account, in one consent: its mail and — when asked — its
+   * calendar, two connections that came with the same access. An account
+   * whose mail is here already only adds the calendar.
+   */
+  async addGoogleAccount(
+    parentWindow: BrowserWindow | undefined,
+    options: { calendar: boolean }
+  ): Promise<MailAccount> {
     if (!this.googleOAuthService.isConfigured()) {
       throw new Error('Google OAuth is not configured in this environment.')
     }
 
-    const oauthResult = await this.googleOAuthService.authorize(parentWindow)
+    const oauthResult = await this.googleOAuthService.authorize(parentWindow, {
+      scopes: options.calendar ? [GOOGLE_MAIL_SCOPE, GOOGLE_CALENDAR_SCOPE] : [GOOGLE_MAIL_SCOPE],
+      title: options.calendar ? 'Collega la posta e il calendario di Google' : 'Collega Gmail'
+    })
+
+    if (!oauthResult.scopes.includes(GOOGLE_MAIL_SCOPE)) {
+      throw new Error(
+        "Google non ha dato l'accesso alla posta: rifallo lasciando selezionata la casella della posta."
+      )
+    }
+
+    const known = (await this.database.getAccounts()).find(
+      (candidate) => candidate.email.toLowerCase() === oauthResult.email.toLowerCase()
+    )
+    const withCalendar = options.calendar && oauthResult.scopes.includes(GOOGLE_CALENDAR_SCOPE)
+
+    if (known) {
+      if (!withCalendar) {
+        throw new Error(`La posta di ${known.email} è già collegata.`)
+      }
+
+      await this.calendar.addGoogle(oauthResult.email, oauthResult.refreshToken, oauthResult.scopes)
+      return known
+    }
 
     const account = await this.database.createAccount({
       id: randomUUID(),
@@ -925,6 +1017,91 @@ export class MailService {
     this.database.learnContacts([{ address: account.email, name: account.displayName }])
     await this.engine.addAccount(account.id)
     await this.introduceNotifications(account)
+
+    // The calendar came with the same consent; a problem reading it is the calendar's, not the mail's.
+    if (withCalendar) {
+      await this.calendar
+        .addGoogle(oauthResult.email, oauthResult.refreshToken, oauthResult.scopes)
+        .catch((error: unknown) =>
+          logMainError('Google calendar not connected with its account', error, {
+            accountId: account.id
+          })
+        )
+    }
+
+    return account
+  }
+
+  /** A mailbox's servers, found from its address alone; null when nothing tells them. */
+  async discoverMailSettings(address: string): Promise<DiscoveredMailSettings | null> {
+    const resolver = new Resolver({ timeout: 3_000, tries: 2 })
+
+    try {
+      return await discoverMailSettings(address, {
+        fetch: (input, init) => net.fetch(input, init),
+        resolveMx: (domain) => resolver.resolveMx(domain),
+        resolveSrv: (name) => resolver.resolveSrv(name),
+        reachable: serverAnswers
+      })
+    } finally {
+      resolver.cancel()
+    }
+  }
+
+  /**
+   * A Microsoft account — Microsoft 365, Outlook.com — in one consent: its
+   * mailbox over IMAP and SMTP and — when asked — its calendar over Graph.
+   * An account whose mail is here already only adds the calendar.
+   */
+  async addMicrosoftAccount(options: { calendar: boolean }): Promise<MailAccount> {
+    if (!this.microsoftOAuthService.isConfigured()) {
+      throw new Error("L'accesso con Microsoft non è attivo in questa versione di SIEVER Mail.")
+    }
+
+    const granted = await this.microsoftOAuthService.authorize()
+    const known = (await this.database.getAccounts()).find(
+      (candidate) => candidate.email.toLowerCase() === granted.email.toLowerCase()
+    )
+
+    if (known) {
+      if (!options.calendar) {
+        throw new Error(`La posta di ${known.email} è già collegata.`)
+      }
+
+      await this.calendar.addMicrosoft(granted.email, granted.secret)
+      return known
+    }
+
+    const account = await this.database.createAccount({
+      id: randomUUID(),
+      type: 'imap',
+      email: granted.email,
+      displayName: granted.displayName,
+      username: granted.email,
+      authType: 'oauth',
+      encryptedSecret: encryptSecret(granted.secret),
+      imapHost: 'outlook.office365.com',
+      imapPort: 993,
+      imapSecure: true,
+      // Outlook.com sends through its own server; Microsoft 365 through Office 365's.
+      smtpHost: granted.personal ? 'smtp-mail.outlook.com' : 'smtp.office365.com',
+      smtpPort: 587,
+      smtpSecure: false
+    })
+
+    await this.includeAccountInUnifiedInbox(account.id)
+    this.database.learnContacts([{ address: account.email, name: account.displayName }])
+    await this.engine.addAccount(account.id)
+    await this.introduceNotifications(account)
+
+    if (options.calendar) {
+      await this.calendar.addMicrosoft(granted.email, granted.secret).catch((error: unknown) =>
+        logMainError('Microsoft calendar not connected with its account', error, {
+          accountId: account.id
+        })
+      )
+    }
+
     return account
   }
 
@@ -945,7 +1122,7 @@ export class MailService {
   async removeAccount(accountId: string): Promise<void> {
     const account = await this.ensureAccountExists(accountId)
     await this.segretario.forgetAccount(accountId, account.email)
-    await this.calendar.forgetAccount(accountId)
+    await this.calendar.mailAccountRemoved(accountId)
     await this.engine.removeAccount(accountId)
     await this.database.clearAccountData(accountId)
     await this.database.deleteAccount(accountId)
@@ -1593,36 +1770,59 @@ export class MailService {
       secret: decryptSecret(stored.encryptedSecret)
     }
 
-    const outgoing = createOutgoingMessagePayload(account, payload)
+    try {
+      await this.deliver(account, createOutgoingMessagePayload(account, payload))
+    } catch (error) {
+      // Not sent: the draft, as it was when sending, waits in Bozze.
+      if (payload.draftId) {
+        void this.drafts.flush(payload.draftId)
+      }
+
+      throw error
+    }
+
+    if (payload.draftId) {
+      void this.drafts
+        .sent(payload.draftId)
+        .catch((error: unknown) => logMainError('Deleting the sent draft failed', error))
+    }
+
+    // The message has gone: counting who it went to must not turn that into a failure.
+    void this.database
+      .recordContactsWritten([...payload.to, ...payload.cc, ...payload.bcc])
+      .catch((error: unknown) => logMainError('Counting the recipients failed', error))
+    await this.recordRecentFiles(
+      payload.attachments.map((attachment) => attachment.path),
+      SENT_ATTACHMENT_ACTIVITY
+    )
+  }
+
+  /**
+   * A message sent from an account: through its SMTP server — through
+   * Graph where a Microsoft organisation turned SMTP off — and its copy
+   * filed in Inviata where the server does not file it itself (Gmail and
+   * Graph do).
+   */
+  private async deliver(
+    account: AccountWithSecret,
+    outgoing: OutgoingMessagePayload
+  ): Promise<void> {
     const rawOutgoing = account.type === 'imap' ? await buildRawOutgoingMessage(outgoing) : null
-    const transport = await createSmtpTransport(account, this.googleOAuthService)
+    const transport = await createSmtpTransport(account, this.tokens)
 
     try {
-      const result = await transport.sendMail(outgoing).catch((error: unknown) => {
-        // Not sent: the draft, as it was when sending, waits in Bozze.
-        if (payload.draftId) {
-          void this.drafts.flush(payload.draftId)
+      let sentThroughGraph = false
+      const result = await transport.sendMail(outgoing).catch(async (error: unknown) => {
+        if (rawOutgoing && isMicrosoftAccount(account) && smtpTurnedOff(error)) {
+          await this.sendThroughGraph(account, rawOutgoing)
+          sentThroughGraph = true
+          return { messageId: outgoing.messageId }
         }
 
         throw error
       })
 
-      if (payload.draftId) {
-        void this.drafts
-          .sent(payload.draftId)
-          .catch((error: unknown) => logMainError('Deleting the sent draft failed', error))
-      }
-
-      // The message has gone: counting who it went to must not turn that into a failure.
-      void this.database
-        .recordContactsWritten([...payload.to, ...payload.cc, ...payload.bcc])
-        .catch((error: unknown) => logMainError('Counting the recipients failed', error))
-      await this.recordRecentFiles(
-        payload.attachments.map((attachment) => attachment.path),
-        SENT_ATTACHMENT_ACTIVITY
-      )
-
-      if (account.type === 'imap' && rawOutgoing) {
+      if (account.type === 'imap' && rawOutgoing && !sentThroughGraph) {
         const messageId = typeof result?.messageId === 'string' ? result.messageId.trim() : ''
         // The message has gone. Filing its copy in "Posta inviata" waits for
         // the account's IMAP connection, however long that takes, so it must
@@ -1634,6 +1834,29 @@ export class MailService {
       }
     } finally {
       transport.close()
+    }
+  }
+
+  /** A message sent as it was built (MIME), through Graph, by a Microsoft account. */
+  private async sendThroughGraph(
+    account: { id: string; type: MailAccount['type']; secret: string },
+    raw: Buffer
+  ): Promise<void> {
+    const token = await this.microsoftOAuthService.accessToken(
+      account.secret,
+      ['https://graph.microsoft.com/Mail.Send'],
+      (secret) => this.database.setAccountSecret(account.id, encryptSecret(secret))
+    )
+    const response = await net.fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
+      body: raw.toString('base64')
+    })
+
+    if (!response.ok) {
+      throw new Error(
+        `Microsoft non ha inviato il messaggio (${response.status}): ${await response.text()}`
+      )
     }
   }
 
@@ -2073,8 +2296,8 @@ export class MailService {
     await this.dropAttachmentCopies()
   }
 
-  /** The calendar invitation a message carries, with its event in the account's calendar. */
-  async calendarInvitation(ref: MessageRef): Promise<MessageInvitation | null> {
+  /** The iCalendar file a message carries, as text; null when it carries none. */
+  private async invitationText(ref: MessageRef): Promise<string | null> {
     const message = await this.requireMessage(ref)
     const file = message.attachments.find(isIcsAttachment)
 
@@ -2087,22 +2310,76 @@ export class MailService {
       [{ index: parseAttachmentIndex(file.id), part: file.part }],
       message.size
     )
-    const invitation = fetched ? parseInvitation(fetched.content.toString('utf8')) : null
+    return fetched ? fetched.content.toString('utf8') : null
+  }
 
-    if (!invitation) {
+  /** The calendar invitation a message carries, with its event in any connected calendar. */
+  async calendarInvitation(ref: MessageRef): Promise<MessageInvitation | null> {
+    const text = await this.invitationText(ref)
+    const invitation = text ? parseInvitation(text) : null
+
+    if (!text || !invitation) {
       return null
     }
 
-    const connected = (await this.calendar.listConnections()).some(
-      (connection) => connection.accountId === ref.accountId && connection.state === 'connected'
+    const connected = (await this.calendar.listConnections()).length > 0
+    const event = connected ? await this.calendar.eventByUid(invitation.uid, ref.accountId) : null
+    const { organizer } = invitationParties(text)
+    const said = occurrenceIn(text, null, [])
+    const own = new Set(
+      (await this.database.getAccounts()).map((account) => account.email.toLowerCase())
     )
 
     return {
       method: invitation.method,
       summary: invitation.summary,
-      event: connected ? await this.calendar.eventByUid(ref.accountId, invitation.uid) : null,
-      calendarConnected: connected
+      event,
+      calendarConnected: connected,
+      organizer,
+      when: said
+        ? { start: said.start, end: said.end, allDay: said.allDay, location: said.location }
+        : null,
+      answerByMail:
+        !event && invitation.method === 'REQUEST' && organizer !== null && !own.has(organizer)
     }
+  }
+
+  /**
+   * An invitation answered by mail (iMIP): the event is in no calendar
+   * reached here, so the organizer gets the answer as their calendar reads
+   * it — from the account the invitation came to, by the address it named.
+   */
+  async respondToInvitationByMail(
+    ref: MessageRef,
+    response: Exclude<CalendarResponse, 'needsAction'>
+  ): Promise<void> {
+    const text = await this.invitationText(ref)
+    const stored = await this.database.getStoredAccountById(ref.accountId)
+
+    if (!text || !stored) {
+      throw new Error('L’invito non c’è più.')
+    }
+
+    const account = { ...stored, secret: decryptSecret(stored.encryptedSecret) }
+    const addresses = (await this.database.getAccounts()).map((candidate) => candidate.email)
+    const reply = invitationReply(
+      text,
+      { addresses, address: account.email, name: account.displayName },
+      response
+    )
+    const said = INVITATION_ANSWERS[response]
+
+    await this.deliver(account, {
+      from: { name: account.displayName, address: account.email },
+      to: [{ address: reply.organizer }],
+      cc: [],
+      bcc: [],
+      subject: `${said.subject}: ${reply.summary}`,
+      text: `${account.displayName} ${said.body} l’invito «${reply.summary}».`,
+      html: '',
+      attachments: [],
+      icalEvent: { method: 'REPLY', content: reply.ics }
+    })
   }
 
   private async requireMessage(ref: MessageRef): Promise<MailMessageDetail> {

@@ -172,7 +172,7 @@ function CalendarsList({
   calendars: ReadonlyArray<CalendarListEntry>
   onSetHidden: (key: string, hidden: boolean) => void
 }): React.JSX.Element {
-  const accounts = [...new Set(calendars.map((calendar) => calendar.account))]
+  const accounts = [...new Set(calendars.map((calendar) => calendar.connection))]
 
   return (
     <div className="flex flex-col gap-3">
@@ -180,7 +180,7 @@ function CalendarsList({
         <section key={account} aria-label={account} className="flex flex-col gap-0.5">
           <h3 className="eyebrow truncate px-1 pb-0.5">{account}</h3>
           {calendars
-            .filter((calendar) => calendar.account === account)
+            .filter((calendar) => calendar.connection === account)
             .map((calendar) => (
               <label
                 key={calendar.key}

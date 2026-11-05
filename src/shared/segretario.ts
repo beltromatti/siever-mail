@@ -400,12 +400,21 @@ export interface ReadingStatus {
 }
 
 /** Where getting to know a connection stands. */
+/** Whether the Segretario knows a connection — a mailbox or a calendar — from Conoscimi. */
 export interface ConnectionLearning {
-  accountId: string
-  email: string
+  /** The connection as Conoscimi records it: a mailbox's id, or `calendarLearningKey(id)`. */
+  key: string
+  kind: 'posta' | 'calendario'
+  /** Its address, or a calendar's name. */
+  label: string
   state: 'waiting' | 'running' | 'done'
   activityId: string | null
   finishedAt: number | null
+}
+
+/** A calendar connection as Conoscimi records it: apart from the mailboxes, whose ids it may share. */
+export function calendarLearningKey(connectionId: string): string {
+  return `calendario:${connectionId}`
 }
 
 /* ──────────────────────────────── runs ──────────────────────────────── */
@@ -690,7 +699,8 @@ export interface SegretarioApi {
    * Segretario gets to know them, building on what it knows. Resolves with
    * the run, which the page shows as it goes.
    */
-  startConoscimi: (accountIds?: string[]) => Promise<ActivitySummary>
+  /** Conoscimi on these connections (`ConnectionLearning.key`), on all of them when none are named. */
+  startConoscimi: (keys?: string[]) => Promise<ActivitySummary>
   /** The guided setup under way, or null. */
   getOnboarding: () => Promise<OnboardingState | null>
   /** Keeps where the guided setup is, or — null — that it is over. */

@@ -5,20 +5,19 @@ import {
   ExternalLink,
   KeyRound,
   LoaderCircle,
-  Mail,
   Plus,
   Sparkles
 } from 'lucide-react'
 
-import { AddAccountDialog } from '@renderer/features/accounts/add-account-dialog'
-import { CalendarConnectionLine } from '@renderer/features/calendar/calendar-connection'
-import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
+import { AddConnection } from '@renderer/features/connections/add-connection'
+import { ConnectionsList } from '@renderer/features/connections/connections-list'
 import { ActivityThread } from '@renderer/features/segretario/segretario-panel'
 import type { SegretarioState } from '@renderer/features/segretario/use-segretario'
 import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { Input } from '@renderer/components/ui/input'
 import { cn } from '@renderer/lib/utils'
+import type { CalendarConnection } from '@shared/calendar'
 import type { AccountConnectionState, MailAccount } from '@shared/models'
 import type {
   ConnectionLearning,
@@ -106,7 +105,7 @@ function StepFrame({
   actions: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-6">
+    <div className="flex flex-1 flex-col gap-6">
       <div className="flex flex-col gap-2">
         <h1 className="display-title text-[30px] leading-tight">{title}</h1>
         <p className="voice text-muted-foreground text-[16px] leading-[1.5]">{lead}</p>
@@ -117,22 +116,34 @@ function StepFrame({
   )
 }
 
-/** Step 1: the connections — the mail accounts, and the calendar of each Google one. */
+/**
+ * Step 1: the connections — each mailbox and each calendar on its own, by
+ * the access that brought them — and adding more, the way Settings adds them.
+ */
 function ConnectionsStep({
   accounts,
-  canUseGoogle,
+  mailStates,
+  removingAccountId,
+  googleReady,
+  microsoftReady,
   onAccountCreated,
+  onRemoveMail,
   onNext,
   onCancel
 }: {
   accounts: ReadonlyArray<MailAccount>
-  canUseGoogle: boolean
+  mailStates: Readonly<Record<string, AccountConnectionState | undefined>>
+  removingAccountId: string | null
+  googleReady: boolean
+  microsoftReady: boolean
   onAccountCreated: (account: MailAccount) => void
+  onRemoveMail: (accountId: string, calendars: ReadonlyArray<CalendarConnection>) => void
   onNext: () => void
   /** Nothing added yet, from inside SIEVER Mail: the user may go back. */
   onCancel: (() => void) | null
 }): React.JSX.Element {
-  const { connections, setConnections } = useCalendarConnections()
+  // Opened by itself the first time, when there is nothing yet.
+  const [adding, setAdding] = useState(accounts.length === 0)
 
   return (
     <StepFrame
@@ -152,42 +163,32 @@ function ConnectionsStep({
       }
     >
       <div className="flex flex-col gap-2">
-        {accounts.map((account) => {
-          const calendar = connections?.find((connection) => connection.accountId === account.id)
-
-          return (
-            <div key={account.id} className="bg-hover rounded-[10px] px-4 py-3">
-              <div className="flex items-center gap-2.5">
-                <Mail className="text-faint-foreground size-4 shrink-0" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-semibold">{account.email}</span>
-                  {account.displayName && account.displayName !== account.email && (
-                    <span className="text-muted-foreground block truncate text-[11.5px]">
-                      {account.displayName}
-                    </span>
-                  )}
-                </span>
-                <Check className="text-status-online size-4 shrink-0" />
-              </div>
-              {calendar && (
-                <CalendarConnectionLine connection={calendar} onChange={setConnections} />
-              )}
-            </div>
-          )
-        })}
-        <AddAccountDialog
-          canUseGoogle={canUseGoogle}
-          onAccountCreated={onAccountCreated}
-          trigger={
-            <button
-              type="button"
-              className="text-muted-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring/60 flex items-center gap-2.5 rounded-[10px] border border-dashed px-4 py-3 text-left text-[13px] font-medium outline-none focus-visible:ring-2"
-            >
-              <Plus className="size-4 shrink-0" />
-              {accounts.length === 0 ? 'Collega la tua posta' : 'Collega un’altra casella'}
-            </button>
-          }
-        />
+        {accounts.length > 0 && (
+          <ConnectionsList
+            accounts={accounts}
+            mailStates={mailStates}
+            removingAccountId={removingAccountId}
+            googleReady={googleReady}
+            onRemoveMail={onRemoveMail}
+          />
+        )}
+        {adding ? (
+          <AddConnection
+            googleReady={googleReady}
+            microsoftReady={microsoftReady}
+            onMailAdded={onAccountCreated}
+            onDone={() => setAdding(false)}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="text-muted-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring/60 flex items-center gap-2.5 rounded-[10px] border border-dashed px-4 py-3 text-left text-[13px] font-medium outline-none focus-visible:ring-2"
+          >
+            <Plus className="size-4 shrink-0" />
+            {accounts.length === 0 ? 'Collega la tua posta' : 'Aggiungi una connessione'}
+          </button>
+        )}
       </div>
     </StepFrame>
   )
@@ -486,7 +487,7 @@ function ConoscimiStep({
   segretario: SegretarioState
   state: OnboardingState
   learning: ReadonlyArray<ConnectionLearning> | null
-  onStarted: (activityId: string, accountIds: string[]) => void
+  onStarted: (activityId: string) => void
   onNext: () => void
 }): React.JSX.Element {
   const [starting, setStarting] = useState(false)
@@ -509,12 +510,12 @@ function ConoscimiStep({
     setProblem(null)
 
     try {
-      const accountIds =
+      const keys =
         state.case === 'conoscimi' || unknown.length === 0
-          ? (learning ?? []).map((connection) => connection.accountId)
-          : unknown.map((connection) => connection.accountId)
-      const activity = await window.segretarioApi.startConoscimi(accountIds)
-      onStarted(activity.id, accountIds)
+          ? (learning ?? []).map((connection) => connection.key)
+          : unknown.map((connection) => connection.key)
+      const activity = await window.segretarioApi.startConoscimi(keys)
+      onStarted(activity.id)
     } catch (error) {
       setProblem(errorText(error) ?? 'Conoscimi non è partito.')
     } finally {
@@ -748,7 +749,9 @@ export function OnboardingWizard({
   state,
   accounts,
   connections,
+  removingAccountId,
   canUseGoogle,
+  canUseMicrosoft,
   segretario,
   aiOn,
   onAccountCreated,
@@ -759,11 +762,14 @@ export function OnboardingWizard({
   state: OnboardingState
   accounts: ReadonlyArray<MailAccount>
   connections: Readonly<Record<string, AccountConnectionState>>
+  removingAccountId: string | null
   canUseGoogle: boolean
+  canUseMicrosoft: boolean
   segretario: SegretarioState
   aiOn: boolean
   onAccountCreated: (account: MailAccount) => void
-  onRemoveAccount: (accountId: string) => void
+  /** Removes a mail connection and the calendars given, after asking the user. */
+  onRemoveAccount: (accountId: string, calendars: ReadonlyArray<CalendarConnection>) => void
   /** The setup moved on: kept, and the engine told. */
   onChange: (state: OnboardingState) => void
   /** Over — finished, or given up before the AI was turned on. */
@@ -805,7 +811,7 @@ export function OnboardingWizard({
 
   return (
     <div className="paper flex h-full min-h-0 flex-col overflow-y-auto">
-      <div className="mx-auto flex min-h-full w-full max-w-[720px] flex-col gap-8 px-6 py-10">
+      <div className="mx-auto flex min-h-full w-full max-w-[720px] shrink-0 flex-col gap-8 px-6 py-10">
         <nav aria-label="Passi" className="flex items-center gap-3">
           <CompassStar className="text-ai-star size-5 shrink-0" />
           <ol className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px]">
@@ -834,7 +840,7 @@ export function OnboardingWizard({
 
         <article
           className={cn(
-            'letter flex flex-col rounded-[14px] px-8 py-8 sm:px-12',
+            'letter flex shrink-0 flex-col rounded-[14px] px-8 py-8 sm:px-12',
             // Conoscimi is watched as it writes: its page takes the room there is.
             state.step === 'conoscimi' && state.conoscimiId
               ? 'min-h-[560px] flex-1'
@@ -844,7 +850,11 @@ export function OnboardingWizard({
           {state.step === 'connessioni' && (
             <ConnectionsStep
               accounts={accounts}
-              canUseGoogle={canUseGoogle}
+              mailStates={connections}
+              removingAccountId={removingAccountId}
+              googleReady={canUseGoogle}
+              microsoftReady={canUseMicrosoft}
+              onRemoveMail={onRemoveAccount}
               onAccountCreated={(account) => {
                 onAccountCreated(account)
                 onChange({ ...state, accountIds: [...new Set([...state.accountIds, account.id])] })
@@ -879,7 +889,7 @@ export function OnboardingWizard({
               accounts={accounts}
               connections={connections}
               aiOn={aiOn}
-              onRemoveAccount={onRemoveAccount}
+              onRemoveAccount={(accountId) => onRemoveAccount(accountId, [])}
               onNext={() => next()}
             />
           )}

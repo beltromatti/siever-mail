@@ -543,6 +543,8 @@ export interface MailContactSuggestion {
 
 export interface AppCapabilities {
   googleOAuthReady: boolean
+  /** Signing in with Microsoft is set up in this build (its app registered). */
+  microsoftOAuthReady: boolean
 }
 
 export interface AppBootstrap {

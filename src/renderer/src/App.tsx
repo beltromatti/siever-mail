@@ -72,7 +72,7 @@ import {
 import { dayKey, dayOfKey, eventSpan } from '@renderer/features/calendar/calendar-dates'
 import { ComingSoonApp } from '@renderer/apps/coming-soon'
 import { InvitationCard } from '@renderer/features/calendar/invitation-card'
-import { isIcsAttachment } from '@shared/calendar'
+import { isIcsAttachment, type CalendarConnection } from '@shared/calendar'
 import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
 import { SearchBanner } from '@renderer/features/segretario/search-banner'
 import { ProjectBanner } from '@renderer/features/segretario/project-banner'
@@ -379,7 +379,10 @@ function useMailBootstrap(): {
   reload: () => Promise<void>
 } {
   const [accounts, setAccounts] = useState<MailAccount[]>([])
-  const [capabilities, setCapabilities] = useState<AppCapabilities>({ googleOAuthReady: false })
+  const [capabilities, setCapabilities] = useState<AppCapabilities>({
+    googleOAuthReady: false,
+    microsoftOAuthReady: false
+  })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -594,11 +597,9 @@ function App(): React.JSX.Element {
   /** Sends the Segretario asked for, waiting to hear how they went, by draft. */
   const segretarioSendWaitersRef = useRef(new Map<string, (outcome: SendOutcome) => void>())
   const [segretarioOpen, setSegretarioOpen] = useState(false)
-  // Whether any account's calendar is connected: what the Segretario suggests knows it.
+  // Whether any calendar is connected: what the Segretario suggests knows it.
   const { connections: calendarConnections } = useCalendarConnections()
-  const calendarConnected = Boolean(
-    calendarConnections?.some((connection) => connection.state === 'connected')
-  )
+  const calendarConnected = Boolean(calendarConnections?.length)
   // The app in front: the mail, or another in its place. The calendar opens where it is asked to.
   const [activeApp, setActiveApp] = useState<AppId>('mail')
   const [calendarFocus, setCalendarFocus] = useState<{ focus: CalendarFocus; at: number } | null>(
@@ -1306,8 +1307,9 @@ function App(): React.JSX.Element {
     []
   )
 
+  /** A mail connection taken away — with the calendars given, the whole access — once the user says so. */
   const removeAccount = useCallback(
-    async (accountId: string): Promise<void> => {
+    async (accountId: string, calendars: ReadonlyArray<CalendarConnection> = []): Promise<void> => {
       if (removingAccountId) {
         return
       }
@@ -1315,8 +1317,9 @@ function App(): React.JSX.Element {
       const account = accounts.find((entry) => entry.id === accountId)
       const confirmed = await confirm({
         title: `Disconnettere ${account?.email ?? "l'account"}?`,
-        description:
-          'SIEVER Mail smette di ricevere e inviare con questo account e toglie dal computer la sua posta, la sua firma e quello che il Segretario aveva annotato su questo account. Sul server non cambia nulla: puoi ricollegarlo quando vuoi.',
+        description: `SIEVER Mail smette di ricevere e inviare con questo account e toglie dal computer la sua posta, la sua firma e quello che il Segretario aveva annotato su questo account${
+          calendars.length > 0 ? ', e i suoi calendari' : ''
+        }. Sul server non cambia nulla: puoi ricollegarlo quando vuoi.`,
         confirmLabel: 'Disconnetti',
         destructive: true
       })
@@ -1329,6 +1332,10 @@ function App(): React.JSX.Element {
       setRemovingAccountId(accountId)
 
       try {
+        for (const calendar of calendars) {
+          await window.calendarApi.disconnect(calendar.id)
+        }
+
         await window.mailApi.removeAccount(accountId)
         cancelInFlightWork()
         setUnifiedSummaries([])
@@ -4617,11 +4624,13 @@ function App(): React.JSX.Element {
           state={onboarding}
           accounts={accounts}
           connections={accountConnections}
+          removingAccountId={removingAccountId}
           canUseGoogle={capabilities.googleOAuthReady}
+          canUseMicrosoft={capabilities.microsoftOAuthReady}
           segretario={segretario}
           aiOn={aiOn}
           onAccountCreated={onAccountCreated}
-          onRemoveAccount={(accountId) => void removeAccount(accountId)}
+          onRemoveAccount={(accountId, calendars) => void removeAccount(accountId, calendars)}
           onChange={saveOnboarding}
           onFinish={(entered) => {
             saveOnboarding(null)
@@ -5388,13 +5397,15 @@ function App(): React.JSX.Element {
           }}
           initialSectionId={settingsSection}
           accounts={accounts}
+          mailStates={accountConnections}
+          googleReady={capabilities.googleOAuthReady}
           selectedAccountId={selectedAccountId}
           removingAccountId={removingAccountId}
           clearingAccountDataId={clearingAccountDataId}
           clearingDatabaseData={clearingDatabaseData}
           uiPreferences={uiPreferences}
           onUiPreferencesChange={updateUiPreferences}
-          onRemoveAccount={(accountId) => void removeAccount(accountId)}
+          onRemoveAccount={(accountId, calendars) => void removeAccount(accountId, calendars)}
           onClearAccountData={(accountId) => void clearAccountData(accountId)}
           onClearDatabaseData={() => void clearAllDataKeepAccounts()}
           onAddAccount={() => {

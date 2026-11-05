@@ -79,8 +79,21 @@ export function registerMailIpc(
     mailService.setUiPreferences(preferences as UiPreferences)
   )
 
-  registerDataHandler(IPC_CHANNELS.addGoogleAccount, async () => {
-    return mailService.addGoogleAccount(getMainWindow() ?? undefined)
+  registerDataHandler(IPC_CHANNELS.addGoogleAccount, async (options) => {
+    return mailService.addGoogleAccount(
+      getMainWindow() ?? undefined,
+      z.object({ calendar: z.boolean() }).strict().parse(options)
+    )
+  })
+
+  registerDataHandler(IPC_CHANNELS.addMicrosoftAccount, async (options) => {
+    return mailService.addMicrosoftAccount(
+      z.object({ calendar: z.boolean() }).strict().parse(options)
+    )
+  })
+
+  registerDataHandler(IPC_CHANNELS.discoverMailSettings, async (address) => {
+    return mailService.discoverMailSettings(z.string().trim().email().max(320).parse(address))
   })
 
   registerDataHandler(IPC_CHANNELS.addImapAccount, async (payload) => {

@@ -3,7 +3,7 @@ import { z } from 'zod'
 
 import type { CalendarService } from '@main/calendar/calendar-service'
 import { logMainError } from '@main/utils/error-utils'
-import { CALENDAR_IPC, type MessageInvitation } from '@shared/calendar'
+import { CALENDAR_IPC, type CalendarResponse, type MessageInvitation } from '@shared/calendar'
 import type { MessageRef } from '@shared/models'
 
 const idSchema = z.string().min(1).max(200)
@@ -54,7 +54,13 @@ const eventChangeSchema = z
 /** The calendars' channels; each waits for them to be open and checks what the page sends. */
 export function registerCalendarIpc(
   calendar: CalendarService,
-  invitationOf: (ref: MessageRef) => Promise<MessageInvitation | null>,
+  invitations: {
+    of: (ref: MessageRef) => Promise<MessageInvitation | null>
+    respondByMail: (
+      ref: MessageRef,
+      response: Exclude<CalendarResponse, 'needsAction'>
+    ) => Promise<void>
+  },
   whenReady: () => Promise<void>
 ): void {
   const handle = <Args extends unknown[], Result>(
@@ -76,18 +82,48 @@ export function registerCalendarIpc(
   }
 
   handle(CALENDAR_IPC.listConnections, () => calendar.listConnections())
-  handle(CALENDAR_IPC.connect, (accountId: unknown) => calendar.connect(idSchema.parse(accountId)))
-  handle(CALENDAR_IPC.disconnect, (accountId: unknown) =>
-    calendar.disconnect(idSchema.parse(accountId))
+  handle(CALENDAR_IPC.connectGoogle, (mailAccountId: unknown) =>
+    calendar.connectGoogle(idSchema.nullable().parse(mailAccountId))
+  )
+  handle(CALENDAR_IPC.connectMicrosoft, (mailAccountId: unknown) =>
+    calendar.connectMicrosoft(idSchema.nullable().parse(mailAccountId))
+  )
+  handle(CALENDAR_IPC.addIcs, (link: unknown, name: unknown) =>
+    calendar.addIcs(
+      z.string().trim().min(1).max(4000).parse(link),
+      z.string().trim().max(200).nullable().parse(name)
+    )
+  )
+  handle(CALENDAR_IPC.addCalDav, (input: unknown) =>
+    calendar.addCalDav(
+      z
+        .object({
+          serverUrl: z.string().trim().url().max(2000),
+          username: z.string().trim().min(1).max(320),
+          password: z.string().min(1).max(1000),
+          label: z.string().trim().max(320)
+        })
+        .strict()
+        .parse(input)
+    )
+  )
+  handle(CALENDAR_IPC.disconnect, (connectionId: unknown) =>
+    calendar.disconnect(idSchema.parse(connectionId))
   )
   handle(CALENDAR_IPC.events, (fromIso: unknown, toIso: unknown) =>
     calendar.events(isoSchema.parse(fromIso), isoSchema.parse(toIso))
   )
   handle(CALENDAR_IPC.event, (key: unknown) => calendar.event(keySchema.parse(key)))
-  handle(CALENDAR_IPC.eventByUid, (accountId: unknown, iCalUid: unknown) =>
-    calendar.eventByUid(idSchema.parse(accountId), z.string().min(1).max(1000).parse(iCalUid))
+  handle(CALENDAR_IPC.eventByUid, (iCalUid: unknown, mailAccountId: unknown) =>
+    calendar.eventByUid(
+      z.string().min(1).max(1000).parse(iCalUid),
+      idSchema.nullable().parse(mailAccountId)
+    )
   )
-  handle(CALENDAR_IPC.invitation, (ref: unknown) => invitationOf(messageRefSchema.parse(ref)))
+  handle(CALENDAR_IPC.invitation, (ref: unknown) => invitations.of(messageRefSchema.parse(ref)))
+  handle(CALENDAR_IPC.respondByMail, (ref: unknown, response: unknown) =>
+    invitations.respondByMail(messageRefSchema.parse(ref), responseSchema.parse(response))
+  )
   handle(CALENDAR_IPC.respond, (key: unknown, response: unknown) =>
     calendar.respond(z.string().min(1).max(2000).parse(key), responseSchema.parse(response))
   )

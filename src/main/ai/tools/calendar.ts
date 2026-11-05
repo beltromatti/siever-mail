@@ -113,7 +113,9 @@ function range(args: Record<string, unknown>): { from: Date; to: Date } {
   const days = Math.round((to.getTime() - from.getTime()) / 86_400_000)
 
   if (days < 1 || days > MAX_DAYS) {
-    throw new ToolInputError(`Un periodo da uno a ${MAX_DAYS} giorni, con \`da\` prima di \`a\`.`)
+    throw new ToolInputError(
+      `Un periodo da uno a ${MAX_DAYS} giorni, con \`da\` prima di \`a\`. Il calendario qui tiene gli eventi da due mesi fa a un anno avanti: più indietro non c'è niente da leggere.`
+    )
   }
 
   return { from, to }
@@ -198,7 +200,7 @@ async function chooseCalendar(context: ToolContext, wanted: string | undefined):
       `Indica \`calendario\`: ${calendars
         .map(
           (calendar) =>
-            `«${calendar.name}» (${calendar.account}${calendar.primary ? ', principale' : ''})`
+            `«${calendar.name}» (${calendar.connection}${calendar.primary ? ', principale' : ''})`
         )
         .join(
           ', '
@@ -210,13 +212,13 @@ async function chooseCalendar(context: ToolContext, wanted: string | undefined):
   const match =
     calendars.find((calendar) => calendar.key === wanted) ??
     calendars.find((calendar) =>
-      `${calendar.name} ${calendar.account}`.toLowerCase().includes(folded)
+      `${calendar.name} ${calendar.connection}`.toLowerCase().includes(folded)
     ) ??
     calendars.find((calendar) => calendar.name.toLowerCase() === folded)
 
   if (!match) {
     throw new ToolInputError(
-      `Nessun calendario «${wanted}». Ci sono: ${calendars.map((calendar) => `«${calendar.name}» (${calendar.account})`).join(', ')}.`
+      `Nessun calendario «${wanted}». Ci sono: ${calendars.map((calendar) => `«${calendar.name}» (${calendar.connection})`).join(', ')}.`
     )
   }
 
@@ -508,7 +510,7 @@ export const calendarTool: SegretarioTool = {
         recordChange(context, 'eliminato', `Tolto dal calendario: ${current.title}`, current, {
           kind: 'evento-eliminato',
           event: {
-            calendarKey: calendarKey(current.accountId, current.calendarId),
+            calendarKey: calendarKey(current.connectionId, current.calendarId),
             title: current.title,
             start: current.start,
             end: current.end,

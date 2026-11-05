@@ -15,7 +15,9 @@ interface GoogleAuthResult {
 }
 
 const IDENTITY_SCOPES = ['openid', 'email', 'profile']
-const MAIL_SCOPES = ['https://mail.google.com/', ...IDENTITY_SCOPES]
+/** The mail of the account, over IMAP and SMTP. */
+export const GOOGLE_MAIL_SCOPE = 'https://mail.google.com/'
+const MAIL_SCOPES = [GOOGLE_MAIL_SCOPE, ...IDENTITY_SCOPES]
 
 function callbackResponseHtml(success: boolean): string {
   const title = success ? 'Accesso completato' : 'Accesso non riuscito'

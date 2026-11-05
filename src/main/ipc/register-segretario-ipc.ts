@@ -166,8 +166,8 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   )
   handle(SEGRETARIO_IPC.forgetEverything, () => segretario.forgetEverything())
   handle(SEGRETARIO_IPC.listLearning, () => segretario.listLearning())
-  handle(SEGRETARIO_IPC.startConoscimi, (accountIds: unknown) =>
-    segretario.startConoscimi(z.array(idSchema).max(100).optional().parse(accountIds))
+  handle(SEGRETARIO_IPC.startConoscimi, (keys: unknown) =>
+    segretario.startConoscimi(z.array(z.string().min(1).max(200)).max(100).optional().parse(keys))
   )
   handle(SEGRETARIO_IPC.getOnboarding, () => segretario.getOnboarding())
   handle(SEGRETARIO_IPC.setOnboarding, (state: unknown) =>

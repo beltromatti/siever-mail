@@ -2,6 +2,7 @@ import type { PrismaClient } from '@prisma/client'
 
 import type {
   CalendarChange,
+  CalendarConnection,
   CalendarEvent,
   CalendarResponse,
   EventChange,
@@ -141,8 +142,10 @@ export interface SegretarioMailPort {
 export interface SegretarioCalendarPort {
   /** The calendars it can write in, each with what it is called and whose it is. */
   calendars(): Promise<
-    Array<{ key: string; name: string; account: string; primary: boolean; writable: boolean }>
+    Array<{ key: string; name: string; connection: string; primary: boolean; writable: boolean }>
   >
+  /** The calendar connections: who they are with, and their calendars. */
+  connections(): Promise<CalendarConnection[]>
   events(fromIso: string, toIso: string): Promise<CalendarEvent[]>
   event(eventKey: string): Promise<CalendarEvent | null>
   create(event: NewCalendarEvent): Promise<CalendarEvent>

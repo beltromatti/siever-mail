@@ -17,6 +17,7 @@ import {
   type CommitmentStatus,
   type ComposeResult,
   type ComposeSpec,
+  calendarLearningKey,
   type ConnectionLearning,
   type ConnectionReadiness,
   type DayLine,
@@ -749,26 +750,50 @@ export class SegretarioService {
 
   /* ──────────────────────── getting to know the connections ──────────────────────── */
 
+  /**
+   * Which connections the Segretario knows from Conoscimi: each mailbox,
+   * each calendar — a calendar that came with a mailbox known with it.
+   */
   async listLearning(): Promise<ConnectionLearning[]> {
-    const accounts = await this.options.mail.listAccounts()
-    const rows = new Map((await this.db.store.listLearning()).map((row) => [row.accountId, row]))
-
-    return accounts.map((account) => {
-      const row = rows.get(account.id)
-      return {
-        accountId: account.id,
-        email: account.email,
-        state: !row
-          ? 'waiting'
-          : row.finishedAt !== null
-            ? 'done'
-            : row.activityId && this.runner?.isRunning(row.activityId)
-              ? 'running'
-              : 'waiting',
-        activityId: row?.activityId ?? null,
-        finishedAt: row?.finishedAt ?? null
-      }
+    const [accounts, calendars, learnt] = await Promise.all([
+      this.options.mail.listAccounts(),
+      this.options.calendar.connections(),
+      this.db.store.listLearning()
+    ])
+    const rows = new Map(learnt.map((row) => [row.accountId, row]))
+    const entry = (
+      key: string,
+      kind: ConnectionLearning['kind'],
+      label: string,
+      row: (typeof learnt)[number] | undefined
+    ): ConnectionLearning => ({
+      key,
+      kind,
+      label,
+      state: !row
+        ? 'waiting'
+        : row.finishedAt !== null
+          ? 'done'
+          : row.activityId && this.runner?.isRunning(row.activityId)
+            ? 'running'
+            : 'waiting',
+      activityId: row?.activityId ?? null,
+      finishedAt: row?.finishedAt ?? null
     })
+
+    return [
+      ...accounts.map((account) => entry(account.id, 'posta', account.email, rows.get(account.id))),
+      ...calendars.map((connection) => {
+        const key = calendarLearningKey(connection.id)
+        return entry(
+          key,
+          'calendario',
+          connection.label,
+          rows.get(key) ??
+            (connection.mailAccountId ? rows.get(connection.mailAccountId) : undefined)
+        )
+      })
+    ]
   }
 
   /**
@@ -776,23 +801,24 @@ export class SegretarioService {
    * when none are named — building on what it already knows. The user
    * watches it in the panel; it may not act on anything outside.
    */
-  async startConoscimi(accountIds?: string[]): Promise<ActivitySummary> {
+  async startConoscimi(keys?: string[]): Promise<ActivitySummary> {
     await this.requireKey()
-    const accounts = await this.options.mail.listAccounts()
-    const chosen =
-      accountIds && accountIds.length > 0
-        ? accounts.filter((account) => accountIds.includes(account.id))
-        : accounts
+    const [accounts, calendars] = await Promise.all([
+      this.options.mail.listAccounts(),
+      this.options.calendar.connections()
+    ])
+    const all = [
+      ...accounts.map((account) => account.id),
+      ...calendars.map((connection) => calendarLearningKey(connection.id))
+    ]
+    const chosen = keys && keys.length > 0 ? all.filter((key) => keys.includes(key)) : all
 
     if (chosen.length === 0) {
       throw new Error('Non ci sono connessioni da conoscere.')
     }
 
     const { store } = this.db
-    const data = await prepareConoscimi(
-      { mail: this.options.mail, store },
-      chosen.map((account) => account.id)
-    )
+    const data = await prepareConoscimi({ mail: this.options.mail, store, calendars }, chosen)
     const created = Promise.withResolvers<string>()
 
     void startRun(this.starter(), {
@@ -802,10 +828,7 @@ export class SegretarioService {
       data,
       shown: 'Fatti conoscere',
       onCreated: async (activityId) => {
-        await store.startLearning(
-          chosen.map((account) => account.id),
-          activityId
-        )
+        await store.startLearning(chosen, activityId)
         created.resolve(activityId)
       }
     })
@@ -1200,7 +1223,7 @@ export class SegretarioService {
         calendars.find(
           (candidate) =>
             payload.calendar &&
-            `${candidate.name} ${candidate.account}`
+            `${candidate.name} ${candidate.connection}`
               .toLowerCase()
               .includes(payload.calendar.toLowerCase())
         ) ??

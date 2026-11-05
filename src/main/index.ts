@@ -290,7 +290,10 @@ if (hasSingleInstanceLock) {
     registerSegretarioIpc(mailService.segretario)
     registerCalendarIpc(
       service.calendar,
-      (ref) => service.calendarInvitation(ref),
+      {
+        of: (ref) => service.calendarInvitation(ref),
+        respondByMail: (ref, response) => service.respondToInvitationByMail(ref, response)
+      },
       () => service.segretario.whenReady()
     )
     installAppMenu(() => mainWindow)
