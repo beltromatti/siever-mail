@@ -4547,7 +4547,8 @@ function App(): React.JSX.Element {
   )
 
   const onAccountCreated = (account: MailAccount): void => {
-    setAccounts((current) => [...current, account])
+    // Signing in again to an account already here (to add its calendar) gives that account back.
+    setAccounts((current) => [...current.filter((existing) => existing.id !== account.id), account])
     setSelectedAccountId(account.id)
     setShowWelcomeGate(false)
   }

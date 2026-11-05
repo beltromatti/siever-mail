@@ -20,6 +20,7 @@ interface ProposalRow {
   payload_json: string
   status: string
   run_id: string | null
+  revision: number
   created_at: number
   decided_at: number | null
   result_json: string | null
@@ -36,6 +37,7 @@ function proposalOf(row: ProposalRow): ProposalRecord {
     payload: JSON.parse(row.payload_json) as Record<string, unknown>,
     status: row.status as ProposalStatus,
     runId: row.run_id,
+    revision: Number(row.revision),
     createdAt: Number(row.created_at),
     decidedAt: row.decided_at === null ? null : Number(row.decided_at),
     result: row.result_json ? (JSON.parse(row.result_json) as Record<string, unknown>) : null
@@ -85,7 +87,8 @@ export class ProposalStore {
 
     if (existing) {
       await this.sql.run(
-        'UPDATE ai_proposals SET title = ?, payload_json = ?, run_id = ? WHERE id = ?',
+        `UPDATE ai_proposals SET title = ?, payload_json = ?, run_id = ?, revision = revision + 1
+         WHERE id = ?`,
         title,
         JSON.stringify(input.payload),
         actor.runId ?? null,

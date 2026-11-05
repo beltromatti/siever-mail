@@ -5,6 +5,7 @@ import type { CalendarAttendee, CalendarResponse, EventOrigin } from '@shared/ca
 import {
   SyncTokenExpired,
   type CalendarProvider,
+  type EventField,
   type ProviderEvent,
   type ProviderEventInput
 } from './calendar-provider'
@@ -35,6 +36,8 @@ export interface GraphEvent {
   '@removed'?: { reason?: string }
   iCalUId?: string | null
   uid?: string | null
+  /** For an instance of a series, the series. */
+  seriesMasterId?: string | null
   subject?: string | null
   body?: { contentType?: 'text' | 'html'; content?: string | null } | null
   start?: GraphDateTime | null
@@ -193,6 +196,9 @@ function graphBody(event: ProviderEventInput): Record<string, unknown> {
  * Graph tells the guests itself when an event with guests is written.
  */
 export class GraphCalendarProvider implements CalendarProvider {
+  /** Each series' UID, by its id: read once. */
+  private readonly seriesUids = new Map<string, string | null>()
+
   constructor(
     private readonly token: () => Promise<string>,
     private readonly self: string,
@@ -276,7 +282,7 @@ export class GraphCalendarProvider implements CalendarProvider {
       'syncToken' in since
         ? since.syncToken
         : `/me/calendars/${encodeURIComponent(calendarId)}/calendarView/delta?startDateTime=${encodeURIComponent(since.fromIso)}&endDateTime=${encodeURIComponent(since.toIso)}`
-    const events: ProviderEvent[] = []
+    const items: GraphEvent[] = []
     let deltaLink: string | null = null
 
     while (url) {
@@ -301,17 +307,35 @@ export class GraphCalendarProvider implements CalendarProvider {
         '@odata.deltaLink'?: string
       }
 
-      for (const item of page.value) {
-        events.push(
-          item['@removed']
-            ? removedEvent(item.id, calendarId)
-            : eventOfGraph(item, calendarId, this.self)
-        )
-      }
-
+      items.push(...page.value)
       url = page['@odata.nextLink'] ?? null
       deltaLink = page['@odata.deltaLink'] ?? deltaLink
     }
+
+    // Graph's iCalUId differs for each instance of a series: an instance takes its series' UID,
+    // the one an invitation names, read once for each series.
+    for (const masterId of new Set(
+      items.flatMap((item) =>
+        !item['@removed'] && item.seriesMasterId ? [item.seriesMasterId] : []
+      )
+    )) {
+      if (!this.seriesUids.has(masterId)) {
+        const master = await this.json<GraphEvent>(
+          `/me/events/${encodeURIComponent(masterId)}?$select=iCalUId,uid`
+        ).catch(() => null)
+        this.seriesUids.set(masterId, master ? (master.uid ?? master.iCalUId ?? null) : null)
+      }
+    }
+
+    const events = items.map((item) => {
+      if (item['@removed']) {
+        return removedEvent(item.id, calendarId)
+      }
+
+      const event = eventOfGraph(item, calendarId, this.self)
+      const seriesUid = item.seriesMasterId ? this.seriesUids.get(item.seriesMasterId) : null
+      return seriesUid ? { ...event, iCalUid: seriesUid } : event
+    })
 
     return { events, syncToken: deltaLink }
   }
@@ -344,11 +368,23 @@ export class GraphCalendarProvider implements CalendarProvider {
   async update(
     calendarId: string,
     eventId: string,
-    event: ProviderEventInput
+    event: ProviderEventInput,
+    _notify: boolean,
+    fields: ReadonlySet<EventField>
   ): Promise<ProviderEvent> {
+    const body = graphBody(event)
+    // Only what changed: a PATCH leaves the rest as Graph has it now.
     const updated = await this.json<GraphEvent>(`/me/events/${encodeURIComponent(eventId)}`, {
       method: 'PATCH',
-      body: graphBody(event)
+      body: {
+        ...(fields.has('title') ? { subject: body.subject } : {}),
+        ...(fields.has('time')
+          ? { start: body.start, end: body.end, isAllDay: body.isAllDay }
+          : {}),
+        ...(fields.has('location') ? { location: body.location } : {}),
+        ...(fields.has('description') ? { body: body.body } : {}),
+        ...(fields.has('attendees') ? { attendees: body.attendees } : {})
+      }
     })
 
     return eventOfGraph(updated, calendarId, this.self)
@@ -366,9 +402,18 @@ export class GraphCalendarProvider implements CalendarProvider {
 
   async respond(
     calendarId: string,
-    eventId: string,
-    response: Exclude<CalendarResponse, 'needsAction'>
+    instanceId: string,
+    response: Exclude<CalendarResponse, 'needsAction'>,
+    series: boolean
   ): Promise<ProviderEvent> {
+    // The whole series answered: the instance stands for it.
+    const eventId = series
+      ? ((
+          await this.json<{ seriesMasterId?: string | null }>(
+            `/me/events/${encodeURIComponent(instanceId)}?$select=seriesMasterId`
+          )
+        ).seriesMasterId ?? instanceId)
+      : instanceId
     const answered = await this.request(
       `/me/events/${encodeURIComponent(eventId)}/${ANSWERS[response]}`,
       {

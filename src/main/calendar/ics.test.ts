@@ -21,8 +21,28 @@ describe('parseInvitation', () => {
     expect(parseInvitation(ics)).toEqual({
       method: 'REQUEST',
       uid: 'abc123@google.com',
-      summary: 'Sopralluogo Caseificio Valli, celle 1-3 e verifica gruppi frigo'
+      summary: 'Sopralluogo Caseificio Valli, celle 1-3 e verifica gruppi frigo',
+      series: false
     })
+  })
+
+  it('knows an invitation to a whole series from one to an instance of it', () => {
+    const invitation = (lines: string[]): string =>
+      [
+        'BEGIN:VCALENDAR',
+        'METHOD:REQUEST',
+        'BEGIN:VEVENT',
+        'UID:serie@prova',
+        ...lines,
+        'END:VEVENT',
+        'END:VCALENDAR'
+      ].join('\r\n')
+
+    expect(parseInvitation(invitation(['RRULE:FREQ=WEEKLY;BYDAY=MO']))?.series).toBe(true)
+    expect(
+      parseInvitation(invitation(['RRULE:FREQ=WEEKLY;BYDAY=MO', 'RECURRENCE-ID:20261116T080000Z']))
+        ?.series
+    ).toBe(false)
   })
 
   it('finds nothing in a file without an event', () => {

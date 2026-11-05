@@ -211,6 +211,51 @@ SUMMARY:Riunione spostata
 END:VEVENT
 END:VCALENDAR`
 
+describe('occurrencesOf, on calendars that are not well made', () => {
+  const calendar = (...events: string[]): string =>
+    ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//prova//prova', ...events, 'END:VCALENDAR'].join(
+      '\r\n'
+    )
+  const event = (lines: string[]): string => ['BEGIN:VEVENT', ...lines, 'END:VEVENT'].join('\r\n')
+
+  it('leaves out a series that can never happen, without stopping on it', () => {
+    const found = occurrencesOf(
+      calendar(
+        event([
+          'UID:impossibile@prova',
+          'DTSTAMP:20261101T000000Z',
+          'DTSTART:20261101T090000Z',
+          'DTEND:20261101T100000Z',
+          'RRULE:FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30',
+          'SUMMARY:Il 30 febbraio'
+        ]),
+        event([
+          'UID:vero@prova',
+          'DTSTAMP:20261101T000000Z',
+          'DTSTART:20261110T090000Z',
+          'DTEND:20261110T100000Z',
+          'SUMMARY:Sopralluogo'
+        ])
+      ),
+      range
+    )
+
+    expect(found.map((occurrence) => occurrence.title)).toEqual(['Sopralluogo'])
+  })
+
+  it('keeps every event without a UID, each on its own', () => {
+    const found = occurrencesOf(
+      calendar(
+        event(['DTSTAMP:20261101T000000Z', 'DTSTART:20261103T090000Z', 'SUMMARY:Primo']),
+        event(['DTSTAMP:20261101T000000Z', 'DTSTART:20261104T090000Z', 'SUMMARY:Secondo'])
+      ),
+      range
+    )
+
+    expect(found.map((occurrence) => occurrence.title).sort()).toEqual(['Primo', 'Secondo'])
+  })
+})
+
 describe('writing events', () => {
   const meeting = {
     title: 'Revisione tavole',
@@ -241,6 +286,34 @@ describe('writing events', () => {
     expect(occurrence?.attendees.map((attendee) => [attendee.email, attendee.response])).toEqual([
       ['davide@studio.it', 'needsAction']
     ])
+  })
+
+  it('changes only what was changed: a place added meanwhile elsewhere stays', () => {
+    const asKept = {
+      title: 'Sopralluogo',
+      start: '2026-11-10T08:00:00.000Z',
+      end: '2026-11-10T09:00:00.000Z',
+      allDay: false,
+      location: null,
+      description: null,
+      attendees: []
+    }
+    // Written here, then given a place by another client.
+    const onServer = newEventResource('luogo@test', asKept, null, null).replace(
+      'SUMMARY:Sopralluogo',
+      'SUMMARY:Sopralluogo\r\nLOCATION:Magazzino nord'
+    )
+    const moved = changeEventResource(
+      onServer,
+      null,
+      { ...asKept, start: '2026-11-10T10:00:00.000Z', end: '2026-11-10T11:00:00.000Z' },
+      null,
+      new Set(['time'])
+    )
+    const [event] = occurrencesOf(moved, range)
+
+    expect(event.start).toBe('2026-11-10T10:00:00.000Z')
+    expect(event.location).toBe('Magazzino nord')
   })
 
   it('moves one instance of a series, keeping the series in its time zone', () => {

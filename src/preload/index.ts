@@ -43,6 +43,7 @@ const desktopMailApi: DesktopMailApi = {
   addGoogleAccount: async (options) => invoke(IPC_CHANNELS.addGoogleAccount, options),
   addImapAccount: async (input) => invoke(IPC_CHANNELS.addImapAccount, input),
   addMicrosoftAccount: async (options) => invoke(IPC_CHANNELS.addMicrosoftAccount, options),
+  cancelSignIn: async () => invoke(IPC_CHANNELS.cancelSignIn),
   discoverMailSettings: async (address) => invoke(IPC_CHANNELS.discoverMailSettings, address),
   markAccountLastViewed: async (accountId) => invoke(IPC_CHANNELS.markAccountLastViewed, accountId),
   removeAccount: async (accountId) => invoke(IPC_CHANNELS.removeAccount, accountId),
@@ -177,8 +178,8 @@ const segretarioApi: SegretarioApi = {
     invoke(SEGRETARIO_IPC.discardReply, accountId, messageKey),
   listProposals: async () => invoke(SEGRETARIO_IPC.listProposals),
   eventPrep: async (eventKey) => invoke(SEGRETARIO_IPC.eventPrep, eventKey),
-  decideProposal: async (id, accepted, result) =>
-    invoke(SEGRETARIO_IPC.decideProposal, id, accepted, result),
+  decideProposal: async (id, accepted, result, revision) =>
+    invoke(SEGRETARIO_IPC.decideProposal, id, accepted, result, revision),
   getToday: async () => invoke(SEGRETARIO_IPC.getToday),
   refreshToday: async () => invoke(SEGRETARIO_IPC.refreshToday),
   getDue: async (throughDay) => invoke(SEGRETARIO_IPC.getDue, throughDay),
@@ -231,7 +232,8 @@ const calendarApi: CalendarApi = {
   eventByUid: async (iCalUid, mailAccountId) =>
     invoke(CALENDAR_IPC.eventByUid, iCalUid, mailAccountId),
   invitation: async (ref) => invoke(CALENDAR_IPC.invitation, ref),
-  respond: async (eventKey, response) => invoke(CALENDAR_IPC.respond, eventKey, response),
+  respond: async (eventKey, response, options) =>
+    invoke(CALENDAR_IPC.respond, eventKey, response, options),
   calendars: async () => invoke(CALENDAR_IPC.calendars),
   setCalendarHidden: async (calendarKey, hidden) =>
     invoke(CALENDAR_IPC.setCalendarHidden, calendarKey, hidden),

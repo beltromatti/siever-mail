@@ -124,8 +124,12 @@ export function registerCalendarIpc(
   handle(CALENDAR_IPC.respondByMail, (ref: unknown, response: unknown) =>
     invitations.respondByMail(messageRefSchema.parse(ref), responseSchema.parse(response))
   )
-  handle(CALENDAR_IPC.respond, (key: unknown, response: unknown) =>
-    calendar.respond(z.string().min(1).max(2000).parse(key), responseSchema.parse(response))
+  handle(CALENDAR_IPC.respond, (key: unknown, response: unknown, options: unknown) =>
+    calendar.respond(
+      z.string().min(1).max(2000).parse(key),
+      responseSchema.parse(response),
+      z.object({ series: z.boolean().optional() }).strict().optional().parse(options)
+    )
   )
   handle(CALENDAR_IPC.calendars, () => calendar.calendars())
   handle(CALENDAR_IPC.setCalendarHidden, (key: unknown, hidden: unknown) =>

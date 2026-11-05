@@ -101,6 +101,27 @@ describe('WorkQueue', () => {
     })
   })
 
+  it('tries again one unit for each scope, and leaves alone a scope that just failed', async () => {
+    const fail = async (): Promise<string> => {
+      const unit = await queue.enqueue({ task: 'punto', scopeKey: 'p', scope: {}, priority: 30 })
+      await queue.claim(unit.id)
+      await queue.fail(unit.id, 'no', { retry: false, counts: true, maxAttempts: 3 })
+      return unit.id
+    }
+    await fail()
+    await fail()
+
+    expect(await queue.busy('p')).toBe(true)
+    expect(await queue.retryFailed()).toBe(1)
+
+    const statuses = (
+      await sql.all<{ status: string }>("SELECT status FROM ai_work WHERE scope_key = 'p'")
+    )
+      .map((row) => row.status)
+      .sort()
+    expect(statuses).toEqual(['annullato', 'in_coda'])
+  })
+
   it('puts back what a quit left running', async () => {
     const unit = await queue.enqueue({ task: 'lettura', scopeKey: 'k', scope: {}, priority: 10 })
     await queue.claim(unit.id)
@@ -202,6 +223,39 @@ describe('Scheduler', () => {
 
     scheduler.setAsleep(false)
     await until(() => runs === 2)
+  })
+
+  it('goes past the units a key in use holds up, so one sender never holds every other', async () => {
+    const started: string[] = []
+    const executor: TaskExecutor = {
+      lockKeys: async (unit) => [(unit.scope as { sender: string }).sender],
+      run: async (unit, signal) => {
+        started.push(unit.scopeKey)
+        await new Promise<void>((_resolve, reject) =>
+          signal.addEventListener('abort', () => reject(new Error('Interrotto.')))
+        )
+      }
+    }
+    scheduler = new Scheduler(queue, { lettura: executor }, { concurrency: () => 2 })
+
+    for (let n = 0; n < 18; n += 1) {
+      await queue.enqueue({
+        task: 'lettura',
+        scopeKey: `noreply-${n}`,
+        scope: { sender: 'noreply' },
+        priority: 10
+      })
+    }
+    await queue.enqueue({
+      task: 'lettura',
+      scopeKey: 'anna',
+      scope: { sender: 'anna' },
+      priority: 10
+    })
+    await scheduler.start()
+
+    await until(() => started.includes('anna'))
+    expect(started.filter((key) => key.startsWith('noreply'))).toHaveLength(1)
   })
 
   it('never runs together two units that hold the same key', async () => {

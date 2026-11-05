@@ -308,7 +308,9 @@ export class CommitmentStore {
         due: due === undefined ? current.due : due,
         kind: changes.kind ?? current.kind,
         question:
-          changes.question === undefined ? current.question : changes.question?.trim() || null
+          changes.question === undefined ? current.question : changes.question?.trim() || null,
+        // What the user corrected is theirs: a run alone does not change it back.
+        setBy: actor.by === 'utente' ? 'utente' : current.setBy
       }),
       options.reason ?? null
     )
@@ -569,7 +571,7 @@ export class CommitmentStore {
         )
       }
 
-      this.guard(current, actor, options.evidence)
+      await this.guard(current, actor, options.evidence)
 
       const next = { ...current, ...change(current) }
       const now = Date.now()
@@ -616,11 +618,19 @@ export class CommitmentStore {
 
   /**
    * The user's word holds against a run in the background: it changes
-   * what the user decided only with a message that came after the decision.
+   * what the user decided only with a message of the same matter — its
+   * conversation, or one of its projects — that came after the decision.
    */
-  private guard(current: CommitmentRecord, actor: Actor, evidence?: Evidence): void {
+  private async guard(current: CommitmentRecord, actor: Actor, evidence?: Evidence): Promise<void> {
     if (actor.by !== 'segretario' || !actor.background || current.setBy !== 'utente') {
       return
+    }
+
+    if (evidence && !(await this.sameMatter(current, evidence))) {
+      throw new RegistryRefusal(
+        `La prova che dai per #${current.id} è di un'altra conversazione: vale solo un messaggio della stessa questione. Se lo è, collega prima la sua conversazione al progetto (\`progetti\`, \`collega\`), poi riprova.`,
+        current
+      )
     }
 
     const evidenceAt = evidence ? Date.parse(evidence.dateIso) : Number.NaN
@@ -635,6 +645,31 @@ export class CommitmentStore {
         current
       )
     }
+  }
+
+  /** Whether a message is of the matter a commitment is: its conversation, or a project of it. */
+  private async sameMatter(current: CommitmentRecord, evidence: Evidence): Promise<boolean> {
+    if (evidence.accountId !== current.accountId) {
+      return false
+    }
+
+    if (evidence.threadId === current.threadId) {
+      return true
+    }
+
+    return (
+      (await this.sql.get(
+        `SELECT 1 AS found FROM ai_project_threads a
+         JOIN ai_project_threads b ON b.project_id = a.project_id
+         WHERE a.account_id = ? AND a.thread_id = ? AND a.rejected = 0
+           AND b.account_id = ? AND b.thread_id = ? AND b.rejected = 0
+         LIMIT 1`,
+        current.accountId,
+        current.threadId,
+        evidence.accountId,
+        evidence.threadId
+      )) !== null
+    )
   }
 
   private async addHistory(

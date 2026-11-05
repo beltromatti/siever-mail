@@ -247,12 +247,15 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.eventPrep, (eventKey: unknown) =>
     segretario.eventPrep(z.string().min(1).max(2000).parse(eventKey))
   )
-  handle(SEGRETARIO_IPC.decideProposal, (id: unknown, accepted: unknown, result: unknown) =>
-    segretario.decideProposal(
-      idSchema.parse(id),
-      z.boolean().parse(accepted),
-      z.record(z.string(), z.unknown()).optional().parse(result)
-    )
+  handle(
+    SEGRETARIO_IPC.decideProposal,
+    (id: unknown, accepted: unknown, result: unknown, revision: unknown) =>
+      segretario.decideProposal(
+        idSchema.parse(id),
+        z.boolean().parse(accepted),
+        z.record(z.string(), z.unknown()).optional().parse(result),
+        z.number().int().positive().optional().parse(revision)
+      )
   )
 
   // The day.

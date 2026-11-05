@@ -88,5 +88,10 @@ export async function evidenceOf(
 
   // A draft proves nothing yet: it has not gone.
   const message = await resolveSentOrReceived(context, handle)
-  return { messageKey: message.messageKey, dateIso: message.dateIso }
+  return {
+    accountId: message.accountId,
+    messageKey: message.messageKey,
+    threadId: message.threadId,
+    dateIso: message.dateIso
+  }
 }

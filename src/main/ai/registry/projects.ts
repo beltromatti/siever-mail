@@ -23,6 +23,7 @@ interface ProjectRow {
   origin: string
   hidden_at: number | null
   closed_at: number | null
+  closed_by: string | null
   active_at: number | null
   revision: number
   created_at: number
@@ -30,7 +31,7 @@ interface ProjectRow {
 }
 
 const COLUMNS = `p.id, p.title, p.title_by, p.description, p.state, p.state_at, p.stale_since, p.origin,
-  p.hidden_at, p.closed_at, p.active_at, p.revision, p.created_at, p.updated_at`
+  p.hidden_at, p.closed_at, p.closed_by, p.active_at, p.revision, p.created_at, p.updated_at`
 
 function actorKind(value: string): ActorKind {
   return value === 'utente' || value === 'sistema' ? value : 'segretario'
@@ -52,6 +53,7 @@ function recordOf(row: ProjectRow): ProjectRecord {
     origin: actorKind(row.origin),
     hiddenAt: nullableNumber(row.hidden_at),
     closedAt: nullableNumber(row.closed_at),
+    closedBy: row.closed_by === null ? null : actorKind(row.closed_by),
     activeAt: nullableNumber(row.active_at),
     revision: Number(row.revision),
     createdAt: Number(row.created_at),
@@ -198,7 +200,12 @@ export class ProjectStore {
     return { record: recordOf(row!), created: true }
   }
 
-  async rename(id: string, title: string, actor: Actor): Promise<ProjectRecord> {
+  async rename(
+    id: string,
+    title: string,
+    actor: Actor,
+    seenRevision?: number
+  ): Promise<ProjectRecord> {
     const name = title.trim()
 
     if (!name) {
@@ -211,20 +218,34 @@ export class ProjectStore {
       throw new RegistryRefusal(`Il nome «${current.title}» l'ha dato l'utente: lascialo.`, current)
     }
 
-    return this.update(id, { title: name, title_by: actor.by })
+    return this.update(id, { title: name, title_by: actor.by }, seenRevision)
   }
 
-  async describe(id: string, description: string, actor: Actor): Promise<ProjectRecord> {
+  async describe(
+    id: string,
+    description: string,
+    actor: Actor,
+    seenRevision?: number
+  ): Promise<ProjectRecord> {
     void actor
     await this.require(id)
-    return this.update(id, { description: description.trim() || null })
+    return this.update(id, { description: description.trim() || null }, seenRevision)
   }
 
   /** Writes "Il punto": where the project stands now. It is current again. */
-  async setState(id: string, state: string, actor: Actor): Promise<ProjectRecord> {
+  async setState(
+    id: string,
+    state: string,
+    actor: Actor,
+    seenRevision?: number
+  ): Promise<ProjectRecord> {
     void actor
     await this.require(id)
-    return this.update(id, { state: state.trim() || null, state_at: Date.now(), stale_since: null })
+    return this.update(
+      id,
+      { state: state.trim() || null, state_at: Date.now(), stale_since: null },
+      seenRevision
+    )
   }
 
   /** Something moved in these projects after "Il punto" was written. */
@@ -252,20 +273,44 @@ export class ProjectStore {
     return rows.map(recordOf)
   }
 
-  async setHidden(id: string, hidden: boolean, actor: Actor): Promise<ProjectRecord> {
+  async setHidden(
+    id: string,
+    hidden: boolean,
+    actor: Actor,
+    seenRevision?: number
+  ): Promise<ProjectRecord> {
     const current = await this.require(id)
 
     if (!hidden && current.hiddenAt !== null && actor.background) {
       throw new RegistryRefusal("L'utente l'ha nascosto: lascialo così.", current)
     }
 
-    return this.update(id, { hidden_at: hidden ? Date.now() : null })
+    return this.update(id, { hidden_at: hidden ? Date.now() : null }, seenRevision)
   }
 
-  async setClosed(id: string, closed: boolean, actor: Actor): Promise<ProjectRecord> {
-    void actor
-    await this.require(id)
-    return this.update(id, { closed_at: closed ? Date.now() : null })
+  /** Concluded, or open again — and who said so: a run alone does not turn over the user's say. */
+  async setClosed(
+    id: string,
+    closed: boolean,
+    actor: Actor,
+    seenRevision?: number
+  ): Promise<ProjectRecord> {
+    const current = await this.require(id)
+
+    if (actor.background && current.closedBy === 'utente') {
+      throw new RegistryRefusal(
+        current.closedAt === null
+          ? `L'utente ha riaperto «${current.title}»: lascialo in corso.`
+          : `L'utente ha concluso «${current.title}»: lascialo concluso.`,
+        current
+      )
+    }
+
+    return this.update(
+      id,
+      { closed_at: closed ? Date.now() : null, closed_by: actor.by },
+      seenRevision
+    )
   }
 
   /**
@@ -539,16 +584,34 @@ export class ProjectStore {
     return (await this.linksOf([thread])).find((link) => link.projectId === projectId) ?? null
   }
 
-  private async update(id: string, fields: Record<string, unknown>): Promise<ProjectRecord> {
+  /**
+   * One write. With the revision the run last saw, only if nobody wrote in
+   * between: otherwise refused, with the project as it is now.
+   */
+  private async update(
+    id: string,
+    fields: Record<string, unknown>,
+    seenRevision?: number
+  ): Promise<ProjectRecord> {
     const names = Object.keys(fields)
-    await this.sql.run(
+    const changed = await this.sql.run(
       `UPDATE ai_projects SET ${names.map((name) => `${name} = ?`).join(', ')},
          revision = revision + 1, updated_at = ?
-       WHERE id = ?`,
+       WHERE id = ? ${seenRevision === undefined ? '' : 'AND revision = ?'}`,
       ...names.map((name) => fields[name]),
       Date.now(),
-      id
+      id,
+      ...(seenRevision === undefined ? [] : [seenRevision])
     )
+
+    if (changed === 0) {
+      const current = await this.require(id)
+      throw new RegistryRefusal(
+        `«${current.title}» è cambiato da quando l'hai letto: rileggilo con \`leggi\` e decidi di nuovo.`,
+        current
+      )
+    }
+
     return this.require(id)
   }
 }

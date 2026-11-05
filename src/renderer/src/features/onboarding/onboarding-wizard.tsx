@@ -417,7 +417,10 @@ function PreparationStep({
     account,
     ...preparationOf(connections[account.id], indexed.get(account.id), aiOn)
   }))
-  const ready = rows.length > 0 && rows.every((row) => row.ready)
+  // A connection that fails never holds the setup: it tries again by itself, and the user can
+  // take it away now or set it right later in Settings → Connessioni.
+  const failing = rows.filter((row) => row.failed).length
+  const ready = rows.length > 0 && rows.every((row) => row.ready || row.failed)
 
   return (
     <StepFrame
@@ -430,7 +433,7 @@ function PreparationStep({
       actions={
         <Button size="lg" disabled={!ready} onClick={onNext}>
           {!ready && <LoaderCircle className="size-4 animate-spin" />}
-          Continua
+          {ready && failing > 0 ? 'Continua senza' : 'Continua'}
         </Button>
       }
     >
@@ -467,6 +470,13 @@ function PreparationStep({
             )}
           </div>
         ))}
+        {ready && failing > 0 && (
+          <p className="text-muted-foreground text-[12px] leading-[1.45]">
+            {failing === 1
+              ? 'Una connessione non si collega: riprova da sola, e puoi sistemarla dopo in Impostazioni → Connessioni.'
+              : `${failing} connessioni non si collegano: riprovano da sole, e puoi sistemarle dopo in Impostazioni → Connessioni.`}
+          </p>
+        )}
       </div>
     </StepFrame>
   )
@@ -482,13 +492,16 @@ function ConoscimiStep({
   state,
   learning,
   onStarted,
-  onNext
+  onNext,
+  onCancel
 }: {
   segretario: SegretarioState
   state: OnboardingState
   learning: ReadonlyArray<ConnectionLearning> | null
   onStarted: (activityId: string) => void
   onNext: () => void
+  /** Asked from Settings, it can be left before it starts: nothing is spent. */
+  onCancel: (() => void) | null
 }): React.JSX.Element {
   const [starting, setStarting] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
@@ -534,6 +547,11 @@ function ConoscimiStep({
         }
         actions={
           <>
+            {onCancel && (
+              <Button variant="ghost" size="lg" disabled={starting} onClick={onCancel}>
+                Annulla
+              </Button>
+            )}
             {optional && (
               <Button variant="ghost" size="lg" disabled={starting} onClick={onNext}>
                 Salta
@@ -906,6 +924,7 @@ export function OnboardingWizard({
               learning={learning}
               onStarted={(conoscimiId) => onChange({ ...state, conoscimiId })}
               onNext={() => next()}
+              onCancel={state.case === 'conoscimi' ? () => onFinish(true) : null}
             />
           )}
           {state.step === 'lettura' && <ReadingStep onNext={() => next()} />}

@@ -383,7 +383,7 @@ export class MailEngine {
   async fetchMessageRawSources(
     refs: ReadonlyArray<MessageRef>,
     onMessage: (ref: MessageRef, message: RawMessage) => Promise<void>
-  ): Promise<{ missing: MessageRef[] }> {
+  ): Promise<{ missing: MessageRef[]; unread: Array<{ ref: MessageRef; message: string }> }> {
     const groups = new Map<string, MessageRef[]>()
 
     for (const ref of refs) {
@@ -392,20 +392,35 @@ export class MailEngine {
     }
 
     const missing: MessageRef[] = []
+    const unread: Array<{ ref: MessageRef; message: string }> = []
 
+    // Each folder on its own: an account that fails does not hold the others' messages.
     for (const group of groups.values()) {
       const { accountId, folderPath } = group[0]
-      const connection = await this.requestConnection(accountId)
-      const lost = await connection.fetchRawSources(
-        folderPath,
-        group.map((ref) => ref.uid),
-        (uid, message) => onMessage({ accountId, folderPath, uid }, message)
-      )
+      const handed = new Set<number>()
 
-      missing.push(...lost.map((uid) => ({ accountId, folderPath, uid })))
+      try {
+        const connection = await this.requestConnection(accountId)
+        const lost = await connection.fetchRawSources(
+          folderPath,
+          group.map((ref) => ref.uid),
+          async (uid, message) => {
+            handed.add(uid)
+            await onMessage({ accountId, folderPath, uid }, message)
+          }
+        )
+
+        missing.push(...lost.map((uid) => ({ accountId, folderPath, uid })))
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message.trim()
+            ? error.message
+            : 'Download dei messaggi non riuscito.'
+        unread.push(...group.filter((ref) => !handed.has(ref.uid)).map((ref) => ({ ref, message })))
+      }
     }
 
-    return { missing }
+    return { missing, unread }
   }
 
   /** See `AccountConnection.markFolderRead`. */

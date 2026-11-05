@@ -6,6 +6,7 @@ import { RegistryRefusal, type ThreadRef } from '../registry/types'
 import {
   booleanArg,
   requireString,
+  seenKey,
   stringArg,
   stringListArg,
   ToolInputError,
@@ -101,6 +102,16 @@ async function threadsOf(
   }
 
   return [...threads.values()]
+}
+
+/** The revision of a project this run last saw: a write over a newer one is refused. */
+function seenOf(context: ToolContext, projectId: string): number | undefined {
+  return context.run.seen.get(seenKey('project', projectId))
+}
+
+/** A project as this run wrote it: what it has seen now. */
+function saw(context: ToolContext, project: { id: string; revision: number }): void {
+  context.run.seen.set(seenKey('project', project.id), project.revision)
 }
 
 export const projectsTool: SegretarioTool = {
@@ -244,33 +255,42 @@ export const projectsTool: SegretarioTool = {
           }
         }
         case 'rinomina': {
+          const id = projectOf(context, args)
           const record = await context.registry.renameProject(
-            projectOf(context, args),
+            id,
             requireString(args, 'titolo'),
-            actor
+            actor,
+            seenOf(context, id)
           )
+          saw(context, record)
           return {
             content: `Ora si chiama «${record.title}».`,
             summary: `Progetto rinominato: ${record.title}`
           }
         }
         case 'descrivi': {
+          const id = projectOf(context, args)
           const record = await context.registry.describeProject(
-            projectOf(context, args),
+            id,
             requireString(args, 'descrizione'),
-            actor
+            actor,
+            seenOf(context, id)
           )
+          saw(context, record)
           return {
             content: `Descrizione di ${record.title} aggiornata.`,
             summary: `Di cosa si tratta: ${record.title}`
           }
         }
         case 'punto': {
+          const id = projectOf(context, args)
           const record = await context.registry.setProjectState(
-            projectOf(context, args),
+            id,
             requireString(args, 'testo'),
-            actor
+            actor,
+            seenOf(context, id)
           )
+          saw(context, record)
           return {
             content: `Il punto di ${record.title} aggiornato.`,
             summary: `Il punto: ${record.title}`
@@ -312,11 +332,14 @@ export const projectsTool: SegretarioTool = {
         }
         case 'nascondi':
         case 'mostra': {
+          const id = projectOf(context, args)
           const record = await context.registry.setProjectHidden(
-            projectOf(context, args),
+            id,
             action === 'nascondi',
-            actor
+            actor,
+            seenOf(context, id)
           )
+          saw(context, record)
           return {
             content: `${record.title} ${action === 'nascondi' ? 'nascosto' : 'di nuovo visibile'}.`,
             summary: `${action === 'nascondi' ? 'Nascosto' : 'Mostrato'}: ${record.title}`
@@ -324,11 +347,14 @@ export const projectsTool: SegretarioTool = {
         }
         case 'concludi':
         case 'riapri': {
+          const id = projectOf(context, args)
           const record = await context.registry.setProjectClosed(
-            projectOf(context, args),
+            id,
             action === 'concludi',
-            actor
+            actor,
+            seenOf(context, id)
           )
+          saw(context, record)
           return {
             content: `${record.title} ${action === 'concludi' ? 'concluso' : 'riaperto'}.`,
             summary: `${action === 'concludi' ? 'Concluso' : 'Riaperto'}: ${record.title}`

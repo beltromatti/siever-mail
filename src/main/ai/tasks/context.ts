@@ -1,4 +1,4 @@
-import type { SegretarioCalendarPort, SegretarioMailPort } from '../agent/tool-types'
+import { seenKey, type SegretarioCalendarPort, type SegretarioMailPort } from '../agent/tool-types'
 import type { Notebook } from '../memory/notebook'
 import { fillTemplate, PROMPTS } from '../prompts'
 import { clip } from '../tools/format'
@@ -17,9 +17,13 @@ export interface ContextSources {
  * connections — mail with signatures, calendars — and the memory's index
  * with its core notes and the note of each mail account. The same for
  * every run until the memory changes: it sits early in the request, where
- * the provider's cache keeps it.
+ * the provider's cache keeps it. `seen` is the revision of each note it
+ * shows: the run has read them, and a whole rewrite of one changed since
+ * is refused as for any note read.
  */
-export async function contextBlock(sources: ContextSources): Promise<string> {
+export async function contextBlock(
+  sources: ContextSources
+): Promise<{ text: string; seen: Map<string, number> }> {
   const [accounts, signatures, calendars, notes, index] = await Promise.all([
     sources.mail.listAccounts(),
     sources.mail.accountSignatures(),
@@ -48,13 +52,15 @@ export async function contextBlock(sources: ContextSources): Promise<string> {
       `- Calendario: «${calendar.name}» di ${calendar.connection}${calendar.primary ? ' (principale)' : ''}${calendar.writable ? '' : ' (sola lettura)'}`
   )
 
-  return fillTemplate(PROMPTS.context, {
+  const text = fillTemplate(PROMPTS.context, {
     data: new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(now),
     fuso: Intl.DateTimeFormat().resolvedOptions().timeZone,
     connessioni: [...mailLines, ...calendarLines].join('\n') || '(nessuna connessione)',
     indice_memoria: index,
     note_principali: core.map((note) => `### ${note.path}\n\n${note.content.trim()}`).join('\n\n')
   })
+
+  return { text, seen: new Map(core.map((note) => [seenKey('memory', note.path), note.revision])) }
 }
 
 /** The moment, for the data a run starts from: the day is in the context, the hour is here. */

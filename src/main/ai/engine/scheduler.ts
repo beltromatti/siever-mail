@@ -10,6 +10,9 @@ const IDLE_MS = 60_000
 /** How many times a unit is tried before it is left failed. */
 const MAX_ATTEMPTS = 3
 
+/** How far down the waiting work one look goes, past what a key in use holds up. */
+const MAX_SCANNED = 120
+
 /** What runs the units of a task. */
 export interface TaskExecutor {
   /**
@@ -75,6 +78,8 @@ export class Scheduler {
     private readonly options: {
       /** How many units may run at once now. */
       concurrency: () => number
+      /** Whether anything may start now at all: the AI on, with a key. */
+      canStart?: () => Promise<boolean>
       /** Something started, finished or failed. */
       onChange?: () => void
       /** The engine paused, or resumed (null). */
@@ -169,7 +174,11 @@ export class Scheduler {
   private async work(): Promise<void> {
     while (!this.stopped) {
       try {
-        if (this.pausedFor === null && !this.asleep) {
+        if (
+          this.pausedFor === null &&
+          !this.asleep &&
+          (await (this.options.canStart?.() ?? Promise.resolve(true)))
+        ) {
           await this.startWhatCan()
         }
       } catch (error) {
@@ -188,43 +197,55 @@ export class Scheduler {
       return
     }
 
-    for (const unit of await this.queue.ready(Math.max(free * 6, 12))) {
-      if (free <= 0 || this.stopped || this.pausedFor !== null || this.asleep) {
+    // The most urgent first; past those held up by a key in use — a sender's twenty notices
+    // read one by one — to the rest, so one lane never holds every other.
+    const page = Math.max(free * 6, 12)
+
+    for (let offset = 0; free > 0 && offset < MAX_SCANNED; offset += page) {
+      const units = await this.queue.ready(page, Date.now(), offset)
+
+      if (units.length === 0) {
         return
       }
 
-      const executor = this.executors[unit.task]
+      for (const unit of units) {
+        if (free <= 0 || this.stopped || this.pausedFor !== null || this.asleep) {
+          return
+        }
 
-      if (!executor) {
-        await this.queue.cancel(unit.id)
-        continue
-      }
+        const executor = this.executors[unit.task]
 
-      if (unit.priority >= BACKLOG_PRIORITY) {
-        const backlogRunning = [...this.running.values()].filter(
-          (running) => running.unit.priority >= BACKLOG_PRIORITY
-        ).length
-
-        if (backlogRunning >= Math.max(capacity - 1, 1)) {
+        if (!executor) {
+          await this.queue.cancel(unit.id)
           continue
         }
+
+        if (unit.priority >= BACKLOG_PRIORITY) {
+          const backlogRunning = [...this.running.values()].filter(
+            (running) => running.unit.priority >= BACKLOG_PRIORITY
+          ).length
+
+          if (backlogRunning >= Math.max(capacity - 1, 1)) {
+            continue
+          }
+        }
+
+        let keys: string[]
+
+        try {
+          keys = await executor.lockKeys(unit)
+        } catch (error) {
+          logMainError('Segretario work could not say what it holds', error, { task: unit.task })
+          keys = [unit.scopeKey]
+        }
+
+        if (keys.some((key) => this.held.has(key)) || !(await this.queue.claim(unit.id))) {
+          continue
+        }
+
+        free -= 1
+        this.begin(unit, executor, keys)
       }
-
-      let keys: string[]
-
-      try {
-        keys = await executor.lockKeys(unit)
-      } catch (error) {
-        logMainError('Segretario work could not say what it holds', error, { task: unit.task })
-        keys = [unit.scopeKey]
-      }
-
-      if (keys.some((key) => this.held.has(key)) || !(await this.queue.claim(unit.id))) {
-        continue
-      }
-
-      free -= 1
-      this.begin(unit, executor, keys)
     }
   }
 

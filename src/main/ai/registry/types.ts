@@ -106,8 +106,11 @@ export interface CommitmentRecord extends MessageAnchor {
 }
 
 /** A message that bears on a decision: it must be newer than the decision it overturns. */
+/** A message given as proof of a change: where it is, and when it came. */
 export interface Evidence {
+  accountId: string
   messageKey: string
+  threadId: string
   dateIso: string
 }
 
@@ -140,6 +143,8 @@ export interface ProjectRecord {
   origin: ActorKind
   hiddenAt: number | null
   closedAt: number | null
+  /** Who concluded it — or, when it is open, opened it again; null for neither. */
+  closedBy: ActorKind | null
   activeAt: number | null
   revision: number
   createdAt: number
@@ -212,6 +217,8 @@ export interface ProposalRecord {
   payload: Record<string, unknown>
   status: ProposalStatus
   runId: string | null
+  /** Up by one each time a run writes it again. */
+  revision: number
   createdAt: number
   decidedAt: number | null
   result: Record<string, unknown> | null

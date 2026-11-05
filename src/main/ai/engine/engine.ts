@@ -118,7 +118,9 @@ function settle(result: RunResult): void {
   const error = result.error
 
   if (error instanceof SegretarioError) {
-    if (['no-key', 'invalid-key', 'no-credit', 'blocked'].includes(error.code)) {
+    // The key or the credit stops everything until the user acts; a request blocked for what it
+    // carries (`blocked`) is that work's failure, not every work's.
+    if (['no-key', 'invalid-key', 'no-credit'].includes(error.code)) {
       throw new EnginePause(error.message)
     }
 
@@ -156,6 +158,8 @@ export class SegretarioEngine {
     }
     this.scheduler = new Scheduler(deps.queue, this.executors(), {
       concurrency: () => (this.preparing ? PREPARING_CONCURRENCY : CONCURRENCY),
+      // Work queued before the AI was switched off — or before a restart with it off — waits.
+      canStart: () => deps.ready(),
       onChange: () => deps.onStateChange(),
       onPause: (reason) => deps.onPause(reason)
     })
@@ -223,6 +227,11 @@ export class SegretarioEngine {
     this.scheduler.resume()
   }
 
+  /** Why the engine is paused (the key, the credit), or null. */
+  get paused(): string | null {
+    return this.scheduler.paused
+  }
+
   /** The computer sleeps: the work in the background waits for it to wake (see `Scheduler`). */
   setAsleep(asleep: boolean): void {
     this.scheduler.setAsleep(asleep)
@@ -238,6 +247,16 @@ export class SegretarioEngine {
     for (const unit of this.scheduler.runningUnits()) {
       this.scheduler.cancel(unit.id)
     }
+  }
+
+  /**
+   * The AI switched off: what runs stops, and what waits is let go — switched on
+   * again, the planning finds from the state what is still to do.
+   */
+  async switchedOff(): Promise<void> {
+    this.cancelRunning()
+    await this.deps.queue.cancelWaiting()
+    this.deps.onStateChange()
   }
 
   async state(): Promise<EngineState> {
@@ -431,7 +450,7 @@ export class SegretarioEngine {
     // The morning: once a day, once the day has begun.
     if (now.getHours() >= DAY_STARTS_AT_HOUR) {
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-      const lastDay = await store.lastActivityAt('giornata')
+      const lastDay = await store.lastActivityAt('giornata', 'done')
 
       if (lastDay === null || lastDay < startOfDay) {
         // Asked once: while it starts, before its run is written down, it is not asked again.
@@ -493,7 +512,7 @@ export class SegretarioEngine {
     }
 
     // What the user taught, to take in; the memory, to keep up with the mail.
-    const lastReflection = await store.lastActivityAt('riflessione')
+    const lastReflection = await store.lastActivityAt('riflessione', 'done')
 
     if (
       (lastReflection === null || now.getTime() - lastReflection > REFLECTION_INTERVAL_MS) &&
@@ -516,7 +535,7 @@ export class SegretarioEngine {
         learnt.some((row) => row.accountId === account.id && row.finishedAt !== null)
       )
     const lastKeptUp = Math.max(
-      (await store.lastActivityAt('al_passo')) ?? 0,
+      (await store.lastActivityAt('al_passo', 'done')) ?? 0,
       Number((await store.meta(KEEP_UP_CHECKED)) ?? 0)
     )
     // Keeping up waits for the reading to be done: it takes in what the notes say.
@@ -736,7 +755,7 @@ export class SegretarioEngine {
         run: async (unit, signal) => {
           const learnt = await deps.store.listLearning()
           const since =
-            (await deps.store.lastActivityAt('al_passo')) ??
+            (await deps.store.lastActivityAt('al_passo', 'done')) ??
             Math.max(0, ...learnt.map((row) => row.finishedAt ?? 0))
           const data = await prepareKeepingUp(deps, since, KEEP_UP_MIN_NOTES)
 

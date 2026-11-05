@@ -92,6 +92,8 @@ export function registerMailIpc(
     )
   })
 
+  registerHandler(IPC_CHANNELS.cancelSignIn, async () => mailService.cancelSignIn())
+
   registerDataHandler(IPC_CHANNELS.discoverMailSettings, async (address) => {
     return mailService.discoverMailSettings(z.string().trim().email().max(320).parse(address))
   })

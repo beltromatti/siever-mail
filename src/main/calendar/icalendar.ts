@@ -5,10 +5,44 @@ import { logMainError } from '@main/utils/error-utils'
 
 import type { CalendarAttendee, CalendarResponse, EventOrigin } from '@shared/calendar'
 
-import type { ProviderEvent, ProviderEventInput } from './calendar-provider'
+import type { EventField, ProviderEvent, ProviderEventInput } from './calendar-provider'
 
 /** The longest a series is walked looking for its occurrences in a window: a guard, not a limit anyone meets. */
 const MAX_STEPS = 20_000
+/**
+ * The candidates a rule may turn down in a row before it is taken for one
+ * that can never happen. ical.js counts them only for monthly and yearly
+ * rules: a daily rule asking for the 30th of February walks the days for
+ * ever, inside one call, and holds the whole app. A real rule finds its day
+ * far sooner — a 29 February that is a Monday comes back within forty-odd
+ * years — and a rule this guard stops costs a third of a second.
+ */
+const MAX_REJECTED_IN_A_ROW = 100_000
+
+/** A series' occurrences, walked with that guard on each of its rules. */
+function guardedIterator(event: ICAL.Event): ICAL.RecurExpansion {
+  const expansion = event.iterator()
+  // `ruleIterators` is private in ical.js's types, public in its code.
+  const rules = (expansion as unknown as { ruleIterators?: ICAL.RecurIterator[] }).ruleIterators
+
+  for (const rule of rules ?? []) {
+    const check = rule.check_contracting_rules.bind(rule)
+    let rejected = 0
+
+    rule.check_contracting_rules = (): boolean => {
+      const passes = check()
+      rejected = passes ? 0 : rejected + 1
+
+      if (rejected > MAX_REJECTED_IN_A_ROW) {
+        throw new Error(`A recurrence rule that matches no day: ${rule.rule.toString()}`)
+      }
+
+      return passes
+    }
+  }
+
+  return expansion
+}
 
 /** The property our app marks its events with, for the Segretario's origin. */
 export const ORIGIN_PROPERTY = 'x-siever-origin'
@@ -213,8 +247,9 @@ export function occurrencesOf(
     // A series and its exceptions, by UID: ical.js would otherwise take every exception of the calendar as its own.
     const groups = new Map<string, { master: ICAL.Component | null; overrides: ICAL.Component[] }>()
 
-    for (const component of calendar.getAllSubcomponents('vevent')) {
-      const uid = String(component.getFirstPropertyValue('uid') ?? '')
+    calendar.getAllSubcomponents('vevent').forEach((component, index) => {
+      // An event without a UID has no series to belong to: each is a group of its own.
+      const uid = String(component.getFirstPropertyValue('uid') ?? '') || `\u0000${index}`
       const group = groups.get(uid) ?? { master: null, overrides: [] }
 
       if (component.hasProperty('recurrence-id')) {
@@ -224,7 +259,7 @@ export function occurrencesOf(
       }
 
       groups.set(uid, group)
-    }
+    })
 
     for (const { master, overrides } of groups.values()) {
       try {
@@ -257,7 +292,7 @@ export function occurrencesOf(
           continue
         }
 
-        const iterator = event.iterator()
+        const iterator = guardedIterator(event)
         const length = Math.max(instantOf(event.endDate) - instantOf(event.startDate), 0)
         const walked = new Set<string>()
 
@@ -436,23 +471,42 @@ function setAttendees(
   }
 }
 
+/** Every field: what a new event is written with. */
+const ALL_FIELDS: ReadonlySet<EventField> = new Set<EventField>([
+  'title',
+  'time',
+  'location',
+  'description',
+  'attendees'
+])
+
 function writeFields(
   component: ICAL.Component,
   event: ProviderEventInput,
-  organizer: string | null
+  organizer: string | null,
+  fields: ReadonlySet<EventField> = ALL_FIELDS
 ): void {
   const target = new ICAL.Event(component, { exceptions: [] })
   const zone = target.startDate && !target.startDate.isDate ? target.startDate.zone : null
 
-  target.summary = event.title
-  target.startDate = timeOf(event.start, event.allDay, zone)
-  target.endDate = timeOf(event.end, event.allDay, zone)
-  component.removeAllProperties('duration')
+  if (fields.has('title')) {
+    target.summary = event.title
+  }
+
+  if (fields.has('time')) {
+    target.startDate = timeOf(event.start, event.allDay, zone)
+    target.endDate = timeOf(event.end, event.allDay, zone)
+    component.removeAllProperties('duration')
+  }
 
   for (const [name, value] of [
     ['location', event.location],
     ['description', event.description]
   ] as const) {
+    if (!fields.has(name)) {
+      continue
+    }
+
     if (value) {
       component.updatePropertyWithValue(name, value)
     } else {
@@ -460,7 +514,10 @@ function writeFields(
     }
   }
 
-  setAttendees(component, event.attendees, organizer)
+  if (fields.has('attendees')) {
+    setAttendees(component, event.attendees, organizer)
+  }
+
   component.updatePropertyWithValue(
     'sequence',
     Number(component.getFirstPropertyValue('sequence') ?? 0) + 1
@@ -507,7 +564,8 @@ export function changeEventResource(
   text: string,
   recurrenceId: string | null,
   event: ProviderEventInput,
-  organizer: string | null
+  organizer: string | null,
+  fields: ReadonlySet<EventField> = ALL_FIELDS
 ): string {
   const calendar = calendarOf(text)
   const component =
@@ -519,7 +577,7 @@ export function changeEventResource(
     throw new Error('L’evento non si trova nel calendario.')
   }
 
-  writeFields(component, event, organizer)
+  writeFields(component, event, organizer, fields)
   return calendar.toString()
 }
 

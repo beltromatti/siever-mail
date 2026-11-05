@@ -381,6 +381,59 @@ function mailboxesOf(
   return [...seen.values()]
 }
 
+/**
+ * A GET that hands a redirect back instead of following it, as `fetch` with
+ * `redirect: 'manual'` means — which Electron's `net.fetch` turns into a
+ * failure ("Redirect was cancelled"), so a config file behind a redirect was
+ * never read. Still Chromium's network: the system's proxy and certificates.
+ */
+function fetchNotFollowing(url: string, init: { signal?: AbortSignal | null }): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const request = net.request({ url, redirect: 'manual', cache: 'no-store' })
+    const abort = (): void => {
+      request.abort()
+      reject(init.signal?.reason ?? new Error('Interrotto.'))
+    }
+
+    if (init.signal?.aborted) {
+      abort()
+      return
+    }
+
+    init.signal?.addEventListener('abort', abort, { once: true })
+    const settle = (): void => init.signal?.removeEventListener('abort', abort)
+
+    request.on('redirect', (status, _method, redirectUrl) => {
+      settle()
+      request.abort()
+      resolve(new Response(null, { status, headers: { location: redirectUrl } }))
+    })
+    request.on('response', (response) => {
+      const chunks: Buffer[] = []
+      response.on('data', (chunk: Buffer) => chunks.push(chunk))
+      response.on('end', () => {
+        settle()
+        const headers = new Headers()
+
+        for (const [name, value] of Object.entries(response.headers)) {
+          headers.set(name, Array.isArray(value) ? value.join(', ') : value)
+        }
+
+        resolve(new Response(Buffer.concat(chunks), { status: response.statusCode, headers }))
+      })
+      response.on('error', (error: Error) => {
+        settle()
+        reject(error)
+      })
+    })
+    request.on('error', (error) => {
+      settle()
+      reject(error)
+    })
+    request.end()
+  })
+}
+
 /** Whether a mail server answers at an address and port, encrypted from the first byte or not, within a few seconds. */
 function serverAnswers(host: string, port: number, secure: boolean): Promise<boolean> {
   return new Promise((resolve) => {
@@ -742,17 +795,29 @@ export class MailService {
     void rememberMountedShares().catch((error: unknown) =>
       logMainError('Reading the mounted network shares failed', error)
     )
-    this.applyNotificationPreferences(await this.database.getNotificationPreferences())
-    this.badge.setCount(await this.engine.inboxUnreadCount())
-    await this.engine.start()
-    await this.drafts.resume()
-    await this.calendar.open()
-    // A run the computer's sleep would cut short does not start, and waits for it to wake.
-    this.unwatchSleep = watchSystemSleep((asleep) => this.segretario.setSystemAsleep(asleep))
-    // The Segretario failing to open leaves the mail and the calendar working.
-    await this.segretario
-      .open()
-      .catch((error: unknown) => logMainError('The Segretario did not open', error))
+    try {
+      this.applyNotificationPreferences(await this.database.getNotificationPreferences())
+      this.badge.setCount(await this.engine.inboxUnreadCount())
+      await this.engine.start()
+      await this.drafts.resume()
+    } finally {
+      // The calendar and the Segretario open whatever the mail did, so what waits for them
+      // never hangs; one failing to open leaves the others working.
+      await this.calendar
+        .open()
+        .catch((error: unknown) => logMainError('The calendar did not open', error))
+      // A run the computer's sleep would cut short does not start, and waits for it to wake.
+      this.unwatchSleep = watchSystemSleep((asleep) => this.segretario.setSystemAsleep(asleep))
+      await this.segretario
+        .open()
+        .catch((error: unknown) => logMainError('The Segretario did not open', error))
+    }
+  }
+
+  /** The app could not start: what waits for the calendar or the Segretario is told, not left waiting. */
+  abandonStartup(error: unknown): void {
+    this.calendar.abandon(error)
+    this.segretario.abandon(error)
   }
 
   /** The window loaded anew: what only its page can draw is drawn again. */
@@ -895,25 +960,35 @@ export class MailService {
           logMainError('Copies saved outside the mail could not be recorded', error)
         }
       },
+      // What is known of earlier copies; with the Segretario unable to open, nothing — the
+      // extension's own work goes on, as it did before there was a Segretario.
       savedCopies: async (refs) => {
-        await this.segretario.whenReady()
-        const identities = await this.database.messageIdentities(refs)
         const copies: Array<{ ref: MessageRef; destination: string; files: string[] }> = []
 
-        for (const identity of identities) {
-          for (const copy of await this.segretario.copiesOf(
-            identity.ref.accountId,
-            identity.messageKey
-          )) {
-            copies.push({ ref: identity.ref, destination: copy.destination, files: copy.files })
+        try {
+          await this.segretario.whenReady()
+
+          for (const identity of await this.database.messageIdentities(refs)) {
+            for (const copy of await this.segretario.copiesOf(
+              identity.ref.accountId,
+              identity.messageKey
+            )) {
+              copies.push({ ref: identity.ref, destination: copy.destination, files: copy.files })
+            }
           }
+        } catch (error) {
+          logMainError('Copies saved outside the mail could not be read', error)
         }
 
         return copies
       },
       proposalDecided: async (id, accepted, result) => {
-        await this.segretario.whenReady()
-        await this.segretario.decideProposal(id, accepted, result ?? undefined)
+        try {
+          await this.segretario.whenReady()
+          await this.segretario.decideProposal(id, accepted, result ?? undefined)
+        } catch (error) {
+          logMainError('A proposal decided could not be recorded', error)
+        }
       },
       adoptShortcutOverride: async (commandId, chord) => {
         const preferences = await this.database.getUiPreferences()
@@ -1048,7 +1123,10 @@ export class MailService {
 
     try {
       return await discoverMailSettings(address, {
-        fetch: (input, init) => net.fetch(input, init),
+        fetch: (input, init) =>
+          init?.redirect === 'manual'
+            ? fetchNotFollowing(String(input), init)
+            : net.fetch(input, init),
         resolveMx: (domain) => resolver.resolveMx(domain),
         resolveSrv: (name) => resolver.resolveSrv(name),
         reachable: serverAnswers
@@ -1056,6 +1134,11 @@ export class MailService {
     } finally {
       resolver.cancel()
     }
+  }
+
+  /** Stops waiting for a sign-in left in the browser. */
+  cancelSignIn(): void {
+    this.microsoftOAuthService.cancelSignIn()
   }
 
   /**
@@ -1824,7 +1907,7 @@ export class MailService {
       let sentThroughGraph = false
       const result = await transport.sendMail(outgoing).catch(async (error: unknown) => {
         if (rawOutgoing && isMicrosoftAccount(account) && smtpTurnedOff(error)) {
-          await this.sendThroughGraph(account, rawOutgoing)
+          await this.sendThroughGraph(account, rawOutgoing, outgoing.bcc)
           sentThroughGraph = true
           return { messageId: outgoing.messageId }
         }
@@ -1847,27 +1930,61 @@ export class MailService {
     }
   }
 
-  /** A message sent as it was built (MIME), through Graph, by a Microsoft account. */
+  /**
+   * A message sent as it was built (MIME), through Graph, by a Microsoft
+   * account. The MIME of a message sent carries no Bcc, and Graph is not
+   * documented to send to one it finds there: with blind copies the message
+   * becomes a draft from that MIME, gets its Bcc as Graph's own field, which
+   * a draft takes, and is sent from there.
+   */
   private async sendThroughGraph(
     account: { id: string; type: MailAccount['type']; secret: string },
-    raw: Buffer
+    raw: Buffer,
+    bcc: ReadonlyArray<MailAddress>
   ): Promise<void> {
     const token = await this.microsoftOAuthService.accessToken(
       account.secret,
-      ['https://graph.microsoft.com/Mail.Send'],
+      bcc.length === 0
+        ? ['https://graph.microsoft.com/Mail.Send']
+        : ['https://graph.microsoft.com/Mail.Send', 'https://graph.microsoft.com/Mail.ReadWrite'],
       (secret) => this.database.setAccountSecret(account.id, encryptSecret(secret))
     )
-    const response = await net.fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
-      body: raw.toString('base64')
-    })
+    const graph = async (path: string, init: RequestInit): Promise<Response> => {
+      const response = await net.fetch(`https://graph.microsoft.com/v1.0${path}`, {
+        ...init,
+        headers: { Authorization: `Bearer ${token}`, ...init.headers }
+      })
 
-    if (!response.ok) {
-      throw new Error(
-        `Microsoft non ha inviato il messaggio (${response.status}): ${await response.text()}`
-      )
+      if (!response.ok) {
+        throw new Error(
+          `Microsoft non ha inviato il messaggio (${response.status}): ${await response.text()}`
+        )
+      }
+
+      return response
     }
+    const mime = {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: raw.toString('base64')
+    }
+
+    if (bcc.length === 0) {
+      await graph('/me/sendMail', mime)
+      return
+    }
+
+    const draft = (await (await graph('/me/messages', mime)).json()) as { id: string }
+    await graph(`/me/messages/${encodeURIComponent(draft.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bccRecipients: bcc.map((address) => ({
+          emailAddress: { address: address.address, name: address.name || undefined }
+        }))
+      })
+    })
+    await graph(`/me/messages/${encodeURIComponent(draft.id)}/send`, { method: 'POST' })
   }
 
   async suggestContacts(query: string, limit?: number): Promise<MailContactSuggestion[]> {
@@ -2350,7 +2467,8 @@ export class MailService {
         ? { start: said.start, end: said.end, allDay: said.allDay, location: said.location }
         : null,
       answerByMail:
-        !event && invitation.method === 'REQUEST' && organizer !== null && !own.has(organizer)
+        !event && invitation.method === 'REQUEST' && organizer !== null && !own.has(organizer),
+      series: invitation.series
     }
   }
 

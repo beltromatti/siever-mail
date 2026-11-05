@@ -165,7 +165,7 @@ export function ProposalCard({
   const decide = (accepted: boolean): void => {
     setBusy(true)
     void window.segretarioApi
-      .decideProposal(proposal.id, accepted)
+      .decideProposal(proposal.id, accepted, undefined, proposal.revision)
       .then(
         () =>
           accepted &&

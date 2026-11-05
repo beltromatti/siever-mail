@@ -4,6 +4,8 @@ export interface IcsInvitation {
   method: string
   uid: string
   summary: string | null
+  /** For a whole series (a rule, no RECURRENCE-ID): answered for every instance, not one. */
+  series: boolean
 }
 
 /** The value of a property line — "SUMMARY;LANGUAGE=it:Riunione" — with its escapes undone. */
@@ -24,6 +26,8 @@ export function parseInvitation(text: string): IcsInvitation | null {
   let method = 'PUBLISH'
   let uid: string | null = null
   let summary: string | null = null
+  let rule = false
+  let instance = false
   let inEvent = false
 
   for (const line of lines) {
@@ -43,8 +47,12 @@ export function parseInvitation(text: string): IcsInvitation | null {
       uid = valueOf(line)
     } else if (inEvent && name === 'SUMMARY') {
       summary = valueOf(line)
+    } else if (inEvent && name === 'RRULE') {
+      rule = true
+    } else if (inEvent && name === 'RECURRENCE-ID') {
+      instance = true
     }
   }
 
-  return uid ? { method, uid, summary } : null
+  return uid ? { method, uid, summary, series: rule && !instance } : null
 }

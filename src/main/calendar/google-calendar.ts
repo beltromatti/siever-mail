@@ -5,6 +5,7 @@ import type { CalendarResponse, EventOrigin } from '@shared/calendar'
 import {
   SyncTokenExpired,
   type CalendarProvider,
+  type EventField,
   type ProviderEvent,
   type ProviderEventInput
 } from './calendar-provider'
@@ -271,10 +272,12 @@ export class GoogleCalendarProvider implements CalendarProvider {
     calendarId: string,
     eventId: string,
     event: ProviderEventInput,
-    notify: boolean
+    notify: boolean,
+    fields: ReadonlySet<EventField>
   ): Promise<ProviderEvent> {
     try {
       const { data: current } = await this.api.events.get({ calendarId, eventId })
+      const body = bodyOf(event)
       const wanted = new Set(event.attendees.map((email) => email.toLowerCase()))
       const kept = (current.attendees ?? []).filter(
         (attendee) =>
@@ -287,15 +290,23 @@ export class GoogleCalendarProvider implements CalendarProvider {
         calendarId,
         eventId,
         sendUpdates: notify ? 'all' : 'none',
+        // Only what changed: a PATCH leaves the rest as Google has it now.
         requestBody: {
-          ...bodyOf(event),
+          ...(fields.has('title') ? { summary: body.summary } : {}),
+          ...(fields.has('time') ? { start: body.start, end: body.end } : {}),
+          ...(fields.has('location') ? { location: body.location } : {}),
+          ...(fields.has('description') ? { description: body.description } : {}),
           // Those still invited keep their answers; the user's own entry stays.
-          attendees: [
-            ...kept,
-            ...event.attendees
-              .filter((email) => !known.has(email.toLowerCase()))
-              .map((email) => ({ email }))
-          ]
+          ...(fields.has('attendees')
+            ? {
+                attendees: [
+                  ...kept,
+                  ...event.attendees
+                    .filter((email) => !known.has(email.toLowerCase()))
+                    .map((email) => ({ email }))
+                ]
+              }
+            : {})
         }
       })
       return this.provided(calendarId, data, 'Google non ha restituito l’evento.')
@@ -332,11 +343,20 @@ export class GoogleCalendarProvider implements CalendarProvider {
 
   async respond(
     calendarId: string,
-    eventId: string,
-    response: Exclude<CalendarResponse, 'needsAction'>
+    instanceId: string,
+    response: Exclude<CalendarResponse, 'needsAction'>,
+    series: boolean
   ): Promise<ProviderEvent> {
     try {
-      const { data: current } = await this.api.events.get({ calendarId, eventId })
+      let eventId = instanceId
+      let { data: current } = await this.api.events.get({ calendarId, eventId })
+
+      // The whole series answered: the instance stands for it.
+      if (series && current.recurringEventId) {
+        eventId = current.recurringEventId
+        current = (await this.api.events.get({ calendarId, eventId })).data
+      }
+
       const attendees = (current.attendees ?? []).map((attendee) =>
         attendee.self || attendee.email?.toLowerCase() === this.selfEmail
           ? { ...attendee, responseStatus: response }

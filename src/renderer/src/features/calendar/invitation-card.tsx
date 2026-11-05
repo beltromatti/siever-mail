@@ -124,7 +124,10 @@ export function InvitationCard({
             answering={answering}
             onAnswer={(response) =>
               answer(response, async () => {
-                const answered = await window.calendarApi.respond(event.key, response)
+                // An invitation to a series is answered for the series, not for the instance found.
+                const answered = await window.calendarApi.respond(event.key, response, {
+                  series: invitation.series
+                })
                 setInvitation({ ...invitation, event: answered })
               })
             }

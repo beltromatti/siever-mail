@@ -381,7 +381,13 @@ export function EventPanel({
               onClick={() =>
                 void run(
                   'accept',
-                  () => window.segretarioApi.decideProposal(proposed.proposal.id, true),
+                  () =>
+                    window.segretarioApi.decideProposal(
+                      proposed.proposal.id,
+                      true,
+                      undefined,
+                      proposed.proposal.revision
+                    ),
                   'Messo in calendario'
                 ).then(onClose)
               }
@@ -399,7 +405,12 @@ export function EventPanel({
               disabled={working !== null}
               onClick={() =>
                 void run('ignore', () =>
-                  window.segretarioApi.decideProposal(proposed.proposal.id, false)
+                  window.segretarioApi.decideProposal(
+                    proposed.proposal.id,
+                    false,
+                    undefined,
+                    proposed.proposal.revision
+                  )
                 ).then(onClose)
               }
             >

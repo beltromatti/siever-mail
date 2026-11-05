@@ -536,6 +536,8 @@ model AiProject {
   origin      String
   hiddenAt    BigInt? @map("hidden_at")
   closedAt    BigInt? @map("closed_at")
+  /// Who concluded it, or opened it again: the user's say is not turned over by a run alone.
+  closedBy    String? @map("closed_by")
   activeAt    BigInt? @map("active_at")
   revision    Int     @default(1)
   createdAt   BigInt  @map("created_at")
@@ -586,6 +588,8 @@ model AiProposal {
   /// `aperta`, `accettata`, `scartata`, `superata`.
   status      String
   runId       String? @map("run_id")
+  /// Up by one each time a run writes it again: an answer is to the version the user saw.
+  revision    Int     @default(1)
   createdAt   BigInt  @map("created_at")
   decidedAt   BigInt? @map("decided_at")
   resultJson  String? @map("result_json")

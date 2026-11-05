@@ -11,6 +11,8 @@ export type WorkStatus =
   'in_coda' | 'al_lavoro' | 'fatto' | 'da_riprovare' | 'fallito' | 'annullato'
 
 const WAITING: ReadonlyArray<WorkStatus> = ['in_coda', 'da_riprovare']
+/** How long work that failed for good is left alone before the planning may queue it again. */
+const FAILED_REST_MS = 24 * 60 * 60 * 1000
 
 export interface WorkUnit<Scope = unknown> {
   id: string
@@ -165,13 +167,14 @@ export class WorkQueue {
   }
 
   /** The units that may start now, the most urgent first, then the oldest. */
-  async ready(limit: number, now = Date.now()): Promise<WorkUnit[]> {
+  async ready(limit: number, now = Date.now(), offset = 0): Promise<WorkUnit[]> {
     const rows = await this.sql.all<WorkRow>(
       `SELECT * FROM ai_work WHERE status IN (${placeholders(WAITING)}) AND not_before <= ?
-       ORDER BY priority, created_at LIMIT ?`,
+       ORDER BY priority, created_at LIMIT ? OFFSET ?`,
       ...WAITING,
       now,
-      limit
+      limit,
+      offset
     )
     return rows.map((row) => unitOf(row))
   }
@@ -319,12 +322,19 @@ export class WorkQueue {
 
   /** Whether a scope failed for good lately: not asked for again until the user says so. */
   /** Whether work for a scope is waiting or running: work done once at a time is not asked again. */
+  /**
+   * Whether work for a scope waits, runs, or failed for good in the last day:
+   * then it is not queued again — a failure repeated every planning would be
+   * paid for each time — until the user says "Riprova", or the day passes.
+   */
   async busy(scopeKey: string): Promise<boolean> {
     return (
       (await this.sql.get(
         `SELECT 1 AS found FROM ai_work WHERE scope_key = ?
-         AND status IN ('in_coda', 'da_riprovare', 'al_lavoro') LIMIT 1`,
-        scopeKey
+         AND (status IN ('in_coda', 'da_riprovare', 'al_lavoro')
+           OR (status = 'fallito' AND updated_at >= ?)) LIMIT 1`,
+        scopeKey,
+        Date.now() - FAILED_REST_MS
       )) !== null
     )
   }
@@ -352,15 +362,41 @@ export class WorkQueue {
     return rows.map((row) => unitOf(row))
   }
 
-  /** Tries failed work again, now: the user asked. */
+  /**
+   * Tries failed work again, now: the user asked. One unit waits per scope:
+   * the latest failure of each is tried, unless work for it waits already;
+   * the others are let go.
+   */
   async retryFailed(ids?: ReadonlyArray<string>): Promise<number> {
-    return this.sql.run(
-      `UPDATE ai_work SET status = 'in_coda', attempts = 0, not_before = ?, updated_at = ?
-       WHERE status = 'fallito' ${ids ? `AND id IN (${placeholders(ids)})` : ''}`,
-      Date.now(),
-      Date.now(),
+    const failed = await this.sql.all<WorkRow>(
+      `SELECT * FROM ai_work WHERE status = 'fallito' ${ids ? `AND id IN (${placeholders(ids)})` : ''}
+       ORDER BY updated_at DESC`,
       ...(ids ?? [])
     )
+    const tried = new Set<string>()
+
+    for (const row of failed) {
+      const now = Date.now()
+
+      if (tried.has(row.scope_key) || (await this.waitingFor(row.scope_key))) {
+        await this.sql.run(
+          "UPDATE ai_work SET status = 'annullato', updated_at = ? WHERE id = ?",
+          now,
+          row.id
+        )
+      } else {
+        await this.sql.run(
+          `UPDATE ai_work SET status = 'in_coda', attempts = 0, not_before = ?, updated_at = ?
+           WHERE id = ?`,
+          now,
+          now,
+          row.id
+        )
+        tried.add(row.scope_key)
+      }
+    }
+
+    return tried.size
   }
 
   /** How much of each task waits, runs and failed: the progress the interface shows. */
@@ -386,9 +422,10 @@ export class WorkQueue {
   }
 
   /** Forgets finished work older than a while. */
+  /** Forgets work long done, let go or failed: a failure that old is no longer shown. */
   async prune(olderThanMs: number): Promise<void> {
     await this.sql.run(
-      "DELETE FROM ai_work WHERE status IN ('fatto', 'annullato') AND updated_at < ?",
+      "DELETE FROM ai_work WHERE status IN ('fatto', 'annullato', 'fallito') AND updated_at < ?",
       Date.now() - olderThanMs
     )
   }

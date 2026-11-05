@@ -402,9 +402,14 @@ export class Registry {
     return record
   }
 
-  async renameProject(id: string, title: string, actor: Actor): Promise<ProjectRecord> {
+  async renameProject(
+    id: string,
+    title: string,
+    actor: Actor,
+    seenRevision?: number
+  ): Promise<ProjectRecord> {
     const before = await this.projects.get(id)
-    const record = await this.projects.rename(id, title, actor)
+    const record = await this.projects.rename(id, title, actor, seenRevision)
 
     if (actor.by === 'utente' && before && before.title !== record.title) {
       this.hooks.lesson('progetto_rinominato', { prima: before.title, dopo: record.title })
@@ -422,20 +427,35 @@ export class Registry {
     return record
   }
 
-  async describeProject(id: string, description: string, actor: Actor): Promise<ProjectRecord> {
-    const record = await this.projects.describe(id, description, actor)
+  async describeProject(
+    id: string,
+    description: string,
+    actor: Actor,
+    seenRevision?: number
+  ): Promise<ProjectRecord> {
+    const record = await this.projects.describe(id, description, actor, seenRevision)
     this.emitProject(record, 'descritto', `Di cosa si tratta: ${record.title}`, actor)
     return record
   }
 
-  async setProjectState(id: string, state: string, actor: Actor): Promise<ProjectRecord> {
-    const record = await this.projects.setState(id, state, actor)
+  async setProjectState(
+    id: string,
+    state: string,
+    actor: Actor,
+    seenRevision?: number
+  ): Promise<ProjectRecord> {
+    const record = await this.projects.setState(id, state, actor, seenRevision)
     this.emitProject(record, 'punto', `Il punto aggiornato: ${record.title}`, actor)
     return record
   }
 
-  async setProjectHidden(id: string, hidden: boolean, actor: Actor): Promise<ProjectRecord> {
-    const record = await this.projects.setHidden(id, hidden, actor)
+  async setProjectHidden(
+    id: string,
+    hidden: boolean,
+    actor: Actor,
+    seenRevision?: number
+  ): Promise<ProjectRecord> {
+    const record = await this.projects.setHidden(id, hidden, actor, seenRevision)
 
     if (actor.by === 'utente' && hidden) {
       this.hooks.lesson('progetto_nascosto', { progetto: record.title })
@@ -451,8 +471,13 @@ export class Registry {
     return record
   }
 
-  async setProjectClosed(id: string, closed: boolean, actor: Actor): Promise<ProjectRecord> {
-    const record = await this.projects.setClosed(id, closed, actor)
+  async setProjectClosed(
+    id: string,
+    closed: boolean,
+    actor: Actor,
+    seenRevision?: number
+  ): Promise<ProjectRecord> {
+    const record = await this.projects.setClosed(id, closed, actor, seenRevision)
     this.emitProject(
       record,
       closed ? 'chiuso' : 'riaperto',
@@ -993,8 +1018,10 @@ export class Registry {
       `SELECT g.account_id, g.message_key FROM ai_gone g
        WHERE g.since <= ?
          AND EXISTS (SELECT 1 FROM folders f WHERE f.account_id = g.account_id)
+         -- Every folder read since it went missing: moved to one not read yet, it is not gone.
          AND NOT EXISTS (
-           SELECT 1 FROM folders f WHERE f.account_id = g.account_id AND f.last_synced_at IS NULL
+           SELECT 1 FROM folders f WHERE f.account_id = g.account_id
+             AND (f.last_synced_at IS NULL OR f.last_synced_at < g.since)
          )`,
       now - GONE_AFTER_MS
     )

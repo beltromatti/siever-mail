@@ -114,15 +114,21 @@ describe.skipIf(!server)('CalDavCalendarProvider (a real server)', () => {
     ])
 
     // One instance moved, another taken out: the series keeps the rest.
-    const moved = await first.update(calendar.calendarId, series[1].eventId, {
-      title: 'Riunione spostata',
-      start: '2026-11-10T14:00:00.000Z',
-      end: '2026-11-10T14:30:00.000Z',
-      allDay: false,
-      location: null,
-      description: null,
-      attendees: []
-    })
+    const moved = await first.update(
+      calendar.calendarId,
+      series[1].eventId,
+      {
+        title: 'Riunione spostata',
+        start: '2026-11-10T14:00:00.000Z',
+        end: '2026-11-10T14:30:00.000Z',
+        allDay: false,
+        location: null,
+        description: null,
+        attendees: []
+      },
+      false,
+      new Set(['title', 'time'])
+    )
     expect(moved).toMatchObject({ eventId: series[1].eventId, start: '2026-11-10T14:00:00.000Z' })
     await first.remove(calendar.calendarId, series[2].eventId)
 
@@ -138,7 +144,7 @@ describe.skipIf(!server)('CalDavCalendarProvider (a real server)', () => {
     ])
 
     // The user answers the invitation of the series: their own PARTSTAT on the server.
-    const answered = await first.respond(calendar.calendarId, series[0].eventId, 'accepted')
+    const answered = await first.respond(calendar.calendarId, series[0].eventId, 'accepted', true)
     expect(answered.myResponse).toBe('accepted')
     const onServer = await (await elsewhere(seriesUrl, { method: 'GET' })).text()
     expect(onServer).toMatch(/PARTSTAT=ACCEPTED/)

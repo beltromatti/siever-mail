@@ -171,12 +171,13 @@ export const memoryTool: SegretarioTool = {
         case 'scrivi': {
           const text = requireString(args, 'testo')
           checkShortNames(text, context.handles)
+          const read = context.run.seen.get(seenKey('memory', path))
           const { document, created } = await notebook.write(path, text, actor, {
-            seenRevision: context.run.seen.get(seenKey('memory', path))
+            seenRevision: read
           })
           remember(context, document)
 
-          if (!created && context.run.seen.get(seenKey('memory', path)) === undefined) {
+          if (!created && read === undefined) {
             // Rewritten whole without having been read in this work: said, so it is a choice.
             return {
               content: `${path} riscritta per intero (non l'avevi letta in questo lavoro: se conteneva altro, ora non c'è più — controlla con \`storia\`).`,

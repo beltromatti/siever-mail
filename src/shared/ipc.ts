@@ -52,6 +52,7 @@ export const IPC_CHANNELS = {
   addGoogleAccount: 'account:add-google',
   addImapAccount: 'account:add-imap',
   addMicrosoftAccount: 'account:add-microsoft',
+  cancelSignIn: 'account:cancel-sign-in',
   discoverMailSettings: 'account:discover-settings',
   markAccountLastViewed: 'account:mark-last-viewed',
   removeAccount: 'account:remove',
@@ -148,6 +149,8 @@ export interface DesktopMailApi {
   addImapAccount: (input: AddImapAccountInput) => Promise<MailAccount>
   /** A Microsoft account, in one consent in the browser: its mail, and its calendar when asked. */
   addMicrosoftAccount: (options: { calendar: boolean }) => Promise<MailAccount>
+  /** Stops waiting for a sign-in left in the browser (Microsoft): the user went back. */
+  cancelSignIn: () => Promise<void>
   /** A mailbox's servers found from its address alone; null when nothing tells them. */
   discoverMailSettings: (address: string) => Promise<DiscoveredMailSettings | null>
   markAccountLastViewed: (accountId: string) => Promise<void>

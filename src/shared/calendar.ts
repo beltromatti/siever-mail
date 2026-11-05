@@ -155,6 +155,8 @@ export interface MessageInvitation {
   when: Pick<CalendarEvent, 'start' | 'end' | 'allDay' | 'location'> | null
   /** The event is in no calendar reached here: the answer goes to the organizer by mail (iMIP). */
   answerByMail: boolean
+  /** For a whole series: the answer goes to the series, not to the instance shown. */
+  series: boolean
 }
 
 export const CALENDAR_IPC = {
@@ -217,10 +219,11 @@ export interface CalendarApi {
    * (REQUEST, CANCEL…), its title, and its event in a connected calendar.
    */
   invitation: (ref: MessageRef) => Promise<MessageInvitation | null>
-  /** Answers an invitation; the organizer is told. */
+  /** Answers an invitation — for the whole series with `series` — and the organizer is told. */
   respond: (
     eventKey: string,
-    response: Exclude<CalendarResponse, 'needsAction'>
+    response: Exclude<CalendarResponse, 'needsAction'>,
+    options?: { series?: boolean }
   ) => Promise<CalendarEvent>
   /** Answers an invitation in no connected calendar: by mail to its organizer, from the account it came to. */
   respondByMail: (

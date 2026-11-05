@@ -20,12 +20,14 @@ export const MICROSOFT_MAIL_SCOPES = [
 ]
 /**
  * Graph: the calendar, the address of the account, and sending through
- * Graph where the organisation turned SMTP off.
+ * Graph where the organisation turned SMTP off — a message with blind
+ * copies as a draft first, which takes Mail.ReadWrite.
  */
 export const MICROSOFT_GRAPH_SCOPES = [
   'https://graph.microsoft.com/User.Read',
   'https://graph.microsoft.com/Calendars.ReadWrite',
-  'https://graph.microsoft.com/Mail.Send'
+  'https://graph.microsoft.com/Mail.Send',
+  'https://graph.microsoft.com/Mail.ReadWrite'
 ]
 
 /** What is kept of a Microsoft sign-in, encrypted: whose it is, and MSAL's cache with its tokens. */
@@ -50,6 +52,17 @@ export class MicrosoftSignInNeeded extends Error {
     this.name = 'MicrosoftSignInNeeded'
   }
 }
+
+/** The sign-in in the browser was left: the user went back, or the browser never answered. */
+export class MicrosoftSignInCancelled extends Error {
+  constructor() {
+    super('Accesso a Microsoft annullato.')
+    this.name = 'MicrosoftSignInCancelled'
+  }
+}
+
+/** How long the browser has to bring a sign-in back before it is given up. */
+const SIGN_IN_TIMEOUT_MS = 5 * 60 * 1000
 
 const page = (title: string, body: string): string =>
   `<!doctype html><html><head><meta charset="utf-8" /><title>${title}</title></head><body style="font-family:system-ui;padding:24px;background:#101421;color:#f1f5f9"><h2>${title}</h2><p>${body}</p></body></html>`
@@ -77,9 +90,16 @@ export class MicrosoftOAuthService {
   /** The latest cache of each account, ahead of what was stored: one renewal at a time each. */
   private readonly latest = new Map<string, string>()
   private readonly queues = new Map<string, Promise<unknown>>()
+  /** The sign-in waiting for the browser, to give up. */
+  private signIn: AbortController | null = null
 
   constructor(config: RuntimeConfig) {
     this.clientId = config.microsoftClientId
+  }
+
+  /** Stops waiting for the sign-in in the browser: the user went back, or closed its tab. */
+  cancelSignIn(): void {
+    this.signIn?.abort()
   }
 
   isConfigured(): boolean {
@@ -117,7 +137,13 @@ export class MicrosoftOAuthService {
   async authorize(loginHint?: string): Promise<MicrosoftAuthResult> {
     const state = { cache: '' }
     const application = this.application(state)
-    const result = await application.acquireTokenInteractive({
+    // MSAL waits on its own loopback server and cannot be stopped: the wait for it can. One
+    // sign-in at a time; the one before, still waiting, is given up.
+    this.signIn?.abort()
+    const controller = new AbortController()
+    this.signIn = controller
+    const timer = setTimeout(() => controller.abort(), SIGN_IN_TIMEOUT_MS)
+    const interactive = application.acquireTokenInteractive({
       scopes: MICROSOFT_MAIL_SCOPES,
       extraScopesToConsent: MICROSOFT_GRAPH_SCOPES,
       prompt: 'select_account',
@@ -134,6 +160,31 @@ export class MicrosoftOAuthService {
         'Autorizzazione annullata o non valida. Puoi chiudere questa scheda.'
       )
     })
+    // Answered after it was given up, it goes nowhere.
+    interactive.catch(() => undefined)
+
+    let result: Awaited<typeof interactive>
+
+    try {
+      result = await Promise.race([
+        interactive,
+        new Promise<never>((_, reject) => {
+          controller.signal.addEventListener(
+            'abort',
+            () => reject(new MicrosoftSignInCancelled()),
+            {
+              once: true
+            }
+          )
+        })
+      ])
+    } finally {
+      clearTimeout(timer)
+
+      if (this.signIn === controller) {
+        this.signIn = null
+      }
+    }
 
     if (!result.account) {
       throw new Error('Microsoft non ha detto quale account hai scelto.')

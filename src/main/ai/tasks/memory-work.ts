@@ -106,11 +106,20 @@ export async function prepareReflection(deps: {
   mail: SegretarioMailPort
   store: AiStore
 }): Promise<(StartingData & { lessonIds: number[] }) | null> {
-  const lessons = (await deps.store.pendingLessons()).slice(0, LESSONS_PER_REFLECTION)
+  // The lessons that teach, a reflection's worth; the drafts sent as they were, all of them —
+  // they are told as a count. Taken in order alone, a run of those would hide what comes after.
+  const pending = await deps.store.pendingLessons()
+  const teaching = pending
+    .filter((lesson) => lesson.kind !== 'confermata')
+    .slice(0, LESSONS_PER_REFLECTION)
 
-  if (!lessons.some((lesson) => lesson.kind !== 'confermata')) {
+  if (teaching.length === 0) {
     return null
   }
+
+  const lessons = [...pending.filter((lesson) => lesson.kind === 'confermata'), ...teaching].sort(
+    (a, b) => a.id - b.id
+  )
 
   const emails = new Map(
     (await deps.mail.listAccounts()).map((account) => [account.id, account.email])

@@ -24,6 +24,7 @@ import {
 import type { MailAccount } from '@shared/models'
 
 import {
+  changedFields,
   SyncTokenExpired,
   type CalendarProvider,
   type ProviderEvent,
@@ -184,16 +185,34 @@ export class CalendarService {
   private timer: NodeJS.Timeout | null = null
   /** The sync of each account under way: one at a time each. */
   private readonly syncing = new Map<string, Promise<void>>()
+  /** Connections being taken away: their sync stops, and none starts. */
+  private readonly leaving = new Set<string>()
 
   constructor(private readonly options: CalendarServiceOptions) {}
 
-  private readonly opened = Promise.withResolvers<void>()
+  private readonly opened = (() => {
+    const opened = Promise.withResolvers<void>()
+    // Rejected when the app could not start: whoever waits is told, nobody else must listen.
+    opened.promise.catch(() => undefined)
+    return opened
+  })()
 
   async open(): Promise<void> {
-    this.prisma = await this.options.database.storeClient()
+    try {
+      this.prisma = await this.options.database.storeClient()
+    } catch (error) {
+      this.abandon(error)
+      throw error
+    }
+
     this.timer = setInterval(() => void this.syncAll(), SYNC_EVERY_MS)
     this.opened.resolve()
     void this.syncAll()
+  }
+
+  /** The app could not start: what waits for the calendar is told so, rather than left waiting. */
+  abandon(error: unknown): void {
+    this.opened.reject(error instanceof Error ? error : new Error(String(error)))
   }
 
   /** Resolves once the calendars are open: what asks for them waits until then. */
@@ -533,14 +552,22 @@ export class CalendarService {
   /** Forgets a calendar connection here — its calendars and events; the provider keeps them. */
   async disconnect(connectionId: string): Promise<CalendarConnection[]> {
     const prisma = this.requirePrisma()
+    // A sync under way would go on writing what is being forgotten: it is let end first.
+    this.leaving.add(connectionId)
 
-    await prisma.$transaction([
-      prisma.calendarChange.deleteMany({ where: { connectionId } }),
-      prisma.calendarEvent.deleteMany({ where: { connectionId } }),
-      prisma.calendarObject.deleteMany({ where: { connectionId } }),
-      prisma.calendarCalendar.deleteMany({ where: { connectionId } }),
-      prisma.calendarConnection.deleteMany({ where: { id: connectionId } })
-    ])
+    try {
+      await this.syncing.get(connectionId)?.catch(() => undefined)
+      await prisma.$transaction([
+        prisma.calendarChange.deleteMany({ where: { connectionId } }),
+        prisma.calendarEvent.deleteMany({ where: { connectionId } }),
+        prisma.calendarObject.deleteMany({ where: { connectionId } }),
+        prisma.calendarCalendar.deleteMany({ where: { connectionId } }),
+        prisma.calendarConnection.deleteMany({ where: { id: connectionId } })
+      ])
+    } finally {
+      this.leaving.delete(connectionId)
+    }
+
     this.options.send(CALENDAR_IPC.changed, null)
     return this.listConnections()
   }
@@ -589,6 +616,10 @@ export class CalendarService {
       return running
     }
 
+    if (this.leaving.has(connectionId)) {
+      return Promise.resolve()
+    }
+
     const sync = this.syncConnection(connectionId).finally(() => this.syncing.delete(connectionId))
     this.syncing.set(connectionId, sync)
     return sync
@@ -617,7 +648,14 @@ export class CalendarService {
         ])
       }
 
+      // A calendar that cannot be read says so, and the others are read all the same.
+      const problems: string[] = []
+
       for (const calendar of calendars) {
+        if (this.leaving.has(connectionId)) {
+          return
+        }
+
         const stored = known.find((candidate) => candidate.calendarId === calendar.calendarId)
         await prisma.calendarCalendar.upsert({
           where: { connectionId_calendarId: { connectionId, calendarId: calendar.calendarId } },
@@ -636,12 +674,25 @@ export class CalendarService {
             color: calendar.color
           }
         })
-        await this.syncCalendar(provider, connectionId, calendar.calendarId, stored ?? null)
+        try {
+          await this.syncCalendar(provider, connectionId, calendar.calendarId, stored ?? null)
+        } catch (error) {
+          logMainError('A calendar could not be read', error, {
+            connectionId,
+            calendarId: calendar.calendarId
+          })
+          problems.push(
+            `«${calendar.name}» non si legge: ${error instanceof Error ? error.message : String(error)}`
+          )
+        }
       }
 
       await prisma.calendarConnection.update({
         where: { id: connectionId },
-        data: { lastSyncAt: BigInt(Date.now()), problem: null }
+        data: {
+          lastSyncAt: BigInt(Date.now()),
+          problem: problems.length > 0 ? problems.join(' ') : null
+        }
       })
     } catch (error) {
       logMainError('Calendar sync failed', error, { connectionId })
@@ -674,11 +725,12 @@ export class CalendarService {
 
     if (fresh && stored.syncToken) {
       try {
-        const { events, syncToken } = await provider.changes(calendarId, {
+        const { events, syncToken, commit } = await provider.changes(calendarId, {
           syncToken: stored.syncToken
         })
         // What changed since the last read was done elsewhere — or here, and then it is no change.
         await this.applyChanges(connectionId, events, { logChanges: true })
+        await commit?.()
         await prisma.calendarCalendar.update({
           where: { connectionId_calendarId: { connectionId, calendarId } },
           data: { syncToken }
@@ -692,31 +744,63 @@ export class CalendarService {
     }
 
     const windowEnd = now + WINDOW_AHEAD_MS
-    const { events, syncToken } = await provider.changes(calendarId, {
+    const { events, syncToken, commit } = await provider.changes(calendarId, {
       fromIso: new Date(now - WINDOW_BACK_MS).toISOString(),
       toIso: new Date(windowEnd).toISOString()
     })
 
     // Kept as read, then what is no longer there goes: an event the Segretario put
-    // there keeps saying so, where the provider does not give it back.
-    await this.applyChanges(connectionId, events)
+    // there keeps saying so, where the provider does not give it back. A calendar read
+    // before is compared with what it was — a link is read whole each time it changes, an
+    // expired token starts over — so what changed elsewhere is noted all the same; the
+    // first read of a calendar is no change.
+    const readBefore = stored !== null && stored.windowEnd !== null
+    await this.applyChanges(connectionId, events, { logChanges: readBefore })
     const read = new Set(
       events
         .filter((event) => !event.cancelled)
         .map((event) => eventKey(connectionId, event.calendarId, event.eventId))
     )
+    const windowStart = now - WINDOW_BACK_MS
     const gone = (
-      await prisma.calendarEvent.findMany({
-        where: { connectionId, calendarId },
-        select: { key: true }
-      })
-    )
-      .map((row) => row.key)
-      .filter((key) => !read.has(key))
+      await prisma.calendarEvent.findMany({ where: { connectionId, calendarId } })
+    ).filter((row) => !read.has(row.key))
 
-    for (let at = 0; at < gone.length; at += 500) {
-      await prisma.calendarEvent.deleteMany({ where: { key: { in: gone.slice(at, at + 500) } } })
+    if (readBefore) {
+      const name =
+        (
+          await prisma.calendarCalendar.findUnique({
+            where: { connectionId_calendarId: { connectionId, calendarId } },
+            select: { name: true }
+          })
+        )?.name ?? ''
+      // Only an event that should still be read is gone: one that ended before the window
+      // merely left it.
+      const cancelled = gone.filter((row) => Number(row.endsAt) > windowStart)
+
+      for (let at = 0; at < cancelled.length; at += 500) {
+        await prisma.calendarChange.createMany({
+          data: cancelled.slice(at, at + 500).map((row) => ({
+            connectionId,
+            eventKey: row.key,
+            kind: 'annullato',
+            beforeJson: JSON.stringify(eventOfRow(row, name)),
+            afterJson: null,
+            at: BigInt(Date.now())
+          }))
+        })
+      }
     }
+
+    const goneKeys = gone.map((row) => row.key)
+
+    for (let at = 0; at < goneKeys.length; at += 500) {
+      await prisma.calendarEvent.deleteMany({
+        where: { key: { in: goneKeys.slice(at, at + 500) } }
+      })
+    }
+
+    await commit?.()
 
     await prisma.calendarCalendar.update({
       where: { connectionId_calendarId: { connectionId, calendarId } },
@@ -992,7 +1076,8 @@ export class CalendarService {
 
   async respond(
     key: string,
-    response: Exclude<CalendarResponse, 'needsAction'>
+    response: Exclude<CalendarResponse, 'needsAction'>,
+    options: { series?: boolean } = {}
   ): Promise<CalendarEvent> {
     const prisma = this.requirePrisma()
     const row = await prisma.calendarEvent.findUnique({ where: { key } })
@@ -1002,7 +1087,15 @@ export class CalendarService {
       throw new Error('L’evento non c’è più nel calendario.')
     }
 
-    const answered = await provider.respond(row.calendarId, row.eventId, response)
+    const series = options.series === true
+    const answered = await provider.respond(row.calendarId, row.eventId, response, series)
+
+    if (series) {
+      // The series answered: its instances, kept one by one, are read again as they are now.
+      await this.sync(row.connectionId)
+      return this.eventOrThrow(key)
+    }
+
     await this.applyChanges(row.connectionId, [answered])
     this.options.send(CALENDAR_IPC.changed, null)
     return this.eventOrThrow(eventKey(row.connectionId, row.calendarId, answered.eventId))
@@ -1090,7 +1183,13 @@ export class CalendarService {
     }
     const next = changedEvent(current, change)
     const notify = next.attendees.length > 0 || current.attendees.some((attendee) => !attendee.self)
-    const updated = await provider.update(row.calendarId, row.eventId, next, notify)
+    const updated = await provider.update(
+      row.calendarId,
+      row.eventId,
+      next,
+      notify,
+      changedFields(change)
+    )
 
     await this.applyChanges(row.connectionId, [updated])
     this.options.send(CALENDAR_IPC.changed, null)

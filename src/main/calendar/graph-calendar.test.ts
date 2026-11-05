@@ -103,6 +103,48 @@ describe('GraphCalendarProvider', () => {
     expect(syncToken).toBe('https://graph.microsoft.com/v1.0/delta?token=z')
   })
 
+  it('gives each instance of a series the series’ UID, the one an invitation names', async () => {
+    const asked: string[] = []
+    const occurrence = (id: string, day: string): GraphEvent => ({
+      ...meeting,
+      id,
+      uid: undefined,
+      iCalUId: `uid-of-${id}`,
+      seriesMasterId: 'AAMk-series',
+      start: { dateTime: `2026-11-${day}T08:30:00.0000000`, timeZone: 'UTC' },
+      end: { dateTime: `2026-11-${day}T09:30:00.0000000`, timeZone: 'UTC' }
+    })
+    const provider = new GraphCalendarProvider(
+      async () => 'token',
+      'mattia@siever.it',
+      async (input) => {
+        asked.push(input)
+        return new Response(
+          JSON.stringify(
+            input.includes('/me/events/AAMk-series')
+              ? { id: 'AAMk-series', iCalUId: 'series-uid@outlook' }
+              : {
+                  value: [occurrence('AAMk-a', '16'), occurrence('AAMk-b', '23')],
+                  '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/delta?token=y'
+                }
+          ),
+          { status: 200 }
+        )
+      }
+    )
+
+    const { events } = await provider.changes('cal-1', {
+      fromIso: '2026-11-01T00:00:00.000Z',
+      toIso: '2026-12-31T00:00:00.000Z'
+    })
+
+    expect(events.map((event) => event.iCalUid)).toEqual([
+      'series-uid@outlook',
+      'series-uid@outlook'
+    ])
+    expect(asked.filter((url) => url.includes('/me/events/AAMk-series'))).toHaveLength(1)
+  })
+
   it('reads again from the start when Graph no longer knows the delta', async () => {
     const provider = new GraphCalendarProvider(
       async () => 'token',

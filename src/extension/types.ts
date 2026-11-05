@@ -297,8 +297,10 @@ export interface ExtensionMailEngineHandle {
    * The raw RFC 822 source of each message of `refs`, with a parsed view
    * of it, handed to `onMessage` as it arrives: a few messages download at
    * a time, in one command, while the ones before are handled. Resolves
-   * with the messages no longer on their server; a rejection of
-   * `onMessage` stops the rest, so it should settle each message itself.
+   * with the messages no longer on their server and those not read — a
+   * folder or an account that failed, each on its own while the others go
+   * on. A rejection of `onMessage` stops the rest of its folder, so it
+   * should settle each message itself.
    *
    * The parse leaves `cid:` references in the HTML alone rather than
    * rewriting them into `data:` URIs, so the sender's attachments can be
@@ -311,7 +313,12 @@ export interface ExtensionMailEngineHandle {
       ref: MessageRef,
       message: { source: Buffer; parsed: ParsedMail; internalDate: string }
     ) => Promise<void>
-  ): Promise<{ missing: MessageRef[] }>
+  ): Promise<{
+    /** No longer on the server. */
+    missing: MessageRef[]
+    /** Not read: their account or folder failed — each folder on its own, the others go on. */
+    unread: Array<{ ref: MessageRef; message: string }>
+  }>
   /**
    * Archives messages as their provider means it, by what they are rather
    * than where they are shown: on Gmail they leave the inbox (their labels

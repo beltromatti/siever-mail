@@ -445,17 +445,31 @@ export const calendarTool: SegretarioTool = {
           throw new ToolInputError("L'evento non c'è più.")
         }
 
-        if (hasGuests(current) || (current.organizer && current.myResponse !== null)) {
+        const change = changeOf(
+          args,
+          args.tutto_il_giorno !== undefined ? booleanArg(args, 'tutto_il_giorno') : current.allDay
+        )
+        // People are told of a change to an event they are in — and invited by one that adds them.
+        const invited = change.attendees ?? []
+
+        if (
+          hasGuests(current) ||
+          invited.length > 0 ||
+          (current.organizer && current.myResponse !== null)
+        ) {
           if (context.run.background) {
             throw new ToolInputError(
-              'L’evento coinvolge altre persone: correggerlo le avvisa. Da solo non puoi: proponilo con `proponi` e spiegane il motivo.'
+              'L’evento coinvolge altre persone, o le invita: correggerlo le avvisa. Da solo non puoi: proponilo con `proponi` e spiegane il motivo.'
             )
           }
 
           const { approved } = await context.requestApproval({
             kind: 'action',
             title: `Modifica: ${current.title}`,
-            details: ['Gli invitati ricevono l’aggiornamento.'],
+            details:
+              invited.length > 0
+                ? [`Invitati: ${invited.join(', ')}`, 'Ricevono l’invito o l’aggiornamento.']
+                : ['Gli invitati ricevono l’aggiornamento.'],
             confirmLabel: 'Modifica'
           })
 
@@ -464,10 +478,6 @@ export const calendarTool: SegretarioTool = {
           }
         }
 
-        const change = changeOf(
-          args,
-          args.tutto_il_giorno !== undefined ? booleanArg(args, 'tutto_il_giorno') : current.allDay
-        )
         const updated = await context.calendar.update(key, change)
         recordChange(context, 'modificato', `Corretto in calendario: ${updated.title}`, updated, {
           kind: 'evento-modificato',

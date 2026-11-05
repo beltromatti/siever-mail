@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ensureAiSchema } from '../schema'
 import type { Sql } from '../sql'
@@ -99,14 +99,30 @@ describe('Registry', () => {
       await expect(
         registry.setCommitmentStatus(record.id, 'aperta', BACKGROUND, {
           evidence: {
+            accountId: 'acc',
+            threadId: 't1',
             messageKey: 'm:old',
             dateIso: new Date(closed.record.updatedAt - 1000).toISOString()
           }
         })
       ).rejects.toBeInstanceOf(RegistryRefusal)
 
+      // Newer, but of another conversation: not a proof of this.
+      await expect(
+        registry.setCommitmentStatus(record.id, 'aperta', BACKGROUND, {
+          evidence: {
+            accountId: 'acc',
+            threadId: 't-altro',
+            messageKey: 'm:altro',
+            dateIso: new Date(closed.record.updatedAt + 1000).toISOString()
+          }
+        })
+      ).rejects.toBeInstanceOf(RegistryRefusal)
+
       const reopened = await registry.setCommitmentStatus(record.id, 'aperta', BACKGROUND, {
         evidence: {
+          accountId: 'acc',
+          threadId: 't1',
           messageKey: 'm:new',
           dateIso: new Date(closed.record.updatedAt + 1000).toISOString()
         },
@@ -117,6 +133,20 @@ describe('Registry', () => {
       // The chat works with the user watching: it may.
       await registry.setCommitmentStatus(record.id, 'fatta', USER)
       await expect(registry.setCommitmentStatus(record.id, 'aperta', CHAT)).resolves.toBeTruthy()
+    })
+
+    it('keeps what the user corrected from a run in the background', async () => {
+      const { record } = await registry.openCommitment(
+        ANNA,
+        { kind: 'ti_chiedono', text: 'Il preventivo' },
+        BACKGROUND
+      )
+      await registry.commitments.edit(record.id, { due: '2026-11-20' }, USER)
+
+      await expect(
+        registry.commitments.edit(record.id, { due: '2026-11-10' }, BACKGROUND)
+      ).rejects.toBeInstanceOf(RegistryRefusal)
+      expect((await registry.commitments.get(record.id))?.due).toBe('2026-11-20')
     })
 
     it('refuses a write made on an old look at the thing', async () => {
@@ -287,11 +317,14 @@ describe('Registry', () => {
         },
         BACKGROUND
       )
+      // Prepared on the 2nd; Anna writes again on the 3rd.
+      vi.useFakeTimers({ now: new Date('2026-11-02T10:00:00.000Z'), toFake: ['Date'] })
       await registry.saveReply(
         ANNA,
         { kind: 'risposta', text: 'Ciao Anna, …', doubts: '' },
         BACKGROUND
       )
+      vi.useRealTimers()
       expect(await registry.viewKeys('bozze-pronte')).toEqual([
         { accountId: 'acc', messageKey: 'm:anna' }
       ])
@@ -299,6 +332,11 @@ describe('Registry', () => {
       await registry.markRepliesStale(ANNA, '2026-11-03T09:00:00.000Z', 'Anna ha scritto di nuovo')
       expect(await registry.viewKeys('bozze-pronte')).toEqual([])
       expect((await registry.replies.get('acc', 'm:anna'))?.status).toBe('da_rivedere')
+
+      // Confirmed after the newer message came, it is not sent back to be looked at again.
+      await registry.setReplyStatus('acc', 'm:anna', 'pronta', BACKGROUND)
+      await registry.markRepliesStale(ANNA, '2026-11-03T09:00:00.000Z', 'Anna ha scritto di nuovo')
+      expect((await registry.replies.get('acc', 'm:anna'))?.status).toBe('pronta')
 
       await registry.setReplyStatus('acc', 'm:anna', 'scartata', USER)
       await expect(
@@ -352,7 +390,14 @@ describe('Registry', () => {
       // Still missing later, but a folder was never synced (a cache being rebuilt): nothing.
       await sql.run("UPDATE folders SET last_synced_at = NULL WHERE account_id = 'acc'")
       expect(await registry.settleDeleted(start + 31 * 60 * 1000)).toBe(0)
+      // Read, but only before it went missing: it may have moved to a folder not read since.
       await sql.run("UPDATE folders SET last_synced_at = 1 WHERE account_id = 'acc'")
+      expect(await registry.settleDeleted(start + 31 * 60 * 1000)).toBe(0)
+      // Every folder read after it went missing, and it is in none: gone.
+      await sql.run(
+        "UPDATE folders SET last_synced_at = ? WHERE account_id = 'acc'",
+        start + 60_000
+      )
 
       expect(await registry.settleDeleted(start + 31 * 60 * 1000)).toBe(1)
       expect(await registry.commitments.get(record.id)).toMatchObject({

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ArrowLeft,
   AtSign,
@@ -238,6 +238,25 @@ export function AddConnection({
   const [serverUrl, setServerUrl] = useState('')
   const [link, setLink] = useState('')
   const [linkName, setLinkName] = useState('')
+  // The iCloud mailbox already connected on a try whose calendar failed: a retry adds only the calendar.
+  const [mailAddedFor, setMailAddedFor] = useState<string | null>(null)
+  // The address a search for servers was asked for: an answer for another one is late, and dropped.
+  const discovering = useRef<string | null>(null)
+  // A Microsoft sign-in waiting on the browser is given up when this closes.
+  const waitingForMicrosoft = useRef(false)
+
+  useEffect(() => {
+    waitingForMicrosoft.current = pending && choice === 'microsoft'
+  }, [pending, choice])
+
+  useEffect(
+    () => () => {
+      if (waitingForMicrosoft.current) {
+        void window.mailApi.cancelSignIn()
+      }
+    },
+    []
+  )
 
   const choose = (next: Choice | null): void => {
     setChoice(next)
@@ -282,16 +301,24 @@ export function AddConnection({
 
   /** The servers of the address, found; a provider with its own way in is offered that way. */
   const discover = async (): Promise<void> => {
+    const asked = address.trim()
+    discovering.current = asked
     setPending(true)
     setProblem(null)
 
     try {
-      const settings = await window.mailApi.discoverMailSettings(address.trim())
+      const settings = await window.mailApi.discoverMailSettings(asked)
 
+      if (discovering.current !== asked) {
+        return
+      }
+
+      // A provider with its own way in is offered that way — when that way is open in this build;
+      // otherwise its servers are, for an app password.
       if (
-        settings?.provider === 'google' ||
-        settings?.provider === 'microsoft' ||
-        settings?.provider === 'icloud'
+        settings?.provider === 'icloud' ||
+        (settings?.provider === 'google' && googleReady) ||
+        (settings?.provider === 'microsoft' && microsoftReady)
       ) {
         setChoice(settings.provider)
         setProblem(null)
@@ -310,11 +337,13 @@ export function AddConnection({
               smtpPort: String(settings.smtp.port),
               smtpSecure: settings.smtp.secure
             }
-          : { ...EMPTY_SERVERS, username: address.trim() }
+          : { ...EMPTY_SERVERS, username: asked }
       )
     } catch (error) {
-      setProblem(messageOf(error, 'Non ho trovato i server di questo indirizzo.'))
-      setServers({ ...EMPTY_SERVERS, username: address.trim() })
+      if (discovering.current === asked) {
+        setProblem(messageOf(error, 'Non ho trovato i server di questo indirizzo.'))
+        setServers({ ...EMPTY_SERVERS, username: asked })
+      }
     } finally {
       setPending(false)
     }
@@ -423,8 +452,9 @@ export function AddConnection({
               }
               onClick={() =>
                 void run(async () => {
-                  if (services.mail) {
+                  if (services.mail && mailAddedFor !== address.trim().toLowerCase()) {
                     await addMailbox({ ...ICLOUD_SERVERS, username: address.trim() })
+                    setMailAddedFor(address.trim().toLowerCase())
                   }
 
                   if (services.calendar) {
@@ -570,8 +600,15 @@ export function AddConnection({
               variant="ghost"
               className="size-7"
               aria-label="Indietro"
-              disabled={pending}
-              onClick={() => choose(null)}
+              // A Microsoft sign-in waits on the browser, which may never answer: going back gives it up.
+              disabled={pending && choice !== 'microsoft'}
+              onClick={() => {
+                if (pending && choice === 'microsoft') {
+                  void window.mailApi.cancelSignIn()
+                }
+
+                choose(null)
+              }}
             >
               <ArrowLeft className="size-4" />
             </Button>

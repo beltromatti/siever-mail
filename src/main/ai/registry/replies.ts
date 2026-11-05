@@ -215,10 +215,13 @@ export class ReplyStore {
            r.stale_reason, r.revision, r.run_id, r.created_at, r.updated_at
          FROM ai_ready_drafts r
          JOIN ai_notes n ON n.account_id = r.account_id AND n.message_key = r.message_key
-         WHERE r.account_id = ? AND r.thread_id = ? AND r.status = 'pronta' AND n.message_date < ?`,
+         WHERE r.account_id = ? AND r.thread_id = ? AND r.status = 'pronta' AND n.message_date < ?
+           AND r.updated_at < ?`,
         thread.accountId,
         thread.threadId,
-        beforeIso
+        beforeIso,
+        // A reply written or confirmed after the newer message came knows it already.
+        Date.parse(beforeIso)
       )
     ).map(recordOf)
 

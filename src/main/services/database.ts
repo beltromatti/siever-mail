@@ -1983,6 +1983,20 @@ export class AppDatabase {
     ])
   }
 
+  /**
+   * A folder found unchanged on the server: what is kept of it is current as of
+   * `at`. What depends on a folder being read after something happened — a
+   * message missing everywhere is gone, not moved — reads it from here.
+   */
+  async markFolderCurrent(accountId: string, folderPath: string, at: number): Promise<void> {
+    await this.ready
+
+    await this.prisma.folder.updateMany({
+      where: { accountId, path: folderPath },
+      data: { lastSyncedAt: BigInt(at) }
+    })
+  }
+
   async updateFolderCounts(
     accountId: string,
     folderPath: string,
@@ -3622,9 +3636,17 @@ export class AppDatabase {
     }
 
     const [row] = await this.prisma.$queryRaw<
-      Array<{ onServer: number | bigint; cached: number | bigint; waiting: number | bigint }>
+      Array<{
+        unsynced: number | bigint
+        onServer: number | bigint
+        cached: number | bigint
+        waiting: number | bigint
+      }>
     >`
       SELECT
+        (SELECT COUNT(*) FROM folders
+          WHERE account_id = ${accountId} AND path IN (${Prisma.join([...folderPaths])})
+            AND last_synced_at IS NULL) AS unsynced,
         (SELECT COALESCE(SUM(message_count), 0) FROM folders
           WHERE account_id = ${accountId} AND path IN (${Prisma.join([...folderPaths])})) AS onServer,
         (SELECT COUNT(*) FROM messages
@@ -3639,10 +3661,13 @@ export class AppDatabase {
             )) AS waiting
     `
 
+    // Every folder read once, all its mail in, the recent text indexed: an empty mailbox is
+    // ready as soon as it is read, not never.
     return (
-      Number(row?.cached ?? 0) > 0 &&
-      Number(row?.cached ?? 0) >= Number(row?.onServer ?? 0) &&
-      Number(row?.waiting ?? 0) === 0
+      row !== undefined &&
+      Number(row.unsynced) === 0 &&
+      Number(row.cached) >= Number(row.onServer) &&
+      Number(row.waiting) === 0
     )
   }
 

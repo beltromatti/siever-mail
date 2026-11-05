@@ -163,6 +163,8 @@ export interface Proposal {
   payload: Record<string, unknown>
   accountId: string | null
   messageKey: string | null
+  /** The version shown: an answer to an older one is refused, the proposal having changed. */
+  revision: number
   createdAt: number
 }
 
@@ -768,7 +770,13 @@ export interface SegretarioApi {
   /** How to prepare for an event, as the Segretario wrote it, and when; null when it has not. */
   eventPrep: (eventKey: string) => Promise<{ text: string; writtenAt: number } | null>
   /** The user accepted a proposal — with what they changed — or set it aside. */
-  decideProposal: (id: string, accepted: boolean, result?: Record<string, unknown>) => Promise<void>
+  /** Answers a proposal; `revision` is the version shown: one changed since is refused. */
+  decideProposal: (
+    id: string,
+    accepted: boolean,
+    result?: Record<string, unknown>,
+    revision?: number
+  ) => Promise<void>
   getToday: () => Promise<TodayPage>
   /** Asks the Segretario to look at the day again now. */
   refreshToday: () => Promise<void>

@@ -284,6 +284,7 @@ if (hasSingleInstanceLock) {
       })
       .catch((error) => {
         console.error('[startup] initialization failed', error)
+        service.abandonStartup(error)
       })
 
     registerMailIpc(mailService, () => mainWindow)

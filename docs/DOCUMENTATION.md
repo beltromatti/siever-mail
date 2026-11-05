@@ -46,8 +46,12 @@ Startup, in `src/main/index.ts`:
    [Network shares](#network-shares)), the mail engine connects the
    accounts, the drafts the server lacks are filed, the calendars open
    (see [Calendar](#calendar)) and the Segretario opens (see
-   [Segretario](#segretario)). A Segretario that fails to open is logged
-   and leaves the mail and the calendar working.
+   [Segretario](#segretario)). The calendar and the Segretario open even
+   when the mail engine could not start; either failing to open is logged
+   and leaves the others working. When startup fails,
+   `abandonStartup` rejects what waits for the calendar and the
+   Segretario, so their channels answer with the reason instead of
+   hanging.
 4. The extension installs (see [Extensions](#extensions)).
 
 The window is created right away and loads alongside. **Every IPC channel
@@ -252,7 +256,9 @@ the guided setup:
 **A mailbox from its address.** `discoverMailSettings` (`mail-discovery.ts`)
 finds the servers as Thunderbird does: the providers SIEVER Mail knows by
 the address's domain (the Italian ones and the PEC among them); then the
-provider's own config file over https and Thunderbird's database (ISPDB),
+provider's own config file over https (a redirect followed only to https,
+`net.request`, since Electron's `net.fetch` refuses `redirect: 'manual'`)
+and Thunderbird's database (ISPDB),
 looked up while the domain's MX is resolved; failing those, a known
 provider recognised by its mail servers (a company's domain hosted there),
 the config files of the MX host's own domain, the domain's SRV records
@@ -273,7 +279,10 @@ the user's browser: one consent for the mailbox and, through
 cache with the account it is for; Microsoft renews the refresh token at
 each use, so every change of the cache is stored again, one renewal at a
 time per account. The account's address comes from Graph (`/me`), since a
-work account's sign-in name may not be it. The mailbox is
+work account's sign-in name may not be it. The browser's answer is waited
+for five minutes at most, and "Indietro" — or leaving the form — cancels
+the sign-in (`cancelSignIn`), so a tab closed without answering never
+leaves the form waiting. The mailbox is
 `outlook.office365.com` over IMAP; mail goes out through
 `smtp-mail.outlook.com` for a personal account and `smtp.office365.com` for
 a work or school one — or, where the organisation turned SMTP AUTH off
@@ -291,8 +300,10 @@ permissions are the scopes the code asks for (`microsoft-oauth.ts`):
 
 - `https://outlook.office.com/IMAP.AccessAsUser.All` and
   `https://outlook.office.com/SMTP.Send` — the mailbox;
-- `https://graph.microsoft.com/User.Read`, `Calendars.ReadWrite` and
-  `Mail.Send` — the address, the calendar, sending through Graph;
+- `https://graph.microsoft.com/User.Read`, `Calendars.ReadWrite`,
+  `Mail.Send` and `Mail.ReadWrite` — the address, the calendar, sending
+  through Graph (a message with blind copies goes as a draft first, since
+  Graph is not documented to send to a Bcc found in the MIME);
 - `openid`, `profile` and `offline_access`, which MSAL adds to every request.
 
 `.env.example` has the same notes beside the variable.
@@ -326,7 +337,10 @@ with three IMAP clients, so what the user does never waits behind a sync:
 **What changed** is found with one `LIST` that asks every folder's
 `STATUS` (`reviewFolders`), every 45 s and when the machine wakes or the
 network comes back; IDLE pushes the folder it watches, and the folder on
-screen is also looked at every 20 s. A message whose text the index gets,
+screen is also looked at every 20 s. A folder found unchanged is marked
+current, at most every five minutes (`markFolderCurrent`), so the
+Segretario can tell a message gone from the server from one in a folder
+nobody looked at (see [Views](#views)). A message whose text the index gets,
 or one that goes away, wakes the Segretario's engine (`onMailChanged`, at
 most every two seconds). A folder is synced
 only when its counts, UIDNEXT or (where the server keeps it per folder)
@@ -806,7 +820,10 @@ the reading only with it on. The state is kept in `ai_meta` (`onboarding`),
 so a quit brings the user back to the same step. Conoscimi is started by
 the user and watched as it works; the reading of the last thirty days runs
 eight at a time, with its progress, an estimate and what failed — nothing
-passes for read, and the user enters anyway. The engine follows the setup:
+passes for read, and the user enters anyway. A connection that cannot
+sync does not hold the preparation back: it says which, and "Continua
+senza" goes on. "Rifai Conoscimi" cancelled goes back to the app with the
+memory as it was. The engine follows the setup:
 until its Conoscimi is done, the setup's connections are not read, so the
 reading starts informed; when the AI is being turned on, the day, the
 projects and the memory wait for the setup to end. The switch in Settings,
@@ -890,10 +907,16 @@ key (`lettura:<account>:<thread>`, `giornata:<day>`, `punto:<project>`…, a
 partial unique index): what comes for a scope while it waits joins it — the
 scopes merged, the more urgent priority kept, a burst's start moved on. A
 failed unit is tried again after a minute, then five, three attempts in
-all; a network or provider failure does not count against it, and a
-reading failed for good is not queued again for a day. Settings shows what
-failed, with "Riprova". When a unit for the same scope is already waiting,
-it takes the failed one's place, with its attempts. After a quit, what was
+all; a network or provider failure does not count against it. Work
+failed for good is not queued again for its scope for a day
+(`FAILED_REST_MS`) — a failure repeated at every planning would be paid
+each time — and is then forgotten with the work done. Settings shows what
+failed, with "Riprova": the latest failure of each scope is tried again,
+unless work for it already waits. When a unit for the same scope is
+already waiting, a failing one joins it, with its attempts. The AI switched
+off stops what runs and lets go of what waits (`switchedOff`): on again,
+the planning finds from the state what is still to do; nothing queued
+starts while it is off. After a quit, what was
 running waits again (`recover`), unless a unit for its scope is already
 waiting. While the computer sleeps nothing starts — the few seconds a Mac
 wakes for now and then (Power Nap) are no time for a run — and what was
@@ -907,8 +930,11 @@ keeping one place for what is not backlog, so new mail never waits behind
 a month being read. Two units holding a lock key never run together: a
 reading holds its conversation, its projects and its outside sender, so
 what belongs together is read in turn; "Il punto" holds its project, and
-the day, the calendar and the memory's work one key each. A key refused or
-a credit run out pauses everything until the user acts.
+the day, the calendar and the memory's work one key each. It looks at the
+ready units a page of 120 at a time, so a long backlog of units waiting on
+a lock never hides one that may start. A key refused or a credit run out
+pauses everything until the user acts; a request the provider blocks for
+what it carries (`blocked`) is that unit's failure only.
 
 ### The registry
 
@@ -931,9 +957,11 @@ the run's page of the diary and — made by the user — becomes a lesson.
   `rinviata` to a day, when it opens again; any can be reopened, corrected,
   merged with another, or asked about — the Segretario's question, answered
   in Oggi. Every change goes in `ai_item_history`, with who made it, before
-  and after, and can be undone. The user's word wins: a run in the
-  background changes what the user decided only with a message newer than
-  the decision, given as evidence.
+  and after, and can be undone. The user's word wins: a commitment the
+  user created or edited is theirs (`set_by`), and a run in the background
+  changes what the user decided only with a message newer than the
+  decision, given as evidence — and of the same matter: the same
+  conversation, or one in a project they share.
 - **Projects** (`projects.ts`): the matters that last. The Segretario makes,
   names and fills them as it reads; the user renames, merges, hides and
   concludes them from the sidebar. A conversation may be in several; one
@@ -941,7 +969,7 @@ the run's page of the diary and — made by the user — becomes a lesson.
   a network disk are linked as resources. "Il punto" says where a project
   stands; once something moves after it, it is stale (`stale_since`) and the
   engine has it written again. A run in the background does not merge the
-  user's projects.
+  user's projects, nor open again one the user concluded (`closed_by`).
 - **Replies prepared** (`replies.ts`): one per message, a reply or a
   reminder (`sollecito`), local until the user takes it up: `pronta`;
   `da_rivedere` once the conversation moved on (kept, not counted as ready);
@@ -950,7 +978,10 @@ the run's page of the diary and — made by the user — becomes a lesson.
 - **Proposals** (`proposals.ts`): what the Segretario recommends and may not
   do alone — an event with guests (`evento`), an extension's action — one
   open per message and kind, until the user accepts it (an event is then
-  created as the user's own act) or sets it aside.
+  created as the user's own act) or sets it aside. Written again, a
+  proposal's revision goes up; the user's answer is to the revision on
+  screen, so one to a proposal changed meanwhile is refused, to be looked
+  at again.
 - **Saved copies**: copies an extension saved outside the mail, facts on
   the message wherever it goes, shown with the extension's label
   (`savedCopyLabel`).
@@ -958,9 +989,10 @@ the run's page of the diary and — made by the user — becomes a lesson.
   of a meeting, each with when it was written.
 
 Every object has a revision. A run remembers the revision of what it read
-(`RunContext.seen`), and a write over a newer one is refused with the
-object as it is now: the model reads again and decides again, so two runs
-never overwrite each other.
+(`RunContext.seen`) — what its context showed counts as read, and a
+conversation in the panel keeps them from one request to the next — and a
+write over a newer one is refused with the object as it is now: the model
+reads again and decides again, so two runs never overwrite each other.
 
 ### Views
 
@@ -975,7 +1007,8 @@ shows each message in the folder the user thinks of it in (`locate`).
 Archiving or moving closes nothing. A message only in the Trash or Spam is
 set aside: what is open from it leaves the views and Oggi until it comes
 back. A message deleted for good — missing from every folder for half an
-hour, its account's folders all synced (`ai_gone`, `settleDeleted`) —
+hour, every folder of its account synced since (`ai_gone`,
+`settleDeleted`) —
 closes what came from it as not needed, its reply and proposals
 superseded; its note stays, as history.
 
@@ -1170,8 +1203,10 @@ the Calendario, Oggi, the reader and the Segretario read it from there.
 **Providers** implement one interface (`CalendarProvider`): the calendars
 (name, primary, whether events can be written in it, colour); the events
 of a calendar, every one in a window or what changed since a token,
-cancelled ones included; create, update and remove, telling the guests;
-answer an invitation.
+cancelled ones included; create, update and remove, telling the guests —
+an update writes only the fields that changed (`changedFields`), so what
+someone else changed meanwhile in another stays; answer an invitation,
+one occurrence or the whole series.
 
 | `provider`  | Module               | How it syncs                                                                                                                                           | Writes                                                                                                                                  |
 | ----------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1183,17 +1218,24 @@ answer an invitation.
 iCalendar text — CalDAV objects, links, invitations — is read with ical.js
 (`icalendar.ts`): a series with its exceptions by UID, a time zone named
 without its VTIMEZONE resolved by its IANA name, the instances that fall in
-the window. An event the Segretario put in a calendar says so
+the window. A rule that would never give an instance is cut off
+(`guardedIterator`: ical.js guards only monthly and yearly ones), and an
+event without a UID is kept by its place in the file. An event the Segretario put in a calendar says so
 (`EventOrigin`), marked in the provider's own private properties.
 
 **Sync.** Every five minutes, one sync at a time per connection: the
 calendars listed (one no longer there takes its events with it), then each
 calendar's events — from two months back to a year ahead the first time,
 then only what changed; when the token expires or the window's end comes
-within six months, the window is read again. What a sync finds changed that
-the app did not change — new, moved, cancelled, an invitation answered — is
-noted in `calendar_changes`, kept a month, for the Segretario's `calendario`
-run. A connection's last problem is kept with it, in the user's words.
+within six months, the window is read again. A CalDAV object read is kept
+only once its events are (`commit`), so a sync cut short reads it again.
+What a sync finds changed that the app did not change — new, moved,
+cancelled, an invitation answered — is noted in `calendar_changes`, kept a
+month, for the Segretario's `calendario` run; a calendar read whole again
+(a link, an expired token) is compared with what it held, and an event
+gone before its end counts as cancelled. A calendar that cannot be read
+does not stop the others. A connection's last problems are kept with it,
+in the user's words.
 
 **The Calendario** (`apps/calendar/`): day, week, month and agenda, the
 small month, and the calendars by connection with their colours, each
@@ -1209,8 +1251,9 @@ an event there. Oggi lists the day's events under "In agenda".
 shows at the top of the reader (`features/calendar/invitation-card.tsx`).
 Its event is looked for by UID in every connected calendar — the one that
 came with the message's account first — and answered there: Partecipo,
-Forse, Non partecipo, the organizer told by the provider. When it is in no
-calendar reached here, the answer goes to the organizer by mail, as
+Forse, Non partecipo, the organizer told by the provider — to the whole
+series, for an invitation to one. When it is in no calendar reached here,
+the answer goes to the organizer by mail, as
 calendars answer one another (iMIP: a `REPLY` from the account the
 invitation came to, `respondToInvitationByMail`), the date read from the
 file. The Segretario's `calendario` tool lists events and free times,
@@ -1265,10 +1308,13 @@ saved outside the mail, as facts on each message wherever it goes;
 `savedCopies(refs)` says where these messages were saved before, so what is
 saved already is not saved again; `proposalDecided(id, accepted, result)`
 settles one of its proposals with what the user chose, for the reflection
-to learn from. The engine handle gives raw messages in bulk —
+to learn from; with the Segretario unable to open, `savedCopies` knows
+none and a decision goes unrecorded, and the extension works as before
+there was one. The engine handle gives raw messages in bulk —
 `fetchMessageRawSources(refs, onMessage)` downloads a few per command and
 hands each on while the next arrive, resolving with those no longer on the
-server — and `archiveMessages(refs)` archives them as their provider means
+server (`missing`) and those whose folder could not be read now (`unread`,
+with the reason), a folder's failure not stopping the others — and `archiveMessages(refs)` archives them as their provider means
 it: on Gmail they leave the inbox, elsewhere they go to the archive folder.
 Main-side extension code may also import the host's helpers, such as
 `ensurePathReachable` and `writeUniqueFile`.
@@ -1328,8 +1374,8 @@ label of its own.
 The packaged app reads its OAuth clients — Google's
 (`GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`) and Microsoft's
 (`MICROSOFT_OAUTH_CLIENT_ID`, see [Connections](#connections)) — from a
-`.env` in its resources (`config/env.ts`); a client left out turns its
-sign-in off. `build.mjs` writes that file (`.env.runtime`) from the local
+`.env` in its resources (`config/env.ts`); a client left out, or blank,
+turns its sign-in off. `build.mjs` writes that file (`.env.runtime`) from the local
 `.env`, keeping only the variables the app reads (`RUNTIME_ENV_KEYS`): a
 developer's own keys never ship.
 

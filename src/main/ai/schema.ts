@@ -9,7 +9,7 @@ import type { Sql } from './sql'
  * order, as an old one runs the steps it has not had: one path, so what a
  * fresh database looks like is what an upgraded one looks like.
  */
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 /** The tables of the first 2.0 builds, as they stood (version 1). */
 const BASELINE: ReadonlyArray<string> = [
@@ -176,6 +176,7 @@ const REGISTRY: ReadonlyArray<string> = [
     origin TEXT NOT NULL,
     hidden_at INTEGER,
     closed_at INTEGER,
+    closed_by TEXT,
     active_at INTEGER,
     revision INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
@@ -211,6 +212,7 @@ const REGISTRY: ReadonlyArray<string> = [
     payload_json TEXT NOT NULL,
     status TEXT NOT NULL,
     run_id TEXT,
+    revision INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
     decided_at INTEGER,
     result_json TEXT
@@ -298,6 +300,12 @@ const ADDED_COLUMNS: ReadonlyArray<{ table: string; column: string; definition: 
   { table: 'ai_memory', column: 'updated_by', definition: 'TEXT' }
 ]
 
+/** Version 3: who closed a project, so the user's closing stands; a proposal's revision. */
+const STEP_3_COLUMNS: ReadonlyArray<{ table: string; column: string; definition: string }> = [
+  { table: 'ai_projects', column: 'closed_by', definition: 'TEXT' },
+  { table: 'ai_proposals', column: 'revision', definition: 'INTEGER NOT NULL DEFAULT 1' }
+]
+
 async function hasTable(sql: Sql, table: string): Promise<boolean> {
   return (
     (await sql.get<{ name: string }>(
@@ -331,6 +339,13 @@ async function topicsToProjects(sql: Sql): Promise<void> {
     return
   }
 
+  // Run again after a start cut short between two steps, it picks up where it was: the links
+  // already copied stand for those of a table already dropped.
+  const threads = await hasTable(sql, 'ai_topic_threads')
+  const linked = threads
+    ? 'EXISTS (SELECT 1 FROM ai_topic_threads x WHERE x.topic_id = t.id)'
+    : 'EXISTS (SELECT 1 FROM ai_project_threads x WHERE x.project_id = t.id)'
+
   await sql.run(`
     INSERT OR IGNORE INTO ai_projects (
       id, title, title_by, description, state, state_at, stale_since, origin,
@@ -342,11 +357,10 @@ async function topicsToProjects(sql: Sql): Promise<void> {
       CASE WHEN t.origin = 'utente' THEN 'utente' ELSE 'segretario' END,
       NULL, t.archived_at, t.active_at, 1, t.created_at, t.updated_at
     FROM ai_topics t
-    WHERE t.origin <> 'extension'
-      OR EXISTS (SELECT 1 FROM ai_topic_threads x WHERE x.topic_id = t.id)
+    WHERE t.origin <> 'extension' OR ${linked}
   `)
 
-  if (await hasTable(sql, 'ai_topic_threads')) {
+  if (threads) {
     await sql.run(`
       INSERT OR IGNORE INTO ai_project_threads (project_id, account_id, thread_id, linked_by, rejected, created_at)
       SELECT x.topic_id, x.account_id, x.thread_id,
@@ -425,6 +439,12 @@ export async function ensureAiSchema(sql: Sql): Promise<void> {
 
   if (version < 2) {
     await registryStep(sql)
+  }
+
+  if (version < 3) {
+    for (const { table, column, definition } of STEP_3_COLUMNS) {
+      await addColumn(sql, table, column, definition)
+    }
   }
 
   if (version !== SCHEMA_VERSION) {

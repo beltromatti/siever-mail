@@ -238,6 +238,8 @@ export class SegretarioService {
   private reading: boolean | null = null
   private engineStateTimer: NodeJS.Timeout | null = null
   private mailWakeTimer: NodeJS.Timeout | null = null
+  /** Proposals being answered now. */
+  private readonly deciding = new Set<string>()
   /** The computer is asleep: the engine, made or yet to be made, waits for it to wake. */
   private asleep = false
 
@@ -255,9 +257,14 @@ export class SegretarioService {
       await this.openAll()
       this.opened.resolve()
     } catch (error) {
-      this.opened.reject(error instanceof Error ? error : new Error(String(error)))
+      this.abandon(error)
       throw error
     }
+  }
+
+  /** The app could not start: what waits for the Segretario is told so, rather than left waiting. */
+  abandon(error: unknown): void {
+    this.opened.reject(error instanceof Error ? error : new Error(String(error)))
   }
 
   private async openAll(): Promise<void> {
@@ -385,8 +392,10 @@ export class SegretarioService {
       this.mailWakeTimer = null
     }
 
-    this.runner?.cancelAll()
+    // The engine first: what it runs is put back to wait for the next start; cancelled by the
+    // runner before, it would count as the user's cancelling — failed, or the day taken as done.
     await this.engine?.stop()
+    this.runner?.cancelAll()
   }
 
   /** The computer goes to sleep, or wakes: the work done alone waits for it to be awake. */
@@ -469,13 +478,16 @@ export class SegretarioService {
   }
 
   private async setStatus(status: SegretarioStatus): Promise<SegretarioStatus> {
-    const becameReady = status.keyState === 'ready' && this.status.keyState !== 'ready'
+    // A key found working lifts a pause — the credit topped up leaves the key as it was, ready.
+    const lifts =
+      status.keyState === 'ready' &&
+      (this.status.keyState !== 'ready' || (this.engine?.paused ?? null) !== null)
     this.status = status
     await this.db.store.setStoredStatus(status)
     this.options.send(SEGRETARIO_IPC.statusChanged, status)
     await this.sayWhetherReading()
 
-    if (becameReady) {
+    if (lifts) {
       this.engine?.resume()
       this.engine?.wake()
     }
@@ -607,7 +619,7 @@ export class SegretarioService {
 
     if (!stored.enabled) {
       this.runner?.cancelAll()
-      this.engine?.cancelRunning()
+      await this.engine?.switchedOff()
     }
 
     await this.sayWhetherReading()
@@ -1051,6 +1063,7 @@ export class SegretarioService {
     payload: Record<string, unknown>
     accountId: string | null
     messageKey: string | null
+    revision: number
     createdAt: number
   }): Proposal {
     return {
@@ -1060,6 +1073,7 @@ export class SegretarioService {
       payload: proposal.payload,
       accountId: proposal.accountId,
       messageKey: proposal.messageKey,
+      revision: proposal.revision,
       createdAt: proposal.createdAt
     }
   }
@@ -1256,16 +1270,45 @@ export class SegretarioService {
    * calendar as proposed — the user's own act, invitations included.
    * An extension's: the extension did what it proposes; this records how.
    */
+  /**
+   * The user's answer to a proposal — to the version they saw (`revision`):
+   * one a run wrote again since is refused, to be looked at again. One
+   * answer at a time for each: a second click does not create twice.
+   */
   async decideProposal(
     id: string,
     accepted: boolean,
-    result?: Record<string, unknown>
+    result?: Record<string, unknown>,
+    revision?: number
+  ): Promise<void> {
+    if (this.deciding.has(id)) {
+      throw new Error('Questa proposta si sta già decidendo.')
+    }
+
+    this.deciding.add(id)
+
+    try {
+      await this.decideProposalNow(id, accepted, result, revision)
+    } finally {
+      this.deciding.delete(id)
+    }
+  }
+
+  private async decideProposalNow(
+    id: string,
+    accepted: boolean,
+    result: Record<string, unknown> | undefined,
+    revision: number | undefined
   ): Promise<void> {
     const { registry } = this.db
     const proposal = await registry.proposals.get(id)
 
     if (!proposal || proposal.status !== 'aperta') {
       throw new Error('Questa proposta non è più in attesa.')
+    }
+
+    if (revision !== undefined && revision !== proposal.revision) {
+      throw new Error('La proposta è cambiata da quando l’hai vista: guardala di nuovo.')
     }
 
     if (accepted && proposal.kind === 'evento') {
@@ -2019,9 +2062,15 @@ export class SegretarioService {
     })
 
     this.emit({ type: 'summary', activity: summary })
-    await store.appendEvent<ContextPayload>(id, 'context', {
-      text: `${PROMPTS.tasks.richiesta}\n\n---\n\n${await contextBlock({ mail: this.options.mail, calendar: this.options.calendar, notebook })}`
+    const block = await contextBlock({
+      mail: this.options.mail,
+      calendar: this.options.calendar,
+      notebook
     })
+    await store.appendEvent<ContextPayload>(id, 'context', {
+      text: `${PROMPTS.tasks.richiesta}\n\n---\n\n${block.text}`
+    })
+    this.db.runner.keepSeen(id, block.seen)
     const request = await this.appendUserMessage(id, text, context)
     void this.nameActivity(id, request)
     void this.converse(id)
@@ -2049,7 +2098,12 @@ export class SegretarioService {
   /** One turn of a conversation in the panel: the user is there, so it may ask and act. */
   private async converse(id: string, task: ActivitySummary['task'] = 'richiesta'): Promise<void> {
     try {
-      await this.db.runner.run({ activityId: id, task, background: task === 'conoscimi' })
+      await this.db.runner.run({
+        activityId: id,
+        task,
+        background: task === 'conoscimi',
+        conversation: true
+      })
     } catch (error) {
       logMainError('A conversation with the Segretario failed', error, { activityId: id })
     }
@@ -2061,6 +2115,7 @@ export class SegretarioService {
 
   async removeActivity(id: string): Promise<void> {
     this.runner?.cancel(id)
+    this.runner?.forgetSeen(id)
     await this.db.store.deleteActivity(id)
     this.emit({ type: 'removed', activityId: id })
   }

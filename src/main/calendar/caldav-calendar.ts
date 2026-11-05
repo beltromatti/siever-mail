@@ -4,7 +4,12 @@ import { DAVClient, type DAVCalendar, type DAVObject } from 'tsdav'
 
 import type { CalendarResponse, EventOrigin } from '@shared/calendar'
 
-import type { CalendarProvider, ProviderEvent, ProviderEventInput } from './calendar-provider'
+import type {
+  CalendarProvider,
+  EventField,
+  ProviderEvent,
+  ProviderEventInput
+} from './calendar-provider'
 import {
   changeEventResource,
   newEventResource,
@@ -245,7 +250,11 @@ export class CalDavCalendarProvider implements CalendarProvider {
   async changes(
     calendarId: string,
     since: { syncToken: string } | { fromIso: string; toIso: string }
-  ): Promise<{ events: ProviderEvent[]; syncToken: string | null }> {
+  ): Promise<{
+    events: ProviderEvent[]
+    syncToken: string | null
+    commit: () => Promise<void>
+  }> {
     const client = await this.dav()
     const calendar = await this.calendar(calendarId)
     const { store } = this.options
@@ -259,10 +268,6 @@ export class CalDavCalendarProvider implements CalendarProvider {
         })
       ).filter((object): object is DAVObject & { data: string } => typeof object.data === 'string')
 
-      await store.replace(
-        calendarId,
-        objects.map((object) => ({ url: object.url, etag: object.etag ?? null, data: object.data }))
-      )
       const events = (
         await Promise.all(objects.map((object) => this.eventsOf(calendarId, object, range)))
       ).flat()
@@ -271,7 +276,19 @@ export class CalDavCalendarProvider implements CalendarProvider {
         ctag: calendar.ctag ?? null,
         ...range
       }
-      return { events, syncToken: JSON.stringify(state) }
+      return {
+        events,
+        syncToken: JSON.stringify(state),
+        commit: () =>
+          store.replace(
+            calendarId,
+            objects.map((object) => ({
+              url: object.url,
+              etag: object.etag ?? null,
+              data: object.data
+            }))
+          )
+      }
     }
 
     const state = JSON.parse(since.syncToken) as SyncState
@@ -294,6 +311,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
       }
     })
     const events: ProviderEvent[] = []
+    const kept: StoredObject[] = []
 
     // Changed or new: its events now, and those it had that are no longer.
     for (const object of [...result.objects.created, ...result.objects.updated]) {
@@ -303,20 +321,18 @@ export class CalDavCalendarProvider implements CalendarProvider {
 
       const now = await this.eventsOf(calendarId, { url: object.url, data: object.data }, range)
       const before = stored.get(object.url)
-      const kept = new Set(now.map((event) => event.eventId))
+      const still = new Set(now.map((event) => event.eventId))
 
       if (before) {
         for (const event of await this.eventsOf(calendarId, before, range)) {
-          if (!kept.has(event.eventId)) {
+          if (!still.has(event.eventId)) {
             events.push({ ...event, cancelled: true })
           }
         }
       }
 
       events.push(...now)
-      await store.put(calendarId, [
-        { url: object.url, etag: object.etag ?? null, data: object.data }
-      ])
+      kept.push({ url: object.url, etag: object.etag ?? null, data: object.data })
     }
 
     // Gone from the server: its events go.
@@ -330,13 +346,19 @@ export class CalDavCalendarProvider implements CalendarProvider {
       }
     }
 
-    await store.remove(result.objects.deleted.map((object) => object.url))
     const next: SyncState = {
       sync: result.syncToken ?? state.sync,
       ctag: result.ctag ?? state.ctag,
       ...range
     }
-    return { events, syncToken: JSON.stringify(next) }
+    return {
+      events,
+      syncToken: JSON.stringify(next),
+      commit: async () => {
+        await store.put(calendarId, kept)
+        await store.remove(result.objects.deleted.map((object) => object.url))
+      }
+    }
   }
 
   /** An object as the server has it now, kept. */
@@ -449,12 +471,15 @@ export class CalDavCalendarProvider implements CalendarProvider {
   async update(
     calendarId: string,
     eventId: string,
-    event: ProviderEventInput
+    event: ProviderEventInput,
+    _notify: boolean,
+    fields: ReadonlySet<EventField>
   ): Promise<ProviderEvent> {
     const { url, recurrenceId } = splitEventId(eventId)
     const organizer = await this.organizer(event)
+    // Applied to the object as the server has it — again after a 412 — only what changed.
     const object = await this.rewrite(calendarId, url, (data) =>
-      changeEventResource(data, recurrenceId, event, organizer)
+      changeEventResource(data, recurrenceId, event, organizer, fields)
     )
     return this.occurrence(calendarId, object, recurrenceId)
   }
@@ -493,12 +518,15 @@ export class CalDavCalendarProvider implements CalendarProvider {
   async respond(
     calendarId: string,
     eventId: string,
-    response: Exclude<CalendarResponse, 'needsAction'>
+    response: Exclude<CalendarResponse, 'needsAction'>,
+    series: boolean
   ): Promise<ProviderEvent> {
     const { url, recurrenceId } = splitEventId(eventId)
+    // The whole series answered: on the series itself, not on the instance shown.
+    const answered = series ? null : recurrenceId
     const self = await this.self()
     const object = await this.rewrite(calendarId, url, (data) =>
-      withResponse(data, recurrenceId, self, response)
+      withResponse(data, answered, self, response)
     )
     return this.occurrence(calendarId, object, recurrenceId)
   }

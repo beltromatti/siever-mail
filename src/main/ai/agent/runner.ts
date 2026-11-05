@@ -79,6 +79,11 @@ export interface RunOptions {
   signal?: AbortSignal
   /** The revisions of what the run's starting data showed it. */
   seen?: ReadonlyMap<string, number>
+  /**
+   * A turn of a conversation: what the earlier turns read is still read, so a
+   * write over what changed since is refused in this turn too.
+   */
+  conversation?: boolean
 }
 
 export interface RunResult {
@@ -114,8 +119,19 @@ interface LiveRun {
  */
 export class AgentRunner {
   private readonly live = new Map<string, LiveRun>()
+  /** What each conversation in the panel has read, by revision: kept from one turn to the next. */
+  private readonly seenByConversation = new Map<string, Map<string, number>>()
 
   constructor(private readonly deps: RunnerDeps) {}
+
+  /** What a conversation starts having read: the notes of its context. */
+  keepSeen(activityId: string, seen: ReadonlyMap<string, number>): void {
+    this.seenByConversation.set(activityId, new Map(seen))
+  }
+
+  forgetSeen(activityId: string): void {
+    this.seenByConversation.delete(activityId)
+  }
 
   /** A change to the user's work, by a run: it goes on that run's page of the diary. */
   recordChange(change: RegistryChange, actor: Actor): void {
@@ -161,7 +177,7 @@ export class AgentRunner {
       task: options.task,
       background: options.background,
       actor: { by: 'segretario', runId: id, background: options.background },
-      seen: new Map(options.seen ?? []),
+      seen: new Map([...(this.seenByConversation.get(id) ?? []), ...(options.seen ?? [])]),
       changes: [],
       results: {},
       editor: options.editor ?? null
@@ -285,6 +301,10 @@ export class AgentRunner {
     } finally {
       for (const approval of live.approvals.values()) {
         approval.reject(new SegretarioError('cancelled', 'Interrotto.'))
+      }
+
+      if (options.conversation) {
+        this.seenByConversation.set(id, context.seen)
       }
 
       if (context.changes.length > 0) {

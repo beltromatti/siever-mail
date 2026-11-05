@@ -1,10 +1,20 @@
 import { z } from 'zod'
 
+/**
+ * A variable with a value. Blank counts as not set — `KEY=` is how `.env.example`
+ * and the release workflow write one they do not have — so one missing value
+ * turns off its own sign-in, never the others.
+ */
+const setting = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+  z.string().trim().min(1).optional()
+)
+
 const envSchema = z.object({
-  GOOGLE_OAUTH_CLIENT_ID: z.string().trim().min(1).optional(),
-  GOOGLE_OAUTH_CLIENT_SECRET: z.string().trim().min(1).optional(),
+  GOOGLE_OAUTH_CLIENT_ID: setting,
+  GOOGLE_OAUTH_CLIENT_SECRET: setting,
   /** The app registered in Microsoft Entra (public client, redirect `http://localhost`). */
-  MICROSOFT_OAUTH_CLIENT_ID: z.string().trim().min(1).optional()
+  MICROSOFT_OAUTH_CLIENT_ID: setting
 })
 
 export interface RuntimeConfig {

@@ -109,6 +109,8 @@ const INBOX_SPECIAL_USE = '\\Inbox'
 // of the list, open at once.
 const RECENT_INBOX_BODIES = 25
 const BACKGROUND_FOLDER_POLL_INTERVAL_MS = 45_000
+/** How stale a folder found unchanged may be marked before it is marked current again. */
+const FOLDER_CURRENT_MARK_MS = 5 * 60_000
 const ACTIVE_FOLDER_POLL_INTERVAL_MS = 20_000
 const RECONNECT_BACKOFF_INITIAL_MS = 2_000
 const RECONNECT_BACKOFF_MAX_MS = 60_000
@@ -2239,6 +2241,13 @@ export class AccountConnection extends EventEmitter {
           this.isInSight(mailbox.path) ? 'active-sync' : 'background'
         )
         continue
+      }
+
+      // Unchanged on the server: what is kept of it is current now — written now and then.
+      const now = Date.now()
+
+      if (state?.lastSyncedAt && now - state.lastSyncedAt > FOLDER_CURRENT_MARK_MS) {
+        await this.database.markFolderCurrent(this.account.id, mailbox.path, now)
       }
 
       // Previews a sync stopped short of filling, the last time.

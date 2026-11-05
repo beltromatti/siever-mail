@@ -107,7 +107,56 @@ describe('ensureAiSchema', () => {
       )
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '2'
+      value: '3'
+    })
+  })
+
+  it('picks up a migration a quit cut short between two steps', async () => {
+    await ensureAiSchema(sql)
+    await sql.run("UPDATE ai_meta SET value = '1' WHERE key = 'schema_version'")
+    await sql.run(V1_TABLES[0])
+    await sql.run(
+      `INSERT INTO ai_topics VALUES
+        ('t1', 'pratica:2451', 'Prat2451 · Valli', NULL, NULL, NULL, 1, 5, 'Il caseificio', 1, 'extension', NULL, NULL, NULL, 1, 2),
+        ('t2', 'pratica:2999', 'Prat2999 · Mai vista', NULL, NULL, NULL, 2, NULL, NULL, NULL, 'extension', NULL, NULL, NULL, 1, 1)`
+    )
+    // Cut short after the links were copied and their table dropped, before the topics were.
+    await sql.run(
+      `INSERT INTO ai_projects (id, title, title_by, origin, revision, created_at, updated_at)
+       VALUES ('t1', 'Prat2451 · Valli', 'segretario', 'segretario', 1, 1, 2)`
+    )
+    await sql.run(
+      `INSERT INTO ai_project_threads (project_id, account_id, thread_id, linked_by, rejected, created_at)
+       VALUES ('t1', 'a', 'th1', 'segretario', 0, 1)`
+    )
+
+    await ensureAiSchema(sql)
+
+    expect(await sql.all("SELECT name FROM sqlite_master WHERE name = 'ai_topics'")).toEqual([])
+    expect(await sql.all('SELECT id FROM ai_projects ORDER BY id')).toEqual([{ id: 't1' }])
+  })
+
+  it('gives a version 2 database the columns of version 3', async () => {
+    // A database at version 2, as the registry first wrote it: without the two columns.
+    await ensureAiSchema(sql)
+    await sql.run('ALTER TABLE ai_projects DROP COLUMN closed_by')
+    await sql.run('ALTER TABLE ai_proposals DROP COLUMN revision')
+    await sql.run("UPDATE ai_meta SET value = '2' WHERE key = 'schema_version'")
+    await sql.run(
+      `INSERT INTO ai_proposals (id, kind, title, payload_json, status, created_at)
+       VALUES ('p1', 'archivia', 'Archivia', '{}', 'aperta', 1)`
+    )
+
+    await ensureAiSchema(sql)
+
+    expect(
+      await sql.all("SELECT name FROM pragma_table_info('ai_projects') WHERE name = 'closed_by'")
+    ).toEqual([{ name: 'closed_by' }])
+    expect(await sql.all('SELECT id, revision FROM ai_proposals')).toEqual([
+      { id: 'p1', revision: 1 }
+    ])
+    expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
+      value: '3'
     })
   })
 
