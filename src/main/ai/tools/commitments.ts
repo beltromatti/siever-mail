@@ -13,7 +13,6 @@ import {
 } from '../agent/tool-types'
 import { evidenceOf, resolveSentOrReceived } from './anchors'
 import { commitmentLine, rememberCommitments } from './describe'
-import { checkWeekdays } from './weekdays'
 import { countOf } from './format'
 
 const NATURES: ReadonlyArray<NoteNature> = [
@@ -53,7 +52,6 @@ export const noteTool: SegretarioTool = {
     const message = await resolveSentOrReceived(context, handle)
     const nature = requireString(args, 'natura') as NoteNature
     const priority = requireString(args, 'importanza') as NotePriority
-    checkWeekdays(stringArg(args, 'sintesi'), stringArg(args, 'motivo'))
 
     try {
       const { record, change } = await context.registry.writeNote(
@@ -100,7 +98,6 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
   const remember = (record: CommitmentRecord): void => {
     context.run.seen.set(seenKey('item', record.id), record.revision)
   }
-  checkWeekdays(stringArg(operation, 'testo'), stringArg(operation, 'domanda'))
   const needId = (): number => {
     if (id === undefined) {
       throw new ToolInputError(`Per «${action}» serve \`id\`, il numero della cosa (#12 → 12).`)
@@ -207,6 +204,27 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
   }
 }
 
+/** How far back, and over how many conversations, what is open with a person is looked for. */
+const PERSON_LOOKBACK_MS = 365 * 24 * 60 * 60 * 1000
+const PERSON_CONVERSATIONS = 50
+
+/** The conversations, in every account, with mail from this address. */
+async function conversationsWith(
+  context: ToolContext,
+  address: string
+): Promise<Array<{ accountId: string; threadId: string }>> {
+  const since = new Date(Date.now() - PERSON_LOOKBACK_MS).toISOString()
+  const accounts = await context.mail.listAccounts()
+  const found = await Promise.all(
+    accounts.map(async (account) =>
+      (await context.mail.threadsFromSender(account.id, address, since, PERSON_CONVERSATIONS)).map(
+        (threadId) => ({ accountId: account.id, threadId })
+      )
+    )
+  )
+  return found.flat()
+}
+
 async function listCommitments(context: ToolContext, filter: Operation): Promise<string> {
   const kind = stringArg(filter, 'tipo') as CommitmentKind | undefined
   const projectHandle = stringArg(filter, 'progetto')
@@ -216,7 +234,26 @@ async function listCommitments(context: ToolContext, filter: Operation): Promise
     throw new ToolInputError(`Non conosco il progetto «${projectHandle}».`)
   }
 
-  const threads = project ? await context.registry.projects.threadsOf(project.projectId) : undefined
+  const person = stringArg(filter, 'persona')?.trim().toLowerCase()
+  let threads = project ? await context.registry.projects.threadsOf(project.projectId) : undefined
+
+  if (person) {
+    const withPerson = await conversationsWith(context, person)
+    const kept = threads
+      ? threads.filter((thread) =>
+          withPerson.some(
+            (other) => other.accountId === thread.accountId && other.threadId === thread.threadId
+          )
+        )
+      : withPerson
+
+    if (kept.length === 0) {
+      return `Nessuna conversazione con ${person}${project ? ' in questo progetto' : ''}.`
+    }
+
+    threads = kept
+  }
+
   const records = await context.registry.commitments.open({
     kinds: kind ? [kind] : undefined,
     dueBy: stringArg(filter, 'entro'),
@@ -293,7 +330,8 @@ export const commitmentsTool: SegretarioTool = {
             domanda: { type: 'string' },
             con: { type: 'array', items: { type: 'integer' } },
             entro: { type: 'string' },
-            progetto: { type: 'string' }
+            progetto: { type: 'string' },
+            persona: { type: 'string' }
           },
           required: ['azione']
         }

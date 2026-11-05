@@ -4,6 +4,7 @@ Parametri:
 
 - `messaggio`: il riferimento del messaggio — quello a cui si risponde, o per un sollecito l'ultimo dell'utente.
 - `azione`:
+  - `elenco` — senza `messaggio`: le risposte e i solleciti preparati che l'utente non ha ancora usato, pronti o da rivedere, ognuno sul suo messaggio.
   - `prepara` — con `testo` (il corpo, nella voce dell'utente, con tra parentesi quadre ciò che deve completare lui), `dubbi` (in una o due frasi, cosa deve decidere o verificare prima di mandarla; vuoto se niente) e `tipo` (`risposta` o `sollecito`). Se ce n'era già una, la sostituisce.
   - `conferma` — una risposta segnata da rivedere è ancora giusta così.
   - `scarta` — con `motivo`: non serve più (l'utente ha già risposto, la questione è cambiata).

@@ -847,23 +847,26 @@ keeps for itself is what cannot be left to the model:
   of the run is summarised (`infrastruttura/compattazione.md`); 80 steps at
   most;
 - a tool call that failed is not made again as it was;
-- the weekday of a date, which the model reckons wrongly now and then: the
-  context lists the next two weeks, the days the tools give carry theirs
-  (`2026-11-10 (mar)`), and what a run writes — the letter, notes,
-  commitments, replies, drafts, projects, the memory — giving a day a
-  weekday not its own is refused with the right one (`tools/weekdays.ts`);
-  the reread before sending finds the same in the user's own text;
 - what the task must leave (`missing`): a run that stops short is told what
   is missing, twice at most, then fails.
 
-A run begins (`tasks/start-run.ts`) with its task (`prompts/compiti/`) and
-the context (`contesto.md`, `tasks/context.ts`: the date and time zone, the
-connections — mailboxes with their signatures, calendars — and the memory's
-index with `tu.md`, `stile.md`, `connessioni.md` and each mailbox's note),
-then the data it starts from. The system prompt is the identity with what
-the extension adds (`assistant.instructions()`), and every run gets the same
-tools in the same order (`tools/index.ts`), so the prefix the provider
-caches is shared by all of them. The model names what it saw by short
+What the model reads is its own choice: the harness checks a tool call,
+never the text the model writes, and decides only the little a run begins
+with. A run begins (`tasks/start-run.ts`) with its task
+(`prompts/compiti/`), a map (`contesto.md`, `tasks/context.ts`: the date
+and time zone, the connections — mailboxes with their signatures,
+calendars — and the memory's index), then what changed: the messages that
+came, named for the run to read; the project that moved; the calendar's
+changes; the user's corrections; the request and what the user is looking
+at. Everything else — the conversation and the work already on it, the
+memory's notes, the calendar, what is open with a person or in a project —
+the run looks up with its tools, as much as the case needs; the prompts
+suggest where to look, the tools return dates with their weekday.
+
+The system prompt is the identity with what the extension adds
+(`assistant.instructions()`), and every run gets the same tools in the
+same order (`tools/index.ts`), so the prefix the provider caches is shared
+by all of them. The model names what it saw by short
 handles — `m4` a message, `f2` a file or an attachment, `b1` a draft, `p3`
 a project, `e2` an event (`agent/handles.ts`) — which the panel turns into
 links.
@@ -966,8 +969,7 @@ the run's page of the diary and — made by the user — becomes a lesson.
   and after, and can be undone. The user's word wins: a commitment the
   user created or edited is theirs (`set_by`), and a run in the background
   changes what the user decided only with a message newer than the
-  decision, given as evidence — and of the same matter: the same
-  conversation, or one in a project they share.
+  decision, given as evidence.
 - **Projects** (`projects.ts`): the matters that last. The Segretario makes,
   names and fills them as it reads; the user renames, merges, hides and
   concludes them from the sidebar. A conversation may be in several; one
@@ -1029,13 +1031,13 @@ Every run has the same tools (`tools/`), each described to the model by
 | `cerca_file`   | Files and folders by name in the user's folders and the mounted disks, or a folder's listing.                                                                                               |
 | `leggi`        | Whatever a handle names — a message or its whole conversation with the work already on it, an attachment or a file (`extraction.ts`), an event, a project, a draft — or a file by its path. |
 | `nota`         | Writes or corrects a message's note.                                                                                                                                                        |
-| `impegni`      | Lists the commitments and changes them, several operations a call.                                                                                                                          |
+| `impegni`      | Lists the commitments — by kind, date, project or person — and changes them, several operations a call.                                                                                     |
 | `progetti`     | Lists, creates, links and unlinks conversations, renames, describes, writes "Il punto", merges, hides, concludes, links folders.                                                            |
-| `risposta`     | Prepares a reply or reminder, confirms one to look at again, discards one.                                                                                                                  |
+| `risposta`     | Lists the replies and reminders prepared, prepares one, confirms one to look at again, discards one.                                                                                        |
 | `scrivi_bozza` | A real draft — reply, forward, new — saved in Bozze and opened in the composer; in `scrittura`, the text for the editor.                                                                    |
 | `invia_bozza`  | Sends a draft once the user confirms its card.                                                                                                                                              |
 | `organizza`    | Archives, moves, flags, marks read or unread, moves to the Trash.                                                                                                                           |
-| `calendario`   | Lists events and free times, creates, changes, deletes, answers invitations, proposes.                                                                                                      |
+| `calendario`   | Lists events (with the events it proposed) and free times, creates, changes, deletes, answers invitations, proposes.                                                                        |
 | `memoria`      | Reads, searches, edits, inserts, writes, renames and deletes notes; a note's history, and a version restored.                                                                               |
 | `oggi`         | The letter of Oggi — written by the day's run, or when the user asks: a reading puts what matters today in the commitments instead — and a meeting's preparation.                           |
 | `revisione`    | The outcome of a reread before sending.                                                                                                                                                     |

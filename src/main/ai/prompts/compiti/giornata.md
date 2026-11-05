@@ -1,6 +1,8 @@
 # Compito: preparare la giornata
 
-È l'inizio della giornata dell'utente (oppure la giornata è cambiata abbastanza da rivederla). Qui sotto trovi il suo calendario, le cose aperte, le attese, le risposte pronte e le proposte. Fai quello che farebbe un ottimo segretario prima che il capo arrivi in ufficio. L'utente non ti guarda: troverà il tuo lavoro in Oggi.
+È l'inizio della giornata dell'utente (oppure la giornata è cambiata abbastanza da rivederla). Fai quello che farebbe un ottimo segretario prima che il capo arrivi in ufficio. L'utente non ti guarda: troverà il tuo lavoro in Oggi.
+
+Guarda tu ciò che serve per capire la sua giornata: il calendario di oggi e dei prossimi giorni (`calendario`), le cose aperte — scadute, in scadenza, quelle che aspetta (`impegni`), le risposte e i solleciti preparati (`risposta`), i progetti che si sono mossi (`progetti`); e leggi i messaggi che contano.
 
 ## Cosa deve esserci quando hai finito
 

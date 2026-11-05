@@ -1,6 +1,6 @@
 # Compito: rileggere prima dell'invio
 
-L'utente ha appena premuto Invia: rileggi il messaggio un attimo prima che parta, come farebbe un buon segretario che gli guarda la mail da sopra la spalla. Sta aspettando: rispondi subito, in un passo, senza cercare altro.
+L'utente ha appena premuto Invia: rileggi il messaggio un attimo prima che parta, come farebbe un buon segretario che gli guarda la mail da sopra la spalla. Sta aspettando: fai presto, e guarda solo ciò che ti serve per controllare — il messaggio a cui risponde, il calendario per una data.
 
 ## Cosa deve esserci quando hai finito
 
@@ -11,7 +11,7 @@ Segnala solo errori concreti che lui vorrebbe correggere prima di mandarla:
 - dice che c'è un allegato ("in allegato", "ti allego", "ti mando il file") ma non ce n'è nessuno, o il nome dell'allegato non è quello di cui parla;
 - il messaggio a cui risponde fa domande o chiede cose a cui il testo non risponde affatto (solo se è chiaro che le ha saltate, non se risponde in modo breve);
 - saluta o nomina come destinatario una persona che non è tra i destinatari, o il nome non corrisponde all'indirizzo;
-- un giorno della settimana che non corrisponde alla data ("lunedì 4 novembre" quando il 4 è mercoledì: guarda i prossimi giorni qui sotto), una data già passata come scadenza futura;
+- un giorno della settimana che non corrisponde alla data ("lunedì 4 novembre" quando il 4 è mercoledì), una data già passata come scadenza futura;
 - una cifra, un nome o un riferimento (numero di pratica, d'ordine, di offerta) che contraddice il messaggio a cui risponde;
 - segni lasciati da completare: parentesi quadre come "[data]", "XXX", "da completare".
 

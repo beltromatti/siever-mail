@@ -15,7 +15,6 @@ import {
 } from '../agent/tool-types'
 import { resolveMessage } from './anchors'
 import { projectLine } from './describe'
-import { checkWeekdays } from './weekdays'
 import { countOf } from './format'
 
 const ACTIONS = [
@@ -179,7 +178,6 @@ export const projectsTool: SegretarioTool = {
           }
         }
         case 'crea': {
-          checkWeekdays(stringArg(args, 'descrizione'))
           const { record, created } = await context.registry.createProject(
             requireString(args, 'titolo'),
             actor,
@@ -272,7 +270,6 @@ export const projectsTool: SegretarioTool = {
         }
         case 'descrivi': {
           const id = projectOf(context, args)
-          checkWeekdays(stringArg(args, 'descrizione'))
           const record = await context.registry.describeProject(
             id,
             requireString(args, 'descrizione'),
@@ -287,7 +284,6 @@ export const projectsTool: SegretarioTool = {
         }
         case 'punto': {
           const id = projectOf(context, args)
-          checkWeekdays(stringArg(args, 'testo'))
           const record = await context.registry.setProjectState(
             id,
             requireString(args, 'testo'),

@@ -12,7 +12,6 @@ import {
   type SegretarioTool,
   type ToolContext
 } from '../agent/tool-types'
-import { checkWeekdays } from './weekdays'
 
 /**
  * A draft as a whole — its words, who it goes to, its subject and files —
@@ -108,7 +107,6 @@ export const writeDraftTool: SegretarioTool = {
   running: (args) => (args.tipo ? 'Scrivo la bozza…' : 'Scrivo…'),
   async execute(args, context) {
     const text = requireString(args, 'testo')
-    checkWeekdays(text)
 
     // Writing in the message open in the editor: the words go there, in place.
     if (context.run.task === 'scrittura') {

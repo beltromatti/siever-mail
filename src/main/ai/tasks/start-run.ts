@@ -59,7 +59,7 @@ export async function startRun(
   await spec.onCreated?.(id)
   const context = await contextBlock(starter.sources)
   await store.appendEvent<ContextPayload>(id, 'context', {
-    text: `${PROMPTS.tasks[spec.task]}\n\n---\n\n${context.text}`
+    text: `${PROMPTS.tasks[spec.task]}\n\n---\n\n${context}`
   })
   const user = await store.appendEvent<UserPayload>(id, 'user', {
     text: spec.shown ?? spec.data.title,
@@ -80,7 +80,7 @@ export async function startRun(
     editor: spec.editor,
     missing: spec.missing,
     signal: spec.signal,
-    seen: new Map([...context.seen, ...(spec.data.seen ?? [])]),
+    seen: new Map(spec.data.seen ?? []),
     // Work shown in the panel may go on as a conversation: what it read is kept for that.
     conversation: spec.visibility === 'pannello'
   })

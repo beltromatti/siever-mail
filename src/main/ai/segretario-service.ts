@@ -86,7 +86,6 @@ import { SEGRETARIO_TOOLS } from './tools'
 import { eventLine } from './tools/calendar'
 import { localDay } from './tools/day'
 import { comparableText, formatDateTime, shortDate } from './tools/format'
-import { wrongWeekdays } from './tools/weekdays'
 
 const KEY_RECHECK_MS = 20 * 60 * 1000
 /** New mail wakes the engine at most this often. */
@@ -1884,9 +1883,7 @@ export class SegretarioService {
   /** Rereads a message about to be sent: what the user would want to correct first, a line each. */
   async reviewDraft(request: ReviewRequest): Promise<string[]> {
     await this.requireKey()
-    // A day given a weekday not its own is certain, not a matter of reading: found by the program.
-    const weekdays = wrongWeekdays(request.writtenText).map((line) => `${line}.`)
-    const data = await prepareReview({ mail: this.options.mail }, request, weekdays)
+    const data = await prepareReview({ mail: this.options.mail }, request)
     const result = await startRun(this.starter(), {
       task: 'revisione',
       background: false,
@@ -1895,7 +1892,7 @@ export class SegretarioService {
       signal: AbortSignal.timeout(REVIEW_TIMEOUT_MS),
       missing: async (run) => (run.results.review ? null : 'Dai l’esito con `revisione`.')
     })
-    return [...weekdays, ...(result.run.results.review ?? [])]
+    return result.run.results.review ?? []
   }
 
   /**
@@ -2071,9 +2068,8 @@ export class SegretarioService {
       notebook
     })
     await store.appendEvent<ContextPayload>(id, 'context', {
-      text: `${PROMPTS.tasks.richiesta}\n\n---\n\n${block.text}`
+      text: `${PROMPTS.tasks.richiesta}\n\n---\n\n${block}`
     })
-    this.db.runner.keepSeen(id, block.seen)
     const request = await this.appendUserMessage(id, text, context)
     void this.nameActivity(id, request)
     void this.converse(id)

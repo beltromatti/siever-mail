@@ -11,9 +11,7 @@ import {
   type SegretarioTool,
   type ToolContext
 } from '../agent/tool-types'
-import type { HandleRegistry } from '../agent/handles'
 import { formatDateTime } from './format'
-import { checkWeekdays } from './weekdays'
 
 const COMMANDS = [
   'leggi',
@@ -26,27 +24,6 @@ const COMMANDS = [
   'storia',
   'ripristina'
 ] as const
-
-/**
- * A note outlives the run, its short names do not: m4 is another message
- * in the next one. A short name of this run in what is written is sent
- * back, for the model to say what it stands for.
- */
-function checkShortNames(text: string, handles: HandleRegistry): void {
-  const used = [
-    ...new Set(
-      [...text.matchAll(/\b([mfbpe]\d{1,4})\b/g)]
-        .map((match) => match[1])
-        .filter((name) => handles.resolve(name) !== null)
-    )
-  ]
-
-  if (used.length > 0) {
-    throw new ToolInputError(
-      `Nella nota hai usato ${used.join(', ')}: questi riferimenti valgono solo in questo lavoro. Scrivi invece mittente, oggetto e data del messaggio, il nome del progetto o del file.`
-    )
-  }
-}
 
 function numbered(document: MemoryDocument): string {
   return `${document.path} (versione ${document.revision}, aggiornata il ${formatDateTime(new Date(document.updatedAt).toISOString())})\n${document.content
@@ -146,11 +123,6 @@ export const memoryTool: SegretarioTool = {
             new: typeof edit.nuovo === 'string' ? edit.nuovo : ''
           }))
 
-          for (const edit of edits) {
-            checkShortNames(edit.new, context.handles)
-            checkWeekdays(edit.new)
-          }
-
           const document = await notebook.edit(path, edits, actor)
           remember(context, document)
           return {
@@ -160,8 +132,6 @@ export const memoryTool: SegretarioTool = {
         }
         case 'inserisci': {
           const text = requireString(args, 'testo')
-          checkShortNames(text, context.handles)
-          checkWeekdays(text)
           const document = await notebook.insert(
             path,
             numberArg(args, 'riga') ?? Number.MAX_SAFE_INTEGER,
@@ -173,8 +143,6 @@ export const memoryTool: SegretarioTool = {
         }
         case 'scrivi': {
           const text = requireString(args, 'testo')
-          checkShortNames(text, context.handles)
-          checkWeekdays(text)
           const read = context.run.seen.get(seenKey('memory', path))
           const { document, created } = await notebook.write(path, text, actor, {
             seenRevision: read

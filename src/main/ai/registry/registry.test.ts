@@ -99,30 +99,14 @@ describe('Registry', () => {
       await expect(
         registry.setCommitmentStatus(record.id, 'aperta', BACKGROUND, {
           evidence: {
-            accountId: 'acc',
-            threadId: 't1',
             messageKey: 'm:old',
             dateIso: new Date(closed.record.updatedAt - 1000).toISOString()
           }
         })
       ).rejects.toBeInstanceOf(RegistryRefusal)
 
-      // Newer, but of another conversation: not a proof of this.
-      await expect(
-        registry.setCommitmentStatus(record.id, 'aperta', BACKGROUND, {
-          evidence: {
-            accountId: 'acc',
-            threadId: 't-altro',
-            messageKey: 'm:altro',
-            dateIso: new Date(closed.record.updatedAt + 1000).toISOString()
-          }
-        })
-      ).rejects.toBeInstanceOf(RegistryRefusal)
-
       const reopened = await registry.setCommitmentStatus(record.id, 'aperta', BACKGROUND, {
         evidence: {
-          accountId: 'acc',
-          threadId: 't1',
           messageKey: 'm:new',
           dateIso: new Date(closed.record.updatedAt + 1000).toISOString()
         },

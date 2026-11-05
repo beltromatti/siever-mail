@@ -2,7 +2,7 @@ Le cose aperte tra l'utente e gli altri, in tutti i suoi account: ciò che gli c
 
 Fai tutte le operazioni che servono in una sola chiamata, in `operazioni`. Ognuna ha la sua `azione`:
 
-- `elenco` — le cose aperte (e quelle rinviate), le più vicine per prime, con il messaggio da cui nascono; si restringe con `tipo`, `entro` (AAAA-MM-GG) e `progetto` (p…).
+- `elenco` — le cose aperte (e quelle rinviate), le più vicine per prime, con il messaggio da cui nascono; si restringe con `tipo`, `entro` (AAAA-MM-GG), `progetto` (p…) e `persona` (un indirizzo: le conversazioni in cui ha scritto, in tutti gli account).
 - `apri` — con `messaggio` (il riferimento del messaggio da cui nasce), `tipo`, `testo` (la cosa, breve e concreta) e `scadenza` se c'è. Se la stessa cosa è già aperta nella conversazione, restituisce quella.
 - `aggiorna` — con `id`: cambia `testo`, `scadenza` o `tipo` (una data fissata o spostata, ciò che resta da fare).
 - `fatta` — con `id`: è fatta. Indica in `prova` il messaggio che lo mostra, se c'è, e in `motivo` cosa è successo.

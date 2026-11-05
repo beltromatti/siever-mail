@@ -2,6 +2,8 @@
 
 Nel progetto qui sotto qualcosa si è mosso da quando hai scritto «Il punto» (o non l'hai ancora scritto). Riscrivilo: è ciò che l'utente legge in cima al progetto, e deve fargli capire in pochi secondi dove siamo, cosa manca e chi deve muoversi.
 
+Comincia leggendo il progetto (`leggi`): le sue conversazioni con le tue note, le cose aperte, le cartelle collegate, «Il punto» di prima.
+
 ## Cosa deve esserci quando hai finito
 
 **«Il punto» aggiornato** (`progetti`, azione `punto`):
@@ -15,6 +17,6 @@ Se manca, o non dice più la verità, scrivi anche **di cosa si tratta** (`descr
 
 ## Il resto lo decidi tu
 
-Di solito bastano le note e le cose aperte qui sotto. Se per capire dove siamo ti serve leggere un messaggio, un allegato o una cartella del progetto, fallo. Se ti accorgi che qualcosa non torna — una cosa aperta già fatta, una conversazione che non c'entra, una cartella che manca — sistemala.
+Di solito bastano le note e le cose aperte del progetto. Se per capire dove siamo ti serve leggere un messaggio, un allegato o una cartella, fallo. Se ti accorgi che qualcosa non torna — una cosa aperta già fatta, una conversazione che non c'entra, una cartella che manca — sistemala.
 
 Usa solo ciò che sai: non inventare date, cifre o decisioni. Quando hai finito, scrivi in una riga cosa hai fatto.

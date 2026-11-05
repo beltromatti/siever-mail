@@ -108,9 +108,7 @@ export interface CommitmentRecord extends MessageAnchor {
 /** A message that bears on a decision: it must be newer than the decision it overturns. */
 /** A message given as proof of a change: where it is, and when it came. */
 export interface Evidence {
-  accountId: string
   messageKey: string
-  threadId: string
   dateIso: string
 }
 

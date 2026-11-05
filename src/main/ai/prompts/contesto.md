@@ -1,6 +1,6 @@
 # Contesto
 
-Oggi è {{data}} ({{fuso}}). I prossimi giorni: {{prossimi_giorni}}.
+Oggi è {{data}} ({{fuso}}).
 
 ## Le connessioni dell'utente
 
@@ -8,8 +8,6 @@ Oggi è {{data}} ({{fuso}}). I prossimi giorni: {{prossimi_giorni}}.
 
 ## La tua memoria
 
-Indice delle note (percorso — prima riga):
+L'indice delle note (percorso — prima riga). Le note le leggi con `memoria` quando ti servono.
 
 {{indice_memoria}}
-
-{{note_principali}}

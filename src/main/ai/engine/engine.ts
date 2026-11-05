@@ -641,7 +641,7 @@ export class SegretarioEngine {
           const today = localDay()
           const begun = Date.now()
           const letter = await deps.registry.day.letter(today)
-          const data = await prepareDay(deps, { refresh, lastLetterAt: letter?.writtenAt ?? null })
+          const data = prepareDay({ refresh, lastLetterAt: letter?.writtenAt ?? null })
 
           settle(
             await startRun(starter, {

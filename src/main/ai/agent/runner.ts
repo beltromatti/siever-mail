@@ -124,11 +124,6 @@ export class AgentRunner {
 
   constructor(private readonly deps: RunnerDeps) {}
 
-  /** What a conversation starts having read: the notes of its context. */
-  keepSeen(activityId: string, seen: ReadonlyMap<string, number>): void {
-    this.seenByConversation.set(activityId, new Map(seen))
-  }
-
   forgetSeen(activityId: string): void {
     this.seenByConversation.delete(activityId)
   }

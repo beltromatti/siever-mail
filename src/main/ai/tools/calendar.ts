@@ -5,7 +5,7 @@ import {
   type EventChange
 } from '@shared/calendar'
 
-import type { UndoSpec } from '../registry/types'
+import type { ProposalRecord, UndoSpec } from '../registry/types'
 
 import { PROMPTS } from '../prompts'
 import {
@@ -297,6 +297,41 @@ function changeOf(args: Record<string, unknown>, allDay: boolean): EventChange {
   return change
 }
 
+/** When an event proposed would be, from what `proponi` kept. */
+function proposedTimes(
+  payload: Record<string, unknown>
+): { start: Date; end: Date; allDay: boolean } | null {
+  const allDay = payload.allDay === true
+  const at = (value: unknown): Date | null => {
+    if (typeof value !== 'string') {
+      return null
+    }
+
+    const date = new Date(allDay && !value.includes('T') ? `${value}T00:00` : value)
+    return Number.isNaN(date.getTime()) ? null : date
+  }
+  const start = at(payload.start)
+  const end = at(payload.end)
+  return start && end ? { start, end, allDay } : null
+}
+
+/** An event proposed, as the calendar lists it: what, when, with whom. */
+function proposalLine(proposal: ProposalRecord): string {
+  const times = proposedTimes(proposal.payload)
+  const attendees = Array.isArray(proposal.payload.attendees)
+    ? proposal.payload.attendees.filter((value): value is string => typeof value === 'string')
+    : []
+  const when = !times
+    ? ''
+    : times.allDay
+      ? ` · ${DAY.format(times.start)}, tutto il giorno`
+      : ` · ${DAY.format(times.start)} ${TIME.format(times.start)}–${TIME.format(times.end)}`
+
+  return `- «${String(proposal.payload.title ?? proposal.title)}»${when}${
+    attendees.length > 0 ? ` · con ${attendees.join(', ')}` : ''
+  }`
+}
+
 export const calendarTool: SegretarioTool = {
   name: 'calendario',
   description: PROMPTS.tools.calendario,
@@ -341,14 +376,28 @@ export const calendarTool: SegretarioTool = {
         const events = await context.calendar.events(from.toISOString(), to.toISOString())
         const preps = await context.registry.day.preps(events.map((event) => event.key))
         const lastDay = new Date(to.getTime() - 1)
+        const proposed = (await context.registry.proposals.open({ kind: 'evento' })).filter(
+          (proposal) => {
+            const start = proposedTimes(proposal.payload)?.start
+            return start !== undefined && start >= from && start < to
+          }
+        )
+        const lines = [
+          events.length === 0
+            ? `Nessun evento dal ${DAY.format(from)} al ${DAY.format(lastDay)}.`
+            : `${countOf(events.length, 'evento', 'eventi')} dal ${DAY.format(from)} al ${DAY.format(lastDay)}:\n${events
+                .map((event) => eventLine(event, context, preps.get(event.key)))
+                .join('\n')}`
+        ]
+
+        if (proposed.length > 0) {
+          lines.push(
+            `Proposti da te, in attesa che l'utente li accetti:\n${proposed.map(proposalLine).join('\n')}`
+          )
+        }
 
         return {
-          content:
-            events.length === 0
-              ? `Nessun evento dal ${DAY.format(from)} al ${DAY.format(lastDay)}.`
-              : `${countOf(events.length, 'evento', 'eventi')} dal ${DAY.format(from)} al ${DAY.format(lastDay)}:\n${events
-                  .map((event) => eventLine(event, context, preps.get(event.key)))
-                  .join('\n')}`,
+          content: lines.join('\n\n'),
           summary: `Guardato il calendario · ${countOf(events.length, 'evento', 'eventi')}`
         }
       }
