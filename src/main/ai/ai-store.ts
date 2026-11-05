@@ -641,7 +641,11 @@ export class AiStore {
   }
 
   /** Everything but the key and the settings: what "Elimina tutti i dati" empties. */
-  async clearData(): Promise<void> {
+  /**
+   * The Segretario's data gone. `keepSavedCopies`: the copies an extension
+   * saved (ARCHIVIA SIEVER) stay, facts of the files on disk, not knowledge.
+   */
+  async clearData(options: { keepSavedCopies?: boolean } = {}): Promise<void> {
     for (const table of [
       'ai_events',
       'ai_activities',
@@ -661,7 +665,7 @@ export class AiStore {
       'ai_project_threads',
       'ai_project_resources',
       'ai_proposals',
-      'ai_saved_copies',
+      ...(options.keepSavedCopies ? [] : ['ai_saved_copies']),
       'ai_saved_searches',
       'ai_work',
       'ai_gone'

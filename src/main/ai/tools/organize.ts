@@ -55,7 +55,7 @@ export const organizeTool: SegretarioTool = {
     const action = requireString(args, 'azione') as (typeof ORGANIZE_ACTIONS)[number]
 
     if (!ORGANIZE_ACTIONS.includes(action)) {
-      throw new ToolInputError(`Azione sconosciuta «${action}».`)
+      throw new ToolInputError(`\`azione\` è una di: ${ORGANIZE_ACTIONS.join(', ')}.`)
     }
 
     const refs = stringListArg(args, 'messaggi').map((handle) => {

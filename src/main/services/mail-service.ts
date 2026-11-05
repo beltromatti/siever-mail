@@ -127,6 +127,7 @@ import { applyThemeMode } from '../theme'
 import { ensurePathReachable, rememberMountedShares } from './network-volumes'
 import { isUserFile, listRecentFiles, privateFolders } from './recent-files'
 import { decryptSecret, encryptSecret } from './secure-storage'
+import { watchSystemSleep } from './system-sleep'
 
 const imapAccountSchema = z.object({
   email: z.string().trim().email(),
@@ -449,6 +450,7 @@ export class MailService {
   readonly segretario: SegretarioService
   readonly calendar: CalendarService
   private extension: ExtensionMain | null = null
+  private unwatchSleep: (() => void) | null = null
   private storageReady: Promise<void> | null = null
   // The copy of each attachment last written, and what it held, keyed by its
   // folder: an untouched copy is used again without a download.
@@ -471,7 +473,8 @@ export class MailService {
       database: this.database,
       tokens: this.tokens,
       getMainWindow: getAppWindow,
-      onInboxUnreadChange: (count) => this.badge.setCount(count)
+      onInboxUnreadChange: (count) => this.badge.setCount(count),
+      onMailChanged: () => this.segretario.mailChanged()
     })
     this.drafts = new DraftService({
       database: this.database,
@@ -744,7 +747,12 @@ export class MailService {
     await this.engine.start()
     await this.drafts.resume()
     await this.calendar.open()
-    await this.segretario.open()
+    // A run the computer's sleep would cut short does not start, and waits for it to wake.
+    this.unwatchSleep = watchSystemSleep((asleep) => this.segretario.setSystemAsleep(asleep))
+    // The Segretario failing to open leaves the mail and the calendar working.
+    await this.segretario
+      .open()
+      .catch((error: unknown) => logMainError('The Segretario did not open', error))
   }
 
   /** The window loaded anew: what only its page can draw is drawn again. */
@@ -812,6 +820,8 @@ export class MailService {
     }
 
     this.calendar.stop()
+    this.unwatchSleep?.()
+    this.unwatchSleep = null
     await this.segretario.stop()
 
     // What is being written reaches Bozze before the connections close.

@@ -809,9 +809,18 @@ export function OnboardingWizard({
     next(true, { accountIds: [] })
   }
 
+  // Conoscimi is watched as it writes: its page takes the window's height and its thread
+  // scrolls inside, following the newest step. Every other step grows with what it holds.
+  const watching = state.step === 'conoscimi' && state.conoscimiId !== null
+
   return (
     <div className="paper flex h-full min-h-0 flex-col overflow-y-auto">
-      <div className="mx-auto flex min-h-full w-full max-w-[720px] shrink-0 flex-col gap-8 px-6 py-10">
+      <div
+        className={cn(
+          'mx-auto flex w-full max-w-[720px] shrink-0 flex-col gap-8 px-6 py-10',
+          watching ? 'h-full' : 'min-h-full'
+        )}
+      >
         <nav aria-label="Passi" className="flex items-center gap-3">
           <CompassStar className="text-ai-star size-5 shrink-0" />
           <ol className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px]">
@@ -840,11 +849,8 @@ export function OnboardingWizard({
 
         <article
           className={cn(
-            'letter flex shrink-0 flex-col rounded-[14px] px-8 py-8 sm:px-12',
-            // Conoscimi is watched as it writes: its page takes the room there is.
-            state.step === 'conoscimi' && state.conoscimiId
-              ? 'min-h-[560px] flex-1'
-              : 'min-h-[360px]'
+            'letter flex flex-col rounded-[14px] px-8 py-8 sm:px-12',
+            watching ? 'min-h-[420px] flex-1' : 'min-h-[360px] shrink-0'
           )}
         >
           {state.step === 'connessioni' && (

@@ -21,6 +21,7 @@ import type { App, BrowserWindow, IpcMain, IpcRenderer } from 'electron'
 import type { ParsedMail } from 'mailparser'
 import type { ComponentType, ReactNode } from 'react'
 
+import type { DesktopMailApi } from '@shared/ipc'
 import type { MailFontOption } from '@shared/mail-fonts'
 import type { MailMessageSummary, MessageRef, MessagesActionResult } from '@shared/models'
 
@@ -461,14 +462,21 @@ export interface ExtensionHostHooks {
 /* ────────────────────────── preload ────────────────────────── */
 
 /**
- * Preload-side hook. Called by the host preload script with the local
- * `ipcRenderer`; the returned object is merged into the bridge surface
- * exposed on `window.mailApi`. Public builds return an empty object, so
- * `window.mailApi` carries only the host's own API in the public bundle.
+ * What an extension adds to `window.mailApi`: methods of its own, never one
+ * named like the host's — it would replace the host's for the whole app, as
+ * a bridge `archiveMessages` once replaced the host's Archivia. A name the
+ * host uses fails the extension's type check; at run time the host's wins.
  *
- * The return type is `object` rather than `Record<string, unknown>` on
- * purpose: an extension naturally declares its bridge as a named interface,
- * and TypeScript refuses to assign an interface to an index-signature type.
- * The host only ever spreads the result, so the wider type costs nothing.
+ * `object` rather than `Record<string, unknown>` on purpose: an extension
+ * naturally declares its bridge as a named interface, and TypeScript refuses
+ * to assign an interface to an index-signature type.
  */
-export type ExtensionPreloadInstaller = (ipcRenderer: IpcRenderer) => object
+export type ExtensionBridge = object & { [Name in keyof DesktopMailApi]?: never }
+
+/**
+ * Preload-side hook. Called by the host preload script with the local
+ * `ipcRenderer`; the returned bridge is added to `window.mailApi`. Public
+ * builds return an empty object, so `window.mailApi` carries only the
+ * host's own API in the public bundle.
+ */
+export type ExtensionPreloadInstaller = (ipcRenderer: IpcRenderer) => ExtensionBridge

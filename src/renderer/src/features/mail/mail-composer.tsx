@@ -62,6 +62,7 @@ import {
   parseRecipients
 } from '@shared/email-address'
 import { MAIL_COMPOSER_DEFAULT_FONT_FAMILY } from '@shared/mail-fonts'
+import { REVIEW_TIMEOUT_MS } from '@shared/segretario'
 import type {
   ComposeMailInput,
   DraftAttachment,
@@ -166,9 +167,6 @@ interface MailComposerProps {
   canAskSegretario: boolean
   ref?: React.Ref<MailComposerHandle>
 }
-
-/** How long a send waits for the Segretario's reread before going as it is. */
-const REVIEW_TIMEOUT_MS = 8_000
 
 /** "Anna Rossi <anna@cliente.it>", or the address alone: who a message goes to, as the reread reads it. */
 function addressLabel(address: MailAddress): string {

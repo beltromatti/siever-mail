@@ -355,7 +355,9 @@ export const projectsTool: SegretarioTool = {
           return { content: `Collegata ${folder}.`, summary: `Collegata una cartella al progetto` }
         }
         default:
-          throw new ToolInputError(`Azione sconosciuta «${action}».`)
+          throw new ToolInputError(
+            `\`azione\` è una di: ${ACTIONS.join(', ')}. Per cercare un progetto: \`elenco\` con \`cerca\`.`
+          )
       }
     } catch (error) {
       if (error instanceof RegistryRefusal) {

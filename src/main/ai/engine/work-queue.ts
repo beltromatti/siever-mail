@@ -62,9 +62,12 @@ function unitOf<Scope>(row: WorkRow): WorkUnit<Scope> {
   }
 }
 
-/** How long a failed unit waits before it is tried again, by how many times it failed. */
+/**
+ * How long a failed unit waits before it is tried again, by how many times it failed: a minute,
+ * then five. The third failure leaves it failed, in sight with "Riprova" (see `fail`).
+ */
 export function retryDelayMs(attempts: number): number {
-  return [60_000, 5 * 60_000, 30 * 60_000][Math.min(Math.max(attempts - 1, 0), 2)]
+  return attempts <= 1 ? 60_000 : 5 * 60_000
 }
 
 /**
@@ -213,14 +216,15 @@ export class WorkQueue {
   }
 
   /**
-   * A unit failed. One that may be tried again waits from `notBefore`;
-   * a failure that is not the work's own — the network, the provider —
-   * does not count against it.
+   * A unit failed. One that may be tried again waits a while — `delayMs`, or longer the more it
+   * failed; a failure that is not the work's own — the network, the provider, a quit, the
+   * computer's sleep — does not count against it. One unit waits per scope: when what came for
+   * the same scope waits already, that unit takes this one's place, with its attempts.
    */
   async fail(
     id: string,
     error: string,
-    options: { retry: boolean; counts: boolean; maxAttempts: number }
+    options: { retry: boolean; counts: boolean; maxAttempts: number; delayMs?: number }
   ): Promise<WorkStatus> {
     const unit = await this.get(id)
 
@@ -231,18 +235,49 @@ export class WorkQueue {
     const attempts = options.counts ? unit.attempts : Math.max(unit.attempts - 1, 0)
     const status: WorkStatus =
       options.retry && attempts < options.maxAttempts ? 'da_riprovare' : 'fallito'
+    const message = error.slice(0, 1000)
 
-    await this.sql.run(
-      `UPDATE ai_work SET status = ?, attempts = ?, last_error = ?, not_before = ?, updated_at = ?
-       WHERE id = ?`,
-      status,
-      attempts,
-      error.slice(0, 1000),
-      Date.now() + retryDelayMs(Math.max(attempts, 1)),
-      Date.now(),
-      id
-    )
-    return status
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const waiting = status === 'da_riprovare' ? await this.waitingFor(unit.scopeKey) : null
+
+      if (waiting && waiting.id !== id) {
+        await this.sql.run(
+          'UPDATE ai_work SET attempts = MAX(attempts, ?), last_error = ?, updated_at = ? WHERE id = ?',
+          attempts,
+          message,
+          Date.now(),
+          waiting.id
+        )
+        await this.sql.run(
+          "UPDATE ai_work SET status = 'annullato', last_error = ?, updated_at = ? WHERE id = ?",
+          message,
+          Date.now(),
+          id
+        )
+        return status
+      }
+
+      try {
+        await this.sql.run(
+          `UPDATE ai_work SET status = ?, attempts = ?, last_error = ?, not_before = ?, updated_at = ?
+           WHERE id = ?`,
+          status,
+          attempts,
+          message,
+          Date.now() + (options.delayMs ?? retryDelayMs(Math.max(attempts, 1))),
+          Date.now(),
+          id
+        )
+        return status
+      } catch (failure) {
+        // Work for the same scope was queued between the look and the write: it takes the place.
+        if (!String(failure).includes('UNIQUE')) {
+          throw failure
+        }
+      }
+    }
+
+    throw new Error(`Could not put back the work for ${unit.scopeKey}.`)
   }
 
   async cancel(id: string): Promise<void> {
@@ -268,6 +303,14 @@ export class WorkQueue {
 
   /** Work a quit left running waits again: it starts over. */
   async recover(): Promise<number> {
+    // Work cut short whose scope has a unit waiting already — what came while it ran — is
+    // done by that one; of two cut short for one scope, the later stays.
+    await this.sql.run(
+      `DELETE FROM ai_work WHERE status = 'al_lavoro' AND (
+        scope_key IN (SELECT scope_key FROM ai_work WHERE status IN ('in_coda', 'da_riprovare'))
+        OR rowid NOT IN (SELECT MAX(rowid) FROM ai_work WHERE status = 'al_lavoro' GROUP BY scope_key)
+      )`
+    )
     return this.sql.run(
       "UPDATE ai_work SET status = 'in_coda', attempts = MAX(attempts - 1, 0), updated_at = ? WHERE status = 'al_lavoro'",
       Date.now()

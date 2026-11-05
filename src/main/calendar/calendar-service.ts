@@ -187,10 +187,18 @@ export class CalendarService {
 
   constructor(private readonly options: CalendarServiceOptions) {}
 
+  private readonly opened = Promise.withResolvers<void>()
+
   async open(): Promise<void> {
     this.prisma = await this.options.database.storeClient()
     this.timer = setInterval(() => void this.syncAll(), SYNC_EVERY_MS)
+    this.opened.resolve()
     void this.syncAll()
+  }
+
+  /** Resolves once the calendars are open: what asks for them waits until then. */
+  whenOpen(): Promise<void> {
+    return this.opened.promise
   }
 
   stop(): void {

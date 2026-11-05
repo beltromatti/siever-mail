@@ -1,7 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// The engine reaches Electron through what its runs read (PDF pages, files): not these tests.
+vi.mock('electron', () => ({
+  app: { getPath: () => '/tmp' },
+  BrowserWindow: class {},
+  shell: {}
+}))
+vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
 
 import { ensureAiSchema } from '../schema'
 import { memorySql } from '../testing/memory-sql'
+import { SegretarioEngine, type EngineDeps } from './engine'
 import { EnginePause, Scheduler, WorkFailure, type TaskExecutor } from './scheduler'
 import { WorkQueue, type WorkUnit } from './work-queue'
 
@@ -76,12 +85,39 @@ describe('WorkQueue', () => {
     expect((await queue.get(unit.id))?.status).toBe('in_coda')
   })
 
+  it('lets the unit that waits take the place of one that failed for the same scope', async () => {
+    const running = await queue.enqueue({ task: 'lettura', scopeKey: 'k', scope: {}, priority: 10 })
+    await queue.claim(running.id)
+    const waiting = await queue.enqueue({ task: 'lettura', scopeKey: 'k', scope: {}, priority: 10 })
+
+    expect(
+      await queue.fail(running.id, 'nota mancante', { retry: true, counts: true, maxAttempts: 3 })
+    ).toBe('da_riprovare')
+    expect((await queue.get(running.id))?.status).toBe('annullato')
+    expect(await queue.get(waiting.id)).toMatchObject({
+      status: 'in_coda',
+      attempts: 1,
+      lastError: 'nota mancante'
+    })
+  })
+
   it('puts back what a quit left running', async () => {
     const unit = await queue.enqueue({ task: 'lettura', scopeKey: 'k', scope: {}, priority: 10 })
     await queue.claim(unit.id)
 
     expect(await queue.recover()).toBe(1)
     expect(await queue.get(unit.id)).toMatchObject({ status: 'in_coda', attempts: 0 })
+  })
+
+  it('lets the unit that waits do the work a quit cut short for the same scope', async () => {
+    const running = await queue.enqueue({ task: 'lettura', scopeKey: 'k', scope: {}, priority: 10 })
+    await queue.claim(running.id)
+    const waiting = await queue.enqueue({ task: 'lettura', scopeKey: 'k', scope: {}, priority: 10 })
+
+    await queue.recover()
+
+    expect(await queue.get(running.id)).toBeNull()
+    expect(await queue.get(waiting.id)).toMatchObject({ status: 'in_coda' })
   })
 })
 
@@ -139,6 +175,34 @@ describe('Scheduler', () => {
 
     throw new Error('Timed out')
   }
+
+  it('lets the sleep stop what runs, uncounted, and start nothing until the computer wakes', async () => {
+    let runs = 0
+    const executor: TaskExecutor = {
+      lockKeys: async (unit) => [unit.scopeKey],
+      run: async (_unit, signal) => {
+        runs += 1
+        await new Promise<void>((_resolve, reject) =>
+          signal.addEventListener('abort', () => reject(new Error('Interrotto.')))
+        )
+      }
+    }
+    scheduler = new Scheduler(queue, { giornata: executor }, { concurrency: () => 2 })
+    const unit = await queue.enqueue({ task: 'giornata', scopeKey: 'g', scope: {}, priority: 20 })
+    await scheduler.start()
+    await until(() => runs === 1)
+
+    scheduler.setAsleep(true)
+    await until(async () => (await queue.get(unit.id))?.status === 'da_riprovare')
+    expect((await queue.get(unit.id))?.attempts).toBe(0)
+
+    scheduler.wake()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(runs).toBe(1)
+
+    scheduler.setAsleep(false)
+    await until(() => runs === 2)
+  })
 
   it('never runs together two units that hold the same key', async () => {
     const executor = gatedExecutor((unit) => [(unit.scope as { project: string }).project])
@@ -233,5 +297,44 @@ describe('Scheduler', () => {
     await until(async () => (await queue.get(unit.id))?.status === 'da_riprovare')
     expect(calls).toBe(1)
     expect((await queue.get(unit.id))?.lastError).toBe('Manca la nota di m2')
+  })
+})
+
+describe('Engine', () => {
+  let sql: ReturnType<typeof memorySql>
+  let queue: WorkQueue
+
+  beforeEach(async () => {
+    sql = memorySql()
+    await ensureAiSchema(sql)
+    queue = new WorkQueue(sql)
+  })
+
+  afterEach(() => sql.close())
+
+  const engineWith = (letter: { text: string } | null): SegretarioEngine =>
+    new SegretarioEngine({
+      queue,
+      registry: { day: { letter: async () => letter } }
+    } as unknown as EngineDeps)
+
+  const queuedDays = async (): Promise<number> =>
+    (await queue.counts())
+      .filter((count) => count.task === 'giornata')
+      .reduce((total, count) => total + count.count, 0)
+
+  it('writes the day a setup promised at once, and once', async () => {
+    const engine = engineWith(null)
+
+    await engine.writeDayNow()
+    await engine.writeDayNow()
+
+    expect(await queuedDays()).toBe(1)
+  })
+
+  it('leaves the day alone when today has its letter', async () => {
+    await engineWith({ text: 'La giornata.' }).writeDayNow()
+
+    expect(await queuedDays()).toBe(0)
   })
 })

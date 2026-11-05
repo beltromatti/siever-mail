@@ -138,6 +138,7 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
     segretario.saveKey(z.string().max(500).parse(key))
   )
   handle(SEGRETARIO_IPC.removeKey, () => segretario.removeKey())
+  handle(SEGRETARIO_IPC.forgetAll, () => segretario.forgetAll())
   handle(SEGRETARIO_IPC.checkKey, () => segretario.checkKey())
   handle(SEGRETARIO_IPC.getPreferences, () => segretario.getPreferences())
   handle(SEGRETARIO_IPC.setPreferences, (preferences: unknown) =>

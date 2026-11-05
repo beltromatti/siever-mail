@@ -224,6 +224,16 @@ export class SegretarioEngine {
     this.scheduler.resume()
   }
 
+  /** The computer sleeps: the work in the background waits for it to wake (see `Scheduler`). */
+  setAsleep(asleep: boolean): void {
+    this.scheduler.setAsleep(asleep)
+
+    if (!asleep) {
+      // Awake, the world may have moved on while it slept: plan before the queue goes on.
+      this.wake()
+    }
+  }
+
   /** Stops every run of a task now — the AI switched off. */
   cancelRunning(): void {
     for (const unit of this.scheduler.runningUnits()) {
@@ -295,6 +305,29 @@ export class SegretarioEngine {
       failed,
       done: waiting === 0 && running === 0 && left.length === 0
     }
+  }
+
+  /**
+   * A setup that turned the AI on is over: the day it promised is written now, whatever the
+   * hour, unless today has its letter already. It is the day's letter: the morning has no other.
+   */
+  async writeDayNow(): Promise<void> {
+    const today = localDay()
+
+    if (
+      (await this.deps.registry.day.letter(today)) ||
+      (await this.deps.queue.busy(`giornata:${today}`))
+    ) {
+      return
+    }
+
+    await this.deps.queue.enqueue({
+      task: 'giornata',
+      scopeKey: `giornata:${today}`,
+      scope: { refresh: false },
+      priority: PRIORITY.day
+    })
+    this.scheduler.wake()
   }
 
   /** The user asked to look at the day again now. */

@@ -1,14 +1,14 @@
 <div align="center">
   <img src="resources/icon.png" alt="SIEVER Mail" width="160" />
   <h1>SIEVER Mail</h1>
-  <p><strong>A fast desktop email client with a secretary in it.</strong></p>
+  <p><strong>A fast desktop mail and calendar client with a secretary in it.</strong></p>
   <p>
     <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" />
     <img alt="Platforms" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey" />
     <img alt="Stack" src="https://img.shields.io/badge/stack-Electron%20%7C%20React%20%7C%20TypeScript-success" />
     <img alt="Status" src="https://img.shields.io/badge/status-active%20development-orange" />
   </p>
-  <p><sub>desktop email client · IMAP · Gmail OAuth · cross-platform · open source</sub></p>
+  <p><sub>desktop email client · calendar · IMAP · Google and Microsoft OAuth · CalDAV · cross-platform · open source</sub></p>
 </div>
 
 ---
@@ -44,19 +44,20 @@ open-source software released under the Apache License 2.0.
 
 ## Highlights
 
-- **A secretary that reads your mail with you** — the Segretario notes every
-  message as it arrives: what it wants of you and by when, what you
-  promised, what you are waiting for. It keeps that count across
-  conversations — the same request again, or a reply that settles it, is
-  one thing, not two — and files each conversation in the matter it
-  belongs to. Your day opens on **Oggi**, written in its hand; the
-  **Agenda** puts the mail's deadlines beside your calendar; **Da gestire**
-  and **In attesa** are folders it keeps for you.
+- **A secretary that keeps your work** — the Segretario reads every
+  message as it arrives, and the last thirty days when you start: what it
+  wants of you and by when, what you promised, what you are waiting for.
+  Each of those is one open thing, wherever the mail is filed, with its
+  story — done, not needed, put off to a day, reopened — and your word wins
+  over its guesses. It files conversations into the projects they belong
+  to and keeps "Il punto" of each. Your day opens on **Oggi**, written in
+  its hand; **Da gestire**, **In attesa** and **Risposte pronte** are views
+  it keeps for you, and an "Attivi" filter narrows any list.
 - **Work done ahead** — replies to what matters and reminders for what is
-  late are written before you ask, in your style; a message is reread as it
-  goes (the attachment you mention, the question left open, the weekday
-  that does not match the date); alerts come only for what matters, saying
-  what it wants.
+  late are written before you ask, in your style; meetings come with what
+  to know before them; a message is reread as it goes (the attachment you
+  mention, the question left open, the weekday that does not match the
+  date); alerts come only for what matters, saying what it wants.
 - **Ask it anything, or ask the mail** — in its panel it searches and reads
   every message, attachment and file on your computer, writes and fixes
   drafts in the composer you use, schedules, files and tidies — nothing is
@@ -64,18 +65,31 @@ open-source software released under the Apache License 2.0.
   ("le offerte di Gallo da settembre, con il pdf") and keep the answer as a
   folder that searches again each time it opens. In the composer, ⌘J
   writes the reply or rewrites what you selected.
-- **It learns you, and keeps up** — it gets to know each account from the
-  mail you wrote, learns from how you correct its drafts, and every day
-  from the mail that arrives: who people are, how you write to them. Every
-  note is yours to read, correct or forget. It runs on your own
-  [OpenRouter](https://openrouter.ai/) key, only through providers that
+- **On its own, it only proposes** — the work it does by itself never
+  reaches anyone: it does not send, invite, archive or move mail, it leaves
+  you a proposal one click away. A diary shows what it did, each change
+  with its undo.
+- **It learns you, and keeps up** — it gets to know your connections in
+  Conoscimi, with you watching; learns from how you correct its drafts and
+  its work; and keeps up with the mail that arrives: who people are, how
+  you write to them. Every note is yours to read, correct, restore or
+  forget. It is off until you turn it on in the guided setup, runs on your
+  own [OpenRouter](https://openrouter.ai/) key, only through providers that
   keep no data, and you see what it costs.
-- **Multi-account by design** — IMAP/SMTP (SSL/TLS or STARTTLS) and Gmail
-  OAuth side by side. "Tutti gli account" gathers the inbox, sent mail,
+- **Mail and calendars, each its own connection** — Google, Microsoft 365 and
+  Outlook.com, iCloud, and any IMAP mailbox (PEC included), its servers
+  found from the address as Thunderbird finds them; calendars from Google,
+  Microsoft, any CalDAV server or a published link, each connected with or
+  without its mail. "Tutti gli account" gathers the inbox, sent mail,
   drafts, archive, spam and trash of every account, whatever each server
   calls them, and each account shows its folders as a tree. Every message
   is acted on from its own account: replies, forwards and moves never
   cross over unasked.
+- **A calendar of its own** — the Calendario shows every connected
+  calendar by day, week, month or agenda, with the deadlines the mail
+  carries and the events the Segretario proposes; draw an event on the
+  grid, drag it to move it. An invitation in a message is answered from
+  whichever calendar holds it, or by mail to its organizer.
 - **Fast where it is felt** — a message opens at once, the next ones are
   read ahead, a large one shows before its attachments arrive; a new
   account shows its first screen in a moment; the list is endless and
@@ -124,15 +138,18 @@ open-source software released under the Apache License 2.0.
   credentials go through the OS keychain via Electron's `safeStorage`. No
   telemetry, no third-party tracking.
 - **Upgrade-safe** — a new version rebuilds only the message cache. Accounts,
-  signatures, preferences, contacts and any extension's data are kept, and
-  an update interrupted halfway is recovered on the next launch.
+  calendar connections, signatures, preferences, contacts, the Segretario's
+  work and any extension's data are kept, and an update interrupted halfway
+  is recovered on the next launch.
 
 ## Roadmap
 
-2.0 makes the Segretario part of the client: triage, the day, the agenda,
-work done ahead, memory. Next: Microsoft 365 and CalDAV calendars beside
-Google's, accessibility passes, localisation beyond Italian, and
-performance budgets for very large mailboxes.
+2.0 makes the Segretario part of the client — one agent woken by an
+engine, over a record of your work — and gives mail and calendars
+connections of their own: Google, Microsoft, iCloud, CalDAV, published
+calendars and any IMAP mailbox. Next: the Contatti and Progetti apps,
+already on the rail as "In arrivo", accessibility passes, localisation
+beyond Italian, and performance budgets for very large mailboxes.
 
 ## Quick start
 
@@ -141,10 +158,17 @@ Prerequisites: Node.js 22+, npm 10+.
 ```bash
 git clone https://github.com/<your-fork>/siever-mail.git
 cd siever-mail
-cp .env.example .env   # fill in Google OAuth credentials if you want Gmail
+cp .env.example .env   # the Google and Microsoft OAuth clients, for their sign-ins
 npm install
 npm run dev
 ```
+
+Google's sign-in needs an OAuth client of type "Desktop app"; Microsoft's
+(Microsoft 365, Outlook.com) an app registered in Microsoft Entra as a
+public client, its id in `MICROSOFT_OAUTH_CLIENT_ID` — the redirect URI and
+the permissions are in `.env.example` and in
+[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md#connections). A client left
+out only turns its sign-in off.
 
 Production builds live behind a single script:
 
@@ -161,16 +185,19 @@ is pushed, then publishes the artifacts as a GitHub Release.
 ## Extensions
 
 SIEVER Mail ships with a small **extension surface** that lets a custom
-fork plug in features — toolbar actions, settings tabs, a primary-action
-dialog, IPC handlers and tables of its own, fonts and colours for the
-composer, a default account signature it can keep up to date in the
-signatures already stored — without touching the public source tree. The host loads exactly one extension at build time through four Vite
+fork plug in features — toolbar actions, commands, settings tabs, a
+primary-action dialog, IPC handlers and tables of its own, fonts and
+colours for the composer, a default account signature it can keep up to
+date in the signatures already stored, and for the Segretario: what it
+must know of the company, tools of its own, proposals it carries out, and
+copies of messages saved outside the mail — without touching the public
+source tree. The host loads exactly one extension at build time through four Vite
 aliases:
 
-- `@app/extension/main` — main-process entry (install, IPC, tables, data reset)
-- `@app/extension/renderer` — renderer entry (toolbar actions, settings tabs, dialog, bundled fonts)
+- `@app/extension/main` — main-process entry (install, IPC, tables, data reset, the Segretario's instructions and tools)
+- `@app/extension/renderer` — renderer entry (toolbar actions, commands, settings tabs, dialog, proposal actions, bundled fonts)
 - `@app/extension/preload` — preload bridge additions on `window.mailApi`
-- `@app/extension/shared` — loaded by both: the composer's fonts and colours
+- `@app/extension/shared` — loaded by both: the composer's fonts and colours, the commands
 
 In the public source the aliases resolve to **no-op stubs** under
 `src/extension/`, so the open-source build never imports any extension
@@ -193,18 +220,20 @@ switch back to a clean public build at any time without changing files.
 ## Documentation
 
 - **[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)** — architecture and
-  implementation reference (startup, data and upgrades, mail engine,
-  interface, mail content, extension points, build).
+  implementation reference (startup, data and upgrades, connections, mail
+  engine, interface, mail content, the Segretario, the calendar, extension
+  points, build).
 - **[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)** — issue policy, support
   channels and how the maintainer handles external contributions.
 
 ## Status
 
 The application is **in active development**. It is already fast, stable and
-usable as a daily-driver mail client; the surface area is being polished
-release after release. The data layout may change between versions while
-the 1.x baseline settles — the upgrade-safe migration is designed exactly
-for that.
+usable as a daily-driver mail and calendar client; the surface area is
+being polished release after release. The data layout may change between
+versions — the upgrade-safe migration is designed exactly for that, and the
+Segretario's tables carry a schema version of their own, migrated in
+place.
 
 It runs on macOS 13 Ventura or later (Apple silicon and Intel), Windows 10
 and 11 (64-bit) and Linux desktops.

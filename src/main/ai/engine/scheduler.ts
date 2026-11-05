@@ -46,6 +46,8 @@ interface Running {
   unit: WorkUnit
   keys: string[]
   controller: AbortController
+  /** Why it was stopped, when it was: the user cancelled it, or the computer went to sleep. */
+  stoppedBy: 'user' | 'sleep' | null
   done: Promise<void>
 }
 
@@ -54,7 +56,8 @@ interface Running {
  * at once as it is given, never two that hold the same key, and always one
  * place kept for what is not backlog — mail that just came never waits
  * behind a month being read. A failure is tried again later; a pause (the
- * key, the credit) stops everything until it is lifted.
+ * key, the credit) stops everything until it is lifted, and so does the
+ * computer's sleep, until it wakes.
  */
 export class Scheduler {
   private readonly running = new Map<string, Running>()
@@ -62,6 +65,7 @@ export class Scheduler {
   private loop: Promise<void> | null = null
   private stopped = true
   private pausedFor: string | null = null
+  private asleep = false
   private wakeUp: (() => void) | null = null
   private timer: NodeJS.Timeout | null = null
 
@@ -121,6 +125,28 @@ export class Scheduler {
     }
   }
 
+  /**
+   * The computer goes to sleep, or wakes. Asleep, nothing starts — the few seconds macOS wakes
+   * for now and then are no time for a run — and what runs stops and waits again, not counted
+   * against it: cut off by the sleep, it would only time out at the next wake.
+   */
+  setAsleep(asleep: boolean): void {
+    if (asleep === this.asleep) {
+      return
+    }
+
+    this.asleep = asleep
+
+    if (asleep) {
+      for (const running of this.running.values()) {
+        running.stoppedBy = 'sleep'
+        running.controller.abort()
+      }
+    } else {
+      this.nudge()
+    }
+  }
+
   /** The units running now. */
   runningUnits(): WorkUnit[] {
     return [...this.running.values()].map((running) => running.unit)
@@ -128,7 +154,12 @@ export class Scheduler {
 
   /** Stops one unit: its activity was cancelled by the user. */
   cancel(unitId: string): void {
-    this.running.get(unitId)?.controller.abort()
+    const running = this.running.get(unitId)
+
+    if (running) {
+      running.stoppedBy = 'user'
+      running.controller.abort()
+    }
   }
 
   private nudge(): void {
@@ -138,7 +169,7 @@ export class Scheduler {
   private async work(): Promise<void> {
     while (!this.stopped) {
       try {
-        if (this.pausedFor === null) {
+        if (this.pausedFor === null && !this.asleep) {
           await this.startWhatCan()
         }
       } catch (error) {
@@ -158,7 +189,7 @@ export class Scheduler {
     }
 
     for (const unit of await this.queue.ready(Math.max(free * 6, 12))) {
-      if (free <= 0 || this.stopped || this.pausedFor !== null) {
+      if (free <= 0 || this.stopped || this.pausedFor !== null || this.asleep) {
         return
       }
 
@@ -199,17 +230,18 @@ export class Scheduler {
 
   private begin(unit: WorkUnit, executor: TaskExecutor, keys: string[]): void {
     const controller = new AbortController()
+    const running: Running = { unit, keys, controller, stoppedBy: null, done: Promise.resolve() }
 
     for (const key of keys) {
       this.held.add(key)
     }
 
-    const done = (async () => {
+    running.done = (async () => {
       try {
         await executor.run(unit, controller.signal)
         await this.queue.complete(unit.id)
       } catch (error) {
-        await this.failed(unit, error, controller.signal.aborted)
+        await this.failed(running, error)
       } finally {
         for (const key of keys) {
           this.held.delete(key)
@@ -221,18 +253,22 @@ export class Scheduler {
       }
     })()
 
-    this.running.set(unit.id, { unit, keys, controller, done })
+    this.running.set(unit.id, running)
     this.options.onChange?.()
   }
 
-  private async failed(unit: WorkUnit, error: unknown, aborted: boolean): Promise<void> {
-    if (aborted) {
-      // Stopped by a quit or by the user: a quit leaves it to the next start, the user cancels it.
-      if (this.stopped) {
+  private async failed(running: Running, error: unknown): Promise<void> {
+    const { unit } = running
+
+    if (running.controller.signal.aborted) {
+      // Stopped by a quit, the sleep or the user: a quit or the sleep leaves it to wait again,
+      // the user cancels it.
+      if (this.stopped || running.stoppedBy === 'sleep') {
         await this.queue.fail(unit.id, 'Interrotto.', {
           retry: true,
           counts: false,
-          maxAttempts: MAX_ATTEMPTS
+          maxAttempts: MAX_ATTEMPTS,
+          delayMs: 0
         })
       } else {
         await this.queue.cancel(unit.id)

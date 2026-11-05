@@ -145,7 +145,7 @@ export function SegretarioSection({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [keyInput, setKeyInput] = useState('')
   const [replacing, setReplacing] = useState(false)
-  const [busy, setBusy] = useState<'save' | 'check' | 'remove' | null>(null)
+  const [busy, setBusy] = useState<'save' | 'check' | 'remove' | 'forget' | null>(null)
   const [keyError, setKeyError] = useState<string | null>(null)
   const { confirm, dialog: confirmDialog } = useConfirmDialog()
 
@@ -266,6 +266,34 @@ export function SegretarioSection({
       setReplacing(false)
     } catch (error) {
       toast.error('Chiave non tolta', { description: errorText(error) })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const forgetAll = async (): Promise<void> => {
+    const confirmed = await confirm({
+      title: 'Far dimenticare tutto al Segretario?',
+      description:
+        'Memoria, note, cose aperte, progetti, risposte pronte e diario si cancellano, e non tornano. La posta e i calendari non cambiano; la chiave resta.',
+      confirmLabel: 'Dimentica tutto',
+      cancelLabel: 'Annulla',
+      destructive: true
+    })
+
+    if (!confirmed) {
+      return
+    }
+
+    setBusy('forget')
+
+    try {
+      await window.segretarioApi.forgetAll()
+      setPreferences(await window.segretarioApi.getPreferences())
+      setSpending(await window.segretarioApi.getSpending())
+      toast('Il Segretario ha dimenticato tutto.')
+    } catch (error) {
+      toast.error('Non è andata', { description: errorText(error) })
     } finally {
       setBusy(null)
     }
@@ -532,6 +560,30 @@ export function SegretarioSection({
           Data Retention). La posta, i file e quello che impara di te restano su questo computer.
           Legge i tuoi file senza mai modificarli, e nessun messaggio parte senza la tua conferma.
         </p>
+      </div>
+
+      <div className="settings-group flex flex-col gap-2">
+        <p className="eyebrow">Dimentica tutto</p>
+        <p className="text-muted-foreground text-[11.5px] leading-[1.5]">
+          Cancella quello che il Segretario sa e ha fatto: memoria, note, cose aperte, progetti,
+          risposte pronte, diario e spese. Restano la chiave e le copie archiviate su disco. Le
+          funzioni AI si spengono: riaccese, ripartono da capo, da Conoscimi.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="text-destructive-soft-foreground w-fit"
+          disabled={busy !== null}
+          onClick={() => void forgetAll()}
+        >
+          {busy === 'forget' ? (
+            <LoaderCircle className="size-3.5 animate-spin" />
+          ) : (
+            <Trash2 className="size-3.5" />
+          )}
+          Dimentica tutto
+        </Button>
       </div>
 
       {confirmDialog}

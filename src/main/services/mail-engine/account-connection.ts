@@ -578,14 +578,25 @@ export class AccountConnection extends EventEmitter {
 
     const nextPath = context?.accountId === this.account.id ? context.folderPath : null
 
-    if (nextPath && nextPath !== previousPath) {
-      // Switch primary IDLE to the folder the user is now viewing so we catch
-      // new-message events on it in real time.
-      if (this.primaryClient?.usable) {
-        this.enqueuePrimaryCommand(async () => {
+    if (nextPath === previousPath) {
+      return
+    }
+
+    // Switch primary IDLE to the folder the user is now viewing so we catch
+    // new-message events on it in real time — or, the user gone elsewhere
+    // (Oggi, the calendar, a view of every account), back to Posta in
+    // arrivo, where new mail comes: left on the folder last seen, the inbox
+    // would wait for the next poll for as long as the user is away.
+    if (this.primaryClient?.usable) {
+      this.enqueuePrimaryCommand(
+        async () => {
           await this.selectIdleMailbox()
-        }, `idle-switch:${nextPath}`)
-      }
+        },
+        `idle-switch:${nextPath ?? 'inbox'}`
+      )
+    }
+
+    if (nextPath) {
       // Fast-forward sync of that folder at 'active-sync' priority so its
       // contents show up as quickly as possible — this jumps the sync queue
       // ahead of background bootstrap work on other folders.

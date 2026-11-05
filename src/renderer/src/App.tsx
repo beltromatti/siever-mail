@@ -199,6 +199,8 @@ const READER_ZOOM_SAVE_DELAY_MS = 400
 const PREFETCHED_NEIGHBOUR_OFFSETS = [1, -1, 2, -2]
 /** How long sync events gather before the list is read again for them. */
 const LIST_REFRESH_COALESCE_MS = 300
+/** Mail coming and going moves the views' counts: gathered longer, as a sync brings it in bursts. */
+const VIEW_COUNTS_AFTER_MAIL_MS = 1_500
 /** How long a search rests before the servers are asked too: not at every keystroke. */
 const SERVER_SEARCH_DELAY_MS = 450
 /** How long a message stays in the pane before its neighbours are fetched: skimming past fetches nothing. */
@@ -1265,7 +1267,9 @@ function App(): React.JSX.Element {
     listRefreshTimerRef.current = setTimeout(run, LIST_REFRESH_COALESCE_MS)
   }, [refreshCurrentFolder])
 
-  // The Segretario's views follow its work: their counts, and the list when one is open.
+  // The Segretario's views follow its work: their counts, and the list when one is open. They
+  // follow the mail too: a message in the Trash sets aside what is open in it, one put back
+  // brings it back, wherever the move was made.
   const viewCountsTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
@@ -1275,21 +1279,31 @@ function App(): React.JSX.Element {
 
     void refreshSegretarioViews()
 
-    const unsubscribe = window.segretarioApi.onWorkChanged(() => {
-      if (isSegretarioList(currentViewRef.current?.folderPath)) {
-        scheduleListRefresh()
-      }
-
+    const scheduleCounts = (delay: number): void => {
       if (viewCountsTimerRef.current === null) {
         viewCountsTimerRef.current = window.setTimeout(() => {
           viewCountsTimerRef.current = null
           void refreshSegretarioViews()
-        }, LIST_REFRESH_COALESCE_MS)
+        }, delay)
+      }
+    }
+
+    const unsubscribeWork = window.segretarioApi.onWorkChanged(() => {
+      if (isSegretarioList(currentViewRef.current?.folderPath)) {
+        scheduleListRefresh()
+      }
+
+      scheduleCounts(LIST_REFRESH_COALESCE_MS)
+    })
+    const unsubscribeMail = window.mailApi.onMessagesChanged((event) => {
+      if (event.added.length > 0 || event.removedUids.length > 0) {
+        scheduleCounts(VIEW_COUNTS_AFTER_MAIL_MS)
       }
     })
 
     return () => {
-      unsubscribe()
+      unsubscribeWork()
+      unsubscribeMail()
 
       if (viewCountsTimerRef.current !== null) {
         window.clearTimeout(viewCountsTimerRef.current)
@@ -1641,8 +1655,15 @@ function App(): React.JSX.Element {
     }
   }, [clearSearch, hasActiveSearch, isMessageExpanded, selection.selectedRefs.length])
 
+  // The folder in sight, which the engine watches live; none outside the Posta, so every
+  // account watches its Posta in arrivo while the user is in Oggi or the calendar.
   useEffect(() => {
-    if (!selectedAccountId || !selectedFolderPath || isAcrossAccounts(selectedFolderPath)) {
+    if (
+      shownApp !== 'mail' ||
+      !selectedAccountId ||
+      !selectedFolderPath ||
+      isAcrossAccounts(selectedFolderPath)
+    ) {
       void window.mailApi.setActiveMailboxContext(null)
       return
     }
@@ -1651,7 +1672,7 @@ function App(): React.JSX.Element {
       accountId: selectedAccountId,
       folderPath: selectedFolderPath
     })
-  }, [selectedAccountId, selectedFolderPath])
+  }, [shownApp, selectedAccountId, selectedFolderPath])
 
   useEffect(() => {
     const unsubscribeMessages = window.mailApi.onMessagesChanged((event) => {

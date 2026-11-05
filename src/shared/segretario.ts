@@ -54,6 +54,9 @@ export interface SegretarioPreferences {
 /** Off until the user turns it on, in the guided setup: the AI starts with Conoscimi, never by itself. */
 export const DEFAULT_SEGRETARIO_PREFERENCES: SegretarioPreferences = { enabled: false }
 
+/** How long a send waits for the Segretario's reread: past it the message goes as it is, and the reread stops. */
+export const REVIEW_TIMEOUT_MS = 12_000
+
 /** What the Segretario costs, in dollars, as OpenRouter billed each call. */
 export interface SegretarioSpending {
   today: number
@@ -603,6 +606,7 @@ export const SEGRETARIO_IPC = {
   getStatus: 'segretario:get-status',
   saveKey: 'segretario:save-key',
   removeKey: 'segretario:remove-key',
+  forgetAll: 'segretario:forget-all',
   checkKey: 'segretario:check-key',
   getPreferences: 'segretario:get-preferences',
   setPreferences: 'segretario:set-preferences',
@@ -678,6 +682,8 @@ export interface SegretarioApi {
   /** Checks a key with OpenRouter and, if it answers, keeps it encrypted. */
   saveKey: (key: string) => Promise<SegretarioStatus>
   removeKey: () => Promise<SegretarioStatus>
+  /** Everything the Segretario knows and did, gone; the key and the archived copies stay, the AI turns off. */
+  forgetAll: () => Promise<void>
   checkKey: () => Promise<SegretarioStatus>
   getPreferences: () => Promise<SegretarioPreferences>
   setPreferences: (preferences: SegretarioPreferences) => Promise<SegretarioPreferences>

@@ -37,6 +37,8 @@ export interface MailEngineDependencies {
   getMainWindow: () => BrowserWindow | null
   /** The unread messages of every account's Posta in arrivo, whenever a count may have changed. */
   onInboxUnreadChange: (count: number) => void
+  /** Messages had their text indexed, or went away: what reads the mail may look again. */
+  onMailChanged: () => void
 }
 
 // How often to compare the network state with the last one seen. Reading it
@@ -545,10 +547,17 @@ export class MailEngine {
     }
 
     const connection = new AccountConnection(this.deps.database, this.deps.tokens, account)
+    let indexed = 0
 
     connection.on('state', (snapshot) => {
       const state: AccountConnectionState = { accountId, ...snapshot }
       this.broadcast(IPC_CHANNELS.accountConnectionChanged, state)
+
+      // More of the mail can be read now: a message's words are what the Segretario starts from.
+      if (snapshot.index && snapshot.index.indexed > indexed) {
+        indexed = snapshot.index.indexed
+        this.deps.onMailChanged()
+      }
     })
 
     connection.on('folders', (folders) => {
@@ -576,6 +585,10 @@ export class MailEngine {
         updated: event.updated,
         removedUids: event.removedUids
       })
+
+      if (event.removedUids.length > 0) {
+        this.deps.onMailChanged()
+      }
 
       // Read, moved or deleted — here or on another device — a message's alert goes.
       this.notifications.withdraw([

@@ -225,7 +225,7 @@ export const memoryTool: SegretarioTool = {
           }
         }
         default:
-          throw new ToolInputError(`Comando sconosciuto «${command}».`)
+          throw new ToolInputError(`\`comando\` è uno di: ${COMMANDS.join(', ')}.`)
       }
     } catch (error) {
       if (error instanceof RegistryRefusal) {

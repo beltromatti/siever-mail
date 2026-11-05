@@ -5,7 +5,8 @@ import {
   stringArg,
   stringListArg,
   ToolInputError,
-  type SegretarioTool
+  type SegretarioTool,
+  type TaskKind
 } from '../agent/tool-types'
 import { clip, countOf, formatDateTime } from './format'
 
@@ -27,6 +28,9 @@ const TASK_WORDS: Record<string, string> = {
   riflessione: 'riflessione',
   al_passo: 'Al passo'
 }
+
+/** Who writes the letter: the day's own work, and the user who asks for it. */
+const LETTER_WRITERS: ReadonlyArray<TaskKind> = ['giornata', 'richiesta']
 
 /** The letter at the top of Oggi, and what to know before a meeting. */
 export const todayTool: SegretarioTool = {
@@ -51,6 +55,14 @@ export const todayTool: SegretarioTool = {
     }
 
     if (letter) {
+      // The letter is the whole day seen at once: one conversation's reading would write it
+      // from a corner. What matters today goes in the open things, and the day is written again.
+      if (!LETTER_WRITERS.includes(context.run.task)) {
+        throw new ToolInputError(
+          'La lettera di Oggi la scrive il lavoro della giornata, guardando tutto, e la riscrive quando le cose cambiano: quello che conta per oggi mettilo nelle cose aperte con `impegni`, con la sua scadenza, e la giornata ne terrà conto.'
+        )
+      }
+
       await context.registry.saveLetter(localDay(), letter, context.run.actor)
       lines.push('La lettera di oggi è in cima a Oggi.')
     }

@@ -43,7 +43,8 @@ import {
   type SendOutcome,
   type TodayPage,
   type WorkChange,
-  type WritingRequest
+  type WritingRequest,
+  REVIEW_TIMEOUT_MS
 } from '@shared/segretario'
 
 import { logMainError } from '../utils/error-utils'
@@ -87,13 +88,13 @@ import { localDay } from './tools/day'
 import { comparableText, formatDateTime, shortDate } from './tools/format'
 
 const KEY_RECHECK_MS = 20 * 60 * 1000
+/** New mail wakes the engine at most this often. */
+const MAIL_WAKE_MS = 2_000
 /** How long a draft the Segretario wrote is remembered, to learn from what the user sends. */
 const DRAFT_RECORD_TTL_MS = 90 * 24 * 60 * 60 * 1000
 /** How long the diary keeps the work done alone. */
 const DIARY_KEPT_MS = 21 * 24 * 60 * 60 * 1000
 const COMPOSE_TIMEOUT_MS = 30_000
-/** How long a reread before sending may take: past it, the message goes as it is. */
-const REVIEW_TIMEOUT_MS = 12_000
 /** How long the writing in the editor and the search asked in words may take at most. */
 const INLINE_TIMEOUT_MS = 90_000
 const ASK_MAIL_LIMIT = 200
@@ -219,7 +220,12 @@ export class SegretarioService {
   private readonly client: OpenRouterClient
   private status: SegretarioStatus = EMPTY_STATUS
   private recheckTimer: ReturnType<typeof setInterval> | null = null
-  private readonly opened = Promise.withResolvers<void>()
+  private readonly opened = (() => {
+    const opened = Promise.withResolvers<void>()
+    // Waited for by every request: one that fails says so to each, not to nobody.
+    opened.promise.catch(() => undefined)
+    return opened
+  })()
   private readonly composeRequests = new Map<
     string,
     { resolve: (draftId: string) => void; reject: (error: Error) => void }
@@ -231,6 +237,9 @@ export class SegretarioService {
   >()
   private reading: boolean | null = null
   private engineStateTimer: NodeJS.Timeout | null = null
+  private mailWakeTimer: NodeJS.Timeout | null = null
+  /** The computer is asleep: the engine, made or yet to be made, waits for it to wake. */
+  private asleep = false
 
   constructor(private readonly options: SegretarioServiceOptions) {
     this.client = new OpenRouterClient(options.fetch)
@@ -240,7 +249,18 @@ export class SegretarioService {
     return this.opened.promise
   }
 
+  /** Opens the Segretario; requests wait for it, and fail with it rather than wait for ever. */
   async open(): Promise<void> {
+    try {
+      await this.openAll()
+      this.opened.resolve()
+    } catch (error) {
+      this.opened.reject(error instanceof Error ? error : new Error(String(error)))
+      throw error
+    }
+  }
+
+  private async openAll(): Promise<void> {
     // The database is open, and the tables shaped (see `ensureAiSchema`).
     const sql = prismaSql(await this.options.database.storeClient())
     const store = new AiStore(sql)
@@ -312,6 +332,7 @@ export class SegretarioService {
         this.engineChanged()
       }
     })
+    this.engine.setAsleep(this.asleep)
     this.status = (await store.getStoredStatus()) ?? EMPTY_STATUS
 
     // A conversation a quit cut short cannot go on by itself: it says so, and
@@ -346,9 +367,11 @@ export class SegretarioService {
         void this.checkKey()
       }
     }, KEY_RECHECK_MS)
-    await this.engine.start()
+    // An engine that does not start leaves the work done alone stopped, not the Segretario.
+    await this.engine
+      .start()
+      .catch((error: unknown) => logMainError('The Segretario’s engine did not start', error))
     await this.sayWhetherReading()
-    this.opened.resolve()
   }
 
   async stop(): Promise<void> {
@@ -357,13 +380,34 @@ export class SegretarioService {
       this.recheckTimer = null
     }
 
+    if (this.mailWakeTimer) {
+      clearTimeout(this.mailWakeTimer)
+      this.mailWakeTimer = null
+    }
+
     this.runner?.cancelAll()
     await this.engine?.stop()
   }
 
-  /** New mail may be there to read, or the work changed: the engine looks now. */
+  /** The computer goes to sleep, or wakes: the work done alone waits for it to be awake. */
+  setSystemAsleep(asleep: boolean): void {
+    this.asleep = asleep
+    this.engine?.setAsleep(asleep)
+  }
+
+  /**
+   * New mail is indexed, or mail went away: the engine looks now rather than at its next round —
+   * at most every few seconds, so an index filling up does not keep it planning.
+   */
   mailChanged(): void {
-    this.engine?.wake()
+    if (this.mailWakeTimer) {
+      return
+    }
+
+    this.mailWakeTimer = setTimeout(() => {
+      this.mailWakeTimer = null
+      this.engine?.wake()
+    }, MAIL_WAKE_MS)
   }
 
   private require<T>(value: T | null): T {
@@ -637,9 +681,15 @@ export class SegretarioService {
     if (state) {
       await this.db.store.setMeta(ONBOARDING, JSON.stringify(state))
     } else {
+      const finished = await this.getOnboarding()
       await this.db.store.deleteMeta(ONBOARDING)
       // The setup is over: the reading goes back to its usual pace.
       this.setPreparing(false)
+
+      // "Pronto" promised the day in Oggi: with the AI on, it is written now, even before dawn.
+      if (finished && (await this.ready())) {
+        await this.engine?.writeDayNow()
+      }
     }
 
     // A step on may let work through that waited for it.
@@ -886,6 +936,20 @@ export class SegretarioService {
     this.engine?.cancelRunning()
     await this.db.store.clearData()
     this.searches.clear()
+  }
+
+  /**
+   * "Dimentica tutto": what the Segretario knows and did goes — memory,
+   * notes, open things, projects, replies, diary, spending — the key and
+   * the copies archived stay. The AI turns off: on again, it starts from
+   * the guided setup, knowing nothing.
+   */
+  async forgetAll(): Promise<void> {
+    this.runner?.cancelAll()
+    this.engine?.cancelRunning()
+    await this.db.store.clearData({ keepSavedCopies: true })
+    this.searches.clear()
+    await this.setPreferences({ enabled: false })
   }
 
   /* ──────────────────────────────── the user's work ──────────────────────────────── */

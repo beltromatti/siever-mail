@@ -137,6 +137,7 @@ const segretarioApi: SegretarioApi = {
   getStatus: async () => invoke(SEGRETARIO_IPC.getStatus),
   saveKey: async (key) => invoke(SEGRETARIO_IPC.saveKey, key),
   removeKey: async () => invoke(SEGRETARIO_IPC.removeKey),
+  forgetAll: async () => invoke(SEGRETARIO_IPC.forgetAll),
   checkKey: async () => invoke(SEGRETARIO_IPC.checkKey),
   getPreferences: async () => invoke(SEGRETARIO_IPC.getPreferences),
   setPreferences: async (preferences) => invoke(SEGRETARIO_IPC.setPreferences, preferences),
@@ -241,12 +242,13 @@ const calendarApi: CalendarApi = {
   onChanged: (listener) => subscribe(CALENDAR_IPC.changed, () => listener())
 }
 
-// Merge any extension-provided bridge methods (the IPC channels an
-// extension registers) onto the host's API surface. The public build's
+// Add any extension-provided bridge methods (the IPC channels an extension
+// registers) to the host's API surface. The host's own methods always win:
+// an extension may add, never replace (`ExtensionBridge`). The public build's
 // installer returns an empty object, so window.mailApi remains the host's
 // own API there.
 const extensionBridge = installExtensionPreload(ipcRenderer)
-const mergedMailApi = { ...desktopMailApi, ...extensionBridge }
+const mergedMailApi = { ...extensionBridge, ...desktopMailApi }
 
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld('mailApi', mergedMailApi)

@@ -294,7 +294,7 @@ if (hasSingleInstanceLock) {
         of: (ref) => service.calendarInvitation(ref),
         respondByMail: (ref, response) => service.respondToInvitationByMail(ref, response)
       },
-      () => service.segretario.whenReady()
+      () => service.calendar.whenOpen()
     )
     installAppMenu(() => mainWindow)
 
