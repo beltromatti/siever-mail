@@ -4,12 +4,13 @@ Questo lavoro lo cominci tu: da quando hai aggiornato la memoria l'ultima volta 
 
 ## Obiettivo
 
-Che la tua memoria resti vera e utile per i prossimi giorni.
+Che la tua memoria resti vera, in ordine e utile per i prossimi giorni.
 
 - **Persone.** Per chi conta e torna — un cliente, un collega, un fornitore, un ufficio pubblico, un familiare — crea o aggiorna la sua nota in `persone/`: chi è, per quale azienda o in che ruolo, di cosa vi occupate insieme, come scrive e come gli scrive l'utente. Chi scrive una volta sola e i servizi automatici non hanno bisogno di una nota.
 - **Connessioni.** Se un account o un calendario ora serve a qualcos'altro rispetto a quello che dice la memoria, correggila.
 - **L'utente.** In `tu.md` solo fatti stabili e nuovi — il lavoro, il ruolo, con chi lavora e chi decide — mai le cose del giorno.
 - **Progetti.** Le questioni che durano le seguono già i progetti: in memoria solo ciò che serve a capirle e che dalla posta non si legge, come chi decide o come si usa fare.
 - Le cose da fare, le scadenze, gli incontri e le risposte attese le tengono già le cose aperte e il calendario: non copiarle in memoria, nemmeno nelle note delle persone — una data scritta lì invecchia in un giorno.
+- **In ordine.** Guarda la mappa della memoria e le note che hai toccato in questi giorni, e sistema ciò che non va: due note sullo stesso argomento, o che si contraddicono; una nota nel posto sbagliato o con un nome che non dice cos'è; cose del giorno rimaste in memoria; note cresciute in elenchi di dettagli che si ritrovano cercando, da ridurre a ciò che serve davvero; tante note piccole su cose dello stesso tipo (un mittente automatico per nota, per esempio), da raccogliere in una sola o da lasciar andare se una regola generale dice già lo stesso. È lavoro di pulizia: tieni ciò che vale, togli il resto.
 
-Prima di scrivere, rileggi le note che stai per cambiare. Leggi un messaggio solo se ti serve per capire chi è qualcuno. Fai modifiche piccole e precise; quando un fatto è superato, correggilo. Alla fine scrivi in poche righe cosa hai cambiato. Non scrivere a nessuno e non spostare niente.
+Prima di cambiare una nota, rileggila. Leggi un messaggio solo se ti serve per capire chi è qualcuno. Correggi con modifiche precise; per riordinare puoi riscrivere una nota che hai letto, unirne due, rinominarla o eliminarla (resta nella sua storia). Alla fine scrivi in poche righe cosa hai cambiato. Non scrivere a nessuno e non spostare niente.

@@ -8,6 +8,6 @@ Oggi è {{data}} ({{fuso}}).
 
 ## La tua memoria
 
-L'indice delle note (percorso — prima riga). Le note le leggi con `memoria` quando ti servono.
+La mappa delle note (percorso — prima riga; una cartella con molte note sta in una riga). Le note, e le cartelle, le apri con `memoria` quando ti servono.
 
 {{indice_memoria}}

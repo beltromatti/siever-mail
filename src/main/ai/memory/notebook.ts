@@ -5,6 +5,10 @@ import { RegistryRefusal, type Actor } from '../registry/types'
 /** Notes are short by design: a note this long is a note to split. */
 export const MAX_NOTE_CHARS = 20_000
 
+/** A folder of more notes than this shows in the index as one line, opened when needed. */
+const INDEX_FOLDER_LISTED = 12
+const INDEX_FOLDER_RECENT = 5
+
 /** How many past versions of a note are kept. */
 const VERSIONS_KEPT = 40
 
@@ -85,7 +89,7 @@ function fold(text: string): string {
 function checkSize(path: string, content: string): void {
   if (content.length > MAX_NOTE_CHARS) {
     throw new RegistryRefusal(
-      `${path} arriverebbe a ${content.length} caratteri, oltre il massimo di ${MAX_NOTE_CHARS}: lì non entra altro. Metti ciò che volevi aggiungere in una nota più specifica sul suo argomento (anche nuova, con \`inserisci\`), e se vuoi lascia in ${path} solo un rimando; oppure accorcia ${path} togliendo ciò che non serve più.`
+      `${path} arriverebbe a ${content.length} caratteri, oltre il massimo di ${MAX_NOTE_CHARS}: così non entra. È il segno che va messa in ordine: rileggila, togli ciò che non serve più (cose del giorno, dettagli che si ritrovano cercando nella posta), unisci ciò che si ripete; se tratta argomenti diversi, dividila per argomento. Poi aggiungi, se vale ancora la pena.`
     )
   }
 }
@@ -122,10 +126,53 @@ export class Notebook {
   }
 
   /** The index: each note and its first line. */
+  /**
+   * The memory as every run begins with it: a map, not the notes. Each note
+   * with its first line; a folder of many notes as one line — how many, the
+   * ones touched last — opened with \`leggi\` when the work needs it, so the
+   * map stays small however much the memory grows.
+   */
   async index(): Promise<string> {
     const notes = await this.list()
+
+    if (notes.length === 0) {
+      return '(la memoria è vuota)'
+    }
+
+    const folders = new Map<string, MemoryDocument[]>()
+
+    for (const note of notes) {
+      const folder = note.path.includes('/') ? note.path.slice(0, note.path.indexOf('/')) : ''
+      folders.set(folder, [...(folders.get(folder) ?? []), note])
+    }
+
+    const line = (note: MemoryDocument): string =>
+      `- ${note.path} — ${memoryHeadline(note.content)}`
+
+    return [...folders.entries()]
+      .sort(([a], [b]) => (a === '' ? -1 : b === '' ? 1 : a.localeCompare(b)))
+      .flatMap(([folder, inFolder]) => {
+        if (folder === '' || inFolder.length <= INDEX_FOLDER_LISTED) {
+          return inFolder.map(line)
+        }
+
+        const recent = [...inFolder]
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+          .slice(0, INDEX_FOLDER_RECENT)
+          .map((note) => note.path.slice(folder.length + 1))
+        return [
+          `- ${folder}/ — ${inFolder.length} note (le ultime toccate: ${recent.join(', ')}): \`leggi\` con \`${folder}/\` le elenca`
+        ]
+      })
+      .join('\n')
+  }
+
+  /** The notes of a folder, each with its first line; null when there is no such folder. */
+  async folder(path: string): Promise<string | null> {
+    const prefix = `${path.replace(/^\/+|\/+$/g, '')}/`
+    const notes = (await this.list()).filter((note) => note.path.startsWith(prefix))
     return notes.length === 0
-      ? '(la memoria è vuota)'
+      ? null
       : notes.map((note) => `- ${note.path} — ${memoryHeadline(note.content)}`).join('\n')
   }
 

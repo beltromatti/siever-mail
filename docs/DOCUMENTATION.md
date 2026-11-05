@@ -1098,13 +1098,21 @@ created, changed or deleted.
 ### Memory
 
 The notebook (`memory/notebook.ts`, `ai_memory`) is Markdown notes the
-Segretario organises itself — `tu.md`, `stile.md`, `connessioni.md`,
-`account/…`, `persone/…`, `progetti/…` — shared by every run. It guarantees
-integrity, not shape: edits are patches on the note as it is now (each
-passage replaced found exactly once, all or none), so two runs editing
-different lines both land; a whole rewrite made on an older reading is
-refused; every version is kept (the last 40) with who wrote it, and can be
-restored. A note may not carry a run's short handles. Settings → "Cosa so di
+Segretario organises itself, shared by every run. Its shape is the
+Segretario's: the identity suggests a start (`tu.md`, `stile.md`,
+`connessioni.md`, `persone/…`, `progetti/…`, `decisioni.md`) and principles
+— what the mail does not say goes in, what a search finds again or what
+changes by the day does not; one note per subject, each fact in one place —
+and nothing in the code depends on a path. What the notebook guarantees is
+integrity: edits are patches on the note as it is now (each passage
+replaced found exactly once, all or none), so two runs editing different
+lines both land; a whole rewrite made on an older reading is refused; every
+version is kept (the last 40) with who wrote it, and can be restored; a
+note holds 20 000 characters at most. Every run begins with its map
+(`index`): each note with its first line, a folder of more than twelve as
+one line with its count and the notes touched last, opened with `memoria
+leggi <cartella>/` — so the map stays small however much the memory
+grows. Settings → "Cosa so di
 te" shows every note to read, correct (a lesson), and restore from its
 history; its "Dimentica tutto" forgets the notes and the connections known,
 so Conoscimi is to be done again.
@@ -1122,11 +1130,14 @@ so Conoscimi is to be done again.
   run turns them into rules.
 - **Al passo**: once every mailbox is known and the reading is done, about
   once a day, the notes written since on messages that say something (the
-  latest 150) go to a run that keeps the memory true: people who come back,
-  connections used differently, stable facts about the user.
+  latest 150) go to a run that keeps the memory true — people who come back,
+  connections used differently, stable facts about the user — and in order:
+  notes that repeat or contradict each other merged, day-to-day facts taken
+  out, notes grown into lists of details cut back, many small notes of one
+  kind gathered.
 
-A connection removed takes its account's note and its learning with it, and
-the next reflection hears of it. "Dimentica tutto" in Settings → Segretario
+A connection removed takes its learning with it, and the next reflection
+hears of it, to correct the memory wherever it wrote of that mailbox. "Dimentica tutto" in Settings → Segretario
 (`forgetAll`) goes further: memory, notes, commitments, projects, replies,
 diary and spending go — the key and the copies an extension saved stay —
 and the AI turns off; on again, it starts from the guided setup.

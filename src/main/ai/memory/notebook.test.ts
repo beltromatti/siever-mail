@@ -20,6 +20,25 @@ describe('Notebook', () => {
 
   afterEach(() => sql.close())
 
+  it('maps the memory small: a folder of many notes in one line, opened on demand', async () => {
+    await notebook.write('tu.md', '# Chi sei\n', RUN_A)
+
+    for (let index = 1; index <= 13; index += 1) {
+      await notebook.write(`persone/p${index}.md`, `# Persona ${index}\n`, RUN_A)
+    }
+
+    await notebook.write('progetti/hotel.md', '# Hotel Lido\n', RUN_A)
+
+    const map = await notebook.index()
+
+    expect(map).toContain('- tu.md — Chi sei')
+    expect(map).toContain('- progetti/hotel.md — Hotel Lido')
+    expect(map).toMatch(/- persone\/ — 13 note \(le ultime toccate: /)
+    expect(map).not.toContain('persone/p1.md')
+    expect(await notebook.folder('persone/')).toContain('- persone/p1.md — Persona 1')
+    expect(await notebook.folder('clienti')).toBeNull()
+  })
+
   it('names the notes most like one that is not there', async () => {
     await notebook.write('progetti/prat2492-malagoli.md', '# Prat2492 · Acetaia Malagoli\n', RUN_A)
     await notebook.write('stile.md', '# Come scrive\n', RUN_A)

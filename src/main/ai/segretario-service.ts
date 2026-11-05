@@ -71,7 +71,6 @@ import { Registry, type RegistryView } from './registry/registry'
 import {
   OWED_KINDS,
   RegistryRefusal,
-  SYSTEM,
   USER,
   type CommitmentRecord,
   type NoteRecord,
@@ -926,9 +925,13 @@ export class SegretarioService {
     )
   }
 
-  /** A connection was removed: what was kept about it alone goes, and the next reflection hears of it. */
+  /**
+   * A connection was removed: what was kept about it alone goes, and the
+   * next reflection hears of it — the memory is the Segretario's to correct,
+   * wherever it wrote of that mailbox.
+   */
   async forgetAccount(accountId: string, email: string): Promise<void> {
-    const { store, notebook } = this.db
+    const { store } = this.db
 
     for (const row of await store.listLearning()) {
       if (row.accountId === accountId && row.activityId) {
@@ -937,7 +940,6 @@ export class SegretarioService {
     }
 
     await store.forgetAccount(accountId)
-    await notebook.delete(normalizeMemoryPath(`account/${email}`), SYSTEM)
     await store.addLesson('account-rimosso', { email })
     this.workChanged({ accountIds: [accountId], threadIds: [], messageKeys: [], projectIds: [] })
   }

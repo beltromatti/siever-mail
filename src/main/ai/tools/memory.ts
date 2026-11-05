@@ -89,6 +89,15 @@ export const memoryTool: SegretarioTool = {
         return { content: await notebook.index(), summary: 'Riletto l’indice della memoria' }
       }
 
+      // A folder: its notes, each with its first line.
+      if (command === 'leggi' && rawPath && !rawPath.trim().endsWith('.md')) {
+        const listing = await notebook.folder(rawPath)
+
+        if (listing !== null) {
+          return { content: listing, summary: `Guardata la cartella ${rawPath}` }
+        }
+      }
+
       if (!rawPath) {
         // The model now and then fills every other parameter and forgets this one: it is told
         // where the text it wants to change is, so the next call lands.

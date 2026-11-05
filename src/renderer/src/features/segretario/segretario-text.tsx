@@ -7,18 +7,34 @@ import type { HandleLink } from '@shared/segretario'
 
 const INTERNAL_LINK_PREFIX = '#segretario/'
 
+/** The kind of link a short name is, by its letter: `m4` is a message wherever it is written. */
+const KIND_OF_HANDLE: Readonly<Record<string, string>> = {
+  m: 'mail',
+  f: 'file',
+  b: 'bozza',
+  p: 'progetto',
+  e: 'evento'
+}
+
 /**
  * The Segretario writes links to what it found as `[testo](mail:m4)`,
- * `(file:f2)`, `(bozza:b1)`, `(progetto:p1)`, `(evento:e1)`. They become internal anchors before the
- * markdown is read — a sanitiser would drop an unknown scheme — and chips
- * when drawn.
+ * `(file:f2)`, `(bozza:b1)`, `(progetto:p1)`, `(evento:e1)` — now and then
+ * as the short name alone, `(m4)`, which says as much. They become internal
+ * anchors before the markdown is read — a sanitiser would drop an unknown
+ * scheme — and chips when drawn.
  */
 function internalizeLinks(markdown: string): string {
-  return markdown.replace(
-    /\]\(\s*(mail|file|bozza|progetto|evento)\s*:\s*([a-z]\d+)\s*\)/gi,
-    (_match, kind: string, handle: string) =>
-      `](${INTERNAL_LINK_PREFIX}${kind.toLowerCase()}/${handle.toLowerCase()})`
-  )
+  return markdown
+    .replace(
+      /\]\(\s*(mail|file|bozza|progetto|evento)\s*:\s*([a-z]\d+)\s*\)/gi,
+      (_match, kind: string, handle: string) =>
+        `](${INTERNAL_LINK_PREFIX}${kind.toLowerCase()}/${handle.toLowerCase()})`
+    )
+    .replace(
+      /\]\(\s*([mfbpe])(\d+)\s*\)/gi,
+      (_match, letter: string, number: string) =>
+        `](${INTERNAL_LINK_PREFIX}${KIND_OF_HANDLE[letter.toLowerCase()]}/${letter.toLowerCase()}${number})`
+    )
 }
 
 const CHIP_ICONS = {
