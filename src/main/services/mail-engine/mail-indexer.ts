@@ -123,6 +123,18 @@ export class MailIndexer {
     this.wakeUp?.()
   }
 
+  /**
+   * Closes the indexer's connection at once, without a word to the server
+   * — the computer is going to sleep, and the network with it. A read under
+   * way fails, and is read again on a new connection once the account's is
+   * back.
+   */
+  dropConnection(): void {
+    const client = this.client
+    this.client = null
+    client?.close()
+  }
+
   async stop(): Promise<void> {
     this.running = false
     this.poke()
@@ -147,7 +159,11 @@ export class MailIndexer {
         this.unreadable
       )
 
+      // Nothing left to read: the connection goes until there is. It never
+      // idles (see `AccountConnection.buildClient`), and one left open and
+      // silent would only time out.
       if (batch.length === 0) {
+        await this.closeClient()
         this.host.onProgress(await this.host.database.indexProgress(this.host.accountId, folders))
         await this.rest(INDEX_IDLE_RECHECK_MS)
         continue

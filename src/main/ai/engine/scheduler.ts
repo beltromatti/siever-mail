@@ -20,6 +20,12 @@ export interface TaskExecutor {
    * together — what belongs together is read in turn.
    */
   lockKeys(unit: WorkUnit): Promise<string[]>
+  /**
+   * Where the unit's matter stands in time, when that orders it: of two
+   * units sharing a lane, the earlier goes first — who reads after sees
+   * what was opened before.
+   */
+  order?(unit: WorkUnit): number | null
   run(unit: WorkUnit, signal: AbortSignal): Promise<void>
 }
 
@@ -30,12 +36,17 @@ export class WorkFailure extends Error {
     /** Worth trying again later. */
     readonly retry: boolean,
     /** Its own fault — counted against it — or the world's (network, provider). */
-    readonly counts: boolean
+    readonly counts: boolean,
+    /** The world's: the connection or the provider did not answer — nothing else would now either. */
+    readonly unreachable = false
   ) {
     super(message)
     this.name = 'WorkFailure'
   }
 }
+
+/** While the connection or the provider does not answer, the waits between tries, growing. */
+const UNREACHABLE_WAITS_MS = [30_000, 60_000, 120_000, 300_000]
 
 /** Nothing can run until the user acts: the key was refused, the credit ran out. */
 export class EnginePause extends Error {
@@ -51,6 +62,7 @@ interface Running {
   controller: AbortController
   /** Why it was stopped, when it was: the user cancelled it, or the computer went to sleep. */
   stoppedBy: 'user' | 'sleep' | null
+  startedAt: number
   done: Promise<void>
 }
 
@@ -68,6 +80,8 @@ export class Scheduler {
   private loop: Promise<void> | null = null
   private stopped = true
   private pausedFor: string | null = null
+  /** The connection or the provider stopped answering: one try at a time, ever more spaced. */
+  private unreachable: { since: number; tries: number; until: number } | null = null
   private asleep = false
   private wakeUp: (() => void) | null = null
   private timer: NodeJS.Timeout | null = null
@@ -121,6 +135,21 @@ export class Scheduler {
     return this.pausedFor
   }
 
+  /** Since when, and until when, the work waits for the connection or the provider to answer. */
+  get waitingForNetwork(): { since: number; until: number } | null {
+    return this.unreachable
+      ? { since: this.unreachable.since, until: this.unreachable.until }
+      : null
+  }
+
+  /** The computer is back online: try again now. */
+  online(): void {
+    if (this.unreachable) {
+      this.unreachable.until = Date.now()
+      this.nudge()
+    }
+  }
+
   /** The user fixed what paused the engine: work goes on. */
   resume(): void {
     if (this.pausedFor !== null) {
@@ -148,6 +177,8 @@ export class Scheduler {
         running.controller.abort()
       }
     } else {
+      // Awake, the connection is likely back too: what waited for it tries at once.
+      this.online()
       this.nudge()
     }
   }
@@ -155,6 +186,18 @@ export class Scheduler {
   /** The units running now. */
   runningUnits(): WorkUnit[] {
     return [...this.running.values()].map((running) => running.unit)
+  }
+
+  /** Stops the units running on what is going away (a removed account), and waits for them to stop. */
+  async stopWhere(going: (unit: WorkUnit) => boolean): Promise<void> {
+    const stopping = [...this.running.values()].filter((running) => going(running.unit))
+
+    for (const running of stopping) {
+      running.stoppedBy = 'user'
+      running.controller.abort()
+    }
+
+    await Promise.allSettled(stopping.map((running) => running.done))
   }
 
   /** Stops one unit: its activity was cancelled by the user. */
@@ -190,7 +233,12 @@ export class Scheduler {
   }
 
   private async startWhatCan(): Promise<void> {
-    const capacity = this.options.concurrency()
+    if (this.unreachable && Date.now() < this.unreachable.until) {
+      return
+    }
+
+    // Waiting for the network, one unit tries; the rest follow once it answers.
+    const capacity = this.unreachable ? 1 : this.options.concurrency()
     let free = capacity - this.running.size
 
     if (free <= 0) {
@@ -200,6 +248,54 @@ export class Scheduler {
     // The most urgent first; past those held up by a key in use — a sender's twenty notices
     // read one by one — to the rest, so one lane never holds every other.
     const page = Math.max(free * 6, 12)
+    const lanes = new Map<string, string[]>()
+    const claimed = new Set<string>()
+    const keysOf = async (unit: WorkUnit): Promise<string[]> => {
+      const known = lanes.get(unit.id)
+
+      if (known) {
+        return known
+      }
+
+      let keys: string[]
+
+      try {
+        keys = await this.executors[unit.task].lockKeys(unit)
+      } catch (error) {
+        logMainError('Segretario work could not say what it holds', error, { task: unit.task })
+        keys = [unit.scopeKey]
+      }
+
+      lanes.set(unit.id, keys)
+      return keys
+    }
+    // A unit gives way to an earlier one of its lane waiting in the same page — one at least as
+    // urgent: new mail does not wait for the backlog.
+    let looked: WorkUnit[] = []
+    const earlierInLane = async (unit: WorkUnit, keys: ReadonlyArray<string>): Promise<boolean> => {
+      const order = this.executors[unit.task].order?.(unit) ?? null
+
+      if (order === null) {
+        return false
+      }
+
+      for (const other of looked) {
+        const otherOrder =
+          other.id === unit.id || claimed.has(other.id) || other.priority > unit.priority
+            ? null
+            : (this.executors[other.task]?.order?.(other) ?? null)
+
+        if (
+          otherOrder !== null &&
+          otherOrder < order &&
+          (await keysOf(other)).some((key) => keys.includes(key))
+        ) {
+          return true
+        }
+      }
+
+      return false
+    }
 
     for (let offset = 0; free > 0 && offset < MAX_SCANNED; offset += page) {
       const units = await this.queue.ready(page, Date.now(), offset)
@@ -207,6 +303,8 @@ export class Scheduler {
       if (units.length === 0) {
         return
       }
+
+      looked = units
 
       for (const unit of units) {
         if (free <= 0 || this.stopped || this.pausedFor !== null || this.asleep) {
@@ -230,18 +328,17 @@ export class Scheduler {
           }
         }
 
-        let keys: string[]
+        const keys = await keysOf(unit)
 
-        try {
-          keys = await executor.lockKeys(unit)
-        } catch (error) {
-          logMainError('Segretario work could not say what it holds', error, { task: unit.task })
-          keys = [unit.scopeKey]
-        }
-
-        if (keys.some((key) => this.held.has(key)) || !(await this.queue.claim(unit.id))) {
+        if (keys.some((key) => this.held.has(key)) || (await earlierInLane(unit, keys))) {
           continue
         }
+
+        if (!(await this.queue.claim(unit.id))) {
+          continue
+        }
+
+        claimed.add(unit.id)
 
         free -= 1
         this.begin(unit, executor, keys)
@@ -251,7 +348,14 @@ export class Scheduler {
 
   private begin(unit: WorkUnit, executor: TaskExecutor, keys: string[]): void {
     const controller = new AbortController()
-    const running: Running = { unit, keys, controller, stoppedBy: null, done: Promise.resolve() }
+    const running: Running = {
+      unit,
+      keys,
+      controller,
+      stoppedBy: null,
+      startedAt: Date.now(),
+      done: Promise.resolve()
+    }
 
     for (const key of keys) {
       this.held.add(key)
@@ -261,6 +365,12 @@ export class Scheduler {
       try {
         await executor.run(unit, controller.signal)
         await this.queue.complete(unit.id)
+
+        if (this.unreachable) {
+          this.unreachable = null
+          this.options.onChange?.()
+          this.nudge()
+        }
       } catch (error) {
         await this.failed(running, error)
       } finally {
@@ -322,6 +432,30 @@ export class Scheduler {
       logMainError('Segretario work failed', error, { task: unit.task, scope: unit.scopeKey })
     }
 
+    if (failure.unreachable) {
+      // A try is a unit that started while the engine waited: those already running when the
+      // network went fail with it, as one.
+      if (!this.unreachable || running.startedAt >= this.unreachable.since) {
+        const tries = (this.unreachable?.tries ?? 0) + 1
+        const wait = UNREACHABLE_WAITS_MS[Math.min(tries, UNREACHABLE_WAITS_MS.length) - 1]
+        this.unreachable = {
+          since: this.unreachable?.since ?? Date.now(),
+          tries,
+          until: Date.now() + wait
+        }
+      }
+
+      // Waiting for the network is the engine's, not the unit's: it waits, uncounted, for the
+      // engine to try again.
+      await this.queue.fail(unit.id, failure.message, {
+        retry: true,
+        counts: false,
+        maxAttempts: MAX_ATTEMPTS,
+        delayMs: 0
+      })
+      return
+    }
+
     await this.queue.fail(unit.id, failure.message, {
       retry: failure.retry,
       counts: failure.counts,
@@ -335,8 +469,15 @@ export class Scheduler {
       return
     }
 
+    // Until the next unit whose time comes — one ready already but held (no room, its lane
+    // taken) starts when what holds it ends, which wakes the loop — or the network wait ends.
+    const now = Date.now()
     const next = await this.queue.nextStart().catch(() => null)
-    const delay = next === null ? IDLE_MS : Math.min(Math.max(next - Date.now(), 50), IDLE_MS)
+    const due = [next !== null && next > now ? next : null, this.unreachable?.until ?? null].filter(
+      (at): at is number => at !== null && at > now
+    )
+    const delay =
+      due.length === 0 ? IDLE_MS : Math.min(Math.max(Math.min(...due) - now, 50), IDLE_MS)
 
     await new Promise<void>((resolve) => {
       this.wakeUp = () => {

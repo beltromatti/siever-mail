@@ -8,26 +8,28 @@ datasource db {
 }
 
 model Account {
-  id              String         @id
+  id              String           @id
   type            String
-  email           String         @unique
-  displayName     String         @map("display_name")
-  imapHost        String         @map("imap_host")
-  imapPort        Int            @map("imap_port")
-  imapSecure      Boolean        @map("imap_secure")
-  smtpHost        String         @map("smtp_host")
-  smtpPort        Int            @map("smtp_port")
-  smtpSecure      Boolean        @map("smtp_secure")
+  email           String           @unique
+  displayName     String           @map("display_name")
+  imapHost        String           @map("imap_host")
+  imapPort        Int              @map("imap_port")
+  imapSecure      Boolean          @map("imap_secure")
+  smtpHost        String           @map("smtp_host")
+  smtpPort        Int              @map("smtp_port")
+  smtpSecure      Boolean          @map("smtp_secure")
   username        String
-  authType        String         @map("auth_type")
-  encryptedSecret String         @map("encrypted_secret")
-  createdAt       BigInt         @map("created_at")
-  updatedAt       BigInt         @map("updated_at")
+  authType        String           @map("auth_type")
+  encryptedSecret String           @map("encrypted_secret")
+  createdAt       BigInt           @map("created_at")
+  updatedAt       BigInt           @map("updated_at")
   folders         Folder[]
   messages        Message[]
   messageBodies   MessageBody[]
   recentFolders   RecentFolder[]
   drafts          Draft[]
+  messageIdKeys   MessageIdKey[]
+  leftOutMessages LeftOutMessage[]
 
   @@map("accounts")
 }
@@ -160,6 +162,35 @@ model Contact {
 
 /// Files the user attached, saved from a message or filed away through an
 /// extension. The "Allega" menu offers them back, newest first.
+/// Which message holds each `m:` key of an account, by its content: kept after its rows go,
+/// for a message stored again to find its key (`mail-engine/message-id-keys.ts`).
+model MessageIdKey {
+  accountId     String  @map("account_id")
+  messageKey    String  @map("message_key")
+  threadId      String  @map("thread_id")
+  contentDigest String  @map("content_digest")
+  leftAt        BigInt? @map("left_at")
+  account       Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@id([accountId, messageKey])
+  @@map("message_id_keys")
+}
+
+/// Messages a folder's sync leaves out for now: deleted by the app and not expunged yet, or
+/// refused by the server (`mail-engine/unreadable-messages.ts`).
+model LeftOutMessage {
+  accountId  String  @map("account_id")
+  folderPath String  @map("folder_path")
+  uid        Int
+  reason     String
+  failures   Int     @default(0)
+  retryAt    BigInt? @map("retry_at")
+  account    Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@id([accountId, folderPath, uid])
+  @@map("left_out_messages")
+}
+
 model RecentFolder {
   accountId  String  @map("account_id")
   folderPath String  @map("folder_path")

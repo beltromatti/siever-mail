@@ -1,19 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, LoaderCircle, RefreshCw } from 'lucide-react'
+import { AlertCircle, Check, LoaderCircle, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { cn } from '@renderer/lib/utils'
 import type { MessageRef } from '@shared/models'
-import type { DayLine, TodayPage as Today } from '@shared/segretario'
+import type { Commitment, DayLine, TodayPage as Today } from '@shared/segretario'
 
 import { isOnDay, startOfDay } from '@renderer/features/calendar/calendar-dates'
 import { EventLine } from '@renderer/features/calendar/event-line'
 import { useCalendarEvents } from '@renderer/features/calendar/use-calendar'
 
-import { CommitmentRow } from '@renderer/features/segretario/commitment-row'
+import {
+  CommitmentMenu,
+  CommitmentRow,
+  undoTick
+} from '@renderer/features/segretario/commitment-row'
 import { ProposalCard } from '@renderer/features/segretario/message-work'
+import { LinkedWords } from '@renderer/features/segretario/segretario-text'
 import { COMMITMENT_LABELS, dueLabel } from '@renderer/features/segretario/row-work'
 
 const DAY_TITLE = new Intl.DateTimeFormat('it-IT', {
@@ -60,7 +65,7 @@ async function settleLine(line: DayLine): Promise<boolean> {
       description: commitment.text,
       action: {
         label: 'Annulla',
-        onClick: () => void window.segretarioApi.setCommitmentStatus(commitment.id, 'aperta')
+        onClick: () => undoTick(commitment.id)
       }
     })
     return true
@@ -77,13 +82,15 @@ function Line({
   day,
   showWaitingSince,
   onOpen,
-  onSettled
+  onSettled,
+  onRemind
 }: {
   line: DayLine
   day: string
   showWaitingSince?: boolean
   onOpen: (ref: MessageRef) => void
   onSettled: (line: DayLine) => void
+  onRemind: (commitment: Commitment) => void
 }): React.JSX.Element {
   const late = line.due !== null && line.due < day
   const kind = line.commitment?.kind
@@ -124,15 +131,22 @@ function Line({
           </span>
         </span>
       </button>
-      {settleLabel && (
-        <button
-          type="button"
-          onClick={() => void settleLine(line).then((settled) => settled && onSettled(line))}
-          className="button-raised focus-visible:ring-ring/60 absolute top-2.5 -right-1 flex h-7 items-center gap-1 rounded-[7px] px-2 text-[11.5px] font-semibold opacity-0 transition-opacity outline-none group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:ring-2"
-        >
-          <Check className="size-3.5" />
-          {settleLabel}
-        </button>
+      {settleLabel && line.commitment && (
+        <span className="absolute top-2.5 -right-1 flex items-center gap-1.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 has-[[data-state=open]]:opacity-100">
+          <CommitmentMenu
+            commitment={line.commitment}
+            onRemind={onRemind}
+            className="grid size-7 place-items-center"
+          />
+          <button
+            type="button"
+            onClick={() => void settleLine(line).then((settled) => settled && onSettled(line))}
+            className="button-raised focus-visible:ring-ring/60 flex h-7 items-center gap-1 rounded-[7px] px-2 text-[11.5px] font-semibold outline-none focus-visible:ring-2"
+          >
+            <Check className="size-3.5" />
+            {settleLabel}
+          </button>
+        </span>
       )}
     </li>
   )
@@ -146,7 +160,8 @@ function Section({
   showWaitingSince,
   onOpen,
   settled,
-  onSettled
+  onSettled,
+  onRemind
 }: {
   id: string
   title: string
@@ -157,6 +172,7 @@ function Section({
   /** Lines just dealt with here, gone before the day is read again. */
   settled: ReadonlySet<string>
   onSettled: (line: DayLine) => void
+  onRemind: (commitment: Commitment) => void
 }): React.JSX.Element | null {
   const shown = lines.filter((line) => !settled.has(lineKey(line)))
 
@@ -178,6 +194,7 @@ function Section({
             showWaitingSince={showWaitingSince}
             onOpen={onOpen}
             onSettled={onSettled}
+            onRemind={onRemind}
           />
         ))}
       </ul>
@@ -195,12 +212,15 @@ function Section({
 export function TodayPage({
   canWrite,
   atWindowTopRight,
-  onOpenMessage
+  onOpenMessage,
+  onRemind
 }: {
   /** The Segretario can work: the letter can be written again. */
   canWrite: boolean
   atWindowTopRight: boolean
   onOpenMessage: (ref: MessageRef) => void
+  /** Asks the Segretario for a reminder to who is awaited. */
+  onRemind: (commitment: Commitment) => void
 }): React.JSX.Element {
   const [page, setPage] = useState<Today | null>(null)
   const [settled, setSettled] = useState<ReadonlySet<string>>(() => new Set())
@@ -279,7 +299,8 @@ export function TodayPage({
     return () => window.clearTimeout(timer)
   }, [rewritingSince])
 
-  const rewriting = rewritingSince !== null
+  // Asked here, or begun by the Segretario itself — the letter behind when the page was opened.
+  const rewriting = rewritingSince !== null || (page?.letterRewriting ?? false)
   const empty =
     page !== null &&
     SECTIONS.every(({ key }) => page[key].length === 0) &&
@@ -368,16 +389,25 @@ export function TodayPage({
               </nav>
             )}
             {page?.letter && (
-              <p
+              <LinkedWords
+                text={page.letter}
+                links={page.letterLinks}
                 className={cn(
-                  'voice drop-cap text-foreground text-[18px] leading-[1.55] whitespace-pre-line',
+                  'drop-cap text-foreground text-[18px] leading-[1.55]',
                   rewriting && 'opacity-60'
                 )}
-              >
-                {page.letter}
-              </p>
+              />
             )}
-            {rewriting ? (
+            {page?.paused ? (
+              <p className="text-destructive-soft-foreground flex items-start gap-2 text-[13px]">
+                <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                <span>
+                  Sono fermo: {page.paused}
+                  {page.reading > 0 &&
+                    ` Restano da leggere ${page.reading === 1 ? 'un messaggio' : `${page.reading.toLocaleString('it-IT')} messaggi`}.`}
+                </span>
+              </p>
+            ) : rewriting ? (
               <p className="text-muted-foreground flex items-center gap-2 text-[13px]">
                 <LoaderCircle className="text-ai size-4 animate-spin" />
                 Sto guardando la tua giornata…
@@ -451,6 +481,7 @@ export function TodayPage({
                   onOpen={onOpenMessage}
                   settled={settled}
                   onSettled={settle}
+                  onRemind={onRemind}
                 />
               ))}
               {page.proposals.length > 0 && (
@@ -460,6 +491,7 @@ export function TodayPage({
                     <ProposalCard
                       key={proposal.id}
                       proposal={proposal}
+                      onOpenSource={onOpenMessage}
                       onAct={(acted) =>
                         acted.accountId &&
                         acted.messageKey &&

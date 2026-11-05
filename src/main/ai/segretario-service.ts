@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { PrismaClient } from '@prisma/client'
 
 import extensionMain from '@app/extension/main'
+import type { CalendarResponse, EventChange } from '@shared/calendar'
 import type { MessageRef } from '@shared/models'
 import {
   SEGRETARIO_IPC,
@@ -32,6 +33,7 @@ import {
   type Project,
   type ProjectDetail,
   type ProjectLabel,
+  type LinkedText,
   type Proposal,
   type ReadingStatus,
   type ReviewRequest,
@@ -41,10 +43,12 @@ import {
   type SegretarioSpending,
   type SegretarioStatus,
   type SendOutcome,
+  type TaskKind,
   type TodayPage,
   type WorkChange,
   type WritingRequest,
-  REVIEW_TIMEOUT_MS
+  REVIEW_TIMEOUT_MS,
+  setupTurnsAiOn
 } from '@shared/segretario'
 
 import { logMainError } from '../utils/error-utils'
@@ -65,7 +69,12 @@ import { READING_HORIZON_DAYS, SegretarioEngine } from './engine/engine'
 import { WorkQueue } from './engine/work-queue'
 import { folderQueryLabel, searchMail, searchScope } from './mail-search'
 import { MAX_NOTE_CHARS, normalizeMemoryPath, Notebook } from './memory/notebook'
-import { OpenRouterClient, SegretarioError, type ChatUsage, type FetchFunction } from './openrouter'
+import {
+  OpenRouterClient,
+  SegretarioError,
+  type FetchFunction,
+  type GenerationBill
+} from './openrouter'
 import { PROMPTS } from './prompts'
 import { Registry, type RegistryView } from './registry/registry'
 import {
@@ -137,6 +146,11 @@ export interface SegretarioServiceOptions {
   send(channel: string, payload: unknown): void
   /** Whether new mail is read as it comes — the AI on, with a working key. */
   onReadingChange(reading: boolean): void
+  /**
+   * The AI on or off as the page has it — the switch up and a key given:
+   * what is offered outside the page (the menu) follows.
+   */
+  onEnabledChange(on: boolean): void
   /** A message's note, written as it was read: an alert waiting for it is let go. */
   onNoteWritten(note: MessageNote): void
 }
@@ -184,6 +198,7 @@ function projectOf(summary: ProjectSummary): Project {
     title: summary.title,
     description: summary.description,
     state: summary.state,
+    stateLinks: summary.stateLinks,
     stateAt: summary.stateAt,
     stale: summary.staleSince !== null,
     origin: summary.origin,
@@ -201,6 +216,12 @@ function plainly<T>(work: Promise<T>): Promise<T> {
     throw error instanceof RegistryRefusal ? new Error(error.message) : error
   })
 }
+
+/** The work that writes the memory: stopped before the memory is emptied. */
+const MEMORY_TASKS: ReadonlyArray<TaskKind> = ['al_passo', 'riflessione', 'conoscimi']
+
+/** A letter looked at in Oggi is written again when it is behind by more than this. */
+const LETTER_LOOKED_AT_STALE_MS = 60 * 60 * 1000
 
 /**
  * The Segretario, as the rest of the app speaks to it: the key and the one
@@ -235,6 +256,8 @@ export class SegretarioService {
     { asked: AskedMail; search: AskedSearch; refs: MessageRef[] }
   >()
   private reading: boolean | null = null
+  /** The AI on as the page shows it: the switch up and a key given. */
+  private on: boolean | null = null
   private engineStateTimer: NodeJS.Timeout | null = null
   private mailWakeTimer: NodeJS.Timeout | null = null
   /** Proposals being answered now. */
@@ -328,6 +351,7 @@ export class SegretarioService {
       queue: new WorkQueue(sql),
       emit: (event) => this.emit(event),
       ready: () => this.ready(),
+      blocked: () => this.blocked(),
       onboarding: () => this.getOnboarding(),
       onStateChange: () => this.engineChanged(),
       onPause: (reason) => {
@@ -345,12 +369,11 @@ export class SegretarioService {
     // waits for the user. Work done alone starts over from the queue.
     for (const activity of await store.listUnfinished()) {
       if (activity.visibility === 'pannello') {
-        const event = await store.appendEvent(activity.id, 'error', {
+        await store.appendEvent(activity.id, 'error', {
           code: 'interrupted',
           message:
             'Interrotto: SIEVER Mail è stato chiuso mentre lavoravo. Scrivimi per riprendere.'
         })
-        void event
         await store.updateActivity(activity.id, { status: 'failed', unseen: true })
 
         if (activity.task === 'conoscimi') {
@@ -358,6 +381,11 @@ export class SegretarioService {
         }
       } else {
         await store.updateActivity(activity.id, { status: 'cancelled' })
+
+        // The lessons a reflection cut short had taken go back to the next one.
+        if (activity.task === 'riflessione') {
+          await store.endReflection(activity.id, false)
+        }
       }
     }
 
@@ -466,13 +494,38 @@ export class SegretarioService {
     )
   }
 
+  /** With the AI on, why the Segretario cannot work — said to the user — or null. */
+  private async blocked(): Promise<string | null> {
+    if (!(await this.db.store.getPreferences()).enabled) {
+      return null
+    }
+
+    switch (this.status.keyState) {
+      case 'invalid':
+        return 'OpenRouter ha rifiutato la chiave: inseriscine una valida in Impostazioni › Segretario.'
+      case 'exhausted':
+        return 'Il credito OpenRouter è finito: ricaricalo su openrouter.ai, poi il lavoro riprende da solo.'
+      case 'missing':
+        return 'Manca la chiave OpenRouter: inseriscila in Impostazioni › Segretario.'
+      default:
+        return null
+    }
+  }
+
   private async sayWhetherReading(): Promise<void> {
-    const reading =
-      this.status.keyState === 'ready' && (await this.db.store.getPreferences()).enabled
+    const { enabled } = await this.db.store.getPreferences()
+    const reading = this.status.keyState === 'ready' && enabled
 
     if (reading !== this.reading) {
       this.reading = reading
       this.options.onReadingChange(reading)
+    }
+
+    const on = enabled && this.status.keyState !== 'missing'
+
+    if (on !== this.on) {
+      this.on = on
+      this.options.onEnabledChange(on)
     }
   }
 
@@ -485,6 +538,8 @@ export class SegretarioService {
     await this.db.store.setStoredStatus(status)
     this.options.send(SEGRETARIO_IPC.statusChanged, status)
     await this.sayWhetherReading()
+    // Whether the work can go on is part of the engine's state: the setup and the panel say it.
+    this.engineChanged()
 
     if (lifts) {
       this.engine?.resume()
@@ -655,7 +710,7 @@ export class SegretarioService {
   private async recordUsage(
     activityId: string | null,
     purpose: string,
-    result: { usage: ChatUsage; model: string | null; provider: string | null }
+    result: GenerationBill
   ): Promise<void> {
     await this.db.store.recordUsage({
       activityId,
@@ -697,8 +752,9 @@ export class SegretarioService {
       // The setup is over: the reading goes back to its usual pace.
       this.setPreparing(false)
 
-      // "Pronto" promised the day in Oggi: with the AI on, it is written now, even before dawn.
-      if (finished && (await this.ready())) {
+      // The setup that turned the AI on promised the day in Oggi: it is written now, even
+      // before dawn. Any other leaves the morning to its hour.
+      if (finished && setupTurnsAiOn(finished) && (await this.ready())) {
         await this.engine?.writeDayNow()
       }
     }
@@ -720,8 +776,9 @@ export class SegretarioService {
     )
   }
 
-  getReadingStatus(): Promise<ReadingStatus> {
-    return this.db.engine.readingStatus()
+  /** Where the reading of the last thirty days stands — of these accounts (a connection just added), or all. */
+  getReadingStatus(accountIds?: ReadonlyArray<string>): Promise<ReadingStatus> {
+    return this.db.engine.readingStatus(accountIds)
   }
 
   /** Tells the window the engine's state, at most a few times a second. */
@@ -762,15 +819,25 @@ export class SegretarioService {
     }))
   }
 
-  /** A note as the user corrected it: a version like any other, and a lesson. */
-  async writeMemory(path: string, content: string): Promise<MemoryNote[]> {
+  /**
+   * The user's own words in a note: a version like any other, and a lesson;
+   * over a version the Segretario changed since they opened it, refused.
+   */
+  async writeMemory(path: string, content: string, seenRevision?: number): Promise<MemoryNote[]> {
     if (content.length > MAX_NOTE_CHARS) {
       throw new Error('La nota è troppo lunga: dividila in più note.')
     }
 
     const normalized = normalizeMemoryPath(path)
     const before = await this.db.notebook.read(normalized)
-    await plainly(this.db.notebook.write(normalized, content, USER))
+
+    if (before && seenRevision !== undefined && before.revision !== seenRevision) {
+      throw new Error(
+        'Il Segretario ha cambiato questa nota mentre la scrivevi: riaprila, guarda com’è ora e rifai la tua modifica.'
+      )
+    }
+
+    await plainly(this.db.notebook.write(normalized, content, USER, { seenRevision }))
 
     if (before) {
       await this.db.store.addLesson('memoria_corretta', {
@@ -805,6 +872,14 @@ export class SegretarioService {
 
   /** Forgets what it learnt, and that it knows the connections: Conoscimi is to be done again. */
   async forgetEverything(): Promise<void> {
+    // What writes the memory stops first: it would write again into the memory just emptied.
+    for (const row of await this.db.store.listLearning()) {
+      if (row.activityId) {
+        this.runner?.cancel(row.activityId)
+      }
+    }
+
+    await this.db.engine.stopWhere((unit) => MEMORY_TASKS.includes(unit.task as TaskKind))
     await this.db.notebook.clear()
     await this.db.store.resetLearning()
   }
@@ -939,17 +1014,35 @@ export class SegretarioService {
       }
     }
 
+    await this.engine?.forgetAccount(accountId)
     await store.forgetAccount(accountId)
     await store.addLesson('account-rimosso', { email })
     this.workChanged({ accountIds: [accountId], threadIds: [], messageKeys: [], projectIds: [] })
   }
 
-  /** Everything but the key and the settings, for "Elimina tutti i dati". */
+  /**
+   * A calendar connection removed: what was kept about its events goes, and
+   * the next reflection hears of it — the memory is the Segretario's to
+   * correct wherever it wrote of those calendars.
+   */
+  async forgetCalendar(connectionId: string, calendarNames: ReadonlyArray<string>): Promise<void> {
+    await this.db.store.forgetCalendar(connectionId, calendarLearningKey(connectionId))
+    await this.db.store.addLesson('calendario-rimosso', { calendari: calendarNames })
+    this.workChanged({ accountIds: [], threadIds: [], messageKeys: [], projectIds: [] })
+  }
+
+  /**
+   * "Elimina tutti i dati": everything the Segretario kept goes, and — as
+   * after "Dimentica tutto" — the AI turns off: on again, it starts from the
+   * guided setup, Conoscimi first, instead of reading a month of mail
+   * knowing nothing.
+   */
   async clearData(): Promise<void> {
     this.runner?.cancelAll()
     this.engine?.cancelRunning()
     await this.db.store.clearData()
     this.searches.clear()
+    await this.setPreferences({ enabled: false })
   }
 
   /**
@@ -1015,7 +1108,8 @@ export class SegretarioService {
     const location = (await this.options.mail.locate(accountId, [messageKey])).get(messageKey)
     const threadId = note?.threadId ?? location?.threadId ?? null
     const thread = threadId ? { accountId, threadId } : null
-    // The reply and the proposals are the conversation's: whichever of its messages is open shows them.
+    // The reply and the events proposed are the conversation's: whichever of its messages is
+    // open shows them. What a proposal does to one message (archiving it) shows on that one.
     const [commitments, links, replies, copies, proposals] = await Promise.all([
       thread ? registry.commitments.ofThreads([thread]) : Promise.resolve([]),
       thread ? registry.projects.linksOf([thread]) : Promise.resolve([]),
@@ -1054,7 +1148,13 @@ export class SegretarioService {
         destination: copy.destination,
         savedAt: copy.savedAt
       })),
-      proposals: proposals.map((proposal) => this.proposalOf(proposal))
+      proposals: proposals
+        .filter(
+          (proposal) =>
+            proposal.kind === 'evento' ||
+            (proposal.accountId === accountId && proposal.messageKey === messageKey)
+        )
+        .map((proposal) => this.proposalOf(proposal))
     }
   }
 
@@ -1091,6 +1191,30 @@ export class SegretarioService {
         reason: options.reason ?? null
       })
     )
+    return commitmentOf(record)
+  }
+
+  /**
+   * "Annulla" after the user ticked, set aside or put off an open thing: it
+   * is as it was — its question too — and what the tick taught is taken back.
+   */
+  async undoCommitmentStatus(id: number): Promise<Commitment> {
+    const { registry, store } = this.db
+    const last = (await registry.commitments.history(id))
+      .filter((entry) => entry.actor === 'utente')
+      .sort((a, b) => b.id - a.id)[0]
+
+    if (!last) {
+      throw new Error('Non c’è niente da annullare.')
+    }
+
+    const record = await plainly(registry.undoCommitment(last.id, USER))
+
+    if (!record) {
+      throw new Error('Non c’è niente da annullare.')
+    }
+
+    await store.retractLessons(id, last.at)
     return commitmentOf(record)
   }
 
@@ -1259,8 +1383,14 @@ export class SegretarioService {
   }
 
   /** How to prepare for an event, as written for it (by the day's work, or asked in the chat). */
-  async eventPrep(eventKey: string): Promise<{ text: string; writtenAt: number } | null> {
+  async eventPrep(eventKey: string): Promise<(LinkedText & { writtenAt: number }) | null> {
     return this.db.registry.day.prep(eventKey)
+  }
+
+  /** The message an open thing comes from, where it is now: a link to the thing opens it. */
+  async commitmentSource(id: number): Promise<MessageRef | null> {
+    const record = await this.db.registry.commitments.get(id)
+    return record ? this.replySource(record.accountId, record.messageKey) : null
   }
 
   async listProposals(): Promise<Proposal[]> {
@@ -1268,14 +1398,12 @@ export class SegretarioService {
   }
 
   /**
-   * The user's word on a proposal. An event: accepted, it is put in the
-   * calendar as proposed — the user's own act, invitations included.
-   * An extension's: the extension did what it proposes; this records how.
-   */
-  /**
    * The user's answer to a proposal — to the version they saw (`revision`):
    * one a run wrote again since is refused, to be looked at again. One
-   * answer at a time for each: a second click does not create twice.
+   * answer at a time for each: a second click does not create twice. An
+   * event accepted is put in the calendar as proposed — the user's own act,
+   * invitations included; an extension's proposal, the extension did what
+   * it proposes, and this records how.
    */
   async decideProposal(
     id: string,
@@ -1324,7 +1452,35 @@ export class SegretarioService {
         attendees: string[]
         calendar: string | null
         eventKey: string | null
+        /** An answer to the event's invitation. */
+        response?: Exclude<CalendarResponse, 'needsAction'>
+        /** What changes in the event, and only that. */
+        change?: EventChange
       }
+
+      if (payload.eventKey && payload.response) {
+        const answered = await this.options.calendar.respond(payload.eventKey, payload.response)
+        await registry.decideProposal(id, 'accettata', { eventKey: answered.key, ...result })
+        return
+      }
+
+      if (payload.eventKey) {
+        // What the proposal changes, and nothing else: a proposal written before it kept only
+        // the change carries the whole event, of which what it did not say is left as it is.
+        const change: EventChange = payload.change ?? {
+          title: payload.title,
+          start: payload.start,
+          end: payload.end,
+          allDay: payload.allDay,
+          ...(payload.location ? { location: payload.location } : {}),
+          ...(payload.description ? { description: payload.description } : {}),
+          ...(payload.attendees?.length ? { attendees: payload.attendees } : {})
+        }
+        const updated = await this.options.calendar.update(payload.eventKey, change)
+        await registry.decideProposal(id, 'accettata', { eventKey: updated.key, ...result })
+        return
+      }
+
       const calendars = (await this.options.calendar.calendars()).filter(
         (calendar) => calendar.writable
       )
@@ -1338,20 +1494,6 @@ export class SegretarioService {
         ) ??
         calendars.find((candidate) => candidate.primary) ??
         calendars[0]
-
-      if (payload.eventKey) {
-        const updated = await this.options.calendar.update(payload.eventKey, {
-          title: payload.title,
-          start: payload.start,
-          end: payload.end,
-          allDay: payload.allDay,
-          location: payload.location,
-          description: payload.description,
-          attendees: payload.attendees
-        })
-        await registry.decideProposal(id, 'accettata', { eventKey: updated.key, ...result })
-        return
-      }
 
       if (!calendar) {
         throw new Error(
@@ -1379,7 +1521,13 @@ export class SegretarioService {
 
   /* ─────────────────────────────── copies saved outside ─────────────────────────────── */
 
-  /** Copies an extension saved outside the mail: facts on each message, and where the user files. */
+  /**
+   * Copies an extension saved outside the mail: facts on each message, and
+   * where the user files. The record is what makes a copy saved, so only it
+   * can fail the save; the proposals are answered after it — those the user
+   * followed accepted with their choice, the rest set aside — and a proposal
+   * left open by a failure there is answered by the next copy or the user.
+   */
   async copiesSaved(
     entries: ReadonlyArray<{
       ref: MessageRef
@@ -1388,6 +1536,7 @@ export class SegretarioService {
       fromAddress: string | null
       destination: string
       files: string[]
+      proposals: ReadonlyArray<{ id: string; result: Record<string, unknown> }>
     }>
   ): Promise<void> {
     await this.db.registry.saveCopies(
@@ -1402,6 +1551,31 @@ export class SegretarioService {
       })),
       USER
     )
+
+    for (const proposal of entries.flatMap((entry) => entry.proposals)) {
+      await this.decideProposal(proposal.id, true, proposal.result).catch((error: unknown) =>
+        logMainError('A proposal followed by a saved copy could not be accepted', error)
+      )
+    }
+
+    // Saved, the proposals to save them still open are answered: set aside.
+    const answered = extensionMain.assistant?.savedCopyProposalKind
+
+    if (answered) {
+      for (const accountId of new Set(entries.map((entry) => entry.ref.accountId))) {
+        await this.db.registry.proposals
+          .supersedeFor(
+            accountId,
+            entries
+              .filter((entry) => entry.ref.accountId === accountId)
+              .map((entry) => entry.messageKey),
+            answered
+          )
+          .catch((error: unknown) =>
+            logMainError('Proposals answered by a saved copy could not be set aside', error)
+          )
+      }
+    }
   }
 
   /**
@@ -1431,6 +1605,11 @@ export class SegretarioService {
         messages.flatMap((message) => (message.from ? [message.from.trim().toLowerCase()] : []))
       )
     ]
+    const ofConversations = latest(await registry.copies.ofThreads(threads))
+    const ofSenders =
+      ofConversations === null && senders.length > 0
+        ? latest(await registry.copies.fromSenders(senders, ''))
+        : null
 
     const projectIds = [
       ...new Set(
@@ -1442,9 +1621,11 @@ export class SegretarioService {
     const resources = await Promise.all(projectIds.map((id) => registry.projects.resources(id)))
 
     return {
-      savedBefore:
-        latest(await registry.copies.ofThreads(threads)) ??
-        (senders.length > 0 ? latest(await registry.copies.fromSenders(senders, '')) : null),
+      savedBefore: ofConversations
+        ? { destination: ofConversations, from: 'conversazione' }
+        : ofSenders
+          ? { destination: ofSenders, from: 'mittente' }
+          : null,
       projectFolders: [
         ...new Set(
           resources
@@ -1507,6 +1688,41 @@ export class SegretarioService {
 
   /* ──────────────────────────────── the day ──────────────────────────────── */
 
+  /** Messages as a line of the day shows them: where they are, their subject, who wrote them ("Tu" for the user). */
+  private async messageLines(
+    wanted: ReadonlyArray<{ accountId: string; messageKey: string }>
+  ): Promise<Map<string, { ref: MessageRef; subject: string; from: string; dateIso: string }>> {
+    const own = new Set(
+      (await this.options.mail.listAccounts()).map((account) => account.email.toLowerCase())
+    )
+    const lines = new Map<
+      string,
+      { ref: MessageRef; subject: string; from: string; dateIso: string }
+    >()
+
+    for (const accountId of new Set(wanted.map((item) => item.accountId))) {
+      const found = await this.options.mail.messageSummaries(
+        accountId,
+        wanted.filter((item) => item.accountId === accountId).map((item) => item.messageKey)
+      )
+
+      for (const [key, summary] of found) {
+        const sender = summary.from[0]
+        lines.set(`${accountId}\u0000${key}`, {
+          ref: summary.ref,
+          subject: summary.subject,
+          from:
+            sender && own.has(sender.address.toLowerCase())
+              ? 'Tu'
+              : sender?.name || sender?.address || '',
+          dateIso: summary.dateIso
+        })
+      }
+    }
+
+    return lines
+  }
+
   /**
    * Lines of the day, from what is open and prepared: each with its
    * message — in the folder the user thinks of it in, never one only in
@@ -1521,38 +1737,11 @@ export class SegretarioService {
     }> = []
   ): Promise<{ commitments: Map<number, DayLine>; replies: DayLine[] }> {
     const { registry } = this.db
-    const own = new Set(
-      (await this.options.mail.listAccounts()).map((account) => account.email.toLowerCase())
-    )
     const wanted = [
       ...records.map((record) => ({ accountId: record.accountId, messageKey: record.messageKey })),
       ...replies
     ]
-    const summaries = new Map<
-      string,
-      { ref: MessageRef; subject: string; from: string; dateIso: string }
-    >()
-
-    for (const accountId of new Set(wanted.map((item) => item.accountId))) {
-      const found = await this.options.mail.messageSummaries(
-        accountId,
-        wanted.filter((item) => item.accountId === accountId).map((item) => item.messageKey)
-      )
-
-      for (const [key, summary] of found) {
-        const sender = summary.from[0]
-        summaries.set(`${accountId}\u0000${key}`, {
-          ref: summary.ref,
-          subject: summary.subject,
-          from:
-            sender && own.has(sender.address.toLowerCase())
-              ? 'Tu'
-              : sender?.name || sender?.address || '',
-          dateIso: summary.dateIso
-        })
-      }
-    }
-
+    const summaries = await this.messageLines(wanted)
     const notes = new Map(
       (await registry.notes.many(wanted)).map((note) => [
         `${note.accountId}\u0000${note.messageKey}`,
@@ -1606,6 +1795,14 @@ export class SegretarioService {
 
   async getToday(): Promise<TodayPage> {
     const { registry, engine } = this.db
+
+    // Looked at, and behind by more than an hour: the letter is written again (vision §2.4).
+    if ((await this.ready()) && (await engine.letterBehind(LETTER_LOOKED_AT_STALE_MS))) {
+      if (!(await engine.dayBusy())) {
+        await engine.refreshDay()
+      }
+    }
+
     const now = new Date()
     const today = localDay(now)
     const weekEnd = localDay(new Date(now.getFullYear(), now.getMonth(), now.getDate() + WEEK_DAYS))
@@ -1617,10 +1814,20 @@ export class SegretarioService {
       engine.state()
     ])
     const { commitments, replies: ready } = await this.dayLines(open, replies)
+    const proposalSources = await this.messageLines(
+      proposals.flatMap((proposal) =>
+        proposal.accountId && proposal.messageKey
+          ? [{ accountId: proposal.accountId, messageKey: proposal.messageKey }]
+          : []
+      )
+    )
     const byPriority = (a: DayLine, b: DayLine): number =>
       (a.due ?? '9999').localeCompare(b.due ?? '9999') ||
       PRIORITY_ORDER[a.priority ?? 'media'] - PRIORITY_ORDER[b.priority ?? 'media']
-    const owed = open.filter((record) => OWED_KINDS.includes(record.kind))
+    // What the Segretario asks about stands once, under its question, until the user answers.
+    const asked = open.filter((record) => record.question !== null)
+    const settledOpen = open.filter((record) => record.question === null)
+    const owed = settledOpen.filter((record) => OWED_KINDS.includes(record.kind))
     const lineOf = (record: CommitmentRecord): DayLine[] => {
       const line = commitments.get(record.id)
       return line ? [line] : []
@@ -1633,8 +1840,11 @@ export class SegretarioService {
     return {
       day: today,
       letter: letter?.text ?? null,
+      letterLinks: letter?.links ?? [],
       letterAt: letter?.writtenAt ?? null,
+      letterRewriting: await engine.dayInProgress(),
       reading: Math.max(0, state.reading.total - state.reading.read),
+      paused: state.paused,
       today: owed
         .filter((record) => record.due !== null && record.due <= today)
         .flatMap(lineOf)
@@ -1647,14 +1857,33 @@ export class SegretarioService {
         .filter((record) => record.due === null || record.due > weekEnd)
         .flatMap(lineOf)
         .sort(byPriority),
-      awaited: open
+      awaited: settledOpen
         .filter((record) => record.kind === 'aspetti')
         .sort((a, b) => a.createdAt - b.createdAt)
         .flatMap(lineOf),
       ready,
-      questions: open.filter((record) => record.question !== null).flatMap(lineOf),
-      proposals: proposals.map((proposal) => this.proposalOf(proposal)),
-      preps: Object.fromEntries(await registry.day.preps(events.map((event) => event.key)))
+      questions: asked.flatMap(lineOf),
+      // An event to decide on comes before the rest: it is part of the days ahead.
+      proposals: [...proposals]
+        .sort((a, b) => Number(b.kind === 'evento') - Number(a.kind === 'evento'))
+        .map((proposal) => {
+          const source =
+            proposal.accountId && proposal.messageKey
+              ? proposalSources.get(`${proposal.accountId}\u0000${proposal.messageKey}`)
+              : undefined
+          return {
+            ...this.proposalOf(proposal),
+            ...(source
+              ? { source: { ref: source.ref, from: source.from, subject: source.subject } }
+              : {})
+          }
+        }),
+      preps: Object.fromEntries(
+        [...(await registry.day.preps(events.map((event) => event.key)))].map(([key, prep]) => [
+          key,
+          { text: prep.text, links: prep.links }
+        ])
+      )
     }
   }
 
@@ -1675,12 +1904,60 @@ export class SegretarioService {
   /* ───────────────────────────────── projects ───────────────────────────────── */
 
   async listProjects(options: { includeHidden?: boolean } = {}): Promise<Project[]> {
-    return (
-      await this.db.registry.projects.list({
+    const { registry } = this.db
+    const projects = (
+      await registry.projects.list({
         includeHidden: options.includeHidden,
         includeClosed: options.includeHidden
       })
     ).map(projectOf)
+    // What is open from a message in the Trash or Spam is set aside: not counted, as not shown.
+    const open = await registry.commitments.open()
+    const aside = await this.setAsideOf(open)
+
+    if (aside.size === 0) {
+      return projects
+    }
+
+    const setAsideRecords = open.filter((record) => aside.has(record.id))
+    const less = new Map<string, number>()
+
+    for (const link of await registry.projects.linksOf(setAsideRecords)) {
+      if (!link.rejected) {
+        less.set(
+          link.projectId,
+          (less.get(link.projectId) ?? 0) +
+            setAsideRecords.filter(
+              (record) => record.accountId === link.accountId && record.threadId === link.threadId
+            ).length
+        )
+      }
+    }
+
+    return projects.map((project) => ({
+      ...project,
+      openCommitments: Math.max(0, project.openCommitments - (less.get(project.id) ?? 0))
+    }))
+  }
+
+  /** Of these commitments, those whose message lies only in the Trash or Spam: set aside. */
+  private async setAsideOf(records: ReadonlyArray<CommitmentRecord>): Promise<Set<number>> {
+    const aside = new Set<number>()
+
+    for (const accountId of new Set(records.map((record) => record.accountId))) {
+      const ofAccount = records.filter((record) => record.accountId === accountId)
+      const located = await this.options.mail.locate(accountId, [
+        ...new Set(ofAccount.map((record) => record.messageKey))
+      ])
+
+      for (const record of ofAccount) {
+        if (located.get(record.messageKey)?.setAside) {
+          aside.add(record.id)
+        }
+      }
+    }
+
+    return aside
   }
 
   async getProject(id: string): Promise<ProjectDetail | null> {
@@ -1692,52 +1969,11 @@ export class SegretarioService {
     }
 
     const threads = await registry.projects.threadsOf(id)
-    const [items, notes, resources] = await Promise.all([
+    const [items, resources] = await Promise.all([
       registry.commitments.ofThreads(threads),
-      registry.notes.ofThreads(threads),
       registry.projects.resources(id)
     ])
-    const latest = new Map<string, NoteRecord>()
-
-    for (const note of notes) {
-      const key = `${note.accountId}\u0000${note.threadId}`
-      const known = latest.get(key)
-
-      if (!known || note.messageDate > known.messageDate) {
-        latest.set(key, note)
-      }
-    }
-
-    const own = new Set(
-      (await this.options.mail.listAccounts()).map((account) => account.email.toLowerCase())
-    )
-    const messages: DayLine[] = []
-
-    for (const note of [...latest.values()].sort((a, b) =>
-      b.messageDate.localeCompare(a.messageDate)
-    )) {
-      const summary = (
-        await this.options.mail.messageSummaries(note.accountId, [note.messageKey])
-      ).get(note.messageKey)
-
-      if (summary) {
-        const sender = summary.from[0]
-        messages.push({
-          text: note.summary,
-          priority: note.priority,
-          due: note.due,
-          commitment: null,
-          ref: summary.ref,
-          messageKey: note.messageKey,
-          subject: summary.subject,
-          from:
-            sender && own.has(sender.address.toLowerCase())
-              ? 'Tu'
-              : sender?.name || sender?.address || '',
-          date: summary.dateIso
-        })
-      }
-    }
+    const aside = await this.setAsideOf(items)
 
     return {
       ...projectOf(summary),
@@ -1746,8 +1982,12 @@ export class SegretarioService {
         location: resource.location,
         label: resource.label
       })),
-      commitments: items.map(commitmentOf),
-      messages
+      commitments: items.filter((item) => !aside.has(item.id)).map(commitmentOf),
+      openCommitments: Math.max(
+        0,
+        summary.openCommitments -
+          items.filter((item) => item.status === 'aperta' && aside.has(item.id)).length
+      )
     }
   }
 
@@ -2230,14 +2470,18 @@ export class SegretarioService {
   private async nameActivity(id: string, request: string): Promise<void> {
     try {
       const key = await this.requireKey()
-      const result = await this.client.chat(key, {
-        messages: [
-          { role: 'system', content: PROMPTS.title },
-          { role: 'user', content: request.slice(0, 4_000) }
-        ],
-        reasoningEffort: 'none',
-        maxTokens: 40
-      })
+      const result = await this.client.chat(
+        key,
+        {
+          messages: [
+            { role: 'system', content: PROMPTS.title },
+            { role: 'user', content: request.slice(0, 4_000) }
+          ],
+          reasoningEffort: 'none',
+          maxTokens: 40
+        },
+        { onLateBill: (bill) => this.recordUsage(id, 'titolo', bill) }
+      )
 
       await this.recordUsage(id, 'titolo', result)
       const title = result.content

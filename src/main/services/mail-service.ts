@@ -122,7 +122,7 @@ import {
   type AccountWithSecret,
   type OutgoingMessagePayload
 } from './mail-engine/mail-transport'
-import { updateAppMenuShortcuts } from '../app-menu'
+import { updateAppMenuAi, updateAppMenuShortcuts } from '../app-menu'
 import { applyThemeMode } from '../theme'
 import { ensurePathReachable, rememberMountedShares } from './network-volumes'
 import { isUserFile, listRecentFiles, privateFolders } from './recent-files'
@@ -545,7 +545,13 @@ export class MailService {
       microsoft: this.microsoftOAuthService,
       fetch: (input, init) => net.fetch(input, init),
       send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload),
-      parentWindow: () => getAppWindow()
+      parentWindow: () => getAppWindow(),
+      onDisconnected: (connectionId, names) =>
+        void this.segretario
+          .forgetCalendar(connectionId, names)
+          .catch((error: unknown) =>
+            logMainError('The Segretario could not let go of a calendar', error)
+          )
     })
     this.segretario = new SegretarioService({
       database: this.database,
@@ -553,6 +559,7 @@ export class MailService {
       fetch: (input, init) => net.fetch(input, init),
       send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload),
       onReadingChange: (reading) => this.engine.setSegretarioReading(reading),
+      onEnabledChange: (on) => updateAppMenuAi(on),
       onNoteWritten: (note) => this.engine.noteWritten(note),
       calendar: {
         calendars: () => this.calendar.calendars(),
@@ -586,50 +593,57 @@ export class MailService {
           ])
         ),
       listFolders: (accountId) => this.database.listFolders(accountId),
+      // The planner asks every few seconds: one statement per account, however much is unread.
       unreadConversations: async (sinceIso, limit) => {
-        const threads: Array<{
-          accountId: string
-          threadId: string
-          newest: string
-          messages: Array<{ ref: MessageRef; messageKey: string; dateIso: string }>
-        }> = []
+        const threads = new Map<
+          string,
+          {
+            accountId: string
+            threadId: string
+            newest: string
+            messages: Array<{ ref: MessageRef; messageKey: string; dateIso: string }>
+          }
+        >()
 
         for (const account of await this.database.getAccounts()) {
-          const folders = segretarioFolders(await this.database.listFolders(account.id))
-          const newest = await this.database.listUnnoted(account.id, folders, sinceIso, limit)
+          const rows = await this.database.listUnnotedConversations(
+            account.id,
+            segretarioFolders(await this.database.listFolders(account.id)),
+            sinceIso,
+            limit,
+            limit
+          )
 
-          for (const threadId of [...new Set(newest.map((row) => row.threadId))]) {
-            const rows = await this.database.listUnnoted(
-              account.id,
-              folders,
-              sinceIso,
-              limit,
-              threadId
-            )
-
-            threads.push({
+          for (const row of rows) {
+            const key = `${account.id}\u0000${row.threadId}`
+            const thread = threads.get(key) ?? {
               accountId: account.id,
-              threadId,
-              newest: rows[0]?.dateIso ?? '',
-              messages: rows.reverse().map((row) => ({
-                ref: { accountId: account.id, folderPath: row.folderPath, uid: row.uid },
-                messageKey: row.messageKey,
-                dateIso: row.dateIso
-              }))
+              threadId: row.threadId,
+              newest: row.newest,
+              messages: []
+            }
+
+            thread.messages.push({
+              ref: { accountId: account.id, folderPath: row.folderPath, uid: row.uid },
+              messageKey: row.messageKey,
+              dateIso: row.dateIso
             })
+            threads.set(key, thread)
           }
         }
 
-        return threads
+        return [...threads.values()]
           .sort((a, b) => b.newest.localeCompare(a.newest))
           .slice(0, limit)
           .map(({ accountId, threadId, messages }) => ({ accountId, threadId, messages }))
       },
-      readingProgress: async (sinceIso) => {
+      readingProgress: async (sinceIso, accountIds) => {
         let read = 0
         let total = 0
 
-        for (const account of await this.database.getAccounts()) {
+        for (const account of (await this.database.getAccounts()).filter(
+          (candidate) => !accountIds || accountIds.includes(candidate.id)
+        )) {
           const progress = await this.database.noteProgress(
             account.id,
             segretarioFolders(await this.database.listFolders(account.id)),
@@ -915,7 +929,7 @@ export class MailService {
     const mailEngineHandle: ExtensionMailEngineHandle = {
       fetchMessageRawSources: (refs, onMessage) =>
         this.engine.fetchMessageRawSources(refs, onMessage),
-      archiveMessages: (refs) => this.archiveByIdentity(refs)
+      archiveMessages: (refs) => this.archiveMessages(refs)
     }
 
     const context: ExtensionMainContext = {
@@ -926,7 +940,9 @@ export class MailService {
       mailEngine: mailEngineHandle,
       getMainWindow: getAppWindow,
       recordRecentFiles: (paths, activity) => this.recordRecentFiles(paths, activity),
-      // Bookkeeping: the copy is made whatever happens to its record here.
+      // A copy is only saved once it is recorded: the record is what keeps it from being saved
+      // twice and the message from being archived without it, so a record that fails is a save
+      // that failed.
       copiesSaved: async (entries) => {
         const refKey = (ref: MessageRef): string =>
           `${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`
@@ -940,28 +956,36 @@ export class MailService {
           )
 
           await this.segretario.copiesSaved(
-            entries.flatMap((entry) => {
+            entries.map((entry) => {
               const identity = identities.get(refKey(entry.ref))
-              return identity
-                ? [
-                    {
-                      ref: entry.ref,
-                      messageKey: identity.messageKey,
-                      threadId: identity.threadId,
-                      fromAddress: identity.fromAddress,
-                      destination: entry.destination,
-                      files: entry.files
-                    }
-                  ]
-                : []
+
+              if (!identity) {
+                throw new Error(
+                  'Il messaggio non è più nella sua cartella: si è spostato mentre veniva salvato.'
+                )
+              }
+
+              return {
+                ref: entry.ref,
+                messageKey: identity.messageKey,
+                threadId: identity.threadId,
+                fromAddress: identity.fromAddress,
+                destination: entry.destination,
+                files: entry.files,
+                proposals: entry.proposals ?? []
+              }
             })
           )
         } catch (error) {
           logMainError('Copies saved outside the mail could not be recorded', error)
+          throw new Error(
+            `SIEVER Mail non è riuscito a registrare la copia, che è stata tolta: il messaggio non viene archiviato. ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error }
+          )
         }
       },
-      // What is known of earlier copies; with the Segretario unable to open, nothing — the
-      // extension's own work goes on, as it did before there was a Segretario.
+      // What is known of earlier copies. Not knowing it is no answer: a copy saved before would
+      // be saved again, so the save does not start.
       savedCopies: async (refs) => {
         const copies: Array<{ ref: MessageRef; destination: string; files: string[] }> = []
 
@@ -978,6 +1002,10 @@ export class MailService {
           }
         } catch (error) {
           logMainError('Copies saved outside the mail could not be read', error)
+          throw new Error(
+            `SIEVER Mail non riesce a leggere le copie già salvate, e salvandole ancora le farebbe doppie: nessun messaggio è stato salvato. ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error }
+          )
         }
 
         return copies
@@ -1151,7 +1179,11 @@ export class MailService {
       throw new Error("L'accesso con Microsoft non è attivo in questa versione di SIEVER Mail.")
     }
 
-    const granted = await this.microsoftOAuthService.authorize()
+    // Only the scopes of what is turned on: a mailbox alone does not ask for the calendar.
+    const granted = await this.microsoftOAuthService.authorize(undefined, {
+      mail: true,
+      calendar: options.calendar
+    })
     const known = (await this.database.getAccounts()).find(
       (candidate) => candidate.email.toLowerCase() === granted.email.toLowerCase()
     )
@@ -1708,69 +1740,12 @@ export class MailService {
   }
 
   /**
-   * Archives messages by what they are rather than the row shown: on Gmail
-   * archiving is leaving the inbox, so the message's inbox row is archived
-   * — one not in the inbox is archived already, and its labels stay; on
-   * other servers it is moved to the archive folder, unless it is there.
-   * What could not be archived is reported by the refs given.
+   * "Archivia", from the toolbar, the Segretario or an extension: each
+   * message as its provider means it, by what it is rather than the row it
+   * was picked from (see `MailEngine.archiveMessages`). One archived
+   * already stays where it is, and is no failure.
    */
-  private async archiveByIdentity(refs: ReadonlyArray<MessageRef>): Promise<MessagesActionResult> {
-    const identities = await this.database.messageIdentities(refs)
-    const acting = new Map<string, MessageRef[]>()
-    const refKey = (ref: MessageRef): string =>
-      `${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`
-
-    for (const accountId of new Set(identities.map((identity) => identity.ref.accountId))) {
-      const folders = await this.database.listFolders(accountId)
-      const archive = folderForRole(folders, '\\Archive')
-      const inbox = folderForRole(folders, '\\Inbox')
-      const ofAccount = identities.filter((identity) => identity.ref.accountId === accountId)
-
-      if (archive?.specialUse?.toLowerCase() === '\\all') {
-        const rows = await this.database.listMessageRowsByKey(
-          accountId,
-          ofAccount.map((identity) => identity.messageKey)
-        )
-
-        for (const identity of ofAccount) {
-          const inInbox = rows.filter(
-            (row) => row.messageKey === identity.messageKey && row.folderPath === inbox?.path
-          )
-
-          if (inInbox.length > 0) {
-            acting.set(
-              refKey(identity.ref),
-              inInbox.map((row) => ({ accountId, folderPath: row.folderPath, uid: row.uid }))
-            )
-          }
-        }
-      } else {
-        for (const identity of ofAccount) {
-          if (identity.ref.folderPath !== archive?.path) {
-            acting.set(refKey(identity.ref), [identity.ref])
-          }
-        }
-      }
-    }
-
-    const moving = [...acting.values()].flat()
-
-    if (moving.length === 0) {
-      return { failed: [] }
-    }
-
-    const result = await this.archiveMessages(moving)
-    const failedRows = new Set(result.failed.map(refKey))
-
-    return {
-      failed: refs.filter((ref) =>
-        (acting.get(refKey(ref)) ?? []).some((row) => failedRows.has(refKey(row)))
-      ),
-      error: result.error
-    }
-  }
-
-  async archiveMessages(refs: MessageRef[]): Promise<MessagesActionResult> {
+  async archiveMessages(refs: ReadonlyArray<MessageRef>): Promise<MessagesActionResult> {
     const payload = messageRefsSchema.parse(refs)
     await this.ensureAccountsExist(payload)
     return this.withDraftsLeaving(payload, (acting) => this.engine.archiveMessages(acting))
@@ -1779,12 +1754,13 @@ export class MailService {
   /**
    * Messages leaving their folder, by `act`. Those of Bozze take their
    * drafts with them (see `DraftService.hold`): the copy that leaves is the
-   * draft as it is, and only a draft whose copy did leave is let go. What
-   * failed is said in the refs the caller gave.
+   * draft as it is, and only a draft whose copy did leave is let go — not
+   * one `act` left where it was (`stayed`: archived already, on Gmail a
+   * draft is). What failed is said in the refs the caller gave.
    */
   private async withDraftsLeaving(
     refs: ReadonlyArray<MessageRef>,
-    act: (refs: MessageRef[]) => Promise<MessagesActionResult>
+    act: (refs: MessageRef[]) => Promise<MessagesActionResult & { stayed?: MessageRef[] }>
   ): Promise<MessagesActionResult> {
     const draftsFolders = new Map<string, string | undefined>()
 
@@ -1810,7 +1786,7 @@ export class MailService {
       return [copy]
     })
 
-    let result: MessagesActionResult
+    let result: MessagesActionResult & { stayed?: MessageRef[] }
 
     try {
       result = acting.length > 0 ? await act(acting) : { failed: [] }
@@ -1821,11 +1797,15 @@ export class MailService {
     }
 
     const failed = new Set(result.failed.map(draftRefKey))
-    await held.settle(acting.filter((ref) => !failed.has(draftRefKey(ref))))
+    const stayed = new Set((result.stayed ?? []).map(draftRefKey))
+    await held.settle(
+      acting.filter((ref) => !failed.has(draftRefKey(ref)) && !stayed.has(draftRefKey(ref)))
+    )
 
     return {
       failed: [...result.failed.map((ref) => given.get(draftRefKey(ref)) ?? ref), ...held.refused],
-      error: result.error ?? held.error
+      error: result.error ?? held.error,
+      ...(result.kept ? { kept: result.kept.map((ref) => given.get(draftRefKey(ref)) ?? ref) } : {})
     }
   }
 
@@ -2450,7 +2430,10 @@ export class MailService {
     }
 
     const connected = (await this.calendar.listConnections()).length > 0
-    const event = connected ? await this.calendar.eventByUid(invitation.uid, ref.accountId) : null
+    // The occurrence the invitation is about (its RECURRENCE-ID), not the series' next one.
+    const event = connected
+      ? await this.calendar.eventByUid(invitation.uid, ref.accountId, invitation.instance)
+      : null
     const { organizer } = invitationParties(text)
     const said = occurrenceIn(text, null, [])
     const own = new Set(

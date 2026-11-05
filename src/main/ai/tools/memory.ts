@@ -7,6 +7,7 @@ import {
   requireString,
   seenKey,
   stringArg,
+  ToolConflict,
   ToolInputError,
   type SegretarioTool,
   type ToolContext
@@ -46,6 +47,16 @@ function numbered(document: MemoryDocument): string {
     .split('\n')
     .map((line, index) => `${String(index + 1).padStart(4)}\t${line}`)
     .join('\n')}`
+}
+
+function isDocument(value: unknown): value is MemoryDocument {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as MemoryDocument).path === 'string' &&
+    typeof (value as MemoryDocument).content === 'string' &&
+    typeof (value as MemoryDocument).revision === 'number'
+  )
 }
 
 function remember(context: ToolContext, document: MemoryDocument): void {
@@ -158,9 +169,12 @@ export const memoryTool: SegretarioTool = {
           const text = textArg(args)
           const document = await notebook.insert(
             path,
-            numberArg(args, 'riga') ?? Number.MAX_SAFE_INTEGER,
+            numberArg(args, 'riga') ?? null,
             text,
-            actor
+            actor,
+            {
+              seenRevision: context.run.seen.get(seenKey('memory', path))
+            }
           )
           remember(context, document)
           return { content: `Testo inserito in ${path}.`, summary: `Aggiornata la nota ${path}` }
@@ -241,6 +255,13 @@ export const memoryTool: SegretarioTool = {
       }
     } catch (error) {
       if (error instanceof RegistryRefusal) {
+        // Changed by another run since this one read it: here is the note as it is now, seen,
+        // to do again what still holds.
+        if (isDocument(error.current)) {
+          remember(context, error.current)
+          throw new ToolConflict(`${error.message}\n\nCom'è ora:\n${numbered(error.current)}`)
+        }
+
         throw new ToolInputError(error.message)
       }
 

@@ -19,6 +19,7 @@ import type { AccountConnectionState, MailAccount } from '@shared/models'
 import {
   ACCESS_LABELS,
   canAddCalendar,
+  canReconnect,
   connectionGroups,
   type AccessKind,
   type ConnectionGroup
@@ -74,8 +75,9 @@ function calendarStatus(connection: CalendarConnection): string {
 /**
  * The user's connections, by access: each account, server or link with
  * what it brought — the mail, the calendar — how each stands, and what can
- * be done: add the calendar an account can give, take one service away,
- * or the whole access. The same in Settings and in the guided setup.
+ * be done: add the calendar an account can give, sign one in again whose
+ * access failed, take one service away, or the whole access. The same in
+ * Settings and in the guided setup.
  */
 export function ConnectionsList({
   accounts,
@@ -212,6 +214,24 @@ export function ConnectionsList({
                   >
                     {calendar.problem ?? calendarStatus(calendar)}
                   </span>
+                  {canReconnect(calendar) && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-[11px]"
+                      disabled={busy || (calendar.provider === 'google' && !googleReady)}
+                      onClick={() =>
+                        void run(group.key, () =>
+                          calendar.provider === 'google'
+                            ? window.calendarApi.connectGoogle(calendar.mailAccountId)
+                            : window.calendarApi.connectMicrosoft(calendar.mailAccountId)
+                        )
+                      }
+                    >
+                      Ricollega
+                    </Button>
+                  )}
                   {group.mail && (
                     <Button
                       type="button"

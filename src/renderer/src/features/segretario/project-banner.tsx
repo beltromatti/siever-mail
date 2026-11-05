@@ -28,6 +28,7 @@ import { cn, formatCount } from '@renderer/lib/utils'
 import type { Commitment, Project, ProjectDetail } from '@shared/segretario'
 
 import { CommitmentList } from './commitment-row'
+import { LinkedWords } from './segretario-text'
 
 /** About what four lines of "Il punto" hold in the list's width: past it, it folds. */
 const STATE_CLAMPED_CHARS = 220
@@ -289,15 +290,15 @@ export function ProjectBanner({
 
       {project.state ? (
         <div className="flex flex-col items-start gap-0.5">
-          <p
+          <LinkedWords
+            text={project.state}
+            links={project.stateLinks}
             className={cn(
-              'voice text-foreground text-[14.5px] leading-[1.5] whitespace-pre-line',
+              'text-foreground text-[14.5px] leading-[1.5]',
               !stateOpen && 'line-clamp-4',
               rewriting && 'opacity-60'
             )}
-          >
-            {project.state}
-          </p>
+          />
           {project.state.length > STATE_CLAMPED_CHARS && (
             <button
               type="button"

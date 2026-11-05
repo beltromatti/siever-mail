@@ -9,6 +9,8 @@ import { nowLine } from './context'
 export interface ReadingScope {
   accountId: string
   threadId: string
+  /** When its newest message came: in a lane, the conversations are read the oldest first. */
+  newest?: string
 }
 
 export interface ReadingDeps {

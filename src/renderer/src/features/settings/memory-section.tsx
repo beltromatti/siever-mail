@@ -380,7 +380,9 @@ export function MemorySection({
               note={note}
               onSave={async (content) => {
                 try {
-                  setNotes(await window.segretarioApi.writeMemory(note.path, content))
+                  setNotes(
+                    await window.segretarioApi.writeMemory(note.path, content, note.revision)
+                  )
                 } catch (error) {
                   toast.error('Nota non salvata', { description: errorText(error) })
                 }

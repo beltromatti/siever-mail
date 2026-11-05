@@ -19,9 +19,24 @@ import {
 import { countOf, formatDateTime } from './format'
 
 const DEFAULT_FILE_LIMIT = 30
+
+/**
+ * Brings back the network share a path is on, when it went away (after a
+ * sleep): only with the user there to answer if the system asks for the
+ * share's password — Conoscimi, or a conversation. Work on its own reads
+ * what is reachable and says what is not.
+ */
+export async function reachShare(context: ToolContext, path: string): Promise<void> {
+  if (context.run.watched || context.run.task === 'conoscimi') {
+    await ensurePathReachable(path)
+  }
+}
+
 /** Entries a search looks at, and how long it may take, before it reports what it has. */
 const SEARCH_MAX_ENTRIES = 80_000
 const SEARCH_MAX_MS = 8_000
+/** Entries of a folder asked about at once, listing it: a share answers a few at a time. */
+const LIST_STAT_BATCH = 32
 
 /**
  * Folders no document worth finding lives in: the system's, the programs',
@@ -179,7 +194,7 @@ export const searchFilesTool: SegretarioTool = {
     }
 
     if (folder) {
-      await ensurePathReachable(folder)
+      await reachShare(context, folder)
     }
 
     if (booleanArg(args, 'elenca')) {
@@ -190,23 +205,40 @@ export const searchFilesTool: SegretarioTool = {
       const entries = await readdir(resolve(folder), { withFileTypes: true }).catch(() => {
         throw new ToolInputError(`Non riesco ad aprire la cartella «${folder}».`)
       })
-      const items = await Promise.all(
-        entries
-          .filter((entry) => !entry.name.startsWith('.'))
-          .slice(0, 300)
-          .map(async (entry) => {
-            const path = join(folder, entry.name)
-            const info = await stat(path).catch(() => null)
-            return {
-              path,
-              directory: entry.isDirectory(),
-              size: info?.size ?? 0,
-              modified: info?.mtimeMs ?? 0
-            }
-          })
-      )
+      // All of it, sorted, before any is left out: the newest of a large archive come first. A
+      // share is asked a few at a time and for as long as a search is: what it had not told by
+      // then comes after, by name.
+      const visible = entries.filter((entry) => !entry.name.startsWith('.'))
+      const deadline = Date.now() + SEARCH_MAX_MS
+      const items: Array<{ path: string; directory: boolean; size: number; modified: number }> = []
+      let undated = 0
+
+      for (let start = 0; start < visible.length; start += LIST_STAT_BATCH) {
+        const late = Date.now() > deadline
+        items.push(
+          ...(await Promise.all(
+            visible.slice(start, start + LIST_STAT_BATCH).map(async (entry) => {
+              const path = join(folder, entry.name)
+              const info = late ? null : await stat(path).catch(() => null)
+              undated += late ? 1 : 0
+              return {
+                path,
+                directory: entry.isDirectory(),
+                size: info?.size ?? 0,
+                modified: info?.mtimeMs ?? 0
+              }
+            })
+          ))
+        )
+      }
+
       const lines = items
-        .sort((a, b) => Number(b.directory) - Number(a.directory) || b.modified - a.modified)
+        .sort(
+          (a, b) =>
+            Number(b.directory) - Number(a.directory) ||
+            b.modified - a.modified ||
+            a.path.localeCompare(b.path)
+        )
         .slice(0, limit)
         .map((item) =>
           item.directory
@@ -215,7 +247,7 @@ export const searchFilesTool: SegretarioTool = {
         )
 
       return {
-        content: `${folder} (${countOf(items.length, 'elemento', 'elementi')}${items.length > limit ? `, i primi ${limit}` : ''}):\n${lines.join('\n')}`,
+        content: `${folder} (${countOf(items.length, 'elemento', 'elementi')}${items.length > limit ? `; le cartelle, poi i più recenti, i primi ${limit}: per gli altri cerca per \`nome\`` : ''}${undated > 0 ? `; ${countOf(undated, 'elemento', 'elementi')} senza data, la cartella risponde lentamente` : ''}):\n${lines.join('\n')}`,
         summary: `Guardato in ${basename(folder) || folder}`,
         files: items
           .filter((item) => !item.directory)

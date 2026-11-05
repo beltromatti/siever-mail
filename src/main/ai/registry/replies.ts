@@ -46,9 +46,6 @@ function recordOf(row: ReplyRow): ReplyRecord {
   }
 }
 
-/** Statuses in which a reply still waits for the user. */
-export const LIVE_REPLY_STATUSES: ReadonlyArray<ReplyStatus> = ['pronta', 'da_rivedere']
-
 /**
  * The replies the Segretario prepared ahead — answers, and reminders after
  * the user's own messages — one per message, local until the user takes
@@ -118,23 +115,10 @@ export class ReplyStore {
       throw new RegistryRefusal('Il testo della risposta è vuoto.')
     }
 
-    const current = await this.get(anchor.accountId, anchor.messageKey)
-
-    if (
-      current &&
-      (current.status === 'usata' || current.status === 'scartata') &&
-      actor.background
-    ) {
-      throw new RegistryRefusal(
-        current.status === 'usata'
-          ? 'L’utente ha già usato la risposta preparata per questo messaggio.'
-          : 'L’utente ha scartato la risposta preparata per questo messaggio: non riproporla.',
-        current
-      )
-    }
-
     const now = Date.now()
-    await this.sql.run(
+    // From the background, written only over a reply the user has not decided on — checked in
+    // the very statement, so a decision taken a moment before is never written over.
+    const changed = await this.sql.run(
       `INSERT INTO ai_ready_drafts (
         account_id, message_key, thread_id, kind, text, doubts, status, stale_reason, revision,
         run_id, created_at, updated_at
@@ -143,7 +127,8 @@ export class ReplyStore {
         thread_id = excluded.thread_id, kind = excluded.kind, text = excluded.text,
         doubts = excluded.doubts, status = 'pronta', stale_reason = NULL,
         revision = ai_ready_drafts.revision + 1, run_id = excluded.run_id,
-        updated_at = excluded.updated_at`,
+        updated_at = excluded.updated_at
+      ${actor.background ? "WHERE ai_ready_drafts.status NOT IN ('usata', 'scartata')" : ''}`,
       anchor.accountId,
       anchor.messageKey,
       anchor.threadId,
@@ -154,7 +139,18 @@ export class ReplyStore {
       now,
       now
     )
-    return { record: (await this.get(anchor.accountId, anchor.messageKey))!, created: !current }
+    const record = (await this.get(anchor.accountId, anchor.messageKey))!
+
+    if (changed === 0) {
+      throw new RegistryRefusal(
+        record.status === 'usata'
+          ? 'L’utente ha già usato la risposta preparata per questo messaggio.'
+          : 'L’utente ha scartato la risposta preparata per questo messaggio: non riproporla.',
+        record
+      )
+    }
+
+    return { record, created: record.revision === 1 }
   }
 
   /**
@@ -166,41 +162,54 @@ export class ReplyStore {
     messageKey: string,
     status: ReplyStatus,
     actor: Actor,
-    options: { reason?: string | null; seenRevision?: number } = {}
+    options: {
+      reason?: string | null
+      seenRevision?: number
+      /** Only from these: a reply that moved on meanwhile is left as it now is. */
+      onlyFrom?: ReadonlyArray<ReplyStatus>
+    } = {}
   ): Promise<ReplyRecord | null> {
-    const current = await this.get(accountId, messageKey)
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const current = await this.get(accountId, messageKey)
 
-    if (!current) {
-      return null
-    }
+      if (!current || (options.onlyFrom && !options.onlyFrom.includes(current.status))) {
+        return current
+      }
 
-    if (options.seenRevision !== undefined && options.seenRevision !== current.revision) {
-      throw new RevisionConflict(
-        `La risposta preparata è cambiata da quando l’hai letta: ora è ${
-          current.status === 'pronta' ? 'pronta' : current.status.replace('_', ' ')
-        }, e dice «${current.text.length > 600 ? `${current.text.slice(0, 600)}…` : current.text}». Se ciò che volevi fare vale ancora, rifallo.`,
-        current
+      if (options.seenRevision !== undefined && options.seenRevision !== current.revision) {
+        throw new RevisionConflict(
+          `La risposta preparata è cambiata da quando l’hai letta: ora è ${
+            current.status === 'pronta' ? 'pronta' : current.status.replace('_', ' ')
+          }, e dice «${current.text.length > 600 ? `${current.text.slice(0, 600)}…` : current.text}». Se ciò che volevi fare vale ancora, rifallo.`,
+          current
+        )
+      }
+
+      if (
+        actor.background &&
+        (current.status === 'usata' || current.status === 'scartata') &&
+        status !== current.status
+      ) {
+        throw new RegistryRefusal('L’utente ha già deciso di questa risposta.', current)
+      }
+
+      const changed = await this.sql.run(
+        `UPDATE ai_ready_drafts SET status = ?, stale_reason = ?, revision = revision + 1, updated_at = ?
+         WHERE account_id = ? AND message_key = ? AND revision = ?`,
+        status,
+        status === 'da_rivedere' ? (options.reason?.trim() ?? null) : null,
+        Date.now(),
+        accountId,
+        messageKey,
+        current.revision
       )
+
+      if (changed === 1) {
+        return this.get(accountId, messageKey)
+      }
     }
 
-    if (
-      actor.background &&
-      (current.status === 'usata' || current.status === 'scartata') &&
-      status !== current.status
-    ) {
-      throw new RegistryRefusal('L’utente ha già deciso di questa risposta.', current)
-    }
-
-    await this.sql.run(
-      `UPDATE ai_ready_drafts SET status = ?, stale_reason = ?, revision = revision + 1, updated_at = ?
-       WHERE account_id = ? AND message_key = ?`,
-      status,
-      status === 'da_rivedere' ? (options.reason?.trim() ?? null) : null,
-      Date.now(),
-      accountId,
-      messageKey
-    )
-    return this.get(accountId, messageKey)
+    throw new RegistryRefusal('La risposta preparata cambia di continuo: riprova tra poco.')
   }
 
   /**
@@ -212,32 +221,31 @@ export class ReplyStore {
     beforeIso: string,
     reason: string
   ): Promise<ReplyRecord[]> {
-    const stale = (
+    // A reply written or confirmed after the newer message came knows it already; one written
+    // before does not — whatever message of the conversation it answers, noted or not.
+    const candidates = (
       await this.sql.all<ReplyRow>(
-        `SELECT r.account_id, r.message_key, r.thread_id, r.kind, r.text, r.doubts, r.status,
-           r.stale_reason, r.revision, r.run_id, r.created_at, r.updated_at
-         FROM ai_ready_drafts r
-         JOIN ai_notes n ON n.account_id = r.account_id AND n.message_key = r.message_key
-         WHERE r.account_id = ? AND r.thread_id = ? AND r.status = 'pronta' AND n.message_date < ?
-           AND r.updated_at < ?`,
+        `SELECT ${COLUMNS} FROM ai_ready_drafts
+         WHERE account_id = ? AND thread_id = ? AND status = 'pronta' AND updated_at < ?`,
         thread.accountId,
         thread.threadId,
-        beforeIso,
-        // A reply written or confirmed after the newer message came knows it already.
         Date.parse(beforeIso)
       )
     ).map(recordOf)
+    const stale: ReplyRecord[] = []
 
-    for (const reply of stale) {
-      await this.setStatus(
+    for (const reply of candidates) {
+      const record = await this.setStatus(
         reply.accountId,
         reply.messageKey,
         'da_rivedere',
         { by: 'sistema' },
-        {
-          reason
-        }
+        { reason, onlyFrom: ['pronta'] }
       )
+
+      if (record?.status === 'da_rivedere') {
+        stale.push(record)
+      }
     }
 
     return stale

@@ -15,6 +15,8 @@ const APP_NAME = 'SIEVER Mail'
 
 let getWindow: (() => BrowserWindow | null) | null = null
 let overrides: ShortcutOverrides = {}
+/** With the AI off, the Segretario is nowhere: not in the menu either. */
+let aiOn = false
 
 /**
  * The menu bar, in Italian, on macOS — where every app has one and where
@@ -40,6 +42,16 @@ export function updateAppMenuShortcuts(next: ShortcutOverrides): void {
   }
 
   overrides = next
+  buildMenu()
+}
+
+/** Rebuilds the menu when the AI goes on or off: the switch up and a key given. */
+export function updateAppMenuAi(on: boolean): void {
+  if (on === aiOn) {
+    return
+  }
+
+  aiOn = on
   buildMenu()
 }
 
@@ -147,8 +159,7 @@ function buildMenu(): void {
     {
       label: 'Vista',
       submenu: [
-        item('segretario'),
-        { type: 'separator' },
+        ...(aiOn ? [item('segretario'), { type: 'separator' as const }] : []),
         item('reader-zoom-in'),
         item('reader-zoom-out'),
         item('reader-zoom-reset'),

@@ -1,3 +1,5 @@
+import { invitationInstance, type InvitationInstance } from './icalendar'
+
 /** An invitation as an iCalendar file carries it: what it asks, and the event it is about. */
 export interface IcsInvitation {
   /** REQUEST (an invitation, or its update), CANCEL, REPLY… */
@@ -6,6 +8,8 @@ export interface IcsInvitation {
   summary: string | null
   /** For a whole series (a rule, no RECURRENCE-ID): answered for every instance, not one. */
   series: boolean
+  /** For one instance of a series (RECURRENCE-ID): which one, to find it, not another, in a calendar. */
+  instance: InvitationInstance | null
 }
 
 /** The value of a property line — "SUMMARY;LANGUAGE=it:Riunione" — with its escapes undone. */
@@ -54,5 +58,13 @@ export function parseInvitation(text: string): IcsInvitation | null {
     }
   }
 
-  return uid ? { method, uid, summary, series: rule && !instance } : null
+  return uid
+    ? {
+        method,
+        uid,
+        summary,
+        series: rule && !instance,
+        instance: instance ? invitationInstance(text) : null
+      }
+    : null
 }

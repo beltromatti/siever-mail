@@ -9,7 +9,7 @@ import type { Sql } from './sql'
  * order, as an old one runs the steps it has not had: one path, so what a
  * fresh database looks like is what an upgraded one looks like.
  */
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 /** The tables of the first 2.0 builds, as they stood (version 1). */
 const BASELINE: ReadonlyArray<string> = [
@@ -306,6 +306,13 @@ const STEP_3_COLUMNS: ReadonlyArray<{ table: string; column: string; definition:
   { table: 'ai_proposals', column: 'revision', definition: 'INTEGER NOT NULL DEFAULT 1' }
 ]
 
+/** Version 4: what the short names in the words that stay (the letter, a meeting's preparation, "Il punto") stand for. */
+const STEP_4_COLUMNS: ReadonlyArray<{ table: string; column: string; definition: string }> = [
+  { table: 'ai_briefings', column: 'links_json', definition: "TEXT NOT NULL DEFAULT '[]'" },
+  { table: 'ai_event_preps', column: 'links_json', definition: "TEXT NOT NULL DEFAULT '[]'" },
+  { table: 'ai_projects', column: 'state_links_json', definition: "TEXT NOT NULL DEFAULT '[]'" }
+]
+
 async function hasTable(sql: Sql, table: string): Promise<boolean> {
   return (
     (await sql.get<{ name: string }>(
@@ -443,6 +450,12 @@ export async function ensureAiSchema(sql: Sql): Promise<void> {
 
   if (version < 3) {
     for (const { table, column, definition } of STEP_3_COLUMNS) {
+      await addColumn(sql, table, column, definition)
+    }
+  }
+
+  if (version < 4) {
+    for (const { table, column, definition } of STEP_4_COLUMNS) {
       await addColumn(sql, table, column, definition)
     }
   }

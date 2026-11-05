@@ -62,6 +62,19 @@ function summaryOf(row: ActivityRow): ActivitySummary {
   }
 }
 
+/** A run in the diary, with what it changed. */
+export interface WorkEntry {
+  activityId: string
+  task: TaskKind
+  title: string
+  status: ActivityStatus
+  createdAt: number
+  changes: RegistryChange[]
+}
+
+/** Runs read at a time when the diary is searched. */
+const WORK_PAGE = 300
+
 /**
  * The Segretario's own bookkeeping: its settings and key, what it cost,
  * its runs and their logs, which connections it knows, what it has to
@@ -371,35 +384,59 @@ export class AiStore {
       : null
   }
 
-  /** The runs since a moment, the newest first, each with what it changed: the diary. */
+  /**
+   * The runs since a moment, the newest first, each with what it changed:
+   * the diary. With `matches`, only those it takes — read a page at a time
+   * until there are `limit` of them.
+   */
   async recentWork(
     sinceMs: number,
-    limit: number
-  ): Promise<
-    Array<{
-      activityId: string
-      task: TaskKind
-      title: string
-      status: ActivityStatus
-      createdAt: number
-      changes: RegistryChange[]
-    }>
-  > {
-    const rows = await this.sql.all<ActivityRow & { changes_json: string | null }>(
-      `SELECT a.*, (SELECT e.payload_json FROM ai_events e WHERE e.activity_id = a.id AND e.type = 'changes'
-         ORDER BY e.id DESC LIMIT 1) AS changes_json
-       FROM ai_activities a WHERE a.created_at >= ? ORDER BY a.created_at DESC LIMIT ?`,
-      sinceMs,
-      limit
-    )
-    return rows.map((row) => ({
-      activityId: row.id,
-      task: row.kind as TaskKind,
-      title: row.title,
-      status: row.status as ActivityStatus,
-      createdAt: Number(row.created_at),
-      changes: parseJson<{ changes: RegistryChange[] }>(row.changes_json, { changes: [] }).changes
-    }))
+    limit: number,
+    matches?: (entry: WorkEntry) => boolean
+  ): Promise<WorkEntry[]> {
+    const found: WorkEntry[] = []
+    const page = matches ? WORK_PAGE : limit
+    let after: { createdAt: number; id: string } | null = null
+
+    for (;;) {
+      const rows: Array<ActivityRow & { changes_json: string | null }> = await this.sql.all(
+        `SELECT a.*, (SELECT e.payload_json FROM ai_events e WHERE e.activity_id = a.id AND e.type = 'changes'
+           ORDER BY e.id DESC LIMIT 1) AS changes_json
+         FROM ai_activities a
+         WHERE a.created_at >= ? ${after ? 'AND (a.created_at < ? OR (a.created_at = ? AND a.id < ?))' : ''}
+         ORDER BY a.created_at DESC, a.id DESC LIMIT ?`,
+        sinceMs,
+        ...(after ? [after.createdAt, after.createdAt, after.id] : []),
+        page
+      )
+
+      for (const row of rows) {
+        const entry: WorkEntry = {
+          activityId: row.id,
+          task: row.kind as TaskKind,
+          title: row.title,
+          status: row.status as ActivityStatus,
+          createdAt: Number(row.created_at),
+          changes: parseJson<{ changes: RegistryChange[] }>(row.changes_json, { changes: [] })
+            .changes
+        }
+
+        if (!matches || matches(entry)) {
+          found.push(entry)
+
+          if (found.length === limit) {
+            return found
+          }
+        }
+      }
+
+      if (rows.length < page) {
+        return found
+      }
+
+      const last = rows[rows.length - 1]
+      after = { createdAt: Number(last.created_at), id: last.id }
+    }
   }
 
   /** Forgets finished background runs older than a while: the diary keeps a few weeks. */
@@ -478,6 +515,19 @@ export class AiStore {
       kind,
       JSON.stringify(payload),
       Date.now()
+    )
+  }
+
+  /**
+   * What the user did to an open thing and then undid teaches nothing: the
+   * lessons it left since then, not yet taken in, go.
+   */
+  async retractLessons(itemId: number, since: number): Promise<void> {
+    await this.sql.run(
+      `DELETE FROM ai_lessons WHERE reflection_id IS NULL AND created_at >= ?
+         AND json_extract(payload_json, '$.impegno') = ?`,
+      since,
+      itemId
     )
   }
 
@@ -638,9 +688,28 @@ export class AiStore {
       accountId
     )
     await this.sql.run('DELETE FROM ai_work WHERE scope_key LIKE ?', `%:${accountId}:%`)
+    // The same messages in another account were read here, and carry only a copy of the note:
+    // without it, they are read again there, where the work now lives.
+    await this.sql.run('DELETE FROM ai_notes WHERE twin_account_id = ?', accountId)
   }
 
-  /** Everything but the key and the settings: what "Elimina tutti i dati" empties. */
+  /**
+   * A calendar connection removed: what was kept about its events — how to
+   * prepare them, proposals to change them or answer them — and Conoscimi's
+   * knowing it go with it.
+   */
+  async forgetCalendar(connectionId: string, learningKey: string): Promise<void> {
+    const ofIt = `${connectionId}\u0000%`
+    await this.sql.run('DELETE FROM ai_event_preps WHERE event_key LIKE ?', ofIt)
+    await this.sql.run(
+      `UPDATE ai_proposals SET status = 'superata', decided_at = ?
+       WHERE status = 'aperta' AND kind = 'evento' AND json_extract(payload_json, '$.eventKey') LIKE ?`,
+      Date.now(),
+      ofIt
+    )
+    await this.sql.run('DELETE FROM ai_learning WHERE account_id = ?', learningKey)
+  }
+
   /**
    * The Segretario's data gone. `keepSavedCopies`: the copies an extension
    * saved (ARCHIVIA SIEVER) stay, facts of the files on disk, not knowledge.

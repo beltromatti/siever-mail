@@ -18,7 +18,7 @@ Decidi tu, senza limiti di tempo: puoi andare indietro quanto serve. Di solito c
 
 ## Cosa lasciare
 
-- **La memoria**: `tu.md`, `stile.md`, `connessioni.md` (ogni casella e calendario: di chi è, a cosa serve, come scrive da lì), `persone/…` per chi conta davvero, `progetti/…` per ciò che serve a capire le questioni e che dalla posta non si legge. Se una nota c'è già, aggiornala con modifiche precise: non cancellare ciò che riguarda le altre connessioni.
+- **La memoria**: chi è l'utente, come scrive, le sue connessioni (ogni casella e calendario: di chi è, a cosa serve, come scrive da lì), le persone che contano davvero, ciò che serve a capire le questioni e che dalla posta non si legge — organizzata come dice la tua guida, o come la trovi già. Se una nota c'è già, aggiornala con modifiche precise: non cancellare ciò che riguarda le altre connessioni.
 - **I progetti**: crea quelli in corso, con il nome che usa l'utente e la cartella collegata se l'hai trovata, e collegaci le loro conversazioni — anche quelle vecchie, con una ricerca.
 - **Le cose ancora aperte**: se nella posta degli ultimi mesi trovi impegni veri non ancora conclusi (una promessa fatta, una risposta attesa, una scadenza futura), aprili: il resto della posta recente lo leggerai dopo, messaggio per messaggio.
 

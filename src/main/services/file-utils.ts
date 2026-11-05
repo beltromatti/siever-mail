@@ -20,6 +20,9 @@ export async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+/** The names Windows keeps for devices, with or without an extension. */
+const WINDOWS_DEVICE_NAME = /^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?=\s*(?:\.|$))/i
+
 /**
  * Strips characters disallowed on common filesystems (Windows is the
  * strictest) and collapses whitespace. Returns `fallback` if the input
@@ -41,6 +44,9 @@ export function sanitizePathSegment(rawValue: string, fallback: string): string 
     .join('')
     .replace(/\s+/g, ' ')
     .replace(/[. ]+$/g, '')
+    // Windows keeps these names for devices, with or without an extension ("aux.pdf"): a file
+    // so named cannot be opened or deleted from Explorer.
+    .replace(WINDOWS_DEVICE_NAME, '$&_')
 
   return sanitized || fallback
 }

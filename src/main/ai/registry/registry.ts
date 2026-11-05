@@ -1,3 +1,5 @@
+import type { HandleLink } from '@shared/segretario'
+
 import { placeholders, type Sql } from '../sql'
 import { CommitmentStore } from './commitments'
 import { DayStore } from './day'
@@ -96,6 +98,7 @@ export class Registry {
 
     if (actor.by === 'utente' && before) {
       this.hooks.lesson('nota_corretta', {
+        messaggio: { accountId: record.accountId, messageKey: record.messageKey },
         prima: { sintesi: before.summary, natura: before.nature, importanza: before.priority },
         dopo: { sintesi: record.summary, natura: record.nature, importanza: record.priority }
       })
@@ -122,7 +125,7 @@ export class Registry {
   /* ───────────────────────────── commitments ───────────────────────────── */
 
   async openCommitment(
-    anchor: MessageAnchor,
+    anchor: MessageAnchor & { dateIso?: string },
     input: { kind: CommitmentKind; text: string; due?: string | null; question?: string | null },
     actor: Actor
   ): Promise<{ record: CommitmentRecord; created: boolean; change: RegistryChange | null }> {
@@ -170,6 +173,8 @@ export class Registry {
 
     if (actor.by === 'utente' && before) {
       this.hooks.lesson('impegno_corretto', {
+        messaggio: { accountId: record.accountId, messageKey: record.messageKey },
+        impegno: record.id,
         prima: { tipo: before.kind, testo: before.text, scadenza: before.due },
         dopo: { tipo: record.kind, testo: record.text, scadenza: record.due }
       })
@@ -222,6 +227,8 @@ export class Registry {
         (status === 'aperta' && before.status !== 'aperta' && before.setBy === 'segretario')
       ) {
         this.hooks.lesson(status === 'non_serve' ? 'impegno_non_serve' : 'impegno_riaperto', {
+          messaggio: { accountId: record.accountId, messageKey: record.messageKey },
+          impegno: record.id,
           tipo: record.kind,
           testo: record.text,
           prima: before.status,
@@ -229,6 +236,8 @@ export class Registry {
         })
       } else if (before.question) {
         this.hooks.lesson('domanda_risposta', {
+          messaggio: { accountId: record.accountId, messageKey: record.messageKey },
+          impegno: record.id,
           tipo: record.kind,
           testo: record.text,
           domanda: before.question,
@@ -290,34 +299,6 @@ export class Registry {
     return changes
   }
 
-  /** Moves what was open in conversations that repeat another to the message that carries it now. */
-  async carryCommitments(
-    from: ReadonlyArray<ThreadRef>,
-    to: MessageAnchor,
-    actor: Actor
-  ): Promise<CommitmentRecord[]> {
-    const moved = await this.commitments.carry(from, to, actor)
-
-    if (moved.length > 0) {
-      await this.projects.markStaleByThreads([to, ...from])
-      this.emit(
-        {
-          object: 'impegno',
-          action: 'spostate',
-          label: `${moved.length === 1 ? 'Spostata' : `Spostate ${moved.length} cose`} sul messaggio più recente`,
-          accountId: to.accountId,
-          threadIds: [to.threadId, ...from.map((thread) => thread.threadId)],
-          messageKeys: [to.messageKey, ...moved.map((record) => record.messageKey)],
-          projectIds: [],
-          id: to.messageKey
-        },
-        actor
-      )
-    }
-
-    return moved
-  }
-
   async undoCommitment(historyId: number, actor: Actor): Promise<CommitmentRecord | null> {
     const undone = await this.commitments.undo(historyId, actor)
 
@@ -348,6 +329,8 @@ export class Registry {
     const actor = SYSTEM
 
     for (const record of woken) {
+      // Open again, it is news for its projects: their "Il punto" is behind.
+      const projectIds = await this.projects.markStaleByThreads([record])
       this.emit(
         {
           object: 'impegno',
@@ -356,7 +339,7 @@ export class Registry {
           accountId: record.accountId,
           threadIds: [record.threadId],
           messageKeys: [record.messageKey],
-          projectIds: [],
+          projectIds,
           id: record.id
         },
         actor
@@ -438,13 +421,16 @@ export class Registry {
     return record
   }
 
+  /** "Il punto", with what its short names stand for; `basisAt` is when its writer last saw the project. */
   async setProjectState(
     id: string,
     state: string,
+    links: ReadonlyArray<HandleLink>,
+    basisAt: number,
     actor: Actor,
     seenRevision?: number
   ): Promise<ProjectRecord> {
-    const record = await this.projects.setState(id, state, actor, seenRevision)
+    const record = await this.projects.setState(id, state, links, basisAt, seenRevision)
     this.emitProject(record, 'punto', `Il punto aggiornato: ${record.title}`, actor)
     return record
   }
@@ -755,6 +741,8 @@ export class Registry {
       accountId?: string | null
       messageKey?: string | null
       threadId?: string | null
+      replaces?: string | null
+      perMessage?: boolean
     },
     actor: Actor
   ): Promise<ProposalRecord> {
@@ -775,6 +763,25 @@ export class Registry {
     return record
   }
 
+  /** The Segretario takes back a proposal of its own that no longer holds: no lesson, it is not the user's word. */
+  async withdrawProposal(id: string, reason: string, actor: Actor): Promise<ProposalRecord> {
+    const record = await this.proposals.decide(id, 'superata', { motivo: reason })
+    this.emit(
+      {
+        object: 'proposta',
+        action: 'superata',
+        label: `Ritirata: ${record.title} (${reason})`,
+        accountId: record.accountId,
+        threadIds: record.threadId ? [record.threadId] : [],
+        messageKeys: record.messageKey ? [record.messageKey] : [],
+        projectIds: [],
+        id: record.id
+      },
+      actor
+    )
+    return record
+  }
+
   async decideProposal(
     id: string,
     status: Exclude<ProposalStatus, 'aperta'>,
@@ -782,12 +789,17 @@ export class Registry {
   ): Promise<ProposalRecord> {
     const record = await this.proposals.decide(id, status, result)
     const actor = USER
-    this.hooks.lesson(status === 'accettata' ? 'proposta_accettata' : 'proposta_scartata', {
-      tipo: record.kind,
-      proposta: record.title,
-      dati: record.payload,
-      scelta: result
-    })
+
+    // What teaches is what the user changed or refused: an event taken as it was proposed says
+    // only that it was right — like a draft sent as written, nothing to learn a rule from.
+    if (status !== 'accettata' || record.kind !== 'evento') {
+      this.hooks.lesson(status === 'accettata' ? 'proposta_accettata' : 'proposta_scartata', {
+        tipo: record.kind,
+        proposta: record.title,
+        dati: record.payload,
+        scelta: result
+      })
+    }
     this.emit(
       {
         object: 'proposta',
@@ -1071,8 +1083,13 @@ export class Registry {
   /* ──────────────────────────────── the day ──────────────────────────────── */
 
   /** The letter at the top of Oggi, for a day. */
-  async saveLetter(day: string, text: string, actor: Actor): Promise<void> {
-    await this.day.saveLetter(day, text)
+  async saveLetter(
+    day: string,
+    text: string,
+    links: ReadonlyArray<HandleLink>,
+    actor: Actor
+  ): Promise<void> {
+    await this.day.saveLetter(day, text, links)
     this.emit(
       {
         object: 'giornata',
@@ -1089,8 +1106,14 @@ export class Registry {
   }
 
   /** How to prepare for a meeting, under the event. */
-  async savePrep(eventKey: string, title: string, text: string, actor: Actor): Promise<void> {
-    await this.day.savePrep(eventKey, text, actor.runId ?? null)
+  async savePrep(
+    eventKey: string,
+    title: string,
+    text: string,
+    links: ReadonlyArray<HandleLink>,
+    actor: Actor
+  ): Promise<void> {
+    await this.day.savePrep(eventKey, text, links, actor.runId ?? null)
     this.emit(
       {
         object: 'giornata',

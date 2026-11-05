@@ -2,6 +2,9 @@ import { MapPin, Video } from 'lucide-react'
 
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarResponse } from '@shared/calendar'
+import type { LinkedText } from '@shared/segretario'
+
+import { LinkedWords } from '@renderer/features/segretario/segretario-text'
 
 const TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
 
@@ -49,7 +52,7 @@ export function EventLine({
   day: Date
   now: number
   /** How to prepare for it, as the Segretario wrote it. */
-  prep?: string
+  prep?: LinkedText
 }): React.JSX.Element {
   const over = !event.allDay && Date.parse(event.end) < now
 
@@ -100,9 +103,11 @@ export function EventLine({
           </span>
         )}
         {prep && (
-          <span className="voice text-muted-foreground border-ai-line mt-1 border-l-2 pl-2.5 text-[13.5px] leading-[1.45] whitespace-pre-line">
-            {prep}
-          </span>
+          <LinkedWords
+            text={prep.text}
+            links={prep.links}
+            className="text-muted-foreground border-ai-line mt-1 border-l-2 pl-2.5 text-[13.5px] leading-[1.45]"
+          />
         )}
       </span>
     </li>

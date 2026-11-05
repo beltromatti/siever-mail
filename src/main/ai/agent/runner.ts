@@ -7,7 +7,7 @@ import type { AiStore, StoredEvent } from '../ai-store'
 import type { Notebook } from '../memory/notebook'
 import {
   SegretarioError,
-  type ChatResult,
+  type GenerationBill,
   type OpenRouterClient,
   type ToolCall
 } from '../openrouter'
@@ -32,6 +32,7 @@ import { HandleRegistry } from './handles'
 import {
   ToolConflict,
   ToolInputError,
+  UnknownHandle,
   type RunContext,
   type SegretarioCalendarPort,
   type SegretarioMailPort,
@@ -47,7 +48,24 @@ const MAX_TOKENS_PER_TURN = 16_000
 /** Past this many tokens of prompt, old tool results are cleared; past the next, the old part is summarised. */
 const CLEAR_TOOL_RESULTS_AT = 60_000
 const RECENT_TOOL_RESULTS_KEPT = 8
+/**
+ * Results cleared at once, at the least: each clearing changes the prefix the
+ * provider caches, so it happens in strokes, not at every step past the mark.
+ */
+const TOOL_RESULTS_CLEARED_TOGETHER = 12
 const COMPACT_AT = 140_000
+/**
+ * How long work on its own may go on before it is stopped as stuck: far
+ * past what the task takes (a reading is done in under a minute, Conoscimi
+ * in minutes), so only a call that never returns meets it. It counts as a
+ * failure, tried again later; the user's own work has no such limit.
+ */
+const BACKGROUND_DEADLINE_MS: Partial<Record<TaskKind, number>> = {
+  conoscimi: 60 * 60_000,
+  al_passo: 30 * 60_000,
+  riflessione: 30 * 60_000
+}
+const DEFAULT_BACKGROUND_DEADLINE_MS = 15 * 60_000
 /** How often a run that stops short of its task is told what is missing. */
 const MAX_NUDGES = 2
 const STREAM_FLUSH_MS = 60
@@ -63,13 +81,15 @@ export interface RunnerDeps {
   page: SegretarioPagePort
   requireKey(): Promise<string>
   emit(event: ActivityEvent): void
-  recordUsage(activityId: string | null, purpose: string, result: ChatResult): Promise<void>
+  recordUsage(activityId: string | null, purpose: string, result: GenerationBill): Promise<void>
 }
 
 export interface RunOptions {
   activityId: string
   task: TaskKind
   background: boolean
+  /** The user sees the run and can confirm; by default, any run that is not on its own. */
+  watched?: boolean
   editor?: RunContext['editor']
   /**
    * What the task must leave and has not, when the model stops: a line to
@@ -106,8 +126,11 @@ interface LiveRun {
       reject: (error: Error) => void
     }
   >
-  /** The calls that failed in this run, by tool and arguments: one is not made again as it was. */
-  failedCalls: Set<string>
+  /**
+   * The calls that failed in this run, as made — one is not made again as it
+   * was — with whether the failure was a name the run lacked.
+   */
+  failedCalls: Map<string, 'name' | 'other'>
 }
 
 /**
@@ -171,20 +194,38 @@ export class AgentRunner {
     const context: RunContext = {
       activityId: id,
       task: options.task,
+      startedAt: Date.now(),
       background: options.background,
+      watched: options.watched ?? !options.background,
       actor: { by: 'segretario', runId: id, background: options.background },
       seen: new Map([...(this.seenByConversation.get(id) ?? []), ...(options.seen ?? [])]),
       changes: [],
       results: {},
       editor: options.editor ?? null
     }
-    const live: LiveRun = { context, controller, approvals: new Map(), failedCalls: new Set() }
+    const live: LiveRun = { context, controller, approvals: new Map(), failedCalls: new Map() }
     const { signal } = controller
     let ended: ActivityStatus = 'failed'
     let failure: SegretarioError | Error | null = null
     let nudges = 0
 
+    // Stopped before it began (the AI switched off, the computer asleep): it does not run.
+    if (options.signal?.aborted) {
+      controller.abort()
+    }
+
     options.signal?.addEventListener('abort', () => controller.abort(), { once: true })
+    const deadlineMs = options.background
+      ? (BACKGROUND_DEADLINE_MS[options.task] ?? DEFAULT_BACKGROUND_DEADLINE_MS)
+      : null
+    let overDeadline = false
+    const deadline =
+      deadlineMs === null
+        ? null
+        : setTimeout(() => {
+            overDeadline = true
+            controller.abort()
+          }, deadlineMs)
     this.live.set(id, live)
     await store.updateActivity(id, { status: 'running' })
     await this.emitSummary(id)
@@ -212,6 +253,7 @@ export class AgentRunner {
           },
           {
             signal,
+            onLateBill: (bill) => this.deps.recordUsage(id, options.task, bill),
             onText: (text) => {
               streamed += text
               flushTimer ??= setTimeout(() => {
@@ -258,7 +300,11 @@ export class AgentRunner {
           break
         }
 
-        await Promise.all(result.toolCalls.map((call) => this.runTool(live, call, handles)))
+        // Written past the length a step may have, the calls' arguments are cut: said as such.
+        const truncated = result.finishReason === 'length'
+        await Promise.all(
+          result.toolCalls.map((call) => this.runTool(live, call, handles, truncated))
+        )
         await this.manageContext(id, key, system, result.usage.promptTokens, signal)
 
         if (step === MAX_STEPS_PER_TURN - 1) {
@@ -273,28 +319,39 @@ export class AgentRunner {
       ended = 'done'
     } catch (raw) {
       const error = raw instanceof SegretarioError ? raw : null
-      failure = raw instanceof Error ? raw : new Error(String(raw))
+      failure = overDeadline
+        ? new Error(
+            `Il lavoro è andato oltre ${Math.round((deadlineMs ?? 0) / 60_000)} minuti ed è stato fermato.`
+          )
+        : raw instanceof Error
+          ? raw
+          : new Error(String(raw))
 
-      if (signal.aborted || error?.code === 'cancelled') {
+      if (!overDeadline && (signal.aborted || error?.code === 'cancelled')) {
         await store.updateActivity(id, { status: 'cancelled' })
         ended = 'cancelled'
       } else {
-        const message =
-          error?.message ??
-          (raw instanceof Error ? raw.message : 'Qualcosa è andato storto mentre lavoravo.')
+        const message = overDeadline
+          ? failure.message
+          : (error?.message ??
+            (raw instanceof Error ? raw.message : 'Qualcosa è andato storto mentre lavoravo.'))
 
-        if (!error) {
+        if (!error && !overDeadline) {
           logMainError('Segretario run failed', raw, { activityId: id, task: options.task })
         }
 
         const event = await store.appendEvent<ErrorPayload>(id, 'error', {
-          code: error?.code ?? 'internal',
+          code: overDeadline ? 'internal' : (error?.code ?? 'internal'),
           message
         })
         this.emitEntry(id, event)
         await store.updateActivity(id, { status: 'failed', unseen: !options.background })
       }
     } finally {
+      if (deadline) {
+        clearTimeout(deadline)
+      }
+
       for (const approval of live.approvals.values()) {
         approval.reject(new SegretarioError('cancelled', 'Interrotto.'))
       }
@@ -317,7 +374,12 @@ export class AgentRunner {
     return { status: ended, run: context, error: ended === 'done' ? null : failure }
   }
 
-  private async runTool(live: LiveRun, call: ToolCall, handles: HandleRegistry): Promise<void> {
+  private async runTool(
+    live: LiveRun,
+    call: ToolCall,
+    handles: HandleRegistry,
+    truncated = false
+  ): Promise<void> {
     const { store } = this.deps
     const activityId = live.context.activityId
     const tool = this.deps.tools.find((candidate) => candidate.name === call.function.name)
@@ -328,7 +390,9 @@ export class AgentRunner {
       const parsed = call.function.arguments.trim() ? JSON.parse(call.function.arguments) : {}
       args = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
     } catch {
-      argsProblem = 'Gli argomenti non sono JSON valido: riprova.'
+      argsProblem = truncated
+        ? 'La chiamata si è interrotta: era più lunga di quanto un passo possa scrivere. Rifalla più breve, o dividila in più chiamate.'
+        : 'Gli argomenti non sono JSON valido: riprova.'
     }
 
     const payload: ToolPayload = {
@@ -348,21 +412,30 @@ export class AgentRunner {
       this.emitEntry(activityId, { ...event, payload })
     }
 
+    // A call that failed, made again as it was, fails again: said so instead of tried.
+    const signature = `${call.function.name}\u0000${
+      argsProblem
+        ? call.function.arguments
+        : JSON.stringify(
+            Object.keys(args)
+              .sort()
+              .map((name) => [name, args[name]])
+          )
+    }`
+
     if (!tool || argsProblem) {
+      const again = live.failedCalls.has(signature)
+      live.failedCalls.set(signature, 'other')
       await finish({
         status: 'error',
         summary: tool ? 'Argomenti non validi' : `Strumento sconosciuto: ${call.function.name}`,
-        result: argsProblem ?? `Non esiste lo strumento «${call.function.name}».`
+        result: again
+          ? 'Hai già fatto esattamente questa chiamata e non è riuscita: non ripeterla uguale.'
+          : (argsProblem ??
+            `Non esiste lo strumento «${call.function.name}»: usa uno di ${this.deps.tools.map((candidate) => candidate.name).join(', ')}.`)
       })
       return
     }
-
-    // A call that failed, made again as it was, fails again: said so instead of tried.
-    const signature = `${tool.name}\u0000${JSON.stringify(
-      Object.keys(args)
-        .sort()
-        .map((name) => [name, args[name]])
-    )}`
 
     if (live.failedCalls.has(signature)) {
       await finish({
@@ -392,10 +465,14 @@ export class AgentRunner {
       const outcome = await tool.execute(args, context)
 
       if (outcome.failed) {
-        live.failedCalls.add(signature)
+        live.failedCalls.set(signature, 'other')
       } else if (context.newHandles.length > 0) {
         // New names: a call that failed on a name it did not have yet may be right now.
-        live.failedCalls.clear()
+        for (const [failed, why] of live.failedCalls) {
+          if (why === 'name') {
+            live.failedCalls.delete(failed)
+          }
+        }
       }
 
       await finish({
@@ -416,7 +493,7 @@ export class AgentRunner {
 
       // What changed under the call is now seen: the same call may be made again, knowingly.
       if (!(error instanceof ToolConflict)) {
-        live.failedCalls.add(signature)
+        live.failedCalls.set(signature, error instanceof UnknownHandle ? 'name' : 'other')
       }
 
       if (!(error instanceof ToolInputError)) {
@@ -437,9 +514,11 @@ export class AgentRunner {
     callId: string,
     request: Omit<ApprovalPayload, 'approvalId' | 'status' | 'callId'>
   ): Promise<{ approved: boolean; outcome?: SendOutcome }> {
-    if (live.context.background) {
+    if (!live.context.watched) {
       throw new ToolInputError(
-        'Nessuno è davanti allo schermo per confermare: proponilo invece di farlo.'
+        live.context.background
+          ? 'In questo lavoro non puoi chiedere conferma all’utente: proponilo invece di farlo.'
+          : "L'utente non ha davanti questa conversazione e non può confermare: non farlo da qui."
       )
     }
 
@@ -512,7 +591,7 @@ export class AgentRunner {
           maxTokens: 8_000,
           sessionId: id
         },
-        { signal }
+        { signal, onLateBill: (bill) => this.deps.recordUsage(id, 'compattazione', bill) }
       )
 
       await this.deps.recordUsage(id, 'compattazione', result)
@@ -534,7 +613,11 @@ export class AgentRunner {
         )
       const tools = events.filter((event) => event.type === 'tool' && event.id >= cleared)
 
-      if (tools.length > RECENT_TOOL_RESULTS_KEPT) {
+      // The first time past the mark, at once; then in strokes.
+      if (
+        tools.length > RECENT_TOOL_RESULTS_KEPT &&
+        (cleared === 0 || tools.length >= RECENT_TOOL_RESULTS_KEPT + TOOL_RESULTS_CLEARED_TOGETHER)
+      ) {
         await store.appendEvent<ClearingPayload>(id, 'clearing', {
           before: tools[tools.length - RECENT_TOOL_RESULTS_KEPT].id
         })

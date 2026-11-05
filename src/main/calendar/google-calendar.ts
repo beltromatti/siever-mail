@@ -61,11 +61,27 @@ function readableError(error: unknown): Error {
   return error instanceof Error ? error : new Error(message)
 }
 
-function eventOf(event: calendar_v3.Schema$Event, selfEmail: string): ProviderEvent | null {
+/**
+ * Whether Google's `self` — "this entry is the calendar this copy is in" —
+ * says the user: in the user's own calendar, or in one of theirs that is no
+ * person's (a secondary calendar). In someone else's calendar it is that
+ * person: the user is themselves only by their address there.
+ */
+function selfIsUser(calendarId: string, selfEmail: string): boolean {
+  const id = calendarId.toLowerCase()
+  return id === 'primary' || id === selfEmail || id.endsWith('@group.calendar.google.com')
+}
+
+function eventOf(
+  event: calendar_v3.Schema$Event,
+  calendarId: string,
+  selfEmail: string
+): ProviderEvent | null {
   if (!event.id) {
     return null
   }
 
+  const trustSelf = selfIsUser(calendarId, selfEmail)
   const allDay = Boolean(event.start?.date)
   const start = event.start?.dateTime ?? event.start?.date ?? ''
   const end = event.end?.dateTime ?? event.end?.date ?? start
@@ -76,7 +92,8 @@ function eventOf(event: calendar_v3.Schema$Event, selfEmail: string): ProviderEv
             email: attendee.email,
             name: attendee.displayName ?? null,
             response: responseOf(attendee.responseStatus),
-            self: Boolean(attendee.self) || attendee.email.toLowerCase() === selfEmail,
+            self:
+              (trustSelf && Boolean(attendee.self)) || attendee.email.toLowerCase() === selfEmail,
             organizer: Boolean(attendee.organizer)
           }
         ]
@@ -85,7 +102,7 @@ function eventOf(event: calendar_v3.Schema$Event, selfEmail: string): ProviderEv
   const self = attendees.find((attendee) => attendee.self)
 
   return {
-    calendarId: '',
+    calendarId,
     eventId: event.id,
     iCalUid: event.iCalUID ?? null,
     title: event.summary?.trim() || '(senza titolo)',
@@ -97,9 +114,10 @@ function eventOf(event: calendar_v3.Schema$Event, selfEmail: string): ProviderEv
     location: event.location?.trim() || null,
     description: event.description?.trim() || null,
     attendees,
-    organizer: event.organizer?.displayName ?? event.organizer?.email ?? null,
-    // Answering is for the invited; one's own event has nothing to answer.
-    myResponse: self && !self.organizer ? self.response : null,
+    organizer: event.organizer?.email?.toLowerCase() ?? null,
+    // Answering is for the invited, in a calendar of theirs: one's own event has nothing to
+    // answer, nor has the copy in a colleague's calendar.
+    myResponse: trustSelf && self && !self.organizer ? self.response : null,
     meetLink:
       event.hangoutLink ??
       event.conferenceData?.entryPoints?.find((entry) => entry.entryPointType === 'video')?.uri ??
@@ -218,10 +236,10 @@ export class GoogleCalendarProvider implements CalendarProvider {
         })
 
         for (const item of data.items ?? []) {
-          const event = eventOf(item, this.selfEmail)
+          const event = eventOf(item, calendarId, this.selfEmail)
 
           if (event) {
-            events.push({ ...event, calendarId })
+            events.push(event)
           }
         }
 
@@ -332,13 +350,13 @@ export class GoogleCalendarProvider implements CalendarProvider {
     data: calendar_v3.Schema$Event,
     missing: string
   ): ProviderEvent {
-    const event = eventOf(data, this.selfEmail)
+    const event = eventOf(data, calendarId, this.selfEmail)
 
     if (!event) {
       throw new Error(missing)
     }
 
-    return { ...event, calendarId }
+    return event
   }
 
   async respond(
@@ -347,6 +365,11 @@ export class GoogleCalendarProvider implements CalendarProvider {
     response: Exclude<CalendarResponse, 'needsAction'>,
     series: boolean
   ): Promise<ProviderEvent> {
+    // In a calendar someone shares, "self" is its owner: answering there would answer for them.
+    if (!selfIsUser(calendarId, this.selfEmail)) {
+      throw new Error('Questo è il calendario di un’altra persona: rispondi all’invito dal tuo.')
+    }
+
     try {
       let eventId = instanceId
       let { data: current } = await this.api.events.get({ calendarId, eventId })
@@ -357,10 +380,15 @@ export class GoogleCalendarProvider implements CalendarProvider {
         current = (await this.api.events.get({ calendarId, eventId })).data
       }
 
-      const attendees = (current.attendees ?? []).map((attendee) =>
-        attendee.self || attendee.email?.toLowerCase() === this.selfEmail
-          ? { ...attendee, responseStatus: response }
-          : attendee
+      const isUser = (attendee: calendar_v3.Schema$EventAttendee): boolean =>
+        Boolean(attendee.self) || attendee.email?.toLowerCase() === this.selfEmail
+
+      if (!current.attendees?.some(isUser)) {
+        throw new Error('In questo evento non sei tra gli invitati.')
+      }
+
+      const attendees = current.attendees.map((attendee) =>
+        isUser(attendee) ? { ...attendee, responseStatus: response } : attendee
       )
       const { data } = await this.api.events.patch({
         calendarId,

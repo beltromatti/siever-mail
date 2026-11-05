@@ -67,8 +67,30 @@ import { SIGNATURE_HTML_FORMAT, upgradeLegacySignatureHtml } from '@shared/signa
 import { subjectSortKey } from '@shared/subject'
 
 import { rankContactSuggestions, type ContactCandidate } from './contact-ranking'
-import { fullTextMatchExpression } from './full-text-query'
+import { fullTextMatchExpression, numberWords, queryNumbers } from './full-text-query'
+import {
+  forgetLeftKeysStatement,
+  keyHoldersQuery,
+  keysHeldStatement,
+  keysLeftStatement,
+  MESSAGE_ID_KEYS_SCHEMA,
+  rememberKeysStatement
+} from './mail-engine/message-id-keys'
+import {
+  identityLookups,
+  isMessageIdKey,
+  settleNewcomers,
+  type IdentityClaim,
+  type StoredIdentity
+} from './mail-engine/message-identity'
 import { plainTextOfHtml } from './mail-engine/preview'
+import type { UnreadableMessage } from './mail-engine/unreadable-messages'
+import {
+  unnotedConversationsQuery,
+  unnotedMessagesOf,
+  type ReadFolders,
+  type UnnotedMessage
+} from './mail-engine/unnoted-conversations'
 
 /**
  * SQLite hands INTEGER columns back as `bigint` or `number` depending on
@@ -140,6 +162,20 @@ export interface FolderSyncState {
   lastSyncedAt?: number
 }
 
+/**
+ * What the server has of a folder that its cache leaves out on purpose,
+ * under the folder's UIDVALIDITY (`left_out_messages`).
+ */
+export interface LeftOutMessages {
+  /**
+   * Messages this app flagged \Deleted there that wait for an expunge (see
+   * `expungeOnly`): not another program's, and not mail to fetch again.
+   */
+  deleted: number[]
+  /** Messages the server would not give (see `UnreadableMessage`). */
+  unreadable: UnreadableMessage[]
+}
+
 interface CreateAccountInput {
   id: string
   type: MailAccount['type']
@@ -175,6 +211,21 @@ const SEARCHED_SENDER_LIMIT = 200
 const RECENT_FILES_KEPT = 200
 /** The folders kept per account as recent destinations of "Sposta". */
 const RECENT_FOLDERS_KEPT = 8
+/**
+ * Messages, keys or refs one statement names: a selection of thousands
+ * would otherwise pass SQLite's limit on bound values.
+ */
+const IDENTITY_LOOKUP_CHUNK = 500
+
+function chunkOf<T>(items: ReadonlyArray<T>, size: number): T[][] {
+  const chunks: T[][] = []
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size))
+  }
+
+  return chunks
+}
 
 function parseJsonArray<T>(value: string): T[] {
   try {
@@ -612,16 +663,21 @@ const SORT_FILING_VERSION = 3
  * cached row holds changes in a way the rows already stored cannot follow:
  *   1 — up to 1.10, bodies kept with each row;
  *   2 — 2.0: stable message keys and threads, one body per message, the
- *       full-text index.
+ *       full-text index;
+ *   3 — 2.0: who holds each key made of a Message-ID, by what every copy
+ *       of the message says alike (`message_id_keys`), which the rows
+ *       stored before did not keep.
  */
-export const CACHE_SCHEMA_VERSION = 2
+export const CACHE_SCHEMA_VERSION = 3
 
 /** The cache's tables, dependants first. */
 const CACHE_TABLES_IN_DROP_ORDER = [
   'search_hits',
+  'message_fts_vocab',
   'message_fts',
   'message_bodies',
   'messages',
+  'left_out_messages',
   'folders'
 ] as const
 
@@ -958,6 +1014,8 @@ export class AppDatabase {
    * stored, a row added or gone — so a search's kept matches are made again.
    */
   private indexGeneration = 0
+  /** The words of the index each number searched is written in, while the index stays as it was. */
+  private readonly numberWordsCache = new Map<string, { generation: number; words: string[] }>()
   /** The tokens of the last searches' index matches (see `indexHitsToken`), oldest first. */
   private readonly indexSearches = new Map<string, { token: string; generation: number }>()
 
@@ -1258,6 +1316,16 @@ export class AppDatabase {
         SELECT
           account_id,
           (
+            2 * LENGTH(message_key) +
+            LENGTH(thread_id) +
+            LENGTH(content_digest) +
+            48
+          ) AS estimated_bytes
+        FROM message_id_keys
+        UNION ALL
+        SELECT
+          account_id,
+          (
             LENGTH(account_id) +
             LENGTH(html) +
             32
@@ -1365,9 +1433,13 @@ export class AppDatabase {
         where: {
           accountId
         }
-      })
+      }),
+      this.prisma.$executeRaw`DELETE FROM left_out_messages WHERE account_id = ${accountId}`
     ])
     this.indexGeneration += 1
+    // Who holds each Message-ID's key is not the cache: the mail downloaded
+    // again takes its keys back.
+    await this.markKeysLeft(accountId, null)
 
     // Checkpoint + VACUUM the same way clearAllDataKeepAccounts does: SQLite
     // keeps deleted rows' pages as reusable "free pages" and never returns
@@ -1388,6 +1460,9 @@ export class AppDatabase {
       this.prisma.message.deleteMany(),
       this.prisma.messageBody.deleteMany(),
       this.prisma.folder.deleteMany(),
+      this.prisma.$executeRaw`DELETE FROM left_out_messages`,
+      // What the Segretario names goes with it (see `AiStore.clearData`).
+      this.prisma.$executeRaw`DELETE FROM message_id_keys`,
       this.prisma.contact.deleteMany(),
       this.prisma.recentFile.deleteMany(),
       this.prisma.recentFolder.deleteMany(),
@@ -1409,12 +1484,6 @@ export class AppDatabase {
     await this.prisma.$executeRawUnsafe('VACUUM')
   }
 
-  /**
-   * Remembers files the user just attached, saved or filed away, as the
-   * newest entries of the "Allega" menu. The history stays short: it is a
-   * convenience, not a record.
-   */
-  /** A folder messages were just moved to, first among the account's recent destinations. */
   /**
    * Keeps a draft as it is now, as one more save of it — the next the
    * server is to get — open in the composer.
@@ -1580,6 +1649,7 @@ export class AppDatabase {
     await this.prisma.draft.deleteMany({ where: { id } })
   }
 
+  /** A folder messages were just moved to, first among the account's recent destinations. */
   async recordRecentFolder(accountId: string, folderPath: string): Promise<void> {
     await this.ready
 
@@ -1619,6 +1689,11 @@ export class AppDatabase {
     return rows.map((row) => row.folderPath)
   }
 
+  /**
+   * Remembers files the user just attached, saved or filed away, as the
+   * newest entries of the "Allega" menu. The history stays short: it is a
+   * convenience, not a record.
+   */
   async recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void> {
     await this.ready
 
@@ -1797,21 +1872,37 @@ export class AppDatabase {
     })
   }
 
+  /**
+   * Stores an account's folder list as the server gave it, with the counts
+   * its STATUS reported. A folder read before keeps the message count its
+   * cache was last brought in line with: compared with the server's at the
+   * next review, it is how a change is noticed — taken from STATUS here, a
+   * change still to sync looked done after the app quit before syncing it.
+   */
   async replaceFolders(accountId: string, folders: FolderPersistenceInput[]): Promise<void> {
     await this.ready
 
     const now = BigInt(Date.now())
     const folderPaths = folders.map((folder) => folder.path)
 
-    await this.prisma.$transaction(async (tx) => {
+    const removedRows = await this.prisma.$transaction(async (tx) => {
       if (folderPaths.length === 0) {
         await tx.folder.deleteMany({
           where: {
             accountId
           }
         })
-        return
+        return 0
       }
+
+      const synced = new Set(
+        (
+          await tx.folder.findMany({
+            where: { accountId, lastSyncedAt: { not: null } },
+            select: { path: true }
+          })
+        ).map((folder) => folder.path)
+      )
 
       await Promise.all(
         folders.map(async (folder) => {
@@ -1839,7 +1930,7 @@ export class AppDatabase {
               name: folder.name,
               delimiter: folder.delimiter ?? null,
               specialUse: folder.specialUse ?? null,
-              messageCount: folder.messageCount,
+              ...(synced.has(folder.path) ? {} : { messageCount: folder.messageCount }),
               unseenCount: folder.unseenCount,
               updatedAt: now
             }
@@ -1856,7 +1947,12 @@ export class AppDatabase {
         }
       })
 
-      await tx.message.deleteMany({
+      await tx.$executeRaw`
+        DELETE FROM left_out_messages
+        WHERE account_id = ${accountId} AND folder_path NOT IN (${Prisma.join(folderPaths)})
+      `
+
+      const removed = await tx.message.deleteMany({
         where: {
           accountId,
           folderPath: {
@@ -1864,7 +1960,13 @@ export class AppDatabase {
           }
         }
       })
+
+      return removed.count
     })
+
+    if (removedRows > 0) {
+      await this.markKeysLeft(accountId, null)
+    }
   }
 
   async listFolders(accountId: string): Promise<MailFolder[]> {
@@ -1971,6 +2073,9 @@ export class AppDatabase {
         where: { accountId, folderPath }
       }),
       this.prisma.$executeRaw`
+        DELETE FROM left_out_messages WHERE account_id = ${accountId} AND folder_path = ${folderPath}
+      `,
+      this.prisma.$executeRaw`
         UPDATE folders
         SET uid_validity = NULL,
             highest_modseq = NULL,
@@ -1981,6 +2086,8 @@ export class AppDatabase {
         WHERE account_id = ${accountId} AND path = ${folderPath}
       `
     ])
+    // The folder read anew gives its messages back their keys.
+    await this.markKeysLeft(accountId, null)
   }
 
   /**
@@ -2444,6 +2551,93 @@ export class AppDatabase {
     `
   }
 
+  /**
+   * The key and conversation each message fetched from a folder is stored
+   * under (see `settleIdentity`), in the order of `claims`: a row stored
+   * already keeps its own; a new one is settled against what the account
+   * knows — the rows it holds, and who holds each key made of a Message-ID
+   * (`message_id_keys`), remembered while no row does — oldest first, so a
+   * batch's replies find their parents in it, and two messages of one
+   * batch sharing a Message-ID are told apart as two stored ones. The keys
+   * made of a Message-ID settled here are remembered with their holder,
+   * held once the rows are stored (`upsertMessageSummaries`).
+   */
+  async settleMessageIdentities(
+    accountId: string,
+    folderPath: string,
+    claims: ReadonlyArray<IdentityClaim>
+  ): Promise<Array<{ messageKey: string; threadId: string }>> {
+    await this.ready
+
+    const settled = new Map<number, { messageKey: string; threadId: string }>()
+
+    for (const part of chunkOf(claims, IDENTITY_LOOKUP_CHUNK)) {
+      const existing = await this.prisma.message.findMany({
+        where: { accountId, folderPath, uid: { in: part.map((claim) => claim.uid) } },
+        select: { uid: true, messageKey: true, threadId: true }
+      })
+
+      existing.forEach((row) =>
+        settled.set(row.uid, { messageKey: row.messageKey, threadId: row.threadId })
+      )
+    }
+
+    const newcomers = claims.filter((claim) => !settled.has(claim.uid))
+    const lookups = identityLookups(newcomers)
+    const stored: StoredIdentity[] = [
+      ...(
+        await Promise.all(
+          chunkOf(
+            lookups.filter((key) => !isMessageIdKey(key)),
+            IDENTITY_LOOKUP_CHUNK
+          ).map((part) =>
+            this.prisma.message.findMany({
+              where: { accountId, messageKey: { in: part } },
+              select: { messageKey: true, threadId: true }
+            })
+          )
+        )
+      ).flat(),
+      ...(
+        await Promise.all(
+          chunkOf(lookups.filter(isMessageIdKey), IDENTITY_LOOKUP_CHUNK).map((part) => {
+            const query = keyHoldersQuery(accountId, part)
+            return this.prisma.$queryRawUnsafe<Required<StoredIdentity>[]>(
+              query.sql,
+              ...query.params
+            )
+          })
+        )
+      ).flat()
+    ]
+    const digests = new Map(newcomers.map((claim) => [claim.uid, claim.digest]))
+    const holders = new Map<string, Required<StoredIdentity>>()
+
+    for (const [uid, identity] of settleNewcomers(newcomers, stored)) {
+      settled.set(uid, identity)
+
+      if (isMessageIdKey(identity.messageKey) && !holders.has(identity.messageKey)) {
+        holders.set(identity.messageKey, { ...identity, digest: digests.get(uid)! })
+      }
+    }
+
+    const at = Date.now()
+
+    for (const part of chunkOf([...holders.values()], IDENTITY_LOOKUP_CHUNK)) {
+      const statement = rememberKeysStatement(accountId, part, at)
+      await this.prisma.$executeRawUnsafe(statement.sql, ...statement.params)
+    }
+
+    // Every claim is settled above: stored already, or a newcomer.
+    return claims.map((claim) => settled.get(claim.uid)!)
+  }
+
+  /**
+   * Stores the messages of a folder fetched from the server. A row stored
+   * already takes everything new but its key and conversation, which are
+   * settled once, when it is first stored (`settleMessageIdentities`):
+   * what hangs off them stays where it is.
+   */
   async upsertMessageSummaries(
     accountId: string,
     folderPath: string,
@@ -2466,6 +2660,8 @@ export class AppDatabase {
       },
       select: {
         uid: true,
+        messageKey: true,
+        threadId: true,
         messageId: true,
         subject: true,
         preview: true,
@@ -2532,8 +2728,6 @@ export class AppDatabase {
         const keepExistingPreview = existing?.previewHydrated === true && !message.previewHydrated
         const preview = keepExistingPreview ? existing!.preview : message.preview
         const update = {
-          messageKey: message.messageKey,
-          threadId: message.threadId,
           messageId: message.messageId ?? null,
           subject: message.subject,
           subjectSort,
@@ -2559,6 +2753,8 @@ export class AppDatabase {
         if (existing) {
           result.updated.push({
             ...message,
+            messageKey: existing.messageKey,
+            threadId: existing.threadId,
             senderLabel,
             preview: update.preview,
             previewHydrated: update.previewHydrated
@@ -2580,6 +2776,13 @@ export class AppDatabase {
         })
       })
     )
+
+    const held = [...new Set(result.added.map((row) => row.messageKey).filter(isMessageIdKey))]
+
+    for (const part of chunkOf(held, IDENTITY_LOOKUP_CHUNK)) {
+      const statement = keysHeldStatement(accountId, part)
+      await this.prisma.$executeRawUnsafe(statement.sql, ...statement.params)
+    }
 
     this.learnContacts(contacts)
 
@@ -2883,7 +3086,9 @@ export class AppDatabase {
    * again at every release would cost the user hours. Its shape is versioned
    * on its own (`CACHE_SCHEMA_VERSION`): when it changes, the tables are
    * dropped here, before anything reads them, and created again in the new
-   * shape; the engine downloads the mail anew.
+   * shape; the engine downloads the mail anew. The keys made of a
+   * Message-ID stay, held by no row since now: the messages downloaded
+   * again take them back (see `message-id-keys.ts`).
    */
   private async resetCacheIfOutdated(): Promise<void> {
     const rows = await this.prisma.$queryRaw<Array<{ value: string }>>`
@@ -2898,6 +3103,9 @@ export class AppDatabase {
       await this.prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS ${table}`)
     }
 
+    await this.prisma.$executeRaw`
+      UPDATE message_id_keys SET left_at = ${Date.now()} WHERE left_at IS NULL
+    `
     await this.prisma.$executeRaw`
       INSERT INTO app_meta (key, value) VALUES ('cache_version', ${String(CACHE_SCHEMA_VERSION)})
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -2917,6 +3125,10 @@ export class AppDatabase {
         tokenize='unicode61 remove_diacritics 2'
       )
     `)
+    // Its words, for a number to be found inside the codes the index keeps whole.
+    await this.prisma.$executeRawUnsafe(
+      "CREATE VIRTUAL TABLE IF NOT EXISTS message_fts_vocab USING fts5vocab(message_fts, 'row')"
+    )
     await this.prisma.$executeRawUnsafe(`
       CREATE TRIGGER IF NOT EXISTS message_bodies_ai AFTER INSERT ON message_bodies BEGIN
         INSERT INTO message_fts (rowid, subject, sender, recipients, body)
@@ -3235,6 +3447,19 @@ export class AppDatabase {
     return rows.length > SEARCHED_SENDER_LIMIT ? [] : rows.map((row) => row.senderSort)
   }
 
+  /** How many rows the cache holds of each folder of an account, by path. */
+  async countMessagesByFolder(accountId: string): Promise<Map<string, number>> {
+    await this.ready
+
+    const groups = await this.prisma.message.groupBy({
+      by: ['folderPath'],
+      where: { accountId },
+      _count: { _all: true }
+    })
+
+    return new Map(groups.map((group) => [group.folderPath, group._count._all]))
+  }
+
   async listAllMessageUids(accountId: string, folderPath: string): Promise<number[]> {
     await this.ready
 
@@ -3244,6 +3469,19 @@ export class AppDatabase {
     })
 
     return rows.map((row) => row.uid)
+  }
+
+  /** The highest UID the cache holds of a folder: a message the server gave, null when it holds none. */
+  async newestStoredUid(accountId: string, folderPath: string): Promise<number | null> {
+    await this.ready
+
+    const row = await this.prisma.message.findFirst({
+      where: { accountId, folderPath },
+      orderBy: { uid: 'desc' },
+      select: { uid: true }
+    })
+
+    return row?.uid ?? null
   }
 
   async deleteMessageUids(accountId: string, folderPath: string, uids: number[]): Promise<void> {
@@ -3264,9 +3502,167 @@ export class AppDatabase {
 
       await this.prisma.message.deleteMany({ where })
       await this.forgetUnheldBodies(accountId, keys)
+      await this.markKeysLeft(accountId, keys)
     }
 
     this.indexGeneration += 1
+  }
+
+  /**
+   * The keys made of a Message-ID that no row holds any longer — of
+   * `keys`, or of the whole account when it is null — left as of now:
+   * remembered, for the message to come back as itself (see
+   * `message-id-keys.ts`).
+   */
+  private async markKeysLeft(accountId: string, keys: ReadonlyArray<string> | null): Promise<void> {
+    const at = Date.now()
+
+    if (keys === null) {
+      const statement = keysLeftStatement(accountId, at, null)
+      await this.prisma.$executeRawUnsafe(statement.sql, ...statement.params)
+      return
+    }
+
+    for (const part of chunkOf([...new Set(keys)].filter(isMessageIdKey), IDENTITY_LOOKUP_CHUNK)) {
+      const statement = keysLeftStatement(accountId, at, part)
+      await this.prisma.$executeRawUnsafe(statement.sql, ...statement.params)
+    }
+  }
+
+  /**
+   * Forgets the keys made of a Message-ID an account remembered with no
+   * row holding them, once every folder of it has been read since they
+   * left and the Segretario names none of them (see `message-id-keys.ts`).
+   */
+  async forgetLeftMessageIdKeys(accountId: string): Promise<void> {
+    await this.ready
+
+    const statement = forgetLeftKeysStatement(accountId)
+    await this.prisma.$executeRawUnsafe(statement.sql, ...statement.params)
+  }
+
+  /** What the server has of a folder that its cache leaves out on purpose (see `LeftOutMessages`). */
+  async listLeftOutMessages(accountId: string, folderPath: string): Promise<LeftOutMessages> {
+    await this.ready
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        uid: number | bigint
+        reason: string
+        failures: number | bigint
+        retryAt: number | bigint | null
+      }>
+    >`
+      SELECT uid, reason, failures, retry_at AS retryAt
+      FROM left_out_messages
+      WHERE account_id = ${accountId} AND folder_path = ${folderPath}
+    `
+
+    return {
+      deleted: rows.filter((row) => row.reason === 'deleted').map((row) => Number(row.uid)),
+      unreadable: rows
+        .filter((row) => row.reason === 'unreadable')
+        .map((row) => ({
+          uid: Number(row.uid),
+          failures: Number(row.failures),
+          retryAt: row.retryAt === null ? null : Number(row.retryAt)
+        }))
+    }
+  }
+
+  /**
+   * By folder of an account, what its cache leaves out on purpose: how
+   * many of those messages the cache does not hold — what the server's
+   * count of the folder has more — and whether one the server would not
+   * give is to be asked for now, still being tried or due again.
+   */
+  async summarizeLeftOutMessages(
+    accountId: string,
+    now: number
+  ): Promise<Map<string, { uncached: number; retry: boolean }>> {
+    await this.ready
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{ folderPath: string; uncached: number | bigint; retry: number | bigint }>
+    >`
+      SELECT l.folder_path AS folderPath,
+        SUM(
+          (l.reason = 'deleted' OR l.retry_at > ${now})
+          AND NOT EXISTS (
+            SELECT 1 FROM messages m
+            WHERE m.account_id = l.account_id AND m.folder_path = l.folder_path AND m.uid = l.uid
+          )
+        ) AS uncached,
+        MAX(l.reason = 'unreadable' AND (l.retry_at IS NULL OR l.retry_at <= ${now})) AS retry
+      FROM left_out_messages l
+      WHERE l.account_id = ${accountId}
+      GROUP BY l.folder_path
+    `
+
+    return new Map(
+      rows.map((row) => [
+        row.folderPath,
+        { uncached: Number(row.uncached), retry: Number(row.retry) === 1 }
+      ])
+    )
+  }
+
+  /** Messages this app flagged \Deleted in a folder, waiting there for an expunge (see `LeftOutMessages`). */
+  async addDeletedUids(
+    accountId: string,
+    folderPath: string,
+    uids: ReadonlyArray<number>
+  ): Promise<void> {
+    await this.ready
+
+    for (const part of chunkOf(uids, IDENTITY_LOOKUP_CHUNK)) {
+      await this.prisma.$executeRaw`
+        INSERT INTO left_out_messages (account_id, folder_path, uid, reason)
+        VALUES ${Prisma.join(part.map((uid) => Prisma.sql`(${accountId}, ${folderPath}, ${uid}, 'deleted')`))}
+        ON CONFLICT (account_id, folder_path, uid) DO UPDATE
+          SET reason = 'deleted', failures = 0, retry_at = NULL
+      `
+    }
+  }
+
+  /** Records messages of a folder the server would not give (see `UnreadableMessage`). */
+  async storeUnreadableMessages(
+    accountId: string,
+    folderPath: string,
+    records: ReadonlyArray<UnreadableMessage>
+  ): Promise<void> {
+    await this.ready
+
+    for (const part of chunkOf(records, IDENTITY_LOOKUP_CHUNK)) {
+      await this.prisma.$executeRaw`
+        INSERT INTO left_out_messages (account_id, folder_path, uid, reason, failures, retry_at)
+        VALUES ${Prisma.join(
+          part.map(
+            (record) =>
+              Prisma.sql`(${accountId}, ${folderPath}, ${record.uid}, 'unreadable', ${record.failures}, ${record.retryAt})`
+          )
+        )}
+        ON CONFLICT (account_id, folder_path, uid) DO UPDATE
+          SET reason = excluded.reason, failures = excluded.failures, retry_at = excluded.retry_at
+      `
+    }
+  }
+
+  /** What a folder's cache stops leaving out: stored now, or gone from the server. */
+  async forgetLeftOutMessages(
+    accountId: string,
+    folderPath: string,
+    uids: ReadonlyArray<number>
+  ): Promise<void> {
+    await this.ready
+
+    for (const part of chunkOf(uids, IDENTITY_LOOKUP_CHUNK)) {
+      await this.prisma.$executeRaw`
+        DELETE FROM left_out_messages
+        WHERE account_id = ${accountId} AND folder_path = ${folderPath}
+          AND uid IN (${Prisma.join(part)})
+      `
+    }
   }
 
   /**
@@ -3290,6 +3686,31 @@ export class AppDatabase {
     `
   }
 
+  /** The words of the index the numbers of a query are written in, as `numberWords` finds them. */
+  private async numberWordsOf(
+    query: string | undefined
+  ): Promise<ReadonlyMap<string, ReadonlyArray<string>>> {
+    const found = new Map<string, string[]>()
+
+    for (const digits of queryNumbers(query)) {
+      const cached = this.numberWordsCache.get(digits)
+      const words =
+        cached?.generation === this.indexGeneration
+          ? cached.words
+          : await numberWords(this.prisma, digits)
+
+      this.numberWordsCache.delete(digits)
+      this.numberWordsCache.set(digits, { generation: this.indexGeneration, words })
+      found.set(digits, words)
+    }
+
+    for (const digits of [...this.numberWordsCache.keys()].slice(0, -CACHED_INDEX_SEARCHES)) {
+      this.numberWordsCache.delete(digits)
+    }
+
+    return found
+  }
+
   /**
    * The rows of `mailboxes` the full-text index finds the whole of `query`
    * in, kept under a token the list's WHERE refers to (`search_hits`): a
@@ -3303,7 +3724,7 @@ export class AppDatabase {
     mailboxes: ReadonlyArray<{ accountId: string; folderPath: string }>,
     query: string | undefined
   ): Promise<string | null> {
-    const expression = fullTextMatchExpression(query)
+    const expression = fullTextMatchExpression(query, await this.numberWordsOf(query))
 
     if (!expression || mailboxes.length === 0) {
       return null
@@ -3672,72 +4093,30 @@ export class AppDatabase {
   }
 
   /**
-   * Messages the Segretario has written no note for, in the folders given
-   * (an account's every folder but the Trash, Spam and Bozze), since
-   * `sinceIso`, whose text the index already has — never a draft, which
-   * Gmail lists in All Mail too: the newest first, each message once.
+   * An account's conversations with messages the Segretario has written no
+   * note for, the latest first, each with those messages, the oldest first
+   * (see `unnotedConversationsQuery`): one statement, however many.
    */
-  async listUnnoted(
+  async listUnnotedConversations(
     accountId: string,
-    folders: { read: ReadonlyArray<string>; drafts: ReadonlyArray<string> },
+    folders: ReadFolders,
     sinceIso: string,
-    limit: number,
-    /** Only this conversation's. */
-    threadId?: string
-  ): Promise<
-    Array<{
-      folderPath: string
-      uid: number
-      messageKey: string
-      threadId: string
-      dateIso: string
-    }>
-  > {
+    threadLimit: number,
+    messageLimit: number
+  ): Promise<UnnotedMessage[]> {
     await this.ready
 
     if (folders.read.length === 0) {
       return []
     }
 
-    const drafts = folders.drafts.length > 0 ? [...folders.drafts] : ['']
-    const rows = await this.prisma.$queryRaw<
-      Array<{
-        folderPath: string
-        uid: number | bigint
-        messageKey: string
-        threadId: string
-        dateIso: string
-      }>
-    >`
-      SELECT m.folder_path AS folderPath, m.uid AS uid, m.message_key AS messageKey,
-        m.thread_id AS threadId, m.date_iso AS dateIso
-      FROM messages m
-      WHERE m.account_id = ${accountId}
-        AND m.folder_path IN (${Prisma.join([...folders.read])})
-        AND m.date_iso >= ${sinceIso}
-        AND (${threadId ?? null} IS NULL OR m.thread_id = ${threadId ?? null})
-        AND EXISTS (
-          SELECT 1 FROM message_bodies b
-          WHERE b.account_id = m.account_id AND b.message_key = m.message_key
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM ai_notes n
-          WHERE n.account_id = m.account_id AND n.message_key = m.message_key
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM messages d
-          WHERE d.account_id = m.account_id AND d.message_key = m.message_key
-            AND d.folder_path IN (${Prisma.join(drafts)})
-        )
-      ORDER BY m.date_iso DESC
-      LIMIT ${limit * 3}
-    `
-    const seen = new Set<string>()
+    const query = unnotedConversationsQuery(accountId, folders, sinceIso, threadLimit, messageLimit)
 
-    return rows
-      .filter((row) => !seen.has(row.messageKey) && seen.add(row.messageKey))
-      .slice(0, limit)
-      .map((row) => ({ ...row, uid: Number(row.uid) }))
+    return unnotedMessagesOf(
+      await this.prisma.$queryRawUnsafe<
+        Array<Omit<UnnotedMessage, 'uid'> & { uid: number | bigint }>
+      >(query.sql, ...query.params)
+    )
   }
 
   /**
@@ -3803,27 +4182,29 @@ export class AppDatabase {
   > {
     await this.ready
 
-    if (refs.length === 0) {
-      return []
-    }
-
-    const rows = await this.prisma.message.findMany({
-      where: {
-        OR: refs.map((ref) => ({
-          accountId: ref.accountId,
-          folderPath: ref.folderPath,
-          uid: ref.uid
-        }))
-      },
-      select: {
-        accountId: true,
-        folderPath: true,
-        uid: true,
-        messageKey: true,
-        threadId: true,
-        fromJson: true
-      }
-    })
+    const rows = (
+      await Promise.all(
+        chunkOf(refs, IDENTITY_LOOKUP_CHUNK).map((part) =>
+          this.prisma.message.findMany({
+            where: {
+              OR: part.map((ref) => ({
+                accountId: ref.accountId,
+                folderPath: ref.folderPath,
+                uid: ref.uid
+              }))
+            },
+            select: {
+              accountId: true,
+              folderPath: true,
+              uid: true,
+              messageKey: true,
+              threadId: true,
+              fromJson: true
+            }
+          })
+        )
+      )
+    ).flat()
 
     return rows.map((row) => ({
       ref: { accountId: row.accountId, folderPath: row.folderPath, uid: Number(row.uid) },
@@ -3951,18 +4332,24 @@ export class AppDatabase {
   > {
     await this.ready
 
-    const rows = await this.prisma.message.findMany({
-      where: { accountId, messageKey: { in: [...messageKeys] } },
-      select: {
-        folderPath: true,
-        uid: true,
-        messageKey: true,
-        threadId: true,
-        dateIso: true,
-        subject: true,
-        fromJson: true
-      }
-    })
+    const rows = (
+      await Promise.all(
+        chunkOf([...new Set(messageKeys)], IDENTITY_LOOKUP_CHUNK).map((part) =>
+          this.prisma.message.findMany({
+            where: { accountId, messageKey: { in: part } },
+            select: {
+              folderPath: true,
+              uid: true,
+              messageKey: true,
+              threadId: true,
+              dateIso: true,
+              subject: true,
+              fromJson: true
+            }
+          })
+        )
+      )
+    ).flat()
 
     return rows.map(({ fromJson, ...row }) => ({
       ...row,
@@ -4339,15 +4726,17 @@ export class AppDatabase {
 
     const pairs = [...uidMap]
     const now = BigInt(Date.now())
+    const arrived = {
+      accountId,
+      folderPath: destinationFolderPath,
+      uid: { in: pairs.map(([, destinationUid]) => destinationUid) }
+    }
+    const arrivedKeys = (
+      await this.prisma.message.findMany({ where: arrived, select: { messageKey: true } })
+    ).map((row) => row.messageKey)
 
     await this.prisma.$transaction([
-      this.prisma.message.deleteMany({
-        where: {
-          accountId,
-          folderPath: destinationFolderPath,
-          uid: { in: pairs.map(([, destinationUid]) => destinationUid) }
-        }
-      }),
+      this.prisma.message.deleteMany({ where: arrived }),
       ...pairs.map(([sourceUid, destinationUid]) =>
         this.prisma.message.updateMany({
           where: { accountId, folderPath: sourceFolderPath, uid: sourceUid },
@@ -4361,13 +4750,10 @@ export class AppDatabase {
       )
     ])
 
+    await this.markKeysLeft(accountId, arrivedKeys)
     this.indexGeneration += 1
     const rows = await this.prisma.message.findMany({
-      where: {
-        accountId,
-        folderPath: destinationFolderPath,
-        uid: { in: pairs.map(([, destinationUid]) => destinationUid) }
-      },
+      where: arrived,
       select: MESSAGE_SUMMARY_SELECT
     })
 
@@ -4452,6 +4838,11 @@ export class AppDatabase {
         value TEXT NOT NULL
       )
     `)
+
+    for (const statement of MESSAGE_ID_KEYS_SCHEMA) {
+      await this.prisma.$executeRawUnsafe(statement)
+    }
+
     await this.resetCacheIfOutdated()
 
     await this.prisma.$executeRawUnsafe(`
@@ -4471,6 +4862,20 @@ export class AppDatabase {
         last_synced_at INTEGER,
         updated_at INTEGER NOT NULL,
         UNIQUE(account_id, path)
+      )
+    `)
+
+    // A folder's sync state, by UID (see `LeftOutMessages`): what the server
+    // has there that the cache leaves out on purpose, and why.
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS left_out_messages (
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        folder_path TEXT NOT NULL,
+        uid INTEGER NOT NULL,
+        reason TEXT NOT NULL CHECK(reason IN ('deleted', 'unreadable')),
+        failures INTEGER NOT NULL DEFAULT 0,
+        retry_at INTEGER,
+        PRIMARY KEY(account_id, folder_path, uid)
       )
     `)
 

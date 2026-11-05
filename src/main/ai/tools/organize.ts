@@ -4,7 +4,8 @@ import {
   requireString,
   stringListArg,
   ToolInputError,
-  type SegretarioTool
+  type SegretarioTool,
+  UnknownHandle
 } from '../agent/tool-types'
 import { countOf } from './format'
 
@@ -62,7 +63,7 @@ export const organizeTool: SegretarioTool = {
       const message = context.handles.message(handle)
 
       if (!message) {
-        throw new ToolInputError(`Non conosco il messaggio «${handle}».`)
+        throw new UnknownHandle(`Non conosco il messaggio «${handle}».`)
       }
 
       return message.ref

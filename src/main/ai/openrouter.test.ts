@@ -7,7 +7,8 @@ import {
   SegretarioError,
   errorFromResponse,
   readChatStream,
-  sseData
+  sseData,
+  type GenerationBill
 } from './openrouter'
 
 function streamOf(...chunks: string[]): ReadableStream<Uint8Array> {
@@ -104,6 +105,7 @@ describe('readChatStream', () => {
     ])
     expect(result.reasoningDetails).toEqual([{ type: 'reasoning.text' }])
     expect(result.finishReason).toBe('tool_calls')
+    expect(result.billed).toBe(true)
     expect(result.usage).toEqual({
       promptTokens: 1200,
       cachedTokens: 1100,
@@ -170,6 +172,71 @@ describe('OpenRouterClient', () => {
     expect(body.session_id).toBe('activity-1')
     expect(body.reasoning).toEqual({ effort: 'none' })
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-test')
+  })
+
+  it('fetches the bill of a turn that broke before saying it, once OpenRouter keeps it', async () => {
+    vi.useFakeTimers()
+
+    try {
+      const lookups: string[] = []
+      const fetchImpl = vi.fn(async (url: string) => {
+        if (url.includes('/generation')) {
+          lookups.push(url)
+
+          return lookups.length === 1
+            ? new Response('{}', { status: 404 })
+            : Response.json({
+                data: {
+                  total_cost: 0.0031,
+                  tokens_prompt: 900,
+                  tokens_completion: 120,
+                  native_tokens_reasoning: 30,
+                  native_tokens_cached: 512,
+                  model: 'deepseek/deepseek-v4.1-flash-1017',
+                  provider_name: 'Wafer'
+                }
+              })
+        }
+
+        return new Response(
+          streamOf(
+            event({ choices: [{ delta: { content: 'Ok' } }] }),
+            event({ error: { code: 502, message: 'Provider disconnected' } })
+          ),
+          { status: 200, headers: { 'x-generation-id': 'gen-7' } }
+        )
+      })
+      const bills: GenerationBill[] = []
+
+      await expect(
+        new OpenRouterClient(fetchImpl).chat(
+          'sk',
+          { messages: [{ role: 'user', content: 'x' }], reasoningEffort: 'none' },
+          { onLateBill: async (bill) => void bills.push(bill) }
+        )
+      ).rejects.toMatchObject({ code: 'unavailable' })
+      await vi.advanceTimersByTimeAsync(15_000)
+
+      expect(lookups).toEqual([
+        'https://openrouter.ai/api/v1/generation?id=gen-7',
+        'https://openrouter.ai/api/v1/generation?id=gen-7'
+      ])
+      expect(bills).toEqual([
+        {
+          usage: {
+            promptTokens: 900,
+            cachedTokens: 512,
+            completionTokens: 120,
+            reasoningTokens: 30,
+            cost: 0.0031
+          },
+          model: 'deepseek/deepseek-v4.1-flash-1017',
+          provider: 'Wafer'
+        }
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('retries a busy provider before the first word, then gives up', async () => {

@@ -70,7 +70,9 @@ export function useSegretario(visible: boolean): SegretarioState {
   const [diary, setDiary] = useState<ActivitySummary[] | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [entries, setEntries] = useState<ActivityEntry[] | null>(null)
-  const [streams, setStreams] = useState<Record<string, string>>({})
+  // What the activity on screen is writing, as it writes: only that one's, so the work done
+  // alone, step after step, does not redraw the app.
+  const [stream, setStream] = useState<{ id: string; text: string } | null>(null)
   const selectedRef = useRef<string | null>(null)
   const visibleRef = useRef(visible)
 
@@ -116,7 +118,13 @@ export function useSegretario(visible: boolean): SegretarioState {
           }
           break
         case 'stream':
-          setStreams((current) => ({ ...current, [event.activityId]: event.text }))
+          if (event.activityId === selectedRef.current) {
+            setStream((current) =>
+              current?.id === event.activityId && current.text === event.text
+                ? current
+                : { id: event.activityId, text: event.text }
+            )
+          }
           break
         case 'removed':
           setActivities((current) => current.filter((activity) => activity.id !== event.activityId))
@@ -208,24 +216,71 @@ export function useSegretario(visible: boolean): SegretarioState {
     setDiary(sortActivities(all.filter((activity) => activity.visibility === 'diario')))
   }, [])
 
-  return {
-    status,
-    preferences,
-    activities,
-    selectedId,
-    entries,
-    streaming: selectedId ? (streams[selectedId] ?? '') : '',
-    handles,
-    attention: activities.some((activity) => activity.status === 'waiting' || activity.unseen),
-    select,
-    start,
-    send,
-    cancel: (id) => void window.segretarioApi.cancelActivity(id),
-    remove: async (id) => window.segretarioApi.removeActivity(id),
-    resolveApproval: async (activityId, approvalId, approved, outcome) =>
-      window.segretarioApi.resolveApproval(activityId, approvalId, approved, outcome),
-    refreshStatus: async () => setStatus(await window.segretarioApi.checkKey()),
-    diary,
-    loadDiary
-  }
+  const refreshStatus = useCallback(
+    async (): Promise<void> => setStatus(await window.segretarioApi.checkKey()),
+    []
+  )
+  const streaming = selectedId && stream?.id === selectedId ? stream.text : ''
+  // Something waits for the user: an answer, work not looked at — or the key or the credit,
+  // without which nothing goes on.
+  const attention =
+    (preferences?.enabled === true &&
+      (status?.keyState === 'invalid' || status?.keyState === 'exhausted')) ||
+    activities.some((activity) => activity.status === 'waiting' || activity.unseen)
+
+  // The same object while nothing in it changes: what depends on it is not redrawn.
+  return useMemo(
+    () => ({
+      status,
+      preferences,
+      activities,
+      selectedId,
+      entries,
+      streaming,
+      handles,
+      attention,
+      select,
+      start,
+      send,
+      cancel: cancelActivity,
+      remove: removeActivity,
+      resolveApproval: resolveActivityApproval,
+      refreshStatus,
+      diary,
+      loadDiary
+    }),
+    [
+      status,
+      preferences,
+      activities,
+      selectedId,
+      entries,
+      streaming,
+      handles,
+      attention,
+      select,
+      start,
+      send,
+      refreshStatus,
+      diary,
+      loadDiary
+    ]
+  )
+}
+
+function cancelActivity(id: string): void {
+  void window.segretarioApi.cancelActivity(id)
+}
+
+function removeActivity(id: string): Promise<void> {
+  return window.segretarioApi.removeActivity(id)
+}
+
+function resolveActivityApproval(
+  activityId: string,
+  approvalId: string,
+  approved: boolean,
+  outcome?: Parameters<typeof window.segretarioApi.resolveApproval>[3]
+): Promise<void> {
+  return window.segretarioApi.resolveApproval(activityId, approvalId, approved, outcome)
 }

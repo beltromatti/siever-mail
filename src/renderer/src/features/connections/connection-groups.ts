@@ -106,3 +106,15 @@ export function connectionGroups(
 export function canAddCalendar(group: ConnectionGroup): boolean {
   return group.kind === 'google' && group.mail !== null && group.calendars.length === 0
 }
+
+/**
+ * Whether a calendar connection that could not be read is signed in again
+ * from here: Google's and Microsoft's, in their own sign-in. A CalDAV
+ * server's password is given again by adding it anew; a link has none.
+ */
+export function canReconnect(connection: CalendarConnection): boolean {
+  return (
+    connection.problem !== null &&
+    (connection.provider === 'google' || connection.provider === 'microsoft')
+  )
+}

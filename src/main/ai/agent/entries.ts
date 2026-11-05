@@ -1,3 +1,4 @@
+import { linkedHandles } from '@shared/segretario-links'
 import type { ActivityEntry, HandleLink } from '@shared/segretario'
 
 import type { StoredEvent } from '../ai-store'
@@ -9,7 +10,7 @@ import type {
   ToolPayload,
   UserPayload
 } from './conversation'
-import type { HandleRecord } from './handles'
+import type { HandleRecord, HandleRegistry } from './handles'
 
 /** The names an event gave, as the page links them. */
 export function handleLinks(records: ReadonlyArray<HandleRecord> | undefined): HandleLink[] {
@@ -18,7 +19,7 @@ export function handleLinks(records: ReadonlyArray<HandleRecord> | undefined): H
 
     switch (target.kind) {
       case 'message':
-        return [{ handle, kind: 'message', ref: target.ref }]
+        return [{ handle, kind: 'message', ref: target.ref, messageKey: target.messageKey }]
       case 'draft':
         return [{ handle, kind: 'draft', draftId: target.draftId }]
       case 'project':
@@ -42,6 +43,20 @@ export function handleLinks(records: ReadonlyArray<HandleRecord> | undefined): H
         return []
     }
   })
+}
+
+/**
+ * What the short names a text links to stand for, as the run named them:
+ * kept with words that stay (the letter, "Il punto", a meeting's
+ * preparation), they open what they meant after the run is over.
+ */
+export function linksIn(text: string, handles: HandleRegistry): HandleLink[] {
+  return handleLinks(
+    linkedHandles(text).flatMap((handle) => {
+      const target = handles.resolve(handle)
+      return target ? [{ handle, target }] : []
+    })
+  )
 }
 
 /** What the page shows of a stored event; null for those it does not show. */

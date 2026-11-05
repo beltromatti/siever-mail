@@ -5,6 +5,8 @@ import {
   type EventChange
 } from '@shared/calendar'
 
+import { unlinked } from '@shared/segretario-links'
+
 import { foldTitle } from '../registry/projects'
 import type { ProposalRecord, UndoSpec } from '../registry/types'
 
@@ -18,7 +20,8 @@ import {
   ToolInputError,
   type SegretarioTool,
   type ToolContext,
-  type ToolOutcome
+  type ToolOutcome,
+  UnknownHandle
 } from '../agent/tool-types'
 import { resolveMessage } from './anchors'
 import { countOf } from './format'
@@ -40,7 +43,89 @@ const RESPONSE_WORDS: Readonly<Record<CalendarResponse, string>> = {
   needsAction: 'non ha ancora risposto'
 }
 
-const ACTIONS = ['elenco', 'liberi', 'crea', 'modifica', 'elimina', 'rispondi', 'proponi'] as const
+const ACTIONS = [
+  'elenco',
+  'liberi',
+  'crea',
+  'modifica',
+  'elimina',
+  'rispondi',
+  'proponi',
+  'ritira'
+] as const
+
+/** An answer to an invitation, in the words a model may write it. */
+const RESPONSE_OF: Readonly<Record<string, Exclude<CalendarResponse, 'needsAction'>>> = {
+  accepted: 'accepted',
+  accetto: 'accepted',
+  accetta: 'accepted',
+  partecipo: 'accepted',
+  partecipa: 'accepted',
+  si: 'accepted',
+  sì: 'accepted',
+  tentative: 'tentative',
+  forse: 'tentative',
+  declined: 'declined',
+  rifiuto: 'declined',
+  rifiuta: 'declined',
+  no: 'declined',
+  'non partecipo': 'declined',
+  'non partecipa': 'declined'
+}
+
+function responseOf(args: Record<string, unknown>): Exclude<CalendarResponse, 'needsAction'> {
+  const written = requireString(args, 'risposta')
+  const response = RESPONSE_OF[written.trim().toLowerCase()]
+
+  if (!response) {
+    throw new ToolInputError(
+      `\`risposta\` è \`accepted\` (partecipa), \`tentative\` (forse) o \`declined\` (non partecipa), non «${written}».`
+    )
+  }
+
+  return response
+}
+
+/** When an event is, in the user's words and time: "ven 6 nov 15:00–16:00". */
+function whenWords(start: string, end: string, allDay: boolean): string {
+  if (allDay) {
+    const first = new Date(`${start.slice(0, 10)}T00:00`)
+    const last = new Date(new Date(`${end.slice(0, 10)}T00:00`).getTime() - 1)
+    return first.toDateString() === last.toDateString() || last < first
+      ? `${DAY.format(first)}, tutto il giorno`
+      : `${DAY.format(first)} – ${DAY.format(last)}, tutto il giorno`
+  }
+
+  const from = new Date(start)
+  const to = new Date(end)
+  return from.toDateString() === to.toDateString()
+    ? `${DAY.format(from)} ${TIME.format(from)}–${TIME.format(to)}`
+    : `${DAY.format(from)} ${TIME.format(from)} – ${DAY.format(to)} ${TIME.format(to)}`
+}
+
+/** What a change does to an event, line by line, for the user to confirm: what it was, what it becomes. */
+function changeLines(event: CalendarEvent, change: EventChange): string[] {
+  const lines: string[] = []
+
+  if (change.title !== undefined) lines.push(`Titolo: «${change.title}» (era «${event.title}»)`)
+  if (change.start !== undefined || change.end !== undefined || change.allDay !== undefined) {
+    lines.push(
+      `Quando: ${whenWords(change.start ?? event.start, change.end ?? event.end, change.allDay ?? event.allDay)} (era ${whenWords(event.start, event.end, event.allDay)})`
+    )
+  }
+  if (change.location !== undefined) lines.push(`Dove: ${change.location ?? '(nessun luogo)'}`)
+  if (change.description !== undefined) lines.push('Cambia la descrizione.')
+  if (change.attendees !== undefined) {
+    lines.push(`Invitati: ${change.attendees.length > 0 ? change.attendees.join(', ') : 'nessuno'}`)
+  }
+
+  return lines
+}
+
+/** A moment's local day, AAAA-MM-GG. */
+function localDayOf(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
 
 /** A day written AAAA-MM-GG, at its local midnight. */
 function localDay(value: string): Date | null {
@@ -78,22 +163,32 @@ export function eventLine(
       ? `   l'utente: ${RESPONSE_WORDS[event.myResponse]}`
       : null,
     event.description ? `   ${event.description.replace(/\s+/g, ' ').slice(0, 200)}` : null,
-    prep ? `   preparazione già scritta: ${prep.replace(/\s+/g, ' ').slice(0, 160)}` : null
+    prep
+      ? `   preparazione già scritta: ${unlinked(prep).replace(/\s+/g, ' ').slice(0, 160)}`
+      : null
   ]
     .filter(Boolean)
     .join('\n')
 }
 
-/** "AAAA-MM-GGTHH:MM" (local) or, all day, "AAAA-MM-GG": as the provider takes it. */
+/**
+ * "AAAA-MM-GGTHH:MM" (local) or, all day, "AAAA-MM-GG": as the provider takes
+ * it. An all-day `fine` is written as the last day, as one says it ("dal 10
+ * al 12"); the provider wants the day after.
+ */
 function instant(value: string | undefined, allDay: boolean, name: string): string {
   const text = value?.trim() ?? ''
 
   if (allDay) {
-    if (!localDay(text)) {
+    const day = localDay(text)
+
+    if (!day) {
       throw new ToolInputError(`\`${name}\` è una data AAAA-MM-GG.`)
     }
 
-    return text
+    return name === 'fine'
+      ? localDayOf(new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1))
+      : text
   }
 
   const parsed = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(text) ? new Date(text) : null
@@ -144,7 +239,7 @@ function eventOf(context: ToolContext, args: Record<string, unknown>): string {
   const event = context.handles.event(handle)
 
   if (!event) {
-    throw new ToolInputError(
+    throw new UnknownHandle(
       `Non conosco l'evento «${handle}»: usa un riferimento e… ricevuto da \`calendario\`.`
     )
   }
@@ -192,6 +287,15 @@ function beforeChange(event: CalendarEvent, change: EventChange): EventChange {
   }
 
   return before
+}
+
+/** An event someone else organises — an invitation — is answered, not changed or taken away. */
+function refuseInvitation(event: CalendarEvent): void {
+  if (event.organizedByUser === false) {
+    throw new ToolInputError(
+      `«${event.title}» lo organizza ${event.organizer ?? 'un altro'}: all'invito si risponde (\`rispondi\`), non si cambia. Se va spostato, scrivilo a chi lo organizza.`
+    )
+  }
 }
 
 /** Whether an event brings in other people: changing it tells them. */
@@ -442,7 +546,8 @@ export const calendarTool: SegretarioTool = {
       descrizione: { type: 'string' },
       invitati: { type: 'array', items: { type: 'string' } },
       messaggio: { type: 'string' },
-      risposta: { type: 'string', enum: ['accepted', 'tentative', 'declined'] }
+      risposta: { type: 'string', enum: ['accepted', 'tentative', 'declined'] },
+      motivo: { type: 'string' }
     },
     required: ['azione']
   },
@@ -452,6 +557,7 @@ export const calendarTool: SegretarioTool = {
       modifica: 'Correggo l’evento…',
       elimina: 'Tolgo l’evento…',
       rispondi: 'Preparo la risposta all’invito…',
+      ritira: 'Ritiro una proposta…',
       proponi: 'Preparo la proposta…',
       liberi: 'Cerco gli orari liberi…'
     })[String(args.azione)] ?? 'Guardo il calendario…',
@@ -474,7 +580,7 @@ export const calendarTool: SegretarioTool = {
           events.length === 0
             ? `Nessun evento dal ${DAY.format(from)} al ${DAY.format(lastDay)}.`
             : `${countOf(events.length, 'evento', 'eventi')} dal ${DAY.format(from)} al ${DAY.format(lastDay)}:\n${events
-                .map((event) => eventLine(event, context, preps.get(event.key)))
+                .map((event) => eventLine(event, context, preps.get(event.key)?.text))
                 .join('\n')}`
         ]
 
@@ -549,7 +655,7 @@ export const calendarTool: SegretarioTool = {
             kind: 'action',
             title: `Nuovo evento: ${event.title}`,
             details: [
-              `Quando: ${event.start}${allDay ? '' : ` – ${event.end}`}`,
+              `Quando: ${whenWords(event.start, event.end, allDay)}`,
               ...(event.location ? [`Dove: ${event.location}`] : []),
               `Invitati: ${attendees.join(', ')} (ricevono l'invito)`
             ],
@@ -593,6 +699,7 @@ export const calendarTool: SegretarioTool = {
           throw new ToolInputError("L'evento non c'è più.")
         }
 
+        refuseInvitation(current)
         const change = changeOf(args, allDayOf(args, current.allDay), current.allDay)
         // People are told of a change to an event they are in — and invited by one that adds them.
         const invited = change.attendees ?? []
@@ -611,10 +718,12 @@ export const calendarTool: SegretarioTool = {
           const { approved } = await context.requestApproval({
             kind: 'action',
             title: `Modifica: ${current.title}`,
-            details:
+            details: [
+              ...changeLines(current, change),
               invited.length > 0
-                ? [`Invitati: ${invited.join(', ')}`, 'Ricevono l’invito o l’aggiornamento.']
-                : ['Gli invitati ricevono l’aggiornamento.'],
+                ? 'Gli invitati ricevono l’invito o l’aggiornamento.'
+                : 'Gli invitati ricevono l’aggiornamento.'
+            ],
             confirmLabel: 'Modifica'
           })
 
@@ -641,6 +750,8 @@ export const calendarTool: SegretarioTool = {
         if (!current) {
           return { content: "L'evento non c'era più.", summary: 'Evento già tolto' }
         }
+
+        refuseInvitation(current)
 
         if (context.run.background && (hasGuests(current) || current.origin?.by !== 'segretario')) {
           throw new ToolInputError(
@@ -685,7 +796,7 @@ export const calendarTool: SegretarioTool = {
       }
       case 'rispondi': {
         const key = eventOf(context, args)
-        const response = requireString(args, 'risposta') as Exclude<CalendarResponse, 'needsAction'>
+        const response = responseOf(args)
 
         if (context.run.background) {
           throw new ToolInputError(
@@ -712,44 +823,125 @@ export const calendarTool: SegretarioTool = {
         }
       }
       case 'proponi': {
-        const allDay = allDayOf(args, false)
         const source = stringArg(args, 'messaggio')
           ? await resolveMessage(context, stringArg(args, 'messaggio')!)
           : null
+        const from = {
+          accountId: source?.accountId ?? null,
+          messageKey: source?.messageKey ?? null,
+          threadId: source?.threadId ?? null
+        }
+
+        if (stringArg(args, 'evento')) {
+          // About an event already there: an answer to its invitation, or a change to it. Each
+          // proposal holds only what it changes, and takes the place of one waiting on that event.
+          const eventKey = eventOf(context, args)
+          const current = await context.calendar.event(eventKey)
+
+          if (!current) {
+            throw new ToolInputError("L'evento non c'è più.")
+          }
+
+          const waiting = (await context.registry.proposals.open({ kind: 'evento' })).find(
+            (proposal) => proposal.payload.eventKey === eventKey
+          )
+          const shown = {
+            title: current.title,
+            start: current.start,
+            end: current.end,
+            allDay: current.allDay,
+            location: current.location,
+            eventKey
+          }
+
+          if (stringArg(args, 'risposta')) {
+            const response = responseOf(args)
+            const proposal = await context.registry.propose(
+              {
+                kind: 'evento',
+                title: `Rispondi «${RESPONSE_WORDS[response]}»: ${current.title}`,
+                payload: { ...shown, response },
+                ...from,
+                replaces: waiting?.id ?? null,
+                perMessage: false
+              },
+              context.run.actor
+            )
+            return {
+              content: `Proposta all'utente: ${proposal.title}. La vede in Oggi e nel calendario e risponde con un clic.`,
+              summary: `Proposto di rispondere: ${current.title}`
+            }
+          }
+
+          // Someone else's event: what can be proposed is the answer to its invitation.
+          refuseInvitation(current)
+          const change = changeOf(args, allDayOf(args, current.allDay), current.allDay)
+
+          if (Object.keys(change).length === 0) {
+            throw new ToolInputError(
+              'Indica cosa cambia (`inizio` e `fine`, `titolo`, `luogo`, `descrizione`, `invitati`), oppure `risposta` per rispondere al suo invito.'
+            )
+          }
+
+          const proposal = await context.registry.propose(
+            {
+              kind: 'evento',
+              title: `Modifica: ${current.title}`,
+              payload: {
+                ...shown,
+                title: change.title ?? current.title,
+                start: change.start ?? current.start,
+                end: change.end ?? current.end,
+                allDay: change.allDay ?? current.allDay,
+                location: change.location !== undefined ? change.location : current.location,
+                change,
+                changes: changeLines(current, change)
+              },
+              ...from,
+              replaces: waiting?.id ?? null,
+              perMessage: false
+            },
+            context.run.actor
+          )
+          return {
+            content: `Proposta all'utente: ${proposal.title} (${changeLines(current, change).join('; ')}). La vede in Oggi e nel calendario e la applica con un clic.`,
+            summary: `Proposta una modifica: ${current.title}`
+          }
+        }
+
+        const allDay = allDayOf(args, false)
         const title = requireString(args, 'titolo')
-        const eventKey = stringArg(args, 'evento') ? eventOf(context, args) : null
         const start = instant(stringArg(args, 'inizio'), allDay, 'inizio')
         const end = instant(stringArg(args, 'fine'), allDay, 'fine')
 
         return oneAtATime(async () => {
           // A new event already there, or already proposed, is not proposed twice.
-          if (!eventKey) {
-            const there = await eventAlreadyThere(context, { title, start, end })
+          const there = await eventAlreadyThere(context, { title, start, end })
 
-            if (there) {
-              return {
-                content: `È già in calendario: ${eventLine(there, context)} — non serve proporlo.`,
-                summary: `Già in calendario: ${there.title}`
-              }
+          if (there) {
+            return {
+              content: `È già in calendario: ${eventLine(there, context)} — non serve proporlo.`,
+              summary: `Già in calendario: ${there.title}`
             }
+          }
 
-            const waiting = (await context.registry.proposals.open({ kind: 'evento' })).find(
-              (proposal) => {
-                const times = proposedTimes(proposal.payload)
-                return (
-                  times !== null &&
-                  Math.abs(times.start.getTime() - momentOf(start)) < 60_000 &&
-                  Math.abs(times.end.getTime() - momentOf(end)) < 60_000 &&
-                  sameTitle(String(proposal.payload.title ?? proposal.title), title)
-                )
-              }
-            )
+          const waiting = (await context.registry.proposals.open({ kind: 'evento' })).find(
+            (proposal) => {
+              const times = proposedTimes(proposal.payload)
+              return (
+                !proposal.payload.eventKey &&
+                times !== null &&
+                Math.abs(times.start.getTime() - momentOf(start)) < 60_000 &&
+                Math.abs(times.end.getTime() - momentOf(end)) < 60_000 &&
+                sameTitle(String(proposal.payload.title ?? proposal.title), title)
+              )
+            }
+          )
 
-            if (waiting) {
-              return {
-                content: `La proposta c'è già e aspetta l'utente: ${proposalLine(waiting).slice(2)}.`,
-                summary: `Già proposto: ${title}`
-              }
+          if (waiting) {
+            return {
+              content: `La proposta c'è già e aspetta l'utente: ${proposalLine(waiting).slice(2)}.`,
+              summary: `Già proposto: ${title}`
             }
           }
 
@@ -766,19 +958,51 @@ export const calendarTool: SegretarioTool = {
                 description: stringArg(args, 'descrizione') ?? null,
                 attendees: stringListArg(args, 'invitati'),
                 calendar: stringArg(args, 'calendario') ?? null,
-                eventKey
+                eventKey: null
               },
-              accountId: source?.accountId ?? null,
-              messageKey: source?.messageKey ?? null,
-              threadId: source?.threadId ?? null
+              ...from,
+              perMessage: false
             },
             context.run.actor
           )
           return {
-            content: `Proposta all'utente: ${proposal.title}. La vede in Oggi e nel calendario.`,
+            content: `Proposta all'utente: ${proposal.title}. La vede in Oggi e nel calendario e la crea con un clic.`,
             summary: `Proposto: ${title}`
           }
         })
+      }
+      case 'ritira': {
+        // A proposal of an event that no longer holds — the meeting cancelled, agreed otherwise.
+        const title = requireString(args, 'titolo')
+        const reason = requireString(args, 'motivo')
+        const at = stringArg(args, 'inizio')
+        const matching = (await context.registry.proposals.open({ kind: 'evento' })).filter(
+          (proposal) => {
+            const times = proposedTimes(proposal.payload)
+            return (
+              sameTitle(String(proposal.payload.title ?? proposal.title), title) &&
+              (!at || (times !== null && localDayOf(times.start) === at.slice(0, 10)))
+            )
+          }
+        )
+
+        if (matching.length !== 1) {
+          throw new ToolInputError(
+            matching.length === 0
+              ? `Nessuna proposta in attesa si chiama così. Quelle in attesa le vedi con \`elenco\`.`
+              : `Più proposte in attesa si chiamano così:\n${matching.map(proposalLine).join('\n')}\nIndica in \`inizio\` il giorno (AAAA-MM-GG) di quella da ritirare.`
+          )
+        }
+
+        const withdrawn = await context.registry.withdrawProposal(
+          matching[0].id,
+          reason,
+          context.run.actor
+        )
+        return {
+          content: `Ritirata: ${proposalLine(withdrawn).slice(2)}.`,
+          summary: `Ritirata la proposta: ${String(withdrawn.payload.title ?? withdrawn.title)}`
+        }
       }
       default:
         throw new ToolInputError(`\`azione\` è una di: ${ACTIONS.join(', ')}.`)

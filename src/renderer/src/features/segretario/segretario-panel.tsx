@@ -620,23 +620,47 @@ function Introduction({
   )
 }
 
+/**
+ * Why the Segretario cannot work, and the one way on: the key refused or
+ * out of credit, the key in the settings — nothing else needs doing again.
+ * (Without a key the AI is off, and the panel is not there.)
+ */
 function SetupNotice({
+  keyState,
   problem,
   onOpenSettings
 }: {
+  keyState: 'invalid' | 'exhausted'
   problem: string | null
   onOpenSettings: () => void
 }): React.JSX.Element {
   return (
     <div className="flex min-h-0 flex-1 flex-col justify-center gap-4 px-6">
       <p className="voice text-foreground text-[17px] leading-[1.45]">
-        Per lavorare per te mi serve una chiave OpenRouter: è il servizio da cui uso il modello, e
-        paghi solo quello che consumo — di solito pochi dollari al mese.
+        {keyState === 'invalid'
+          ? 'OpenRouter non accetta più la chiave che mi hai dato: finché non ne inserisci una valida sono fermo.'
+          : 'Il credito OpenRouter è finito: sono fermo finché non lo ricarichi. Poi riprendo da solo da dove ero rimasto.'}
       </p>
       {problem && <p className="text-destructive-soft-foreground text-[12.5px]">{problem}</p>}
-      <Button className="self-start" onClick={onOpenSettings}>
-        Collega OpenRouter
-      </Button>
+      {keyState === 'invalid' ? (
+        <Button className="self-start" onClick={onOpenSettings}>
+          Cambia la chiave
+        </Button>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            className="self-start"
+            onClick={() =>
+              void window.mailApi.openExternalUrl('https://openrouter.ai/settings/credits')
+            }
+          >
+            Ricarica su OpenRouter
+          </Button>
+          <Button variant="ghost" className="self-start" onClick={onOpenSettings}>
+            Impostazioni
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
@@ -663,6 +687,7 @@ export function SegretarioPanel({
   suggestions: ReadonlyArray<string>
   atWindowTopRight: boolean
   onClose: () => void
+  /** The key refused or out of credit: the Segretario's settings. */
   onOpenSettings: () => void
   onOpenHandle: (link: HandleLink) => void
   onApprove: (activityId: string, approval: ApprovalRequest, approved: boolean) => void
@@ -680,6 +705,11 @@ export function SegretarioPanel({
   const onDiaryRun = state.selectedId !== null && selected === null
   const working = selected?.status === 'running' || selected?.status === 'waiting'
   const ready = state.status?.keyState === 'ready' || state.status?.keyState === 'unchecked'
+  // Why it cannot work, when it cannot: the key refused, the credit gone.
+  const stopped =
+    state.status?.keyState === 'invalid' || state.status?.keyState === 'exhausted'
+      ? state.status.keyState
+      : null
 
   // What the user looks at changes: it goes along again.
   useEffect(() => {
@@ -789,10 +819,12 @@ export function SegretarioPanel({
         </nav>
       )}
 
-      {!state.status ||
-      state.status.keyState === 'missing' ||
-      state.status.keyState === 'invalid' ? (
-        <SetupNotice problem={state.status?.problem ?? null} onOpenSettings={onOpenSettings} />
+      {stopped ? (
+        <SetupNotice
+          keyState={stopped}
+          problem={state.status?.problem ?? null}
+          onOpenSettings={onOpenSettings}
+        />
       ) : showDiary ? (
         <DiaryView
           diary={state.diary}
@@ -819,11 +851,6 @@ export function SegretarioPanel({
 
       {ready && (
         <div className="shrink-0 p-3 pt-0">
-          {state.status?.keyState === 'exhausted' && (
-            <p className="text-destructive-soft-foreground mb-2 text-[12px]">
-              {state.status.problem}
-            </p>
-          )}
           {error && <p className="text-destructive-soft-foreground mb-2 text-[12px]">{error}</p>}
           <div className="sheet rounded-[12px] p-2 pb-1.5">
             {contextChip && !contextDetached && (

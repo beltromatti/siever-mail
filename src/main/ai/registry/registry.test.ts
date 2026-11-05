@@ -63,6 +63,31 @@ describe('Registry', () => {
       expect(again.change).toBeNull()
     })
 
+    it('does not open again from the background what the user closed, unless a newer message says so', async () => {
+      const { record } = await registry.openCommitment(
+        ANNA,
+        { kind: 'ti_chiedono', text: 'Mandare il computo ad Anna' },
+        BACKGROUND
+      )
+      await registry.setCommitmentStatus(record.id, 'non_serve', USER)
+      const before = new Date(Date.now() - 60_000).toISOString()
+
+      await expect(
+        registry.openCommitment(
+          { ...ANNA, dateIso: before },
+          { kind: 'ti_chiedono', text: 'Mandare il computo ad Anna' },
+          BACKGROUND
+        )
+      ).rejects.toBeInstanceOf(RegistryRefusal)
+
+      const newer = await registry.openCommitment(
+        { ...ANNA, messageKey: 'm:anna-2', dateIso: new Date(Date.now() + 60_000).toISOString() },
+        { kind: 'ti_chiedono', text: 'Mandare il computo ad Anna' },
+        BACKGROUND
+      )
+      expect(newer.created).toBe(true)
+    })
+
     it('keeps who closed a thing and why, and opens it again', async () => {
       const { record } = await registry.openCommitment(
         ANNA,
@@ -214,11 +239,20 @@ describe('Registry', () => {
   describe('projects', () => {
     it('refuses a write over a newer one, saying the project as it is now', async () => {
       const { record } = await registry.createProject('Prat2451 · Hotel Lido', BACKGROUND)
-      await registry.setProjectState(record.id, 'Si aspetta il collaudo.', CHAT, record.revision)
+      await registry.setProjectState(
+        record.id,
+        'Si aspetta il collaudo.',
+        [],
+        Date.now(),
+        CHAT,
+        record.revision
+      )
 
       const refused = registry.setProjectState(
         record.id,
         'Tutto fermo.',
+        [],
+        Date.now(),
         BACKGROUND,
         record.revision
       )
@@ -289,10 +323,24 @@ describe('Registry', () => {
       )
     })
 
+    it('makes a project once when two readings make it together, and keeps names apart', async () => {
+      const [first, second] = await Promise.all([
+        registry.createProject('Prat2490 · Condominio Bologna', BACKGROUND),
+        registry.createProject('prat2490 · condominio bologna', CHAT)
+      ])
+      expect(second.record.id).toBe(first.record.id)
+      expect([first.created, second.created].sort()).toEqual([false, true])
+
+      const other = await registry.createProject('Prat2491', BACKGROUND)
+      await expect(
+        registry.renameProject(other.record.id, 'PRAT2490 · Condominio Bologna', USER)
+      ).rejects.toBeInstanceOf(RegistryRefusal)
+    })
+
     it('says "Il punto" is behind once something moves in the project', async () => {
       const { record } = await registry.createProject('Prat2470', BACKGROUND)
       await registry.linkThread(record.id, ANNA, BACKGROUND)
-      await registry.setProjectState(record.id, 'Si aspetta il Comune.', BACKGROUND)
+      await registry.setProjectState(record.id, 'Si aspetta il Comune.', [], Date.now(), BACKGROUND)
       expect((await registry.projects.get(record.id))?.staleSince).toBeNull()
 
       await registry.openCommitment(
@@ -302,6 +350,23 @@ describe('Registry', () => {
       )
       expect((await registry.projects.get(record.id))?.staleSince).not.toBeNull()
       expect((await registry.projects.summary(record.id))?.openCommitments).toBe(1)
+    })
+
+    it('keeps "Il punto" behind when the project moved after its writer began looking', async () => {
+      const { record } = await registry.createProject('Prat2470', BACKGROUND)
+      await registry.linkThread(record.id, ANNA, BACKGROUND)
+      const begun = Date.now() - 1000
+      await registry.openCommitment(
+        ANNA,
+        { kind: 'aspetti', text: 'Parere del Comune' },
+        BACKGROUND
+      )
+
+      await registry.setProjectState(record.id, 'Si aspetta il Comune.', [], begun, BACKGROUND)
+      expect((await registry.projects.get(record.id))?.staleSince).not.toBeNull()
+
+      await registry.setProjectState(record.id, 'Si aspetta il Comune.', [], Date.now(), BACKGROUND)
+      expect((await registry.projects.get(record.id))?.staleSince).toBeNull()
     })
   })
 
@@ -343,6 +408,39 @@ describe('Registry', () => {
       await expect(
         registry.saveReply(ANNA, { kind: 'risposta', text: 'Di nuovo', doubts: '' }, BACKGROUND)
       ).rejects.toBeInstanceOf(RegistryRefusal)
+    })
+  })
+
+  describe('proposals', () => {
+    it('keeps the answer the user gave while the same proposal was being made again', async () => {
+      const first = await registry.propose(
+        { kind: 'evento', title: 'Sopralluogo', payload: {}, ...ANNA, perMessage: false },
+        BACKGROUND
+      )
+      // The user sets it aside right after a reading found it open, before it writes over it.
+      const get = sql.get
+      sql.get = async <T>(query: string, ...params: unknown[]): Promise<T | null> => {
+        const row = await get<T>(query, ...params)
+
+        if (row && query.includes("status = 'aperta'")) {
+          sql.get = get
+          await registry.decideProposal(first.id, 'scartata')
+        }
+
+        return row
+      }
+
+      const again = await registry.propose(
+        { kind: 'evento', title: 'Sopralluogo alle 11', payload: {}, ...ANNA, replaces: first.id },
+        BACKGROUND
+      )
+
+      expect(again.id).not.toBe(first.id)
+      expect(again.status).toBe('aperta')
+      expect(await registry.proposals.get(first.id)).toMatchObject({
+        status: 'scartata',
+        title: 'Sopralluogo'
+      })
     })
   })
 

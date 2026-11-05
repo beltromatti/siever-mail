@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
+import type { HandleLink } from '@shared/segretario'
+
 import { placeholders, type Sql } from '../sql'
 import {
   RegistryRefusal,
@@ -19,6 +21,7 @@ interface ProjectRow {
   title_by: string
   description: string | null
   state: string | null
+  state_links_json: string
   state_at: number | null
   stale_since: number | null
   origin: string
@@ -31,8 +34,12 @@ interface ProjectRow {
   updated_at: number
 }
 
-const COLUMNS = `p.id, p.title, p.title_by, p.description, p.state, p.state_at, p.stale_since, p.origin,
-  p.hidden_at, p.closed_at, p.closed_by, p.active_at, p.revision, p.created_at, p.updated_at`
+const COLUMN_NAMES = `id, title, title_by, description, state, state_links_json, state_at, stale_since,
+  origin, hidden_at, closed_at, closed_by, active_at, revision, created_at, updated_at`
+
+const COLUMNS = COLUMN_NAMES.split(',')
+  .map((name) => `p.${name.trim()}`)
+  .join(', ')
 
 function actorKind(value: string): ActorKind {
   return value === 'utente' || value === 'sistema' ? value : 'segretario'
@@ -49,6 +56,7 @@ function recordOf(row: ProjectRow): ProjectRecord {
     titleBy: actorKind(row.title_by),
     description: row.description,
     state: row.state,
+    stateLinks: JSON.parse(row.state_links_json) as HandleLink[],
     stateAt: nullableNumber(row.state_at),
     staleSince: nullableNumber(row.stale_since),
     origin: actorKind(row.origin),
@@ -158,13 +166,26 @@ export class ProjectStore {
   }
 
   /**
-   * Makes a project — or returns the one already called so: a project made
-   * twice is made once.
+   * Makes a project — or returns the one already called so, hidden or
+   * concluded too: a project made twice is made once, also by two readings
+   * at the same moment, which are made to take turns.
    */
   async create(
     title: string,
     actor: Actor,
     options: { description?: string | null } = {}
+  ): Promise<{ record: ProjectRecord; created: boolean }> {
+    const made = this.creating.then(() => this.createNow(title, actor, options))
+    this.creating = made.catch(() => undefined)
+    return made
+  }
+
+  private creating: Promise<unknown> = Promise.resolve()
+
+  private async createNow(
+    title: string,
+    actor: Actor,
+    options: { description?: string | null }
   ): Promise<{ record: ProjectRecord; created: boolean }> {
     const name = title.trim()
 
@@ -172,10 +193,7 @@ export class ProjectStore {
       throw new RegistryRefusal('Un progetto ha bisogno di un nome.')
     }
 
-    const folded = foldTitle(name)
-    const existing = (await this.list({ includeHidden: true })).find(
-      (project) => foldTitle(project.title) === folded
-    )
+    const existing = await this.named(name)
 
     if (existing) {
       return { record: existing, created: false }
@@ -187,8 +205,7 @@ export class ProjectStore {
         id, title, title_by, description, state, state_at, stale_since, origin, hidden_at,
         closed_at, active_at, revision, created_at, updated_at
       ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, NULL, ?, 1, ?, ?)
-      RETURNING id, title, title_by, description, state, state_at, stale_since, origin, hidden_at,
-        closed_at, active_at, revision, created_at, updated_at`,
+      RETURNING ${COLUMN_NAMES}`,
       randomUUID(),
       name,
       actor.by,
@@ -219,7 +236,26 @@ export class ProjectStore {
       throw new RegistryRefusal(`Il nome «${current.title}» l'ha dato l'utente: lascialo.`, current)
     }
 
+    const taken = await this.named(name)
+
+    if (taken && taken.id !== id) {
+      throw new RegistryRefusal(
+        `C'è già un progetto «${taken.title}»: se sono la stessa questione, uniscili.`,
+        taken
+      )
+    }
+
     return this.update(id, { title: name, title_by: actor.by }, seenRevision)
+  }
+
+  /** The project called so, case and accents aside — hidden and concluded ones too. */
+  private async named(name: string): Promise<ProjectSummary | null> {
+    const folded = foldTitle(name)
+    return (
+      (await this.list({ includeHidden: true, includeClosed: true })).find(
+        (project) => foldTitle(project.title) === folded
+      ) ?? null
+    )
   }
 
   async describe(
@@ -233,18 +269,28 @@ export class ProjectStore {
     return this.update(id, { description: description.trim() || null }, seenRevision)
   }
 
-  /** Writes "Il punto": where the project stands now. It is current again. */
+  /**
+   * Writes "Il punto": where the project stands now. It is current again —
+   * unless the project moved after `basisAt`, the moment its writer began
+   * looking: what came since, it did not see.
+   */
   async setState(
     id: string,
     state: string,
-    actor: Actor,
+    links: ReadonlyArray<HandleLink>,
+    basisAt: number,
     seenRevision?: number
   ): Promise<ProjectRecord> {
-    void actor
-    await this.require(id)
+    const before = await this.require(id)
     return this.update(
       id,
-      { state: state.trim() || null, state_at: Date.now(), stale_since: null },
+      {
+        state: state.trim() || null,
+        state_links_json: JSON.stringify(links),
+        state_at: Date.now(),
+        stale_since:
+          before.activeAt !== null && before.activeAt > basisAt ? before.staleSince : null
+      },
       seenRevision
     )
   }
@@ -347,16 +393,25 @@ export class ProjectStore {
     dropIds: ReadonlyArray<string>,
     actor: Actor
   ): Promise<ProjectRecord> {
+    void actor
     await this.require(keepId)
     const dropping = dropIds.filter((id) => id !== keepId)
 
+    // All there before anything moves: a merge is done whole or not at all.
     for (const id of dropping) {
       await this.require(id)
+    }
+
+    for (const id of dropping) {
+      // Each conversation keeps who put it there (or took it out): what the user decided of
+      // it, in either project, stands over the Segretario's.
       await this.sql.run(
-        `INSERT OR IGNORE INTO ai_project_threads (project_id, account_id, thread_id, linked_by, rejected, created_at)
-         SELECT ?, account_id, thread_id, ?, rejected, created_at FROM ai_project_threads WHERE project_id = ?`,
+        `INSERT INTO ai_project_threads (project_id, account_id, thread_id, linked_by, rejected, created_at)
+         SELECT ?, account_id, thread_id, linked_by, rejected, created_at FROM ai_project_threads WHERE project_id = ?
+         ON CONFLICT(project_id, account_id, thread_id) DO UPDATE SET
+           linked_by = excluded.linked_by, rejected = excluded.rejected
+         WHERE excluded.linked_by = 'utente' AND ai_project_threads.linked_by <> 'utente'`,
         keepId,
-        actor.by,
         id
       )
       await this.sql.run(

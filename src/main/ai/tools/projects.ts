@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path'
 
 import { searchMail, searchScope } from '../mail-search'
+import { linksIn } from '../agent/entries'
 import { PROMPTS } from '../prompts'
 import {
   RegistryRefusal,
@@ -17,7 +18,8 @@ import {
   ToolConflict,
   ToolInputError,
   type SegretarioTool,
-  type ToolContext
+  type ToolContext,
+  UnknownHandle
 } from '../agent/tool-types'
 import { resolveMessage } from './anchors'
 import { projectLine } from './describe'
@@ -146,7 +148,7 @@ async function threadsOf(
 
     if (hits.length === 0 && threads.size === 0) {
       throw new ToolInputError(
-        `La ricerca «${stringArg(search, 'testo')}» non trova messaggi: le parole si cercano dall'inizio, quindi un numero dentro una parola (Prat2463) va scritto come compare. Prova altre parole, o cerca prima con \`cerca_posta\`.`
+        `La ricerca «${stringArg(search, 'testo')}» non trova messaggi: le parole si cercano dall'inizio («preven» trova «preventivo», non «ventivo»). Prova altre parole, o cerca prima con \`cerca_posta\`.`
       )
     }
 
@@ -213,8 +215,20 @@ export const projectsTool: SegretarioTool = {
       switch (action) {
         case 'elenco':
         case 'cerca': {
+          // The words looked for, however they come: a project named (not a p… reference) is one.
+          const named = stringArg(args, 'progetto')
           const query =
-            stringArg(args, 'cerca') ?? (action === 'cerca' ? stringArg(args, 'testo') : undefined)
+            stringArg(args, 'cerca') ??
+            (action === 'cerca'
+              ? (stringArg(args, 'testo') ??
+                stringArg(args, 'titolo') ??
+                (named && !context.handles.project(named) ? named : undefined))
+              : undefined)
+
+          if (action === 'cerca' && !query) {
+            throw new ToolInputError('Indica in `cerca` le parole del progetto che cerchi.')
+          }
+
           const projects = query
             ? await context.registry.projects.search(query)
             : await context.registry.projects.list({
@@ -265,8 +279,20 @@ export const projectsTool: SegretarioTool = {
             }
           }
 
+          // One there already may be set aside: said, for the conversations not to go into it unseen.
+          const aside = [
+            record.closedAt
+              ? record.closedBy === 'utente'
+                ? "concluso dall'utente"
+                : 'concluso'
+              : '',
+            record.hiddenAt ? 'nascosto' : ''
+          ]
+            .filter(Boolean)
+            .join(' e ')
+
           return {
-            content: `${created ? 'Creato' : 'Esisteva già'} ${handle} ${record.title}${linked > 0 ? `, con ${countOf(linked, 'conversazione', 'conversazioni')}` : ''}.`,
+            content: `${created ? 'Creato' : 'Esisteva già'} ${handle} ${record.title}${aside ? ` — è ${aside}: \`riapri\` o \`mostra\` solo se la questione è ripresa davvero` : ''}${linked > 0 ? `, con ${countOf(linked, 'conversazione', 'conversazioni')}` : ''}.`,
             summary: `${created ? 'Nuovo progetto' : 'Progetto'}: ${record.title}`
           }
         }
@@ -341,9 +367,16 @@ export const projectsTool: SegretarioTool = {
         }
         case 'punto': {
           const id = await projectOf(context, args)
+          const text = requireString(args, 'testo')
+          // What moved in the project after the run began, it may not have seen — unless the move was its own.
+          const basisAt = context.run.changes.some((change) => change.projectIds.includes(id))
+            ? Date.now()
+            : context.run.startedAt
           const record = await context.registry.setProjectState(
             id,
-            requireString(args, 'testo'),
+            text,
+            linksIn(text, context.handles),
+            basisAt,
             actor,
             seenOf(context, id)
           )
@@ -359,7 +392,7 @@ export const projectsTool: SegretarioTool = {
             const project = context.handles.project(handle)
 
             if (!project) {
-              throw new ToolInputError(`Non conosco il progetto «${handle}».`)
+              throw new UnknownHandle(`Non conosco il progetto «${handle}».`)
             }
 
             return project.projectId

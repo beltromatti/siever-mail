@@ -7,7 +7,8 @@ import {
   moveSelectionCursor,
   reconcileSelection,
   selectAllMessages,
-  type MessageSelectionState
+  type MessageSelectionState,
+  reconcileWithNeighbour
 } from './message-selection'
 import type { MessageRef } from '@shared/models'
 
@@ -152,5 +153,28 @@ describe('reconcileSelection', () => {
   it('returns the same object when nothing changed, so React can bail out', () => {
     const state = selectionOf([1, 2], 2, 1)
     expect(reconcileSelection(state, refs)).toBe(state)
+  })
+})
+
+describe('reconcileWithNeighbour', () => {
+  const ref = (uid: number): MessageRef => ({ accountId: 'a', folderPath: 'INBOX', uid })
+
+  it('moves to the message after the one that left the list, as a list worked through expects', () => {
+    const before = [ref(1), ref(2), ref(3), ref(4)]
+    const current = { selectedRefs: [ref(2)], cursorRef: ref(2), anchorRef: ref(2) }
+
+    expect(reconcileWithNeighbour(current, before, [ref(1), ref(3), ref(4)]).selectedRefs).toEqual([
+      ref(3)
+    ])
+    // The last one gone: the one before it.
+    expect(
+      reconcileWithNeighbour(
+        { selectedRefs: [ref(4)], cursorRef: ref(4), anchorRef: ref(4) },
+        before,
+        [ref(1), ref(2), ref(3)]
+      ).selectedRefs
+    ).toEqual([ref(3)])
+    // Still there: nothing moves.
+    expect(reconcileWithNeighbour(current, before, before)).toBe(current)
   })
 })

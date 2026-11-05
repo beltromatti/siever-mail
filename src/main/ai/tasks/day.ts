@@ -24,9 +24,9 @@ export function prepareDay(options: {
   const now = new Date()
   const sections = [nowLine()]
 
-  if (options.refresh) {
+  if (options.refresh && options.lastLetterAt !== null) {
     sections.push(
-      `Hai già scritto la lettera di oggi${options.lastLetterAt ? ` alle ${new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(new Date(options.lastLetterAt))}` : ''}: da allora qualcosa di aperto è cambiato. Aggiorna la lettera a com'è adesso, e il resto solo se serve.`
+      `Hai già scritto la lettera di oggi alle ${new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(new Date(options.lastLetterAt))}: guarda la giornata com'è adesso e aggiorna la lettera, e il resto solo se serve.`
     )
   }
 

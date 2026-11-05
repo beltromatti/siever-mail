@@ -2,7 +2,7 @@ Cerca nella posta dell'utente, in tutti i suoi account. Il testo completo di ogn
 
 Parametri:
 
-- `testo`: cosa cercare. Le parole si cercano come inizio di parola, senza badare a maiuscole e accenti ("preven" trova "preventivo"). Più parole devono esserci tutte; `OR` tra due parole ne basta una; le virgolette tengono insieme una frase. Puoi restringere una parola a un campo: `da:rossi`, `a:bianchi`, `oggetto:offerta`. Può essere vuoto se usi solo i filtri.
+- `testo`: cosa cercare. Le parole si cercano come inizio di parola, senza badare a maiuscole e accenti ("preven" trova "preventivo"); un numero si trova anche dentro un codice ("2463" trova "Prat2463"). Più parole devono esserci tutte; `OR` tra due parole ne basta una; le virgolette tengono insieme una frase. Puoi restringere una parola a un campo: `da:rossi`, `a:bianchi`, `oggetto:offerta`. Può essere vuoto se usi solo i filtri.
 - `account`: l'indirizzo di un account, per cercare solo lì.
 - `cartella`: dove cercare — `arrivo`, `inviata`, `bozze`, `archivio`, `cestino`, `spam`, oppure il nome di una cartella. Senza, cerca in tutta la posta tranne cestino e spam.
 - `ovunque`: true per cercare anche nel cestino e nello spam.

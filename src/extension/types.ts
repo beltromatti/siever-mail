@@ -24,6 +24,7 @@ import type { ComponentType, ReactNode } from 'react'
 import type { DesktopMailApi } from '@shared/ipc'
 import type { MailFontOption } from '@shared/mail-fonts'
 import type { MailMessageSummary, MessageRef, MessagesActionResult } from '@shared/models'
+import type { SavedBefore } from '@shared/segretario'
 
 /* ────────────────────────── both processes ────────────────────────── */
 
@@ -149,6 +150,12 @@ export interface ExtensionAssistant {
    * message it came from, a word or two: "Archiviato Siever".
    */
   readonly savedCopyLabel?: string
+  /**
+   * The kind of proposal a saved copy answers ("archivia_siever"): once a
+   * message is saved, the ones still waiting on it are settled — however it
+   * was saved, by the user or by the Segretario.
+   */
+  readonly savedCopyProposalKind?: string
 }
 
 export interface ExtensionAssistantTool {
@@ -244,10 +251,19 @@ export interface ExtensionMainContext {
    * SIEVER's, into a pratica — once they are written: the host keeps them
    * as facts on each message (the label, wherever the message goes) and
    * the Segretario learns where the user files. Called while the messages
-   * are still where `ref` says.
+   * are still where `ref` says. Rejects when a copy could not be recorded:
+   * it is not saved then. `proposals` are the extension's proposals the
+   * user followed for that message, with what they chose: once the copy is
+   * recorded they are accepted with it, and the others open on the message
+   * set aside.
    */
   copiesSaved(
-    entries: ReadonlyArray<{ ref: MessageRef; destination: string; files: string[] }>
+    entries: ReadonlyArray<{
+      ref: MessageRef
+      destination: string
+      files: string[]
+      proposals?: ReadonlyArray<{ id: string; result: Record<string, unknown> }>
+    }>
   ): Promise<void>
   /**
    * The copies of these messages the extension saved before, each by the
@@ -334,10 +350,9 @@ export interface ExtensionRenderer {
   readonly id: string
   readonly displayName: string
   /**
-   * Buttons rendered inline in the primary toolbar, immediately after
-   * the built-in "Nuovo messaggio" action. Each receives the current
-   * selection and a host-managed callback to trigger the primary
-   * action dialog (if any).
+   * Buttons rendered in the reading pane's header, before the host's own
+   * reply actions. Each receives the current selection and a host-managed
+   * callback to trigger the primary action dialog (if any).
    */
   readonly toolbarActions: ReadonlyArray<ToolbarActionDescriptor>
   /**
@@ -405,10 +420,10 @@ export interface ExtensionSelectionContext {
   /**
    * Where a copy of an earlier message of the selected conversations was
    * saved by the extension — or, for a new conversation, of one from the
-   * same sender — the latest: the destination it reported. Null without
-   * one, and with the AI off.
+   * same sender, which `from` says — the latest: the destination it
+   * reported. Null without one, and with the AI off.
    */
-  savedBefore: string | null
+  savedBefore: SavedBefore | null
   /**
    * The folders linked to the projects the selected conversations are in —
    * where their work is kept, as the Segretario or the user linked them.
@@ -463,7 +478,8 @@ export interface ExtensionHostHooks {
   /**
    * Takes `refs` out of the visible list at once and runs `action` on
    * them: the ones it reports failed come back where they were, and its
-   * error is shown — as the host's own Archivia and Elimina do.
+   * error is shown — as the host's own Archivia and Elimina do; those it
+   * reports `kept` come back too, done.
    */
   optimisticallyRemoveMessages(
     refs: ReadonlyArray<MessageRef>,

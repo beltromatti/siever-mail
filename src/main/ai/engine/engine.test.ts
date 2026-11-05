@@ -80,7 +80,7 @@ describe('WorkQueue', () => {
       ).toBe(expected)
     }
 
-    expect(await queue.failedSince(['k'], 0)).toEqual(new Set(['k']))
+    expect([...(await queue.failedSince(['k'], 0)).keys()]).toEqual(['k'])
     await queue.retryFailed()
     expect((await queue.get(unit.id))?.status).toBe('in_coda')
   })
@@ -274,6 +274,86 @@ describe('Scheduler', () => {
     executor.release('b')
     executor.release('c')
     await until(async () => (await queue.counts()).length === 0)
+  })
+
+  it('reads a lane from its oldest conversation, even when the newest came first', async () => {
+    const executor = {
+      ...gatedExecutor((unit) => [(unit.scope as { who: string }).who]),
+      order: (unit: WorkUnit) => Date.parse((unit.scope as { newest: string }).newest)
+    }
+    scheduler = new Scheduler(queue, { lettura: executor }, { concurrency: () => 4 })
+    // Queued newest first, as the planner does: Rossi's later conversation, then his earlier one.
+    await queue.enqueue({
+      task: 'lettura',
+      scopeKey: 'rossi-ricevuto',
+      scope: { who: 'rossi', newest: '2026-11-04T10:00:00Z' },
+      priority: 60
+    })
+    await queue.enqueue({
+      task: 'lettura',
+      scopeKey: 'rossi-richiesta',
+      scope: { who: 'rossi', newest: '2026-11-02T10:00:00Z' },
+      priority: 60
+    })
+    await scheduler.start()
+
+    await until(() => executor.started.length === 1)
+    expect(executor.started).toEqual(['rossi-richiesta'])
+    executor.release('rossi-richiesta')
+    await until(() => executor.started.length === 2)
+    expect(executor.started).toEqual(['rossi-richiesta', 'rossi-ricevuto'])
+    executor.release('rossi-ricevuto')
+  })
+
+  it('waits, one try at a time, while the connection does not answer, and counts nothing', async () => {
+    let answering = false
+    let together = 0
+    let most = 0
+    const ran: string[] = []
+    scheduler = new Scheduler(
+      queue,
+      {
+        lettura: {
+          lockKeys: async (unit) => [unit.scopeKey],
+          run: async (unit) => {
+            together += 1
+            most = Math.max(most, together)
+            await new Promise((resolve) => setTimeout(resolve, 5))
+            together -= 1
+
+            if (!answering) {
+              throw new WorkFailure('Rete assente', true, false, true)
+            }
+
+            ran.push(unit.scopeKey)
+          }
+        }
+      },
+      { concurrency: () => 4 }
+    )
+
+    for (const key of ['a', 'b', 'c']) {
+      await queue.enqueue({ task: 'lettura', scopeKey: key, scope: {}, priority: 10 })
+    }
+
+    await scheduler.start()
+    await until(() => scheduler?.waitingForNetwork !== null)
+    // The three that ran when the network went fail as one try: the first wait, not the third.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(scheduler.waitingForNetwork!.until - Date.now()).toBeLessThanOrEqual(30_000)
+    // Found out: from now on one tries, and only when the wait is over.
+    const tried = ran.length
+    most = 0
+    scheduler.online()
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(most).toBe(1)
+    expect(ran.length).toBe(tried)
+    expect((await queue.counts()).every((count) => count.status !== 'fallito')).toBe(true)
+
+    answering = true
+    scheduler.online()
+    await until(() => ran.length === 3)
+    expect(scheduler.waitingForNetwork).toBeNull()
   })
 
   it('keeps a place for new mail while the backlog is read', async () => {

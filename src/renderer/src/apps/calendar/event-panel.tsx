@@ -23,6 +23,9 @@ import { RESPONSE_LABELS } from '@renderer/features/calendar/event-line'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry, CalendarResponse } from '@shared/calendar'
 import type { MessageRef } from '@shared/models'
+import type { LinkedText } from '@shared/segretario'
+import { eventProposalWords } from '@renderer/features/segretario/proposal-words'
+import { LinkedWords } from '@renderer/features/segretario/segretario-text'
 
 import { addDays, dayOfKey } from '@renderer/features/calendar/calendar-dates'
 import { dotStyle } from './event-style'
@@ -75,10 +78,10 @@ async function openSource(
 }
 
 /** What the Segretario wrote to prepare for an event, kept current while it writes. */
-function useEventPrep(eventKey: string | null): { text: string; writtenAt: number } | null {
+function useEventPrep(eventKey: string | null): (LinkedText & { writtenAt: number }) | null {
   const [prep, setPrep] = useState<{
     eventKey: string
-    value: { text: string; writtenAt: number } | null
+    value: (LinkedText & { writtenAt: number }) | null
   } | null>(null)
 
   useEffect(() => {
@@ -315,6 +318,14 @@ export function EventPanel({
           </div>
         )}
 
+        {proposed && eventProposalWords(proposed.proposal).changes.length > 0 && (
+          <ul className="text-foreground flex flex-col gap-0.5 text-[12.5px] leading-[1.5]">
+            {eventProposalWords(proposed.proposal).changes.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        )}
+
         {description && (
           <p className="text-muted-foreground max-h-60 shrink-0 overflow-y-auto text-[12.5px] leading-[1.5] whitespace-pre-wrap">
             {description}
@@ -327,9 +338,11 @@ export function EventPanel({
               <CompassStar className="text-ai-star size-3.5" />
               Per prepararti
             </p>
-            <p className="voice text-foreground border-ai-line border-l-2 pl-2.5 text-[13.5px] leading-[1.5] whitespace-pre-line">
-              {prep.text}
-            </p>
+            <LinkedWords
+              text={prep.text}
+              links={prep.links}
+              className="text-foreground border-ai-line border-l-2 pl-2.5 text-[13.5px] leading-[1.5]"
+            />
           </div>
         )}
 
@@ -388,7 +401,7 @@ export function EventPanel({
                       undefined,
                       proposed.proposal.revision
                     ),
-                  'Messo in calendario'
+                  eventProposalWords(proposed.proposal).done
                 ).then(onClose)
               }
             >
@@ -397,7 +410,7 @@ export function EventPanel({
               ) : (
                 <Check className="size-3.5" />
               )}
-              {attendees.length > 0 ? 'Crea e invita' : 'Aggiungi al calendario'}
+              {eventProposalWords(proposed.proposal).action}
             </Button>
             <Button
               variant="ghost"
@@ -420,7 +433,8 @@ export function EventPanel({
         ) : (
           event && (
             <>
-              {calendar?.writable && (
+              {/* An invitation is answered, not changed: only what the user organises is theirs to edit. */}
+              {calendar?.writable && event.organizedByUser !== false && (
                 <>
                   <Button
                     variant="outline"

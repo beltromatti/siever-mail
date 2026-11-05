@@ -219,3 +219,40 @@ export function reconcileSelection(
 
   return { selectedRefs, cursorRef, anchorRef }
 }
+
+/**
+ * As `reconcileSelection`, for a list loaded again: when nothing selected is
+ * left — dealt with, it left the view — the message that came after it in
+ * the list as it was (or, at the end, before it) is selected, as working
+ * through a list one by one expects; the first only when none of those is.
+ */
+export function reconcileWithNeighbour(
+  current: MessageSelectionState,
+  before: ReadonlyArray<MessageRef>,
+  after: ReadonlyArray<MessageRef>
+): MessageSelectionState {
+  const reconciled = reconcileSelection(current, after)
+
+  if (reconciled.selectedRefs.length > 0 || current.selectedRefs.length === 0) {
+    return reconciled
+  }
+
+  const available = new Map(after.map((ref) => [messageRefKey(ref), ref]))
+  const gone = new Set(current.selectedRefs.map(messageRefKey))
+  const at = before.findIndex((ref) => gone.has(messageRefKey(ref)))
+  const neighbour =
+    at < 0
+      ? undefined
+      : (before
+          .slice(at + 1)
+          .map((ref) => available.get(messageRefKey(ref)))
+          .find((ref) => ref !== undefined) ??
+        before
+          .slice(0, at)
+          .reverse()
+          .map((ref) => available.get(messageRefKey(ref)))
+          .find((ref) => ref !== undefined))
+  const next = neighbour ?? after[0]
+
+  return next ? { selectedRefs: [next], cursorRef: next, anchorRef: next } : reconciled
+}

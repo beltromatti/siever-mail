@@ -171,6 +171,36 @@ export class CommitmentStore {
     return rows.map(recordOf)
   }
 
+  /** What was closed (done, or not needed) since a moment, the latest first: in these conversations, or anywhere. */
+  async closedSince(
+    since: number,
+    filter: { threads?: ReadonlyArray<ThreadRef>; kinds?: ReadonlyArray<CommitmentKind> } = {}
+  ): Promise<CommitmentRecord[]> {
+    if (filter.threads && filter.threads.length === 0) {
+      return []
+    }
+
+    const where = ["status IN ('fatta', 'non_serve')", 'updated_at >= ?']
+    const params: unknown[] = [since]
+
+    if (filter.kinds && filter.kinds.length > 0) {
+      where.push(`kind IN (${placeholders(filter.kinds)})`)
+      params.push(...filter.kinds)
+    }
+
+    if (filter.threads) {
+      where.push(`(${filter.threads.map(() => '(account_id = ? AND thread_id = ?)').join(' OR ')})`)
+      params.push(...filter.threads.flatMap((thread) => [thread.accountId, thread.threadId]))
+    }
+
+    return (
+      await this.sql.all<ItemRow>(
+        `SELECT ${COLUMNS} FROM ai_items WHERE ${where.join(' AND ')} ORDER BY updated_at DESC LIMIT 100`,
+        ...params
+      )
+    ).map(recordOf)
+  }
+
   /** What is open, the nearest due first, then the newest: across all accounts, or these. */
   async open(
     filter: {
@@ -226,10 +256,12 @@ export class CommitmentStore {
   /**
    * Opens a commitment on a message. The same thing already open in the
    * conversation, worded alike, is the one returned: opening twice opens
-   * once.
+   * once. The same thing the user closed is not opened again from the
+   * background on the strength of a message no newer than their decision:
+   * the user's word stands until a newer fact.
    */
   async create(
-    anchor: MessageAnchor,
+    anchor: MessageAnchor & { dateIso?: string },
     input: { kind: CommitmentKind; text: string; due?: string | null; question?: string | null },
     actor: Actor
   ): Promise<{ record: CommitmentRecord; created: boolean; historyId: number | null }> {
@@ -246,6 +278,28 @@ export class CommitmentStore {
 
     if (existing) {
       return { record: existing, created: false, historyId: null }
+    }
+
+    if (actor.background) {
+      const decided = (
+        await this.sql.all<ItemRow>(
+          `SELECT ${COLUMNS} FROM ai_items
+           WHERE account_id = ? AND thread_id = ? AND kind = ? AND closed_by = 'utente'
+             AND status IN ('fatta', 'non_serve')`,
+          anchor.accountId,
+          anchor.threadId,
+          input.kind
+        )
+      )
+        .map(recordOf)
+        .find((candidate) => sameWording(candidate.text, text))
+
+      if (decided && !(anchor.dateIso && Date.parse(anchor.dateIso) > decided.updatedAt)) {
+        throw new RegistryRefusal(
+          `L'utente ha già segnato questa cosa come ${decided.status === 'fatta' ? 'fatta' : 'non serve'} (#${decided.id}), e il messaggio non è più recente della sua decisione: non riaprirla. Se c'è un fatto nuovo, riaprila (\`riapri\`) dicendo qual è.`,
+          decided
+        )
+      }
     }
 
     const now = Date.now()
@@ -385,9 +439,22 @@ export class CommitmentStore {
     actor: Actor
   ): Promise<Array<{ record: CommitmentRecord; historyId: number | null }>> {
     const kept = await this.require(keepId)
+    const dropped = dropIds.filter((candidate) => candidate !== keepId)
     const results: Array<{ record: CommitmentRecord; historyId: number | null }> = []
 
-    for (const id of dropIds.filter((candidate) => candidate !== keepId)) {
+    // All or none: each one is looked at before any is closed.
+    for (const id of dropped) {
+      const record = await this.require(id)
+
+      if (actor.background && record.setBy === 'utente') {
+        throw new RegistryRefusal(
+          `Su #${record.id} («${record.text}») ha deciso l'utente: non unirla da solo.`,
+          record
+        )
+      }
+    }
+
+    for (const id of dropped) {
       results.push(
         await this.setStatus(id, 'non_serve', actor, {
           reason: `È la stessa cosa di «${kept.text}» (#${kept.id}).`
@@ -399,31 +466,19 @@ export class CommitmentStore {
   }
 
   /**
-   * What was open in conversations that turned out to be one matter with
-   * another — the same alert again, the same request in a new thread —
-   * moves to the message that carries it now.
+   * Whether anything open changed since a moment — opened, closed, put off,
+   * moved — other than by the day's own run, which writes the letter that
+   * would be behind.
    */
-  async carry(
-    from: ReadonlyArray<ThreadRef>,
-    to: MessageAnchor,
-    actor: Actor
-  ): Promise<CommitmentRecord[]> {
-    const moving = (await this.open({ threads: from, includeDeferred: true })).filter(
-      (record) => record.threadId !== to.threadId || record.accountId !== to.accountId
+  async changedSince(since: number): Promise<boolean> {
+    return (
+      (await this.sql.get(
+        `SELECT 1 AS found FROM ai_items WHERE updated_at > ?
+           AND (run_id IS NULL OR run_id NOT IN (SELECT id FROM ai_activities WHERE kind = 'giornata'))
+         LIMIT 1`,
+        since
+      )) !== null
     )
-
-    for (const record of moving) {
-      await this.write(
-        record.id,
-        { ...actor, background: false },
-        {},
-        'sposta',
-        () => ({ threadId: to.threadId, messageKey: to.messageKey }),
-        'Stessa cosa, seguita dal messaggio più recente.'
-      )
-    }
-
-    return moving
   }
 
   /** What was put off until today opens again, by the app: the day came. */
@@ -619,8 +674,9 @@ export class CommitmentStore {
 
   /**
    * The user's word holds against a run in the background: it changes
-   * what the user decided only with a message of the same matter — its
-   * conversation, or one of its projects — that came after the decision.
+   * what the user decided only with a message that came after the
+   * decision, given as the proof. That the message is about the same thing
+   * is the Segretario's judgement; that it is newer, the registry's.
    */
   private async guard(current: CommitmentRecord, actor: Actor, evidence?: Evidence): Promise<void> {
     if (actor.by !== 'segretario' || !actor.background || current.setBy !== 'utente') {

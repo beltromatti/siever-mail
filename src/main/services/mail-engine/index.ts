@@ -21,6 +21,7 @@ import type { MessageNote } from '@shared/segretario'
 import type { AppDatabase } from '../database'
 import type { MailTokens } from '../mail-tokens'
 import { decryptSecret } from '../secure-storage'
+import { watchSystemSleep } from '../system-sleep'
 
 import {
   AccountConnection,
@@ -56,6 +57,9 @@ export class MailEngine {
   })
   private activeContext: ActiveMailboxContext | null = null
   private networkWatch: NodeJS.Timeout | null = null
+  private unwatchSleep: (() => void) | null = null
+  /** The computer is asleep: every account's links are closed until it wakes. */
+  private asleep = false
 
   constructor(private readonly deps: MailEngineDependencies) {}
 
@@ -77,12 +81,25 @@ export class MailEngine {
   }
 
   /**
-   * Waking up, unlocking the screen and the network coming or going all
-   * leave the IMAP links in doubt. Every account checks itself right then,
-   * instead of on its next timer — mail that arrived during the night shows
-   * up as soon as the lid opens.
+   * Going to sleep, every account closes its links (see
+   * `AccountConnection.suspend`) and opens them again on waking — mail that
+   * arrived during the night shows up as soon as the lid opens. Waking up,
+   * unlocking the screen and the network coming or going all leave the
+   * links in doubt besides — a sleep the system never announced: every
+   * account checks itself right then, instead of on its next timer.
    */
   private watchSystemEvents(): void {
+    this.unwatchSleep = watchSystemSleep((asleep) => {
+      this.asleep = asleep
+
+      for (const connection of this.connections.values()) {
+        if (asleep) {
+          connection.suspend()
+        } else {
+          connection.resume()
+        }
+      }
+    })
     powerMonitor.on('resume', this.nudgeConnections)
     powerMonitor.on('unlock-screen', this.nudgeConnections)
 
@@ -98,6 +115,8 @@ export class MailEngine {
   }
 
   private unwatchSystemEvents(): void {
+    this.unwatchSleep?.()
+    this.unwatchSleep = null
     powerMonitor.removeListener('resume', this.nudgeConnections)
     powerMonitor.removeListener('unlock-screen', this.nudgeConnections)
 
@@ -245,7 +264,9 @@ export class MailEngine {
 
     for (const ref of refs) {
       const key = `${ref.accountId}\u0000${ref.folderPath}`
-      groups.set(key, [...(groups.get(key) ?? []), ref])
+      const group = groups.get(key) ?? []
+      group.push(ref)
+      groups.set(key, group)
     }
 
     const batches = [...groups.values()]
@@ -316,11 +337,18 @@ export class MailEngine {
         }
   }
 
-  /** See `AccountConnection.moveMessagesToRole`; messages of any account. */
+  /**
+   * See `AccountConnection.moveMessagesToRole`; messages of any account.
+   * Archivio is where archiving puts them, so they are archived.
+   */
   async moveMessagesToRole(
     refs: ReadonlyArray<MessageRef>,
     role: FolderRole
-  ): Promise<MessagesActionResult> {
+  ): Promise<MessagesActionResult & { stayed?: MessageRef[] }> {
+    if (role === '\\Archive') {
+      return this.archiveMessages(refs)
+    }
+
     return this.onMessages(refs, (connection, folderPath, uids) =>
       connection.moveMessagesToRole(folderPath, uids, role)
     )
@@ -332,10 +360,50 @@ export class MailEngine {
     )
   }
 
-  async archiveMessages(refs: ReadonlyArray<MessageRef>): Promise<MessagesActionResult> {
-    return this.onMessages(refs, (connection, folderPath, uids) =>
-      connection.archiveMessages(folderPath, uids)
+  /**
+   * Archives messages of any account, each as its provider means it (see
+   * `AccountConnection.archive`) — "Archivia" wherever it is asked, from a
+   * notification as from the Segretario. What could not be archived is said
+   * by the refs given; `stayed` are those archived already, left as they
+   * were, and `kept` those still where they were shown (see
+   * `MessagesActionResult.kept`).
+   */
+  async archiveMessages(
+    refs: ReadonlyArray<MessageRef>
+  ): Promise<MessagesActionResult & { stayed: MessageRef[]; kept: MessageRef[] }> {
+    const byAccount = new Map<string, MessageRef[]>()
+
+    for (const ref of refs) {
+      const ofAccount = byAccount.get(ref.accountId) ?? []
+      ofAccount.push(ref)
+      byAccount.set(ref.accountId, ofAccount)
+    }
+
+    const groups = [...byAccount]
+    const outcomes = await Promise.allSettled(
+      groups.map(async ([accountId, ofAccount]) =>
+        (await this.requestConnection(accountId)).archive(ofAccount)
+      )
     )
+    const failed: MessageRef[] = []
+    const stayed: MessageRef[] = []
+    const kept: MessageRef[] = []
+    let error: string | undefined
+
+    outcomes.forEach((outcome, index) => {
+      if (outcome.status === 'fulfilled') {
+        failed.push(...outcome.value.failed)
+        stayed.push(...outcome.value.stayed)
+        kept.push(...outcome.value.kept)
+        error ??= outcome.value.error
+        return
+      }
+
+      failed.push(...groups[index][1])
+      error ??= outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)
+    })
+
+    return { failed, error, stayed, kept }
   }
 
   /** See `AccountConnection.saveDraft`. */
@@ -388,7 +456,9 @@ export class MailEngine {
 
     for (const ref of refs) {
       const key = `${ref.accountId}\u0000${ref.folderPath}`
-      groups.set(key, [...(groups.get(key) ?? []), ref])
+      const group = groups.get(key) ?? []
+      group.push(ref)
+      groups.set(key, group)
     }
 
     const missing: MessageRef[] = []
@@ -460,7 +530,9 @@ export class MailEngine {
 
     for (const ref of refs) {
       const key = `${ref.accountId}\u0000${ref.folderPath}`
-      groups.set(key, [...(groups.get(key) ?? []), ref])
+      const group = groups.get(key) ?? []
+      group.push(ref)
+      groups.set(key, group)
     }
 
     for (const group of groups.values()) {
@@ -626,6 +698,10 @@ export class MailEngine {
 
     this.connections.set(accountId, connection)
     connection.start()
+
+    if (this.asleep) {
+      connection.suspend()
+    }
 
     if (this.activeContext && this.activeContext.accountId === accountId) {
       connection.setActiveContext({

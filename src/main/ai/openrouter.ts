@@ -39,6 +39,11 @@ const MAX_ATTEMPTS = 3
 const RETRY_BASE_DELAY_MS = 1_500
 /** A stream that goes silent this long is dead: OpenRouter sends a comment every few seconds. */
 const STREAM_IDLE_TIMEOUT_MS = 90_000
+/**
+ * When the bill of a turn that broke is asked for: OpenRouter keeps it a
+ * moment after the generation ends, and not at once.
+ */
+const LATE_BILL_DELAYS_MS = [2_000, 10_000, 30_000, 120_000, 300_000]
 
 export type FetchFunction = (input: string, init?: RequestInit) => Promise<Response>
 
@@ -106,7 +111,12 @@ export interface ChatResult {
   /** The model that answered, concrete ("deepseek/deepseek-v4.1-flash-1017"). */
   model: string | null
   provider: string | null
+  /** The stream said what the turn cost; one that ended before saying is billed all the same. */
+  billed: boolean
 }
+
+/** What a generation cost, as OpenRouter keeps it. */
+export type GenerationBill = Pick<ChatResult, 'usage' | 'model' | 'provider'>
 
 /* ───────────────────────────────── errors ───────────────────────────────── */
 
@@ -312,20 +322,37 @@ export class OpenRouterClient {
    * One turn of the model, streamed: `onText` hears the answer as it is
    * written. Retries a busy provider or a dropped network before the first
    * word; after it, a broken stream is an error the caller decides on.
+   *
+   * A generation that began and did not say its bill — stopped by the
+   * user, cut by the network, over its time — was paid for all the same:
+   * `onLateBill` hears it once OpenRouter has it.
    */
   async chat(
     key: string,
     request: ChatRequest,
-    options: { signal?: AbortSignal; onText?: (text: string) => void } = {}
+    options: {
+      signal?: AbortSignal
+      onText?: (text: string) => void
+      onLateBill?: (bill: GenerationBill) => Promise<void>
+    } = {}
   ): Promise<ChatResult> {
     let attempt = 0
+    const unbilled = (generationId: string): void => {
+      const { onLateBill } = options
+
+      if (onLateBill) {
+        void this.lateBill(key, generationId)
+          .then((bill) => bill && onLateBill(bill))
+          .catch(() => undefined)
+      }
+    }
 
     for (;;) {
       attempt += 1
       let started = false
 
       try {
-        const result = await this.chatOnce(key, request, options.signal, (text) => {
+        const result = await this.chatOnce(key, request, options.signal, unbilled, (text) => {
           started = true
           options.onText?.(text)
         })
@@ -343,10 +370,56 @@ export class OpenRouterClient {
     }
   }
 
+  /**
+   * The bill of a generation, from OpenRouter's record of it: asked again
+   * while it is not there yet, null when it never comes.
+   */
+  async lateBill(key: string, generationId: string): Promise<GenerationBill | null> {
+    for (const wait of LATE_BILL_DELAYS_MS) {
+      await delay(wait)
+      let response: Response
+
+      try {
+        response = await this.fetchImpl(
+          `${API_BASE}/generation?id=${encodeURIComponent(generationId)}`,
+          { headers: { Authorization: `Bearer ${key}`, ...ATTRIBUTION_HEADERS } }
+        )
+      } catch {
+        continue
+      }
+
+      if (response.ok) {
+        const { data } = (await response.json()) as { data?: GenerationRecord }
+
+        return data && typeof data.total_cost === 'number'
+          ? {
+              usage: {
+                promptTokens: data.tokens_prompt ?? 0,
+                cachedTokens: data.native_tokens_cached ?? 0,
+                completionTokens: data.tokens_completion ?? 0,
+                reasoningTokens: data.native_tokens_reasoning ?? 0,
+                cost: data.total_cost
+              },
+              model: data.model ?? null,
+              provider: data.provider_name ?? null
+            }
+          : null
+      }
+
+      // Not kept yet, or OpenRouter busy: asked again later. Anything else will not change.
+      if (response.status !== 404 && response.status !== 429 && response.status < 500) {
+        return null
+      }
+    }
+
+    return null
+  }
+
   private async chatOnce(
     key: string,
     request: ChatRequest,
     signal: AbortSignal | undefined,
+    unbilled: (generationId: string) => void,
     onText: (text: string) => void
   ): Promise<ChatResult> {
     const body = {
@@ -393,7 +466,24 @@ export class OpenRouterClient {
       )
     }
 
-    return readChatStream(response.body, onText, signal)
+    // The generation's id comes before its first word, and names it even when it breaks.
+    const generationId = response.headers.get('x-generation-id')
+
+    try {
+      const result = await readChatStream(response.body, onText, signal)
+
+      if (!result.billed && generationId) {
+        unbilled(generationId)
+      }
+
+      return result
+    } catch (error) {
+      if (generationId) {
+        unbilled(generationId)
+      }
+
+      throw error
+    }
   }
 
   private async getJson<T>(path: string, key: string, signal?: AbortSignal): Promise<T> {
@@ -421,6 +511,17 @@ export class OpenRouterClient {
 }
 
 /* ──────────────────────────────── streaming ──────────────────────────────── */
+
+/** The fields of OpenRouter's record of a generation that make its bill. */
+interface GenerationRecord {
+  total_cost?: number
+  tokens_prompt?: number | null
+  tokens_completion?: number | null
+  native_tokens_reasoning?: number | null
+  native_tokens_cached?: number | null
+  model?: string | null
+  provider_name?: string | null
+}
 
 interface StreamChunk {
   model?: string
@@ -533,7 +634,8 @@ export async function readChatStream(
     finishReason: null,
     usage: { promptTokens: 0, cachedTokens: 0, completionTokens: 0, reasoningTokens: 0, cost: 0 },
     model: null,
-    provider: null
+    provider: null,
+    billed: false
   }
   const calls = new Map<number, ToolCall>()
 
@@ -600,6 +702,7 @@ export async function readChatStream(
         reasoningTokens: chunk.usage.completion_tokens_details?.reasoning_tokens ?? 0,
         cost: chunk.usage.cost ?? 0
       }
+      result.billed = true
     }
   }
 

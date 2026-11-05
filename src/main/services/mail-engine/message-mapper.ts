@@ -5,7 +5,15 @@ import type { FetchedMessageDetail, MailAddress, MailAttachment } from '@shared/
 import { cleanDisplayName, deriveSenderKey, deriveSenderName } from '@shared/sender'
 import { EMPTY_SUBJECT_LABEL } from '@shared/subject'
 
-import { headerValue, messageIdsIn, messageKeyFor, threadKeyFor } from './message-identity'
+import {
+  contentDigest,
+  headerValue,
+  messageIdsIn,
+  messageKeyFor,
+  normalizeMessageId,
+  threadKeyFor,
+  type IdentityClaim
+} from './message-identity'
 import { extractPreview } from './preview'
 import {
   attachmentFileName,
@@ -142,6 +150,42 @@ export function fetchedIdentity(
       inReplyTo: envelope?.inReplyTo,
       messageId: envelope?.messageId,
       messageKey
+    })
+  }
+}
+
+/** The Date header as the envelope gives it: parsed when it could be, as written otherwise. */
+function headerDateText(date: Date | string | undefined): string | undefined {
+  if (date instanceof Date) {
+    return Number.isNaN(date.valueOf()) ? undefined : date.toISOString()
+  }
+
+  return date?.trim() || undefined
+}
+
+/**
+ * Who a message fetched for the list says it is, for the cache to settle
+ * (see `settleIdentity`): `fetchedIdentity`, and what tells it from another
+ * message. A reply that names no References, on a server that gives no
+ * thread, names the message it replies to.
+ */
+export function fetchedIdentityClaim(fetched: FetchMessageObject): IdentityClaim {
+  const envelope = fetched.envelope
+  const references = messageIdsIn(headerValue(fetched.headers, 'references'))
+  const parent =
+    !fetched.threadId?.trim() && references.length === 0
+      ? normalizeMessageId(envelope?.inReplyTo)
+      : null
+
+  return {
+    uid: fetched.uid,
+    ...fetchedIdentity(fetched, references),
+    parentMessageId: parent ?? undefined,
+    date: internalDateToIso(fetched.internalDate),
+    digest: contentDigest({
+      sentAt: headerDateText(envelope?.date),
+      from: mapAddresses(envelope?.from),
+      subject: formatSubject(envelope?.subject)
     })
   }
 }

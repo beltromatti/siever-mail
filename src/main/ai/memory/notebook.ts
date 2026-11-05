@@ -146,7 +146,6 @@ export class Notebook {
     return row ? documentOf(row) : null
   }
 
-  /** The index: each note and its first line. */
   /**
    * The memory as every run begins with it: a map, not the notes. Each note
    * with its first line; a folder of many notes as one line — how many, the
@@ -214,14 +213,26 @@ export class Notebook {
 
     for (const note of await this.list()) {
       const lines = note.content.split('\n')
+      const path = fold(note.path)
+      // Words all in the note's name find the note, once — not every line of it.
+      const byName = words.every((word) => path.includes(word))
+      let found = false
 
       lines.forEach((text, index) => {
-        const folded = fold(`${note.path} ${text}`)
+        const line = fold(text)
 
-        if (words.every((word) => folded.includes(word))) {
+        if (
+          words.every((word) => path.includes(word) || line.includes(word)) &&
+          (!byName || words.some((word) => line.includes(word)))
+        ) {
           hits.push({ path: note.path, line: index + 1, text })
+          found = true
         }
       })
+
+      if (byName && !found) {
+        hits.push({ path: note.path, line: 1, text: lines[0] ?? '' })
+      }
     }
 
     return hits.slice(0, limit)
@@ -332,12 +343,18 @@ export class Notebook {
     throw new RegistryRefusal(`${path} cambia di continuo: riprova tra poco.`)
   }
 
-  /** Inserts lines after line `afterLine` (0: at the top), on the note as it is now. */
+  /**
+   * Inserts text after a line (at the end without one). A line counted on a
+   * version this run read is the line meant only while the note is still
+   * that version: changed since, the insertion is refused with the note as
+   * it is now — the end of a note, though, stays the end.
+   */
   async insert(
     path: string,
-    afterLine: number,
+    afterLine: number | null,
     text: string,
-    actor: Actor
+    actor: Actor,
+    options: { seenRevision?: number } = {}
   ): Promise<MemoryDocument> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const current = await this.read(path)
@@ -346,8 +363,19 @@ export class Notebook {
         return (await this.write(path, text, actor)).document
       }
 
+      if (
+        afterLine !== null &&
+        options.seenRevision !== undefined &&
+        current.revision !== options.seenRevision
+      ) {
+        throw new RegistryRefusal(
+          `${path} è cambiata da quando l'hai letta (ora è la versione ${current.revision}): la riga ${afterLine} non è più quella che hai visto.`,
+          current
+        )
+      }
+
       const lines = current.content.replace(/\n$/, '').split('\n')
-      const at = Math.max(0, Math.min(lines.length, afterLine))
+      const at = Math.max(0, Math.min(lines.length, afterLine ?? lines.length))
       lines.splice(at, 0, ...text.replace(/\n$/, '').split('\n'))
       const next = lines.join('\n') + '\n'
       checkSize(path, next)

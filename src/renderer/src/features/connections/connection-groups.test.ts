@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { CalendarConnection } from '@shared/calendar'
 import type { MailAccount } from '@shared/models'
 
-import { canAddCalendar, connectionGroups } from './connection-groups'
+import { canAddCalendar, canReconnect, connectionGroups } from './connection-groups'
 
 const mail = (id: string, email: string, change: Partial<MailAccount> = {}): MailAccount => ({
   id,
@@ -84,5 +84,17 @@ describe('connectionGroups', () => {
     ])
     expect(canAddCalendar(groups[0])).toBe(true)
     expect(canAddCalendar(groups[1])).toBe(false)
+  })
+})
+
+describe('canReconnect', () => {
+  it('signs in again a Google or Microsoft calendar that could not be read, not a server or a link', () => {
+    const problem = 'Microsoft non accetta più l’accesso a questo calendario: ricollegalo.'
+
+    expect(canReconnect(calendar('a', { provider: 'microsoft', problem }))).toBe(true)
+    expect(canReconnect(calendar('b', { provider: 'google', problem }))).toBe(true)
+    expect(canReconnect(calendar('c', { provider: 'google' }))).toBe(false)
+    expect(canReconnect(calendar('d', { provider: 'caldav', problem }))).toBe(false)
+    expect(canReconnect(calendar('e', { provider: 'ics', problem }))).toBe(false)
   })
 })

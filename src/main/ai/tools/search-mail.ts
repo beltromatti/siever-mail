@@ -8,7 +8,8 @@ import {
   ToolInputError,
   type SegretarioTool,
   type ToolContext,
-  type ToolOutcome
+  type ToolOutcome,
+  UnknownHandle
 } from '../agent/tool-types'
 import { countOf, formatAddresses, formatDateTime, shortDate } from './format'
 
@@ -178,7 +179,7 @@ export const searchMailTool: SegretarioTool = {
     const project = projectHandle ? context.handles.project(projectHandle) : null
 
     if (projectHandle && !project) {
-      throw new ToolInputError(
+      throw new UnknownHandle(
         `Non conosco il progetto «${projectHandle}»: usa un riferimento p… ricevuto.`
       )
     }

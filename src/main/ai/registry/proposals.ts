@@ -65,6 +65,14 @@ export class ProposalStore {
       accountId?: string | null
       messageKey?: string | null
       threadId?: string | null
+      /**
+       * The open proposal this one takes the place of. Without it, a proposal
+       * of the same kind on the same message is written over — one archiving
+       * per message — unless the kind is one a message can hold several of
+       * (`perMessage: false`: two appointments in one mail are two events).
+       */
+      replaces?: string | null
+      perMessage?: boolean
     },
     actor: Actor
   ): Promise<{ record: ProposalRecord; created: boolean }> {
@@ -74,8 +82,12 @@ export class ProposalStore {
       throw new RegistryRefusal('Una proposta ha bisogno di un titolo.')
     }
 
-    const existing =
-      input.accountId && input.messageKey
+    const existing = input.replaces
+      ? await this.sql.get<ProposalRow>(
+          "SELECT * FROM ai_proposals WHERE id = ? AND status = 'aperta'",
+          input.replaces
+        )
+      : input.perMessage !== false && input.accountId && input.messageKey
         ? await this.sql.get<ProposalRow>(
             `SELECT * FROM ai_proposals
              WHERE kind = ? AND account_id = ? AND message_key = ? AND status = 'aperta'`,
@@ -85,15 +97,19 @@ export class ProposalStore {
           )
         : null
 
-    if (existing) {
-      await this.sql.run(
+    // Written over only while it is still open: one the user answered meanwhile keeps their
+    // answer, and this becomes a proposal of its own.
+    if (
+      existing &&
+      (await this.sql.run(
         `UPDATE ai_proposals SET title = ?, payload_json = ?, run_id = ?, revision = revision + 1
-         WHERE id = ?`,
+         WHERE id = ? AND status = 'aperta'`,
         title,
         JSON.stringify(input.payload),
         actor.runId ?? null,
         existing.id
-      )
+      )) === 1
+    ) {
       return { record: (await this.get(existing.id))!, created: false }
     }
 
@@ -186,18 +202,24 @@ export class ProposalStore {
     return rows.map(proposalOf)
   }
 
-  /** Proposals about messages that are gone: nothing left to decide. */
-  async supersedeFor(accountId: string, messageKeys: ReadonlyArray<string>): Promise<number> {
+  /** The proposals still waiting on these messages — of one kind, or any — no longer hold. */
+  async supersedeFor(
+    accountId: string,
+    messageKeys: ReadonlyArray<string>,
+    kind?: string
+  ): Promise<number> {
     if (messageKeys.length === 0) {
       return 0
     }
 
     return this.sql.run(
       `UPDATE ai_proposals SET status = 'superata', decided_at = ?
-       WHERE status = 'aperta' AND account_id = ? AND message_key IN (${placeholders(messageKeys)})`,
+       WHERE status = 'aperta' AND account_id = ? AND message_key IN (${placeholders(messageKeys)})
+       ${kind ? 'AND kind = ?' : ''}`,
       Date.now(),
       accountId,
-      ...messageKeys
+      ...messageKeys,
+      ...(kind ? [kind] : [])
     )
   }
 }

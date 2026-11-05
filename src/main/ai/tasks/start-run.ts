@@ -77,6 +77,8 @@ export async function startRun(
     activityId: id,
     task: spec.task,
     background: spec.background,
+    // Only a conversation in the panel shows what it asks to confirm.
+    watched: !spec.background && spec.visibility === 'pannello',
     editor: spec.editor,
     missing: spec.missing,
     signal: spec.signal,

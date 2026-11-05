@@ -21,7 +21,12 @@ import {
 } from '@renderer/components/ui/select'
 import { Switch } from '@renderer/components/ui/switch'
 import { Textarea } from '@renderer/components/ui/textarea'
-import type { CalendarEvent, CalendarListEntry, NewCalendarEvent } from '@shared/calendar'
+import type {
+  CalendarEvent,
+  CalendarListEntry,
+  EventChange,
+  NewCalendarEvent
+} from '@shared/calendar'
 import { calendarKey } from '@shared/calendar'
 
 import {
@@ -143,10 +148,46 @@ function eventOfForm(form: Form): { value: EventTiming } | { problem: string } {
   }
 }
 
+/** The addresses of a list of guests, to compare: their case and order do not matter. */
+const guestSet = (guests: ReadonlyArray<string>): string =>
+  [...new Set(guests.map((guest) => guest.toLowerCase()))].sort().join('\n')
+
+/**
+ * What the form changes of the event as it was opened: only that, so what
+ * was changed meanwhile elsewhere — the time, the guests, the body — is not
+ * written over by the form's copy of it.
+ */
+function changeOfForm(form: Form, opened: Form, shaped: EventTiming): EventChange {
+  const before = eventOfForm(opened)
+  const location = form.location.trim() || null
+  const description = form.description.trim() || null
+  const sameTime =
+    'value' in before &&
+    before.value.allDay === shaped.allDay &&
+    before.value.start === shaped.start &&
+    before.value.end === shaped.end
+
+  return {
+    ...(form.title.trim() !== opened.title.trim() ? { title: form.title.trim() } : {}),
+    ...(sameTime ? {} : { start: shaped.start, end: shaped.end, allDay: shaped.allDay }),
+    ...(location !== (opened.location.trim() || null) ? { location } : {}),
+    ...(description !== (opened.description.trim() || null) ? { description } : {}),
+    ...('value' in before && guestSet(before.value.attendees) === guestSet(shaped.attendees)
+      ? {}
+      : { attendees: shaped.attendees })
+  }
+}
+
+/** The write of a change to an event; none for a change that changes nothing. */
+function changedWrite(key: string, change: EventChange): (() => Promise<CalendarEvent>) | null {
+  return Object.keys(change).length > 0 ? () => window.calendarApi.update(key, change) : null
+}
+
 /**
  * A new event, or one changed: its calendar, title, when, where, who is
  * invited — they get the provider's invitation, or its update — what it
- * is about. Mounted anew at each opening.
+ * is about. An event the user is invited to is answered, not changed: the
+ * form says so and saves nothing. Mounted anew at each opening.
  */
 export function EventEditor({
   target,
@@ -159,9 +200,13 @@ export function EventEditor({
   onClose: () => void
   onSaved: (event: CalendarEvent) => void
 }): React.JSX.Element {
-  const [form, setForm] = useState<Form>(() => initialForm(target, calendars))
+  const [opened] = useState<Form>(() => initialForm(target, calendars))
+  const [form, setForm] = useState<Form>(opened)
   const [saving, setSaving] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
+  // An invitation, opened here: it is answered, not changed.
+  const invitedTo =
+    target.mode === 'edit' && target.event.organizedByUser !== true ? target.event : null
   const writable = calendars.filter(
     (calendar) => calendar.writable && (!calendar.hidden || calendar.key === form.calendarKey)
   )
@@ -180,21 +225,29 @@ export function EventEditor({
       return
     }
 
+    const write =
+      target.mode === 'new'
+        ? (): Promise<CalendarEvent> =>
+            window.calendarApi.create({
+              ...shaped.value,
+              calendarKey: form.calendarKey,
+              title: form.title.trim(),
+              location: form.location.trim() || null,
+              description: form.description.trim() || null
+            })
+        : changedWrite(target.event.key, changeOfForm(form, opened, shaped.value))
+
+    // Nothing changed: there is nothing to tell anyone.
+    if (!write) {
+      onClose()
+      return
+    }
+
     setSaving(true)
     setProblem(null)
 
     try {
-      const common = {
-        ...shaped.value,
-        title: form.title.trim(),
-        location: form.location.trim() || null,
-        description: form.description.trim() || null
-      }
-      const saved =
-        target.mode === 'new'
-          ? await window.calendarApi.create({ ...common, calendarKey: form.calendarKey })
-          : await window.calendarApi.update(target.event.key, common)
-      onSaved(saved)
+      onSaved(await write())
     } catch (error) {
       setProblem(error instanceof Error ? error.message : 'L’evento non è stato salvato.')
     } finally {
@@ -208,9 +261,11 @@ export function EventEditor({
         <DialogHeader>
           <DialogTitle>{target.mode === 'new' ? 'Nuovo evento' : 'Modifica l’evento'}</DialogTitle>
           <DialogDescription>
-            {target.mode === 'edit' && target.event.attendees.some((attendee) => !attendee.self)
-              ? 'Gli invitati ricevono l’aggiornamento.'
-              : 'Chi inviti riceve l’invito del calendario.'}
+            {invitedTo
+              ? `Lo organizza ${invitedTo.organizer ?? 'un’altra persona'}: all’invito rispondi, ma cambiarlo può solo chi lo organizza.`
+              : target.mode === 'edit' && target.event.attendees.some((attendee) => !attendee.self)
+                ? 'Gli invitati ricevono l’aggiornamento.'
+                : 'Chi inviti riceve l’invito del calendario.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -324,7 +379,12 @@ export function EventEditor({
             <Button type="button" variant="ghost" disabled={saving} onClick={onClose}>
               Annulla
             </Button>
-            <Button type="submit" disabled={saving || (target.mode === 'new' && !form.calendarKey)}>
+            <Button
+              type="submit"
+              disabled={
+                saving || invitedTo !== null || (target.mode === 'new' && !form.calendarKey)
+              }
+            >
               {saving && <LoaderCircle className="size-3.5 animate-spin" />}
               {target.mode === 'new' ? 'Crea' : 'Salva'}
             </Button>

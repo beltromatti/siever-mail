@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   calendarNameOf,
+  canonicalUid,
   changeEventResource,
   invitationParties,
   invitationReply,
@@ -183,6 +184,68 @@ END:VCALENDAR`
     const [call] = occurrencesOf(text, range)
 
     expect(call.start).toBe('2026-11-05T00:00:00.000Z')
+  })
+
+  it('reads each calendar in its own definition of a time zone, though another named its zone the same', () => {
+    const custom = (offset: string, hour: string): string => `BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VTIMEZONE
+TZID:Customized Time Zone
+BEGIN:STANDARD
+DTSTART:16010101T000000
+TZOFFSETFROM:${offset}
+TZOFFSETTO:${offset}
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:custom-${hour}@test
+DTSTAMP:20261101T000000Z
+DTSTART;TZID=Customized Time Zone:20261105T${hour}0000
+DTEND;TZID=Customized Time Zone:20261105T${hour}3000
+SUMMARY:Riunione
+END:VEVENT
+END:VCALENDAR`
+
+    expect(occurrencesOf(custom('+0100', '10'), range)[0].start).toBe('2026-11-05T09:00:00.000Z')
+    expect(occurrencesOf(custom('-0500', '10'), range)[0].start).toBe('2026-11-05T15:00:00.000Z')
+  })
+
+  it('ends an all-day event at the midnight after its day, on the day the clocks go forward too', () => {
+    const text = `BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:primavera@test
+DTSTAMP:20261101T000000Z
+DTSTART;VALUE=DATE:20270328
+SUMMARY:Domenica dell'ora legale
+END:VEVENT
+END:VCALENDAR`
+    const [day] = occurrencesOf(text, { from: Date.UTC(2027, 2, 1), to: Date.UTC(2027, 3, 1) })
+
+    expect([day.start, day.end]).toEqual(['2027-03-28', '2027-03-29'])
+    expect([day.startsAt, day.endsAt]).toEqual([
+      new Date(2027, 2, 28).getTime(),
+      new Date(2027, 2, 29).getTime()
+    ])
+  })
+})
+
+describe('canonicalUid', () => {
+  it('leaves a UID that is no Exchange Global Object ID as it is', () => {
+    expect(canonicalUid(' abc123@google.com ')).toBe('abc123@google.com')
+    expect(canonicalUid('040000008200E00074C5B7101A82E008')).toBe(
+      '040000008200E00074C5B7101A82E008'
+    )
+  })
+
+  it('writes Exchange’s own as Exchange does in an invitation: upper case, without the instance’s date', () => {
+    expect(
+      canonicalUid(
+        '040000008200e00074c5b7101a82e00807ea0b175025d461e473c801000000000000000010000000c8d3a9e2d1a84b4db0c2f7a6f2d4c1b3'
+      )
+    ).toBe(
+      '040000008200E00074C5B7101A82E008000000005025D461E473C801000000000000000010000000C8D3A9E2D1A84B4DB0C2F7A6F2D4C1B3'
+    )
   })
 })
 

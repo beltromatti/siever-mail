@@ -23,16 +23,18 @@ import type {
   FetchedMessageSummary,
   MailFolder,
   MailMessageSummary,
-  MessageRef
+  MessageRef,
+  MessagesActionResult
 } from '@shared/models'
 import { folderForRole, folderRoleLabel, type FolderRole } from '@shared/folders'
 import { deriveSenderKey, deriveSenderName } from '@shared/sender'
 
-import type { AppDatabase, FolderSyncState } from '../database'
+import type { AppDatabase, FolderSyncState, LeftOutMessages } from '../database'
 import type { MailTokens } from '../mail-tokens'
 
+import { keptRefs, planArchive } from './archive-plan'
 import {
-  fetchedIdentity,
+  fetchedIdentityClaim,
   formatSubject,
   hasAttachmentInStructure,
   internalDateToIso,
@@ -41,7 +43,16 @@ import {
   mergeSummaryAndParsedIntoDetail
 } from './message-mapper'
 import { collectFetchResults, formatUidSet } from './fetch-results'
+import { expungeOnly, moveOnServer } from './server-moves'
 import { MailIndexer, type IndexProgress } from './mail-indexer'
+import {
+  failedAgain,
+  fetchSettingApart,
+  isGivenUp,
+  UNREADABLE_ATTEMPTS,
+  type FetchedGroup,
+  type UnreadableMessage
+} from './unreadable-messages'
 import { extractPreview } from './preview'
 import { intersectUids, SERVER_SEARCH_MATCH_LIMIT } from './server-search'
 import { attachmentFileName, parseMessageSource } from './message-parts'
@@ -111,6 +122,13 @@ const RECENT_INBOX_BODIES = 25
 const BACKGROUND_FOLDER_POLL_INTERVAL_MS = 45_000
 /** How long the primary queue stays empty before IDLE goes back to its folder. */
 const IDLE_RETURN_DELAY_MS = 2_000
+/**
+ * How long the primary connection stays quiet before it idles again. The
+ * commands of one operation run under its mailbox lock, which holds IDLE
+ * off; this only spaces the operations of a burst — the reads of a list
+ * arrowed through — so each does not wait on a DONE.
+ */
+const PRIMARY_IDLE_DELAY_MS = 1_000
 /** How stale a folder found unchanged may be marked before it is marked current again. */
 const FOLDER_CURRENT_MARK_MS = 5 * 60_000
 const ACTIVE_FOLDER_POLL_INTERVAL_MS = 20_000
@@ -179,6 +197,43 @@ interface FolderSyncPlan {
   isBootstrap: boolean
   newUids: number[]
   needsReconciliation: boolean
+  /** A batch of this sync failed: what it held is missing (see `writeFolderSyncState`). */
+  incomplete: boolean
+  /** This sync fetches what a reconciliation found missing: it does not go looking again. */
+  recovering: boolean
+  /** What this sync asked for and the server would not give: not asked for again in it. */
+  unread: Set<number>
+}
+
+/**
+ * What the server has of a folder that its cache leaves out for now (see
+ * `LeftOutMessages`): what this app deleted there and waits for an
+ * expunge, and what the server would not give, given up.
+ */
+function leftOutNow(leftOut: LeftOutMessages, now: number): Set<number> {
+  return new Set([
+    ...leftOut.deleted,
+    ...leftOut.unreadable.filter((record) => isGivenUp(record, now)).map((record) => record.uid)
+  ])
+}
+
+/** The highest of `uids` and `floor`, however many: spread into `Math.max`, a big folder overflowed the stack. */
+function highestUid(uids: Iterable<number>, floor: number): number {
+  let highest = floor
+
+  for (const uid of uids) {
+    if (uid > highest) {
+      highest = uid
+    }
+  }
+
+  return highest
+}
+
+/** A command the server answered NO or BAD, rather than a link that broke or a throttle. */
+function serverRefused(error: unknown): boolean {
+  const { responseStatus, code } = (error ?? {}) as { responseStatus?: string; code?: string }
+  return (responseStatus === 'NO' || responseStatus === 'BAD') && code !== 'ETHROTTLE'
 }
 
 export type AccountConnectionSnapshot = Omit<AccountConnectionState, 'accountId'>
@@ -227,6 +282,23 @@ const IDENTITY_FETCH_QUERY = {
   emailId: true,
   headers: ['references']
 } as const satisfies FetchQueryObject
+
+/**
+ * What the list's fetch asks of each message: who it is, its envelope and
+ * what its row shows — and the start of its source, for its preview, when
+ * `previews` (see `fetchSummariesForUids`).
+ */
+function summaryFetchQuery(previews: boolean): FetchQueryObject {
+  return {
+    ...IDENTITY_FETCH_QUERY,
+    envelope: true,
+    flags: true,
+    internalDate: true,
+    size: true,
+    bodyStructure: true,
+    ...(previews ? { source: { start: 0, maxLength: PREVIEW_SOURCE_MAX_BYTES } } : {})
+  }
+}
 
 /** A message as the server stores it, with a parsed view of it. */
 export interface RawMessage {
@@ -293,48 +365,6 @@ function chunk<T>(items: ReadonlyArray<T>, size: number): T[][] {
   return chunks
 }
 
-/**
- * Moves messages of the selected mailbox, and throws when the server did
- * not. imapflow reports a refused MOVE (a folder that does not exist, a
- * full quota) as `false` instead of an error, which let messages vanish
- * here while they stayed where they were. And on a server without MOVE its
- * own copy-then-delete deletes the originals even when the copy was
- * refused, so that path is spelled out here, in order, checking each step.
- *
- * Resolves with what a server with UIDPLUS says about the destination: its
- * UIDVALIDITY and the UID each message has there.
- */
-async function moveOnServer(
-  client: ImapFlow,
-  uids: number[],
-  destination: string
-): Promise<CopyResponseObject> {
-  const range = formatUidSet(uids)
-
-  if (client.capabilities.has('MOVE')) {
-    const moved = await client.messageMove(range, destination, { uid: true })
-
-    if (!moved) {
-      throw new Error(`Il server non ha spostato i messaggi in «${destination}».`)
-    }
-    return moved
-  }
-
-  const copied = await client.messageCopy(range, destination, { uid: true })
-
-  if (!copied) {
-    throw new Error(`Il server non ha copiato i messaggi in «${destination}».`)
-  }
-
-  if (!(await client.messageDelete(range, { uid: true }))) {
-    throw new Error(
-      `I messaggi sono stati copiati in «${destination}» ma il server non li ha rimossi dalla cartella di origine.`
-    )
-  }
-
-  return copied
-}
-
 export class AccountConnection extends EventEmitter {
   // Two dedicated IMAP connections per account, matching Gmail/Outlook desktop
   // clients:
@@ -353,6 +383,8 @@ export class AccountConnection extends EventEmitter {
   private syncClient: ImapFlow | null = null
   private running = false
   private shuttingDown = false
+  /** The computer is asleep: the links are closed, and none is opened until it wakes. */
+  private suspended = false
   private backoffMs = RECONNECT_BACKOFF_INITIAL_MS
   private folderPollInterval: NodeJS.Timeout | null = null
   private connectionLoopPromise: Promise<void> | null = null
@@ -378,7 +410,9 @@ export class AccountConnection extends EventEmitter {
    * The UIDs taken out of each folder this session — moved, deleted, a
    * draft superseded or sent. A sync that read one off the server just
    * before it went would otherwise put it back in the list after it left;
-   * a UID is never given again under the same UIDVALIDITY.
+   * a UID is never given again under the same UIDVALIDITY. One still on
+   * the server, flagged \Deleted for an expunge, is remembered across
+   * sessions too (see `withOwnDeletions`).
    */
   private readonly removedUids = new Map<string, Set<number>>()
   // A server search waiting its turn (see `searchMessages`).
@@ -407,7 +441,7 @@ export class AccountConnection extends EventEmitter {
       database,
       isConnected: () => this.status === 'connected',
       openClient: async () => {
-        const client = this.buildClient(await resolveImapAuth(this.account, this.tokens))
+        const client = this.buildClient(await resolveImapAuth(this.account, this.tokens), 'index')
         await client.connect()
         return client
       },
@@ -475,6 +509,37 @@ export class AccountConnection extends EventEmitter {
     if (this.primaryClient && this.syncClient) {
       void this.verifyConnection()
     }
+  }
+
+  /**
+   * The computer is going to sleep: the links are closed now, without a
+   * word to the server. Left open they die with the network, and after the
+   * wake the first thing asked of them waits out a timeout before anyone
+   * knows. Nothing reconnects until `resume`.
+   */
+  suspend(): void {
+    if (!this.running || this.suspended) {
+      return
+    }
+
+    this.suspended = true
+    this.indexer.dropConnection()
+    // A loop waiting to retry waits for the wake instead.
+    this.wakeRetry?.()
+    // Closing them resolves the loop's close watcher, which tears both down.
+    this.primaryClient?.close()
+    this.syncClient?.close()
+  }
+
+  /** The computer woke up: the account connects again at once, and catches up on every folder. */
+  resume(): void {
+    if (!this.suspended) {
+      return
+    }
+
+    this.suspended = false
+    this.backoffMs = RECONNECT_BACKOFF_INITIAL_MS
+    this.wakeRetry?.()
   }
 
   /**
@@ -1083,37 +1148,40 @@ export class AccountConnection extends EventEmitter {
   /**
    * Moves messages of one folder to another of the account, in one command.
    * They show in the destination at once, under the UIDs the server gave
-   * them there, with whatever of them was already downloaded.
+   * them there, with whatever of them was already downloaded. Resolves with
+   * those UIDs, by the UID each had here, where the server told them.
    */
   async moveMessages(
     folderPath: string,
     uids: number[],
     destinationFolderPath: string,
     options: { markAsSeenBeforeMove?: boolean } = {}
-  ): Promise<void> {
+  ): Promise<ReadonlyMap<number, number>> {
     if (destinationFolderPath === folderPath) {
-      return
+      return new Map()
     }
 
-    await this.runUserOperation(async () => {
+    return this.runUserOperation(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(folderPath)
       const uidMap = new Map<number, number>()
       let destinationUidValidity: bigint | undefined
 
       try {
-        for (const part of chunk(uids, UID_COMMAND_CHUNK)) {
-          if (options.markAsSeenBeforeMove) {
-            await client.messageFlagsAdd(formatUidSet(part), ['\\Seen'], { uid: true })
-            await this.database.setMessagesFlag(this.account.id, folderPath, part, '\\Seen', true)
-          }
+        await this.withOwnDeletions(folderPath, async (ours) => {
+          for (const part of chunk(uids, UID_COMMAND_CHUNK)) {
+            if (options.markAsSeenBeforeMove) {
+              await client.messageFlagsAdd(formatUidSet(part), ['\\Seen'], { uid: true })
+              await this.database.setMessagesFlag(this.account.id, folderPath, part, '\\Seen', true)
+            }
 
-          const moved = await moveOnServer(client, part, destinationFolderPath)
-          destinationUidValidity = moved.uidValidity
-          moved.uidMap?.forEach((destinationUid, sourceUid) =>
-            uidMap.set(sourceUid, destinationUid)
-          )
-        }
+            const moved = await moveOnServer(client, part, destinationFolderPath, ours)
+            destinationUidValidity = moved.uidValidity
+            moved.uidMap?.forEach((destinationUid, sourceUid) =>
+              uidMap.set(sourceUid, destinationUid)
+            )
+          }
+        })
       } finally {
         lock.release()
       }
@@ -1151,6 +1219,7 @@ export class AccountConnection extends EventEmitter {
 
       this.incrementalSyncFolder(folderPath, 'background')
       this.incrementalSyncFolder(destinationFolderPath, 'background')
+      return uidMap
     }, `move:${folderPath}:${uids.length}`)
   }
 
@@ -1172,6 +1241,34 @@ export class AccountConnection extends EventEmitter {
       removedUids: uids,
       bootstrap: false
     })
+  }
+
+  /**
+   * Runs a move or a deletion on the server in `folderPath` with what this
+   * app flagged \Deleted there and left waiting for an expunge
+   * (`LeftOutMessages`) as its own, so it is not taken for another
+   * program's (see `expungeOnly`); what the operation leaves so in turn is
+   * remembered, across restarts: a sync does not bring it back, nor does
+   * the next deletion there refuse to expunge for it.
+   */
+  private async withOwnDeletions<T>(
+    folderPath: string,
+    remove: (ours: Set<number>) => Promise<T>
+  ): Promise<T> {
+    const known = new Set(
+      (await this.database.listLeftOutMessages(this.account.id, folderPath)).deleted
+    )
+    const ours = new Set(known)
+
+    try {
+      return await remove(ours)
+    } finally {
+      const left = [...ours].filter((uid) => !known.has(uid))
+
+      if (left.length > 0) {
+        await this.database.addDeletedUids(this.account.id, folderPath, left)
+      }
+    }
   }
 
   /**
@@ -1205,7 +1302,7 @@ export class AccountConnection extends EventEmitter {
 
         try {
           const found = await client.search({ header: { 'message-id': messageId } }, { uid: true })
-          uid = Array.isArray(found) && found.length > 0 ? Math.max(...found) : null
+          uid = Array.isArray(found) && found.length > 0 ? highestUid(found, 0) : null
         } finally {
           lock.release()
         }
@@ -1234,6 +1331,11 @@ export class AccountConnection extends EventEmitter {
    * Deletes `uids` of `folderPath` for good. Gmail keeps in "Tutti i
    * messaggi" what is expunged from any other folder, so there they go to
    * the Trash first and are expunged from it, as Gmail's own deletion does.
+   * Where the server could not expunge them alone (see `expungeOnly`) they
+   * stay flagged as deleted, for the next expunge of the folder: they are
+   * gone as far as this app is concerned — remembered as its own
+   * (`withOwnDeletions`) — and a superseded draft is not filed again for
+   * it, now or after a restart.
    */
   private async purgeOnServer(client: ImapFlow, folderPath: string, uids: number[]): Promise<void> {
     const trash = folderForRole(await this.database.listFolders(this.account.id), '\\Trash')
@@ -1244,7 +1346,9 @@ export class AccountConnection extends EventEmitter {
       let moved: CopyResponseObject
 
       try {
-        moved = await moveOnServer(client, uids, trash.path)
+        moved = await this.withOwnDeletions(folderPath, (ours) =>
+          moveOnServer(client, uids, trash.path, ours)
+        )
       } finally {
         lock.release()
       }
@@ -1264,9 +1368,9 @@ export class AccountConnection extends EventEmitter {
     const lock = await client.getMailboxLock(target.folderPath)
 
     try {
-      if (!(await client.messageDelete(formatUidSet(target.uids), { uid: true }))) {
-        throw new Error('Il server non ha eliminato la versione precedente della bozza.')
-      }
+      await this.withOwnDeletions(target.folderPath, (ours) =>
+        expungeOnly(client, target.uids, ours)
+      )
     } finally {
       lock.release()
     }
@@ -1320,7 +1424,9 @@ export class AccountConnection extends EventEmitter {
 
     for (const row of await this.database.listMessageRowsByKey(this.account.id, keys)) {
       if (row.folderPath !== trashPath) {
-        copies.set(row.folderPath, [...(copies.get(row.folderPath) ?? []), row.uid])
+        const labelUids = copies.get(row.folderPath) ?? []
+        labelUids.push(row.uid)
+        copies.set(row.folderPath, labelUids)
       }
     }
 
@@ -1347,19 +1453,36 @@ export class AccountConnection extends EventEmitter {
     await this.runUserOperation(async () => {
       const client = this.requirePrimary()
       const lock = await client.getMailboxLock(folderPath)
+      const kept: number[] = []
 
       try {
-        for (const part of chunk(uids, UID_COMMAND_CHUNK)) {
-          if (!(await client.messageDelete(formatUidSet(part), { uid: true }))) {
-            throw new Error('Il server non ha eliminato i messaggi.')
+        // Those left flagged are this app's own from now on: deleted again,
+        // or another message deleted there, they are not another program's.
+        await this.withOwnDeletions(folderPath, async (ours) => {
+          for (const part of chunk(uids, UID_COMMAND_CHUNK)) {
+            if (!(await expungeOnly(client, part, ours))) {
+              kept.push(...part)
+            }
           }
-        }
+        })
       } finally {
         lock.release()
       }
 
-      await this.forgetMessages(folderPath, uids)
+      const keptSet = new Set(kept)
+      const deleted = uids.filter((uid) => !keptSet.has(uid))
+
+      if (deleted.length > 0) {
+        await this.forgetMessages(folderPath, deleted)
+      }
+
       this.incrementalSyncFolder(folderPath, 'background')
+
+      if (kept.length > 0) {
+        throw new Error(
+          'Segnati come eliminati: il server li toglierà quando la cartella verrà ripulita. Un altro programma vi ha segnato come eliminati anche altri messaggi, che SIEVER Mail non elimina al suo posto.'
+        )
+      }
     }, `delete:${folderPath}:${uids.length}`)
 
     return { sourceFolder: folderPath }
@@ -1367,15 +1490,16 @@ export class AccountConnection extends EventEmitter {
 
   /**
    * Moves messages to the account's folder for a role — what dropping them
-   * on a folder of "Tutti gli account" does: each account's own Spam, its own
-   * Archivio (created where there is none, as archiving creates it).
-   * Messages already there stay.
+   * on a folder of "Tutti gli account" does: each account's own Spam, its
+   * own Cestino. Messages already there stay. Dropped on Archivio they are
+   * archived instead (see `archive`).
    */
-  async moveMessagesToRole(folderPath: string, uids: number[], role: FolderRole): Promise<void> {
-    const target =
-      role === '\\Archive'
-        ? await this.resolveArchiveFolder()
-        : folderForRole(await this.database.listFolders(this.account.id), role)
+  async moveMessagesToRole(
+    folderPath: string,
+    uids: number[],
+    role: Exclude<FolderRole, '\\Archive'>
+  ): Promise<void> {
+    const target = folderForRole(await this.database.listFolders(this.account.id), role)
 
     if (!target) {
       throw new Error(`${this.account.email} non ha una cartella «${folderRoleLabel(role)}».`)
@@ -1386,18 +1510,97 @@ export class AccountConnection extends EventEmitter {
     }
   }
 
-  async archiveMessages(
-    folderPath: string,
-    uids: number[]
-  ): Promise<{ sourceFolder: string; destinationFolder: string }> {
-    const archiveFolder = await this.resolveArchiveFolder()
+  /**
+   * Archives messages of the account as its provider means it, by what
+   * each message is rather than the row it was picked from (see
+   * `planArchive`): on Gmail they leave the inbox — their labels stay —
+   * and one in the Trash or Spam goes back to the inbox, Gmail's own way
+   * out of either, and from there to "Tutti i messaggi"; elsewhere they go
+   * to the archive folder, created the first time. A message archived
+   * already is left where it is, and is no failure. Resolves with the refs
+   * given that could not be archived, and why, and those left where they
+   * were.
+   */
+  async archive(
+    refs: ReadonlyArray<MessageRef>
+  ): Promise<MessagesActionResult & { stayed: MessageRef[]; kept: MessageRef[] }> {
+    const identities = await this.database.messageIdentities(refs)
+    const plan = planArchive({
+      folders: await this.database.listFolders(this.account.id),
+      refs,
+      identities,
+      rows: await this.database.listMessageRowsByKey(
+        this.account.id,
+        identities.map((identity) => identity.messageKey)
+      )
+    })
+    const failed = [...plan.unknown]
+    let error =
+      plan.unknown.length > 0
+        ? 'Il messaggio non è più in questa cartella: è stato spostato o eliminato altrove.'
+        : undefined
 
-    if (archiveFolder.path === folderPath) {
-      throw new Error("I messaggi sono già nell'archivio.")
+    if (plan.pending.length === 0) {
+      return { failed, error, stayed: plan.stayed, kept: keptRefs(plan, failed) }
     }
 
-    await this.moveMessages(folderPath, uids, archiveFolder.path)
-    return { sourceFolder: folderPath, destinationFolder: archiveFolder.path }
+    // Where each folder's rows went, or why they did not.
+    const outcomes = new Map<string, string | null>()
+    const reason = (cause: unknown): string =>
+      cause instanceof Error && cause.message.trim() ? cause.message : String(cause)
+
+    try {
+      const archive = await this.resolveArchiveFolder()
+      const inbox = folderForRole(await this.database.listFolders(this.account.id), '\\Inbox')
+
+      await Promise.all([
+        ...[...plan.moves].map(async ([folderPath, uids]) => {
+          try {
+            await this.moveMessages(folderPath, uids, archive.path)
+            outcomes.set(folderPath, null)
+          } catch (cause) {
+            outcomes.set(folderPath, reason(cause))
+          }
+        }),
+        ...[...plan.restores].map(async ([folderPath, uids]) => {
+          try {
+            if (!inbox) {
+              throw new Error(`${this.account.email} non ha una Posta in arrivo.`)
+            }
+
+            const restored = await this.moveMessages(folderPath, uids, inbox.path)
+            const inInbox = uids.flatMap((uid) => restored.get(uid) ?? [])
+
+            if (inInbox.length < uids.length) {
+              throw new Error(
+                'Il messaggio è tornato nella Posta in arrivo, ma il server non ha detto dove: archivialo da lì.'
+              )
+            }
+
+            await this.moveMessages(inbox.path, inInbox, archive.path)
+            outcomes.set(folderPath, null)
+          } catch (cause) {
+            outcomes.set(folderPath, reason(cause))
+          }
+        })
+      ])
+    } catch (cause) {
+      // No archive folder to move them to.
+      for (const folderPath of [...plan.moves.keys(), ...plan.restores.keys()]) {
+        outcomes.set(folderPath, reason(cause))
+      }
+    }
+
+    for (const { ref, folders } of plan.pending) {
+      const refused = folders.map((folderPath) => outcomes.get(folderPath)).find(Boolean)
+
+      if (refused) {
+        failed.push(ref)
+        error ??= refused
+      }
+    }
+
+    return { failed, error, stayed: plan.stayed, kept: keptRefs(plan, failed) }
   }
 
   /**
@@ -1815,6 +2018,11 @@ export class AccountConnection extends EventEmitter {
 
   private async runConnectionLoop(): Promise<void> {
     while (this.running) {
+      if (this.suspended) {
+        await this.waitBeforeRetry(null)
+        continue
+      }
+
       if (!net.isOnline()) {
         this.setStatus('offline')
         await this.waitBeforeRetry(OFFLINE_RECHECK_MS)
@@ -1839,8 +2047,8 @@ export class AccountConnection extends EventEmitter {
         // means we don't burn two token refreshes on every reconnect.
         const auth = await resolveImapAuth(this.account, this.tokens)
 
-        primary = this.buildClient(auth)
-        sync = this.buildClient(auth)
+        primary = this.buildClient(auth, 'primary')
+        sync = this.buildClient(auth, 'sync')
         this.primaryClient = primary
         this.syncClient = sync
 
@@ -1927,8 +2135,9 @@ export class AccountConnection extends EventEmitter {
       }
 
       // Offline, the top of the loop does the waiting — and retries the
-      // moment the network is back instead of after a grown backoff.
-      if (this.running && net.isOnline()) {
+      // moment the network is back instead of after a grown backoff; asleep,
+      // it waits for the wake.
+      if (this.running && !this.suspended && net.isOnline()) {
         await this.waitBeforeRetry(this.nextBackoffDelay())
       }
     }
@@ -1936,7 +2145,20 @@ export class AccountConnection extends EventEmitter {
     this.setStatus('disconnected')
   }
 
-  private buildClient(auth: Awaited<ReturnType<typeof resolveImapAuth>>): ImapFlow {
+  /**
+   * A connection to the account's server. IDLE is the primary's alone: it
+   * is how new mail is heard, and it goes back to listening a moment after
+   * the last command (`PRIMARY_IDLE_DELAY_MS`) rather than after imapflow's
+   * 15 seconds, deaf to new mail after every click. The others never
+   * idle: news of the folder each has open is news nobody listens to there,
+   * and every command after a pause would wait on a DONE first. The sync
+   * connection talks at every poll, well within the socket timeout; the
+   * indexer's closes when it rests (see `MailIndexer`).
+   */
+  private buildClient(
+    auth: Awaited<ReturnType<typeof resolveImapAuth>>,
+    role: 'primary' | 'sync' | 'index'
+  ): ImapFlow {
     return new ImapFlow({
       host: this.account.imapHost,
       port: this.account.imapPort,
@@ -1945,10 +2167,15 @@ export class AccountConnection extends EventEmitter {
       connectionTimeout: IMAP_CONNECTION_TIMEOUT_MS,
       greetingTimeout: IMAP_GREETING_TIMEOUT_MS,
       socketTimeout: IMAP_SOCKET_TIMEOUT_MS,
-      disableAutoIdle: false,
-      maxIdleTime: IMAP_MAX_IDLE_TIME_MS,
+      ...(role === 'primary'
+        ? {
+            disableAutoIdle: false,
+            autoIdleDelay: PRIMARY_IDLE_DELAY_MS,
+            maxIdleTime: IMAP_MAX_IDLE_TIME_MS,
+            missingIdleCommand: 'STATUS' as const
+          }
+        : { disableAutoIdle: true }),
       qresync: true,
-      missingIdleCommand: 'STATUS',
       logger: false
     })
   }
@@ -1998,10 +2225,10 @@ export class AccountConnection extends EventEmitter {
     return delay
   }
 
-  /** A pause `nudge` and `stop` can cut short. */
-  private waitBeforeRetry(delayMs: number): Promise<void> {
+  /** A pause `nudge`, `resume` and `stop` can cut short; without a delay, only they end it. */
+  private waitBeforeRetry(delayMs: number | null): Promise<void> {
     return new Promise<void>((resolve) => {
-      const timer = setTimeout(wake, delayMs)
+      const timer = delayMs === null ? undefined : setTimeout(wake, delayMs)
 
       function wake(): void {
         clearTimeout(timer)
@@ -2260,6 +2487,13 @@ export class AccountConnection extends EventEmitter {
     const ordered = [...mailboxes].sort(
       (left, right) => Number(!isInboxPath(left.path)) - Number(!isInboxPath(right.path))
     )
+    // On connecting, what the cache holds of each folder too: one left short
+    // by an earlier sync, marked read with messages missing, is read again
+    // rather than taken for current. What it leaves out on purpose is not
+    // missing; a message the server would not give, while it is still
+    // tried or due again, has its folder read again.
+    const cached = connecting ? await this.database.countMessagesByFolder(this.account.id) : null
+    const leftOut = await this.database.summarizeLeftOutMessages(this.account.id, Date.now())
 
     for (const mailbox of ordered) {
       const status = mailbox.status
@@ -2272,8 +2506,15 @@ export class AccountConnection extends EventEmitter {
       }
 
       const state = await this.database.getFolderSyncState(this.account.id, mailbox.path)
+      const folderLeftOut = leftOut.get(mailbox.path)
 
-      if (!folder || this.folderChanged(folder, status, state)) {
+      if (
+        !folder ||
+        this.folderChanged(folder, status, state) ||
+        folderLeftOut?.retry ||
+        (cached !== null &&
+          (cached.get(mailbox.path) ?? 0) + (folderLeftOut?.uncached ?? 0) !== status.messages)
+      ) {
         this.incrementalSyncFolder(
           mailbox.path,
           this.isInSight(mailbox.path) ? 'active-sync' : 'background'
@@ -2467,12 +2708,11 @@ export class AccountConnection extends EventEmitter {
           : `incremental-batch:${folderPath}:${index + 1}`
 
         this.enqueueSyncCommand(
-          async () => {
-            await this.processSyncBatch(folderPath, batch, {
+          () =>
+            this.runPlannedBatch(plan, folderPath, batch, {
               previews: !plan.isBootstrap,
               arrivals: !plan.isBootstrap
-            })
-          },
+            }),
           label,
           index === 0 ? priority : bulkPriority
         )
@@ -2576,7 +2816,10 @@ export class AccountConnection extends EventEmitter {
           previousLastKnownUid,
           isBootstrap,
           newUids: [],
-          needsReconciliation: false
+          needsReconciliation: false,
+          incomplete: false,
+          recovering: false,
+          unread: new Set()
         }
       }
 
@@ -2593,6 +2836,10 @@ export class AccountConnection extends EventEmitter {
 
       const localUids = await this.database.listAllMessageUids(this.account.id, folderPath)
       const localSet = new Set(localUids)
+      const leftOut = leftOutNow(
+        await this.database.listLeftOutMessages(this.account.id, folderPath),
+        Date.now()
+      )
 
       // On bootstrap we ask the server for the full UID set (1:*) — we might
       // be resuming an interrupted bootstrap, in which case the DB already has
@@ -2604,24 +2851,26 @@ export class AccountConnection extends EventEmitter {
       // The localSet filter makes bootstrap idempotent: killing the app
       // mid-sync and reopening does not redownload the rows that were already
       // persisted — it picks up exactly where it left off.
-      let newUids: number[]
-      if (isBootstrap) {
-        const allServerUids = await client.search({ uid: '1:*' }, { uid: true })
-        newUids = Array.isArray(allServerUids)
-          ? allServerUids.filter((uid) => !localSet.has(uid))
-          : []
-      } else {
-        const searchRange = `${previousLastKnownUid + 1}:*`
-        const serverUidsForWindow = await client.search({ uid: searchRange }, { uid: true })
-        newUids = Array.isArray(serverUidsForWindow)
-          ? serverUidsForWindow.filter((uid) => uid > previousLastKnownUid && !localSet.has(uid))
-          : []
+      // A search the server refused says nothing: taken for "no new
+      // messages", the folder would have been marked read without them.
+      const serverUids = await client.search(
+        { uid: isBootstrap ? '1:*' : `${previousLastKnownUid + 1}:*` },
+        { uid: true }
+      )
+
+      if (!Array.isArray(serverUids)) {
+        throw new Error(`Il server non ha elencato i messaggi di «${folderPath}».`)
       }
 
+      const newUids = serverUids.filter(
+        (uid) => uid > previousLastKnownUid && !localSet.has(uid) && !leftOut.has(uid)
+      )
+      const uncached = [...leftOut].filter((uid) => !localSet.has(uid)).length
+
       // Detect VANISHED/expunge drift cheaply: if local count + truly new UIDs
-      // still doesn't match server EXISTS, the finalize pass will do a full
-      // reconciliation.
-      const needsReconciliation = localUids.length + newUids.length !== exists
+      // + what the cache leaves out still doesn't match server EXISTS, the
+      // finalize pass will do a full reconciliation.
+      const needsReconciliation = localUids.length + uncached + newUids.length !== exists
 
       return {
         uidValidity: serverUidValidity,
@@ -2631,10 +2880,35 @@ export class AccountConnection extends EventEmitter {
         previousLastKnownUid,
         isBootstrap,
         newUids,
-        needsReconciliation
+        needsReconciliation,
+        incomplete: false,
+        recovering: false,
+        unread: new Set()
       }
     } finally {
       lock.release()
+    }
+  }
+
+  /**
+   * A batch of a sync plan (see `processSyncBatch`). One that fails leaves
+   * the plan incomplete: its messages are missing, and the folder is not
+   * marked read until a sync brings them. What the server would not give
+   * is kept with the plan, not to be asked for again in it.
+   */
+  private async runPlannedBatch(
+    plan: FolderSyncPlan,
+    folderPath: string,
+    batch: number[],
+    options: { previews: boolean; arrivals: boolean }
+  ): Promise<void> {
+    try {
+      for (const uid of await this.processSyncBatch(folderPath, batch, options)) {
+        plan.unread.add(uid)
+      }
+    } catch (error) {
+      plan.incomplete = true
+      throw error
     }
   }
 
@@ -2645,60 +2919,148 @@ export class AccountConnection extends EventEmitter {
    *   • as new arrivals, which notifications announce, or as mail that was
    *     already there: the first sync of a folder, and messages the server
    *     has but the cache lost (see `reconcileLocalAgainstServer`).
+   * Those the server will not give are set apart (`fetchSettingApart`) and
+   * recorded (`recordUnreadable`); it resolves with them. Throws when the
+   * batch could not be fetched — after storing what came, when the search
+   * for what the server refused stopped short of some of it.
    */
   private async processSyncBatch(
     folderPath: string,
     batch: number[],
     { previews, arrivals }: { previews: boolean; arrivals: boolean }
-  ): Promise<void> {
-    if (!this.syncClient?.usable) {
-      return
-    }
-
-    const client = this.syncClient
+  ): Promise<number[]> {
+    const client = this.requireSync()
     const lock = await client.getMailboxLock(folderPath)
 
     try {
-      const summaries = await this.fetchSummariesForUids(folderPath, batch, {
-        includeBody: previews
+      const { unreadable } = await this.database.listLeftOutMessages(this.account.id, folderPath)
+      const fetched = await fetchSettingApart(batch, {
+        suspects: new Set(unreadable.map((record) => record.uid)),
+        fetch: (uids) => this.fetchSummariesForUids(folderPath, uids, { includeBody: previews }),
+        refused: serverRefused,
+        serving: (uids) => this.servesFolder(folderPath, uids, previews)
       })
-      if (summaries.length === 0) {
-        return
-      }
-
-      const result = await this.database.upsertMessageSummaries(
-        this.account.id,
-        folderPath,
-        summaries
-      )
+      const summaries = fetched.items
       // Read before they left the folder, written after: they stay out.
       const removed = this.removedUids.get(folderPath)
       const stays = (message: { uid: number }): boolean => !removed?.has(message.uid)
-      const gone = summaries.filter((summary) => !stays(summary)).map((summary) => summary.uid)
+      // Taken out on purpose, a message the server no longer gives is not unreadable.
+      const unread = fetched.unread.filter((uid) => !removed?.has(uid))
 
-      if (gone.length > 0) {
-        await this.database.deleteMessageUids(this.account.id, folderPath, gone)
-      }
-
-      const added = result.added.filter(stays)
-
-      if (result.added.length > 0) {
-        this.indexer.poke()
-      }
-      const updated = result.updated.filter(stays)
-
-      if (added.length > 0 || updated.length > 0) {
-        this.emit('messages', {
-          accountId: this.account.id,
+      if (summaries.length > 0) {
+        const result = await this.database.upsertMessageSummaries(
+          this.account.id,
           folderPath,
-          added,
-          updated,
-          removedUids: [],
-          bootstrap: !arrivals
-        })
+          summaries
+        )
+        const gone = summaries.filter((summary) => !stays(summary)).map((summary) => summary.uid)
+
+        if (gone.length > 0) {
+          await this.database.deleteMessageUids(this.account.id, folderPath, gone)
+        }
+
+        const added = result.added.filter(stays)
+
+        if (result.added.length > 0) {
+          this.indexer.poke()
+        }
+        const updated = result.updated.filter(stays)
+
+        if (added.length > 0 || updated.length > 0) {
+          this.emit('messages', {
+            accountId: this.account.id,
+            folderPath,
+            added,
+            updated,
+            removedUids: [],
+            bootstrap: !arrivals
+          })
+        }
       }
+
+      await this.recordUnreadable(
+        folderPath,
+        unreadable,
+        unread,
+        summaries.map((summary) => summary.uid)
+      )
+
+      if (fetched.unresolved.length > 0) {
+        throw new Error(
+          `Il server ha rifiutato ${fetched.unresolved.length} messaggi di «${folderPath}»: verranno chiesti di nuovo.`
+        )
+      }
+
+      return unread
     } finally {
       lock.release()
+    }
+  }
+
+  /**
+   * Whether the server serves a folder's messages now, asked when it
+   * refused a batch of them (see `fetchSettingApart`): the newest message
+   * the cache holds of it, asked for as the batch was — or, of a folder
+   * the cache holds nothing of, the UIDs of those refused alone, which a
+   * server gives whatever their content.
+   */
+  private async servesFolder(
+    folderPath: string,
+    refusedUids: number[],
+    previews: boolean
+  ): Promise<boolean> {
+    const client = this.requireSync()
+    const stored = await this.database.newestStoredUid(this.account.id, folderPath)
+
+    try {
+      if (stored === null) {
+        await client.fetchAll(formatUidSet(refusedUids), { uid: true }, { uid: true })
+      } else {
+        await this.fetchRequested(client, folderPath, [stored], summaryFetchQuery(previews))
+      }
+
+      return true
+    } catch (error) {
+      if (serverRefused(error)) {
+        return false
+      }
+
+      throw error
+    }
+  }
+
+  /**
+   * Records how a batch went for the messages the server would not give
+   * (see `UnreadableMessage`): `unread` fail once more, those `stored`
+   * that had failed before are readable again. A message given up is
+   * logged, once.
+   */
+  private async recordUnreadable(
+    folderPath: string,
+    records: ReadonlyArray<UnreadableMessage>,
+    unread: ReadonlyArray<number>,
+    stored: ReadonlyArray<number>
+  ): Promise<void> {
+    const failed = failedAgain(records, unread, Date.now())
+    const recorded = new Set(records.map((record) => record.uid))
+    const readable = stored.filter((uid) => recorded.has(uid))
+
+    if (failed.length > 0) {
+      await this.database.storeUnreadableMessages(this.account.id, folderPath, failed)
+    }
+
+    if (readable.length > 0) {
+      await this.database.forgetLeftOutMessages(this.account.id, folderPath, readable)
+    }
+
+    const givenUp = failed.filter((record) => record.failures === UNREADABLE_ATTEMPTS)
+
+    if (givenUp.length > 0) {
+      logMainError(
+        'Messages the server would not give are left out of their folder',
+        `UID ${formatUidSet(givenUp.map((record) => record.uid))}`,
+        { accountId: this.account.id, folderPath }
+      )
     }
   }
 
@@ -2818,58 +3180,137 @@ export class AccountConnection extends EventEmitter {
     }
   }
 
+  /**
+   * Marks a folder read as of now — its highest UID, its counts, when —
+   * once the cache holds exactly its messages but those it leaves out on
+   * purpose (`LeftOutMessages`), and only then: a folder marked read is one
+   * whose messages missing everywhere are gone for good, and what the
+   * Segretario closes as deleted rests on that. Not after a batch of the
+   * sync failed: the folder is left as it was, still changed for the next
+   * review, which reads it again. A cache that does not hold what the
+   * server counts is reconciled first; what that finds missing is fetched
+   * before the folder is marked. A message the server would not give in
+   * this sync is not asked for again in it: the folder waits for the next
+   * review, which reads it again, until the message is given up (see
+   * `UnreadableMessage`) — then the folder is marked without it.
+   */
   private async writeFolderSyncState(folderPath: string, plan: FolderSyncPlan): Promise<void> {
-    if (!this.syncClient?.usable) {
+    if (plan.incomplete) {
       return
     }
 
-    const client = this.syncClient
+    const client = this.requireSync()
     const lock = await client.getMailboxLock(folderPath)
 
     try {
-      if (plan.needsReconciliation) {
-        await this.reconcileLocalAgainstServer(folderPath)
+      // What the DB holds now, not what the plan expected: a resumed first
+      // sync had the highest UIDs stored from a session before.
+      const localUids = await this.database.listAllMessageUids(this.account.id, folderPath)
+      const localSet = new Set(localUids)
+      const leftOut = await this.database.listLeftOutMessages(this.account.id, folderPath)
+      const now = Date.now()
+      const keptOut = leftOutNow(leftOut, now)
+      const uncached = [...keptOut].filter((uid) => !localSet.has(uid))
+      let exists = plan.exists
+
+      // A message the server would not give and is still asked for is
+      // looked for on the server too: expunged meanwhile, it is forgotten.
+      if (
+        plan.needsReconciliation ||
+        localUids.length + uncached.length !== plan.exists ||
+        leftOut.unreadable.some((record) => !isGivenUp(record, now))
+      ) {
+        const reconciled = await this.reconcileLocalAgainstServer(folderPath, localUids, keptOut)
+        exists = reconciled.serverCount
+
+        // Left out, and since expunged: nothing to leave out any longer.
+        const expunged = [
+          ...leftOut.deleted,
+          ...leftOut.unreadable.map((record) => record.uid)
+        ].filter((uid) => !reconciled.onServer.has(uid))
+
+        if (expunged.length > 0) {
+          await this.database.forgetLeftOutMessages(this.account.id, folderPath, expunged)
+        }
+
+        if (reconciled.missing.length > 0) {
+          const recoverable = reconciled.missing.filter((uid) => !plan.unread.has(uid))
+
+          if (!plan.recovering && recoverable.length > 0) {
+            this.recoverMissing(folderPath, recoverable, {
+              ...plan,
+              exists,
+              needsReconciliation: false,
+              incomplete: false,
+              recovering: true
+            })
+          }
+
+          return
+        }
       }
 
-      // Compute maxKnownUid from what's actually in the DB now — this covers
-      // the resumed-bootstrap case where the DB already had the highest UID
-      // from a previous session, so plan.newUids (the MISSING set) would
-      // understate the true max. Reading localUids post-batch guarantees the
-      // mark advances past everything we've persisted.
-      const currentLocalUids = await this.database.listAllMessageUids(this.account.id, folderPath)
-      const maxKnownUid =
-        currentLocalUids.length > 0
-          ? Math.max(plan.previousLastKnownUid, ...currentLocalUids)
-          : plan.previousLastKnownUid
       const syncedAt = Date.now()
 
       await this.database.updateFolderSyncState(this.account.id, folderPath, {
         uidValidity: plan.uidValidity,
         highestModseq: plan.highestModseq,
-        lastKnownUid: maxKnownUid,
+        // Past what is left out too: a message given up is not new mail at the next sync.
+        lastKnownUid: highestUid([...localUids, ...uncached], plan.previousLastKnownUid),
         uidNext: plan.uidNext,
         lastSyncedAt: syncedAt
       })
 
       const unseenCount = await countUnseen(client)
 
-      await this.database.updateFolderCounts(this.account.id, folderPath, plan.exists, unseenCount)
+      await this.database.updateFolderCounts(this.account.id, folderPath, exists, unseenCount)
       this.markContact()
 
       this.emit('folder-counts', {
         accountId: this.account.id,
         folderPath,
-        messageCount: plan.exists,
+        messageCount: exists,
         unseenCount,
         lastSyncedAt: syncedAt
       })
     } finally {
       lock.release()
     }
+
+    await this.database.forgetLeftMessageIdKeys(this.account.id)
+  }
+
+  /**
+   * Fetches what a reconciliation found the cache lacks — queued behind it,
+   * like new arrivals, so its lock is released first — and marks the folder
+   * read after them (`writeFolderSyncState`, which will not reconcile again).
+   */
+  private recoverMissing(folderPath: string, missing: number[], plan: FolderSyncPlan): void {
+    chunk(missing, INCREMENTAL_BATCH_SIZE).forEach((batch, index) => {
+      this.enqueueSyncCommand(
+        () => this.runPlannedBatch(plan, folderPath, batch, { previews: true, arrivals: false }),
+        `recovery-batch:${folderPath}:${index + 1}`,
+        'background'
+      )
+    })
+
+    this.enqueueSyncCommand(
+      () => this.writeFolderSyncState(folderPath, plan),
+      `recovery-finalize:${folderPath}`,
+      'background'
+    )
   }
 
   private async applyEmptyFolderState(folderPath: string, plan: FolderSyncPlan): Promise<void> {
     const staleUids = await this.database.listAllMessageUids(this.account.id, folderPath)
+    const leftOut = await this.database.listLeftOutMessages(this.account.id, folderPath)
+
+    // An empty folder has nothing left out of its cache.
+    await this.database.forgetLeftOutMessages(this.account.id, folderPath, [
+      ...leftOut.deleted,
+      ...leftOut.unreadable.map((record) => record.uid)
+    ])
+
     if (staleUids.length > 0) {
       await this.database.deleteMessageUids(this.account.id, folderPath, staleUids)
       this.emit('messages', {
@@ -2898,6 +3339,7 @@ export class AccountConnection extends EventEmitter {
       unseenCount: 0,
       lastSyncedAt: syncedAt
     })
+    await this.database.forgetLeftMessageIdKeys(this.account.id)
   }
 
   private async fetchChangesSinceModseq(folderPath: string, sinceModseq: bigint): Promise<void> {
@@ -2940,11 +3382,15 @@ export class AccountConnection extends EventEmitter {
     }
   }
 
+  /**
+   * The summaries of `uids`, and those the server did not give (see
+   * `FetchedGroup`). Throws when it refuses the FETCH.
+   */
   private async fetchSummariesForUids(
     folderPath: string,
     uids: number[],
     options: { includeBody: boolean }
-  ): Promise<FetchedMessageSummary[]> {
+  ): Promise<FetchedGroup<FetchedMessageSummary>> {
     // Shared fetch request — the only difference between bootstrap and
     // incremental mode is whether we ask IMAP for the first 32 KB of source in
     // the same round-trip. For bootstrap (large batches of thousands of msgs)
@@ -2952,27 +3398,29 @@ export class AccountConnection extends EventEmitter {
     // populates as fast as possible. For incremental (handful of new msgs)
     // we include it and extract the preview right here, so the row lands in
     // the DB with previewHydrated=true and notifications fire with snippet.
-    const fetchedMessages = await this.fetchRequested(this.requireSync(), folderPath, uids, {
-      ...IDENTITY_FETCH_QUERY,
-      envelope: true,
-      flags: true,
-      internalDate: true,
-      size: true,
-      bodyStructure: true,
-      ...(options.includeBody ? { source: { start: 0, maxLength: PREVIEW_SOURCE_MAX_BYTES } } : {})
-    })
+    const fetchedMessages = await this.fetchRequested(
+      this.requireSync(),
+      folderPath,
+      uids,
+      summaryFetchQuery(options.includeBody)
+    )
+    // A message is never stored from less than its envelope: without it
+    // there is no sender, subject or date to show. One that came without
+    // it, or not at all, is not given (see `UnreadableMessage`).
+    const complete = [...fetchedMessages.values()].flatMap((fetched) =>
+      fetched.envelope ? [{ fetched, envelope: fetched.envelope }] : []
+    )
+    const given = new Set(complete.map(({ fetched }) => fetched.uid))
+    // Who each is: settled against what the cache holds (see `settleIdentity`).
+    const identities = await this.database.settleMessageIdentities(
+      this.account.id,
+      folderPath,
+      complete.map(({ fetched }) => fetchedIdentityClaim(fetched))
+    )
     const summaries: FetchedMessageSummary[] = []
 
-    for (const fetched of fetchedMessages.values()) {
-      const envelope = fetched.envelope
-
-      // A message is never stored from less than its envelope: without it
-      // there is no sender, subject or date to show. It is fetched again by
-      // the next sync of the folder.
-      if (!envelope) {
-        continue
-      }
-
+    for (const [index, { fetched, envelope }] of complete.entries()) {
+      const identity = identities[index]
       const flags = [...(fetched.flags ?? new Set<string>())]
       const subject = formatSubject(envelope.subject)
 
@@ -2997,7 +3445,8 @@ export class AccountConnection extends EventEmitter {
         accountId: this.account.id,
         folderPath,
         uid: fetched.uid,
-        ...fetchedIdentity(fetched),
+        messageKey: identity.messageKey,
+        threadId: identity.threadId,
         messageId: envelope.messageId,
         subject,
         from,
@@ -3016,7 +3465,7 @@ export class AccountConnection extends EventEmitter {
       })
     }
 
-    return summaries
+    return { items: summaries, unread: uids.filter((uid) => !given.has(uid)) }
   }
 
   private async fetchPreviewsForUids(
@@ -3056,56 +3505,50 @@ export class AccountConnection extends EventEmitter {
   }
 
   /**
-   * Makes the cache hold exactly the folder's messages, both ways: rows for
-   * messages the server no longer has go, and messages it has but the cache
-   * lacks come back. The second way matters on Gmail: archiving moves a
-   * message into "Tutti i messaggi", where it already is, and for a moment
-   * the folder lists it no more — a reconciliation then drops it, and since
-   * its UID is below the highest known one, fetching only new UIDs would
-   * never bring it back.
+   * Brings the cache in line with the folder's messages, both ways: rows
+   * for messages the server no longer has go, and the UIDs of those it has
+   * but the cache lacks are returned, with what it has. The second way
+   * matters on Gmail: archiving moves a message into "Tutti i messaggi",
+   * where it already is, and for a moment the folder lists it no more — a
+   * reconciliation then drops it, and since its UID is below the highest
+   * known one, fetching only new UIDs would never bring it back. Those
+   * this session took out on purpose, and those `leftOut`, are not
+   * missing. A search the server refuses throws: read as an empty folder,
+   * it emptied the cache.
    */
-  private async reconcileLocalAgainstServer(folderPath: string): Promise<void> {
-    const client = this.requireSync()
-    const localUids = await this.database.listAllMessageUids(this.account.id, folderPath)
+  private async reconcileLocalAgainstServer(
+    folderPath: string,
+    localUids: ReadonlyArray<number>,
+    leftOut: ReadonlySet<number>
+  ): Promise<{ missing: number[]; onServer: Set<number>; serverCount: number }> {
+    const serverUids = await this.requireSync().search({ uid: '1:*' }, { uid: true })
 
-    if (localUids.length === 0) {
-      return
+    if (!Array.isArray(serverUids)) {
+      throw new Error(`Il server non ha elencato i messaggi di «${folderPath}».`)
     }
 
-    const serverUids = await client.search({ uid: '1:*' }, { uid: true })
-    const serverUidList = Array.isArray(serverUids) ? serverUids : []
-    const serverUidSet = new Set(serverUidList)
+    const onServer = new Set(serverUids)
     const localUidSet = new Set(localUids)
-    const staleUids = localUids.filter((uid) => !serverUidSet.has(uid))
-    const missingUids = serverUidList
-      .filter((uid) => !localUidSet.has(uid))
+    // Taken out here this session: moved, deleted, a draft superseded or sent.
+    const removed = this.removedUids.get(folderPath)
+    const staleUids = localUids.filter((uid) => !onServer.has(uid))
+    const missing = serverUids
+      .filter((uid) => !localUidSet.has(uid) && !removed?.has(uid) && !leftOut.has(uid))
       .sort((left, right) => right - left)
 
-    // Queued behind this pass, like new arrivals, so the lock is released first.
-    for (let index = 0; index < missingUids.length; index += INCREMENTAL_BATCH_SIZE) {
-      const batch = missingUids.slice(index, index + INCREMENTAL_BATCH_SIZE)
-      this.enqueueSyncCommand(
-        async () => {
-          await this.processSyncBatch(folderPath, batch, { previews: true, arrivals: false })
-        },
-        `recovery-batch:${folderPath}:${index / INCREMENTAL_BATCH_SIZE + 1}`,
-        'background'
-      )
+    if (staleUids.length > 0) {
+      await this.database.deleteMessageUids(this.account.id, folderPath, staleUids)
+      this.emit('messages', {
+        accountId: this.account.id,
+        folderPath,
+        added: [],
+        updated: [],
+        removedUids: staleUids,
+        bootstrap: false
+      })
     }
 
-    if (staleUids.length === 0) {
-      return
-    }
-
-    await this.database.deleteMessageUids(this.account.id, folderPath, staleUids)
-    this.emit('messages', {
-      accountId: this.account.id,
-      folderPath,
-      added: [],
-      updated: [],
-      removedUids: staleUids,
-      bootstrap: false
-    })
+    return { missing, onServer, serverCount: serverUids.length }
   }
 
   private async handleExpungeEvent(event: ExpungeEvent): Promise<void> {

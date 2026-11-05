@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   CalDavCalendarProvider,
+  davFeatures,
   type CalendarObjectStore,
   type StoredObject
 } from './caldav-calendar'
@@ -51,6 +52,33 @@ const elsewhere = (url: string, init: RequestInit): Promise<Response> =>
 const window = { fromIso: '2026-11-01T00:00:00.000Z', toIso: '2026-12-31T00:00:00.000Z' }
 
 describe.skipIf(!server)('CalDavCalendarProvider (a real server)', () => {
+  it('asks whether the server schedules as it asks everything else, and reads its answer', async () => {
+    const asked: Headers[] = []
+    const provider = new CalDavCalendarProvider({
+      serverUrl: server!,
+      username,
+      password,
+      store: memoryStore(),
+      fetch: async (url, init) => {
+        if (init?.method === 'OPTIONS') {
+          asked.push(new Headers(init.headers))
+        }
+
+        return fetch(url, init)
+      }
+    })
+    const calendar = (await provider.listCalendars()).find(
+      (candidate) => candidate.name === 'Lavoro'
+    )!
+    const said = (await elsewhere(calendar.calendarId, { method: 'OPTIONS' })).headers.get('dav')
+
+    expect(await provider.schedules(calendar.calendarId)).toBe(
+      davFeatures(said).has('calendar-auto-schedule')
+    )
+    expect(asked[0].get('authorization')).toBeTruthy()
+    expect(asked[0].get('accept-language')).toMatch(/^it-IT/)
+  })
+
   it('lists, creates, syncs what others change, moves an instance, answers an invitation', async () => {
     const store = memoryStore()
     const provider = (): CalDavCalendarProvider =>
@@ -63,18 +91,29 @@ describe.skipIf(!server)('CalDavCalendarProvider (a real server)', () => {
     const read = await first.changes(calendar.calendarId, window)
     expect(read.events).toEqual([])
 
+    // Guests only where the server tells them (RFC 6638): Radicale does not.
+    const schedules = await first.schedules(calendar.calendarId)
+    const visit = {
+      title: 'Sopralluogo',
+      start: '2026-11-20T09:00:00.000Z',
+      end: '2026-11-20T10:00:00.000Z',
+      allDay: false,
+      location: 'Cantiere',
+      description: null,
+      attendees: ['davide@studio.it']
+    }
+    const origin = { by: 'segretario', accountId: 'a', messageKey: 'k' } as const
+
+    if (!schedules) {
+      await expect(first.create(calendar.calendarId, visit, origin)).rejects.toThrow(
+        /non manda gli inviti/
+      )
+    }
+
     const created = await first.create(
       calendar.calendarId,
-      {
-        title: 'Sopralluogo',
-        start: '2026-11-20T09:00:00.000Z',
-        end: '2026-11-20T10:00:00.000Z',
-        allDay: false,
-        location: 'Cantiere',
-        description: null,
-        attendees: ['davide@studio.it']
-      },
-      { by: 'segretario', accountId: 'a', messageKey: 'k' }
+      schedules ? visit : { ...visit, attendees: [] },
+      origin
     )
     expect(created).toMatchObject({ title: 'Sopralluogo', origin: { by: 'segretario' } })
 
@@ -130,7 +169,7 @@ describe.skipIf(!server)('CalDavCalendarProvider (a real server)', () => {
       new Set(['title', 'time'])
     )
     expect(moved).toMatchObject({ eventId: series[1].eventId, start: '2026-11-10T14:00:00.000Z' })
-    await first.remove(calendar.calendarId, series[2].eventId)
+    await first.remove(calendar.calendarId, series[2].eventId, false)
 
     const again = await provider().changes(calendar.calendarId, window)
     expect(
@@ -143,11 +182,18 @@ describe.skipIf(!server)('CalDavCalendarProvider (a real server)', () => {
       ['Riunione', '2026-11-23T08:00:00.000Z']
     ])
 
-    // The user answers the invitation of the series: their own PARTSTAT on the server.
-    const answered = await first.respond(calendar.calendarId, series[0].eventId, 'accepted', true)
-    expect(answered.myResponse).toBe('accepted')
-    const onServer = await (await elsewhere(seriesUrl, { method: 'GET' })).text()
-    expect(onServer).toMatch(/PARTSTAT=ACCEPTED/)
+    // The user answers the invitation of the series: their own PARTSTAT on the server, which
+    // tells the organizer — or, on a server that would not, the answer goes by mail instead.
+    if (schedules) {
+      const answered = await first.respond(calendar.calendarId, series[0].eventId, 'accepted', true)
+      expect(answered.myResponse).toBe('accepted')
+      const onServer = await (await elsewhere(seriesUrl, { method: 'GET' })).text()
+      expect(onServer).toMatch(/PARTSTAT=ACCEPTED/)
+    } else {
+      await expect(
+        first.respond(calendar.calendarId, series[0].eventId, 'accepted', true)
+      ).rejects.toThrow(/non avvisa l’organizzatore/)
+    }
 
     // Deleted by another client: its events go at the next sync.
     await elsewhere(seriesUrl, { method: 'DELETE' })
@@ -156,6 +202,6 @@ describe.skipIf(!server)('CalDavCalendarProvider (a real server)', () => {
     })
     expect(afterDelete.events.filter((event) => event.cancelled).length).toBeGreaterThan(0)
 
-    await first.remove(calendar.calendarId, created.eventId)
+    await first.remove(calendar.calendarId, created.eventId, schedules)
   })
 })

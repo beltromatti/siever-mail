@@ -180,86 +180,92 @@ export class NoteStore {
       throw new RegistryRefusal('scadenza: una data come AAAA-MM-GG.')
     }
 
-    const current = await this.get(anchor.accountId, anchor.messageKey)
-
-    if (
-      current &&
-      options.seenRevision !== undefined &&
-      current.revision !== options.seenRevision
-    ) {
-      throw new RevisionConflict(
-        `La nota di questo messaggio è cambiata da quando l’hai letta${
-          current.writtenBy === 'utente' ? ', per mano dell’utente' : ''
-        }: ora dice «${current.summary}» (${current.nature}, importanza ${current.priority}). Se la tua correzione vale ancora, rifalla.`,
-        current
-      )
-    }
-
-    if (current?.writtenBy === 'utente' && actor.background) {
-      throw new RegistryRefusal(
-        'La nota di questo messaggio l’ha corretta l’utente: non la riscrivere.',
-        current
-      )
-    }
-
     const now = Date.now()
     const runId = actor.runId ?? null
     const twin = options.twinAccountId ?? null
 
-    if (!current) {
-      const row = await this.sql.get<NoteRow>(
-        `INSERT INTO ai_notes (
-          account_id, message_key, thread_id, direction, summary, state, priority, reason, due,
-          message_date, created_at, dismissed_at, twin_account_id, revision, run_id, written_by,
-          updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 1, ?, ?, ?)
-        ON CONFLICT(account_id, message_key) DO NOTHING
-        RETURNING ${COLUMNS}`,
-        anchor.accountId,
-        anchor.messageKey,
-        anchor.threadId,
-        anchor.direction,
+    // Read, check, write only over what was read: someone writing in between (the user's
+    // correction, another run) sends it round again, to be checked against what they wrote.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const current = await this.get(anchor.accountId, anchor.messageKey)
+
+      if (
+        current &&
+        options.seenRevision !== undefined &&
+        current.revision !== options.seenRevision
+      ) {
+        throw new RevisionConflict(
+          `La nota di questo messaggio è cambiata da quando l’hai letta${
+            current.writtenBy === 'utente' ? ', per mano dell’utente' : ''
+          }: ora dice «${current.summary}» (${current.nature}, importanza ${current.priority}). Se la tua correzione vale ancora, rifalla.`,
+          current
+        )
+      }
+
+      if (current?.writtenBy === 'utente' && actor.background) {
+        throw new RegistryRefusal(
+          'La nota di questo messaggio l’ha corretta l’utente: non la riscrivere.',
+          current
+        )
+      }
+
+      if (!current) {
+        const row = await this.sql.get<NoteRow>(
+          `INSERT INTO ai_notes (
+            account_id, message_key, thread_id, direction, summary, state, priority, reason, due,
+            message_date, created_at, dismissed_at, twin_account_id, revision, run_id, written_by,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 1, ?, ?, ?)
+          ON CONFLICT(account_id, message_key) DO NOTHING
+          RETURNING ${COLUMNS}`,
+          anchor.accountId,
+          anchor.messageKey,
+          anchor.threadId,
+          anchor.direction,
+          summary,
+          input.nature,
+          input.priority,
+          input.reason.trim(),
+          input.due,
+          anchor.messageDate,
+          now,
+          twin,
+          runId,
+          actor.by,
+          now
+        )
+
+        if (row) {
+          return { record: recordOf(row), created: true }
+        }
+
+        continue
+      }
+
+      const changed = await this.sql.run(
+        `UPDATE ai_notes SET summary = ?, state = ?, priority = ?, reason = ?, due = ?,
+           twin_account_id = ?, run_id = ?, written_by = ?, revision = revision + 1, updated_at = ?
+         WHERE account_id = ? AND message_key = ? AND revision = ?`,
         summary,
         input.nature,
         input.priority,
         input.reason.trim(),
         input.due,
-        anchor.messageDate,
-        now,
         twin,
         runId,
         actor.by,
-        now
+        now,
+        anchor.accountId,
+        anchor.messageKey,
+        current.revision
       )
 
-      if (row) {
-        return { record: recordOf(row), created: true }
+      if (changed === 1) {
+        const record = await this.get(anchor.accountId, anchor.messageKey)
+        return { record: record!, created: false }
       }
     }
 
-    // Written meanwhile by someone else, or there before: corrected in place.
-    const changed = await this.sql.run(
-      `UPDATE ai_notes SET summary = ?, state = ?, priority = ?, reason = ?, due = ?,
-         twin_account_id = ?, run_id = ?, written_by = ?, revision = revision + 1, updated_at = ?
-       WHERE account_id = ? AND message_key = ?`,
-      summary,
-      input.nature,
-      input.priority,
-      input.reason.trim(),
-      input.due,
-      twin,
-      runId,
-      actor.by,
-      now,
-      anchor.accountId,
-      anchor.messageKey
-    )
-
-    if (changed !== 1) {
-      throw new Error('The note just written could not be found.')
-    }
-
-    const record = await this.get(anchor.accountId, anchor.messageKey)
-    return { record: record!, created: false }
+    throw new RegistryRefusal('La nota di questo messaggio cambia di continuo: riprova tra poco.')
   }
 }

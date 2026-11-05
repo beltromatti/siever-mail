@@ -18,16 +18,27 @@ export const MICROSOFT_MAIL_SCOPES = [
   'https://outlook.office.com/IMAP.AccessAsUser.All',
   'https://outlook.office.com/SMTP.Send'
 ]
+/** Graph: the account's address, whichever service it is signed in for. */
+const MICROSOFT_USER_SCOPES = ['https://graph.microsoft.com/User.Read']
 /**
- * Graph: the calendar, the address of the account, and sending through
- * Graph where the organisation turned SMTP off — a message with blind
- * copies as a draft first, which takes Mail.ReadWrite.
+ * Graph, for the mail: sending through Graph where the organisation turned
+ * SMTP off — a message with blind copies as a draft first, which takes
+ * Mail.ReadWrite.
  */
-export const MICROSOFT_GRAPH_SCOPES = [
-  'https://graph.microsoft.com/User.Read',
-  'https://graph.microsoft.com/Calendars.ReadWrite',
+const MICROSOFT_GRAPH_MAIL_SCOPES = [
   'https://graph.microsoft.com/Mail.Send',
   'https://graph.microsoft.com/Mail.ReadWrite'
+]
+/** Graph, for the calendar: its events. */
+export const MICROSOFT_CALENDAR_SCOPES = ['https://graph.microsoft.com/Calendars.ReadWrite']
+/**
+ * Graph, for the mailbox's time zone, which an all-day event is written in
+ * so Outlook shows it on its day. Consented with the calendar, and asked
+ * for on its own: a calendar connected before it was asked for goes on
+ * syncing without it.
+ */
+export const MICROSOFT_MAILBOX_SETTINGS_SCOPES = [
+  'https://graph.microsoft.com/MailboxSettings.Read'
 ]
 
 /** What is kept of a Microsoft sign-in, encrypted: whose it is, and MSAL's cache with its tokens. */
@@ -79,8 +90,9 @@ function parseSecret(secret: string): MicrosoftSecret {
 
 /**
  * Signing in with Microsoft — Microsoft 365, Outlook.com — in the user's
- * browser, with MSAL: one consent for the mailbox (IMAP, SMTP) and for
- * Graph (the calendar), then a token for whichever is asked. MSAL keeps its
+ * browser, with MSAL: one consent for what the user turns on — the mailbox
+ * (IMAP, SMTP, Graph to send), the calendar (Graph) — then a token for
+ * whichever is asked. MSAL keeps its
  * tokens in a cache that this service hands back to be stored encrypted,
  * and takes from there: Microsoft renews the refresh token at each use,
  * so every change of the cache is passed on to be kept.
@@ -131,10 +143,27 @@ export class MicrosoftOAuthService {
   }
 
   /**
-   * Asks Microsoft, in the browser, for the mailbox — and in the same
-   * consent for Graph — of the account the user picks.
+   * Asks Microsoft, in the browser, for the services the user turned on of
+   * the account they pick — the mailbox, the calendar, or both in one
+   * consent — and for nothing else.
    */
-  async authorize(loginHint?: string): Promise<MicrosoftAuthResult> {
+  async authorize(
+    loginHint?: string,
+    services: { mail: boolean; calendar: boolean } = { mail: true, calendar: true }
+  ): Promise<MicrosoftAuthResult> {
+    if (!services.mail && !services.calendar) {
+      throw new Error('Scegli la posta, il calendario o tutti e due.')
+    }
+
+    // MSAL asks for one resource's scopes and has the others consented with them: the
+    // mailbox's (outlook.office.com) first when the mail is asked for, Graph's alone if not.
+    const graph = [
+      ...MICROSOFT_USER_SCOPES,
+      ...(services.mail ? MICROSOFT_GRAPH_MAIL_SCOPES : []),
+      ...(services.calendar
+        ? [...MICROSOFT_CALENDAR_SCOPES, ...MICROSOFT_MAILBOX_SETTINGS_SCOPES]
+        : [])
+    ]
     const state = { cache: '' }
     const application = this.application(state)
     // MSAL waits on its own loopback server and cannot be stopped: the wait for it can. One
@@ -144,8 +173,8 @@ export class MicrosoftOAuthService {
     this.signIn = controller
     const timer = setTimeout(() => controller.abort(), SIGN_IN_TIMEOUT_MS)
     const interactive = application.acquireTokenInteractive({
-      scopes: MICROSOFT_MAIL_SCOPES,
-      extraScopesToConsent: MICROSOFT_GRAPH_SCOPES,
+      scopes: services.mail ? MICROSOFT_MAIL_SCOPES : graph,
+      extraScopesToConsent: services.mail ? graph : undefined,
       prompt: 'select_account',
       loginHint,
       openBrowser: async (url) => {
@@ -191,13 +220,13 @@ export class MicrosoftOAuthService {
     }
 
     const homeAccountId = result.account.homeAccountId
-    const graph = await this.silent(application, homeAccountId, MICROSOFT_GRAPH_SCOPES)
+    const user = await this.silent(application, homeAccountId, MICROSOFT_USER_SCOPES)
     // The mailbox's address: a work account's sign-in name may not be it.
     const me = (await (
       await net.fetch(
         'https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName',
         {
-          headers: { Authorization: `Bearer ${graph.accessToken}` }
+          headers: { Authorization: `Bearer ${user.accessToken}` }
         }
       )
     ).json()) as { mail?: string | null; userPrincipalName?: string; displayName?: string }

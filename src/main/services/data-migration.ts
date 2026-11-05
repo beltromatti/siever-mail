@@ -65,7 +65,8 @@ const CACHE_TABLE_NAMES: ReadonlySet<string> = new Set([
   'messages',
   'folders',
   'message_bodies',
-  'search_hits'
+  'search_hits',
+  'left_out_messages'
 ])
 
 /** The full-text index and the tables FTS5 keeps it in (`message_fts_data`, …). */

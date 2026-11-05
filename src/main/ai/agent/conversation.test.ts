@@ -69,7 +69,7 @@ describe('buildConversation', () => {
     const call = {
       id: 'a',
       type: 'function' as const,
-      function: { name: 'leggi_posta', arguments: '{}' }
+      function: { name: 'leggi', arguments: '{}' }
     }
     const events = [
       event('context', { text: 'C' }),
@@ -77,7 +77,7 @@ describe('buildConversation', () => {
       event('assistant', { content: '', toolCalls: [call], reasoningDetails: [] }),
       event('tool', {
         callId: 'a',
-        name: 'leggi_posta',
+        name: 'leggi',
         status: 'done',
         summary: 'Letto X',
         result: 'LUNGO',
@@ -95,6 +95,16 @@ describe('buildConversation', () => {
     expect(compacted).toHaveLength(2)
     expect((compacted[1] as { content: string }).content).toContain('RIASSUNTO')
     expect((compacted[1] as { content: string }).content).toContain('u2')
+
+    // Compacted in the middle of a run, nothing after: it goes on from its context and the summary.
+    const midRun = buildConversation('S', [
+      ...events,
+      event('compaction', { summary: 'RIASSUNTO', coveredUntil: 4 })
+    ])
+    expect(midRun).toHaveLength(2)
+    expect(midRun[1]).toMatchObject({ role: 'user' })
+    expect((midRun[1] as { content: string }).content).toContain('C')
+    expect((midRun[1] as { content: string }).content).toContain('RIASSUNTO')
   })
 
   it('gathers the names given along the way', () => {

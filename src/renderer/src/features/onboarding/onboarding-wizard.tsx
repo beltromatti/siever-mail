@@ -19,13 +19,14 @@ import { Input } from '@renderer/components/ui/input'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarConnection } from '@shared/calendar'
 import type { AccountConnectionState, MailAccount } from '@shared/models'
-import type {
-  ConnectionLearning,
-  EngineState,
-  OnboardingCase,
-  OnboardingState,
-  OnboardingStep,
-  ReadingStatus
+import {
+  setupTurnsAiOn,
+  type ConnectionLearning,
+  type EngineState,
+  type OnboardingCase,
+  type OnboardingState,
+  type OnboardingStep,
+  type ReadingStatus
 } from '@shared/segretario'
 
 const KEYS_URL = 'https://openrouter.ai/settings/keys'
@@ -634,20 +635,32 @@ function remaining(milliseconds: number): string {
 
 /**
  * Step 5: the Segretario's mail — the last thirty days read as if each
- * message had just come, many at once. What fails is listed and tried
- * again later: the user enters anyway, nothing passes for read.
+ * message had just come, many at once: of the connections a setup adds,
+ * when it adds some with the AI on already — the rest is read already —
+ * else of all. What fails is listed and tried again later: the user enters
+ * anyway, nothing passes for read.
  */
-function ReadingStep({ onNext }: { onNext: () => void }): React.JSX.Element {
+function ReadingStep({
+  accountIds,
+  onNext
+}: {
+  accountIds: string[] | undefined
+  onNext: () => void
+}): React.JSX.Element {
   const [status, setStatus] = useState<ReadingStatus | null>(null)
   const [engine, setEngine] = useState<EngineState | null>(null)
   const started = useRef<{ at: number; read: number } | null>(null)
 
+  // The accounts as a value: a new array of the same ones does not start the watch again.
+  const accountKey = accountIds?.join('\u0000') ?? null
+
   useEffect(() => {
     void window.segretarioApi.setPreparing(true)
     let current = true
+    const ofAccounts = accountKey === null ? undefined : accountKey.split('\u0000')
     const load = (): void =>
       void window.segretarioApi
-        .getReadingStatus()
+        .getReadingStatus(ofAccounts)
         .then((loaded) => {
           if (!current) {
             return
@@ -668,7 +681,7 @@ function ReadingStep({ onNext }: { onNext: () => void }): React.JSX.Element {
       window.clearInterval(timer)
       unsubscribe()
     }
-  }, [])
+  }, [accountKey])
 
   const progress = status && status.total > 0 ? status.read / status.total : 0
   const elapsed = started.current ? Date.now() - started.current.at : 0
@@ -824,7 +837,7 @@ export function OnboardingWizard({
   // Turned on here, the AI starts with every connection: their reading waits for Conoscimi.
   const enable = async (): Promise<void> => {
     await window.segretarioApi.setPreferences({ enabled: true })
-    next(true, { accountIds: [] })
+    next(true, { accountIds: [], turnsAiOn: true })
   }
 
   // Conoscimi is watched as it writes: its page takes the window's height and its thread
@@ -927,7 +940,19 @@ export function OnboardingWizard({
               onCancel={state.case === 'conoscimi' ? () => onFinish(true) : null}
             />
           )}
-          {state.step === 'lettura' && <ReadingStep onNext={() => next()} />}
+          {state.step === 'lettura' && (
+            <ReadingStep
+              accountIds={
+                // A connection added with the AI already on: its reading, not the others'.
+                state.case === 'nuova-connessione' &&
+                !setupTurnsAiOn(state) &&
+                state.accountIds.length > 0
+                  ? state.accountIds
+                  : undefined
+              }
+              onNext={() => next()}
+            />
+          )}
           {state.step === 'entra' && <EnterStep aiOn={aiOn} onEnter={() => onFinish(true)} />}
         </article>
       </div>

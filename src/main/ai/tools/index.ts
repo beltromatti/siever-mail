@@ -60,9 +60,9 @@ function extensionTool(tool: ExtensionAssistantTool): SegretarioTool {
         message: (handle) => extensionMessage(context, handle),
         background: context.run.background,
         confirm: async (request) =>
-          context.run.background
-            ? false
-            : (await context.requestApproval({ kind: 'action', ...request })).approved,
+          context.run.watched
+            ? (await context.requestApproval({ kind: 'action', ...request })).approved
+            : false,
         propose: async ({ kind, title, payload, message }) => {
           try {
             await context.registry.propose(

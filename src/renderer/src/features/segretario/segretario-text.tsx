@@ -1,39 +1,35 @@
-import { memo } from 'react'
-import { Briefcase, CalendarDays, FileText, Mail, PenLine } from 'lucide-react'
+import { createContext, memo, useContext, useMemo } from 'react'
+import { Briefcase, CalendarDays, FileText, ListChecks, Mail, PenLine } from 'lucide-react'
 import { Streamdown } from 'streamdown'
 
 import { cn } from '@renderer/lib/utils'
 import type { HandleLink } from '@shared/segretario'
+import {
+  COMMITMENT_LINK_PATTERN,
+  HANDLE_LINK_PATTERN,
+  SCHEME_OF_HANDLE
+} from '@shared/segretario-links'
 
 const INTERNAL_LINK_PREFIX = '#segretario/'
-
-/** The kind of link a short name is, by its letter: `m4` is a message wherever it is written. */
-const KIND_OF_HANDLE: Readonly<Record<string, string>> = {
-  m: 'mail',
-  f: 'file',
-  b: 'bozza',
-  p: 'progetto',
-  e: 'evento'
-}
 
 /**
  * The Segretario writes links to what it found as `[testo](mail:m4)`,
  * `(file:f2)`, `(bozza:b1)`, `(progetto:p1)`, `(evento:e1)` — now and then
- * as the short name alone, `(m4)`, which says as much. They become internal
- * anchors before the markdown is read — a sanitiser would drop an unknown
- * scheme — and chips when drawn.
+ * as the short name alone, `(m4)`, which says as much — and to an open
+ * thing as `(impegno:12)`. They become internal anchors before the
+ * markdown is read — a sanitiser would drop an unknown scheme — and chips
+ * when drawn.
  */
 function internalizeLinks(markdown: string): string {
   return markdown
     .replace(
-      /\]\(\s*(mail|file|bozza|progetto|evento)\s*:\s*([a-z]\d+)\s*\)/gi,
-      (_match, kind: string, handle: string) =>
-        `](${INTERNAL_LINK_PREFIX}${kind.toLowerCase()}/${handle.toLowerCase()})`
+      new RegExp(HANDLE_LINK_PATTERN),
+      (_match, _scheme: string | undefined, handle: string) =>
+        `](${INTERNAL_LINK_PREFIX}${SCHEME_OF_HANDLE[handle[0].toLowerCase()]}/${handle.toLowerCase()})`
     )
     .replace(
-      /\]\(\s*([mfbpe])(\d+)\s*\)/gi,
-      (_match, letter: string, number: string) =>
-        `](${INTERNAL_LINK_PREFIX}${KIND_OF_HANDLE[letter.toLowerCase()]}/${letter.toLowerCase()}${number})`
+      new RegExp(COMMITMENT_LINK_PATTERN),
+      (_match, id: string) => `](${INTERNAL_LINK_PREFIX}impegno/${id})`
     )
 }
 
@@ -42,7 +38,8 @@ const CHIP_ICONS = {
   file: FileText,
   draft: PenLine,
   project: Briefcase,
-  event: CalendarDays
+  event: CalendarDays,
+  commitment: ListChecks
 } as const
 
 /**
@@ -72,8 +69,12 @@ export const SegretarioText = memo(function SegretarioText({
         components={{
           a: ({ href, children }) => {
             if (href?.startsWith(INTERNAL_LINK_PREFIX)) {
-              const [, handle] = href.slice(INTERNAL_LINK_PREFIX.length).split('/')
-              const link = handles.get(handle)
+              const [scheme, handle] = href.slice(INTERNAL_LINK_PREFIX.length).split('/')
+              // An open thing's number holds everywhere: it needs no name from the run.
+              const link: HandleLink | undefined =
+                scheme === 'impegno'
+                  ? { handle: `#${handle}`, kind: 'commitment', commitmentId: Number(handle) }
+                  : handles.get(handle)
 
               if (!link) {
                 return <span className="text-muted-foreground">{children}</span>
@@ -122,3 +123,28 @@ export const SegretarioText = memo(function SegretarioText({
     </div>
   )
 })
+
+/** Where the app opens what a link of the Segretario points at: given once, at the top. */
+const OpenLinkContext = createContext<(link: HandleLink) => void>(() => undefined)
+
+export const SegretarioLinkProvider = OpenLinkContext.Provider
+
+/**
+ * Words of the Segretario that stay — the letter of Oggi, "Il punto", a
+ * meeting's preparation — set like the rest of its writing, their links
+ * opening what they pointed at when they were written.
+ */
+export function LinkedWords({
+  text,
+  links,
+  className
+}: {
+  text: string
+  links: ReadonlyArray<HandleLink>
+  className?: string
+}): React.JSX.Element {
+  const open = useContext(OpenLinkContext)
+  const handles = useMemo(() => new Map(links.map((link) => [link.handle, link])), [links])
+
+  return <SegretarioText text={text} handles={handles} onOpen={open} className={className} />
+}

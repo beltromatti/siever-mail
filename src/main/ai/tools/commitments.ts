@@ -2,6 +2,7 @@ import type { CommitmentKind, CommitmentRecord, NoteNature, NotePriority } from 
 import { RegistryRefusal, RevisionConflict } from '../registry/types'
 import { PROMPTS } from '../prompts'
 import {
+  booleanArg,
   objectListArg,
   requireString,
   seenKey,
@@ -10,7 +11,8 @@ import {
   ToolConflict,
   ToolInputError,
   type SegretarioTool,
-  type ToolContext
+  type ToolContext,
+  UnknownHandle
 } from '../agent/tool-types'
 import { evidenceOf, resolveSentOrReceived } from './anchors'
 import { commitmentLine, rememberCommitments } from './describe'
@@ -235,6 +237,9 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
   }
 }
 
+/** How far back `chiuse` looks. */
+const RECENTLY_CLOSED_MS = 14 * 24 * 60 * 60 * 1000
+
 /** How far back, and over how many conversations, what is open with a person is looked for. */
 const PERSON_LOOKBACK_MS = 365 * 24 * 60 * 60 * 1000
 const PERSON_CONVERSATIONS = 50
@@ -262,7 +267,7 @@ async function listCommitments(context: ToolContext, filter: Operation): Promise
   const project = projectHandle ? context.handles.project(projectHandle) : null
 
   if (projectHandle && !project) {
-    throw new ToolInputError(`Non conosco il progetto «${projectHandle}».`)
+    throw new UnknownHandle(`Non conosco il progetto «${projectHandle}».`)
   }
 
   const person = stringArg(filter, 'persona')?.trim().toLowerCase()
@@ -279,22 +284,34 @@ async function listCommitments(context: ToolContext, filter: Operation): Promise
       : withPerson
 
     if (kept.length === 0) {
-      return `Nessuna conversazione con ${person}${project ? ' in questo progetto' : ''}.`
+      return `Nessuna conversazione con ${person}${project ? ' in questo progetto' : ''}${
+        person.includes('@') ? '' : ' (`persona` è un indirizzo email: cercalo con cerca_posta)'
+      }.`
     }
 
     threads = kept
   }
 
-  const records = await context.registry.commitments.open({
+  const open = await context.registry.commitments.open({
     kinds: kind ? [kind] : undefined,
     dueBy: stringArg(filter, 'entro'),
     threads,
     includeDeferred: true
   })
+  // Closed lately too, when asked: what was done or not needed is not to be opened again.
+  const closed = booleanArg(filter, 'chiuse')
+    ? await context.registry.commitments.closedSince(Date.now() - RECENTLY_CLOSED_MS, {
+        threads,
+        kinds: kind ? [kind] : undefined
+      })
+    : []
+  const records = [...open, ...closed]
   rememberCommitments(context, records)
 
   if (records.length === 0) {
-    return 'Niente di aperto con questi criteri.'
+    return closed.length === 0 && booleanArg(filter, 'chiuse')
+      ? 'Niente di aperto, né chiuso di recente, con questi criteri.'
+      : 'Niente di aperto con questi criteri.'
   }
 
   const summaries = new Map<string, string>()
@@ -317,12 +334,19 @@ async function listCommitments(context: ToolContext, filter: Operation): Promise
     }
   }
 
-  return `${countOf(records.length, 'cosa aperta', 'cose aperte')}, le più vicine per prime:\n${records
-    .map(
-      (record) =>
-        `${commitmentLine(record)} · da ${summaries.get(`${record.accountId}\u0000${record.messageKey}`) ?? 'un messaggio non più nella posta'}`
-    )
-    .join('\n')}`
+  const line = (record: CommitmentRecord): string =>
+    `${commitmentLine(record)} · da ${summaries.get(`${record.accountId}\u0000${record.messageKey}`) ?? 'un messaggio non più nella posta'}`
+
+  return [
+    open.length > 0
+      ? `${countOf(open.length, 'cosa aperta', 'cose aperte')}, le più vicine per prime:\n${open.map(line).join('\n')}`
+      : 'Niente di aperto con questi criteri.',
+    closed.length > 0
+      ? `Chiuse negli ultimi 14 giorni, le più recenti per prime:\n${closed.map(line).join('\n')}`
+      : null
+  ]
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 export const commitmentsTool: SegretarioTool = {
@@ -362,7 +386,8 @@ export const commitmentsTool: SegretarioTool = {
             con: { type: 'array', items: { type: 'integer' } },
             entro: { type: 'string' },
             progetto: { type: 'string' },
-            persona: { type: 'string' }
+            persona: { type: 'string' },
+            chiuse: { type: 'boolean' }
           },
           required: ['azione']
         }

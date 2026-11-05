@@ -148,6 +148,33 @@ describe('Notebook', () => {
     ])
   })
 
+  it('refuses a line counted on a version since changed, and finds a note by its name once', async () => {
+    const read = (await notebook.write('progetti/lido.md', '# Hotel Lido\nCliente: Rossi\n', RUN_A))
+      .document
+    await notebook.insert('progetti/lido.md', 0, '> Pratica 2470', RUN_B)
+
+    await expect(
+      notebook.insert('progetti/lido.md', 1, 'Collaudo il 12', RUN_A, {
+        seenRevision: read.revision
+      })
+    ).rejects.toMatchObject({ current: { revision: read.revision + 1 } })
+    // At the end, a line count does not matter.
+    await notebook.insert('progetti/lido.md', null, 'Collaudo il 12', RUN_A, {
+      seenRevision: read.revision
+    })
+    expect((await notebook.read('progetti/lido.md'))?.content).toBe(
+      '> Pratica 2470\n# Hotel Lido\nCliente: Rossi\nCollaudo il 12\n'
+    )
+
+    await notebook.write('persone/neri.md', '# Paolo Neri\nFarmaDelta\nDirettore lavori\n', RUN_A)
+    expect(await notebook.search('neri')).toEqual([
+      { path: 'persone/neri.md', line: 1, text: '# Paolo Neri' }
+    ])
+    expect(await notebook.search('neri farmadelta')).toEqual([
+      { path: 'persone/neri.md', line: 2, text: 'FarmaDelta' }
+    ])
+  })
+
   it('keeps paths inside the notebook', () => {
     expect(normalizeMemoryPath('/memoria/persone\\anna')).toBe('persone/anna.md')
     expect(() => normalizeMemoryPath('../segreto')).toThrow(RegistryRefusal)

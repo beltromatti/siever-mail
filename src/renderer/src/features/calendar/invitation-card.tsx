@@ -33,8 +33,9 @@ const ANSWERS: ReadonlyArray<{
 /**
  * The invitation a message carries, at the top of the reader: what and
  * when, and the answer — given in the calendar the event is in, which
- * tells the organizer; or, the event in no calendar reached here, sent to
- * the organizer by mail, as calendars answer one another.
+ * tells the organizer; or, where no calendar connected takes it (none has
+ * the event, or only one the user reads, or where they are not named),
+ * sent to the organizer by mail, as calendars answer one another.
  */
 export function InvitationCard({
   messageRef
@@ -117,22 +118,20 @@ export function InvitationCard({
       )}
       {cancelled ? (
         <p className="text-muted-foreground">L’evento è stato annullato dall’organizzatore.</p>
-      ) : event ? (
-        event.myResponse !== null && (
-          <Answers
-            given={event.myResponse}
-            answering={answering}
-            onAnswer={(response) =>
-              answer(response, async () => {
-                // An invitation to a series is answered for the series, not for the instance found.
-                const answered = await window.calendarApi.respond(event.key, response, {
-                  series: invitation.series
-                })
-                setInvitation({ ...invitation, event: answered })
+      ) : event && event.myResponse !== null ? (
+        <Answers
+          given={event.myResponse}
+          answering={answering}
+          onAnswer={(response) =>
+            answer(response, async () => {
+              // An invitation to a series is answered for the series, not for the instance found.
+              const answered = await window.calendarApi.respond(event.key, response, {
+                series: invitation.series
               })
-            }
-          />
-        )
+              setInvitation({ ...invitation, event: answered })
+            })
+          }
+        />
       ) : invitation.answerByMail ? (
         <>
           <Answers
@@ -148,10 +147,10 @@ export function InvitationCard({
           <p className="text-muted-foreground text-[11.5px]">
             {mailed
               ? `Risposta mandata per mail a ${invitation.organizer}.`
-              : `Non è in un calendario collegato: la risposta va per mail a ${invitation.organizer}.`}
+              : `Nessun calendario collegato risponde per te: la risposta va per mail a ${invitation.organizer}.`}
           </p>
         </>
-      ) : (
+      ) : event ? null : (
         <p className="text-muted-foreground">
           {invitation.calendarConnected
             ? 'Non è ancora nel calendario: compare al prossimo aggiornamento.'

@@ -107,8 +107,30 @@ describe('ensureAiSchema', () => {
       )
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '3'
+      value: '4'
     })
+  })
+
+  it('gives a version 3 database the links of the words that stay', async () => {
+    await ensureAiSchema(sql)
+    await sql.run('ALTER TABLE ai_briefings DROP COLUMN links_json')
+    await sql.run('ALTER TABLE ai_event_preps DROP COLUMN links_json')
+    await sql.run('ALTER TABLE ai_projects DROP COLUMN state_links_json')
+    await sql.run("UPDATE ai_meta SET value = '3' WHERE key = 'schema_version'")
+    await sql.run(
+      `INSERT INTO ai_briefings (day, text, basis, created_at) VALUES ('2026-11-05', 'La giornata', '[]', 1)`
+    )
+
+    await ensureAiSchema(sql)
+
+    expect(await sql.all('SELECT day, links_json FROM ai_briefings')).toEqual([
+      { day: '2026-11-05', links_json: '[]' }
+    ])
+    expect(
+      await sql.all(
+        "SELECT name FROM pragma_table_info('ai_projects') WHERE name = 'state_links_json'"
+      )
+    ).toEqual([{ name: 'state_links_json' }])
   })
 
   it('picks up a migration a quit cut short between two steps', async () => {
@@ -156,7 +178,7 @@ describe('ensureAiSchema', () => {
       { id: 'p1', revision: 1 }
     ])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '3'
+      value: '4'
     })
   })
 

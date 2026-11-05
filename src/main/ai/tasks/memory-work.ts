@@ -1,10 +1,11 @@
 import type { CalendarConnection } from '@shared/calendar'
 import { calendarLearningKey } from '@shared/segretario'
 
+import { HandleRegistry, type HandleRecord } from '../agent/handles'
 import type { SegretarioMailPort } from '../agent/tool-types'
 import type { AiStore } from '../ai-store'
 import type { Registry } from '../registry/registry'
-import { formatAddresses, formatDateTime } from '../tools/format'
+import { formatAddresses, formatDateTime, shortDate } from '../tools/format'
 import { nowLine } from './context'
 import type { StartingData } from './day'
 
@@ -126,9 +127,29 @@ export async function prepareReflection(deps: {
   )
   const confirmed = new Map<string, number>()
   const parts: string[] = []
+  // The message a correction is about, named: who wrote it and about what is often the lesson.
+  const handles = new HandleRegistry()
+  const added: HandleRecord[] = []
+  const messageLine = async (about: unknown): Promise<string | null> => {
+    const { accountId, messageKey } = (about ?? {}) as { accountId?: string; messageKey?: string }
+
+    if (!accountId || !messageKey) {
+      return null
+    }
+
+    const summary = (await deps.mail.messageSummaries(accountId, [messageKey])).get(messageKey)
+
+    if (!summary) {
+      return 'Il messaggio non è più nella posta.'
+    }
+
+    const handle = handles.name({ kind: 'message', ref: summary.ref, messageKey }, added)
+    const sender = summary.from[0]
+    return `Il messaggio: ${handle} · ${shortDate(summary.dateIso)} · ${sender?.name || sender?.address || ''} · «${summary.subject}»`
+  }
 
   for (const lesson of lessons) {
-    const payload = (lesson.payload ?? {}) as Record<string, unknown>
+    const { messaggio: about, ...payload } = (lesson.payload ?? {}) as Record<string, unknown>
     const when = formatDateTime(new Date(lesson.createdAt).toISOString())
     const from = emails.get(String(payload.accountId ?? '')) ?? 'un account'
 
@@ -152,10 +173,19 @@ export async function prepareReflection(deps: {
           `## Connessione rimossa\n\n${String(payload.email ?? '')} è stata rimossa ${when}.`
         )
         break
-      default:
+      case 'calendario-rimosso': {
+        const names = Array.isArray(payload.calendari) ? payload.calendari.map(String) : []
         parts.push(
-          `## ${lesson.kind.replace(/_/g, ' ')} · ${when}\n\n${JSON.stringify(payload, null, 1)}`
+          `## Calendario scollegato\n\n${names.length > 0 ? names.map((name) => `«${name}»`).join(', ') : 'Un calendario'} non ${names.length === 1 ? 'è' : 'sono'} più collegat${names.length === 1 ? 'o' : 'i'} da ${when}.`
         )
+        break
+      }
+      default: {
+        const message = await messageLine(about)
+        parts.push(
+          `## ${lesson.kind.replace(/_/g, ' ')} · ${when}\n\n${message ? `${message}\n\n` : ''}${JSON.stringify(payload, null, 1)}`
+        )
+      }
     }
   }
 
@@ -168,7 +198,7 @@ export async function prepareReflection(deps: {
   return {
     title: 'Riflessione',
     data: `${nowLine()}\n\n${parts.join('\n\n')}`,
-    handles: [],
+    handles: added,
     seen: new Map(),
     lessonIds: lessons.map((lesson) => lesson.id)
   }
@@ -191,6 +221,9 @@ export async function prepareKeepingUp(
   }
 
   const sections: string[] = []
+  // Each named, to be read when a note alone does not say enough.
+  const handles = new HandleRegistry()
+  const added: HandleRecord[] = []
 
   for (const account of await deps.mail.listAccounts()) {
     const ofAccount = notes.filter((note) => note.accountId === account.id)
@@ -208,9 +241,15 @@ export async function prepareKeepingUp(
       [
         `## ${account.email}`,
         ...ofAccount.map((note) => {
-          const from = summaries.get(note.messageKey)?.from ?? []
-          const who = note.direction === 'out' ? "scritto dall'utente" : formatAddresses(from, 1)
-          return `- ${formatDateTime(note.messageDate)} · ${who} · ${NATURE_WORDS[note.nature] ?? note.nature}: ${note.summary}`
+          const summary = summaries.get(note.messageKey)
+          const handle = summary
+            ? `${handles.name({ kind: 'message', ref: summary.ref, messageKey: note.messageKey }, added)} · `
+            : ''
+          const who =
+            note.direction === 'out'
+              ? "scritto dall'utente"
+              : formatAddresses(summary?.from ?? [], 1)
+          return `- ${handle}${formatDateTime(note.messageDate)} · ${who} · ${NATURE_WORDS[note.nature] ?? note.nature}: ${note.summary}`
         })
       ].join('\n')
     )
@@ -221,7 +260,7 @@ export async function prepareKeepingUp(
     data: `${nowLine()}\n\nLe note dal ${formatDateTime(new Date(sinceMs).toISOString())}:\n\n${sections.join('\n\n')}${
       total > notes.length ? `\n\n(Le più recenti ${notes.length} di ${total}.)` : ''
     }`,
-    handles: [],
+    handles: added,
     seen: new Map()
   }
 }

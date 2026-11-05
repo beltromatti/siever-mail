@@ -10,7 +10,8 @@ import {
   stringListArg,
   ToolInputError,
   type SegretarioTool,
-  type ToolContext
+  type ToolContext,
+  UnknownHandle
 } from '../agent/tool-types'
 
 /**
@@ -143,7 +144,7 @@ export const writeDraftTool: SegretarioTool = {
       const source = context.handles.message(sourceHandle)
 
       if (!source) {
-        throw new ToolInputError(`Non conosco il messaggio «${sourceHandle}».`)
+        throw new UnknownHandle(`Non conosco il messaggio «${sourceHandle}».`)
       }
 
       spec.source = source.ref
@@ -192,7 +193,7 @@ export const writeDraftTool: SegretarioTool = {
       const file = context.handles.file(handle)
 
       if (!file) {
-        throw new ToolInputError(`Non conosco il file «${handle}».`)
+        throw new UnknownHandle(`Non conosco il file «${handle}».`)
       }
 
       if (file.kind === 'path') {

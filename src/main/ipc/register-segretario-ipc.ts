@@ -4,7 +4,7 @@ import { z } from 'zod'
 import type { SegretarioService } from '@main/ai/segretario-service'
 import { ensurePathReachable } from '@main/services/network-volumes'
 import { logMainError } from '@main/utils/error-utils'
-import { SEGRETARIO_IPC } from '@shared/segretario'
+import { SEGRETARIO_IPC, type OnboardingState } from '@shared/segretario'
 
 const messageRefSchema = z.object({
   accountId: z.string().min(1),
@@ -93,6 +93,8 @@ const composeResultSchema = z.union([
 
 const textSchema = z.string().trim().min(1, 'Scrivi qualcosa al Segretario.').max(20_000)
 
+// The page sends the setup whole and `strict` refuses a field it does not know: the fields
+// are the shared type's, every one, which the compiler checks.
 const onboardingSchema = z
   .object({
     case: z.enum([
@@ -105,8 +107,9 @@ const onboardingSchema = z
     step: z.enum(['connessioni', 'segretario', 'preparazione', 'conoscimi', 'lettura', 'entra']),
     accountIds: z.array(z.string().min(1).max(100)).max(100),
     conoscimiId: z.string().min(1).max(100).nullable(),
-    startedAt: z.number().int().nonnegative()
-  })
+    startedAt: z.number().int().nonnegative(),
+    turnsAiOn: z.boolean().optional()
+  } satisfies Record<keyof OnboardingState, z.ZodType>)
   .strict()
 
 /**
@@ -150,8 +153,12 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
 
   // The memory, and getting to know the connections.
   handle(SEGRETARIO_IPC.listMemory, () => segretario.listMemory())
-  handle(SEGRETARIO_IPC.writeMemory, (path: unknown, content: unknown) =>
-    segretario.writeMemory(memoryPathSchema.parse(path), z.string().parse(content))
+  handle(SEGRETARIO_IPC.writeMemory, (path: unknown, content: unknown, seenRevision: unknown) =>
+    segretario.writeMemory(
+      memoryPathSchema.parse(path),
+      z.string().parse(content),
+      z.number().int().positive().optional().parse(seenRevision)
+    )
   )
   handle(SEGRETARIO_IPC.deleteMemory, (path: unknown) =>
     segretario.deleteMemory(memoryPathSchema.parse(path))
@@ -177,7 +184,9 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.connectionReadiness, (accountIds: unknown) =>
     segretario.connectionReadiness(z.array(idSchema).max(100).parse(accountIds))
   )
-  handle(SEGRETARIO_IPC.getReadingStatus, () => segretario.getReadingStatus())
+  handle(SEGRETARIO_IPC.getReadingStatus, (accountIds: unknown) =>
+    segretario.getReadingStatus(z.array(idSchema).max(200).optional().parse(accountIds))
+  )
   handle(SEGRETARIO_IPC.setPreparing, (preparing: unknown) =>
     segretario.setPreparing(z.boolean().parse(preparing))
   )
@@ -214,6 +223,9 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
       statusOptionsSchema.parse(options)
     )
   )
+  handle(SEGRETARIO_IPC.undoCommitmentStatus, (id: unknown) =>
+    segretario.undoCommitmentStatus(z.number().int().positive().parse(id))
+  )
   handle(SEGRETARIO_IPC.editCommitment, (id: unknown, changes: unknown) =>
     segretario.editCommitment(commitmentIdSchema.parse(id), commitmentChangeSchema.parse(changes))
   )
@@ -246,6 +258,9 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.listProposals, () => segretario.listProposals())
   handle(SEGRETARIO_IPC.eventPrep, (eventKey: unknown) =>
     segretario.eventPrep(z.string().min(1).max(2000).parse(eventKey))
+  )
+  handle(SEGRETARIO_IPC.commitmentSource, (id: unknown) =>
+    segretario.commitmentSource(z.number().int().positive().parse(id))
   )
   handle(
     SEGRETARIO_IPC.decideProposal,

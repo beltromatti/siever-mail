@@ -6,7 +6,8 @@ import {
   stringArg,
   ToolInputError,
   requireInteractive,
-  type SegretarioTool
+  type SegretarioTool,
+  UnknownHandle
 } from '../agent/tool-types'
 import { clip } from './format'
 
@@ -125,7 +126,7 @@ export const showTool: SegretarioTool = {
       const message = context.handles.message(messageHandle)
 
       if (!message) {
-        throw new ToolInputError(`Non conosco il messaggio «${messageHandle}».`)
+        throw new UnknownHandle(`Non conosco il messaggio «${messageHandle}».`)
       }
 
       context.page.show({ kind: 'message', ref: message.ref })
@@ -140,7 +141,7 @@ export const showTool: SegretarioTool = {
       const draftId = context.handles.draft(draftHandle)
 
       if (!draftId) {
-        throw new ToolInputError(`Non conosco la bozza «${draftHandle}».`)
+        throw new UnknownHandle(`Non conosco la bozza «${draftHandle}».`)
       }
 
       context.page.show({ kind: 'draft', draftId })
@@ -151,7 +152,7 @@ export const showTool: SegretarioTool = {
       const project = context.handles.project(projectHandle)
 
       if (!project) {
-        throw new ToolInputError(`Non conosco il progetto «${projectHandle}».`)
+        throw new UnknownHandle(`Non conosco il progetto «${projectHandle}».`)
       }
 
       context.page.show({ kind: 'project', projectId: project.projectId })
@@ -162,7 +163,7 @@ export const showTool: SegretarioTool = {
       const event = context.handles.event(eventHandle)
 
       if (!event) {
-        throw new ToolInputError(
+        throw new UnknownHandle(
           `Non conosco l'evento «${eventHandle}»: usa un riferimento e… ricevuto da \`calendario\`.`
         )
       }

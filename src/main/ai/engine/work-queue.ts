@@ -93,6 +93,8 @@ export class WorkQueue {
     scope: Scope
     priority: number
     delayMs?: number
+    /** Asked by the user: a unit waiting for it starts now, not when it was to. */
+    now?: boolean
     merge?: (waiting: Scope, incoming: Scope) => Scope
   }): Promise<WorkUnit<Scope>> {
     const now = Date.now()
@@ -105,11 +107,14 @@ export class WorkQueue {
         const scope = input.merge ? input.merge(waiting.scope, input.scope) : input.scope
         const changed = await this.sql.run(
           `UPDATE ai_work SET scope_json = ?, priority = MIN(priority, ?),
-             not_before = CASE WHEN status = 'in_coda' THEN MAX(not_before, ?) ELSE not_before END,
+             not_before = CASE WHEN ? THEN ? WHEN status = 'in_coda' THEN MAX(not_before, ?)
+               ELSE not_before END,
              updated_at = ?
            WHERE id = ? AND status IN (${placeholders(WAITING)})`,
           JSON.stringify(scope),
           input.priority,
+          input.now ? 1 : 0,
+          notBefore,
           notBefore,
           now,
           waiting.id,
@@ -320,8 +325,17 @@ export class WorkQueue {
     )
   }
 
-  /** Whether a scope failed for good lately: not asked for again until the user says so. */
-  /** Whether work for a scope is waiting or running: work done once at a time is not asked again. */
+  /** Whether a unit of this scope waits or runs: asking again adds nothing. */
+  async inProgress(scopeKey: string): Promise<boolean> {
+    return (
+      (await this.sql.get(
+        `SELECT 1 AS found FROM ai_work WHERE scope_key = ?
+         AND status IN ('in_coda', 'da_riprovare', 'al_lavoro') LIMIT 1`,
+        scopeKey
+      )) !== null
+    )
+  }
+
   /**
    * Whether work for a scope waits, runs, or failed for good in the last day:
    * then it is not queued again — a failure repeated every planning would be
@@ -339,18 +353,23 @@ export class WorkQueue {
     )
   }
 
-  async failedSince(scopeKeys: ReadonlyArray<string>, sinceMs: number): Promise<Set<string>> {
+  /** Of these scopes, those whose work failed for good since a moment, with when it failed last. */
+  async failedSince(
+    scopeKeys: ReadonlyArray<string>,
+    sinceMs: number
+  ): Promise<Map<string, number>> {
     if (scopeKeys.length === 0) {
-      return new Set()
+      return new Map()
     }
 
-    const rows = await this.sql.all<{ scope_key: string }>(
-      `SELECT DISTINCT scope_key FROM ai_work WHERE status = 'fallito' AND updated_at >= ?
-       AND scope_key IN (${placeholders(scopeKeys)})`,
+    const rows = await this.sql.all<{ scope_key: string; failed_at: number }>(
+      `SELECT scope_key, MAX(updated_at) AS failed_at FROM ai_work
+       WHERE status = 'fallito' AND updated_at >= ? AND scope_key IN (${placeholders(scopeKeys)})
+       GROUP BY scope_key`,
       sinceMs,
       ...scopeKeys
     )
-    return new Set(rows.map((row) => row.scope_key))
+    return new Map(rows.map((row) => [row.scope_key, Number(row.failed_at)]))
   }
 
   /** The units that failed for good, the newest first. */
@@ -399,6 +418,15 @@ export class WorkQueue {
     return tried.size
   }
 
+  /** A task's units waiting or running. */
+  async units(task: string): Promise<WorkUnit[]> {
+    const rows = await this.sql.all<WorkRow>(
+      `SELECT * FROM ai_work WHERE task = ? AND status IN ('in_coda', 'da_riprovare', 'al_lavoro')`,
+      task
+    )
+    return rows.map((row) => unitOf(row))
+  }
+
   /** How much of each task waits, runs and failed: the progress the interface shows. */
   async counts(): Promise<
     Array<{ task: string; status: WorkStatus; count: number; priority: number }>
@@ -421,7 +449,6 @@ export class WorkQueue {
     }))
   }
 
-  /** Forgets finished work older than a while. */
   /** Forgets work long done, let go or failed: a failure that old is no longer shown. */
   async prune(olderThanMs: number): Promise<void> {
     await this.sql.run(

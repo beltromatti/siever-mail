@@ -22,7 +22,8 @@ describe('parseInvitation', () => {
       method: 'REQUEST',
       uid: 'abc123@google.com',
       summary: 'Sopralluogo Caseificio Valli, celle 1-3 e verifica gruppi frigo',
-      series: false
+      series: false,
+      instance: null
     })
   })
 
@@ -43,6 +44,41 @@ describe('parseInvitation', () => {
       parseInvitation(invitation(['RRULE:FREQ=WEEKLY;BYDAY=MO', 'RECURRENCE-ID:20261116T080000Z']))
         ?.series
     ).toBe(false)
+  })
+
+  it('says which instance an invitation is about: when it is now, and when the series put it', () => {
+    const update = [
+      'BEGIN:VCALENDAR',
+      'METHOD:REQUEST',
+      'BEGIN:VTIMEZONE',
+      'TZID:W. Europe Standard Time',
+      'BEGIN:STANDARD',
+      'DTSTART:16010101T030000',
+      'TZOFFSETFROM:+0200',
+      'TZOFFSETTO:+0100',
+      'RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10',
+      'END:STANDARD',
+      'BEGIN:DAYLIGHT',
+      'DTSTART:16010101T020000',
+      'TZOFFSETFROM:+0100',
+      'TZOFFSETTO:+0200',
+      'RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3',
+      'END:DAYLIGHT',
+      'END:VTIMEZONE',
+      'BEGIN:VEVENT',
+      'UID:serie@prova',
+      'RECURRENCE-ID;TZID=W. Europe Standard Time:20261116T090000',
+      'DTSTART;TZID=W. Europe Standard Time:20261117T150000',
+      'DTEND;TZID=W. Europe Standard Time:20261117T160000',
+      'SUMMARY:Riunione spostata',
+      'END:VEVENT',
+      'END:VCALENDAR'
+    ].join('\r\n')
+
+    expect(parseInvitation(update)?.instance).toEqual({
+      start: Date.UTC(2026, 10, 17, 14),
+      original: Date.UTC(2026, 10, 16, 8)
+    })
   })
 
   it('finds nothing in a file without an event', () => {

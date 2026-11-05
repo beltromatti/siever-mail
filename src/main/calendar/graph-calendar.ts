@@ -1,3 +1,4 @@
+import { Marked } from 'marked'
 import { NodeHtmlMarkdown } from 'node-html-markdown'
 
 import type { CalendarAttendee, CalendarResponse, EventOrigin } from '@shared/calendar'
@@ -10,7 +11,7 @@ import {
   type ProviderEventInput
 } from './calendar-provider'
 import type { Fetch } from './ics-calendar'
-import { originValue } from './icalendar'
+import { canonicalUid, originValue } from './icalendar'
 
 const GRAPH = 'https://graph.microsoft.com/v1.0'
 /** Times in UTC, and ids that do not change when an event moves. */
@@ -21,6 +22,10 @@ const MEETING_LINK =
   /https:\/\/(?:teams\.microsoft\.com|teams\.live\.com|meet\.google\.com|[\w.-]*zoom\.us|[\w.-]*webex\.com)\/[^\s"<>)]+/i
 const MAX_RETRY_WAIT_MS = 30_000
 
+/** What the user is told where an all-day event waits for the mailbox's time zone. */
+export const MAILBOX_ZONE_NOT_GRANTED =
+  'Per scrivere gli eventi di tutto il giorno Microsoft deve dare a SIEVER Mail il fuso orario della casella: ricollega il calendario.'
+
 interface GraphDateTime {
   dateTime: string
   timeZone: string
@@ -30,28 +35,46 @@ interface GraphAddress {
   emailAddress?: { address?: string | null; name?: string | null } | null
 }
 
+/** A guest as Graph keeps one: required, optional, or a room (`resource`). */
+interface GraphAttendee extends GraphAddress {
+  type?: string | null
+  status?: { response?: string } | null
+}
+
 /** An event as Graph gives it, the fields read. */
 export interface GraphEvent {
   id: string
   '@removed'?: { reason?: string }
+  /**
+   * Exchange's Global Object ID in hex: the UID an invitation carries,
+   * wrapped, and each instance's date in it (see `canonicalUid`).
+   */
   iCalUId?: string | null
-  uid?: string | null
-  /** For an instance of a series, the series. */
-  seriesMasterId?: string | null
   subject?: string | null
   body?: { contentType?: 'text' | 'html'; content?: string | null } | null
   start?: GraphDateTime | null
   end?: GraphDateTime | null
   isAllDay?: boolean
   isCancelled?: boolean
+  /** Whether the calendar's owner organises it. */
   isOrganizer?: boolean
   location?: { displayName?: string | null } | null
-  attendees?: Array<GraphAddress & { status?: { response?: string } | null }> | null
+  attendees?: GraphAttendee[] | null
   organizer?: GraphAddress | null
+  /** The calendar owner's answer. */
   responseStatus?: { response?: string } | null
   onlineMeeting?: { joinUrl?: string | null } | null
   onlineMeetingUrl?: string | null
   webLink?: string | null
+}
+
+interface GraphCalendar {
+  id: string
+  name?: string
+  hexColor?: string | null
+  canEdit?: boolean
+  isDefaultCalendar?: boolean
+  owner?: { address?: string | null } | null
 }
 
 const RESPONSES: Readonly<Record<string, CalendarResponse>> = {
@@ -74,7 +97,7 @@ function instantOf(time: GraphDateTime): number {
   return Date.parse(`${time.dateTime.slice(0, 23)}Z`)
 }
 
-/** An all-day event's day, from the date its time carries. */
+/** An all-day event's day: Graph gives its midnight as it is, in whatever zone it is asked for. */
 function dayOf(time: GraphDateTime): string {
   return time.dateTime.slice(0, 10)
 }
@@ -84,8 +107,17 @@ function localMidnight(day: string): number {
   return new Date(year, month - 1, date).getTime()
 }
 
-/** An event as the app keeps it, from Graph's. */
-export function eventOfGraph(item: GraphEvent, calendarId: string, self: string): ProviderEvent {
+/**
+ * An event as the app keeps it, from Graph's. `ownCalendar` says whether
+ * the calendar is the user's: in one someone shares, its owner's answer is
+ * not the user's, and the user has none to give there.
+ */
+export function eventOfGraph(
+  item: GraphEvent,
+  calendarId: string,
+  self: string,
+  ownCalendar: boolean
+): ProviderEvent {
   const own = self.trim().toLowerCase()
   const organizer = addressOf(item.organizer) || null
   const allDay = item.isAllDay === true
@@ -112,7 +144,7 @@ export function eventOfGraph(item: GraphEvent, calendarId: string, self: string)
   return {
     calendarId,
     eventId: item.id,
-    iCalUid: item.uid ?? item.iCalUId ?? null,
+    iCalUid: item.iCalUId ? canonicalUid(item.iCalUId) : null,
     title: item.subject?.trim() || '(senza titolo)',
     start: allDay ? dayOf(start) : new Date(startsAt).toISOString(),
     end: allDay ? dayOf(end) : new Date(Math.max(endsAt, startsAt)).toISOString(),
@@ -123,9 +155,9 @@ export function eventOfGraph(item: GraphEvent, calendarId: string, self: string)
     description: description || null,
     attendees,
     organizer,
-    // The user's answer when invited; none for their own event.
+    // The user's answer when invited; none for their own event, nor in someone else's calendar.
     myResponse:
-      item.isOrganizer || attendees.length === 0
+      !ownCalendar || item.isOrganizer || attendees.length === 0
         ? null
         : (RESPONSES[item.responseStatus?.response ?? ''] ?? 'needsAction'),
     meetLink:
@@ -164,28 +196,41 @@ function removedEvent(id: string, calendarId: string): ProviderEvent {
   }
 }
 
-/** A time as Graph takes it: the instant in UTC, or an all-day event's midnight. */
-function graphTime(value: string, allDay: boolean): GraphDateTime {
-  return {
-    dateTime: allDay
-      ? `${value.slice(0, 10)}T00:00:00`
-      : new Date(value).toISOString().slice(0, 23),
-    timeZone: 'UTC'
-  }
+/**
+ * A time as Graph takes it: an instant, in UTC; an all-day event's day as
+ * its midnight in `zone` — the mailbox's own, the one Outlook shows the day
+ * in: at UTC's midnight it would cross into the next day east of it.
+ */
+function graphTime(value: string, allDay: boolean, zone: string): GraphDateTime {
+  return allDay
+    ? { dateTime: `${value.slice(0, 10)}T00:00:00`, timeZone: zone }
+    : { dateTime: new Date(value).toISOString().slice(0, 23), timeZone: 'UTC' }
 }
 
-function graphBody(event: ProviderEventInput): Record<string, unknown> {
+const escapeHtml = (text: string): string =>
+  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+/**
+ * Markdown as HTML, and only the HTML Markdown says: markup written among
+ * the text is shown as written. A description may come from someone's mail
+ * (the Segretario writes from it), and the body goes to every guest.
+ */
+const markdown = new Marked({
+  gfm: true,
+  breaks: true,
+  renderer: { html: ({ text }) => escapeHtml(text) }
+})
+
+/**
+ * A description as an event's body. The app shows an HTML body — Outlook's
+ * usual, a Teams call's block among it — as Markdown: written back as the
+ * HTML that Markdown says, its links, lists and emphasis stay what they
+ * were, where plain text would show their marks.
+ */
+function bodyOf(description: string | null): { contentType: 'html'; content: string } {
   return {
-    subject: event.title,
-    body: { contentType: 'text', content: event.description ?? '' },
-    start: graphTime(event.start, event.allDay),
-    end: graphTime(event.end, event.allDay),
-    isAllDay: event.allDay,
-    location: { displayName: event.location ?? '' },
-    attendees: event.attendees.map((address) => ({
-      emailAddress: { address },
-      type: 'required'
-    }))
+    contentType: 'html',
+    content: description ? markdown.parse(description, { async: false }) : ''
   }
 }
 
@@ -196,24 +241,31 @@ function graphBody(event: ProviderEventInput): Record<string, unknown> {
  * Graph tells the guests itself when an event with guests is written.
  */
 export class GraphCalendarProvider implements CalendarProvider {
-  /** Each series' UID, by its id: read once. */
-  private readonly seriesUids = new Map<string, string | null>()
+  /** Whether each calendar is the user's, not shared by someone else: as listed, or asked once. */
+  private readonly owned = new Map<string, boolean>()
 
   constructor(
-    private readonly token: () => Promise<string>,
+    private readonly access: {
+      /** A token for the calendars. */
+      calendar: () => Promise<string>
+      /** A token to read the mailbox's settings; null where the account never consented to it. */
+      mailboxSettings: () => Promise<string | null>
+    },
     private readonly self: string,
     private readonly fetch: Fetch
   ) {}
 
   private async request(
     url: string,
-    init: { method?: string; body?: unknown; prefer?: string } = {}
+    init: { method?: string; body?: unknown; prefer?: string; token?: () => Promise<string> } = {}
   ): Promise<Response> {
+    const token = init.token ?? this.access.calendar
+
     for (let attempt = 0; ; attempt++) {
       const response = await this.fetch(url.startsWith('https://') ? url : `${GRAPH}${url}`, {
         method: init.method ?? 'GET',
         headers: {
-          Authorization: `Bearer ${await this.token()}`,
+          Authorization: `Bearer ${await token()}`,
           Prefer: init.prefer ? `${PREFER}, ${init.prefer}` : PREFER,
           ...(init.body ? { 'Content-Type': 'application/json' } : {})
         },
@@ -234,7 +286,10 @@ export class GraphCalendarProvider implements CalendarProvider {
     }
   }
 
-  private async json<T>(url: string, init?: { method?: string; body?: unknown }): Promise<T> {
+  private async json<T>(
+    url: string,
+    init?: { method?: string; body?: unknown; token?: () => Promise<string> }
+  ): Promise<T> {
     const response = await this.request(url, init)
 
     if (!response.ok) {
@@ -242,6 +297,119 @@ export class GraphCalendarProvider implements CalendarProvider {
     }
 
     return (await response.json()) as T
+  }
+
+  /** An event, by the calendar it is in: the user's, or one shared with them, alike. */
+  private eventPath(calendarId: string, eventId: string): string {
+    return `/me/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`
+  }
+
+  /** Whether a calendar is the user's: their main one, or one whose owner they are. */
+  private isOwn(calendar: GraphCalendar): boolean {
+    const owner = calendar.owner?.address?.trim().toLowerCase()
+    return calendar.isDefaultCalendar === true || !owner || owner === this.self.trim().toLowerCase()
+  }
+
+  private async ownCalendar(calendarId: string): Promise<boolean> {
+    let own = this.owned.get(calendarId)
+
+    if (own === undefined) {
+      own = this.isOwn(
+        await this.json<GraphCalendar>(
+          `/me/calendars/${encodeURIComponent(calendarId)}?$select=id,owner,isDefaultCalendar`
+        )
+      )
+      this.owned.set(calendarId, own)
+    }
+
+    return own
+  }
+
+  /**
+   * Whether the account lets the mailbox's time zone be read: one whose
+   * calendar was connected before it was asked for does not, until it is
+   * connected again.
+   */
+  async mailboxZoneGranted(): Promise<boolean> {
+    return (await this.access.mailboxSettings()) !== null
+  }
+
+  /** The time zone of the mailbox: the one Outlook shows its days in. */
+  private async mailboxZone(): Promise<string> {
+    const token = await this.access.mailboxSettings()
+
+    // Without it an all-day event would be written on the wrong days east or west of UTC.
+    if (!token) {
+      throw new Error(MAILBOX_ZONE_NOT_GRANTED)
+    }
+
+    const { value } = await this.json<{ value?: string | null }>('/me/mailboxSettings/timeZone', {
+      token: async () => token
+    })
+
+    if (!value) {
+      throw new Error('Microsoft non ha detto il fuso orario della casella.')
+    }
+
+    return value
+  }
+
+  /**
+   * The fields of an event as Graph takes them: only `fields`, the guests
+   * kept as they are in the event at `current` — none for a new one.
+   */
+  private async fieldsOf(
+    event: ProviderEventInput,
+    fields: ReadonlySet<EventField>,
+    current: string | null
+  ): Promise<Record<string, unknown>> {
+    const zone = fields.has('time') && event.allDay ? await this.mailboxZone() : 'UTC'
+
+    return {
+      ...(fields.has('title') ? { subject: event.title } : {}),
+      ...(fields.has('time')
+        ? {
+            start: graphTime(event.start, event.allDay, zone),
+            end: graphTime(event.end, event.allDay, zone),
+            isAllDay: event.allDay
+          }
+        : {}),
+      ...(fields.has('location') ? { location: { displayName: event.location ?? '' } } : {}),
+      ...(fields.has('description') ? { body: bodyOf(event.description) } : {}),
+      ...(fields.has('attendees')
+        ? { attendees: await this.attendeesOf(event.attendees, current) }
+        : {})
+    }
+  }
+
+  /**
+   * The guests to write: those already there as they are — required,
+   * optional, a room, their names — the new ones required. Graph takes the
+   * whole list; the user's own entry, when there is one, stays.
+   */
+  private async attendeesOf(
+    wanted: ReadonlyArray<string>,
+    current: string | null
+  ): Promise<GraphAttendee[]> {
+    const kept = current
+      ? ((await this.json<{ attendees?: GraphAttendee[] | null }>(`${current}?$select=attendees`))
+          .attendees ?? [])
+      : []
+    const byAddress = new Map(kept.map((attendee) => [addressOf(attendee), attendee]))
+    const own = this.self.trim().toLowerCase()
+    const addresses = [
+      ...new Set([
+        ...(byAddress.has(own) ? [own] : []),
+        ...wanted.map((address) => address.trim().toLowerCase())
+      ])
+    ]
+
+    return addresses.map((address) => {
+      const known = byAddress.get(address)
+      return known
+        ? { emailAddress: known.emailAddress, type: known.type ?? 'required' }
+        : { emailAddress: { address }, type: 'required' }
+    })
   }
 
   async listCalendars(): Promise<
@@ -253,17 +421,21 @@ export class GraphCalendarProvider implements CalendarProvider {
       color: string | null
     }>
   > {
-    const { value } = await this.json<{
-      value: Array<{
-        id: string
-        name?: string
-        hexColor?: string | null
-        canEdit?: boolean
-        isDefaultCalendar?: boolean
-      }>
-    }>('/me/calendars?$select=id,name,hexColor,canEdit,isDefaultCalendar&$top=100')
+    const calendars: GraphCalendar[] = []
+    let url: string | null =
+      '/me/calendars?$select=id,name,hexColor,canEdit,isDefaultCalendar,owner&$top=100'
 
-    return value.map((calendar) => ({
+    while (url) {
+      const page: { value: GraphCalendar[]; '@odata.nextLink'?: string } = await this.json(url)
+      calendars.push(...page.value)
+      url = page['@odata.nextLink'] ?? null
+    }
+
+    for (const calendar of calendars) {
+      this.owned.set(calendar.id, this.isOwn(calendar))
+    }
+
+    return calendars.map((calendar) => ({
       calendarId: calendar.id,
       name: calendar.name?.trim() || 'Calendario',
       primary: calendar.isDefaultCalendar === true,
@@ -312,32 +484,40 @@ export class GraphCalendarProvider implements CalendarProvider {
       deltaLink = page['@odata.deltaLink'] ?? deltaLink
     }
 
-    // Graph's iCalUId differs for each instance of a series: an instance takes its series' UID,
-    // the one an invitation names, read once for each series.
-    for (const masterId of new Set(
-      items.flatMap((item) =>
-        !item['@removed'] && item.seriesMasterId ? [item.seriesMasterId] : []
+    const own = await this.ownCalendar(calendarId)
+    const events: ProviderEvent[] = []
+
+    for (const item of items) {
+      events.push(
+        item['@removed']
+          ? await this.removed(calendarId, item.id, own)
+          : eventOfGraph(item, calendarId, this.self, own)
       )
-    )) {
-      if (!this.seriesUids.has(masterId)) {
-        const master = await this.json<GraphEvent>(
-          `/me/events/${encodeURIComponent(masterId)}?$select=iCalUId,uid`
-        ).catch(() => null)
-        this.seriesUids.set(masterId, master ? (master.uid ?? master.iCalUId ?? null) : null)
-      }
     }
 
-    const events = items.map((item) => {
-      if (item['@removed']) {
-        return removedEvent(item.id, calendarId)
-      }
-
-      const event = eventOfGraph(item, calendarId, this.self)
-      const seriesUid = item.seriesMasterId ? this.seriesUids.get(item.seriesMasterId) : null
-      return seriesUid ? { ...event, iCalUid: seriesUid } : event
-    })
-
     return { events, syncToken: deltaLink }
+  }
+
+  /**
+   * An event the delta took out. Graph says "removed" both of one deleted
+   * and of one that changed outside the window — moved out of it, or made
+   * there — so it is asked for: gone, or as it is now, wherever it is. One
+   * the user may no longer see — made private in a calendar shared with
+   * them, the sharing taken back — is gone for them too. Anything else is
+   * asked again with the whole delta, at the next sync.
+   */
+  private async removed(calendarId: string, eventId: string, own: boolean): Promise<ProviderEvent> {
+    const response = await this.request(this.eventPath(calendarId, eventId))
+
+    if (response.status === 403 || response.status === 404 || response.status === 410) {
+      return removedEvent(eventId, calendarId)
+    }
+
+    if (!response.ok) {
+      throw await graphError(response)
+    }
+
+    return eventOfGraph((await response.json()) as GraphEvent, calendarId, this.self, own)
   }
 
   async create(
@@ -345,12 +525,17 @@ export class GraphCalendarProvider implements CalendarProvider {
     event: ProviderEventInput,
     origin: EventOrigin | null
   ): Promise<ProviderEvent> {
+    const own = await this.ownCalendar(calendarId)
     const created = await this.json<GraphEvent>(
       `/me/calendars/${encodeURIComponent(calendarId)}/events`,
       {
         method: 'POST',
         body: {
-          ...graphBody(event),
+          ...(await this.fieldsOf(
+            event,
+            new Set<EventField>(['title', 'time', 'location', 'description', 'attendees']),
+            null
+          )),
           ...(origin
             ? {
                 singleValueExtendedProperties: [
@@ -362,7 +547,7 @@ export class GraphCalendarProvider implements CalendarProvider {
       }
     )
 
-    return { ...eventOfGraph(created, calendarId, this.self), origin }
+    return { ...eventOfGraph(created, calendarId, this.self, own), origin }
   }
 
   async update(
@@ -372,26 +557,19 @@ export class GraphCalendarProvider implements CalendarProvider {
     _notify: boolean,
     fields: ReadonlySet<EventField>
   ): Promise<ProviderEvent> {
-    const body = graphBody(event)
+    const own = await this.ownCalendar(calendarId)
+    const path = this.eventPath(calendarId, eventId)
     // Only what changed: a PATCH leaves the rest as Graph has it now.
-    const updated = await this.json<GraphEvent>(`/me/events/${encodeURIComponent(eventId)}`, {
+    const updated = await this.json<GraphEvent>(path, {
       method: 'PATCH',
-      body: {
-        ...(fields.has('title') ? { subject: body.subject } : {}),
-        ...(fields.has('time')
-          ? { start: body.start, end: body.end, isAllDay: body.isAllDay }
-          : {}),
-        ...(fields.has('location') ? { location: body.location } : {}),
-        ...(fields.has('description') ? { body: body.body } : {}),
-        ...(fields.has('attendees') ? { attendees: body.attendees } : {})
-      }
+      body: await this.fieldsOf(event, fields, path)
     })
 
-    return eventOfGraph(updated, calendarId, this.self)
+    return eventOfGraph(updated, calendarId, this.self, own)
   }
 
-  async remove(_calendarId: string, eventId: string): Promise<void> {
-    const response = await this.request(`/me/events/${encodeURIComponent(eventId)}`, {
+  async remove(calendarId: string, eventId: string): Promise<void> {
+    const response = await this.request(this.eventPath(calendarId, eventId), {
       method: 'DELETE'
     })
 
@@ -406,31 +584,32 @@ export class GraphCalendarProvider implements CalendarProvider {
     response: Exclude<CalendarResponse, 'needsAction'>,
     series: boolean
   ): Promise<ProviderEvent> {
+    const own = await this.ownCalendar(calendarId)
+
+    // In a calendar someone shares, the answer would be its owner's.
+    if (!own) {
+      throw new Error('Questo è il calendario di un’altra persona: rispondi all’invito dal tuo.')
+    }
+
     // The whole series answered: the instance stands for it.
     const eventId = series
       ? ((
           await this.json<{ seriesMasterId?: string | null }>(
-            `/me/events/${encodeURIComponent(instanceId)}?$select=seriesMasterId`
+            `${this.eventPath(calendarId, instanceId)}?$select=seriesMasterId`
           )
         ).seriesMasterId ?? instanceId)
       : instanceId
-    const answered = await this.request(
-      `/me/events/${encodeURIComponent(eventId)}/${ANSWERS[response]}`,
-      {
-        method: 'POST',
-        body: { sendResponse: true }
-      }
-    )
+    const path = this.eventPath(calendarId, eventId)
+    const answered = await this.request(`${path}/${ANSWERS[response]}`, {
+      method: 'POST',
+      body: { sendResponse: true }
+    })
 
     if (!answered.ok) {
       throw await graphError(answered)
     }
 
-    return eventOfGraph(
-      await this.json<GraphEvent>(`/me/events/${encodeURIComponent(eventId)}`),
-      calendarId,
-      this.self
-    )
+    return eventOfGraph(await this.json<GraphEvent>(path), calendarId, this.self, true)
   }
 }
 

@@ -7,6 +7,7 @@
  */
 
 import type { EventChange, NewCalendarEvent } from '@shared/calendar'
+import type { HandleLink } from '@shared/segretario'
 
 /** Who changed something: the user, the Segretario (in a run), or the app itself. */
 export type ActorKind = 'utente' | 'segretario' | 'sistema'
@@ -105,8 +106,7 @@ export interface CommitmentRecord extends MessageAnchor {
   closedAt: number | null
 }
 
-/** A message that bears on a decision: it must be newer than the decision it overturns. */
-/** A message given as proof of a change: where it is, and when it came. */
+/** A message given as proof of a change: where it is, and when it came — newer than a decision it overturns. */
 export interface Evidence {
   messageKey: string
   dateIso: string
@@ -133,8 +133,9 @@ export interface ProjectRecord {
   titleBy: ActorKind
   /** What it is about, in a line or two. */
   description: string | null
-  /** "Il punto": where it stands now, and when that was written. */
+  /** "Il punto": where it stands now, what its short names stand for, and when it was written. */
   state: string | null
+  stateLinks: HandleLink[]
   stateAt: number | null
   /** Since when "Il punto" no longer tells the whole story: something moved after it. */
   staleSince: number | null

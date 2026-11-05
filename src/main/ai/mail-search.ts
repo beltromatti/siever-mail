@@ -11,7 +11,7 @@ import {
 import type { MailAccount, MailAddress, MailFolder, MessageRef } from '@shared/models'
 
 import { buildMessageSearchWhere } from '../services/database'
-import { fullTextMatchExpression } from '../services/full-text-query'
+import { fullTextMatchExpression, numberWords, queryNumbers } from '../services/full-text-query'
 
 /** What the Segretario asks of the mail when it searches. */
 export interface AgentSearchQuery {
@@ -214,7 +214,16 @@ export async function searchMail(
     return []
   }
 
-  const expression = fullTextMatchExpression(query.text)
+  const expression = fullTextMatchExpression(
+    query.text,
+    new Map(
+      await Promise.all(
+        queryNumbers(query.text).map(
+          async (digits) => [digits, await numberWords(prisma, digits)] as const
+        )
+      )
+    )
+  )
   const overfetch = query.limit * 4
   let rows: HitRow[]
 
@@ -370,6 +379,15 @@ async function unindexedMatches(
     .map((row) => ({ ...row, snippet: null }))
 }
 
+/** A message of a conversation: where it is shown, and who wrote what when. */
+export interface ThreadMessage {
+  ref: MessageRef
+  messageKey: string
+  subject: string
+  from: MailAddress[]
+  dateIso: string
+}
+
 /**
  * The messages of a conversation, oldest first, one row per message — the
  * replies the user sent included, wherever they are filed.
@@ -381,10 +399,17 @@ export async function threadMessages(
   folders: ReadonlyArray<MailFolder>,
   /** Only the messages up to this moment (ISO), the conversation as it stood then. */
   untilIso?: string
-): Promise<MessageRef[]> {
+): Promise<ThreadMessage[]> {
   const rows = await prisma.message.findMany({
     where: { accountId, threadId, ...(untilIso ? { dateIso: { lte: untilIso } } : {}) },
-    select: { folderPath: true, uid: true, messageKey: true, dateIso: true },
+    select: {
+      folderPath: true,
+      uid: true,
+      messageKey: true,
+      dateIso: true,
+      subject: true,
+      fromJson: true
+    },
     orderBy: { dateIso: 'asc' }
   })
   const byKey = new Map<string, (typeof rows)[number]>()
@@ -401,5 +426,11 @@ export async function threadMessages(
 
   return [...byKey.values()]
     .sort((a, b) => a.dateIso.localeCompare(b.dateIso))
-    .map((row) => ({ accountId, folderPath: row.folderPath, uid: row.uid }))
+    .map((row) => ({
+      ref: { accountId, folderPath: row.folderPath, uid: row.uid },
+      messageKey: row.messageKey,
+      subject: row.subject,
+      from: parseAddresses(row.fromJson),
+      dateIso: row.dateIso
+    }))
 }

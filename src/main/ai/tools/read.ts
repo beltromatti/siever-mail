@@ -2,9 +2,10 @@ import { readFile, stat } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 
 import type { MessageRef } from '@shared/models'
+import { unlinked } from '@shared/segretario-links'
 
-import { ensurePathReachable } from '../../services/network-volumes'
 import { extractContent } from '../extraction'
+import { reachShare } from './files'
 import { threadMessages } from '../mail-search'
 import type { ContentPart } from '../openrouter'
 import { PROMPTS } from '../prompts'
@@ -15,7 +16,8 @@ import {
   ToolInputError,
   type SegretarioTool,
   type ToolContext,
-  type ToolOutcome
+  type ToolOutcome,
+  UnknownHandle
 } from '../agent/tool-types'
 import { commitmentLine, messageWork, noteLine, projectLine, rememberCommitments } from './describe'
 import {
@@ -199,67 +201,125 @@ async function readOneMessage(
 
 async function readConversation(context: ToolContext, ref: MessageRef): Promise<ToolOutcome> {
   const message = await context.mail.readMessage(ref)
-  const refs = await threadMessages(
+  const thread = await threadMessages(
     await context.mail.searchClient(),
     ref.accountId,
     message.threadId,
     await context.mail.listFolders(ref.accountId)
   )
-  const parts: string[] = []
-  let total = 0
-  let omitted = 0
+  const refs = thread.map((entry) => entry.ref)
 
-  for (const [index, threadRef] of refs.entries()) {
-    if (total >= THREAD_TOTAL_CHARS) {
-      omitted += 1
+  // Every message named; past the room there is, the first and the newest are given whole and
+  // those in the middle by a line each, to read one by one if they matter. Only the messages
+  // given whole are read: a long conversation does not fetch what it will not show.
+  const read = new Map<number, Awaited<ReturnType<typeof readThreadMessage>>>()
+  const unreadable = new Map<number, string>()
+  let total = 0
+
+  // The first, then from the newest back.
+  const order = thread.length === 0 ? [] : [0, ...[...thread.keys()].slice(1).reverse()]
+
+  for (const index of order) {
+    try {
+      const entry = await readThreadMessage(context, thread[index].ref, index === 0)
+
+      if (read.size > 1 && total + entry.page.text.length > THREAD_TOTAL_CHARS) {
+        break
+      }
+
+      read.set(index, entry)
+      total += entry.page.text.length
+    } catch (error) {
+      unreadable.set(index, error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const parts: string[] = []
+  const skipped: string[] = []
+
+  const flushSkipped = (): void => {
+    if (skipped.length > 0) {
+      parts.push(
+        `[${countOf(skipped.length, 'messaggio', 'messaggi')} in mezzo, non mostrati per spazio: leggili da soli se servono]\n${skipped.join('\n')}`
+      )
+      skipped.length = 0
+    }
+  }
+
+  for (const [index, entry] of thread.entries()) {
+    const handle = context.handles.name(
+      { kind: 'message', ref: entry.ref, messageKey: entry.messageKey },
+      context.newHandles
+    )
+    const whole = read.get(index)
+    const line = `- ${handle} · ${formatDateTime(entry.dateIso)} · ${formatAddresses(entry.from, 1)} · «${entry.subject}»`
+
+    if (unreadable.has(index)) {
+      flushSkipped()
+      parts.push(`${line} — non si legge ora: ${unreadable.get(index)}`)
       continue
     }
 
-    const item = await context.mail.readMessage(threadRef)
-    const itemHandle = context.handles.name(
-      { kind: 'message', ref: threadRef, messageKey: item.messageKey },
-      context.newHandles
-    )
-    const own =
-      index === 0
-        ? { text: item.textForReading, cut: false }
-        : withoutQuotedHistory(item.textForReading)
-    const page = clip(own.text, THREAD_MESSAGE_CHARS)
-    const note = await context.registry.notes.get(threadRef.accountId, item.messageKey)
-    total += page.text.length
+    if (!whole) {
+      skipped.push(line)
+      continue
+    }
 
+    flushSkipped()
+    const { item, own, page } = whole
+    const note = await context.registry.notes.get(entry.ref.accountId, entry.messageKey)
     parts.push(
       [
-        `## ${index + 1}/${refs.length}`,
-        describeMessage(itemHandle, item),
+        `## ${index + 1}/${thread.length}`,
+        describeMessage(handle, item),
         note ? `La tua nota: ${noteLine(note)}` : '',
         '',
         page.text || '(nessun testo)',
         own.cut ? '[Citazioni dei messaggi precedenti omesse.]' : '',
-        page.clipped ? `[Accorciato: leggi ${itemHandle} da solo per il testo intero.]` : '',
-        attachmentsLine(context, threadRef, item.attachments)
+        page.clipped ? `[Accorciato: leggi ${handle} da solo per il testo intero.]` : '',
+        attachmentsLine(context, entry.ref, item.attachments)
       ]
-        .filter((line) => line !== '')
+        .filter((part) => part !== '')
         .join('\n')
     )
   }
 
-  const last = refs[refs.length - 1] ?? ref
-  const lastMessage = last === ref ? message : await context.mail.readMessage(last)
-  const work = await messageWork(context, last, lastMessage.messageKey, message.threadId)
+  flushSkipped()
+
+  const last = thread[thread.length - 1]
+  const work = await messageWork(
+    context,
+    last?.ref ?? ref,
+    last?.messageKey ?? message.messageKey,
+    message.threadId
+  )
 
   return {
-    content: `Conversazione di ${countOf(refs.length, 'messaggio', 'messaggi')}, dal più vecchio:\n\n${parts.join('\n\n')}${
-      omitted > 0
-        ? `\n\n[${countOf(omitted, 'messaggio più recente non mostrato', 'messaggi più recenti non mostrati')} per spazio: leggili uno per uno.]`
-        : ''
-    }\n\n# Il lavoro su questa conversazione\n${work.join('\n')}`,
+    content: `Conversazione di ${countOf(thread.length, 'messaggio', 'messaggi')}, dal più vecchio:\n\n${parts.join('\n\n')}\n\n# Il lavoro su questa conversazione\n${work.join('\n')}`,
     summary:
-      refs.length === 1
+      thread.length <= 1
         ? `Letto «${message.subject}»`
-        : `Letta la conversazione «${message.subject}» · ${countOf(refs.length, 'messaggio', 'messaggi')}`,
+        : `Letta la conversazione «${message.subject}» · ${countOf(thread.length, 'messaggio', 'messaggi')}`,
     messages: refs
   }
+}
+
+/** A message of a conversation as it is shown whole: the first with what it quotes, the others without. */
+async function readThreadMessage(
+  context: ToolContext,
+  ref: MessageRef,
+  first: boolean
+): Promise<{
+  item: Awaited<ReturnType<ToolContext['mail']['readMessage']>>
+  own: { text: string; cut: boolean }
+  page: ReturnType<typeof clip>
+}> {
+  const item = await context.mail.readMessage(ref)
+  const own = first
+    ? { text: item.textForReading, cut: false }
+    : withoutQuotedHistory(item.textForReading)
+
+  return { item, own, page: clip(own.text, THREAD_MESSAGE_CHARS) }
 }
 
 async function readFileAt(
@@ -267,7 +327,7 @@ async function readFileAt(
   path: string,
   args: Record<string, unknown>
 ): Promise<ToolOutcome> {
-  await ensurePathReachable(path)
+  await reachShare(context, path)
   const info = await stat(path).catch(() => null)
 
   if (!info?.isFile()) {
@@ -389,7 +449,7 @@ export async function readProject(context: ProjectReader, projectId: string): Pr
     content: [
       projectLine(context, project),
       project.state
-        ? `Il punto (scritto il ${shortDate(new Date(project.stateAt ?? project.updatedAt).toISOString())}${project.staleSince ? ', poi qualcosa si è mosso: va aggiornato' : ''}):\n${project.state}`
+        ? `Il punto (scritto il ${shortDate(new Date(project.stateAt ?? project.updatedAt).toISOString())}${project.staleSince ? ', poi qualcosa si è mosso: va aggiornato' : ''}):\n${unlinked(project.state)}`
         : 'Il punto: non ancora scritto.',
       resources.length > 0
         ? `Risorse: ${resources.map((resource) => `${resource.label ?? ''} ${resource.location}`.trim()).join(' · ')}`
@@ -492,7 +552,7 @@ export const readTool: SegretarioTool = {
         }
       }
       default:
-        throw new ToolInputError(
+        throw new UnknownHandle(
           `Non conosco «${reference}»: in questa conversazione non l'hai ricevuto. I riferimenti (m…, f…, e…, p…, b…) arrivano dagli strumenti: un messaggio da \`cerca_posta\`, un progetto da \`progetti\`, un evento da \`calendario\`. Un file si legge anche dal suo percorso completo.`
         )
     }

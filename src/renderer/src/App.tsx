@@ -60,6 +60,7 @@ import {
   SegretarioPanel,
   type SegretarioContextChip
 } from '@renderer/features/segretario/segretario-panel'
+import { SegretarioLinkProvider } from '@renderer/features/segretario/segretario-text'
 import { useSegretario } from '@renderer/features/segretario/use-segretario'
 import { rowWorkKey, savedOnly, useRowWork } from '@renderer/features/segretario/row-work'
 import { MessageWorkPanel } from '@renderer/features/segretario/message-work'
@@ -149,6 +150,7 @@ import {
   messageRefKey,
   moveSelectionCursor,
   reconcileSelection,
+  reconcileWithNeighbour,
   selectAllMessages,
   summaryToMessageRef,
   uniqueMessageRefs,
@@ -165,6 +167,7 @@ import {
 import { commandChord, COMMANDS, findCommand, type HostCommandId } from '@shared/commands'
 import type { ContextMenuItem, ContextMenuRequest } from '@shared/context-menu'
 import { replyRecipients, replyReferences } from '@shared/reply'
+import { forwardSubject, replySubject } from '@shared/subject'
 import { highlightTermsForField, parseSearchQuery } from '@shared/search'
 import type {
   AccountConnectionState,
@@ -297,22 +300,6 @@ async function buildForwardQuoteHtml(message: MailMessageDetail): Promise<string
   const ccHeader = message.cc.length > 0 ? `<br>Cc: ${formatQuotedAddressList(message.cc)}` : ''
 
   return `<div class="gmail_quote"><div dir="ltr" class="gmail_attr">---------- Messaggio inoltrato ----------<br>Da: ${fromHeader}<br>Data: ${escapeHtml(formatQuotedDate(message.date))}<br>Oggetto: ${escapeHtml(message.subject)}<br>A: ${toHeader}${ccHeader}<br></div><blockquote class="gmail_quote" type="cite" style="${GMAIL_QUOTE_BLOCK_STYLE}">${quotedBody}</blockquote></div>`
-}
-
-function ensureReplySubject(subject: string): string {
-  if (/^re:/i.test(subject.trim())) {
-    return subject
-  }
-
-  return `Re: ${subject}`
-}
-
-function ensureForwardSubject(subject: string): string {
-  if (/^fwd:/i.test(subject.trim())) {
-    return subject
-  }
-
-  return `Fwd: ${subject}`
 }
 
 /**
@@ -615,7 +602,9 @@ function App(): React.JSX.Element {
     segretario.status && segretario.status.keyState !== 'missing' && segretario.preferences?.enabled
   )
   // The panel is there with the AI on — and, before a key is given, to ask for one.
-  const segretarioOffered = aiOn || segretario.status?.keyState === 'missing'
+  // With the AI off there is no trace of the Segretario (vision §10.1): it is turned on from
+  // Settings › Segretario, which leads to the guided setup.
+  const segretarioOffered = aiOn
   // Oggi is the Segretario's: with the AI off the rail goes without it, and the mail takes its place.
   const railItems = aiOn ? RAIL_ITEMS : RAIL_ITEMS.filter((item) => item.id !== 'oggi')
   const shownApp: AppId = activeApp === 'oggi' && !aiOn ? 'mail' : activeApp
@@ -1041,7 +1030,12 @@ function App(): React.JSX.Element {
             }
           }
 
-          const reconciled = reconcileSelection(current, availableRefs)
+          // The list as it was shown — the ref follows it after each render — tells the neighbour.
+          const reconciled = reconcileWithNeighbour(
+            current,
+            orderedMessageRefsRef.current,
+            availableRefs
+          )
 
           if (reconciled.selectedRefs.length > 0) {
             return reconciled
@@ -1230,6 +1224,11 @@ function App(): React.JSX.Element {
 
   // The view a deferred refresh reads, as it is when the refresh runs.
   const currentViewRef = useRef<{ accountId: string; folderPath: string } | null>(null)
+  const messageFilterRef = useRef(messageFilter)
+
+  useEffect(() => {
+    messageFilterRef.current = messageFilter
+  }, [messageFilter])
 
   useEffect(() => {
     currentViewRef.current =
@@ -1289,7 +1288,12 @@ function App(): React.JSX.Element {
     }
 
     const unsubscribeWork = window.segretarioApi.onWorkChanged(() => {
-      if (isSegretarioList(currentViewRef.current?.folderPath)) {
+      // A list made from the work — a view of the Segretario's, or any folder showing the active
+      // ones — follows it.
+      if (
+        isSegretarioList(currentViewRef.current?.folderPath) ||
+        messageFilterRef.current === 'active'
+      ) {
         scheduleListRefresh()
       }
 
@@ -2085,14 +2089,6 @@ function App(): React.JSX.Element {
   }, [])
 
   /**
-   * The messages taken out of the list ahead of the server, as one burst
-   * however many actions started it — "Elimina" on a selection, an archive
-   * of several — and the selection before the first of them went. If the
-   * server refuses some, they come back, and once the burst is over so does
-   * that selection, less what did go: the list had moved on to a neighbour
-   * only because of them. A selection the user made meanwhile stands.
-   */
-  /**
    * The message shown alone in the reading pane, once its body is on
    * screen — see the read-state rules at `followShownMessage`. `keepState`
    * is set when the user marks it read or unread by hand.
@@ -2103,6 +2099,14 @@ function App(): React.JSX.Element {
     keepState: boolean
   } | null>(null)
 
+  /**
+   * The messages taken out of the list ahead of the server, as one burst
+   * however many actions started it — "Elimina" on a selection, an archive
+   * of several — and the selection before the first of them went. If the
+   * server refuses some, they come back, and once the burst is over so does
+   * that selection, less what did go: the list had moved on to a neighbour
+   * only because of them. A selection the user made meanwhile stands.
+   */
   const removalBurstRef = useRef<{
     leaving: Set<string>
     selectionBefore: MessageSelectionState
@@ -2267,11 +2271,11 @@ function App(): React.JSX.Element {
       refs: ReadonlyArray<MessageRef>,
       action: (refs: MessageRef[]) => Promise<MessagesActionResult>,
       fallbackErrorMessage: string
-    ): Promise<void> => {
+    ): Promise<MessagesActionResult | null> => {
       const targetRefs = uniqueMessageRefs(refs)
 
       if (targetRefs.length === 0) {
-        return
+        return null
       }
 
       setViewError(null)
@@ -2291,17 +2295,19 @@ function App(): React.JSX.Element {
       }
 
       const failedKeys = new Set(result.failed.map(messageRefKey))
+      // Those the server refused, and those it did but which stay where they were shown.
+      const backKeys = new Set([...failedKeys, ...(result.kept ?? []).map(messageRefKey)])
 
       // Back in their places, earliest first, so each index still holds.
       snapshots
-        .filter(({ ref, snapshot }) => snapshot && failedKeys.has(messageRefKey(ref)))
+        .filter(({ ref, snapshot }) => snapshot && backKeys.has(messageRefKey(ref)))
         .sort(
           (left, right) => (left.snapshot?.removedIndex ?? 0) - (right.snapshot?.removedIndex ?? 0)
         )
         .forEach(({ snapshot }) => snapshot && rollbackRemovedMessage(snapshot))
 
       for (const { ref } of snapshots) {
-        settleRemoval(ref, !failedKeys.has(messageRefKey(ref)))
+        settleRemoval(ref, !backKeys.has(messageRefKey(ref)))
       }
 
       if (failedKeys.size > 0) {
@@ -2312,6 +2318,8 @@ function App(): React.JSX.Element {
             : `${message} (${failedKeys.size} messaggi restano dov'erano)`
         )
       }
+
+      return result
     },
     [removeMessageOptimistically, rollbackRemovedMessage, settleRemoval]
   )
@@ -2408,7 +2416,7 @@ function App(): React.JSX.Element {
   // Where the selected messages are likely to be saved outside the mail, and what the Segretario proposes.
   const [selectionFiling, setSelectionFiling] = useState<{
     selection: ReadonlyArray<MailMessageSummary>
-    savedBefore: string | null
+    savedBefore: ExtensionSelectionContext['savedBefore']
     projectFolders: ExtensionSelectionContext['projectFolders']
     proposals: ExtensionSelectionContext['proposals']
   } | null>(null)
@@ -2456,8 +2464,9 @@ function App(): React.JSX.Element {
 
   const extensionHostHooks = useMemo<ExtensionHostHooks>(
     () => ({
-      optimisticallyRemoveMessages: (refs, action, fallbackErrorMessage) =>
-        runMessageRemovalAction(refs, action, fallbackErrorMessage)
+      optimisticallyRemoveMessages: async (refs, action, fallbackErrorMessage) => {
+        await runMessageRemovalAction(refs, action, fallbackErrorMessage)
+      }
     }),
     [runMessageRemovalAction]
   )
@@ -2954,7 +2963,6 @@ function App(): React.JSX.Element {
 
   const [goToFolderOpen, setGoToFolderOpen] = useState(false)
 
-  /** What can be done with a folder from its right click, native as every menu of the app. */
   /**
    * A project's menu in the sidebar: the user's word on it — its name,
    * other projects that are the same one, concluded, not a project at all —
@@ -3033,6 +3041,7 @@ function App(): React.JSX.Element {
     [projects, prompt, refreshSegretarioViews, selectFolder]
   )
 
+  /** What can be done with a folder from its right click, native as every menu of the app. */
   const openFolderContextMenu = useCallback(
     async (target: FolderMenuTarget): Promise<void> => {
       if (target.kind === 'project') {
@@ -3605,7 +3614,7 @@ function App(): React.JSX.Element {
         sourceAccountId: message.accountId,
         to: recipients.to,
         cc: recipients.cc,
-        subject: ensureReplySubject(message.subject),
+        subject: replySubject(message.subject),
         quoteHtml: await buildReplyQuoteHtml(message),
         inReplyTo: message.messageId,
         references: replyReferences(message),
@@ -3635,7 +3644,7 @@ function App(): React.JSX.Element {
         kind: 'forward',
         accountId: message.accountId,
         sourceAccountId: message.accountId,
-        subject: ensureForwardSubject(message.subject),
+        subject: forwardSubject(message.subject),
         quoteHtml: await buildForwardQuoteHtml(message),
         original: {
           ref: summaryToMessageRef(message),
@@ -3715,7 +3724,7 @@ function App(): React.JSX.Element {
           to: addresses(spec.to),
           cc: addresses(spec.cc),
           bcc: addresses(spec.bcc),
-          subject: ensureForwardSubject(message.subject),
+          subject: forwardSubject(message.subject),
           quoteHtml: await buildForwardQuoteHtml(message),
           original,
           attachments: [
@@ -3743,7 +3752,7 @@ function App(): React.JSX.Element {
         to: addresses(spec.to) ?? recipients.to,
         cc: addresses(spec.cc) ?? recipients.cc,
         bcc: addresses(spec.bcc),
-        subject: ensureReplySubject(message.subject),
+        subject: replySubject(message.subject),
         quoteHtml: await buildReplyQuoteHtml(message),
         inReplyTo: message.messageId,
         references: replyReferences(message),
@@ -3994,9 +4003,25 @@ function App(): React.JSX.Element {
   /** A link the Segretario wrote, followed. */
   const openSegretarioHandle = useCallback(
     (link: HandleLink): void => {
+      const openWhereItIs = (found: Promise<MessageRef | null>): void =>
+        void found.then((ref) => {
+          if (ref) {
+            openMessageRef(ref)
+          } else {
+            toast.error('Il messaggio non c’è più', {
+              description: 'È stato spostato fuori dalla posta o eliminato.'
+            })
+          }
+        })
+
       switch (link.kind) {
         case 'message':
-          openMessageRef(link.ref)
+          // Archived or moved since it was named, it is opened where it is now.
+          if (link.messageKey) {
+            openWhereItIs(window.segretarioApi.replySource(link.ref.accountId, link.messageKey))
+          } else {
+            openMessageRef(link.ref)
+          }
           return
         case 'draft':
           void openDraftById(link.draftId)
@@ -4013,6 +4038,9 @@ function App(): React.JSX.Element {
           return
         case 'event':
           void openCalendarEvent(link.eventKey)
+          return
+        case 'commitment':
+          openWhereItIs(window.segretarioApi.commitmentSource(link.commitmentId))
       }
     },
     [openCalendarEvent, openDraftById, openMessageRef, selectFolder]
@@ -4035,14 +4063,57 @@ function App(): React.JSX.Element {
     [openComposer, readingRef?.accountId, selectedAccountId]
   )
 
-  const archiveSelection = useCallback(
-    (): Promise<void> =>
-      runSelectionRemovalAction(
+  const archiveSelection = useCallback(async (): Promise<void> => {
+    // On Gmail archiving only takes a message out of the inbox: shown under a label, in the
+    // sent mail or in Tutti i messaggi, it stays where it is, its labels kept.
+    const labelled = folders.some((folder) => folder.specialUse?.toLowerCase() === '\\all')
+    const stays = (ref: MessageRef): boolean => {
+      if (!labelled || ref.accountId !== selectedAccountId) {
+        return false
+      }
+
+      const folder = folders.find((candidate) => candidate.path === ref.folderPath)
+      const role = folder ? folderRole(folder) : null
+      return role !== '\\Inbox' && role !== '\\Trash' && role !== '\\Junk'
+    }
+    const staying = selection.selectedRefs.filter(stays)
+    const leaving = selection.selectedRefs.filter((ref) => !stays(ref))
+    const sayKept = (kept: number): void => {
+      toast(kept === 1 ? 'Archiviato' : 'Archiviati', {
+        description: 'Fuori dalla Posta in arrivo; qui restano, con le loro etichette.'
+      })
+    }
+
+    if (staying.length > 0) {
+      try {
+        const result = await window.mailApi.archiveMessages(staying)
+
+        if (result.failed.length > 0) {
+          toast.error('Archiviazione email non riuscita.', { description: result.error })
+        } else {
+          sayKept(staying.length)
+        }
+      } catch (error) {
+        toast.error('Archiviazione email non riuscita.', {
+          description: error instanceof Error ? error.message : undefined
+        })
+      }
+    }
+
+    // Seen from "Tutti gli account", a Gmail message is known to stay only once it is archived:
+    // its row comes back, said the same way.
+    if (leaving.length > 0) {
+      const result = await runMessageRemovalAction(
+        leaving,
         (refs) => window.mailApi.archiveMessages(refs),
         'Archiviazione email non riuscita.'
-      ),
-    [runSelectionRemovalAction]
-  )
+      )
+
+      if (result?.kept && result.kept.length > 0) {
+        sayKept(result.kept.length)
+      }
+    }
+  }, [folders, runMessageRemovalAction, selectedAccountId, selection.selectedRefs])
 
   // "Sposta" opens from its button or from its chord.
   // The messages being dragged towards a folder, while the drag lasts.
@@ -5009,444 +5080,460 @@ function App(): React.JSX.Element {
 
   return (
     <CommandShortcutsProvider overrides={uiPreferences.shortcutOverrides}>
-      <AppFrame
-        windowControlsState={windowControlsState}
-        onMinimizeWindow={handleMinimizeWindow}
-        onToggleMaximizeWindow={handleToggleMaximizeWindow}
-        onCloseWindow={handleCloseWindow}
-        inert={composerOpen}
-        framed
-        dockVisible={!composerOpen && composeSessions.length > 0}
-        rightInset={assistantInset}
-        dock={
-          <ComposeDock
-            entries={composeSessions
-              .filter((session) => session.id !== activeComposeId)
-              .map((session) => ({
-                id: session.id,
-                kind: session.initialData.kind,
-                summary: composeSummaries[session.id] ?? null
-              }))}
-            hidden={composerOpen}
-            rightInset={assistantInset}
-            onRestore={setActiveComposeId}
-            onClose={(id) => void composerHandlesRef.current.get(id)?.close()}
-          />
-        }
-      >
-        <WorkspaceLayout
-          mode={uiPreferences.layoutMode}
-          readerExpanded={isMessageExpanded}
-          rail={
-            <AppRail
-              items={railItems}
-              activeItemId={shownApp}
-              onSelectItem={(id) => {
-                const app = railItems.find((item) => item.id === id)
-
-                if (app) {
-                  setActiveApp(app.id)
-                }
-              }}
-              syncSummary={syncSummary}
-              segretario={
-                segretarioOffered
-                  ? {
-                      open: segretarioOpen,
-                      attention: segretario.attention,
-                      onToggle: () => setSegretarioOpen((current) => !current)
-                    }
-                  : null
-              }
-              onOpenSettings={() => setSettingsOpen(true)}
+      <SegretarioLinkProvider value={openSegretarioHandle}>
+        <AppFrame
+          windowControlsState={windowControlsState}
+          onMinimizeWindow={handleMinimizeWindow}
+          onToggleMaximizeWindow={handleToggleMaximizeWindow}
+          onCloseWindow={handleCloseWindow}
+          inert={composerOpen}
+          framed
+          dockVisible={!composerOpen && composeSessions.length > 0}
+          rightInset={assistantInset}
+          dock={
+            <ComposeDock
+              entries={composeSessions
+                .filter((session) => session.id !== activeComposeId)
+                .map((session) => ({
+                  id: session.id,
+                  kind: session.initialData.kind,
+                  summary: composeSummaries[session.id] ?? null
+                }))}
+              hidden={composerOpen}
+              rightInset={assistantInset}
+              onRestore={setActiveComposeId}
+              onClose={(id) => void composerHandlesRef.current.get(id)?.close()}
             />
           }
-          sidebar={
-            <>
-              <div className="window-drag-region flex h-[52px] shrink-0 items-center gap-2 pr-3 pl-[max(12px,calc(var(--titlebar-lights)-52px))]">
-                {!windowControlsState.dragTopRegionEnabled || windowControlsState.enabled ? (
-                  <span className="display-title text-[13.5px]">SIEVER Mail</span>
-                ) : null}
-                <div className="flex-1" />
-                <ActionTooltip label="Nuovo messaggio" commandId="compose">
-                  <Button
-                    size="sm"
-                    className="window-no-drag"
-                    disabled={!selectedAccountId}
-                    onClick={() => {
-                      if (selectedAccountId) {
-                        openComposer({ kind: 'new', accountId: selectedAccountId })
+        >
+          <WorkspaceLayout
+            mode={uiPreferences.layoutMode}
+            readerExpanded={isMessageExpanded}
+            rail={
+              <AppRail
+                items={railItems}
+                activeItemId={shownApp}
+                onSelectItem={(id) => {
+                  const app = railItems.find((item) => item.id === id)
+
+                  if (app) {
+                    setActiveApp(app.id)
+                  }
+                }}
+                syncSummary={syncSummary}
+                segretario={
+                  segretarioOffered
+                    ? {
+                        open: segretarioOpen,
+                        attention: segretario.attention,
+                        onToggle: () => setSegretarioOpen((current) => !current)
                       }
-                    }}
-                  >
-                    <PenLine className="size-3.5" />
-                    Scrivi
-                  </Button>
-                </ActionTooltip>
-              </div>
-              <div className="shrink-0 px-2 pb-2">
-                <AccountSwitcher
-                  accounts={accounts}
-                  selectedAccountId={selectedAccountId}
-                  removingAccountId={removingAccountId}
-                  onSelectAccount={(accountId) => {
-                    cancelInFlightWork()
-                    setSelectedAccountId(accountId)
-                    setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
-                    resetMailboxView()
-                  }}
-                  onRemoveAccount={(accountId) => void removeAccount(accountId)}
-                  onAddAccount={() => startOnboarding('nuova-connessione')}
-                />
-              </div>
-              <div className="min-h-0 flex-1">
-                {loadingFolders ? (
-                  <div className="text-faint-foreground flex items-center gap-2 px-4 py-3 text-[12px]">
-                    <LoaderCircle className="size-3.5 animate-spin" /> Caricamento cartelle…
-                  </div>
-                ) : (
-                  <FolderSidebar
-                    segretarioViews={
-                      aiOn && segretarioViewCounts
-                        ? SEGRETARIO_VIEWS.map((view) => ({
-                            view,
-                            count: segretarioViewCounts[view]
-                          }))
-                        : []
-                    }
-                    projects={aiOn ? projects : null}
-                    onCreateProject={(title) => void createProject(title)}
-                    savedSearches={aiOn ? savedSearches : []}
-                    accountLabel={selectedAccountLabel}
-                    folders={folders}
-                    unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
-                    selectedFolderPath={selectedFolderPath}
-                    messageDrop={messageDrop}
-                    onSelectFolder={selectFolder}
-                    onFolderContextMenu={(target) => void openFolderContextMenu(target)}
-                  />
-                )}
-              </div>
-            </>
-          }
-          messageList={messageListSlot}
-          notice={
-            viewError ? (
-              <div className="bg-destructive/10 text-destructive-soft-foreground flex shrink-0 items-center gap-2 border-b px-4 py-2 text-[12px]">
-                <AlertTriangle className="size-3.5 shrink-0" />
-                <span className="min-w-0 flex-1">{viewError}</span>
-                <button
-                  type="button"
-                  onClick={() => setViewError(null)}
-                  aria-label="Chiudi avviso"
-                  className="hover:text-foreground shrink-0"
-                >
-                  <X className="size-3.5" />
-                </button>
-              </div>
-            ) : null
-          }
-          reader={
-            <MessageViewer
-              message={messageForViewer}
-              brief={
-                messageForViewer &&
-                selection.selectedRefs.length === 1 && (
-                  <>
-                    {messageForViewer.attachments.some(isIcsAttachment) && (
-                      <InvitationCard
-                        key={`${messageForViewer.accountId}:${messageForViewer.folderPath}:${messageForViewer.uid}`}
-                        messageRef={summaryToMessageRef(messageForViewer)}
-                      />
-                    )}
-                    {aiOn && (
-                      <MessageWorkPanel
-                        key={`${messageForViewer.accountId}:${messageForViewer.messageKey}`}
-                        accountId={messageForViewer.accountId}
-                        messageKey={messageForViewer.messageKey}
-                        threadId={messageForViewer.threadId}
-                        projects={projects}
-                        onOpenProject={(projectId) =>
-                          selectFolder(segretarioProjectPath(projectId))
-                        }
-                        accountEmail={(accountId) =>
-                          accounts.find((account) => account.id === accountId)?.email
-                        }
-                        onTakeUpReply={takeUpReply}
-                        onRemind={(commitment) => void remindAbout(commitment)}
-                        onActOnProposal={(proposal) => {
-                          const action = extensionRenderer.proposalActions?.[proposal.kind]
-
-                          if (action) {
-                            extensionRenderer.runCommand?.(action.commandId, {
-                              selection: extensionSelection,
-                              openPrimaryActionDialog: () => setExtensionPrimaryDialogOpen(true),
-                              hostHooks: extensionHostHooks
-                            })
-                          }
-                        }}
-                      />
-                    )}
-                  </>
-                )
-              }
-              bodyStatus={readerBodyStatus}
-              onRetryBody={() => {
-                if (readingRef) {
-                  void loadMessageDetail(readingRef)
+                    : null
                 }
-              }}
-              isExpanded={isMessageExpanded}
-              selectedCount={selection.selectedRefs.length}
-              onClearSelection={clearSelection}
-              wholeViewSelection={
-                hasMoreMessages &&
-                selection.selectedRefs.length > 1 &&
-                selection.selectedRefs.length === messages.length
-                  ? {
-                      total: totalMessagesInFolder,
-                      selecting: selectingWholeView,
-                      onSelect: () => void selectWholeView()
-                    }
-                  : undefined
-              }
-              atWindowTopRight={
-                !segretarioOpen && (isMessageExpanded || uiPreferences.layoutMode === 'apple')
-              }
-              extensionActions={
-                selection.selectedRefs.length > 0 &&
-                extensionRenderer.toolbarActions.map((action) => (
-                  <Fragment key={action.id}>
-                    {action.render({
-                      selection: extensionSelection,
-                      openPrimaryActionDialog: () => setExtensionPrimaryDialogOpen(true),
-                      hostHooks: extensionHostHooks
-                    })}
-                  </Fragment>
-                ))
-              }
-              selectionActions={{
-                moveFolders,
-                moveExcludedPath,
-                recentMovePaths,
-                onMoveAcrossAccounts:
-                  selectionAccountIds.length > 1 ? () => void explainMixedAccountMove() : undefined,
-                moveMenuOpen,
-                onMoveMenuOpenChange: changeMoveMenuOpen,
-                toggleSeenLabel,
-                selectionFlagged,
-                onArchive: () => void archiveSelection(),
-                onMoveToFolder: (destinationFolderPath) =>
-                  void moveSelectionTo(destinationFolderPath),
-                onCreateFolderAndMove: (name) => void createFolderAndMoveSelection(name),
-                onToggleSeen: () => void setSelectionSeen(),
-                onToggleFlagged: () => void setSelectionFlagged(),
-                onDelete: () => void deleteMessages(selection.selectedRefs)
-              }}
-              onReply={() => void openReplyComposer('sender')}
-              onReplyAll={() => void openReplyComposer('all')}
-              onForward={() => void openForwardComposer()}
-              onContinueDraft={
-                readingRef && messageForViewer && isDraftMessage(messageForViewer)
-                  ? () => void continueDraft(readingRef)
-                  : undefined
-              }
-              onToggleExpanded={() => {
-                if (!readingRef) {
-                  return
-                }
-
-                setIsMessageExpanded((current) => !current)
-              }}
-              attachmentActions={attachmentActions}
-              zoom={uiPreferences.readerZoom}
-              onZoomChange={changeReaderZoom}
-              detailsOpen={uiPreferences.readerDetailsOpen}
-              onDetailsOpenChange={(readerDetailsOpen) =>
-                updateUiPreferences({ readerDetailsOpen })
-              }
-              addressActions={addressActions}
-            />
-          }
-          app={
-            shownApp === 'oggi' ? (
-              <TodayPage
-                canWrite={segretario.status?.keyState === 'ready'}
-                atWindowTopRight={!segretarioOpen}
-                onOpenMessage={openMessageRef}
+                onOpenSettings={() => setSettingsOpen(true)}
               />
-            ) : shownApp === 'calendar' ? (
-              <CalendarApp
-                key={calendarFocus?.at}
-                aiOn={aiOn}
-                focus={calendarFocus?.focus}
-                onSight={setCalendarSight}
-                atWindowTopRight={!segretarioOpen}
-                onOpenMessage={openMessageRef}
-                onOpenConnections={() => {
-                  setSettingsSection('accounts')
-                  setSettingsOpen(true)
+            }
+            sidebar={
+              <>
+                <div className="window-drag-region flex h-[52px] shrink-0 items-center gap-2 pr-3 pl-[max(12px,calc(var(--titlebar-lights)-52px))]">
+                  {!windowControlsState.dragTopRegionEnabled || windowControlsState.enabled ? (
+                    <span className="display-title text-[13.5px]">SIEVER Mail</span>
+                  ) : null}
+                  <div className="flex-1" />
+                  <ActionTooltip label="Nuovo messaggio" commandId="compose">
+                    <Button
+                      size="sm"
+                      className="window-no-drag"
+                      disabled={!selectedAccountId}
+                      onClick={() => {
+                        if (selectedAccountId) {
+                          openComposer({ kind: 'new', accountId: selectedAccountId })
+                        }
+                      }}
+                    >
+                      <PenLine className="size-3.5" />
+                      Scrivi
+                    </Button>
+                  </ActionTooltip>
+                </div>
+                <div className="shrink-0 px-2 pb-2">
+                  <AccountSwitcher
+                    accounts={accounts}
+                    selectedAccountId={selectedAccountId}
+                    removingAccountId={removingAccountId}
+                    onSelectAccount={(accountId) => {
+                      cancelInFlightWork()
+                      setSelectedAccountId(accountId)
+                      setMessageFilter(DEFAULT_MESSAGE_LIST_FILTER)
+                      resetMailboxView()
+                    }}
+                    onRemoveAccount={(accountId) => void removeAccount(accountId)}
+                    onAddAccount={() => startOnboarding('nuova-connessione')}
+                  />
+                </div>
+                <div className="min-h-0 flex-1">
+                  {loadingFolders ? (
+                    <div className="text-faint-foreground flex items-center gap-2 px-4 py-3 text-[12px]">
+                      <LoaderCircle className="size-3.5 animate-spin" /> Caricamento cartelle…
+                    </div>
+                  ) : (
+                    <FolderSidebar
+                      segretarioViews={
+                        aiOn && segretarioViewCounts
+                          ? SEGRETARIO_VIEWS.map((view) => ({
+                              view,
+                              count: segretarioViewCounts[view]
+                            }))
+                          : []
+                      }
+                      projects={aiOn ? projects : null}
+                      onCreateProject={(title) => void createProject(title)}
+                      savedSearches={aiOn ? savedSearches : []}
+                      accountLabel={selectedAccountLabel}
+                      folders={folders}
+                      unifiedFolders={accounts.length > 1 ? unifiedSummaries : []}
+                      selectedFolderPath={selectedFolderPath}
+                      messageDrop={messageDrop}
+                      onSelectFolder={selectFolder}
+                      onFolderContextMenu={(target) => void openFolderContextMenu(target)}
+                    />
+                  )}
+                </div>
+              </>
+            }
+            messageList={messageListSlot}
+            notice={
+              viewError ? (
+                <div className="bg-destructive/10 text-destructive-soft-foreground flex shrink-0 items-center gap-2 border-b px-4 py-2 text-[12px]">
+                  <AlertTriangle className="size-3.5 shrink-0" />
+                  <span className="min-w-0 flex-1">{viewError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setViewError(null)}
+                    aria-label="Chiudi avviso"
+                    className="hover:text-foreground shrink-0"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </div>
+              ) : null
+            }
+            reader={
+              <MessageViewer
+                message={messageForViewer}
+                brief={
+                  messageForViewer &&
+                  selection.selectedRefs.length === 1 && (
+                    <>
+                      {messageForViewer.attachments.some(isIcsAttachment) && (
+                        <InvitationCard
+                          key={`${messageForViewer.accountId}:${messageForViewer.folderPath}:${messageForViewer.uid}`}
+                          messageRef={summaryToMessageRef(messageForViewer)}
+                        />
+                      )}
+                      {aiOn && (
+                        <MessageWorkPanel
+                          key={`${messageForViewer.accountId}:${messageForViewer.messageKey}`}
+                          accountId={messageForViewer.accountId}
+                          messageKey={messageForViewer.messageKey}
+                          threadId={messageForViewer.threadId}
+                          projects={projects}
+                          onOpenProject={(projectId) =>
+                            selectFolder(segretarioProjectPath(projectId))
+                          }
+                          accountEmail={(accountId) =>
+                            accounts.find((account) => account.id === accountId)?.email
+                          }
+                          onTakeUpReply={takeUpReply}
+                          onRemind={(commitment) => void remindAbout(commitment)}
+                          onActOnProposal={(proposal) => {
+                            const action = extensionRenderer.proposalActions?.[proposal.kind]
+
+                            if (action) {
+                              extensionRenderer.runCommand?.(action.commandId, {
+                                selection: extensionSelection,
+                                openPrimaryActionDialog: () => setExtensionPrimaryDialogOpen(true),
+                                hostHooks: extensionHostHooks
+                              })
+                            }
+                          }}
+                        />
+                      )}
+                    </>
+                  )
+                }
+                bodyStatus={readerBodyStatus}
+                onRetryBody={() => {
+                  if (readingRef) {
+                    void loadMessageDetail(readingRef)
+                  }
+                }}
+                isExpanded={isMessageExpanded}
+                selectedCount={selection.selectedRefs.length}
+                onClearSelection={clearSelection}
+                wholeViewSelection={
+                  hasMoreMessages &&
+                  selection.selectedRefs.length > 1 &&
+                  selection.selectedRefs.length === messages.length
+                    ? {
+                        total: totalMessagesInFolder,
+                        selecting: selectingWholeView,
+                        onSelect: () => void selectWholeView()
+                      }
+                    : undefined
+                }
+                atWindowTopRight={
+                  !segretarioOpen && (isMessageExpanded || uiPreferences.layoutMode === 'apple')
+                }
+                extensionActions={
+                  selection.selectedRefs.length > 0 &&
+                  extensionRenderer.toolbarActions.map((action) => (
+                    <Fragment key={action.id}>
+                      {action.render({
+                        selection: extensionSelection,
+                        openPrimaryActionDialog: () => setExtensionPrimaryDialogOpen(true),
+                        hostHooks: extensionHostHooks
+                      })}
+                    </Fragment>
+                  ))
+                }
+                selectionActions={{
+                  moveFolders,
+                  moveExcludedPath,
+                  recentMovePaths,
+                  onMoveAcrossAccounts:
+                    selectionAccountIds.length > 1
+                      ? () => void explainMixedAccountMove()
+                      : undefined,
+                  moveMenuOpen,
+                  onMoveMenuOpenChange: changeMoveMenuOpen,
+                  toggleSeenLabel,
+                  selectionFlagged,
+                  onArchive: () => void archiveSelection(),
+                  onMoveToFolder: (destinationFolderPath) =>
+                    void moveSelectionTo(destinationFolderPath),
+                  onCreateFolderAndMove: (name) => void createFolderAndMoveSelection(name),
+                  onToggleSeen: () => void setSelectionSeen(),
+                  onToggleFlagged: () => void setSelectionFlagged(),
+                  onDelete: () => void deleteMessages(selection.selectedRefs)
+                }}
+                onReply={() => void openReplyComposer('sender')}
+                onReplyAll={() => void openReplyComposer('all')}
+                onForward={() => void openForwardComposer()}
+                onContinueDraft={
+                  readingRef && messageForViewer && isDraftMessage(messageForViewer)
+                    ? () => void continueDraft(readingRef)
+                    : undefined
+                }
+                onToggleExpanded={() => {
+                  if (!readingRef) {
+                    return
+                  }
+
+                  setIsMessageExpanded((current) => !current)
+                }}
+                attachmentActions={attachmentActions}
+                zoom={uiPreferences.readerZoom}
+                onZoomChange={changeReaderZoom}
+                detailsOpen={uiPreferences.readerDetailsOpen}
+                onDetailsOpenChange={(readerDetailsOpen) =>
+                  updateUiPreferences({ readerDetailsOpen })
+                }
+                addressActions={addressActions}
+              />
+            }
+            app={
+              shownApp === 'oggi' ? (
+                <TodayPage
+                  canWrite={segretario.status?.keyState === 'ready'}
+                  atWindowTopRight={!segretarioOpen}
+                  onOpenMessage={openMessageRef}
+                  onRemind={(commitment) => void remindAbout(commitment)}
+                />
+              ) : shownApp === 'calendar' ? (
+                <CalendarApp
+                  key={calendarFocus?.at}
+                  aiOn={aiOn}
+                  focus={calendarFocus?.focus}
+                  onSight={setCalendarSight}
+                  atWindowTopRight={!segretarioOpen}
+                  onOpenMessage={openMessageRef}
+                  onOpenConnections={() => {
+                    setSettingsSection('accounts')
+                    setSettingsOpen(true)
+                  }}
+                />
+              ) : shownApp === 'contacts' ? (
+                <ComingSoonApp
+                  title="Contatti"
+                  icon={BookUser}
+                  atWindowTopRight={!segretarioOpen}
+                  lead="Le persone e gli enti con cui lavori, in un posto solo, con quello che il Segretario sa di ciascuno."
+                  points={[
+                    'Dalla posta, dai calendari e dalle rubriche delle connessioni.',
+                    'Per ognuno: le conversazioni, gli appuntamenti, i progetti in comune e le cose aperte.',
+                    'Quello che il Segretario ha capito di loro, scritto da lui e corretto da te.'
+                  ]}
+                />
+              ) : shownApp === 'projects' ? (
+                <ComingSoonApp
+                  title="Progetti"
+                  icon={Briefcase}
+                  atWindowTopRight={!segretarioOpen}
+                  lead="Ogni progetto con tutto ciò che gli appartiene, ovunque si trovi."
+                  points={[
+                    'Le mail, gli allegati, gli appuntamenti e le persone del progetto, insieme.',
+                    'La sua cartella sul computer o sui dischi di rete, e in futuro i file su Google Drive e OneDrive.',
+                    'Niente viene copiato o spostato: il progetto mostra le cose dove sono.',
+                    ...(aiOn
+                      ? ['Intanto i progetti del Segretario sono nella barra laterale della Posta.']
+                      : [])
+                  ]}
+                />
+              ) : undefined
+            }
+            assistant={
+              segretarioOpen ? (
+                <SegretarioPanel
+                  state={segretario}
+                  contextChip={segretarioContext}
+                  suggestions={segretarioSuggestionList}
+                  atWindowTopRight
+                  onClose={() => setSegretarioOpen(false)}
+                  onOpenSettings={() => {
+                    setSettingsSection('segretario')
+                    setSettingsOpen(true)
+                  }}
+                  onOpenHandle={openSegretarioHandle}
+                  onApprove={(activityId, approval, approved) =>
+                    void answerSegretarioApproval(activityId, approval, approved)
+                  }
+                  onOpenDraft={(draftId) => void openDraftById(draftId)}
+                />
+              ) : null
+            }
+          />
+
+          {composeSessions.map((session) => (
+            <MailComposer
+              key={session.id}
+              ref={(handle) => {
+                if (handle) {
+                  composerHandlesRef.current.set(session.id, handle)
+                } else {
+                  composerHandlesRef.current.delete(session.id)
+                }
+              }}
+              session={session}
+              open={session.id === activeComposeId}
+              accounts={accounts}
+              onMinimize={() =>
+                setActiveComposeId((current) => (current === session.id ? null : current))
+              }
+              onClosed={(outcome) => handleComposerClosed(session.id, outcome)}
+              onSendRequested={handleComposerSendRequested}
+              onSummaryChange={(summary) => updateComposeSummary(session.id, summary)}
+              canAskSegretario={
+                aiOn &&
+                (segretario.status?.keyState === 'ready' ||
+                  segretario.status?.keyState === 'unchecked')
+              }
+            />
+          ))}
+
+          <ConfirmDialog
+            open={failedSend !== null}
+            title="Invio non riuscito"
+            description={failedSend?.message}
+            details={
+              failedSend && (
+                <div className="border-destructive/35 bg-destructive/10 flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px]">
+                  <AlertTriangle className="text-destructive size-3.5 shrink-0" />
+                  <span className="min-w-0 truncate">
+                    {failedSend.draft.subject
+                      ? `Il messaggio non è partito: «${failedSend.draft.subject}»`
+                      : 'Il messaggio non è partito.'}
+                  </span>
+                </div>
+              )
+            }
+            confirmLabel="Riapri e riprova"
+            cancelLabel="Lascia in Bozze"
+            initialFocus="confirm"
+            onConfirm={() => settleFailedSend(true)}
+            onCancel={() => settleFailedSend(false)}
+          />
+
+          {confirmDialog}
+          {promptDialog}
+          <Dialog open={goToFolderOpen} onOpenChange={setGoToFolderOpen}>
+            <DialogContent hideClose className="w-auto gap-0 p-0" aria-describedby={undefined}>
+              <DialogTitle className="sr-only">Vai a una cartella</DialogTitle>
+              <FolderPicker
+                folders={folders}
+                recentPaths={[]}
+                excludedPath={selectedFolderPath}
+                onPick={(folderPath) => {
+                  setGoToFolderOpen(false)
+                  selectFolder(folderPath)
                 }}
               />
-            ) : shownApp === 'contacts' ? (
-              <ComingSoonApp
-                title="Contatti"
-                icon={BookUser}
-                atWindowTopRight={!segretarioOpen}
-                lead="Le persone e gli enti con cui lavori, in un posto solo, con quello che il Segretario sa di ciascuno."
-                points={[
-                  'Dalla posta, dai calendari e dalle rubriche delle connessioni.',
-                  'Per ognuno: le conversazioni, gli appuntamenti, i progetti in comune e le cose aperte.',
-                  'Quello che il Segretario ha capito di loro, scritto da lui e corretto da te.'
-                ]}
-              />
-            ) : shownApp === 'projects' ? (
-              <ComingSoonApp
-                title="Progetti"
-                icon={Briefcase}
-                atWindowTopRight={!segretarioOpen}
-                lead="Ogni progetto con tutto ciò che gli appartiene, ovunque si trovi."
-                points={[
-                  'Le mail, gli allegati, gli appuntamenti e le persone del progetto, insieme.',
-                  'La sua cartella sul computer o sui dischi di rete, e in futuro i file su Google Drive e OneDrive.',
-                  'Niente viene copiato o spostato: il progetto mostra le cose dove sono.',
-                  'Intanto i progetti del Segretario sono nella barra laterale della Posta.'
-                ]}
-              />
-            ) : undefined
-          }
-          assistant={
-            segretarioOpen ? (
-              <SegretarioPanel
-                state={segretario}
-                contextChip={segretarioContext}
-                suggestions={segretarioSuggestionList}
-                atWindowTopRight
-                onClose={() => setSegretarioOpen(false)}
-                onOpenSettings={() => void startAiOnboarding()}
-                onOpenHandle={openSegretarioHandle}
-                onApprove={(activityId, approval, approved) =>
-                  void answerSegretarioApproval(activityId, approval, approved)
-                }
-                onOpenDraft={(draftId) => void openDraftById(draftId)}
-              />
-            ) : null
-          }
-        />
+            </DialogContent>
+          </Dialog>
 
-        {composeSessions.map((session) => (
-          <MailComposer
-            key={session.id}
-            ref={(handle) => {
-              if (handle) {
-                composerHandlesRef.current.set(session.id, handle)
-              } else {
-                composerHandlesRef.current.delete(session.id)
+          {extensionRenderer.PrimaryActionDialog && (
+            <extensionRenderer.PrimaryActionDialog
+              open={extensionPrimaryDialogOpen}
+              onOpenChange={setExtensionPrimaryDialogOpen}
+              selection={extensionSelection}
+              hostHooks={extensionHostHooks}
+            />
+          )}
+
+          <SettingsDialog
+            open={settingsOpen}
+            onOpenChange={(open) => {
+              setSettingsOpen(open)
+
+              if (!open) {
+                setSettingsSection(null)
               }
             }}
-            session={session}
-            open={session.id === activeComposeId}
+            initialSectionId={settingsSection}
             accounts={accounts}
-            onMinimize={() =>
-              setActiveComposeId((current) => (current === session.id ? null : current))
-            }
-            onClosed={(outcome) => handleComposerClosed(session.id, outcome)}
-            onSendRequested={handleComposerSendRequested}
-            onSummaryChange={(summary) => updateComposeSummary(session.id, summary)}
-            canAskSegretario={
-              aiOn &&
-              (segretario.status?.keyState === 'ready' ||
-                segretario.status?.keyState === 'unchecked')
-            }
+            mailStates={accountConnections}
+            googleReady={capabilities.googleOAuthReady}
+            selectedAccountId={selectedAccountId}
+            removingAccountId={removingAccountId}
+            clearingAccountDataId={clearingAccountDataId}
+            clearingDatabaseData={clearingDatabaseData}
+            uiPreferences={uiPreferences}
+            onUiPreferencesChange={updateUiPreferences}
+            onRemoveAccount={(accountId, calendars) => void removeAccount(accountId, calendars)}
+            onClearAccountData={(accountId) => void clearAccountData(accountId)}
+            onClearDatabaseData={() => void clearAllDataKeepAccounts()}
+            onAddAccount={() => {
+              setSettingsOpen(false)
+              startOnboarding('nuova-connessione')
+            }}
+            onEnableAi={() => {
+              setSettingsOpen(false)
+              void startAiOnboarding()
+            }}
+            onRedoConoscimi={() => {
+              setSettingsOpen(false)
+
+              // Conoscimi is the Segretario at work: with the AI off, the way to it turns it on.
+              if (aiOn) {
+                startOnboarding('conoscimi')
+              } else {
+                void startAiOnboarding()
+              }
+            }}
+            onUnifiedPreferencesChanged={handleUnifiedPreferencesChanged}
           />
-        ))}
-
-        <ConfirmDialog
-          open={failedSend !== null}
-          title="Invio non riuscito"
-          description={failedSend?.message}
-          details={
-            failedSend && (
-              <div className="border-destructive/35 bg-destructive/10 flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px]">
-                <AlertTriangle className="text-destructive size-3.5 shrink-0" />
-                <span className="min-w-0 truncate">
-                  {failedSend.draft.subject
-                    ? `Il messaggio non è partito: «${failedSend.draft.subject}»`
-                    : 'Il messaggio non è partito.'}
-                </span>
-              </div>
-            )
-          }
-          confirmLabel="Riapri e riprova"
-          cancelLabel="Lascia in Bozze"
-          initialFocus="confirm"
-          onConfirm={() => settleFailedSend(true)}
-          onCancel={() => settleFailedSend(false)}
-        />
-
-        {confirmDialog}
-        {promptDialog}
-        <Dialog open={goToFolderOpen} onOpenChange={setGoToFolderOpen}>
-          <DialogContent hideClose className="w-auto gap-0 p-0" aria-describedby={undefined}>
-            <DialogTitle className="sr-only">Vai a una cartella</DialogTitle>
-            <FolderPicker
-              folders={folders}
-              recentPaths={[]}
-              excludedPath={selectedFolderPath}
-              onPick={(folderPath) => {
-                setGoToFolderOpen(false)
-                selectFolder(folderPath)
-              }}
-            />
-          </DialogContent>
-        </Dialog>
-
-        {extensionRenderer.PrimaryActionDialog && (
-          <extensionRenderer.PrimaryActionDialog
-            open={extensionPrimaryDialogOpen}
-            onOpenChange={setExtensionPrimaryDialogOpen}
-            selection={extensionSelection}
-            hostHooks={extensionHostHooks}
-          />
-        )}
-
-        <SettingsDialog
-          open={settingsOpen}
-          onOpenChange={(open) => {
-            setSettingsOpen(open)
-
-            if (!open) {
-              setSettingsSection(null)
-            }
-          }}
-          initialSectionId={settingsSection}
-          accounts={accounts}
-          mailStates={accountConnections}
-          googleReady={capabilities.googleOAuthReady}
-          selectedAccountId={selectedAccountId}
-          removingAccountId={removingAccountId}
-          clearingAccountDataId={clearingAccountDataId}
-          clearingDatabaseData={clearingDatabaseData}
-          uiPreferences={uiPreferences}
-          onUiPreferencesChange={updateUiPreferences}
-          onRemoveAccount={(accountId, calendars) => void removeAccount(accountId, calendars)}
-          onClearAccountData={(accountId) => void clearAccountData(accountId)}
-          onClearDatabaseData={() => void clearAllDataKeepAccounts()}
-          onAddAccount={() => {
-            setSettingsOpen(false)
-            startOnboarding('nuova-connessione')
-          }}
-          onEnableAi={() => {
-            setSettingsOpen(false)
-            void startAiOnboarding()
-          }}
-          onRedoConoscimi={() => {
-            setSettingsOpen(false)
-            startOnboarding('conoscimi')
-          }}
-          onUnifiedPreferencesChanged={handleUnifiedPreferencesChanged}
-        />
-      </AppFrame>
+        </AppFrame>
+      </SegretarioLinkProvider>
     </CommandShortcutsProvider>
   )
 }

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { EMPTY_SUBJECT_LABEL, stripSubjectPrefixes, subjectSortKey } from './subject'
+import {
+  EMPTY_SUBJECT_LABEL,
+  forwardSubject,
+  replySubject,
+  stripSubjectPrefixes,
+  subjectSortKey
+} from './subject'
 
 describe('stripSubjectPrefixes', () => {
   it('strips stacked reply and forward prefixes in any client language', () => {
@@ -39,5 +45,20 @@ describe('subjectSortKey', () => {
     expect(subjectSortKey(EMPTY_SUBJECT_LABEL)).toBe('')
     expect(subjectSortKey('Re:')).toBe('')
     expect(subjectSortKey(`Re: ${EMPTY_SUBJECT_LABEL}`)).toBe('')
+  })
+})
+
+describe('replySubject and forwardSubject', () => {
+  it('add the prefix once', () => {
+    expect(replySubject('Offerta pompe')).toBe('Re: Offerta pompe')
+    expect(replySubject('RE: Offerta pompe')).toBe('RE: Offerta pompe')
+    expect(forwardSubject('Offerta pompe')).toBe('Fwd: Offerta pompe')
+    expect(forwardSubject('Fwd: Offerta pompe')).toBe('Fwd: Offerta pompe')
+  })
+
+  it('leave out the placeholder of a message without a subject', () => {
+    expect(replySubject(EMPTY_SUBJECT_LABEL)).toBe('Re:')
+    expect(forwardSubject(EMPTY_SUBJECT_LABEL)).toBe('Fwd:')
+    expect(replySubject('')).toBe('Re:')
   })
 })

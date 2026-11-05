@@ -1,7 +1,7 @@
 import type { MessageRef } from '@shared/models'
 
 import type { Evidence, MessageAnchor } from '../registry/types'
-import { ToolInputError, type ToolContext } from '../agent/tool-types'
+import { ToolInputError, type ToolContext, UnknownHandle } from '../agent/tool-types'
 
 export interface ResolvedMessage extends MessageAnchor {
   ref: MessageRef
@@ -26,7 +26,7 @@ export async function resolveMessage(
   const message = context.handles.message(handle)
 
   if (!message) {
-    throw new ToolInputError(
+    throw new UnknownHandle(
       `Non conosco il messaggio «${handle}»: usa un riferimento (m…) ricevuto da cerca_posta, leggi o dal lavoro che stai facendo.`
     )
   }

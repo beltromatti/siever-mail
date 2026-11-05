@@ -13,6 +13,29 @@
 /** What a message without a subject is listed as. */
 export const EMPTY_SUBJECT_LABEL = '(Senza oggetto)'
 
+/**
+ * The subject of a reply, and of a forward: the prefix once — a subject
+ * that already has it keeps it as it is — and nothing of the placeholder a
+ * message without a subject is listed as, which is not its subject.
+ */
+export function replySubject(subject: string): string {
+  return withPrefix('Re:', subject)
+}
+
+export function forwardSubject(subject: string): string {
+  return withPrefix('Fwd:', subject)
+}
+
+function withPrefix(prefix: string, subject: string): string {
+  const own = subject.trim() === EMPTY_SUBJECT_LABEL ? '' : subject.trim()
+
+  if (own.toLowerCase().startsWith(prefix.toLowerCase())) {
+    return own
+  }
+
+  return `${prefix} ${own}`.trim()
+}
+
 /** One leading prefix: a reply/forward marker or a short bracketed tag. */
 const SUBJECT_PREFIX_PATTERN =
   /^\s*(?:(?:re|r|aw|sv|vs|antw|rv|res|ref|fw|fwd|i|inoltra|wg|tr|enc|doorst)(?:\[\d+\])?\s*:|\[[^\]]{1,40}\])\s*/i

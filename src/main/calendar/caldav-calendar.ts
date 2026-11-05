@@ -94,7 +94,24 @@ function orderOf(calendar: DAVCalendar): number {
   return Number.isFinite(order) ? order : Number.MAX_SAFE_INTEGER
 }
 
-async function davError(response: Response, what: string): Promise<Error> {
+/** The features a server says it has, in the DAV header of its answer to OPTIONS (RFC 4918 §10.1). */
+export function davFeatures(header: string | null): Set<string> {
+  return new Set(
+    (header ?? '')
+      .split(',')
+      .map((feature) => feature.trim().toLowerCase())
+      .filter(Boolean)
+  )
+}
+
+const UNSCHEDULED_GUESTS =
+  'Questo server di calendario non manda gli inviti: un evento con invitati mettilo in un calendario che li manda (Google, Microsoft, iCloud), o crealo senza invitati.'
+const UNSCHEDULED_CHANGE =
+  'Questo server di calendario non avvisa gli invitati: un evento con invitati si cambia, o si elimina, dal programma che li avvisa.'
+const UNSCHEDULED_ANSWER =
+  'Questo server di calendario non avvisa l’organizzatore: rispondi dall’invito che hai ricevuto per mail.'
+
+async function davError(response: Pick<Response, 'status'>, what: string): Promise<Error> {
   return new Error(
     response.status === 401 || response.status === 403
       ? 'Il server del calendario non accetta più l’accesso: ricollega il calendario.'
@@ -109,12 +126,16 @@ async function davError(response: Response, what: string): Promise<Error> {
  * (sync-collection) or, where there is none, its ctag; expanded into the
  * window as events; changed in place — an instance of a series as its
  * exception — with the version they were read at. A server that schedules
- * (iCloud, Fastmail) sends the invitations and the answers itself.
+ * (RFC 6638 — iCloud, Fastmail, Nextcloud) sends the invitations and the
+ * answers itself; on one that does not, nobody would be told, so nothing
+ * that would have to tell someone is written there.
  */
 export class CalDavCalendarProvider implements CalendarProvider {
   private client: DAVClient | null = null
   private calendars: DAVCalendar[] | null = null
-  private addresses: string[] | null = null
+  private ownAddresses: string[] | null = null
+  /** Whether each calendar's server schedules, asked once. */
+  private readonly scheduling = new Map<string, Promise<boolean>>()
 
   constructor(
     private readonly options: {
@@ -153,14 +174,14 @@ export class CalDavCalendarProvider implements CalendarProvider {
     return this.client
   }
 
-  /** The user's own addresses on the server, to read and give their answers. */
-  private async self(): Promise<string[]> {
-    if (!this.addresses) {
+  /** The user's own addresses on the server (calendar-user-address-set), to read and give their answers. */
+  async addresses(): Promise<string[]> {
+    if (!this.ownAddresses) {
       const client = await this.dav()
       const listed = client.account
         ? await client.fetchCalendarUserAddresses({ account: client.account }).catch(() => [])
         : []
-      this.addresses = [
+      this.ownAddresses = [
         ...new Set(
           [...listed, this.options.username]
             .map((address) =>
@@ -174,7 +195,55 @@ export class CalDavCalendarProvider implements CalendarProvider {
       ]
     }
 
-    return this.addresses
+    return this.ownAddresses
+  }
+
+  /**
+   * Whether the server sends, itself, the invitations of the events written
+   * in a calendar, their changes, and the user's answers: it says so with
+   * "calendar-auto-schedule" in its DAV header (RFC 6638 §2).
+   */
+  schedules(calendarId: string): Promise<boolean> {
+    let asked = this.scheduling.get(calendarId)
+
+    if (!asked) {
+      asked = this.askScheduling(calendarId)
+      this.scheduling.set(calendarId, asked)
+      // Asked again next time when the question did not get through.
+      asked.catch(() => this.scheduling.delete(calendarId))
+    }
+
+    return asked
+  }
+
+  private async askScheduling(calendarId: string): Promise<boolean> {
+    const client = await this.dav()
+    let features: string | null = null
+    // Asked through the client, as every other request — its headers, its sign-in, Basic or
+    // Digest — keeping the answer's DAV header, which tsdav does not hand back.
+    const [answer] = await client.davRequest({
+      url: calendarId,
+      init: { method: 'OPTIONS', body: undefined },
+      convertIncoming: false,
+      parseOutgoing: false,
+      headersToExclude: ['Content-Type'],
+      fetch: (async (input: string, init?: RequestInit) => {
+        const response = await this.options.fetch(input, init)
+        features = response.headers.get('dav')
+        return response
+      }) as typeof globalThis.fetch
+    })
+
+    // Refused, or not answered for now: asked again later, not taken for a server that does not.
+    if (
+      [401, 403, 429].includes(answer.status) ||
+      (answer.status >= 500 && answer.status !== 501)
+    ) {
+      throw await davError(answer, 'Il server del calendario non ha detto se manda gli inviti')
+    }
+
+    // A server that does not answer OPTIONS does not say it schedules.
+    return answer.ok && davFeatures(features).has('calendar-auto-schedule')
   }
 
   private async calendar(calendarId: string): Promise<DAVCalendar> {
@@ -237,7 +306,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
     object: { url: string; data: string },
     range: { from: number; to: number }
   ): Promise<ProviderEvent[]> {
-    return occurrencesOf(object.data, range, await this.self()).map((occurrence) =>
+    return occurrencesOf(object.data, range, await this.addresses()).map((occurrence) =>
       this.eventOf(calendarId, object.url, occurrence)
     )
   }
@@ -429,7 +498,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
     object: StoredObject,
     recurrenceId: string | null
   ): Promise<ProviderEvent> {
-    const occurrence = occurrenceIn(object.data, recurrenceId, await this.self())
+    const occurrence = occurrenceIn(object.data, recurrenceId, await this.addresses())
 
     if (!occurrence) {
       throw new Error('L’evento non c’è più sul server.')
@@ -440,7 +509,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
 
   /** The organizer of an event with guests: the user, by their address on the server. */
   private async organizer(event: ProviderEventInput): Promise<string | null> {
-    return event.attendees.length > 0 ? ((await this.self())[0] ?? null) : null
+    return event.attendees.length > 0 ? ((await this.addresses())[0] ?? null) : null
   }
 
   async create(
@@ -448,6 +517,10 @@ export class CalDavCalendarProvider implements CalendarProvider {
     event: ProviderEventInput,
     origin: EventOrigin | null
   ): Promise<ProviderEvent> {
+    if (event.attendees.length > 0 && !(await this.schedules(calendarId))) {
+      throw new Error(UNSCHEDULED_GUESTS)
+    }
+
     const client = await this.dav()
     const uid = randomUUID()
     const data = newEventResource(uid, event, await this.organizer(event), origin)
@@ -472,9 +545,13 @@ export class CalDavCalendarProvider implements CalendarProvider {
     calendarId: string,
     eventId: string,
     event: ProviderEventInput,
-    _notify: boolean,
+    notify: boolean,
     fields: ReadonlySet<EventField>
   ): Promise<ProviderEvent> {
+    if (notify && !(await this.schedules(calendarId))) {
+      throw new Error(UNSCHEDULED_CHANGE)
+    }
+
     const { url, recurrenceId } = splitEventId(eventId)
     const organizer = await this.organizer(event)
     // Applied to the object as the server has it — again after a 412 — only what changed.
@@ -484,7 +561,11 @@ export class CalDavCalendarProvider implements CalendarProvider {
     return this.occurrence(calendarId, object, recurrenceId)
   }
 
-  async remove(calendarId: string, eventId: string): Promise<void> {
+  async remove(calendarId: string, eventId: string, notify: boolean): Promise<void> {
+    if (notify && !(await this.schedules(calendarId))) {
+      throw new Error(UNSCHEDULED_CHANGE)
+    }
+
     const { url, recurrenceId } = splitEventId(eventId)
 
     // One instance of a series: the series says it is not there any more.
@@ -521,10 +602,14 @@ export class CalDavCalendarProvider implements CalendarProvider {
     response: Exclude<CalendarResponse, 'needsAction'>,
     series: boolean
   ): Promise<ProviderEvent> {
+    if (!(await this.schedules(calendarId))) {
+      throw new Error(UNSCHEDULED_ANSWER)
+    }
+
     const { url, recurrenceId } = splitEventId(eventId)
     // The whole series answered: on the series itself, not on the instance shown.
     const answered = series ? null : recurrenceId
-    const self = await this.self()
+    const self = await this.addresses()
     const object = await this.rewrite(calendarId, url, (data) =>
       withResponse(data, answered, self, response)
     )

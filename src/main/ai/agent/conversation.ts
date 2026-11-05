@@ -168,6 +168,12 @@ export function buildConversation(
     }
   }
 
+  if (preamble) {
+    // Compacted in the middle of a run, with nothing after: the run goes on from its
+    // context and the summary of the work so far.
+    messages.push({ role: 'user', content: preamble })
+  }
+
   return messages
 }
 

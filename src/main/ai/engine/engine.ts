@@ -1,10 +1,11 @@
-import type {
-  ActivityEvent,
-  EngineState,
-  OnboardingState,
-  OnboardingStep,
-  ReadingStatus,
-  TaskKind
+import {
+  setupTurnsAiOn,
+  type ActivityEvent,
+  type EngineState,
+  type OnboardingState,
+  type OnboardingStep,
+  type ReadingStatus,
+  type TaskKind
 } from '@shared/segretario'
 
 import type { AgentRunner, RunResult } from '../agent/runner'
@@ -55,6 +56,8 @@ const PREPARING_CONCURRENCY = 8
 
 /** The day's run waits for the morning: before this hour it is not yet the day. */
 const DAY_STARTS_AT_HOUR = 6
+/** The day whose morning look is done (AAAA-MM-GG). */
+const MORNING_DONE = 'morning_done'
 /** The letter is looked at again when it is this old and the day moved since. */
 const LETTER_STALE_MS = 3 * 60 * 60 * 1000
 /** Projects whose "Il punto" one planning queues at most. */
@@ -80,12 +83,6 @@ const BEFORE_READING: ReadonlyArray<OnboardingStep> = [
   'conoscimi'
 ]
 
-/** The changes to the calendar a look covers: after one point, through another. */
-interface CalendarScope {
-  after: number
-  through: number
-}
-
 export interface EngineDeps {
   store: AiStore
   registry: Registry
@@ -97,12 +94,23 @@ export interface EngineDeps {
   emit(event: ActivityEvent): void
   /** Whether the AI is on and has a key: the engine plans and runs only then. */
   ready(): Promise<boolean>
+  /**
+   * With the AI on, why nothing can run in the user's words — the key refused,
+   * the credit gone, no key — or null when it can.
+   */
+  blocked(): Promise<string | null>
   /** The guided setup under way, which holds some of the work back (see `plan`). */
   onboarding(): Promise<OnboardingState | null>
   /** What the engine is doing changed. */
   onStateChange(): void
   /** The key was refused or the credit ran out (a reason), or that passed (null). */
   onPause(reason: string | null): void
+}
+
+/** A run settled, then — done — what follows from its being done. */
+async function settled(result: RunResult, done: () => Promise<void>): Promise<void> {
+  settle(result)
+  await done()
 }
 
 /** A run that did not finish, as the scheduler takes it: a pause, a failure to try again, or not. */
@@ -124,8 +132,15 @@ function settle(result: RunResult): void {
       throw new EnginePause(error.message)
     }
 
-    if (['network', 'unavailable', 'rate-limited', 'timeout'].includes(error.code)) {
-      throw new WorkFailure(error.message, true, false)
+    // Nothing would get through now: the engine waits, the unit is not to blame.
+    if (['network', 'unavailable', 'rate-limited'].includes(error.code)) {
+      throw new WorkFailure(error.message, true, false, true)
+    }
+
+    // A request that hung: tried again, and counted — the same one hanging every time is the
+    // unit's, and must not hold the engine.
+    if (error.code === 'timeout') {
+      throw new WorkFailure(error.message, true, true)
     }
   }
 
@@ -249,6 +264,16 @@ export class SegretarioEngine {
     }
   }
 
+  /** An account is removed: the work on it stops before what it wrote is taken away. */
+  async forgetAccount(accountId: string): Promise<void> {
+    await this.stopWhere((unit) => unit.scopeKey.includes(`:${accountId}:`))
+  }
+
+  /** Stops the running units that match, and waits for them to stop. */
+  async stopWhere(going: (unit: WorkUnit) => boolean): Promise<void> {
+    await this.scheduler.stopWhere(going)
+  }
+
   /**
    * The AI switched off: what runs stops, and what waits is let go — switched on
    * again, the planning finds from the state what is still to do.
@@ -277,8 +302,17 @@ export class SegretarioEngine {
       }
     }
 
+    const network = this.scheduler.waitingForNetwork
+
     return {
-      paused: this.scheduler.paused,
+      // Whatever keeps the work from going on, said: a run that met it, the key or the
+      // credit as last checked, the connection.
+      paused:
+        this.scheduler.paused ??
+        (await this.deps.blocked()) ??
+        (network
+          ? `La connessione con OpenRouter non risponde: riprovo alle ${new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(network.until)}.`
+          : null),
       reading: await this.deps.mail.readingProgress(this.horizonIso()),
       queued,
       running,
@@ -291,22 +325,26 @@ export class SegretarioEngine {
    * waits, what failed after its attempts — and whether anything but that
    * is left, which the planner would have queued.
    */
-  async readingStatus(): Promise<ReadingStatus> {
+  async readingStatus(accountIds?: ReadonlyArray<string>): Promise<ReadingStatus> {
     const { queue, mail, store } = this.deps
-    const counts = (await queue.counts()).filter((count) => count.task === 'lettura')
-    const sum = (statuses: ReadonlyArray<string>): number =>
-      counts
-        .filter((count) => statuses.includes(count.status))
-        .reduce((total, count) => total + count.count, 0)
-    const failedUnits = (await queue.failed(200)).filter((unit) => unit.task === 'lettura')
+    // Of these accounts — a connection just added — or of all.
+    const ours = (scopeKey: string): boolean =>
+      !accountIds || accountIds.some((id) => scopeKey.startsWith(`lettura:${id}:`))
+    const units = (await queue.units('lettura')).filter((unit) => ours(unit.scopeKey))
+    const waiting = units.filter(
+      (unit) => unit.status === 'in_coda' || unit.status === 'da_riprovare'
+    ).length
+    const running = units.filter((unit) => unit.status === 'al_lavoro').length
+    const failedUnits = (await queue.failed(200)).filter(
+      (unit) => unit.task === 'lettura' && ours(unit.scopeKey)
+    )
     const failedKeys = new Set(failedUnits.map((unit) => unit.scopeKey))
     const unread = await mail.unreadConversations(this.horizonIso(), READING_PLANNED)
     const left = unread.filter(
       (conversation) =>
+        ours(`lettura:${conversation.accountId}:`) &&
         !failedKeys.has(`lettura:${conversation.accountId}:${conversation.threadId}`)
     )
-    const waiting = sum(['in_coda', 'da_riprovare'])
-    const running = sum(['al_lavoro'])
     const failed = await Promise.all(
       failedUnits.map(async (unit) => ({
         title:
@@ -317,7 +355,7 @@ export class SegretarioEngine {
     )
 
     return {
-      ...(await mail.readingProgress(this.horizonIso())),
+      ...(await mail.readingProgress(this.horizonIso(), accountIds)),
       waiting,
       running,
       failed,
@@ -348,24 +386,70 @@ export class SegretarioEngine {
     this.scheduler.wake()
   }
 
+  /**
+   * Whether today's letter is behind: written more than `olderThan` ago, and
+   * something open changed since — not by the day's run itself.
+   */
+  async letterBehind(olderThan: number): Promise<boolean> {
+    const letter = await this.deps.registry.day.letter(localDay())
+    return (
+      letter !== null &&
+      Date.now() - letter.writtenAt > olderThan &&
+      (await this.deps.registry.commitments.changedSince(letter.writtenAt))
+    )
+  }
+
+  /** Whether the day is being looked at, or about to be. */
+  async dayInProgress(): Promise<boolean> {
+    const today = localDay()
+    return (
+      (await this.deps.queue.inProgress(`giornata:${today}`)) ||
+      (await this.deps.queue.inProgress(`giornata-agg:${today}`))
+    )
+  }
+
+  /** Whether the day is being looked at, about to be, or a look at it failed for good lately: not asked for again. */
+  async dayBusy(): Promise<boolean> {
+    const today = localDay()
+    return (
+      (await this.deps.queue.busy(`giornata:${today}`)) ||
+      (await this.deps.queue.busy(`giornata-agg:${today}`))
+    )
+  }
+
   /** The user asked to look at the day again now. */
   async refreshDay(): Promise<void> {
+    // Being looked at again already: once is enough.
+    if (await this.deps.queue.inProgress(`giornata-agg:${localDay()}`)) {
+      this.scheduler.wake()
+      return
+    }
+
     await this.deps.queue.enqueue({
       task: 'giornata',
       scopeKey: `giornata-agg:${localDay()}`,
       scope: { refresh: true },
-      priority: PRIORITY.dayRefresh
+      priority: PRIORITY.dayRefresh,
+      now: true
     })
     this.scheduler.wake()
   }
 
   /** The user opened a project whose "Il punto" is behind: it is written again, first. */
   async refreshProject(projectId: string): Promise<void> {
+    const scopeKey = `punto:${projectId}`
+
+    // Being written already: what the user opens shows it when it lands.
+    if (this.scheduler.runningUnits().some((unit) => unit.scopeKey === scopeKey)) {
+      return
+    }
+
     await this.deps.queue.enqueue({
       task: 'punto',
-      scopeKey: `punto:${projectId}`,
+      scopeKey,
       scope: { projectId },
-      priority: PRIORITY.dayRefresh
+      priority: PRIORITY.dayRefresh,
+      now: true
     })
     this.scheduler.wake()
   }
@@ -397,9 +481,9 @@ export class SegretarioEngine {
     const setup = await this.deps.onboarding()
     const holding =
       setup !== null && setup.case !== 'conoscimi' && BEFORE_READING.includes(setup.step)
-    // A setup for no connection in particular — the AI turned on — is for all of them.
+    // The setup that turns the AI on is for every connection; one adding connections, for those.
     const held = new Set(holding ? setup.accountIds : [])
-    const holdsAll = holding && setup.accountIds.length === 0
+    const holdsAll = holding && setupTurnsAiOn(setup) && setup.accountIds.length === 0
 
     // Messages not read yet, conversation by conversation; what came now before the backlog.
     const conversations = holdsAll
@@ -417,23 +501,35 @@ export class SegretarioEngine {
     for (const conversation of conversations) {
       const scopeKey = `lettura:${conversation.accountId}:${conversation.threadId}`
 
-      if (failed.has(scopeKey) || conversation.messages.length === 0) {
+      if (conversation.messages.length === 0) {
         continue
       }
 
       const newest = Date.parse(conversation.messages[conversation.messages.length - 1].dateIso)
       const oldest = conversation.messages[0].dateIso
+      const failedAt = failed.get(scopeKey)
+
+      // A reply prepared before these messages no longer knows them: it is to be looked at again.
+      await registry.markRepliesStale(conversation, oldest, 'la conversazione è andata avanti')
+
+      // A conversation whose reading failed rests a day — unless something came after.
+      if (failedAt !== undefined && newest <= failedAt) {
+        continue
+      }
+
       const recent = newest > now.getTime() - NEW_MAIL_DAYS * DAY_MS
       // A burst is gathered from its newest message on, not from this planning: planning again
       // while the unit waits does not push its start further (a clock ahead waits no longer).
       const burstLeft = Math.min(BURST_MS, Math.max(0, newest + BURST_MS - now.getTime()))
 
-      // A reply prepared before these messages no longer knows them: it is to be looked at again.
-      await registry.markRepliesStale(conversation, oldest, 'la conversazione è andata avanti')
       await queue.enqueue<ReadingScope>({
         task: 'lettura',
         scopeKey,
-        scope: { accountId: conversation.accountId, threadId: conversation.threadId },
+        scope: {
+          accountId: conversation.accountId,
+          threadId: conversation.threadId,
+          newest: new Date(newest).toISOString()
+        },
         priority: recent ? PRIORITY.newMail : PRIORITY.backlog,
         delayMs: recent ? burstLeft : 0
       })
@@ -441,7 +537,7 @@ export class SegretarioEngine {
 
     // Turning the AI on, the rest — the day, the projects, the memory — waits for the setup to
     // be over: it is written from what the reading found.
-    if (setup && setup.case !== 'nuova-connessione' && setup.case !== 'conoscimi') {
+    if (setup && setupTurnsAiOn(setup)) {
       await queue.prune(7 * DAY_MS)
       this.deps.onStateChange()
       return
@@ -449,10 +545,18 @@ export class SegretarioEngine {
 
     // The morning: once a day, once the day has begun.
     if (now.getHours() >= DAY_STARTS_AT_HOUR) {
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-      const lastDay = await store.lastActivityAt('giornata', 'done')
+      const dayBegan = new Date(now).setHours(DAY_STARTS_AT_HOUR, 0, 0, 0)
 
-      if (lastDay === null || lastDay < startOfDay) {
+      // A build before this one kept no mark: a day's run done since the morning began counts.
+      if ((await store.meta(MORNING_DONE)) === null) {
+        const last = await store.lastActivityAt('giornata', 'done')
+
+        if (last !== null && last >= dayBegan) {
+          await store.setMeta(MORNING_DONE, today)
+        }
+      }
+
+      if ((await store.meta(MORNING_DONE)) !== today) {
         // Asked once: while it starts, before its run is written down, it is not asked again.
         if (!(await queue.busy(`giornata:${today}`))) {
           await queue.enqueue({
@@ -462,23 +566,11 @@ export class SegretarioEngine {
             priority: PRIORITY.day
           })
         }
-      } else {
-        const letter = await registry.day.letter(today)
-        const changed = await registry.commitments.open({ includeDeferred: false })
-
-        if (
-          letter &&
-          now.getTime() - letter.writtenAt > LETTER_STALE_MS &&
-          changed.some((item) => item.updatedAt > letter.writtenAt) &&
-          !(await queue.busy(`giornata-agg:${today}`))
-        ) {
-          await queue.enqueue({
-            task: 'giornata',
-            scopeKey: `giornata-agg:${today}`,
-            scope: { refresh: true },
-            priority: PRIORITY.dayRefresh
-          })
-        }
+      } else if (
+        (await this.letterBehind(LETTER_STALE_MS)) &&
+        !(await queue.busy(`giornata-agg:${today}`))
+      ) {
+        await this.refreshDay()
       }
     }
 
@@ -527,13 +619,13 @@ export class SegretarioEngine {
       })
     }
 
+    // Keeping the memory in order needs a memory: some connection known through Conoscimi. One
+    // left unknown (Conoscimi failed, the user went on without) does not stop it for the rest.
     const learnt = await store.listLearning()
     const accounts = await mail.listAccounts()
-    const allKnown =
-      accounts.length > 0 &&
-      accounts.every((account) =>
-        learnt.some((row) => row.accountId === account.id && row.finishedAt !== null)
-      )
+    const someKnown = accounts.some((account) =>
+      learnt.some((row) => row.accountId === account.id && row.finishedAt !== null)
+    )
     const lastKeptUp = Math.max(
       (await store.lastActivityAt('al_passo', 'done')) ?? 0,
       Number((await store.meta(KEEP_UP_CHECKED)) ?? 0)
@@ -544,7 +636,7 @@ export class SegretarioEngine {
     )
 
     if (
-      allKnown &&
+      someKnown &&
       !reading &&
       now.getTime() - lastKeptUp > KEEP_UP_INTERVAL_MS &&
       !(await queue.busy('al_passo'))
@@ -562,10 +654,11 @@ export class SegretarioEngine {
   }
 
   /**
-   * Hands what changed in the calendar to a look of the Segretario's. The
-   * point reached moves as soon as the work is queued — the unit keeps its
-   * range, through its retries — so nothing is looked at twice. Changes far
-   * from now are passed over; the first time, the past is.
+   * Hands what changed in the calendar to a look of the Segretario's, once
+   * at a time. The point reached moves when a look is done, so what a look
+   * that failed did not see is seen by the next; a look that failed for good
+   * rests a day, unless the calendar changed after it. Changes far from now
+   * are passed over; the first time, the past is.
    */
   private async planCalendar(): Promise<void> {
     const { store, calendar, queue } = this.deps
@@ -582,23 +675,30 @@ export class SegretarioEngine {
       return
     }
 
-    const through = changes[changes.length - 1].id
-
-    if (changes.some((change) => changeMatters(change))) {
-      await queue.enqueue<CalendarScope>({
-        task: 'calendario',
-        scopeKey: 'calendario',
-        scope: { after: Number(seen), through },
-        priority: PRIORITY.calendar,
-        delayMs: CALENDAR_SETTLE_MS,
-        merge: (waiting, incoming) => ({
-          after: Math.min(waiting.after, incoming.after),
-          through: Math.max(waiting.through, incoming.through)
-        })
-      })
+    // Nothing among them for the Segretario: seen. Otherwise its look is asked once, and the
+    // mark moves when that look is done — one that fails leaves them to the next.
+    if (!changes.some((change) => changeMatters(change))) {
+      await store.setMeta(CALENDAR_SEEN, String(changes[changes.length - 1].id))
+      return
     }
 
-    await store.setMeta(CALENDAR_SEEN, String(through))
+    const failedAt = (await queue.failedSince(['calendario'], Date.now() - DAY_MS)).get(
+      'calendario'
+    )
+
+    if (failedAt !== undefined && !changes.some((change) => change.at > failedAt)) {
+      return
+    }
+
+    if (!(await queue.inProgress('calendario'))) {
+      await queue.enqueue({
+        task: 'calendario',
+        scopeKey: 'calendario',
+        scope: {},
+        priority: PRIORITY.calendar,
+        delayMs: CALENDAR_SETTLE_MS
+      })
+    }
   }
 
   /** How each task's units run. */
@@ -609,6 +709,10 @@ export class SegretarioEngine {
     return {
       lettura: {
         lockKeys: (unit) => readingLockKeys(deps, unit.scope as ReadingScope),
+        order: (unit) => {
+          const newest = (unit.scope as ReadingScope).newest
+          return newest ? Date.parse(newest) : null
+        },
         run: async (unit, signal) => {
           const scope = unit.scope as ReadingScope
           const plan = await prepareReading(deps, scope, this.horizonIso())
@@ -642,8 +746,10 @@ export class SegretarioEngine {
           const begun = Date.now()
           const letter = await deps.registry.day.letter(today)
           const data = prepareDay({ refresh, lastLetterAt: letter?.writtenAt ?? null })
+          const startOfDay = new Date()
+          startOfDay.setHours(DAY_STARTS_AT_HOUR, 0, 0, 0)
 
-          settle(
+          await settled(
             await startRun(starter, {
               task: 'giornata',
               background: true,
@@ -659,7 +765,14 @@ export class SegretarioEngine {
                   : 'Manca ancora la lettera di oggi: scrivila con `oggi` (`lettera`).'
               },
               onCreated: (activityId) => deps.queue.attachActivity(unit.id, activityId)
-            })
+            }),
+            // The morning's look, done once the day has begun: a refresh, or the day written
+            // before dawn at the end of a setup, leaves the morning to come.
+            async () => {
+              if (!refresh && begun >= startOfDay.getTime()) {
+                await deps.store.setMeta(MORNING_DONE, today)
+              }
+            }
           )
         }
       },
@@ -697,30 +810,36 @@ export class SegretarioEngine {
       calendario: {
         lockKeys: async () => ['calendario'],
         run: async (unit, signal) => {
-          const scope = unit.scope as CalendarScope
-          const changes = (
-            await deps.calendar.changesSince(scope.after, CALENDAR_CHANGES_READ * 3)
-          ).filter((change) => change.id <= scope.through && changeMatters(change))
+          // From where the last look that was done left off, as far as one look takes.
+          const seen = Number((await deps.store.meta(CALENDAR_SEEN)) ?? 0)
+          const all = await deps.calendar.changesSince(seen, CALENDAR_CHANGES_READ)
 
-          if (changes.length === 0) {
+          if (all.length === 0) {
             return
           }
 
-          const data = prepareCalendarChanges(changes)
-          settle(
-            await startRun(starter, {
-              task: 'calendario',
-              background: true,
-              visibility: 'diario',
-              data,
-              origin: 'segretario',
-              shown: data.title,
-              workId: unit.id,
-              scope,
-              signal,
-              onCreated: (activityId) => deps.queue.attachActivity(unit.id, activityId)
-            })
-          )
+          const through = all[all.length - 1].id
+          const changes = all.filter((change) => changeMatters(change))
+
+          if (changes.length > 0) {
+            const data = prepareCalendarChanges(changes)
+            settle(
+              await startRun(starter, {
+                task: 'calendario',
+                background: true,
+                visibility: 'diario',
+                data,
+                origin: 'segretario',
+                shown: data.title,
+                workId: unit.id,
+                scope: { after: seen, through },
+                signal,
+                onCreated: (activityId) => deps.queue.attachActivity(unit.id, activityId)
+              })
+            )
+          }
+
+          await deps.store.setMeta(CALENDAR_SEEN, String(through))
         }
       },
       riflessione: {

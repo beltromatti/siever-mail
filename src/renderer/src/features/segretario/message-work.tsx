@@ -7,9 +7,11 @@ import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { cn } from '@renderer/lib/utils'
 import type { Commitment, MessageWork, Project, Proposal } from '@shared/segretario'
+import type { MessageRef } from '@shared/models'
 
 import { CommitmentList } from './commitment-row'
 import { ProjectPickerPopover } from './project-picker'
+import { eventProposalWords } from './proposal-words'
 import { COMMITMENT_LABELS, dueLabel } from './row-work'
 
 const PRIORITY_LABELS = { alta: 'Importante', media: null, bassa: 'Può aspettare' } as const
@@ -149,14 +151,18 @@ function eventWhen(payload: Record<string, unknown>): string {
  */
 export function ProposalCard({
   proposal,
-  onAct
+  onAct,
+  onOpenSource
 }: {
   proposal: Proposal
   /** Carries out what an extension proposes: its command, on the proposal's message. */
   onAct?: (proposal: Proposal) => void
+  /** Away from its message (Oggi), the card says which one it is, and opens it. */
+  onOpenSource?: (ref: MessageRef) => void
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const event = proposal.kind === 'evento'
+  const words = event ? eventProposalWords(proposal) : null
   const action = event ? undefined : extensionRenderer.proposalActions?.[proposal.kind]
   const attendees = Array.isArray(proposal.payload.attendees)
     ? (proposal.payload.attendees as string[])
@@ -169,7 +175,8 @@ export function ProposalCard({
       .then(
         () =>
           accepted &&
-          toast('Messo in calendario', { description: String(proposal.payload.title ?? '') })
+          words &&
+          toast(words.done, { description: String(proposal.payload.title ?? '') })
       )
       .catch((error: unknown) =>
         toast.error(accepted ? 'Non è stato fatto' : 'Non è stata tolta', {
@@ -181,28 +188,42 @@ export function ProposalCard({
 
   return (
     <div className="bg-ai-soft/45 flex flex-col gap-1.5 rounded-[8px] px-3 py-2.5">
-      <p className="text-ai text-[11.5px] font-semibold">
-        {event ? (proposal.payload.eventKey ? 'Modifica proposta' : 'Evento proposto') : 'Proposta'}
-      </p>
+      <p className="text-ai text-[11.5px] font-semibold">{words?.heading ?? 'Proposta'}</p>
       <p className="text-foreground text-[13px] leading-[1.45]">
         {event ? String(proposal.payload.title ?? proposal.title) : proposal.title}
       </p>
-      {event && (
-        <p className="text-muted-foreground text-[12px] leading-[1.45]">
-          {eventWhen(proposal.payload)}
-          {proposal.payload.location ? ` · ${String(proposal.payload.location)}` : ''}
-          {attendees.length > 0 ? ` · invita ${attendees.join(', ')}` : ''}
-        </p>
+      {proposal.source && onOpenSource && (
+        <button
+          type="button"
+          onClick={() => proposal.source && onOpenSource(proposal.source.ref)}
+          className="text-muted-foreground focus-visible:ring-ring/60 -mx-1 min-w-0 truncate rounded-sm px-1 text-left text-[12px] leading-[1.45] outline-none hover:underline focus-visible:ring-2"
+        >
+          {proposal.source.from}
+          {proposal.source.subject && ` · «${proposal.source.subject}»`}
+        </button>
+      )}
+      {words && words.changes.length > 0 ? (
+        <ul className="text-muted-foreground flex flex-col gap-0.5 text-[12px] leading-[1.45]">
+          {words.changes.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      ) : (
+        event && (
+          <p className="text-muted-foreground text-[12px] leading-[1.45]">
+            {eventWhen(proposal.payload)}
+            {proposal.payload.location ? ` · ${String(proposal.payload.location)}` : ''}
+            {attendees.length > 0 && !proposal.payload.eventKey
+              ? ` · invita ${attendees.join(', ')}`
+              : ''}
+          </p>
+        )
       )}
       <div className="flex items-center gap-1.5">
-        {event && (
+        {words && (
           <Button size="sm" disabled={busy} onClick={() => decide(true)}>
             <CalendarPlus className="size-3.5" />
-            {proposal.payload.eventKey
-              ? 'Applica'
-              : attendees.length > 0
-                ? 'Crea e invita'
-                : 'Aggiungi al calendario'}
+            {words.action}
           </Button>
         )}
         {action && onAct && (

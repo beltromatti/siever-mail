@@ -146,7 +146,8 @@ const segretarioApi: SegretarioApi = {
   getEngineState: async () => invoke(SEGRETARIO_IPC.getEngineState),
   retryFailedWork: async () => invoke(SEGRETARIO_IPC.retryFailedWork),
   listMemory: async () => invoke(SEGRETARIO_IPC.listMemory),
-  writeMemory: async (path, content) => invoke(SEGRETARIO_IPC.writeMemory, path, content),
+  writeMemory: async (path, content, seenRevision) =>
+    invoke(SEGRETARIO_IPC.writeMemory, path, content, seenRevision),
   deleteMemory: async (path) => invoke(SEGRETARIO_IPC.deleteMemory, path),
   memoryHistory: async (path) => invoke(SEGRETARIO_IPC.memoryHistory, path),
   restoreMemory: async (path, revision) => invoke(SEGRETARIO_IPC.restoreMemory, path, revision),
@@ -156,7 +157,7 @@ const segretarioApi: SegretarioApi = {
   getOnboarding: async () => invoke(SEGRETARIO_IPC.getOnboarding),
   setOnboarding: async (state) => invoke(SEGRETARIO_IPC.setOnboarding, state),
   connectionReadiness: async (accountIds) => invoke(SEGRETARIO_IPC.connectionReadiness, accountIds),
-  getReadingStatus: async () => invoke(SEGRETARIO_IPC.getReadingStatus),
+  getReadingStatus: async (accountIds) => invoke(SEGRETARIO_IPC.getReadingStatus, accountIds),
   setPreparing: async (preparing) => invoke(SEGRETARIO_IPC.setPreparing, preparing),
   draftSent: async (draftId, writtenText) => invoke(SEGRETARIO_IPC.draftSent, draftId, writtenText),
   getRowWork: async (messages) => invoke(SEGRETARIO_IPC.getRowWork, messages),
@@ -166,6 +167,7 @@ const segretarioApi: SegretarioApi = {
   setCommitmentStatus: async (id, status, options) =>
     invoke(SEGRETARIO_IPC.setCommitmentStatus, id, status, options),
   editCommitment: async (id, changes) => invoke(SEGRETARIO_IPC.editCommitment, id, changes),
+  undoCommitmentStatus: async (id) => invoke(SEGRETARIO_IPC.undoCommitmentStatus, id),
   openCommitment: async (message, input) => invoke(SEGRETARIO_IPC.openCommitment, message, input),
   markHandled: async (messages) => invoke(SEGRETARIO_IPC.markHandled, messages),
   undoChange: async (activityId, eventId, index) =>
@@ -178,6 +180,7 @@ const segretarioApi: SegretarioApi = {
     invoke(SEGRETARIO_IPC.discardReply, accountId, messageKey),
   listProposals: async () => invoke(SEGRETARIO_IPC.listProposals),
   eventPrep: async (eventKey) => invoke(SEGRETARIO_IPC.eventPrep, eventKey),
+  commitmentSource: async (id) => invoke(SEGRETARIO_IPC.commitmentSource, id),
   decideProposal: async (id, accepted, result, revision) =>
     invoke(SEGRETARIO_IPC.decideProposal, id, accepted, result, revision),
   getToday: async () => invoke(SEGRETARIO_IPC.getToday),

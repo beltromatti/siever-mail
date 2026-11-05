@@ -408,6 +408,11 @@ export interface MessagesActionResult {
   failed: MessageRef[]
   /** Why, in the user's words, when something failed. */
   error?: string
+  /**
+   * Those done that are still where they were shown: archived on Gmail from
+   * a label, the sent mail or "Tutti i messaggi", they stay under it.
+   */
+  kept?: MessageRef[]
 }
 
 export interface ComposeAttachmentInput {

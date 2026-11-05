@@ -51,7 +51,7 @@ export interface DrawnRange {
 
 interface Placed {
   id: string
-  /** The event itself — null for a proposal — when it can be moved on the grid. */
+  /** The event itself when the user may move it on the grid; null for a proposal, an invitation. */
   movable: CalendarEvent | null
   start: number
   end: number
@@ -100,8 +100,8 @@ interface Move {
  * The days of a week — or one — hour by hour: the events where they fall,
  * side by side where they overlap; all-day ones, deadlines and proposals
  * in the band on top; now as a line. A click or a drag on the free grid
- * draws a new event; an event of a calendar that can be written is moved
- * by dragging it.
+ * draws a new event; an event the user organises, in a calendar that can
+ * be written, is moved by dragging it.
  */
 export function TimeGrid({
   days,
@@ -157,7 +157,9 @@ export function TimeGrid({
       .filter((event) => !inTopBand(event))
       .map((event) => ({
         id: event.key,
-        movable: calendarOf(event, calendars)?.writable ? event : null,
+        // Moved only by who organises it, in a calendar written in: an invitation is answered.
+        movable:
+          calendarOf(event, calendars)?.writable && event.organizedByUser === true ? event : null,
         ...eventSpan(event),
         title: event.title,
         color: calendarOf(event, calendars)?.color ?? null,

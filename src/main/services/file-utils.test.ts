@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { writeUniqueFile } from './file-utils'
+import { sanitizePathSegment, writeUniqueFile } from './file-utils'
 
 describe('writeUniqueFile', () => {
   let directory: string
@@ -45,5 +45,14 @@ describe('writeUniqueFile', () => {
     })
 
     expect(second.endsWith('Verbale (1).pdf')).toBe(true)
+  })
+})
+
+describe('sanitizePathSegment', () => {
+  it('defuses the names Windows keeps for devices', () => {
+    expect(sanitizePathSegment('aux.pdf', 'file')).toBe('aux_.pdf')
+    expect(sanitizePathSegment('CON', 'file')).toBe('CON_')
+    expect(sanitizePathSegment('Console.txt', 'file')).toBe('Console.txt')
+    expect(sanitizePathSegment('com1 .log', 'file')).toBe('com1_ .log')
   })
 })

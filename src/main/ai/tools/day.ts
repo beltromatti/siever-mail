@@ -1,3 +1,6 @@
+import { foldSearchText } from '@shared/search'
+
+import { linksIn } from '../agent/entries'
 import { PROMPTS } from '../prompts'
 import {
   numberArg,
@@ -10,7 +13,7 @@ import {
   type ToolContext
 } from '../agent/tool-types'
 import { eventLine } from './calendar'
-import { clip, countOf, formatDateTime } from './format'
+import { countOf, formatDateTime } from './format'
 
 /** The user's day, AAAA-MM-GG, as their clock has it. */
 export function localDay(date = new Date()): string {
@@ -112,17 +115,24 @@ export const todayTool: SegretarioTool = {
         )
       }
 
-      await context.registry.saveLetter(localDay(), letter, context.run.actor)
+      await context.registry.saveLetter(
+        localDay(),
+        letter,
+        linksIn(letter, context.handles),
+        context.run.actor
+      )
       lines.push('La lettera di oggi è in cima a Oggi.')
     }
 
     if (meeting) {
       const event = await meetingOf(context, meeting)
 
+      const preparation = requireString(args, 'preparazione')
       await context.registry.savePrep(
         event.eventKey,
         event.title,
-        requireString(args, 'preparazione'),
+        preparation,
+        linksIn(preparation, context.handles),
         context.run.actor
       )
       lines.push(`Preparazione di «${event.title}» salvata: la trova sotto l'evento.`)
@@ -158,9 +168,22 @@ export const reviewTool: SegretarioTool = {
     }
 
     const warnings = stringListArg(args, 'avvisi')
-      .map((warning) => clip(warning.replace(/\s+/g, ' ').trim(), 240).text)
+      .map((warning) => warning.replace(/\s+/g, ' ').trim())
       .filter(Boolean)
-      .slice(0, 4)
+
+    // The card before sending has room for a few short lines: what does not fit is said back.
+    if (warnings.length > MAX_REVIEW_WARNINGS) {
+      throw new ToolInputError(
+        `Al massimo ${MAX_REVIEW_WARNINGS} avvisi: tieni quelli che contano davvero prima di inviare.`
+      )
+    }
+
+    if (warnings.some((warning) => warning.length > MAX_REVIEW_WARNING_CHARS)) {
+      throw new ToolInputError(
+        `Ogni avviso in una frase, entro ${MAX_REVIEW_WARNING_CHARS} caratteri: l'utente lo legge mentre sta per inviare.`
+      )
+    }
+
     context.run.results.review = warnings
     return {
       content:
@@ -174,6 +197,13 @@ export const reviewTool: SegretarioTool = {
     }
   }
 }
+
+/** What the card before sending shows at most. */
+const MAX_REVIEW_WARNINGS = 4
+const MAX_REVIEW_WARNING_CHARS = 280
+
+/** The runs one look at the diary shows at most: past them, the search narrows. */
+const DIARY_RUNS_SHOWN = 40
 
 /** What the Segretario did lately, run by run, with what it changed: to build on it, and to say it. */
 export const journalTool: SegretarioTool = {
@@ -189,25 +219,46 @@ export const journalTool: SegretarioTool = {
   running: () => 'Rileggo cosa ho fatto…',
   async execute(args, context) {
     const days = Math.min(30, Math.max(1, numberArg(args, 'giorni') ?? 3))
-    const words = (stringArg(args, 'cerca') ?? '').toLowerCase().split(/\s+/).filter(Boolean)
+    const words = foldSearchText(stringArg(args, 'cerca') ?? '')
+      .split(/\s+/)
+      .filter(Boolean)
+    // A run is found by what the diary says of it: its title, its kind, its day, its changes —
+    // accents and capitals aside, as the app's search finds.
     const work = (
-      await context.store.recentWork(Date.now() - days * 24 * 60 * 60 * 1000, 200)
+      await context.store.recentWork(
+        Date.now() - days * 24 * 60 * 60 * 1000,
+        DIARY_RUNS_SHOWN + 1,
+        words.length === 0
+          ? undefined
+          : (entry) => {
+              const said = foldSearchText(
+                [
+                  entry.title,
+                  TASK_WORDS[entry.task] ?? entry.task,
+                  formatDateTime(new Date(entry.createdAt).toISOString()),
+                  ...entry.changes.map((change) => change.label)
+                ].join(' ')
+              )
+              return words.every((word) => said.includes(word))
+            }
+      )
     ).filter((entry) => entry.activityId !== context.run.activityId)
-    const lines = work
-      .map((entry) => {
-        const changes = entry.changes.map((change) => change.label)
-        const text = `${formatDateTime(new Date(entry.createdAt).toISOString())} · ${TASK_WORDS[entry.task] ?? entry.task} · «${entry.title}»${
-          entry.status === 'failed' ? ' · non riuscito' : ''
-        }${changes.length > 0 ? `\n   ${changes.slice(0, 12).join('\n   ')}${changes.length > 12 ? `\n   …e altre ${changes.length - 12}` : ''}` : ''}`
-        return text
-      })
-      .filter((text) => words.every((word) => text.toLowerCase().includes(word)))
+    const lines = work.slice(0, DIARY_RUNS_SHOWN).map((entry) => {
+      const changes = entry.changes.map((change) => change.label)
+      return `${formatDateTime(new Date(entry.createdAt).toISOString())} · ${TASK_WORDS[entry.task] ?? entry.task} · «${entry.title}»${
+        entry.status === 'failed' ? ' · non riuscito' : ''
+      }${changes.length > 0 ? `\n   ${changes.slice(0, 12).join('\n   ')}${changes.length > 12 ? `\n   …e altre ${changes.length - 12}` : ''}` : ''}`
+    })
 
     return {
       content:
         lines.length === 0
           ? `Nessun lavoro negli ultimi ${countOf(days, 'giorno', 'giorni')}${words.length > 0 ? ' con queste parole' : ''}.`
-          : `Il tuo lavoro degli ultimi ${countOf(days, 'giorno', 'giorni')}, dal più recente:\n${lines.join('\n')}`,
+          : `Il tuo lavoro degli ultimi ${countOf(days, 'giorno', 'giorni')}, dal più recente:\n${lines.join('\n')}${
+              work.length > DIARY_RUNS_SHOWN
+                ? `\n(Ce n'è altro più indietro: restringi con \`cerca\` o con meno \`giorni\`.)`
+                : ''
+            }`,
       summary: 'Riletto il diario'
     }
   }

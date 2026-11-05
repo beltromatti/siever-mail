@@ -166,6 +166,8 @@ export interface Proposal {
   /** The version shown: an answer to an older one is refused, the proposal having changed. */
   revision: number
   createdAt: number
+  /** Its message, where the proposal is shown away from it (Oggi): who wrote it and about what. */
+  source?: { ref: MessageRef; from: string; subject: string }
 }
 
 /** A copy of a message saved outside the mail by an extension, as the message shows it. */
@@ -208,10 +210,17 @@ export interface MessageRowWork {
   saved: string | null
 }
 
+/** Where an earlier copy went, and how near the messages it was: their conversation, or only their sender. */
+export interface SavedBefore {
+  destination: string
+  /** `mittente`: no message of these conversations was saved, one from the same sender was — a hint, not the place. */
+  from: 'conversazione' | 'mittente'
+}
+
 /** Where messages about to be saved outside the mail are likely to go, and what is proposed for them. */
 export interface FilingContext {
-  /** The latest destination of a copy of an earlier message of their conversations, or else of their senders. */
-  savedBefore: string | null
+  /** The latest copy of an earlier message of their conversations, or else of their senders. */
+  savedBefore: SavedBefore | null
   /** The folders linked to the projects their conversations are in: where their work is kept. */
   projectFolders: string[]
   /** The proposals open on these messages, every kind: an extension takes its own. */
@@ -231,6 +240,8 @@ export interface Project {
   description: string | null
   /** "Il punto": where it stands, as last written; null until written. */
   state: string | null
+  /** What the short names in "Il punto" stand for. */
+  stateLinks: HandleLink[]
   stateAt: number | null
   /** Something moved after "Il punto" was written. */
   stale: boolean
@@ -245,8 +256,6 @@ export interface Project {
 export interface ProjectDetail extends Project {
   resources: Array<{ kind: 'cartella' | 'link'; location: string; label: string | null }>
   commitments: Commitment[]
-  /** Its conversations, each by its latest message, the newest first. */
-  messages: DayLine[]
 }
 
 /* ──────────────────────────────── the day ──────────────────────────────── */
@@ -271,9 +280,15 @@ export interface TodayPage {
   day: string
   /** The letter at the top, and when it was written; null until written. */
   letter: string | null
+  /** What the short names in the letter stand for. */
+  letterLinks: HandleLink[]
   letterAt: number | null
+  /** The day is being looked at again: a new letter is on its way. */
+  letterRewriting: boolean
   /** Messages still to be read: while there are, the day is not complete. */
   reading: number
+  /** Why the Segretario is stopped (the key, the credit, the connection), when it is. */
+  paused: string | null
   /** What is due today, or overdue. */
   today: DayLine[]
   /** What is due in the next seven days. */
@@ -288,7 +303,13 @@ export interface TodayPage {
   questions: DayLine[]
   proposals: Proposal[]
   /** Today's meetings with what the Segretario prepared for them, by event key. */
-  preps: Record<string, string>
+  preps: Record<string, LinkedText>
+}
+
+/** Words of the Segretario that stay, with what their short names stand for. */
+export interface LinkedText {
+  text: string
+  links: HandleLink[]
 }
 
 /* ──────────────────────────────── writing ──────────────────────────────── */
@@ -385,6 +406,21 @@ export interface OnboardingState {
   /** The Conoscimi run of this setup, once started. */
   conoscimiId: string | null
   startedAt: number
+  /**
+   * The AI was turned on in this setup — its own case, or a new connection
+   * added with the AI off and turned on along the way: everything then
+   * waits for Conoscimi and the reading.
+   */
+  turnsAiOn?: boolean
+}
+
+/** Whether a setup is the one that turns the AI on: everything waits for it. */
+export function setupTurnsAiOn(state: OnboardingState): boolean {
+  return state.case === 'primo-avvio' ||
+    state.case === 'ai-prima-volta' ||
+    state.case === 'ai-riaccesa'
+    ? true
+    : state.turnsAiOn === true
 }
 
 /** Whether a connection's recent mail is in, read by the index: what the Segretario needs to start. */
@@ -406,7 +442,6 @@ export interface ReadingStatus {
   done: boolean
 }
 
-/** Where getting to know a connection stands. */
 /** Whether the Segretario knows a connection — a mailbox or a calendar — from Conoscimi. */
 export interface ConnectionLearning {
   /** The connection as Conoscimi records it: a mailbox's id, or `calendarLearningKey(id)`. */
@@ -517,7 +552,8 @@ export interface ApprovalRequest {
 
 /** What a short name the Segretario writes stands for, for the page to make a link of. */
 export type HandleLink =
-  | { handle: string; kind: 'message'; ref: MessageRef }
+  /** `ref` is where the message was when named; `messageKey` finds it wherever it is now. */
+  | { handle: string; kind: 'message'; ref: MessageRef; messageKey?: string }
   | {
       handle: string
       kind: 'file'
@@ -529,6 +565,8 @@ export type HandleLink =
   | { handle: string; kind: 'draft'; draftId: string }
   | { handle: string; kind: 'project'; projectId: string; title: string }
   | { handle: string; kind: 'event'; eventKey: string; title: string }
+  /** An open thing, by its number: it opens on the message it comes from. */
+  | { handle: string; kind: 'commitment'; commitmentId: number }
 
 /** A change a run made to the user's work, as its page of the diary shows it. */
 export interface WorkChangeLine {
@@ -636,6 +674,7 @@ export const SEGRETARIO_IPC = {
   getMessageWork: 'segretario:get-message-work',
   setCommitmentStatus: 'segretario:set-commitment-status',
   editCommitment: 'segretario:edit-commitment',
+  undoCommitmentStatus: 'segretario:undo-commitment-status',
   openCommitment: 'segretario:open-commitment',
   markHandled: 'segretario:mark-handled',
   undoChange: 'segretario:undo-change',
@@ -645,6 +684,7 @@ export const SEGRETARIO_IPC = {
   decideProposal: 'segretario:decide-proposal',
   listProposals: 'segretario:list-proposals',
   eventPrep: 'segretario:event-prep',
+  commitmentSource: 'segretario:commitment-source',
   getToday: 'segretario:get-today',
   refreshToday: 'segretario:refresh-today',
   getDue: 'segretario:get-due',
@@ -696,8 +736,8 @@ export interface SegretarioApi {
   /** Tries the work that failed again, now. */
   retryFailedWork: () => Promise<EngineState>
   listMemory: () => Promise<MemoryNote[]>
-  /** Writes a note as the user corrected it. */
-  writeMemory: (path: string, content: string) => Promise<MemoryNote[]>
+  /** Writes a note as the user corrected it; `seenRevision`, the version they opened: changed since, the write is refused. */
+  writeMemory: (path: string, content: string, seenRevision?: number) => Promise<MemoryNote[]>
   deleteMemory: (path: string) => Promise<MemoryNote[]>
   memoryHistory: (path: string) => Promise<MemoryVersion[]>
   restoreMemory: (path: string, revision: number) => Promise<MemoryNote[]>
@@ -705,18 +745,18 @@ export interface SegretarioApi {
   forgetEverything: () => Promise<void>
   listLearning: () => Promise<ConnectionLearning[]>
   /**
-   * Starts Conoscimi on these connections (all when none are given): the
-   * Segretario gets to know them, building on what it knows. Resolves with
-   * the run, which the page shows as it goes.
+   * Starts Conoscimi on these connections (`ConnectionLearning.key`; all when
+   * none are named): the Segretario gets to know them, building on what it
+   * knows. Resolves with the run, which the page shows as it goes.
    */
-  /** Conoscimi on these connections (`ConnectionLearning.key`), on all of them when none are named. */
   startConoscimi: (keys?: string[]) => Promise<ActivitySummary>
   /** The guided setup under way, or null. */
   getOnboarding: () => Promise<OnboardingState | null>
   /** Keeps where the guided setup is, or — null — that it is over. */
   setOnboarding: (state: OnboardingState | null) => Promise<void>
   connectionReadiness: (accountIds: string[]) => Promise<ConnectionReadiness[]>
-  getReadingStatus: () => Promise<ReadingStatus>
+  /** Of these accounts — the connections a setup adds — or of all. */
+  getReadingStatus: (accountIds?: string[]) => Promise<ReadingStatus>
   /** The first reading is prepared with the user waiting: more of it at once. */
   setPreparing: (preparing: boolean) => Promise<void>
   /** A draft went out: what the user wrote in it, to learn from when the Segretario had written it. */
@@ -745,6 +785,8 @@ export interface SegretarioApi {
     status: CommitmentStatus,
     options?: { until?: string; reason?: string }
   ) => Promise<Commitment>
+  /** Takes back the user's last tick (or setting aside, or putting off) of an open thing. */
+  undoCommitmentStatus: (id: number) => Promise<Commitment>
   /** The user corrects what a commitment says. */
   editCommitment: (
     id: number,
@@ -768,9 +810,13 @@ export interface SegretarioApi {
   /** The proposals waiting for the user, the newest first: events among them show in the calendar. */
   listProposals: () => Promise<Proposal[]>
   /** How to prepare for an event, as the Segretario wrote it, and when; null when it has not. */
-  eventPrep: (eventKey: string) => Promise<{ text: string; writtenAt: number } | null>
-  /** The user accepted a proposal — with what they changed — or set it aside. */
-  /** Answers a proposal; `revision` is the version shown: one changed since is refused. */
+  eventPrep: (eventKey: string) => Promise<(LinkedText & { writtenAt: number }) | null>
+  /** The message an open thing comes from, to open it: null when it is no longer in the mail. */
+  commitmentSource: (id: number) => Promise<MessageRef | null>
+  /**
+   * The user accepted a proposal — with what they changed — or set it aside;
+   * `revision` is the version shown: one changed since is refused.
+   */
   decideProposal: (
     id: string,
     accepted: boolean,

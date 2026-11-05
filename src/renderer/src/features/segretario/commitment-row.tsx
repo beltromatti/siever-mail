@@ -38,18 +38,25 @@ function nextWeekday(weekday: number, from = new Date()): string {
   return inDays(ahead, from)
 }
 
-/** The days a thing can be put off to, or given as its deadline, as a person says them. */
+/**
+ * The days a thing can be put off to, or given as its deadline, as a person
+ * says them — each day once: on a Thursday, "Venerdì" is tomorrow.
+ */
 function dayChoices(): Array<{ label: string; day: string }> {
+  const seen = new Set<string>()
+
   return [
     { label: 'Domani', day: inDays(1) },
     { label: 'Venerdì', day: nextWeekday(5) },
     { label: 'Lunedì prossimo', day: nextWeekday(1) },
     { label: 'Tra una settimana', day: inDays(7) },
     { label: 'Tra un mese', day: inDays(30) }
-  ].map((choice) => ({
-    ...choice,
-    label: `${choice.label} · ${SHORT_DAY.format(new Date(`${choice.day}T00:00`))}`
-  }))
+  ]
+    .filter((choice) => !seen.has(choice.day) && Boolean(seen.add(choice.day)))
+    .map((choice) => ({
+      ...choice,
+      label: `${choice.label} · ${SHORT_DAY.format(new Date(`${choice.day}T00:00`))}`
+    }))
 }
 
 /** "da te", "dal Segretario": who settled it, when it was not the app itself. */
@@ -77,6 +84,15 @@ function settledLine(commitment: Commitment): string | null {
   }
 }
 
+/** "Annulla" on a tick: the thing as it was, and what the tick taught taken back; said when it cannot. */
+export function undoTick(id: number): void {
+  void window.segretarioApi.undoCommitmentStatus(id).catch((error: unknown) =>
+    toast.error('Non si annulla', {
+      description: error instanceof Error ? error.message : undefined
+    })
+  )
+}
+
 const UNDO_WORDS: Readonly<Record<Exclude<CommitmentStatus, 'aperta'>, string>> = {
   fatta: 'Segnata come fatta',
   non_serve: 'Segnata come non necessaria',
@@ -100,7 +116,7 @@ async function setStatus(
           description: commitment.text,
           action: {
             label: 'Annulla',
-            onClick: () => void window.segretarioApi.setCommitmentStatus(commitment.id, 'aperta')
+            onClick: () => undoTick(commitment.id)
           }
         }
       )
@@ -249,75 +265,114 @@ export function CommitmentRow({
         )}
       </div>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-label={`Altro: ${commitment.text}`}
-            className="text-faint-foreground hover:text-foreground focus-visible:ring-ring/60 data-[state=open]:text-foreground mt-[1px] shrink-0 rounded-sm opacity-0 outline-none group-hover/commitment:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 data-[state=open]:opacity-100"
-          >
-            <MoreHorizontal className="size-3.5" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-[13rem]">
-          {open ? (
-            <>
-              {awaited && onRemind && (
-                <DropdownMenuItem onSelect={() => onRemind(commitment)}>
-                  Sollecita…
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onSelect={() => void setStatus(commitment, 'non_serve')}>
-                Non serve
-              </DropdownMenuItem>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>Rinvia</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  {dayChoices().map((choice) => (
-                    <DropdownMenuItem
-                      key={choice.day}
-                      onSelect={() => void setStatus(commitment, 'rinviata', { until: choice.day })}
-                    >
-                      {choice.label}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>Scadenza</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuItem onSelect={() => void edit(commitment, { due: inDays(0) })}>
-                    Oggi
-                  </DropdownMenuItem>
-                  {dayChoices().map((choice) => (
-                    <DropdownMenuItem
-                      key={choice.day}
-                      onSelect={() => void edit(commitment, { due: choice.day })}
-                    >
-                      {choice.label}
-                    </DropdownMenuItem>
-                  ))}
-                  {commitment.due && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={() => void edit(commitment, { due: null })}>
-                        Senza scadenza
-                      </DropdownMenuItem>
-                    </>
-                  )}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => setEditing(true)}>Correggi</DropdownMenuItem>
-            </>
-          ) : (
-            <DropdownMenuItem onSelect={() => void setStatus(commitment, 'aperta')}>
-              Riapri
-            </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <CommitmentMenu
+        commitment={commitment}
+        onRemind={onRemind}
+        onCorrect={() => {
+          // From the words as they are now: the Segretario may have changed them since.
+          setText(commitment.text)
+          setEditing(true)
+        }}
+        className="mt-[1px] opacity-0 group-hover/commitment:opacity-100"
+      />
     </li>
+  )
+}
+
+/**
+ * What can be done to an open thing besides ticking it, wherever it is
+ * shown — the reader, a project, Oggi: chase it, say it is not needed, put
+ * it off, move its deadline, correct its words; for one settled, reopen it.
+ */
+export function CommitmentMenu({
+  commitment,
+  onRemind,
+  onCorrect,
+  className
+}: {
+  commitment: Commitment
+  onRemind?: (commitment: Commitment) => void
+  /** Where the words can be corrected in place. */
+  onCorrect?: () => void
+  className?: string
+}): React.JSX.Element {
+  const open = commitment.status === 'aperta'
+  const awaited = commitment.kind === 'aspetti'
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Altro: ${commitment.text}`}
+          className={cn(
+            'text-faint-foreground hover:text-foreground focus-visible:ring-ring/60 data-[state=open]:text-foreground shrink-0 rounded-sm outline-none focus-visible:opacity-100 focus-visible:ring-2 data-[state=open]:opacity-100',
+            className
+          )}
+        >
+          <MoreHorizontal className="size-3.5" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[13rem]">
+        {open ? (
+          <>
+            {awaited && onRemind && (
+              <DropdownMenuItem onSelect={() => onRemind(commitment)}>Sollecita…</DropdownMenuItem>
+            )}
+            <DropdownMenuItem onSelect={() => void setStatus(commitment, 'non_serve')}>
+              Non serve
+            </DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Rinvia</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {dayChoices().map((choice) => (
+                  <DropdownMenuItem
+                    key={choice.day}
+                    onSelect={() => void setStatus(commitment, 'rinviata', { until: choice.day })}
+                  >
+                    {choice.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Scadenza</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem onSelect={() => void edit(commitment, { due: inDays(0) })}>
+                  Oggi
+                </DropdownMenuItem>
+                {dayChoices().map((choice) => (
+                  <DropdownMenuItem
+                    key={choice.day}
+                    onSelect={() => void edit(commitment, { due: choice.day })}
+                  >
+                    {choice.label}
+                  </DropdownMenuItem>
+                ))}
+                {commitment.due && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={() => void edit(commitment, { due: null })}>
+                      Senza scadenza
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            {onCorrect && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={onCorrect}>Correggi</DropdownMenuItem>
+              </>
+            )}
+          </>
+        ) : (
+          <DropdownMenuItem onSelect={() => void setStatus(commitment, 'aperta')}>
+            Riapri
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

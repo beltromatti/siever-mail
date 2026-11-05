@@ -68,6 +68,19 @@ const PLAIN_TEXT_EXTENSIONS = new Set([
 
 const htmlToMarkdown = new NodeHtmlMarkdown({ keepDataImages: false, maxConsecutiveNewlines: 2 })
 
+/**
+ * An iCalendar file as it reads: its long lines unfolded (RFC 5545 folds
+ * them) and without its time zone definitions, long and of no use to a
+ * reader — every time names its zone.
+ */
+function calendarText(text: string): string {
+  return text
+    .replace(/\r?\n[ \t]/g, '')
+    .replace(/^BEGIN:VTIMEZONE\r?$[\s\S]*?^END:VTIMEZONE\r?\n?/gim, '')
+    .replace(/\r\n/g, '\n')
+    .trim()
+}
+
 /** The part of `text` from `offset`, at most a page of it. */
 function page(text: string, offset: number): ExtractedContent {
   const start = Math.max(0, Math.min(offset, text.length))
@@ -143,6 +156,11 @@ export async function extractContent(
       `${header}\n\n${body}${files.length > 0 ? `\n\nAllegati: ${files.join(', ')}` : ''}`,
       offset
     )
+  }
+
+  // An invitation travels as `text/calendar` in the message and as `application/ics` attached.
+  if (extension === '.ics' || type === 'text/calendar' || type === 'application/ics') {
+    return page(calendarText(data.toString('utf8')), offset)
   }
 
   if (PLAIN_TEXT_EXTENSIONS.has(extension) || type.startsWith('text/')) {

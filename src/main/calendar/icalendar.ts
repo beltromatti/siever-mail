@@ -74,6 +74,46 @@ const CONFERENCE_PROPERTIES = [
 const MEETING_LINK =
   /https:\/\/(?:meet\.google\.com|[\w.-]*zoom\.us|teams\.microsoft\.com|teams\.live\.com|[\w.-]*webex\.com)\/[^\s"<>)]+/i
 
+/** How a Global Object ID begins, written in hex [MS-OXOCAL 2.2.1.27]. */
+const GLOBAL_OBJECT_ID = '040000008200E00074C5B7101A82E008'
+/** What its data begins with when it wraps another calendar's UID: "vCal-Uid", then 1. */
+const WRAPPED_UID = Buffer.from([0x76, 0x43, 0x61, 0x6c, 0x2d, 0x55, 0x69, 0x64, 1, 0, 0, 0])
+
+/**
+ * The UID an event goes by in invitations, from the one a calendar gives.
+ * Exchange gives its Global Object ID in hex (Graph's `iCalUId`): an
+ * instance's own date in it, and a UID that came from another calendar
+ * wrapped as "vCal-Uid". It writes it in an invitation as that UID, or as
+ * the hex with the instance's date cleared [MS-OXCICAL 2.1.3.1.1.20.26]:
+ * so it is read here, for the two to meet. Any other UID is itself.
+ */
+export function canonicalUid(value: string): string {
+  const uid = value.trim()
+
+  if (
+    uid.length < 82 ||
+    uid.length % 2 !== 0 ||
+    !/^[0-9a-f]+$/i.test(uid) ||
+    uid.slice(0, GLOBAL_OBJECT_ID.length).toUpperCase() !== GLOBAL_OBJECT_ID
+  ) {
+    return uid
+  }
+
+  const bytes = Buffer.from(uid, 'hex')
+  // The header: the id's 16 bytes, the instance's date (4), when it was made (8), 8 reserved, the data's size (4).
+  const data = bytes.subarray(40, 40 + bytes.readUInt32LE(36))
+  const wrapped = data.subarray(0, WRAPPED_UID.length).equals(WRAPPED_UID)
+    ? data.subarray(WRAPPED_UID.length).toString('utf8').replace(/\0+$/, '').trim()
+    : ''
+
+  if (wrapped) {
+    return wrapped
+  }
+
+  bytes.fill(0, 16, 20)
+  return bytes.toString('hex').toUpperCase()
+}
+
 function addressOf(value: unknown): string {
   return String(value ?? '')
     .replace(/^mailto:/i, '')
@@ -103,12 +143,16 @@ function instantOf(time: ICAL.Time): number {
  * The time zones a calendar's times are in, known before they are read:
  * the VTIMEZONEs it carries, and — for a TZID it names without one — the
  * IANA zone of that name. A zone left unknown would read as local time.
+ *
+ * ical.js keeps its zones in one registry, by TZID, and finds a time's
+ * zone there as the time is read. Two calendars may define one TZID two
+ * ways — Outlook's "Customized Time Zone" is each organizer's own — so a
+ * calendar's own definitions are registered again each time it is read,
+ * and win: every read here runs, start to end, without yielding.
  */
 function registerTimezones(root: ICAL.Component, text: string): void {
   for (const zone of root.getAllSubcomponents('vtimezone')) {
-    const tzid = zone.getFirstPropertyValue('tzid')
-
-    if (typeof tzid === 'string' && !ICAL.TimezoneService.has(tzid)) {
+    if (typeof zone.getFirstPropertyValue('tzid') === 'string') {
       ICAL.TimezoneService.register(zone)
     }
   }
@@ -192,7 +236,10 @@ function occurrenceOf(
   const own = attendees.find((attendee) => attendee.self)
   const allDay = start.isDate
   const startsAt = instantOf(start)
-  const endsAt = Math.max(instantOf(end), startsAt + (allDay ? 24 * 60 * 60 * 1000 : 0))
+  // An all-day event ends at the midnight its last day ends at — 23 or 25 hours on the days
+  // the clocks change — and lasts its day when it says no end after it.
+  const lastDay = allDay && !(end.isDate && instantOf(end) > startsAt) ? dayAfter(start) : end
+  const endsAt = allDay ? instantOf(lastDay) : Math.max(instantOf(end), startsAt)
   const status = String(event.component.getFirstPropertyValue('status') ?? '').toUpperCase()
 
   return {
@@ -200,9 +247,7 @@ function occurrenceOf(
     iCalUid: event.uid || null,
     title: event.summary?.trim() || '(senza titolo)',
     start: allDay ? dayOf(start) : new Date(startsAt).toISOString(),
-    end: allDay
-      ? dayOf(end.isDate && instantOf(end) > startsAt ? end : dayAfter(start))
-      : new Date(endsAt).toISOString(),
+    end: allDay ? dayOf(lastDay) : new Date(endsAt).toISOString(),
     allDay,
     startsAt,
     endsAt,
@@ -671,6 +716,32 @@ export function invitationParties(text: string): { organizer: string | null; att
       addressOf(property.getFirstValue())
     )
   }
+}
+
+/** An instance of a series, as an invitation about it alone says it: when it is, and when the series put it. */
+export interface InvitationInstance {
+  /** Its start now, as the invitation gives it (DTSTART). */
+  start: number
+  /** The start the series gave it, which names it (RECURRENCE-ID). */
+  original: number
+}
+
+/**
+ * The instance of a series an invitation is about — its event has a
+ * RECURRENCE-ID — with its times as instants, an all-day one's by local
+ * midnight, as the calendars here keep them; null when it is about a whole
+ * event, or a whole series.
+ */
+export function invitationInstance(text: string): InvitationInstance | null {
+  const invited = calendarOf(text).getFirstSubcomponent('vevent')
+
+  if (!invited?.hasProperty('recurrence-id')) {
+    return null
+  }
+
+  const event = new ICAL.Event(invited, { exceptions: [] })
+  const original = instantOf(event.recurrenceId)
+  return { start: event.startDate ? instantOf(event.startDate) : original, original }
 }
 
 /**

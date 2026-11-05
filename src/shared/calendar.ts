@@ -47,6 +47,13 @@ export interface CalendarEvent {
   htmlLink: string | null
   /** Put there by the Segretario, from a message: it may take it away again, and says where it came from. */
   origin: EventOrigin | null
+  /**
+   * The user organises it — they, or a calendar they write in — or it has
+   * no guests: they may change it or take it away, and whoever is invited
+   * is told. False for an invitation, which is answered, not changed. Set
+   * on the events the calendars give; absent from what was kept before.
+   */
+  organizedByUser?: boolean
 }
 
 /** Who put an event in the calendar, when it was the Segretario, and from which message. */

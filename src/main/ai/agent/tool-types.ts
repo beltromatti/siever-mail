@@ -72,8 +72,11 @@ export interface SegretarioMailPort {
       messages: Array<{ ref: MessageRef; messageKey: string; dateIso: string }>
     }>
   >
-  /** Of the messages since `sinceIso` the Segretario reads, how many it has read: its progress. */
-  readingProgress(sinceIso: string): Promise<{ read: number; total: number }>
+  /** Of the messages the Segretario reads since a moment — in these accounts, or all — how many it has read. */
+  readingProgress(
+    sinceIso: string,
+    accountIds?: ReadonlyArray<string>
+  ): Promise<{ read: number; total: number }>
   /**
    * The same message — by its Message-ID — in the user's other accounts:
    * a copy CC'd to both, a team mailbox's. Each account's key and conversation.
@@ -186,12 +189,21 @@ export interface RunResults {
 export interface RunContext {
   activityId: string
   task: TaskKind
+  /** When the run began: what moved after it, it may not have seen. */
+  startedAt: number
   /**
    * Working on its own, nobody watching: it reads mail it cannot trust, so
    * it does nothing that reaches other people or the mail's place — it
    * proposes instead — and never overturns the user without a newer fact.
    */
   background: boolean
+  /**
+   * The user has this run in front of them and can confirm what it asks:
+   * the panel's conversations. Work on its own, and the user's work that
+   * shows no conversation (the reread before sending, the help in the
+   * editor, the search in words), cannot ask — and so cannot act outward.
+   */
+  watched: boolean
   actor: Actor
   /** The revision of each object of the registry and of the memory this run last saw. */
   seen: Map<string, number>
@@ -270,11 +282,24 @@ export class ToolConflict extends ToolInputError {
   }
 }
 
+/**
+ * A short name the run was never given: the call may be right once a tool
+ * names it — so, unlike other failures, it may be made again then.
+ */
+export class UnknownHandle extends ToolInputError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UnknownHandle'
+  }
+}
+
 /** Something this run may not do on its own: said back, with what it can do instead. */
 export function requireInteractive(context: ToolContext, what: string, instead: string): void {
-  if (context.run.background) {
+  if (!context.run.watched) {
     throw new ToolInputError(
-      `In questo lavoro, che fai da solo mentre l'utente non guarda, non puoi ${what}: ${instead}`
+      context.run.background
+        ? `In questo lavoro, che fai da solo senza poter chiedere conferma all'utente, non puoi ${what}: ${instead}`
+        : `In questo lavoro l'utente non ha davanti la conversazione con te e non può confermare: non puoi ${what}. ${instead}`
     )
   }
 }
