@@ -8,6 +8,7 @@ import {
   type SegretarioTool,
   type TaskKind
 } from '../agent/tool-types'
+import { checkWeekdays } from './weekdays'
 import { clip, countOf, formatDateTime } from './format'
 
 /** The user's day, AAAA-MM-GG, as their clock has it. */
@@ -53,6 +54,8 @@ export const todayTool: SegretarioTool = {
     if (!letter && !meeting) {
       throw new ToolInputError('Indica `lettera`, oppure `riunione` con `preparazione`.')
     }
+
+    checkWeekdays(letter, stringArg(args, 'preparazione'))
 
     if (letter) {
       // The letter is the whole day seen at once: one conversation's reading would write it

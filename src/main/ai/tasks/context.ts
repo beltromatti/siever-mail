@@ -54,6 +54,7 @@ export async function contextBlock(
 
   const text = fillTemplate(PROMPTS.context, {
     data: new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(now),
+    prossimi_giorni: nextDays(now),
     fuso: Intl.DateTimeFormat().resolvedOptions().timeZone,
     connessioni: [...mailLines, ...calendarLines].join('\n') || '(nessuna connessione)',
     indice_memoria: index,
@@ -61,6 +62,19 @@ export async function contextBlock(
   })
 
   return { text, seen: new Map(core.map((note) => [seenKey('memory', note.path), note.revision])) }
+}
+
+const NEXT_DAY = new Intl.DateTimeFormat('it-IT', {
+  weekday: 'short',
+  day: 'numeric',
+  month: 'numeric'
+})
+
+/** The next two weeks, each day with its weekday — "ven 6/11, sab 7/11, …" — so none is reckoned. */
+function nextDays(now: Date): string {
+  return Array.from({ length: 14 }, (_, offset) =>
+    NEXT_DAY.format(new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset + 1))
+  ).join(', ')
 }
 
 /** The moment, for the data a run starts from: the day is in the context, the hour is here. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { comparableText, shortDate } from './format'
+import { comparableText, dayWithWeekday, shortDate } from './format'
 
 describe('comparableText', () => {
   it('reads what was written, however the draft formats it again', () => {
@@ -18,5 +18,12 @@ describe('shortDate', () => {
   it('reads a day, and an instant on its local day, and leaves what is no date', () => {
     expect(shortDate('2026-10-28')).toBe(shortDate(new Date(2026, 9, 28, 12).toISOString()))
     expect(shortDate('settembre')).toBe('settembre')
+  })
+})
+
+describe('dayWithWeekday', () => {
+  it('gives a day its weekday, and leaves what is no day', () => {
+    expect(dayWithWeekday('2026-11-10')).toBe('2026-11-10 (mar)')
+    expect(dayWithWeekday('domani')).toBe('domani')
   })
 })

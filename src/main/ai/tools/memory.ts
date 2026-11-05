@@ -13,6 +13,7 @@ import {
 } from '../agent/tool-types'
 import type { HandleRegistry } from '../agent/handles'
 import { formatDateTime } from './format'
+import { checkWeekdays } from './weekdays'
 
 const COMMANDS = [
   'leggi',
@@ -147,6 +148,7 @@ export const memoryTool: SegretarioTool = {
 
           for (const edit of edits) {
             checkShortNames(edit.new, context.handles)
+            checkWeekdays(edit.new)
           }
 
           const document = await notebook.edit(path, edits, actor)
@@ -159,6 +161,7 @@ export const memoryTool: SegretarioTool = {
         case 'inserisci': {
           const text = requireString(args, 'testo')
           checkShortNames(text, context.handles)
+          checkWeekdays(text)
           const document = await notebook.insert(
             path,
             numberArg(args, 'riga') ?? Number.MAX_SAFE_INTEGER,
@@ -171,6 +174,7 @@ export const memoryTool: SegretarioTool = {
         case 'scrivi': {
           const text = requireString(args, 'testo')
           checkShortNames(text, context.handles)
+          checkWeekdays(text)
           const read = context.run.seen.get(seenKey('memory', path))
           const { document, created } = await notebook.write(path, text, actor, {
             seenRevision: read

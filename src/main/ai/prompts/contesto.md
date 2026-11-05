@@ -1,6 +1,6 @@
 # Contesto
 
-Oggi è {{data}} ({{fuso}}).
+Oggi è {{data}} ({{fuso}}). I prossimi giorni: {{prossimi_giorni}}.
 
 ## Le connessioni dell'utente
 

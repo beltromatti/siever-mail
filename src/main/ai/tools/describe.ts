@@ -2,7 +2,7 @@ import type { MessageRef } from '@shared/models'
 
 import type { CommitmentRecord, NoteRecord, ProjectSummary, ReplyRecord } from '../registry/types'
 import { seenKey, type ToolContext } from '../agent/tool-types'
-import { shortDate } from './format'
+import { dayWithWeekday, shortDate } from './format'
 
 const KIND_WORDS: Record<CommitmentRecord['kind'], string> = {
   ti_chiedono: 'ti chiedono',
@@ -31,12 +31,12 @@ export function commitmentLine(record: CommitmentRecord): string {
     record.status === 'aperta'
       ? 'aperta'
       : record.status === 'rinviata'
-        ? `rinviata fino al ${record.until}`
+        ? `rinviata fino al ${dayWithWeekday(record.until ?? '')}`
         : `${record.status === 'fatta' ? 'fatta' : 'non serve'} ${ACTOR_WORDS[record.setBy]} il ${shortDate(
             new Date(record.updatedAt).toISOString()
           )}${record.reason ? ` («${record.reason}»)` : ''}`
 
-  return `#${record.id} ${KIND_WORDS[record.kind]} · «${record.text}»${record.due ? ` · entro ${record.due}` : ''} · ${status}${
+  return `#${record.id} ${KIND_WORDS[record.kind]} · «${record.text}»${record.due ? ` · entro ${dayWithWeekday(record.due)}` : ''} · ${status}${
     record.question ? ` · domanda all'utente: ${record.question}` : ''
   }`
 }
@@ -45,7 +45,7 @@ export function commitmentLine(record: CommitmentRecord): string {
 export function noteLine(note: NoteRecord): string {
   return `«${note.summary}» · ${NATURE_WORDS[note.nature]} · importanza ${note.priority}${
     note.reason ? ` (${note.reason})` : ''
-  }${note.due ? ` · da fare entro ${note.due}` : ''}${note.writtenBy === 'utente' ? ' · corretta dall’utente' : ''}`
+  }${note.due ? ` · da fare entro ${dayWithWeekday(note.due)}` : ''}${note.writtenBy === 'utente' ? ' · corretta dall’utente' : ''}`
 }
 
 export function replyLines(reply: ReplyRecord): string[] {

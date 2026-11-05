@@ -34,6 +34,8 @@ export function reviewRequest(input: {
   attachments: ReadonlyArray<string>
   writtenText: string
   answered: { from: string; date: string; text: string } | null
+  /** What the program found already, said to the user as it is: not to be said twice. */
+  found: ReadonlyArray<string>
 }): string {
   return [
     `Oggi è ${new Intl.DateTimeFormat('it-IT', { dateStyle: 'full' }).format(input.today)}.`,
@@ -51,6 +53,9 @@ export function reviewRequest(input: {
     ]
       .filter((line) => line !== null)
       .join('\n'),
+    input.found.length > 0
+      ? `## Già segnalato all'utente dal programma (non ripeterlo)\n\n${input.found.map((line) => `- ${line}`).join('\n')}`
+      : null,
     input.answered
       ? `## Il messaggio a cui risponde\n\nDa ${input.answered.from}, ${input.answered.date}:\n\n${clip(input.answered.text.trim(), 6000).text}`
       : null

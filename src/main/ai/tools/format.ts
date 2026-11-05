@@ -85,13 +85,24 @@ export function countOf(count: number, one: string, many: string): string {
 }
 
 const SHORT_DATE = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
+const WEEKDAY = new Intl.DateTimeFormat('it-IT', { weekday: 'short' })
 
-/** A calendar day written AAAA-MM-GG, as a line says it: "13 ott". */
 /** A day — AAAA-MM-GG, or an instant on its local day — as a short date; what is no date stays as it is. */
 export function shortDate(value: string): string {
   const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim())
   const date = day ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])) : new Date(value)
   return Number.isNaN(date.getTime()) ? value : SHORT_DATE.format(date)
+}
+
+/**
+ * A day as the tools take it, AAAA-MM-GG, with its weekday: "2026-11-10
+ * (mar)". The model is not left to reckon the weekday of a date it reads.
+ */
+export function dayWithWeekday(value: string): string {
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim())
+  return day
+    ? `${value} (${WEEKDAY.format(new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])))})`
+    : value
 }
 
 /**

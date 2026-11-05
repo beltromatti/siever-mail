@@ -89,7 +89,8 @@ export async function prepareWriting(
 /** What a reread before sending starts from: the message as it will go, the one it answers, the days ahead. */
 export async function prepareReview(
   deps: { mail: SegretarioMailPort },
-  request: ReviewRequest
+  request: ReviewRequest,
+  found: ReadonlyArray<string>
 ): Promise<StartingData> {
   const account = (await deps.mail.listAccounts()).find(
     (candidate) => candidate.id === request.accountId
@@ -119,7 +120,8 @@ export async function prepareReview(
       subject: request.subject,
       attachments: request.attachments,
       writtenText: request.writtenText,
-      answered
+      answered,
+      found
     }),
     handles: [],
     seen: new Map()

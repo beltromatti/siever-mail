@@ -13,6 +13,7 @@ import {
 } from '../agent/tool-types'
 import { evidenceOf, resolveSentOrReceived } from './anchors'
 import { commitmentLine, rememberCommitments } from './describe'
+import { checkWeekdays } from './weekdays'
 import { countOf } from './format'
 
 const NATURES: ReadonlyArray<NoteNature> = [
@@ -52,6 +53,7 @@ export const noteTool: SegretarioTool = {
     const message = await resolveSentOrReceived(context, handle)
     const nature = requireString(args, 'natura') as NoteNature
     const priority = requireString(args, 'importanza') as NotePriority
+    checkWeekdays(stringArg(args, 'sintesi'), stringArg(args, 'motivo'))
 
     try {
       const { record, change } = await context.registry.writeNote(
@@ -98,6 +100,7 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
   const remember = (record: CommitmentRecord): void => {
     context.run.seen.set(seenKey('item', record.id), record.revision)
   }
+  checkWeekdays(stringArg(operation, 'testo'), stringArg(operation, 'domanda'))
   const needId = (): number => {
     if (id === undefined) {
       throw new ToolInputError(`Per «${action}» serve \`id\`, il numero della cosa (#12 → 12).`)

@@ -7,6 +7,7 @@ import {
   ToolInputError,
   type SegretarioTool
 } from '../agent/tool-types'
+import { checkWeekdays } from './weekdays'
 import { resolveSentOrReceived } from './anchors'
 
 /**
@@ -48,6 +49,7 @@ export const replyTool: SegretarioTool = {
         case 'prepara': {
           const kind = (stringArg(args, 'tipo') ??
             (message.direction === 'out' ? 'sollecito' : 'risposta')) as ReplyKind
+          checkWeekdays(stringArg(args, 'testo'))
           const { record, change } = await context.registry.saveReply(
             message,
             { kind, text: requireString(args, 'testo'), doubts: stringArg(args, 'dubbi') ?? '' },

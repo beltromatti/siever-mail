@@ -847,6 +847,12 @@ keeps for itself is what cannot be left to the model:
   of the run is summarised (`infrastruttura/compattazione.md`); 80 steps at
   most;
 - a tool call that failed is not made again as it was;
+- the weekday of a date, which the model reckons wrongly now and then: the
+  context lists the next two weeks, the days the tools give carry theirs
+  (`2026-11-10 (mar)`), and what a run writes — the letter, notes,
+  commitments, replies, drafts, projects, the memory — giving a day a
+  weekday not its own is refused with the right one (`tools/weekdays.ts`);
+  the reread before sending finds the same in the user's own text;
 - what the task must leave (`missing`): a run that stops short is told what
   is missing, twice at most, then fails.
 
