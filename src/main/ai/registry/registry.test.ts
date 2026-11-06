@@ -72,6 +72,33 @@ describe('Registry', () => {
       ])
     })
 
+    it('puts right where a thing comes from, and takes it back with an undo', async () => {
+      const said = await registry.openCommitment(
+        { kind: 'utente' },
+        { kind: 'da_fare', text: 'Fare il check-in online', due: '2026-11-12' },
+        CHAT
+      )
+      const visit = { kind: 'evento' as const, eventKey: 'g:cal:volo' }
+
+      const { record, change } = await registry.editCommitment(
+        said.record.id,
+        { origin: visit },
+        CHAT
+      )
+
+      expect(record.origin).toEqual(visit)
+      expect(record.text).toBe('Fare il check-in online')
+      expect(
+        (await registry.commitments.ofPlaces({ events: ['g:cal:volo'] })).map(({ id }) => id)
+      ).toEqual([said.record.id])
+
+      const undone = await registry.undoCommitment(
+        (change.undo as { historyId: number }).historyId,
+        CHAT
+      )
+      expect(undone?.origin).toEqual({ kind: 'utente' })
+    })
+
     it('does not open again from the background what the user closed, from the same event', async () => {
       const visit = { kind: 'evento' as const, eventKey: 'g:cal:sopralluogo' }
       const { record } = await registry.openCommitment(

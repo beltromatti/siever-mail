@@ -201,6 +201,7 @@ export class Registry {
       due?: string | null
       kind?: CommitmentKind
       question?: string | null
+      origin?: CommitmentOrigin
     },
     actor: Actor,
     options: { seenRevision?: number; evidence?: Evidence; reason?: string } = {}

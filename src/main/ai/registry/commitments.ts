@@ -449,6 +449,8 @@ export class CommitmentStore {
       due?: string | null
       kind?: CommitmentKind
       question?: string | null
+      /** Where it comes from, put right: a message or an event it was not given. */
+      origin?: CommitmentOrigin
     },
     actor: Actor,
     options: { seenRevision?: number; evidence?: Evidence; reason?: string } = {}
@@ -466,6 +468,7 @@ export class CommitmentStore {
         kind: changes.kind ?? current.kind,
         question:
           changes.question === undefined ? current.question : changes.question?.trim() || null,
+        origin: changes.origin ?? current.origin,
         // What the user corrected is theirs: a run alone does not change it back.
         setBy: actor.by === 'utente' ? 'utente' : current.setBy
       }),

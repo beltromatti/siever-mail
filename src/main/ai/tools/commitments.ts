@@ -132,7 +132,9 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
   const actor = context.run.actor
   const id = numberArg(operation, 'id')
   const reason = stringArg(operation, 'motivo') ?? null
-  const evidence = await evidenceOf(context, stringArg(operation, 'prova'))
+  // The message that proves a change — read where a change takes one, not when opening.
+  const evidence = (): ReturnType<typeof evidenceOf> =>
+    evidenceOf(context, stringArg(operation, 'prova'))
   const seenRevision = id !== undefined ? context.run.seen.get(seenKey('item', id)) : undefined
   const remember = (record: CommitmentRecord): void => {
     context.run.seen.set(seenKey('item', record.id), record.revision)
@@ -153,6 +155,18 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
         throw new ToolInputError(`Indica \`tipo\`: ${KINDS.join(', ')}.`)
       }
 
+      // A thing stands in the projects of the place it comes from: a project asked for alone
+      // would leave it born of the user's word, in none.
+      if (
+        stringArg(operation, 'progetto') &&
+        !stringArg(operation, 'messaggio') &&
+        !stringArg(operation, 'evento')
+      ) {
+        throw new ToolInputError(
+          "Una cosa aperta sta nei progetti del messaggio o dell'evento da cui nasce: `progetto` non ce la mette. Indica `evento` (e…) se è per un appuntamento, `messaggio` (m…) se viene da una mail; detta dall'utente senza nessuno dei due, non sta in un progetto."
+        )
+      }
+
       const { record, created } = await context.registry.openCommitment(
         await originOf(context, operation),
         {
@@ -168,17 +182,23 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
       return created ? `Aperta ${commitmentLine(record)}` : `Già aperta: ${commitmentLine(record)}`
     }
     case 'aggiorna': {
+      // The place it comes from, put right when given: the message or the event it is about.
+      const placed =
+        stringArg(operation, 'messaggio') || stringArg(operation, 'evento')
+          ? await originOf(context, operation)
+          : undefined
       const { record } = await context.registry.editCommitment(
         needId(),
         {
           text: stringArg(operation, 'testo'),
           due: operation.scadenza === undefined ? undefined : dayArg(operation, 'scadenza'),
           kind: kindArg(operation),
+          origin: placed,
           question:
             operation.domanda === undefined ? undefined : (stringArg(operation, 'domanda') ?? null)
         },
         actor,
-        { seenRevision, evidence, reason: reason ?? undefined }
+        { seenRevision, evidence: await evidence(), reason: reason ?? undefined }
       )
       remember(record)
       return `Aggiornata ${commitmentLine(record)}`
@@ -194,7 +214,7 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
         actor,
         {
           seenRevision,
-          evidence,
+          evidence: await evidence(),
           reason,
           until: dayArg(operation, 'fino_a')
         }

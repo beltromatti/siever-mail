@@ -102,6 +102,13 @@ export async function evidenceOf(
     return undefined
   }
 
+  // What the user decided changes only with a message that came after: an event proves nothing.
+  if (context.handles.event(handle)) {
+    throw new ToolInputError(
+      `La prova è un messaggio (m…) che mostra il fatto; «${handle}» è un evento. Per aprire una cosa da un evento basta \`evento\`.`
+    )
+  }
+
   // A draft proves nothing yet: it has not gone.
   const message = await resolveSentOrReceived(context, handle)
   return { messageKey: message.messageKey, dateIso: message.dateIso }
