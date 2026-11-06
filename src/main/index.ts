@@ -99,6 +99,12 @@ function createTray(): Tray {
 }
 
 const RENDERER_ENTRY_PATH = join(__dirname, '../renderer/index.html')
+/**
+ * How long quitting waits for the workspace to stop — the drafts being typed
+ * saved, the Segretario's work put back to wait, the database closed —
+ * before it quits anyway.
+ */
+const QUIT_WAIT_MS = 8_000
 
 /**
  * The web permissions the app's page uses: writing to the clipboard
@@ -297,13 +303,24 @@ if (hasSingleInstanceLock) {
   })
 }
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   isQuitting = true
   appTray?.destroy()
   appTray = null
   const shuttingDown = appWorkspace
+
+  if (!shuttingDown) {
+    return
+  }
+
+  // Electron would quit as soon as the windows close: it waits for the workspace to stop, then
+  // quits again — with nothing left to wait for.
   appWorkspace = null
-  void shuttingDown?.stop()
+  event.preventDefault()
+  void Promise.race([
+    shuttingDown.stop(),
+    new Promise<void>((resolve) => setTimeout(resolve, QUIT_WAIT_MS))
+  ]).finally(() => app.quit())
 })
 
 app.on('window-all-closed', () => {

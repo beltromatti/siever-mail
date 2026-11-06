@@ -67,10 +67,17 @@ export class Workspace {
       },
       onMailChanged: () => this.segretario.mailChanged(),
       // The Segretario's work on the mailbox stops and what it kept of it alone goes; a
-      // calendar that came with the same access stays, on its own.
+      // calendar that came with the same access stays, on its own. Each waits to be open; one
+      // that could not open does not keep the mailbox from going.
       onAccountRemoving: async (account) => {
-        await this.segretario.forgetAccount(account.id, account.email)
-        await this.calendar.mailAccountRemoved(account.id)
+        await this.segretario.whenReady().then(
+          () => this.segretario.forgetAccount(account.id, account.email),
+          (error: unknown) => logMainError('The Segretario did not let go of a mailbox', error)
+        )
+        await this.calendar.whenOpen().then(
+          () => this.calendar.mailAccountRemoved(account.id),
+          (error: unknown) => logMainError('The calendar did not let go of a mailbox', error)
+        )
       }
     })
     this.calendar = new CalendarService({
@@ -82,7 +89,8 @@ export class Workspace {
       parentWindow: () => getAppWindow(),
       onDisconnected: (connectionId, names) =>
         void this.segretario
-          .forgetCalendar(connectionId, names)
+          .whenReady()
+          .then(() => this.segretario.forgetCalendar(connectionId, names))
           .catch((error: unknown) =>
             logMainError('The Segretario could not let go of a calendar', error)
           )
@@ -112,20 +120,26 @@ export class Workspace {
   }
 
   /**
-   * Storage and the upgrade migration first, then the network, then the
-   * extension. The migration purges the resyncable cache tables, so it
-   * has to land on a reconciled schema that no IMAP sync has started
-   * writing to yet; the interface's requests wait for it too.
+   * Storage and the upgrade migration first, then the extension, then the
+   * network. The migration purges the resyncable cache tables, so it has
+   * to land on a reconciled schema that no IMAP sync has started writing
+   * to yet; the interface's requests wait for it too. The extension's
+   * tables and handlers are there before anything asks for them — the
+   * Segretario's first run reads its instructions — and neither keeps the
+   * other out: a mailbox that cannot connect, an extension that fails.
    */
   async start(extension: ExtensionMain): Promise<void> {
     try {
       await this.openStorage()
+      await this.installExtension(extension).then(
+        () => {
+          if (extension.id !== 'noop') {
+            console.info(`[extension] installed "${extension.displayName}" (id="${extension.id}")`)
+          }
+        },
+        (error: unknown) => logMainError('The extension did not install', error)
+      )
       await this.openSources()
-      await this.installExtension(extension)
-
-      if (extension.id !== 'noop') {
-        console.info(`[extension] installed "${extension.displayName}" (id="${extension.id}")`)
-      }
     } catch (error) {
       console.error('[startup] initialization failed', error)
       // What waits for the calendar or the Segretario is told, not left waiting.
@@ -156,7 +170,12 @@ export class Workspace {
     return this.storageReady
   }
 
-  /** The mail connects; the calendars and the Segretario open after it, whatever it did. */
+  /**
+   * The mail connects; the calendars and the Segretario open after it,
+   * whatever it did. The computer's sleep is watched for both: a run it
+   * would cut short waits for it to wake, and the calendars are read again
+   * on waking.
+   */
   private async openSources(): Promise<void> {
     void rememberMountedShares().catch((error: unknown) =>
       logMainError('Reading the mounted network shares failed', error)
@@ -169,34 +188,43 @@ export class Workspace {
       await this.calendar
         .open()
         .catch((error: unknown) => logMainError('The calendar did not open', error))
-      // A run the computer's sleep would cut short does not start, and waits for it to wake.
-      this.unwatchSleep = watchSystemSleep((asleep) => this.segretario.setSystemAsleep(asleep))
+      this.unwatchSleep = watchSystemSleep((asleep) => {
+        this.segretario.setSystemAsleep(asleep)
+
+        if (!asleep) {
+          void this.calendar.syncAll()
+        }
+      })
       await this.segretario
         .open()
         .catch((error: unknown) => logMainError('The Segretario did not open', error))
     }
   }
 
+  /** Each part stops on its own: one that fails does not keep the others — the database last — running. */
   async stop(): Promise<void> {
-    try {
-      await this.extension?.uninstall?.()
-    } catch (error) {
-      logMainError('Extension teardown failed', error)
+    const step = async (what: string, work: () => unknown): Promise<void> => {
+      try {
+        await work()
+      } catch (error) {
+        logMainError(`${what} did not stop`, error)
+      }
     }
 
-    this.calendar.stop()
+    await step('The extension', () => this.extension?.uninstall?.())
+    await step('The calendar', () => this.calendar.stop())
     this.unwatchSleep?.()
     this.unwatchSleep = null
-    await this.segretario.stop()
-    await this.mail.stop()
-    this.database.close()
+    await step('The Segretario', () => this.segretario.stop())
+    await step('The mail', () => this.mail.stop())
+    await step('The database', () => this.database.close())
   }
 
   /**
    * Builds the host-provided context surface and hands it to the
-   * extension's `install()` hook. Called once after the sources are
-   * started so the extension can run its own DDL and register IPC
-   * handlers backed by the same SQLite connection.
+   * extension's `install()` hook. Called once, as soon as storage is open,
+   * so the extension can run its own DDL and register IPC handlers backed
+   * by the same SQLite connection; what it asks of the mail it asks later.
    */
   private async installExtension(extension: ExtensionMain): Promise<void> {
     const databaseHandle: ExtensionDatabaseHandle = {
@@ -416,15 +444,18 @@ export class Workspace {
   }
 
   /**
-   * "Elimina tutti i dati": what every app keeps goes — the mail's, the
-   * Segretario's, the calendars', the extension's — with the mail's
+   * "Elimina tutti i dati": what every app keeps goes — the Segretario's,
+   * the mail's, the calendars', the extension's — with the mail's
    * connections stopped meanwhile. The accounts, the calendar connections
-   * and the preferences stay.
+   * and the preferences stay. Every app is open first, or nothing goes: a
+   * clear that could not reach one would be done by half. The Segretario
+   * goes first, so no run reads the mail while it is wiped.
    */
   async clearAllDataKeepAccounts(): Promise<void> {
+    await Promise.all([this.segretario.whenReady(), this.calendar.whenOpen()])
+    await this.segretario.clearData()
     await this.mail.whileDisconnected(async () => {
       await this.mail.clearData()
-      await this.segretario.clearData()
       await this.calendar.clearData()
       await this.extension?.clearData()
     })

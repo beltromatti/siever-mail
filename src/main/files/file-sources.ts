@@ -1,5 +1,4 @@
-import { existsSync } from 'node:fs'
-import { readdir, realpath } from 'node:fs/promises'
+import { readdir, realpath, stat } from 'node:fs/promises'
 import { homedir, userInfo } from 'node:os'
 import { basename, join } from 'node:path'
 
@@ -7,13 +6,28 @@ import type { FileSource } from '@shared/files'
 
 import { mountedShareMountPoints, unmountedShareMountPoints } from '../services/network-volumes'
 
+/** How long the sources read stay good: every run of the Segretario reads them, and Settings. */
+const SOURCES_FRESH_MS = 30_000
+/** A Windows drive that does not answer by then is left out: a mapped share gone away can take many seconds. */
+const DRIVE_ANSWER_MS = 1_500
+
+let recent: { at: number; sources: Promise<FileSource[]> } | null = null
+
 /**
  * The File sources of this computer: the user's folders, then each volume
  * mounted — a disk plugged in, a network share — and the shares seen before
  * that are not mounted now, which come back when a path on them is needed.
  * The startup disk is the computer itself, not a volume of its own.
  */
-export async function fileSources(): Promise<FileSource[]> {
+export function fileSources(): Promise<FileSource[]> {
+  if (!recent || Date.now() - recent.at > SOURCES_FRESH_MS) {
+    recent = { at: Date.now(), sources: readFileSources() }
+  }
+
+  return recent.sources
+}
+
+async function readFileSources(): Promise<FileSource[]> {
   const [mounted, network, unmounted] = await Promise.all([
     mountedVolumes(),
     mountedShareMountPoints(),
@@ -55,9 +69,20 @@ async function mountedVolumes(): Promise<string[]> {
   }
 
   if (process.platform === 'win32') {
-    return [...'DEFGHIJKLMNOPQRSTUVWXYZ']
-      .map((letter) => `${letter}:\\`)
-      .filter((drive) => existsSync(drive))
+    const drives = await Promise.all(
+      [...'DEFGHIJKLMNOPQRSTUVWXYZ'].map(async (letter) => {
+        const drive = `${letter}:\\`
+        const answered = await Promise.race([
+          stat(drive).then(
+            () => true,
+            () => false
+          ),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), DRIVE_ANSWER_MS))
+        ])
+        return answered ? drive : null
+      })
+    )
+    return drives.filter((drive): drive is string => drive !== null)
   }
 
   // A Linux desktop mounts what is plugged in under /media/<user>, by hand under /mnt.

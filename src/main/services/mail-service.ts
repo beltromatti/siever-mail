@@ -960,9 +960,14 @@ export class MailService {
     }
   }
 
+  /**
+   * The connection stops first, so nothing new comes from the mailbox while
+   * the others let go of it; then what is kept of it goes.
+   */
   async removeAccount(accountId: string): Promise<void> {
-    await this.onAccountRemoving(await this.ensureAccountExists(accountId))
+    const account = await this.ensureAccountExists(accountId)
     await this.engine.removeAccount(accountId)
+    await this.onAccountRemoving(account)
     await this.database.clearAccountData(accountId)
     await this.database.deleteAccount(accountId)
     await this.dropAttachmentCopies(accountId)

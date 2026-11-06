@@ -1049,6 +1049,9 @@ export class SegretarioService {
    * knowing nothing.
    */
   async clearData(): Promise<void> {
+    // Off first, so nothing starts while what it kept goes; off again after, the switch being
+    // among what goes.
+    await this.setPreferences({ enabled: false })
     this.runner?.cancelAll()
     this.engine?.cancelRunning()
     await this.db.store.clearData()
