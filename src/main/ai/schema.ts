@@ -9,7 +9,7 @@ import type { Sql } from './sql'
  * order, as an old one runs the steps it has not had: one path, so what a
  * fresh database looks like is what an upgraded one looks like.
  */
-const SCHEMA_VERSION = 5
+const SCHEMA_VERSION = 6
 
 /** The tables of the first 2.0 builds, as they stood (version 1). */
 /** The open things' indexes: by conversation, by state, and — from version 5 — by event. */
@@ -320,6 +320,25 @@ const STEP_4_COLUMNS: ReadonlyArray<{ table: string; column: string; definition:
   { table: 'ai_projects', column: 'state_links_json', definition: "TEXT NOT NULL DEFAULT '[]'" }
 ]
 
+/**
+ * Version 6: how far back each connection is read one by one — what
+ * Conoscimi decided, why and when — and, for a calendar, how far its events
+ * have been looked at; and the project a thing born of the user's word is
+ * about (`project_id`: the others stand in the projects of their source).
+ */
+const STEP_6: ReadonlyArray<string> = [
+  `CREATE TABLE IF NOT EXISTS ai_reading (
+    connection_key TEXT PRIMARY KEY,
+    days INTEGER,
+    reason TEXT,
+    set_by TEXT,
+    set_at INTEGER,
+    looked_from INTEGER,
+    looked_until INTEGER
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_ai_items_project ON ai_items(project_id) WHERE project_id IS NOT NULL'
+]
+
 async function hasTable(sql: Sql, table: string): Promise<boolean> {
   return (
     (await sql.get<{ name: string }>(
@@ -520,6 +539,14 @@ export async function ensureAiSchema(sql: Sql): Promise<void> {
 
   if (version < 5) {
     await itemsFromAnySource(sql)
+  }
+
+  if (version < 6) {
+    await addColumn(sql, 'ai_items', 'project_id', 'TEXT')
+
+    for (const statement of STEP_6) {
+      await sql.run(statement)
+    }
   }
 
   if (version !== SCHEMA_VERSION) {

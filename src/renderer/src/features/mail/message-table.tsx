@@ -43,6 +43,7 @@ import {
   primaryAddressLabel,
   recipientsLabel,
   ProjectTag,
+  PecTag,
   SavedTag,
   UnreadDot
 } from './message-list-shared'
@@ -290,6 +291,7 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
                   {projectTags?.get(threadKey(message)) && (
                     <ProjectTag label={projectTags.get(threadKey(message)) ?? ''} />
                   )}
+                  {message.pec && <PecTag pec={message.pec} />}
                   {work?.saved && <SavedTag label={work.saved} />}
                   {/* The Segretario's word, after the subject, where the table has room. */}
                   {work && hasWorkLine(work) && (

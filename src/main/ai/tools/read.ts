@@ -2,6 +2,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 
 import type { MessageRef } from '@shared/models'
+import { pecReceiptAt, pecReceiptWords } from '@shared/pec'
 import { unlinked } from '@shared/segretario-links'
 
 import { extractContent } from '../extraction'
@@ -48,10 +49,43 @@ export function describeMessage(handle: string, message: ReadMessage): string {
     `A: ${formatAddresses(message.to, 12)}`,
     message.cc.length > 0 ? `Cc: ${formatAddresses(message.cc, 12)}` : '',
     `Oggetto: ${message.subject}`,
-    `Cartella: ${message.folderPath}${message.isRead ? '' : ' · non letto'}${message.isFlagged ? ' · contrassegnato' : ''}`
+    `Cartella: ${message.folderPath}${message.isRead ? '' : ' · non letto'}${message.isFlagged ? ' · contrassegnato' : ''}`,
+    pecLine(message)
   ]
     .filter(Boolean)
     .join('\n')
+}
+
+/**
+ * What certified mail (PEC) says of a message: the certification of one
+ * that came in the provider's envelope, what a receipt says of the message
+ * sent it is about, the receipts on one the user sent.
+ */
+function pecLine(message: ReadMessage): string {
+  const certification = message.pecDetail?.certification ?? null
+  const by = certification?.provider ? ` da ${certification.provider}` : ''
+  const at = certification?.at ? ` il ${formatDateTime(certification.at)}` : ''
+
+  if (message.pec?.kind === 'busta') {
+    return `PEC: messaggio certificato${by}${at}.`
+  }
+
+  if (message.pec?.kind === 'anomalia') {
+    return `PEC: anomalia — il gestore non ha potuto certificarlo (mittente non PEC, o messaggio alterato)${at}.`
+  }
+
+  if (message.pec) {
+    return `Ricevuta PEC: ${pecReceiptWords(message.pec.kind, certification)}${at}, del messaggio inviato «${message.subject}».`
+  }
+
+  return message.pecReceipts && message.pecReceipts.length > 0
+    ? `PEC: ${message.pecReceipts
+        .map(
+          (receipt) =>
+            `${pecReceiptWords(receipt.kind, receipt.certification)} il ${formatDateTime(pecReceiptAt(receipt))}`
+        )
+        .join('; ')}.`
+    : ''
 }
 
 export function attachmentsLine(
@@ -324,10 +358,10 @@ async function readThreadMessage(
 
 async function readFileAt(
   context: ToolContext,
-  path: string,
+  given: string,
   args: Record<string, unknown>
 ): Promise<ToolOutcome> {
-  await reachShare(context, path)
+  const path = await reachShare(context, given)
   const info = await stat(path).catch(() => null)
 
   if (!info?.isFile()) {
@@ -435,7 +469,7 @@ export async function readProject(context: ProjectReader, projectId: string): Pr
     .filter((resource) => resource.kind === 'evento')
     .map((resource) => resource.location)
   const [items, events] = await Promise.all([
-    context.registry.commitments.ofPlaces({ threads, events: eventKeys }),
+    context.registry.commitments.ofPlaces({ threads, events: eventKeys, projects: [projectId] }),
     Promise.all(eventKeys.map((key) => context.calendar.event(key)))
   ])
   rememberCommitments(context, items)

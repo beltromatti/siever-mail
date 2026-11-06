@@ -23,6 +23,7 @@ import {
 import { evidenceOf, resolveEvent, resolveSentOrReceived } from './anchors'
 import { commitmentLine, rememberCommitments } from './describe'
 import { countOf, shortDate } from './format'
+import { projectOf } from './projects'
 
 const NATURES: ReadonlyArray<NoteNature> = [
   'da_rispondere',
@@ -150,43 +151,42 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
   switch (action) {
     case 'apri': {
       const kind = kindArg(operation)
+      const text = stringArg(operation, 'testo')?.trim()
 
-      if (!kind) {
-        throw new ToolInputError(`Indica \`tipo\`: ${KINDS.join(', ')}.`)
-      }
-
-      // A thing stands in the projects of the place it comes from: a project asked for alone
-      // would leave it born of the user's word, in none.
-      if (
-        stringArg(operation, 'progetto') &&
-        !stringArg(operation, 'messaggio') &&
-        !stringArg(operation, 'evento')
-      ) {
+      if (!kind || !text) {
         throw new ToolInputError(
-          "Una cosa aperta sta nei progetti del messaggio o dell'evento da cui nasce: `progetto` non ce la mette. Indica `evento` (e…) se è per un appuntamento, `messaggio` (m…) se viene da una mail; detta dall'utente senza nessuno dei due, non sta in un progetto."
+          `Per aprire una cosa servono \`tipo\` (${KINDS.join(', ')}) e \`testo\`: rifai l'operazione per intero, con il posto da cui nasce.`
         )
       }
 
+      const projectId = await projectArg(context, operation)
+      const origin = await originOf(context, operation, projectId)
       const { record, created } = await context.registry.openCommitment(
-        await originOf(context, operation),
+        origin,
         {
           kind,
-          text: requireString(operation, 'testo'),
+          text,
           due: dayArg(operation, 'scadenza'),
           question: stringArg(operation, 'domanda') ?? null
         },
         actor
       )
       remember(record)
+      const filed = projectId ? await fileSource(context, origin, projectId) : ''
 
-      return created ? `Aperta ${commitmentLine(record)}` : `Già aperta: ${commitmentLine(record)}`
+      return `${created ? 'Aperta' : 'Già aperta:'} ${commitmentLine(record)}${filed}`
     }
     case 'aggiorna': {
-      // The place it comes from, put right when given: the message or the event it is about.
+      const projectId = await projectArg(context, operation)
+      const current = await context.registry.commitments.get(needId())
+      // The place it comes from, put right when given: the message or the event it is about —
+      // or, for the user's word, the project it is about.
       const placed =
         stringArg(operation, 'messaggio') || stringArg(operation, 'evento')
-          ? await originOf(context, operation)
-          : undefined
+          ? await originOf(context, operation, projectId)
+          : projectId && current?.origin.kind === 'utente'
+            ? ({ kind: 'utente', projectId } as const)
+            : undefined
       const { record } = await context.registry.editCommitment(
         needId(),
         {
@@ -201,7 +201,8 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
         { seenRevision, evidence: await evidence(), reason: reason ?? undefined }
       )
       remember(record)
-      return `Aggiornata ${commitmentLine(record)}`
+      const filed = projectId ? await fileSource(context, record.origin, projectId) : ''
+      return `Aggiornata ${commitmentLine(record)}${filed}`
     }
     case 'fatta':
     case 'non_serve':
@@ -261,19 +262,44 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
   }
 }
 
+/** The project an operation names, by its short name or its name; undefined when it names none. */
+async function projectArg(context: ToolContext, operation: Operation): Promise<string | undefined> {
+  const written = stringArg(operation, 'progetto')?.trim()
+
+  if (!written) {
+    return undefined
+  }
+
+  if (/^[me]\d+$/i.test(written)) {
+    throw new ToolInputError(
+      `\`progetto\` è un progetto (p…): ${written} è ${written.toLowerCase().startsWith('m') ? 'un messaggio, va in `messaggio`' : 'un evento, va in `evento`'}.`
+    )
+  }
+
+  return projectOf(context, operation)
+}
+
 /**
- * Where a new open thing comes from: the message given, the event given,
- * or — neither — the user's word, which only a conversation with the user
- * can hear: alone, the Segretario opens things from what it reads.
+ * Where a new open thing comes from: the message given, the event given —
+ * or the one given as its proof, which is where it was read — or, none of
+ * them, the user's word (about `projectId`, if given), which only a
+ * conversation with the user can hear: alone, the Segretario opens things
+ * from what it reads.
  */
 async function originOf(
   context: ToolContext,
-  operation: Operation
+  operation: Operation,
+  projectId?: string
 ): Promise<CommitmentOrigin & { dateIso?: string }> {
-  const messageHandle = stringArg(operation, 'messaggio')
-  const eventHandle = stringArg(operation, 'evento')
+  const proof = stringArg(operation, 'prova')?.trim()
+  const messageHandle =
+    stringArg(operation, 'messaggio') ||
+    (!stringArg(operation, 'evento') && proof && /^m\d+$/i.test(proof) ? proof : undefined)
+  const eventHandle =
+    stringArg(operation, 'evento') ||
+    (!messageHandle && proof && /^e\d+$/i.test(proof) ? proof : undefined)
 
-  if (messageHandle && eventHandle) {
+  if (stringArg(operation, 'messaggio') && stringArg(operation, 'evento')) {
     throw new ToolInputError(
       'Una cosa aperta nasce da un posto solo: `messaggio` oppure `evento`. Se riguarda anche l’altro, dillo nel testo.'
     )
@@ -296,11 +322,59 @@ async function originOf(
 
   if (context.run.actor.background) {
     throw new ToolInputError(
-      'Lavorando da solo, una cosa aperta nasce da ciò che leggi: indica il `messaggio` o l’`evento` da cui viene.'
+      "Lavorando da solo, una cosa aperta nasce da ciò che leggi: indica il `messaggio` (m…) o l'`evento` (e…) da cui viene, e rifai l'operazione per intero, con `tipo` e `testo`."
     )
   }
 
-  return { kind: 'utente' }
+  return projectId ? { kind: 'utente', projectId } : { kind: 'utente' }
+}
+
+/**
+ * A thing said to stand in a project: its message's conversation, or its
+ * event, filed there too — the project gathers its things by their source
+ * (the user's word carries the project itself). A line on what was filed,
+ * or on why it was not.
+ */
+async function fileSource(
+  context: ToolContext,
+  origin: CommitmentOrigin,
+  projectId: string
+): Promise<string> {
+  const project = await context.registry.projects.get(projectId)
+  const title = project?.title ?? 'il progetto'
+
+  try {
+    if (origin.kind === 'messaggio') {
+      const change = await context.registry.linkThread(projectId, origin, context.run.actor)
+      return change ? ` · conversazione collegata a ${title}` : ` · in ${title}`
+    }
+
+    if (origin.kind === 'evento') {
+      const linked = (await context.registry.projects.resources(projectId)).some(
+        (resource) => resource.kind === 'evento' && resource.location === origin.eventKey
+      )
+
+      if (!linked) {
+        const event = await context.calendar.event(origin.eventKey)
+        await context.registry.addProjectResource(
+          projectId,
+          { kind: 'evento', location: origin.eventKey, label: event?.title ?? null },
+          context.run.actor
+        )
+        return ` · evento collegato a ${title}`
+      }
+
+      return ` · in ${title}`
+    }
+
+    return ` · in ${title}`
+  } catch (error) {
+    if (error instanceof RegistryRefusal) {
+      return ` · non messa in ${title}: ${error.message}`
+    }
+
+    throw error
+  }
 }
 
 /** How far back `chiuse` looks. */
@@ -443,11 +517,14 @@ async function listCommitments(context: ToolContext, filter: Operation): Promise
     threads = kept
   }
 
+  // What the user said about the project stands in it too.
+  const projects = project && !person ? [project.projectId] : undefined
   const open = await context.registry.commitments.open({
     kinds: kind ? [kind] : undefined,
     dueBy: stringArg(filter, 'entro'),
     threads,
     events,
+    projects,
     includeDeferred: true
   })
   // Closed lately too, when asked: what was done or not needed is not to be opened again.
@@ -455,6 +532,7 @@ async function listCommitments(context: ToolContext, filter: Operation): Promise
     ? await context.registry.commitments.closedSince(Date.now() - RECENTLY_CLOSED_MS, {
         threads,
         events,
+        projects,
         kinds: kind ? [kind] : undefined
       })
     : []

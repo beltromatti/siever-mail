@@ -134,21 +134,25 @@ export function registerCalendarIpc(
   handle(CALENDAR_IPC.respondByMail, (ref: unknown, response: unknown) =>
     invitations.respondByMail(messageRefSchema.parse(ref), responseSchema.parse(response))
   )
+  // What the user does here is theirs: noted for the Segretario, as a change made elsewhere is.
   handle(CALENDAR_IPC.respond, (key: unknown, response: unknown, options: unknown) =>
-    calendar.respond(
-      z.string().min(1).max(2000).parse(key),
-      responseSchema.parse(response),
-      z.object({ series: z.boolean().optional() }).strict().optional().parse(options)
-    )
+    calendar.respond(z.string().min(1).max(2000).parse(key), responseSchema.parse(response), {
+      ...z.object({ series: z.boolean().optional() }).strict().optional().parse(options),
+      byUser: true
+    })
   )
   handle(CALENDAR_IPC.calendars, () => calendar.calendars())
   handle(CALENDAR_IPC.setCalendarHidden, (key: unknown, hidden: unknown) =>
     calendar.setCalendarHidden(keySchema.parse(key), z.boolean().parse(hidden))
   )
-  handle(CALENDAR_IPC.create, (event: unknown) => calendar.create(newEventSchema.parse(event)))
-  handle(CALENDAR_IPC.update, (key: unknown, change: unknown) =>
-    calendar.update(keySchema.parse(key), eventChangeSchema.parse(change))
+  handle(CALENDAR_IPC.create, (event: unknown) =>
+    calendar.create(newEventSchema.parse(event), { byUser: true })
   )
-  handle(CALENDAR_IPC.remove, (key: unknown) => calendar.remove(keySchema.parse(key)))
+  handle(CALENDAR_IPC.update, (key: unknown, change: unknown) =>
+    calendar.update(keySchema.parse(key), eventChangeSchema.parse(change), { byUser: true })
+  )
+  handle(CALENDAR_IPC.remove, (key: unknown) =>
+    calendar.remove(keySchema.parse(key), { byUser: true })
+  )
   handle(CALENDAR_IPC.syncNow, () => calendar.syncAll())
 }

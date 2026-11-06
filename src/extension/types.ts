@@ -275,6 +275,14 @@ export interface ExtensionMainContext {
     refs: ReadonlyArray<MessageRef>
   ): Promise<Array<{ ref: MessageRef; destination: string; files: string[] }>>
   /**
+   * A folder the extension keeps things under moved — its root, to where
+   * the user says it is now: what the app keeps under the old place (the
+   * copies saved there, projects' folders, recent files) is kept under the
+   * new one, and the Segretario learns of it, to put its memory right.
+   * Resolves with how many were kept anew.
+   */
+  relocatePaths(from: string, to: string): Promise<number>
+  /**
    * What the user did with one of the extension's proposals: accepted,
    * with what they changed (to learn from), or set aside.
    */

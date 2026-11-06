@@ -328,6 +328,33 @@ export class CopyStore {
     return rows.map(copyOf)
   }
 
+  /** The copies under a folder that moved, kept where they are now (`moved`); how many. */
+  async relocate(moved: (path: string) => string | null): Promise<number> {
+    let count = 0
+
+    for (const row of await this.sql.all<CopyRow>('SELECT * FROM ai_saved_copies')) {
+      const destination = moved(row.destination)
+
+      if (destination === null) {
+        continue
+      }
+
+      const files = (JSON.parse(row.files_json) as string[]).map((file) => moved(file) ?? file)
+      await this.sql.run(
+        `UPDATE OR REPLACE ai_saved_copies SET destination = ?, files_json = ?
+         WHERE account_id = ? AND message_key = ? AND destination = ?`,
+        destination,
+        JSON.stringify(files),
+        row.account_id,
+        row.message_key,
+        row.destination
+      )
+      count += 1
+    }
+
+    return count
+  }
+
   /** The latest copies saved, newest first: where the user has been filing lately. */
   async recent(limit = 30): Promise<SavedCopy[]> {
     const rows = await this.sql.all<CopyRow>(

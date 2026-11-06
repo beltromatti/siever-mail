@@ -20,6 +20,7 @@ const mail = (id: string, email: string, change: Partial<MailAccount> = {}): Mai
   authType: 'oauth',
   createdAt: 0,
   updatedAt: 0,
+  pec: false,
   ...change
 })
 

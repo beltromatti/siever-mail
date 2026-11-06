@@ -1,4 +1,5 @@
 import {
+  CALENDAR_HELD_DAYS,
   calendarKey,
   type CalendarEvent,
   type CalendarResponse,
@@ -28,8 +29,8 @@ import { countOf } from './format'
 
 /** Without dates, the agenda listed: today and the week after. */
 const DEFAULT_DAYS = 8
-/** The most days one look reaches: a year and a little. */
-const MAX_DAYS = 400
+/** Events a list shows at most: past it, it says how many more and asks for a shorter period. */
+const LISTED_MAX = 150
 /** Free slots offered at most. */
 const FREE_SLOTS_SHOWN = 12
 /** Events a search gives without `limite`, and at most. */
@@ -221,21 +222,54 @@ function allDayOf(args: Record<string, unknown>, otherwise: boolean): boolean {
     : written.every((value) => /^\d{4}-\d{2}-\d{2}$/.test(value.trim()))
 }
 
-function range(args: Record<string, unknown>): { from: Date; to: Date } {
-  const from = localDay(stringArg(args, 'da') ?? '') ?? new Date(new Date().setHours(0, 0, 0, 0))
-  const lastDay =
-    localDay(stringArg(args, 'a') ?? '') ??
-    new Date(from.getFullYear(), from.getMonth(), from.getDate() + DEFAULT_DAYS - 1)
-  const to = new Date(lastDay.getFullYear(), lastDay.getMonth(), lastDay.getDate() + 1)
-  const days = Math.round((to.getTime() - from.getTime()) / 86_400_000)
+/** The days the calendar keeps, around today: what any period can see of it. */
+function heldPeriod(): { from: Date; to: Date } {
+  const today = new Date(new Date().setHours(0, 0, 0, 0))
+  const at = (offset: number): Date =>
+    new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset)
+  return { from: at(-CALENDAR_HELD_DAYS.back), to: at(CALENDAR_HELD_DAYS.ahead + 1) }
+}
 
-  if (days < 1 || days > MAX_DAYS) {
+/** What the calendar keeps, in words, for when a period goes past it. */
+function heldWords(): string {
+  const held = heldPeriod()
+  return `Il calendario qui tiene gli eventi dal ${DAY.format(held.from)} al ${DAY.format(new Date(held.to.getTime() - 1))}`
+}
+
+/**
+ * The period asked — from `da` to `a`, both in; without them today and the
+ * week after — kept to what the calendar holds: `narrowed` when it went
+ * past it.
+ */
+function range(
+  args: Record<string, unknown>,
+  otherwise?: { from: Date; to: Date }
+): { from: Date; to: Date; narrowed: boolean } {
+  const asked = localDay(stringArg(args, 'da') ?? '') ?? otherwise?.from
+  const from = asked ?? new Date(new Date().setHours(0, 0, 0, 0))
+  const lastDay = localDay(stringArg(args, 'a') ?? '')
+  const to = lastDay
+    ? new Date(lastDay.getFullYear(), lastDay.getMonth(), lastDay.getDate() + 1)
+    : (otherwise?.to ??
+      new Date(from.getFullYear(), from.getMonth(), from.getDate() + DEFAULT_DAYS))
+
+  if (to <= from) {
+    throw new ToolInputError('Un periodo va da `da` ad `a`, con `a` uguale o dopo `da`.')
+  }
+
+  const held = heldPeriod()
+  const kept = {
+    from: from < held.from ? held.from : from,
+    to: to > held.to ? held.to : to
+  }
+
+  if (kept.to <= kept.from) {
     throw new ToolInputError(
-      `Un periodo da uno a ${MAX_DAYS} giorni, con \`da\` prima di \`a\`. Il calendario qui tiene gli eventi da due mesi fa a un anno avanti: più indietro non c'è niente da leggere.`
+      `${heldWords()}: quel periodo ne è fuori. Di un appuntamento più vecchio può dire la posta (\`cerca_posta\`).`
     )
   }
 
-  return { from, to }
+  return { ...kept, narrowed: kept.from > from || kept.to < to }
 }
 
 /** The period a search keeps to, when `da` or `a` say one: from the first day to the last, both in. */
@@ -570,6 +604,44 @@ function proposalLine(proposal: ProposalRecord): string {
   }`
 }
 
+/** The events of a period, with their preparations, and the events proposed in it. */
+async function listEvents(
+  context: ToolContext,
+  { from, to, narrowed }: { from: Date; to: Date; narrowed: boolean }
+): Promise<ToolOutcome> {
+  const events = await context.calendar.events(from.toISOString(), to.toISOString())
+  const shown = events.slice(0, LISTED_MAX)
+  const preps = await context.registry.day.preps(shown.map((event) => event.key))
+  const lastDay = new Date(to.getTime() - 1)
+  const proposed = (await context.registry.proposals.open({ kind: 'evento' })).filter(
+    (proposal) => {
+      const start = proposedTimes(proposal.payload)?.start
+      return start !== undefined && start >= from && start < to
+    }
+  )
+  const period = `dal ${DAY.format(from)} al ${DAY.format(lastDay)}${narrowed ? ` (${heldWords().replace('Il calendario qui', 'il calendario')}: il periodo è quello)` : ''}`
+  const lines = [
+    events.length === 0
+      ? `Nessun evento ${period}.`
+      : `${countOf(events.length, 'evento', 'eventi')} ${period}${
+          events.length > shown.length
+            ? `; ecco i primi ${shown.length}, gli altri chiedili con un periodo più breve`
+            : ''
+        }:\n${shown.map((event) => eventLine(event, context, preps.get(event.key)?.text)).join('\n')}`
+  ]
+
+  if (proposed.length > 0) {
+    lines.push(
+      `Proposti da te, in attesa che l'utente li accetti:\n${proposed.map(proposalLine).join('\n')}`
+    )
+  }
+
+  return {
+    content: lines.join('\n\n'),
+    summary: `Guardato il calendario · ${countOf(events.length, 'evento', 'eventi')}`
+  }
+}
+
 export const calendarTool: SegretarioTool = {
   name: 'calendario',
   description: PROMPTS.tools.calendario,
@@ -616,38 +688,16 @@ export const calendarTool: SegretarioTool = {
     const action = requireString(args, 'azione') as (typeof ACTIONS)[number]
 
     switch (action) {
-      case 'elenco': {
-        const { from, to } = range(args)
-        const events = await context.calendar.events(from.toISOString(), to.toISOString())
-        const preps = await context.registry.day.preps(events.map((event) => event.key))
-        const lastDay = new Date(to.getTime() - 1)
-        const proposed = (await context.registry.proposals.open({ kind: 'evento' })).filter(
-          (proposal) => {
-            const start = proposedTimes(proposal.payload)?.start
-            return start !== undefined && start >= from && start < to
-          }
-        )
-        const lines = [
-          events.length === 0
-            ? `Nessun evento dal ${DAY.format(from)} al ${DAY.format(lastDay)}.`
-            : `${countOf(events.length, 'evento', 'eventi')} dal ${DAY.format(from)} al ${DAY.format(lastDay)}:\n${events
-                .map((event) => eventLine(event, context, preps.get(event.key)?.text))
-                .join('\n')}`
-        ]
-
-        if (proposed.length > 0) {
-          lines.push(
-            `Proposti da te, in attesa che l'utente li accetti:\n${proposed.map(proposalLine).join('\n')}`
-          )
-        }
-
-        return {
-          content: lines.join('\n\n'),
-          summary: `Guardato il calendario · ${countOf(events.length, 'evento', 'eventi')}`
-        }
-      }
+      case 'elenco':
+        return listEvents(context, range(args))
       case 'cerca': {
-        const words = requireString(args, 'parole')
+        const words = stringArg(args, 'parole')?.trim()
+
+        // Nothing to look for: what there is, in the period asked or all the calendar keeps.
+        if (!words) {
+          return listEvents(context, range(args, heldPeriod()))
+        }
+
         const { from, to } = searchPeriod(args)
         const limit = Math.min(
           MAX_SEARCH_LIMIT,
@@ -664,7 +714,7 @@ export const calendarTool: SegretarioTool = {
 
         if (events.length === 0) {
           return {
-            content: `Nessun evento con «${words}»${period}. Ogni parola si cerca nel titolo, nel luogo, nella descrizione, tra gli invitati (nomi e indirizzi) e nel nome del calendario, e devono esserci tutte: prova con meno parole o con altre — il cognome, la località, una parola del titolo${period ? ', o senza `da` e `a`' : ''}. Il calendario qui tiene gli eventi da due mesi fa a un anno avanti: di un appuntamento più vecchio può dire la posta (\`cerca_posta\`).`,
+            content: `Nessun evento con «${words}»${period}. Ogni parola si cerca nel titolo, nel luogo, nella descrizione, tra gli invitati (nomi e indirizzi) e nel nome del calendario, e devono esserci tutte: prova con meno parole o con altre — il cognome, la località, una parola del titolo${period ? ', o senza `da` e `a`' : ''}. ${heldWords()}: di un appuntamento più vecchio può dire la posta (\`cerca_posta\`).`,
             summary: `Cercato «${words}» nel calendario · nessun evento`
           }
         }

@@ -19,7 +19,8 @@ function account(id: string): MailAccount {
     username: id,
     authType: 'password',
     createdAt: 0,
-    updatedAt: 0
+    updatedAt: 0,
+    pec: false
   }
 }
 

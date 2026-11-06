@@ -130,7 +130,7 @@ describe('ensureAiSchema', () => {
       )
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '5'
+      value: '6'
     })
   })
 
@@ -258,7 +258,33 @@ describe('ensureAiSchema', () => {
       { id: 'p1', revision: 1 }
     ])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '5'
+      value: '6'
+    })
+  })
+
+  it('gives a version 5 database how far each connection is read, and the project of the user’s word', async () => {
+    await ensureAiSchema(sql)
+    await sql.run('DROP INDEX idx_ai_items_project')
+    await sql.run('ALTER TABLE ai_items DROP COLUMN project_id')
+    await sql.run('DROP TABLE ai_reading')
+    await sql.run(
+      `INSERT INTO ai_items (id, kind, text, status, created_at) VALUES (3, 'da_fare', 'Chiamare il geometra', 'aperta', 1)`
+    )
+    await sql.run("UPDATE ai_meta SET value = '5' WHERE key = 'schema_version'")
+
+    await ensureAiSchema(sql)
+
+    expect(await sql.all('SELECT id, project_id FROM ai_items')).toEqual([
+      { id: 3, project_id: null }
+    ])
+    await sql.run(
+      `INSERT INTO ai_reading (connection_key, days, reason, set_by, set_at) VALUES ('a', 90, 'pratiche lunghe', 'segretario', 1)`
+    )
+    expect(
+      await sql.all("SELECT name FROM sqlite_master WHERE name = 'idx_ai_items_project'")
+    ).toEqual([{ name: 'idx_ai_items_project' }])
+    expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
+      value: '6'
     })
   })
 

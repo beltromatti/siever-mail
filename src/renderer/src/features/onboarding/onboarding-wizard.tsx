@@ -71,21 +71,21 @@ const STEP_LABELS: Readonly<Record<OnboardingStep, string>> = {
   segretario: 'Segretario',
   preparazione: 'Preparazione',
   conoscimi: 'Conoscimi',
-  lettura: 'La posta',
+  lettura: 'Al passo',
   entra: 'Entra'
 }
 
 /**
  * Whether a step is for this setup: asking for the AI only when it is
  * off — a connection added with it on goes straight to its preparation —
- * Conoscimi only with it on, and the reading of the mail with it on and
- * mail to read.
+ * Conoscimi only with it on, and the reading with it on and something to
+ * read: mail, or a calendar's events.
  */
 function applies(
   step: OnboardingStep,
   setupCase: OnboardingCase,
   aiOn: boolean,
-  hasMail: boolean
+  hasReading: boolean
 ): boolean {
   switch (step) {
     case 'segretario':
@@ -93,7 +93,7 @@ function applies(
     case 'conoscimi':
       return aiOn
     case 'lettura':
-      return aiOn && hasMail
+      return aiOn && hasReading
     default:
       return true
   }
@@ -707,11 +707,12 @@ function remaining(milliseconds: number): string {
 }
 
 /**
- * Step 5: the Segretario's mail — the last thirty days read as if each
- * message had just come, many at once: of the connections a setup adds,
- * when it adds some with the AI on already — the rest is read already —
- * else of all. What fails is listed and tried again later: the user enters
- * anyway, nothing passes for read.
+ * Step 5: the Segretario gets up to date — each connection as far back as
+ * Conoscimi decided, the mail message by message as if each had just come,
+ * the calendars' events in chunks, many at once: of the connections a setup
+ * adds, when it adds some with the AI on already — the rest is read
+ * already — else of all. What fails is listed and tried again later: the
+ * user enters anyway, nothing passes for read.
  */
 function ReadingStep({
   accountIds,
@@ -756,7 +757,8 @@ function ReadingStep({
     }
   }, [accountKey])
 
-  const progress = status && status.total > 0 ? status.read / status.total : 0
+  const all = status ? status.total + status.events.total : 0
+  const progress = status && all > 0 ? (status.read + status.events.looked) / all : 0
   const elapsed = started.current ? Date.now() - started.current.at : 0
   const readSince = status && started.current ? status.read - started.current.read : 0
   const estimate =
@@ -768,8 +770,8 @@ function ReadingStep({
 
   return (
     <StepFrame
-      title="Il Segretario legge la tua posta"
-      lead="Legge i messaggi degli ultimi trenta giorni, uno per uno, come se fossero appena arrivati: annota cosa ti chiedono, apre le cose da fare, riconosce i progetti, prepara le risposte che servono."
+      title="Il Segretario si mette al passo"
+      lead="Legge ogni connessione fin dove ha deciso conoscendoti: i messaggi uno per uno, come se fossero appena arrivati, e gli impegni del calendario. Annota cosa ti chiedono, apre le cose da fare, riconosce i progetti, prepara le risposte che servono."
       actions={
         <Button size="lg" disabled={!done && !paused} onClick={onNext}>
           {!done && !paused && <LoaderCircle className="size-4 animate-spin" />}
@@ -787,11 +789,47 @@ function ReadingStep({
         <p className="text-muted-foreground flex flex-wrap justify-between gap-2 text-[12.5px]">
           <span>
             {status
-              ? `Letti ${status.read.toLocaleString('it-IT')} messaggi su ${status.total.toLocaleString('it-IT')}`
+              ? [
+                  status.total > 0
+                    ? `Letti ${status.read.toLocaleString('it-IT')} messaggi su ${status.total.toLocaleString('it-IT')}`
+                    : null,
+                  status.events.total > 0
+                    ? `guardati ${status.events.looked.toLocaleString('it-IT')} eventi su ${status.events.total.toLocaleString('it-IT')}`
+                    : null
+                ]
+                  .filter(Boolean)
+                  .join(' · ') || 'Niente da leggere'
               : 'Conto i messaggi…'}
           </span>
           {estimate !== null && !done && <span>Manca {remaining(estimate)}</span>}
         </p>
+        {status && status.downloading && (
+          <p className="text-muted-foreground text-[12.5px]">
+            Scarico ancora la posta più vecchia: la leggo man mano che arriva.
+          </p>
+        )}
+        {status && status.horizons.length > 0 && (
+          <ul className="mt-2 flex flex-col gap-1.5 text-[12.5px]">
+            {status.horizons.map((horizon) => (
+              <li key={horizon.key} className="flex flex-col">
+                <span>
+                  <span className="font-semibold">
+                    {horizon.kind === 'calendario' ? `Calendario ${horizon.label}` : horizon.label}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {' · '}
+                    {horizon.kind === 'calendario'
+                      ? `da ${horizon.days} giorni fa ai prossimi due mesi`
+                      : `ultimi ${horizon.days} giorni`}
+                  </span>
+                </span>
+                {horizon.reason && (
+                  <span className="text-muted-foreground voice">{horizon.reason}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
         {paused && (
           <p className="text-destructive-soft-foreground flex items-start gap-2 text-[12.5px]">
             <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
@@ -886,12 +924,13 @@ export function OnboardingWizard({
   const all = CASE_STEPS[state.case]
   const undecided =
     all.includes('segretario') && all.indexOf(state.step) <= all.indexOf('segretario')
-  // The mail to read: a connection added with the AI on already brings its own; else any there is.
-  const hasMail =
-    state.case === 'nuova-connessione' && aiOn && !setupTurnsAiOn(state)
+  // What to read: a connection added with the AI on already brings its own mail; else any there
+  // is — and the calendars, whose events are looked at too.
+  const hasReading =
+    (state.case === 'nuova-connessione' && aiOn && !setupTurnsAiOn(state)
       ? state.accountIds.length > 0
-      : accounts.length > 0
-  const steps = all.filter((step) => applies(step, state.case, aiOn || undecided, hasMail))
+      : accounts.length > 0) || calendarConnections.length > 0
+  const steps = all.filter((step) => applies(step, state.case, aiOn || undecided, hasReading))
 
   // The connections to know, read again as they come — a mailbox or a calendar added here.
   const connectionIds = [
@@ -913,11 +952,11 @@ export function OnboardingWizard({
       const all = CASE_STEPS[state.case]
       const following = all
         .slice(all.indexOf(state.step) + 1)
-        .find((step) => applies(step, state.case, aiOnNow, hasMail))
+        .find((step) => applies(step, state.case, aiOnNow, hasReading))
 
       onChange({ ...state, ...change, step: following ?? 'entra' })
     },
-    [aiOn, hasMail, onChange, state]
+    [aiOn, hasReading, onChange, state]
   )
 
   // Turned on here, the AI starts with every connection: their reading waits for Conoscimi.

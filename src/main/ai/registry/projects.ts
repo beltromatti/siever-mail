@@ -110,7 +110,8 @@ const SUMMARY_SELECT = `
            WHERE t.project_id = p.id AND t.rejected = 0
              AND t.account_id = i.account_id AND t.thread_id = i.thread_id)
          OR EXISTS (SELECT 1 FROM ai_project_resources r
-           WHERE r.project_id = p.id AND r.kind = 'evento' AND r.location = i.event_key))
+           WHERE r.project_id = p.id AND r.kind = 'evento' AND r.location = i.event_key)
+         OR i.project_id = p.id)
     ) AS open_commitments,
     (SELECT MAX(n.message_date) FROM ai_notes n
        JOIN ai_project_threads t ON t.account_id = n.account_id AND t.thread_id = n.thread_id
@@ -406,6 +407,8 @@ export class ProjectStore {
 
     await this.sql.run('DELETE FROM ai_project_threads WHERE project_id = ?', id)
     await this.sql.run('DELETE FROM ai_project_resources WHERE project_id = ?', id)
+    // What the user said about it stays open, in no project.
+    await this.sql.run('UPDATE ai_items SET project_id = NULL WHERE project_id = ?', id)
     await this.sql.run('DELETE FROM ai_projects WHERE id = ?', id)
     return current
   }
@@ -446,6 +449,7 @@ export class ProjectStore {
         keepId,
         id
       )
+      await this.sql.run('UPDATE ai_items SET project_id = ? WHERE project_id = ?', keepId, id)
       await this.sql.run('DELETE FROM ai_project_threads WHERE project_id = ?', id)
       await this.sql.run('DELETE FROM ai_project_resources WHERE project_id = ?', id)
       await this.sql.run('DELETE FROM ai_projects WHERE id = ?', id)
@@ -627,6 +631,29 @@ export class ProjectStore {
       Date.now()
     )
     return this.resources(projectId)
+  }
+
+  /** The folders of projects under a folder that moved, kept where they are now (`moved`); how many. */
+  async relocateFolders(moved: (path: string) => string | null): Promise<number> {
+    let count = 0
+    const rows = await this.sql.all<{ id: number; location: string }>(
+      "SELECT id, location FROM ai_project_resources WHERE kind = 'cartella'"
+    )
+
+    for (const row of rows) {
+      const location = moved(row.location)
+
+      if (location !== null) {
+        await this.sql.run(
+          'UPDATE OR REPLACE ai_project_resources SET location = ? WHERE id = ?',
+          location,
+          row.id
+        )
+        count += 1
+      }
+    }
+
+    return count
   }
 
   async removeResource(

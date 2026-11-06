@@ -88,6 +88,10 @@ model Message {
   searchTo        String      @default("") @map("search_to")
   searchSubject   String      @default("") @map("search_subject")
   searchPreview   String      @default("") @map("search_preview")
+  /// What the message is in certified mail (PEC), when it is the provider's: `busta`, `anomalia`, a receipt's kind.
+  pecKind         String?     @map("pec_kind")
+  /// The Message-ID the sender's client gave the message carried or receipted (X-Riferimento-Message-ID).
+  pecRef          String?     @map("pec_ref")
   updatedAt       BigInt      @map("updated_at")
   account         Account     @relation(fields: [accountId], references: [id], onDelete: Cascade)
   searchHits      SearchHit[]
@@ -100,6 +104,7 @@ model Message {
   @@index([senderKey], map: "idx_messages_sender_key")
   @@index([accountId, folderPath, subjectSort], map: "idx_messages_folder_subject_sort")
   @@index([accountId, folderPath, isFlagged], map: "idx_messages_folder_flagged")
+  @@index([accountId, pecRef], map: "idx_messages_pec_ref")
   @@map("messages")
 }
 
@@ -116,6 +121,8 @@ model MessageBody {
   attachmentsJson String  @default("[]") @map("attachments_json")
   replyToJson     String  @default("[]") @map("reply_to_json")
   referencesJson  String  @default("[]") @map("references_json")
+  /// A certified envelope's certification and the provider's words (`PecDetail`), as JSON.
+  pecJson         String? @map("pec_json")
   subject         String  @default("")
   sender          String  @default("")
   recipients      String  @default("")
@@ -418,6 +425,22 @@ model AiLearning {
   @@map("ai_learning")
 }
 
+/// How far back each connection is read one by one — `days`, decided by the
+/// Segretario in Conoscimi or by the user in chat, with why; none decided,
+/// the default — and, for a calendar, the span of its events looked at
+/// (`looked_from` in, `looked_until` out, by when they start).
+model AiReading {
+  connectionKey String  @id @map("connection_key")
+  days          Int?
+  reason        String?
+  setBy         String? @map("set_by")
+  setAt         BigInt? @map("set_at")
+  lookedFrom    BigInt? @map("looked_from")
+  lookedUntil   BigInt? @map("looked_until")
+
+  @@map("ai_reading")
+}
+
 /// What the next reflection takes in: the user's corrections and decisions
 /// (a draft changed before sending, a commitment not needed, a project
 /// renamed, a proposal set aside…). `reflection_id` is the run that took it in.
@@ -480,12 +503,16 @@ model AiNote {
 }
 
 /// Something open between the user and someone — asked of them, promised,
-/// awaited, to do — with its life: open, done, not needed, put off.
+/// awaited, to do — with its life: open, done, not needed, put off. It comes
+/// from a message (account, conversation, message), from an event, or from
+/// the user's word — with the project it is about, if any.
 model AiItem {
   id          Int     @id @default(autoincrement())
-  accountId   String  @map("account_id")
-  threadId    String  @map("thread_id")
-  messageKey  String  @map("message_key")
+  accountId   String? @map("account_id")
+  threadId    String? @map("thread_id")
+  messageKey  String? @map("message_key")
+  eventKey    String? @map("event_key")
+  projectId   String? @map("project_id")
   kind        String
   text        String
   due         String?
@@ -508,6 +535,8 @@ model AiItem {
 
   @@index([accountId, threadId], map: "idx_ai_items_thread")
   @@index([status, due], map: "idx_ai_items_status")
+  @@index([eventKey], map: "idx_ai_items_event")
+  @@index([projectId], map: "idx_ai_items_project")
   @@map("ai_items")
 }
 
@@ -764,6 +793,8 @@ model CalendarChange {
   /// The event before and after (`CalendarEvent`), as JSON; null where there is none.
   beforeJson   String? @map("before_json")
   afterJson    String? @map("after_json")
+  /// 1 when the user did it in the app; 0 when the sync found it, done elsewhere.
+  inApp        Int     @default(0) @map("in_app")
   at           BigInt
 
   @@index([at], map: "idx_calendar_changes_at")

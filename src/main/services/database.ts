@@ -35,6 +35,9 @@ import type {
   MessageListSortField,
   MessageRef,
   NotificationPreferences,
+  PecDetail,
+  PecKind,
+  PecReceipt,
   ThemeMode,
   UiPreferences
 } from '@shared/models'
@@ -50,7 +53,7 @@ import {
   READER_ZOOM_DEFAULT
 } from '@shared/models'
 import { addressKey, isValidEmailAddress } from '@shared/email-address'
-import { folderRole, type FolderRole } from '@shared/folders'
+import { folderForRole, folderRole, type FolderRole } from '@shared/folders'
 import {
   foldSearchText,
   parseSearchQuery,
@@ -68,6 +71,7 @@ import { subjectSortKey } from '@shared/subject'
 
 import { rankContactSuggestions, type ContactCandidate } from './contact-ranking'
 import { fullTextMatchExpression, numberWords, queryNumbers } from './full-text-query'
+import { isPecServer } from './mail-discovery'
 import {
   forgetLeftKeysStatement,
   keyHoldersQuery,
@@ -328,7 +332,9 @@ const MESSAGE_SUMMARY_SELECT = {
   senderKey: true,
   senderLabel: true,
   hasAttachments: true,
-  size: true
+  size: true,
+  pecKind: true,
+  pecRef: true
 } as const satisfies Prisma.MessageSelect
 
 /** Rows re-filed for search per transaction (see `refreshSearchText`). */
@@ -375,7 +381,7 @@ export const READABLE_BODY_LEVEL = 2
 /** A body as the engine hands it over to be kept. */
 export type StoredBodyInput = Pick<
   FetchedMessageDetail,
-  'html' | 'text' | 'bcc' | 'replyTo' | 'references' | 'attachments' | 'preview'
+  'html' | 'text' | 'bcc' | 'replyTo' | 'references' | 'attachments' | 'preview' | 'pecDetail'
 >
 
 /** People as the index reads them: names and addresses, the list's own name for the sender. */
@@ -666,9 +672,13 @@ const SORT_FILING_VERSION = 3
  *       full-text index;
  *   3 — 2.0: who holds each key made of a Message-ID, by what every copy
  *       of the message says alike (`message_id_keys`), which the rows
- *       stored before did not keep.
+ *       stored before did not keep;
+ *   4 — 2.0: certified mail (PEC) read for what it is — what each message
+ *       is (`pec_kind`, `pec_ref`), an envelope listed as the message it
+ *       carries, its certification beside its body (`pec_json`) — which
+ *       the rows stored before were not.
  */
-export const CACHE_SCHEMA_VERSION = 3
+export const CACHE_SCHEMA_VERSION = 4
 
 /** The cache's tables, dependants first. */
 const CACHE_TABLES_IN_DROP_ORDER = [
@@ -1072,7 +1082,10 @@ export class AppDatabase {
         username,
         auth_type AS authType,
         created_at AS createdAt,
-        updated_at AS updatedAt
+        updated_at AS updatedAt,
+        EXISTS (
+          SELECT 1 FROM messages m WHERE m.account_id = accounts.id AND m.pec_kind IS NOT NULL
+        ) AS hasPecMail
       FROM accounts
       ORDER BY
         CASE WHEN last_viewed_at IS NULL THEN 1 ELSE 0 END ASC,
@@ -1093,6 +1106,7 @@ export class AppDatabase {
       authType: string
       createdAt: bigint
       updatedAt: bigint
+      hasPecMail: number | bigint
     }>
 
     return rows.map((row) => this.mapAccountRow(row))
@@ -1718,6 +1732,29 @@ export class AppDatabase {
         )
       `
     ])
+  }
+
+  /** The recent files under a folder that moved, kept where they are now (`moved`). */
+  async relocateRecentFiles(moved: (path: string) => string | null): Promise<void> {
+    await this.ready
+    const rows = await this.prisma.recentFile.findMany()
+    const writes = rows.flatMap((row) => {
+      const path = moved(row.path)
+      return path === null
+        ? []
+        : [
+            this.prisma.recentFile.delete({ where: { path: row.path } }),
+            this.prisma.recentFile.upsert({
+              where: { path },
+              create: { path, activity: row.activity, usedAt: row.usedAt },
+              update: {}
+            })
+          ]
+    })
+
+    if (writes.length > 0) {
+      await this.prisma.$transaction(writes)
+    }
   }
 
   async listRecentFiles(
@@ -2718,6 +2755,8 @@ export class AppDatabase {
           senderSort,
           hasAttachments: message.hasAttachments,
           size: message.size,
+          pecKind: message.pec?.kind ?? null,
+          pecRef: message.pec?.ref ?? null,
           ...messageSearchText({ ...message, senderLabel }),
           updatedAt: now
         }
@@ -2746,6 +2785,8 @@ export class AppDatabase {
           senderSort,
           hasAttachments: message.hasAttachments,
           size: message.size,
+          pecKind: message.pec?.kind ?? null,
+          pecRef: message.pec?.ref ?? null,
           ...messageSearchText({ ...message, senderLabel, preview }),
           updatedAt: now
         }
@@ -3038,6 +3079,7 @@ export class AppDatabase {
         kind TEXT NOT NULL,
         before_json TEXT,
         after_json TEXT,
+        in_app INTEGER NOT NULL DEFAULT 0,
         at INTEGER NOT NULL
       )
     `)
@@ -3067,6 +3109,13 @@ export class AppDatabase {
 
     if (!(await columns('calendar_events')).has('origin_json')) {
       await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_events ADD COLUMN origin_json TEXT')
+    }
+
+    // Kept before the user's own changes in the app were noted for the Segretario.
+    if (!(await columns('calendar_changes')).has('in_app')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE calendar_changes ADD COLUMN in_app INTEGER NOT NULL DEFAULT 0'
+      )
     }
   }
 
@@ -3367,8 +3416,11 @@ export class AppDatabase {
     senderLabel: string
     hasAttachments: boolean
     size: number
+    pecKind: string | null
+    pecRef: string | null
   }): MailMessageSummary {
     return {
+      ...(row.pecKind ? { pec: { kind: row.pecKind as PecKind, ref: row.pecRef } } : {}),
       accountId: row.accountId,
       folderPath: row.folderPath,
       uid: row.uid,
@@ -4368,6 +4420,7 @@ export class AppDatabase {
     attachments: MailAttachment[]
     replyTo: MailAddress[]
     references: string[]
+    pecDetail: PecDetail | null
   } | null> {
     await this.ready
 
@@ -4382,9 +4435,69 @@ export class AppDatabase {
           text: body.text,
           attachments: parseJsonArray<MailAttachment>(body.attachmentsJson),
           replyTo: parseJsonArray<MailAddress>(body.replyToJson),
-          references: parseJsonArray<string>(body.referencesJson)
+          references: parseJsonArray<string>(body.referencesJson),
+          pecDetail: body.pecJson ? (JSON.parse(body.pecJson) as PecDetail) : null
         }
       : null
+  }
+
+  /**
+   * A message of an account by the Message-ID its sender's client gave it:
+   * the one a PEC receipt is about — its copy in Sent first, where there is
+   * one.
+   */
+  async messageRefById(accountId: string, messageId: string): Promise<MessageRef | null> {
+    await this.ready
+
+    const bare = messageId.trim().replace(/^<|>$/g, '')
+    const rows = await this.prisma.message.findMany({
+      where: { accountId, messageId: { in: [bare, `<${bare}>`] }, pecKind: null },
+      select: { folderPath: true, uid: true }
+    })
+    const sent = folderForRole(await this.listFolders(accountId), '\\Sent')?.path
+    const row = rows.find((candidate) => candidate.folderPath === sent) ?? rows[0]
+
+    return row ? { accountId, folderPath: row.folderPath, uid: row.uid } : null
+  }
+
+  /**
+   * The PEC receipts on a message sent — those naming its Message-ID —
+   * each once, the oldest first, with what its certification says when
+   * the index has read it.
+   */
+  async pecReceipts(accountId: string, messageId: string): Promise<PecReceipt[]> {
+    await this.ready
+
+    const ref = messageId.trim().replace(/^<|>$/g, '')
+
+    if (!ref) {
+      return []
+    }
+
+    const rows = await this.prisma.message.findMany({
+      where: { accountId, pecRef: ref, pecKind: { notIn: ['busta', 'anomalia'] } },
+      select: { folderPath: true, uid: true, messageKey: true, pecKind: true, dateIso: true },
+      orderBy: { dateIso: 'asc' }
+    })
+    const once = [...new Map(rows.map((row) => [row.messageKey, row])).values()]
+    const bodies = new Map(
+      (
+        await this.prisma.messageBody.findMany({
+          where: { accountId, messageKey: { in: once.map((row) => row.messageKey) } },
+          select: { messageKey: true, pecJson: true }
+        })
+      ).map((body) => [body.messageKey, body.pecJson])
+    )
+
+    return once.map((row) => {
+      const kept = bodies.get(row.messageKey)
+      return {
+        kind: row.pecKind as PecKind,
+        ref: { accountId, folderPath: row.folderPath, uid: row.uid },
+        date: row.dateIso,
+        certification: kept ? (JSON.parse(kept) as PecDetail).certification : null
+      }
+    })
   }
 
   /** A message's size, and whether the reader can show it from the cache — without reading the body. */
@@ -4460,7 +4573,9 @@ export class AppDatabase {
       senderLabel: row.senderLabel,
       html: readable ? (body.html ?? undefined) : undefined,
       text: readable ? (body.text ?? undefined) : undefined,
-      attachments: body ? parseJsonArray<MailAttachment>(body.attachmentsJson) : []
+      attachments: body ? parseJsonArray<MailAttachment>(body.attachmentsJson) : [],
+      ...(row.pecKind ? { pec: { kind: row.pecKind as PecKind, ref: row.pecRef } } : {}),
+      ...(body?.pecJson ? { pecDetail: JSON.parse(body.pecJson) as PecDetail } : {})
     }
   }
 
@@ -4568,6 +4683,7 @@ export class AppDatabase {
         attachmentsJson: JSON.stringify(body.attachments),
         replyToJson: JSON.stringify(body.replyTo),
         referencesJson: JSON.stringify(body.references),
+        pecJson: body.pecDetail ? JSON.stringify(body.pecDetail) : null,
         subject: envelope.subject,
         sender: indexedAddresses(from, envelope.senderLabel),
         recipients: indexedAddresses([...to, ...cc, ...body.bcc]),
@@ -4910,10 +5026,16 @@ export class AppDatabase {
         search_to TEXT NOT NULL DEFAULT '',
         search_subject TEXT NOT NULL DEFAULT '',
         search_preview TEXT NOT NULL DEFAULT '',
+        pec_kind TEXT,
+        pec_ref TEXT,
         updated_at INTEGER NOT NULL,
         UNIQUE(account_id, folder_path, uid)
       )
     `)
+    // A PEC receipt finds the message sent it is about by the Message-ID the sender gave it.
+    await this.prisma.$executeRawUnsafe(
+      'CREATE INDEX IF NOT EXISTS idx_messages_pec_ref ON messages(account_id, pec_ref) WHERE pec_ref IS NOT NULL'
+    )
 
     // A message's body once, however many folders hold it (see
     // `message-identity.ts`), with the words the index reads. `level` says
@@ -4930,6 +5052,7 @@ export class AppDatabase {
         attachments_json TEXT NOT NULL DEFAULT '[]',
         reply_to_json TEXT NOT NULL DEFAULT '[]',
         references_json TEXT NOT NULL DEFAULT '[]',
+        pec_json TEXT,
         subject TEXT NOT NULL DEFAULT '',
         sender TEXT NOT NULL DEFAULT '',
         recipients TEXT NOT NULL DEFAULT '',
@@ -5332,6 +5455,11 @@ export class AppDatabase {
     await this.prisma.$executeRawUnsafe('ALTER TABLE accounts ADD COLUMN last_viewed_at INTEGER')
   }
 
+  /**
+   * An account as the app speaks of it. Certified (PEC) when its server is a
+   * known PEC provider's, or — `hasPecMail`, from the accounts' list —
+   * certified envelopes and receipts came to it.
+   */
   private mapAccountRow(row: {
     id: string
     type: string
@@ -5347,8 +5475,10 @@ export class AppDatabase {
     authType: string
     createdAt: bigint
     updatedAt: bigint
+    hasPecMail?: number | bigint | boolean
   }): MailAccount {
     return {
+      pec: isPecServer(row.imapHost) || Boolean(Number(row.hasPecMail ?? 0)),
       id: row.id,
       type: row.type as MailAccount['type'],
       email: row.email,

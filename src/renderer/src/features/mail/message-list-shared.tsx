@@ -43,8 +43,10 @@ import {
   type MailMessageSummary,
   type MessageGroupingMode,
   type MessageListSortDirection,
-  type MessageListSortField
+  type MessageListSortField,
+  type PecMessage
 } from '@shared/models'
+import { isPecFailure, pecLabel } from '@shared/pec'
 import { findHighlightRanges, type SearchHighlightField } from '@shared/search'
 
 /**
@@ -198,6 +200,37 @@ export function SavedTag({ label }: { label: string }): React.JSX.Element {
     <span
       className="text-muted-foreground bg-hover inline-block max-w-[40%] shrink-0 truncate rounded-[4px] px-1 align-middle text-[10.5px] leading-4 font-semibold shadow-[inset_0_0_0_1px_hsl(var(--border))]"
       title={label}
+    >
+      {label}
+    </span>
+  )
+}
+
+/**
+ * What a certified message (PEC) is, on its row: "PEC" for one the
+ * provider carried; for a receipt, what it says of the message sent —
+ * "Consegnata", "Non consegnata", in red when it went wrong.
+ */
+export function PecTag({ pec }: { pec: PecMessage }): React.JSX.Element {
+  const label = pecLabel(pec.kind)
+
+  return (
+    <span
+      className={cn(
+        'inline-block max-w-[40%] shrink-0 truncate rounded-[4px] px-1 align-middle text-[10.5px] leading-4 font-semibold',
+        isPecFailure(pec.kind)
+          ? 'text-destructive-soft-foreground bg-destructive/10 shadow-[inset_0_0_0_1px_hsl(var(--destructive)/0.3)]'
+          : pec.kind === 'anomalia'
+            ? 'text-warning bg-warning/10 shadow-[inset_0_0_0_1px_hsl(var(--warning)/0.3)]'
+            : 'text-muted-foreground bg-hover shadow-[inset_0_0_0_1px_hsl(var(--border))]'
+      )}
+      title={
+        pec.kind === 'busta'
+          ? 'Posta certificata'
+          : pec.kind === 'anomalia'
+            ? 'Posta certificata · anomalia: il gestore non ha potuto certificarlo'
+            : `Ricevuta PEC · ${label}`
+      }
     >
       {label}
     </span>

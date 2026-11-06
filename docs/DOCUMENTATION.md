@@ -1714,6 +1714,31 @@ Type-check an extension with `npm run typecheck:ext` — `npm run typecheck`
 only sees the stubs, and the build strips types without checking them. Its
 tests (`extension/**/*.test.ts`) run with the host's `npm test`.
 
+## Environments
+
+One computer can run three SIEVER Mail at once, of different versions too,
+each on a profile — a `userData` folder — of its own:
+
+| Environment                         | Started by                                      | Profile                                                                     |
+| ----------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------- |
+| The installed app                   | the Dock, the Start menu                        | `siever-mail` in the system's app data folder                               |
+| Development                         | `npm run dev`, `npm run dev:ext`                | `siever-mail-dev` beside it (`index.ts`): the real accounts, connected once |
+| A profile given on the command line | `electron-vite dev -- --user-data-dir=<folder>` | that folder                                                                 |
+
+Development keeps its own profile because the schema only moves forward: a
+build in development would bring the installed app's data where that app
+cannot follow. The single-instance lock is a profile's, so the three run
+side by side; the keychain item that encrypts tokens is the app's name's,
+so a profile copied from another opens with its sign-ins.
+
+A simulated working life for trying the app — mail, sending, calendar and
+PEC servers of its own in Docker, a test CA, an archive on disk, its own
+profile — can be kept on a machine with a launcher of its own in the
+repository's root (`studio.mjs`, ignored by git: it belongs to that
+machine). It runs the app in development on that profile, public by
+default, with the extension when asked: the same data, with what each
+variant can do with it.
+
 ## Testing
 
 `npm test` runs two Vitest projects: `main` (node) for the main process and

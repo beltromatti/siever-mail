@@ -75,6 +75,40 @@ export interface WorkEntry {
 /** Runs read at a time when the diary is searched. */
 const WORK_PAGE = 300
 
+interface ReadingRow {
+  connection_key: string
+  days: number | null
+  reason: string | null
+  set_by: string | null
+  set_at: number | null
+  looked_from: number | null
+  looked_until: number | null
+}
+
+/** How far a connection is read, as kept: what was decided (null days: not yet), and how far its events were looked at. */
+export interface StoredReading {
+  key: string
+  days: number | null
+  reason: string | null
+  setBy: 'segretario' | 'utente' | null
+  setAt: number | null
+  lookedFrom: number | null
+  lookedUntil: number | null
+}
+
+function readingOf(row: ReadingRow): StoredReading {
+  const number = (value: number | null): number | null => (value === null ? null : Number(value))
+  return {
+    key: row.connection_key,
+    days: number(row.days),
+    reason: row.reason,
+    setBy: row.set_by === 'utente' || row.set_by === 'segretario' ? row.set_by : null,
+    setAt: number(row.set_at),
+    lookedFrom: number(row.looked_from),
+    lookedUntil: number(row.looked_until)
+  }
+}
+
 /**
  * The Segretario's own bookkeeping: its settings and key, what it cost,
  * its runs and their logs, which connections it knows, what it has to
@@ -507,6 +541,73 @@ export class AiStore {
     )
   }
 
+  /* ─────────────────────── how far each connection is read ─────────────────────── */
+
+  /** What is kept of how far each connection is read: decided, and looked at so far. */
+  async readings(): Promise<StoredReading[]> {
+    const rows = await this.sql.all<ReadingRow>('SELECT * FROM ai_reading')
+    return rows.map(readingOf)
+  }
+
+  async reading(key: string): Promise<StoredReading | null> {
+    const row = await this.sql.get<ReadingRow>(
+      'SELECT * FROM ai_reading WHERE connection_key = ?',
+      key
+    )
+    return row ? readingOf(row) : null
+  }
+
+  /** How far back a connection is read from now on, why, and who decided. */
+  async setReadingDays(
+    key: string,
+    days: number,
+    reason: string | null,
+    by: 'segretario' | 'utente'
+  ): Promise<void> {
+    await this.sql.run(
+      `INSERT INTO ai_reading (connection_key, days, reason, set_by, set_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(connection_key) DO UPDATE SET days = excluded.days, reason = excluded.reason,
+         set_by = excluded.set_by, set_at = excluded.set_at`,
+      key,
+      days,
+      reason,
+      by,
+      Date.now()
+    )
+  }
+
+  /**
+   * What reading one message has cost lately, on average — the readings'
+   * spending over the notes they wrote since `since` — or null with too few
+   * to tell.
+   */
+  async readingCostPerMessage(since: number): Promise<number | null> {
+    const row = await this.sql.get<{ cost: number | null; notes: number }>(
+      `SELECT
+         (SELECT SUM(u.cost) FROM ai_usage u JOIN ai_activities a ON a.id = u.activity_id
+           WHERE a.task = 'lettura' AND u.created_at >= ?) AS cost,
+         (SELECT COUNT(*) FROM ai_notes n JOIN ai_activities a ON a.id = n.run_id
+           WHERE a.task = 'lettura' AND n.created_at >= ?) AS notes`,
+      since,
+      since
+    )
+    const notes = Number(row?.notes ?? 0)
+    const cost = Number(row?.cost ?? 0)
+    return notes >= 20 && cost > 0 ? cost / notes : null
+  }
+
+  /** How far a calendar's events have been looked at: from one start to another, both in. */
+  async setLooked(key: string, from: number, until: number): Promise<void> {
+    await this.sql.run(
+      `INSERT INTO ai_reading (connection_key, looked_from, looked_until) VALUES (?, ?, ?)
+       ON CONFLICT(connection_key) DO UPDATE SET looked_from = excluded.looked_from,
+         looked_until = excluded.looked_until`,
+      key,
+      from,
+      until
+    )
+  }
+
   /* ──────────────────────── lessons for the reflection ──────────────────────── */
 
   async addLesson(kind: string, payload: unknown): Promise<void> {
@@ -688,6 +789,7 @@ export class AiStore {
       accountId
     )
     await this.sql.run('DELETE FROM ai_work WHERE scope_key LIKE ?', `%:${accountId}:%`)
+    await this.sql.run('DELETE FROM ai_reading WHERE connection_key = ?', accountId)
     // The same messages in another account were read here, and carry only a copy of the note:
     // without it, they are read again there, where the work now lives.
     await this.sql.run('DELETE FROM ai_notes WHERE twin_account_id = ?', accountId)
@@ -723,6 +825,7 @@ export class AiStore {
       ofIt
     )
     await this.sql.run('DELETE FROM ai_learning WHERE account_id = ?', learningKey)
+    await this.sql.run('DELETE FROM ai_reading WHERE connection_key = ?', learningKey)
     return projects.map((row) => row.project_id)
   }
 
@@ -738,6 +841,7 @@ export class AiStore {
       'ai_memory_history',
       'ai_usage',
       'ai_learning',
+      'ai_reading',
       'ai_lessons',
       'ai_drafts',
       'ai_notes',

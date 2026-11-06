@@ -13,6 +13,7 @@ import {
 import { decryptSecret, encryptSecret } from '@main/services/secure-storage'
 import { logMainError } from '@main/utils/error-utils'
 import {
+  CALENDAR_HELD_DAYS,
   CALENDAR_IPC,
   calendarKey,
   calendarSearchWords,
@@ -65,10 +66,9 @@ import { calendarText, feedUrl, IcsCalendarProvider, type Fetch } from './ics-ca
 
 /** How often the calendars are read again for what changed. */
 const SYNC_EVERY_MS = 5 * 60 * 1000
-/** How far back the events are kept: last weeks' meetings still matter to the mail about them. */
-const WINDOW_BACK_MS = 60 * 24 * 60 * 60 * 1000
-/** How far ahead they are read. */
-const WINDOW_AHEAD_MS = 365 * 24 * 60 * 60 * 1000
+/** How far back the events are kept, and how far ahead they are read (`CALENDAR_HELD_DAYS`). */
+const WINDOW_BACK_MS = CALENDAR_HELD_DAYS.back * 24 * 60 * 60 * 1000
+const WINDOW_AHEAD_MS = CALENDAR_HELD_DAYS.ahead * 24 * 60 * 60 * 1000
 /** Less than this ahead, the window is read again from today, so the months coming are in it. */
 const WINDOW_MIN_AHEAD_MS = 180 * 24 * 60 * 60 * 1000
 /** How long what changed in the calendars is kept for the Segretario to look at. */
@@ -882,13 +882,14 @@ export class CalendarService {
   /**
    * Keeps events as the provider gives them. With `logChanges`, what is
    * new, different or cancelled compared with what was kept is noted in
-   * `calendar_changes`, for the Segretario: the app's own writes were kept
-   * already, so they show no difference.
+   * `calendar_changes`, for the Segretario: the sync's finds, and the
+   * user's own writes in the app (`inApp`). The Segretario's writes are not
+   * noted: it knows them.
    */
   private async applyChanges(
     connectionId: string,
     events: ReadonlyArray<ProviderEvent>,
-    options: { logChanges?: boolean } = {}
+    options: { logChanges?: boolean; inApp?: boolean } = {}
   ): Promise<void> {
     const prisma = this.requirePrisma()
     const keyOf = (event: ProviderEvent): string =>
@@ -949,6 +950,7 @@ export class CalendarService {
                   ? JSON.stringify(eventOfRow(before, names.get(before.calendarId) ?? ''))
                   : null,
                 afterJson: event.cancelled ? null : snapshot(event),
+                inApp: options.inApp ? 1 : 0,
                 at: now
               }
             })
@@ -1016,6 +1018,7 @@ export class CalendarService {
             {
               id: row.id,
               kind: row.kind as CalendarChange['kind'],
+              inApp: row.inApp === 1,
               event,
               before,
               at: Number(row.at)
@@ -1352,7 +1355,7 @@ export class CalendarService {
   async respond(
     key: string,
     response: Exclude<CalendarResponse, 'needsAction'>,
-    options: { series?: boolean } = {}
+    options: { series?: boolean; byUser?: boolean } = {}
   ): Promise<CalendarEvent> {
     return this.inTurn(connectionOfKey(key), async () => {
       const row = await this.requirePrisma().calendarEvent.findUnique({ where: { key } })
@@ -1372,7 +1375,10 @@ export class CalendarService {
         return this.eventOrThrow(key)
       }
 
-      await this.applyChanges(row.connectionId, [answered])
+      await this.applyChanges(row.connectionId, [answered], {
+        logChanges: options.byUser,
+        inApp: true
+      })
       this.options.send(CALENDAR_IPC.changed, null)
       return this.eventOrThrow(eventKey(row.connectionId, row.calendarId, answered.eventId))
     })
@@ -1428,8 +1434,15 @@ export class CalendarService {
     return this.eventOrThrow(key).catch(() => null)
   }
 
-  /** Adds an event to a calendar; whoever is invited gets the provider's invitation. */
-  async create(event: NewCalendarEvent): Promise<CalendarEvent> {
+  /**
+   * Adds an event to a calendar; whoever is invited gets the provider's
+   * invitation. `byUser`: the user added it in the app — noted for the
+   * Segretario, as a change done elsewhere is (see `applyChanges`).
+   */
+  async create(
+    event: NewCalendarEvent,
+    options: { byUser?: boolean } = {}
+  ): Promise<CalendarEvent> {
     return this.inTurn(connectionOfKey(event.calendarKey), async () => {
       const prisma = this.requirePrisma()
       const calendar = (await prisma.calendarCalendar.findMany()).find(
@@ -1447,7 +1460,10 @@ export class CalendarService {
       }
 
       const created = await provider.create(calendar.calendarId, event, event.origin ?? null)
-      await this.applyChanges(calendar.connectionId, [created])
+      await this.applyChanges(calendar.connectionId, [created], {
+        logChanges: options.byUser,
+        inApp: true
+      })
       this.options.send(CALENDAR_IPC.changed, null)
       return this.eventOrThrow(
         eventKey(calendar.connectionId, calendar.calendarId, created.eventId)
@@ -1459,7 +1475,11 @@ export class CalendarService {
    * Changes an event as given — only what really changes, the rest left as
    * the provider has it — and whoever is invited, before or now, is told.
    */
-  async update(key: string, change: EventChange): Promise<CalendarEvent> {
+  async update(
+    key: string,
+    change: EventChange,
+    options: { byUser?: boolean } = {}
+  ): Promise<CalendarEvent> {
     return this.inTurn(connectionOfKey(key), async () => {
       const { row, provider } = await this.changeable(key)
       const current = {
@@ -1478,14 +1498,17 @@ export class CalendarService {
         next.attendees.length > 0 || current.attendees.some((attendee) => !attendee.self)
       const updated = await provider.update(row.calendarId, row.eventId, next, notify, fields)
 
-      await this.applyChanges(row.connectionId, [updated])
+      await this.applyChanges(row.connectionId, [updated], {
+        logChanges: options.byUser,
+        inApp: true
+      })
       this.options.send(CALENDAR_IPC.changed, null)
       return this.eventOrThrow(key)
     })
   }
 
-  /** Takes an event away; whoever is invited is told. */
-  async remove(key: string): Promise<void> {
+  /** Takes an event away; whoever is invited is told. `byUser`: noted for the Segretario, as `create`. */
+  async remove(key: string, options: { byUser?: boolean } = {}): Promise<void> {
     return this.inTurn(connectionOfKey(key), async () => {
       const { row, provider } = await this.changeable(key)
       const attendees = JSON.parse(row.attendeesJson) as CalendarAttendee[]
@@ -1495,7 +1518,28 @@ export class CalendarService {
         row.eventId,
         attendees.some((attendee) => !attendee.self)
       )
-      await this.requirePrisma().calendarEvent.deleteMany({ where: { key } })
+      const prisma = this.requirePrisma()
+
+      if (options.byUser) {
+        const calendar = await prisma.calendarCalendar.findUnique({
+          where: {
+            connectionId_calendarId: { connectionId: row.connectionId, calendarId: row.calendarId }
+          }
+        })
+        await prisma.calendarChange.create({
+          data: {
+            connectionId: row.connectionId,
+            eventKey: key,
+            kind: 'annullato',
+            beforeJson: JSON.stringify(eventOfRow(row, calendar?.name ?? '')),
+            afterJson: null,
+            inApp: 1,
+            at: BigInt(Date.now())
+          }
+        })
+      }
+
+      await prisma.calendarEvent.deleteMany({ where: { key } })
       this.eventsChanged()
       this.options.send(CALENDAR_IPC.changed, null)
     })

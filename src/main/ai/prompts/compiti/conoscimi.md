@@ -16,11 +16,14 @@ Capire, connessione per connessione e nel loro insieme:
 
 Decidi tu, senza limiti di tempo: puoi andare indietro quanto serve, in ogni fonte. Di solito conviene partire da uno sguardo d'insieme alla posta di ogni account (`cerca_posta` con `quadro`), poi leggere un buon numero di messaggi scritti dall'utente, anche lontani nel tempo, e le conversazioni con chi conta; guardare il calendario dei mesi passati e futuri; esplorare le cartelle dove tiene il lavoro (`cerca_file`), per capire come nomina i progetti. Leggi abbastanza da farti un'idea solida, non tutto: chi scrive tanto e non riceve mai risposta di solito non conta.
 
+Prendi appunti man mano che capisci, non tutto alla fine: l'utente ti vede imparare, e ciò che hai letto all'inizio non lo perdi per strada.
+
 ## Cosa lasciare
 
-- **La memoria**: chi è l'utente, come scrive, le sue connessioni (ogni casella, calendario e volume: di chi è, a cosa serve, come scrive da lì), le persone che contano davvero, ciò che serve a capire le questioni e che dalle fonti non si legge — organizzata come dice la tua guida, o come la trovi già. Se una nota c'è già, aggiornala con modifiche precise: non cancellare ciò che riguarda le altre connessioni.
+- **La memoria**: `tu.md` (chi è l'utente), `stile.md` (come scrive), `connessioni.md` (ogni casella, calendario e volume: di chi è, a cosa serve, come scrive da lì), una nota in `persone/` per ogni persona o organizzazione che conta davvero, e in `progetti/` ciò che serve a capire le questioni e che dalle fonti non si legge — o come la trovi già organizzata. Se una nota c'è già, aggiornala con modifiche precise: non cancellare ciò che riguarda le altre connessioni.
+- **Fin dove leggere ogni connessione** (`connessioni`): dopo di te, i messaggi e gli eventi si leggono uno per uno, perché il lavoro parta con ciò che è ancora vivo — di base gli ultimi 30 giorni. Ora che conosci ogni connessione, decidi se per lei va bene così: dove le questioni durano mesi, va più indietro; dove tutto si chiude in pochi giorni, meno. Guarda quanto c'è con `elenco`, e scegli con `lettura`, dicendo perché: l'utente lo vede, e aspetta quella lettura prima di entrare.
 - **I progetti**: crea quelli in corso, con il nome che usa l'utente e la cartella collegata se l'hai trovata, e collegaci le loro conversazioni — anche quelle vecchie, con una ricerca — e i loro appuntamenti in calendario.
-- **Le cose ancora aperte**: se nella posta o nel calendario degli ultimi mesi trovi impegni veri non ancora conclusi (una promessa fatta, una risposta attesa, una scadenza futura, qualcosa da preparare per un incontro), aprili: il resto della posta recente lo leggerai dopo, messaggio per messaggio.
+- **Le cose ancora aperte**: se nella posta o nel calendario trovi impegni veri non ancora conclusi più vecchi di dove leggerai (una promessa fatta, una risposta attesa, una scadenza futura, qualcosa da preparare per un incontro), aprili: il resto lo leggerai dopo, messaggio per messaggio ed evento per evento.
 
 Non scrivere a nessuno e non spostare niente: questo è un lavoro di lettura e di appunti.
 

@@ -34,3 +34,8 @@ scripts/.e2e-out/
 # --- Local crash reports / scratch ---
 /dev/
 PROMPT.md
+
+# --- Local test environment (this machine only) ---
+# The studio di prova's launcher: a simulated working life on servers of its
+# own, apart from the real profile. See docs/DOCUMENTATION.md, "Environments".
+/studio.mjs

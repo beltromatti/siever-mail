@@ -6,6 +6,7 @@ import { folderRole } from '@shared/folders'
 import type { AppDatabase, StoredBodyInput } from '../database'
 import { formatUidSet } from './fetch-results'
 import { mergeSummaryAndParsedIntoDetail } from './message-mapper'
+import { pecOfHeaders, readPec } from './pec'
 import { parseMessageSource } from './message-parts'
 import {
   buildPartialSource,
@@ -346,11 +347,28 @@ export class MailIndexer {
       complete = false
     }
 
+    // A certified envelope is indexed as the message it carries: its parts came with the plan.
+    const pec = pecOfHeaders(headers)
     const detail = mergeSummaryAndParsedIntoDetail(
       this.host.accountId,
       folderPath,
       head,
-      await parseMessageSource(source)
+      await parseMessageSource(source),
+      pec
+        ? await readPec(pec, structure, async (parts) => {
+            const found = new Map<string, Buffer>()
+
+            for (const part of parts) {
+              const partContent = content?.bodyParts?.get(part)
+
+              if (partContent) {
+                found.set(part, partContent)
+              }
+            }
+
+            return found
+          })
+        : null
     )
     const omitted = plan?.omittedParts
 

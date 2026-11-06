@@ -60,12 +60,12 @@ export interface SegretarioMailPort {
   listFolders(accountId: string): Promise<MailFolder[]>
   /**
    * The conversations with messages the Segretario has not read yet — in
-   * any folder but the Trash, Spam and Bozze, since `sinceIso`, their text
-   * indexed — those with the newest such message first, each with all of
-   * them, oldest first.
+   * any folder but the Trash, Spam and Bozze, each account since its own
+   * horizon (`sinceOf`), their text indexed — those with the newest such
+   * message first, each with all of them, oldest first.
    */
   unreadConversations(
-    sinceIso: string,
+    sinceOf: (accountId: string) => string,
     limit: number
   ): Promise<
     Array<{
@@ -74,9 +74,12 @@ export interface SegretarioMailPort {
       messages: Array<{ ref: MessageRef; messageKey: string; dateIso: string }>
     }>
   >
-  /** Of the messages the Segretario reads since a moment — in these accounts, or all — how many it has read. */
+  /**
+   * Of the messages the Segretario reads — each account since its horizon,
+   * in these accounts or all — how many it has read.
+   */
   readingProgress(
-    sinceIso: string,
+    sinceOf: (accountId: string) => string,
     accountIds?: ReadonlyArray<string>
   ): Promise<{ read: number; total: number }>
   /**
@@ -145,9 +148,17 @@ export interface SegretarioMailPort {
 
 /** The calendars, as the Segretario reaches them: the same as the page's. */
 export interface SegretarioCalendarPort {
-  /** The calendars it can write in, each with what it is called and whose it is. */
+  /** The calendars, each with what it is called, whose it is, whether it takes events and whether the user keeps it shown. */
   calendars(): Promise<
-    Array<{ key: string; name: string; connection: string; primary: boolean; writable: boolean }>
+    Array<{
+      key: string
+      connectionId: string
+      name: string
+      connection: string
+      primary: boolean
+      writable: boolean
+      hidden: boolean
+    }>
   >
   /** The calendar connections: who they are with, and their calendars. */
   connections(): Promise<CalendarConnection[]>

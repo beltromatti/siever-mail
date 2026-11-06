@@ -40,6 +40,14 @@ if (existsSync(dotenvPath)) {
 // Input the main process turns down is described in the app's language.
 z.config(z.locales.it())
 
+// Development keeps a profile of its own beside the installed app's: the schema only moves
+// forward, so a build in development would carry the installed one's data where that build cannot
+// follow; and the single-instance lock is a profile's, so the two run side by side. A profile given
+// on the command line — the studio di prova's — is kept as given.
+if (!app.isPackaged && !app.commandLine.hasSwitch('user-data-dir')) {
+  app.setPath('userData', join(app.getPath('appData'), `${app.getName()}-dev`))
+}
+
 let mainWindow: BrowserWindow | null = null
 let appWorkspace: Workspace | null = null
 let appTray: Tray | null = null

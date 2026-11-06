@@ -1,5 +1,6 @@
 import type { HandleLink } from '@shared/segretario'
 
+import { movedUnder } from '../../files/paths'
 import { placeholders, type Sql } from '../sql'
 import { CommitmentStore } from './commitments'
 import { DayStore } from './day'
@@ -157,13 +158,18 @@ export class Registry {
       }
     }
 
-    return {
-      accountId: null,
-      threadIds: [],
-      messageKeys: [],
-      projectIds:
-        origin.kind === 'evento' ? await this.projects.markStaleByEvents([origin.eventKey]) : []
+    const projectIds =
+      origin.kind === 'evento'
+        ? await this.projects.markStaleByEvents([origin.eventKey])
+        : origin.projectId
+          ? [origin.projectId]
+          : []
+
+    if (origin.kind === 'utente' && origin.projectId) {
+      await this.projects.markStale([origin.projectId])
     }
+
+    return { accountId: null, threadIds: [], messageKeys: [], projectIds }
   }
 
   async openCommitment(
@@ -852,6 +858,16 @@ export class Registry {
       actor
     )
     return record
+  }
+
+  /**
+   * A folder moved — the archive's root, to where it is now: what is kept
+   * under it — copies saved there, projects' folders — kept under the new
+   * place. How many were.
+   */
+  async relocatePaths(from: string, to: string): Promise<number> {
+    const moved = movedUnder(from, to)
+    return (await this.copies.relocate(moved)) + (await this.projects.relocateFolders(moved))
   }
 
   async saveCopies(copies: ReadonlyArray<Omit<SavedCopy, 'savedAt'>>, actor: Actor): Promise<void> {

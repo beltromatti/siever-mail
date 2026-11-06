@@ -185,6 +185,18 @@ const BY_DOMAIN: ReadonlyArray<[ReadonlyArray<string>, Known]> = [
   [['timpec.it', 'pec.telecomitalia.it', 'trustpec.it'], TIM_PEC]
 ]
 
+/** The mail servers of the certified mail (PEC) providers SIEVER Mail knows. */
+const PEC_SERVERS = new Set(
+  BY_DOMAIN.flatMap(([, settings]) =>
+    settings.pec ? [settings.imap.host.toLowerCase(), settings.smtp.host.toLowerCase()] : []
+  )
+)
+
+/** Whether a mailbox on this server is a certified one (PEC), as its provider is known. */
+export function isPecServer(host: string): boolean {
+  return PEC_SERVERS.has(host.trim().toLowerCase())
+}
+
 /** The providers known by their mail servers: a company's own domain hosted there. */
 const BY_MX: ReadonlyArray<[string, Known]> = [
   ['google.com', GMAIL],

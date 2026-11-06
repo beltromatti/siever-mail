@@ -122,7 +122,8 @@ export type CommitmentStatus = 'aperta' | 'fatta' | 'non_serve' | 'rinviata'
 export type CommitmentSource =
   | { kind: 'message'; accountId: string; threadId: string; messageKey: string }
   | { kind: 'event'; eventKey: string }
-  | { kind: 'user' }
+  /** The user's word, with the project it is about when there is one. */
+  | { kind: 'user'; projectId?: string }
 
 export interface Commitment {
   id: number
@@ -457,13 +458,39 @@ export function setupTurnsAiOn(state: OnboardingState): boolean {
     : state.turnsAiOn === true
 }
 
+/**
+ * How far back a connection is read one by one — each message, each event
+ * looked at — so the work starts with what is still alive: decided by the
+ * Segretario for each connection when it gets to know it (Conoscimi), or by
+ * the user in chat. Without a decision, `default`; within `min` and `max`.
+ */
+export const READING_DAYS = { default: 30, min: 14, max: 365 } as const
+
+/** How far ahead a calendar's events are looked at one by one: what is coming is alive until it comes. */
+export const CALENDAR_LOOK_AHEAD_DAYS = 60
+
+/** How far back a connection is read, as decided — for the setup's reading step. */
+export interface ConnectionReading {
+  /** The connection as Conoscimi records it (see `ConnectionLearning`). */
+  key: string
+  kind: 'posta' | 'calendario'
+  /** Its address, or a calendar connection's name. */
+  label: string
+  days: number
+  /** Why, in the Segretario's words; null when it is the default. */
+  reason: string | null
+}
+
 /** Whether a connection's recent mail is in, read by the index: what the Segretario needs to start. */
 export interface ConnectionReadiness {
   accountId: string
   recentMailIndexed: boolean
 }
 
-/** Where the reading of the last thirty days stands, for the setup to wait on it. */
+/**
+ * Where the reading of each connection's horizon stands, for the setup to
+ * wait on it: the mail message by message, the calendars' events.
+ */
 export interface ReadingStatus {
   read: number
   total: number
@@ -472,7 +499,13 @@ export interface ReadingStatus {
   running: number
   /** Conversations it could not read after its attempts: listed, retried later. */
   failed: Array<{ title: string; error: string | null }>
-  /** Nothing left to read but what failed. */
+  /** The events of the calendars, looked at and to look at. */
+  events: { looked: number; total: number }
+  /** How far back each connection is read, and why. */
+  horizons: ConnectionReading[]
+  /** Older mail of the horizon is still being downloaded: it is read as it comes. */
+  downloading: boolean
+  /** Nothing left to read or look at but what failed. */
   done: boolean
 }
 
@@ -853,14 +886,15 @@ export interface SegretarioApi {
   eventWork: (eventKey: string) => Promise<EventWork>
   /**
    * Where an open thing comes from, to open it: its message where it is now,
-   * its event, the user's word; null when its message or event is gone.
+   * its event, the user's word (with its project); null when its message or
+   * event is gone.
    */
   commitmentSource: (
     id: number
   ) => Promise<
     | { kind: 'message'; ref: MessageRef }
     | { kind: 'event'; eventKey: string }
-    | { kind: 'user' }
+    | { kind: 'user'; projectId?: string }
     | null
   >
   /**

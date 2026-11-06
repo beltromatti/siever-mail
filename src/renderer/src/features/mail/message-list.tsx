@@ -27,6 +27,7 @@ import {
   MessageSectionHeading,
   primaryAddressLabel,
   ProjectTag,
+  PecTag,
   SavedTag,
   UnreadDot
 } from './message-list-shared'
@@ -182,6 +183,7 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
                       <HighlightedText text={message.subject} terms={highlightTerms.subject} />
                     </p>
                     {projectTag && <ProjectTag label={projectTag} />}
+                    {message.pec && <PecTag pec={message.pec} />}
                     {work?.saved && <SavedTag label={work.saved} />}
                     <AttachmentMark present={message.hasAttachments} />
                     <FlagToggle

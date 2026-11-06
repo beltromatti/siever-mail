@@ -338,6 +338,40 @@ describe('Registry', () => {
   })
 
   describe('projects', () => {
+    it('keeps what the user said about a project in it: listed, counted, carried by a merge, let go by a removal', async () => {
+      const lido = await registry.createProject('Prat2470 · Hotel Lido', BACKGROUND)
+      const other = await registry.createProject('Prat2471 · Hotel Lido bis', BACKGROUND)
+      const { record } = await registry.openCommitment(
+        { kind: 'utente', projectId: other.record.id },
+        { kind: 'da_fare', text: 'Chiamare il geometra' },
+        CHAT
+      )
+
+      expect(record.origin).toEqual({ kind: 'utente', projectId: other.record.id })
+      expect(
+        (await registry.commitments.ofPlaces({ projects: [other.record.id] })).map(
+          (item) => item.id
+        )
+      ).toEqual([record.id])
+      expect((await registry.projects.summary(other.record.id))?.openCommitments).toBe(1)
+      expect(changes.at(-1)?.projectIds).toEqual([other.record.id])
+
+      await registry.mergeProjects(lido.record.id, [other.record.id], USER)
+      expect((await registry.commitments.get(record.id))?.origin).toEqual({
+        kind: 'utente',
+        projectId: lido.record.id
+      })
+
+      const scratch = await registry.createProject('Prova', BACKGROUND)
+      const { record: loose } = await registry.openCommitment(
+        { kind: 'utente', projectId: scratch.record.id },
+        { kind: 'da_fare', text: 'Provare' },
+        CHAT
+      )
+      await registry.projects.remove(scratch.record.id)
+      expect((await registry.commitments.get(loose.id))?.origin).toEqual({ kind: 'utente' })
+    })
+
     it('refuses a write over a newer one, saying the project as it is now', async () => {
       const { record } = await registry.createProject('Prat2451 · Hotel Lido', BACKGROUND)
       await registry.setProjectState(

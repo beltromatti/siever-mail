@@ -3,6 +3,7 @@ import { Fragment } from 'react'
 import extensionRenderer from '@app/extension/renderer'
 import { InvitationCard } from '@renderer/features/calendar/invitation-card'
 import { MessageViewer } from '@renderer/features/mail/message-viewer'
+import { PecPanel } from '@renderer/features/mail/pec-panel'
 import { MessageWorkPanel } from '@renderer/features/segretario/message-work'
 import { summaryToMessageRef } from '@renderer/lib/message-selection'
 import { isIcsAttachment } from '@shared/calendar'
@@ -74,7 +75,8 @@ export function MailReader({
     addressActions,
     extensionSelection,
     extensionHostHooks,
-    setExtensionPrimaryDialogOpen
+    setExtensionPrimaryDialogOpen,
+    openMessage
   } = mail
 
   return (
@@ -84,6 +86,7 @@ export function MailReader({
         messageForViewer &&
         selection.selectedRefs.length === 1 && (
           <>
+            <PecPanel message={messageForViewer} onOpen={openMessage} />
             {messageForViewer.attachments.some(isIcsAttachment) && (
               <InvitationCard
                 key={`${messageForViewer.accountId}:${messageForViewer.folderPath}:${messageForViewer.uid}`}

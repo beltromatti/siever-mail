@@ -92,7 +92,8 @@ export const OWED_KINDS: ReadonlyArray<CommitmentKind> = ['ti_chiedono', 'hai_pr
 export type CommitmentOrigin =
   | ({ kind: 'messaggio' } & MessageAnchor)
   | { kind: 'evento'; eventKey: string }
-  | { kind: 'utente' }
+  /** The user's word, with the project it is about when there is one. */
+  | { kind: 'utente'; projectId?: string }
 
 export interface CommitmentRecord {
   id: number

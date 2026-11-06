@@ -48,6 +48,7 @@ import {
   type TodayPage,
   type WorkChange,
   type WritingRequest,
+  READING_DAYS,
   REVIEW_TIMEOUT_MS,
   setupTurnsAiOn
 } from '@shared/segretario'
@@ -66,7 +67,8 @@ import {
 } from './agent/tool-types'
 import { AiStore } from './ai-store'
 import { periodWords, searchPeriod, type AskedSearch } from './ask-mail'
-import { READING_HORIZON_DAYS, SegretarioEngine } from './engine/engine'
+import { canonicalPath } from '../services/network-volumes'
+import { SegretarioEngine } from './engine/engine'
 import { WorkQueue } from './engine/work-queue'
 import { folderQueryLabel, searchMail, searchScope } from './mail-search'
 import { MAX_NOTE_CHARS, normalizeMemoryPath, Notebook } from './memory/notebook'
@@ -188,7 +190,9 @@ function commitmentOf(record: CommitmentRecord): Commitment {
           }
         : origin.kind === 'evento'
           ? { kind: 'event', eventKey: origin.eventKey }
-          : { kind: 'user' },
+          : origin.projectId
+            ? { kind: 'user', projectId: origin.projectId }
+            : { kind: 'user' },
     kind: record.kind,
     text: record.text,
     due: record.due,
@@ -774,20 +778,23 @@ export class SegretarioService {
     this.engine?.wake()
   }
 
-  /** Whether each connection's recent mail is in and read by the index: what Conoscimi and the reading start from. */
+  /**
+   * Whether each connection's recent mail is in and read by the index: what
+   * Conoscimi starts from. The rest of a longer horizon the reading waits for.
+   */
   async connectionReadiness(accountIds: ReadonlyArray<string>): Promise<ConnectionReadiness[]> {
     return Promise.all(
       accountIds.map(async (accountId) => ({
         accountId,
         recentMailIndexed: await this.options.mail.recentMailIndexed(
           accountId,
-          READING_HORIZON_DAYS
+          READING_DAYS.default
         )
       }))
     )
   }
 
-  /** Where the reading of the last thirty days stands — of these accounts (a connection just added), or all. */
+  /** Where the reading of each connection's horizon stands — of these accounts (a connection just added), or all. */
   getReadingStatus(accountIds?: ReadonlyArray<string>): Promise<ReadingStatus> {
     return this.db.engine.readingStatus(accountIds)
   }
@@ -1462,7 +1469,7 @@ export class SegretarioService {
   ): Promise<
     | { kind: 'message'; ref: MessageRef }
     | { kind: 'event'; eventKey: string }
-    | { kind: 'user' }
+    | { kind: 'user'; projectId?: string }
     | null
   > {
     const origin = (await this.db.registry.commitments.get(id))?.origin
@@ -1482,7 +1489,10 @@ export class SegretarioService {
         : null
     }
 
-    return { kind: 'user' }
+    // The project it is about, if it is still there.
+    return origin.projectId && (await this.db.registry.projects.get(origin.projectId))
+      ? { kind: 'user', projectId: origin.projectId }
+      : { kind: 'user' }
   }
 
   async listProposals(): Promise<Proposal[]> {
@@ -1631,16 +1641,19 @@ export class SegretarioService {
       proposals: ReadonlyArray<{ id: string; result: Record<string, unknown> }>
     }>
   ): Promise<void> {
+    // Kept as the app keeps paths: under the mount point their share first had.
     await this.db.registry.saveCopies(
-      entries.map((entry) => ({
-        accountId: entry.ref.accountId,
-        messageKey: entry.messageKey,
-        threadId: entry.threadId,
-        source: extensionMain.id,
-        destination: entry.destination,
-        files: entry.files,
-        fromAddress: entry.fromAddress
-      })),
+      await Promise.all(
+        entries.map(async (entry) => ({
+          accountId: entry.ref.accountId,
+          messageKey: entry.messageKey,
+          threadId: entry.threadId,
+          source: extensionMain.id,
+          destination: await canonicalPath(entry.destination),
+          files: await Promise.all(entry.files.map((file) => canonicalPath(file))),
+          fromAddress: entry.fromAddress
+        }))
+      ),
       USER
     )
 
@@ -1732,6 +1745,18 @@ export class SegretarioService {
         })
       ).map((proposal) => this.proposalOf(proposal))
     }
+  }
+
+  /**
+   * A folder moved to where it is now (both as the app keeps paths): what
+   * the registry kept under it follows, and the Segretario learns of it —
+   * its memory may name the old place. How many were kept anew.
+   */
+  async relocatePaths(from: string, to: string): Promise<number> {
+    await this.whenReady()
+    const moved = await this.db.registry.relocatePaths(from, to)
+    await this.db.store.addLesson('percorso-spostato', { da: from, a: to })
+    return moved
   }
 
   /** The copies of a message saved outside the mail. */
@@ -2119,7 +2144,8 @@ export class SegretarioService {
       threads,
       events: resources
         .filter((resource) => resource.kind === 'evento')
-        .map((resource) => resource.location)
+        .map((resource) => resource.location),
+      projects: [id]
     })
     const aside = await this.setAsideOf(items)
 

@@ -6,6 +6,7 @@ import { ToolInputError, type SegretarioTool, type ToolContext } from '../agent/
 import type { ToolDefinition } from '../openrouter'
 import { calendarTool } from './calendar'
 import { commitmentsTool, noteTool } from './commitments'
+import { connectionsTool } from './connections'
 import { journalTool, reviewTool, todayTool } from './day'
 import { sendDraftTool, writeDraftTool } from './drafts'
 import { searchFilesTool } from './files'
@@ -138,6 +139,7 @@ export const SEGRETARIO_TOOLS: ReadonlyArray<SegretarioTool> = [
   reviewTool,
   showTool,
   journalTool,
+  connectionsTool,
   ...(extensionMain.assistant?.tools ?? []).map(extensionTool)
 ]
 

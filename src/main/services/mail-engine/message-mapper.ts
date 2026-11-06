@@ -20,6 +20,14 @@ import {
   parseMessageSource,
   partitionMessageAttachments
 } from './message-parts'
+import {
+  isCertificationAttachment,
+  isPecReceipt,
+  pecOfHeaders,
+  pecSender,
+  pecSubject,
+  type ReadPec
+} from './pec'
 
 export interface PartialMessage {
   accountId: string
@@ -82,12 +90,19 @@ function isEmbeddedBodyImagePart(structure: MessageStructureObject): boolean {
   return Boolean(structure.id) && (structure.type ?? '').toLowerCase().startsWith('image/')
 }
 
-export function hasAttachmentInStructure(structure?: MessageStructureObject): boolean {
+/**
+ * Whether a message's structure carries a file the sender attached; the
+ * parts `ignored` says are not files are not counted, what they hold is.
+ */
+export function hasAttachmentInStructure(
+  structure?: MessageStructureObject,
+  ignored: (node: MessageStructureObject) => boolean = () => false
+): boolean {
   if (!structure) {
     return false
   }
 
-  if (!isEmbeddedBodyImagePart(structure)) {
+  if (!ignored(structure) && !isEmbeddedBodyImagePart(structure)) {
     const disposition = structure.disposition?.toLowerCase()
 
     if (disposition === 'attachment') {
@@ -99,7 +114,7 @@ export function hasAttachmentInStructure(structure?: MessageStructureObject): bo
     }
   }
 
-  return Boolean(structure.childNodes?.some((node) => hasAttachmentInStructure(node)))
+  return Boolean(structure.childNodes?.some((node) => hasAttachmentInStructure(node, ignored)))
 }
 
 export function formatSubject(subject: string | undefined): string {
@@ -172,9 +187,13 @@ function headerDateText(date: Date | string | undefined): string | undefined {
 export function fetchedIdentityClaim(fetched: FetchMessageObject): IdentityClaim {
   const envelope = fetched.envelope
   const references = messageIdsIn(headerValue(fetched.headers, 'references'))
+  // A PEC receipt names no References: it is the message sent's, which it names otherwise.
+  const pec = pecOfHeaders(fetched.headers)
   const parent =
     !fetched.threadId?.trim() && references.length === 0
-      ? normalizeMessageId(envelope?.inReplyTo)
+      ? pec && isPecReceipt(pec.kind)
+        ? normalizeMessageId(pec.ref ?? undefined)
+        : normalizeMessageId(envelope?.inReplyTo)
       : null
 
   return {
@@ -193,7 +212,8 @@ export function fetchedIdentityClaim(fetched: FetchMessageObject): IdentityClaim
 export async function mapFetchedToDetail(
   accountId: string,
   folderPath: string,
-  fetched: FetchMessageObject
+  fetched: FetchMessageObject,
+  pec: ReadPec | null = null
 ): Promise<FetchedMessageDetail> {
   if (!fetched.source) {
     throw new Error('Message source not available from IMAP server.')
@@ -201,7 +221,7 @@ export async function mapFetchedToDetail(
 
   const parsed = await parseMessageSource(fetched.source)
 
-  return mergeSummaryAndParsedIntoDetail(accountId, folderPath, fetched, parsed)
+  return mergeSummaryAndParsedIntoDetail(accountId, folderPath, fetched, parsed, pec)
 }
 
 function buildDataUri(contentType: string | undefined, content: Buffer): string {
@@ -245,15 +265,32 @@ function inlineCidReferences(html: string, parsed: ParsedMail): string {
   )
 }
 
+/**
+ * A fetched message as the app reads it. A certified envelope (`pec`, read
+ * by `readPec`) is the message it carries — its sender, subject, words and
+ * files — with what the provider certified beside it; a receipt keeps the
+ * provider's words, its subject the message's it is about. The provider's
+ * own files (certification, signature) are not among the files.
+ */
 export function mergeSummaryAndParsedIntoDetail(
   accountId: string,
   folderPath: string,
   fetched: FetchMessageObject,
-  parsed: ParsedMail
+  outer: ParsedMail,
+  pec: ReadPec | null = null
 ): FetchedMessageDetail {
   const envelope = fetched.envelope
   const flags = [...(fetched.flags ?? new Set<string>())]
-  const subject = formatSubject(parsed.subject || envelope?.subject)
+  const receipt = pec !== null && isPecReceipt(pec.message.kind)
+  // The message carried, for an envelope: what is read is it.
+  const parsed = pec?.inner ?? outer
+  const subject = formatSubject(
+    pec?.inner
+      ? parsed.subject || pecSubject(envelope?.subject ?? '')
+      : pec
+        ? pecSubject(outer.subject || envelope?.subject || '')
+        : parsed.subject || envelope?.subject
+  )
 
   // Only what the sender actually attached reaches the reading pane's
   // attachment list. Body imagery is already rendered inside the message, so
@@ -261,21 +298,34 @@ export function mergeSummaryAndParsedIntoDetail(
   // that matters. The id keeps the attachment's ORIGINAL index: downloads
   // re-parse the message and index straight into `parsed.attachments`, so
   // renumbering a filtered list would fetch the wrong file.
-  const attachments: MailAttachment[] = partitionMessageAttachments(parsed).official.map(
-    ({ index, attachment }) => ({
-      id: `${fetched.uid}-${index}`,
-      fileName: attachmentFileName(attachment, index),
-      contentType: attachment.contentType,
-      size: attachment.size,
-      cid: attachment.cid || undefined,
-      part: attachment.partId ?? undefined
-    })
-  )
+  //
+  // A certified envelope's files are the outer message's — mailparser reads the message the
+  // provider carries in line as part of it, its files with their parts — but for the
+  // provider's own; a receipt has none of the user's (its copy of the message sent is in Sent).
+  const attachments: MailAttachment[] = receipt
+    ? []
+    : partitionMessageAttachments(outer)
+        .official.filter(({ attachment }) => !pec || !isCertificationAttachment(attachment))
+        .map(({ index, attachment }) => ({
+          id: `${fetched.uid}-${index}`,
+          fileName: attachmentFileName(attachment, index),
+          contentType: attachment.contentType,
+          size: attachment.size,
+          cid: attachment.cid || undefined,
+          part: attachment.partId ?? undefined
+        }))
 
   const rawHtml = typeof parsed.html === 'string' ? parsed.html : undefined
   const html = rawHtml ? inlineCidReferences(rawHtml, parsed) : undefined
 
-  const from = pickAddresses(mapParsedAddresses(parsed.from), mapAddresses(envelope?.from))
+  const from = pec?.inner
+    ? pickAddresses(
+        mapParsedAddresses(parsed.from),
+        pecSender(mapAddresses(envelope?.from), mapAddresses(envelope?.replyTo))
+      )
+    : pec?.message.kind === 'busta' || pec?.message.kind === 'anomalia'
+      ? pecSender(mapAddresses(envelope?.from), mapAddresses(envelope?.replyTo))
+      : pickAddresses(mapParsedAddresses(parsed.from), mapAddresses(envelope?.from))
   const references = parsedReferences(parsed.references)
 
   return {
@@ -309,6 +359,16 @@ export function mergeSummaryAndParsedIntoDetail(
     senderKey: deriveSenderKey(from),
     html,
     text: parsed.text || undefined,
-    attachments
+    attachments,
+    ...(pec
+      ? {
+          pec: pec.message,
+          pecDetail: {
+            ...pec.message,
+            certification: pec.certification,
+            envelopeText: pec.inner ? outer.text?.trim() || null : null
+          }
+        }
+      : {})
   }
 }

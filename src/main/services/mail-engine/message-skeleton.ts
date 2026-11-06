@@ -1,5 +1,7 @@
 import type { MessageStructureObject } from 'imapflow'
 
+import { isCertificationPart } from './pec'
+
 /**
  * A large message is read without its attachments. Fifteen megabytes of
  * drawings behind three lines of text used to keep the reading pane waiting
@@ -43,6 +45,11 @@ export interface PartialBodyPlan {
 function isBodyContent(node: MessageStructureObject, pictures: boolean): boolean {
   const type = node.type.toLowerCase()
   const disposition = node.disposition?.toLowerCase()
+
+  // What a certified message's provider certifies: a few lines that say what the rest is.
+  if (isCertificationPart(node)) {
+    return true
+  }
 
   if (type === 'message/rfc822') {
     return disposition !== 'attachment'

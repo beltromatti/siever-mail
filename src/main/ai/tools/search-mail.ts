@@ -1,3 +1,4 @@
+import { pecLabel } from '@shared/pec'
 import { accountOverview, type OverviewPerson } from '../mail-overview'
 import { folderQueryLabel, searchMail, searchScope } from '../mail-search'
 import { PROMPTS } from '../prompts'
@@ -251,7 +252,15 @@ export const searchMailTool: SegretarioTool = {
         context.newHandles
       )
       const note = noteOf.get(`${hit.ref.accountId}\u0000${hit.messageKey}`)
-      const flags = [hit.isRead ? null : 'non letto', hit.hasAttachments ? 'con allegati' : null]
+      const flags = [
+        hit.pecKind
+          ? hit.pecKind === 'busta'
+            ? 'PEC'
+            : `PEC: ${pecLabel(hit.pecKind).toLowerCase()}`
+          : null,
+        hit.isRead ? null : 'non letto',
+        hit.hasAttachments ? 'con allegati' : null
+      ]
         .filter(Boolean)
         .join(', ')
 

@@ -84,6 +84,77 @@ export interface MailMessageSummary {
    * "Cristian Sangiorgi". The address itself only when no name is known.
    */
   senderLabel: string
+  /**
+   * What the message is in certified mail (PEC), when it is one of the
+   * provider's: an envelope carrying a message, or a receipt about one the
+   * user sent. Its subject and sender are already the carried message's.
+   */
+  pec?: PecMessage
+}
+
+/**
+ * The provider's messages of Italian certified mail (PEC, DM 2/11/2005):
+ * the envelope (`busta`) a certified message comes in, the envelope of an
+ * anomaly (`anomalia`: mail that could not be certified, carried all the
+ * same), and the receipts on a message sent — accepted by the sender's
+ * provider, taken in charge, delivered, not accepted, not delivered (or
+ * not yet, after 12 hours), a virus found.
+ */
+export type PecKind =
+  | 'busta'
+  | 'anomalia'
+  | 'accettazione'
+  | 'non-accettazione'
+  | 'presa-in-carico'
+  | 'avvenuta-consegna'
+  | 'errore-consegna'
+  | 'preavviso-errore-consegna'
+  | 'rilevazione-virus'
+
+export interface PecMessage {
+  kind: PecKind
+  /**
+   * The Message-ID the sender's own client gave the message carried or
+   * receipted (X-Riferimento-Message-ID): for a receipt, the message sent
+   * it is about.
+   */
+  ref: string | null
+}
+
+/** What the provider certifies, from the envelope's or the receipt's `daticert.xml`. */
+export interface PecCertification {
+  kind: string
+  /** `nessuno`, or what went wrong: `no-dest`, `no-dominio`, `virus`, `altro`. */
+  error: string | null
+  sender: string | null
+  recipients: Array<{ address: string; certified: boolean }>
+  subject: string | null
+  /** The provider that issued it: "ARUBA PEC S.p.A.". */
+  provider: string | null
+  /** When it was certified, as an ISO moment. */
+  at: string | null
+  /** The provider's id of the message. */
+  id: string | null
+  /** For a delivery receipt: the mailbox it was delivered to, or not. */
+  delivery: string | null
+  /** What the provider says went wrong, in its words. */
+  errorDetail: string | null
+}
+
+/** A receipt on a certified message the user sent: what it says, for whom, when. */
+export interface PecReceipt {
+  kind: PecKind
+  ref: MessageRef
+  /** When it came. */
+  date: string
+  certification: PecCertification | null
+}
+
+/** What a certified message read shows besides the message itself. */
+export interface PecDetail extends PecMessage {
+  certification: PecCertification | null
+  /** The provider's own words on the envelope ("Messaggio di posta certificata…"). */
+  envelopeText: string | null
 }
 
 export interface MailMessageDetail extends MailMessageSummary {
@@ -95,6 +166,19 @@ export interface MailMessageDetail extends MailMessageSummary {
   html?: string
   text?: string
   attachments: MailAttachment[]
+  /**
+   * Certified mail read for what it is: for an envelope, the message it
+   * carries is what this detail shows — its sender, subject, body and files
+   * — and this says what the provider certified.
+   */
+  pecDetail?: PecDetail
+  /**
+   * For a message the user sent from a certified mailbox: the receipts its
+   * provider sent back, oldest first — accepted, delivered or not, to whom.
+   */
+  pecReceipts?: PecReceipt[]
+  /** For a PEC receipt: the message sent it is about, where it is now. */
+  pecSent?: MessageRef
 }
 
 /**
@@ -341,6 +425,12 @@ export interface MailAccount {
   authType: AuthType
   createdAt: number
   updatedAt: number
+  /**
+   * A certified mailbox (PEC): its server is a known PEC provider's, or
+   * certified envelopes and receipts come to it. What it sends is certified,
+   * and certified mail takes no Bcc.
+   */
+  pec: boolean
 }
 
 export interface AddImapAccountInput {

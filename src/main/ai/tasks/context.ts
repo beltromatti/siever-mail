@@ -30,7 +30,7 @@ export async function contextBlock(sources: ContextSources): Promise<string> {
   const mailLines = accounts.map((account) => {
     const signature = signatures.get(account.id)
     return [
-      `- Posta: ${account.email} — ${account.displayName}`,
+      `- Posta: ${account.email} — ${account.displayName}${account.pec ? ' · casella PEC (posta certificata)' : ''}`,
       signature
         ? `  Firma dell'utente da qui: «${clip(signature.replace(/\s+/g, ' '), 400).text}»`
         : '  Nessuna firma.'

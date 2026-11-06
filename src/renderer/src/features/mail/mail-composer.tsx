@@ -685,6 +685,10 @@ export function MailComposer({
     attachments.every((attachment) => attachment.path)
   )
 
+  // Certified mail (PEC) takes no Bcc: the provider refuses the whole message.
+  const certified = account?.pec === true
+  const bccShown = !certified || form.bcc.length > 0 || Boolean(recipientDrafts.bcc)
+
   // Content wins over the toggle: a reply-all or a draft that already
   // carries copies must never hide them behind a disclosure.
   const ccBccVisible =
@@ -703,7 +707,7 @@ export function MailComposer({
       disabled={!account}
       className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/70 shrink-0 rounded-sm px-1 text-[11px] outline-none focus-visible:ring-2 disabled:opacity-50"
     >
-      Cc/Ccn
+      {certified ? 'Cc' : 'Cc/Ccn'}
     </button>
   )
 
@@ -1021,6 +1025,14 @@ export function MailComposer({
     setForm((current) => ({ ...current, ...recipients }))
     setRecipientDrafts(EMPTY_RECIPIENT_DRAFTS)
 
+    if (certified && recipients.bcc.length > 0) {
+      toast.error('La PEC non ammette la copia nascosta', {
+        description:
+          'Il gestore rifiuterebbe il messaggio: sposta gli indirizzi in Ccn in A o in Cc, o toglili.'
+      })
+      return false
+    }
+
     if (invalid.length > 0) {
       toast.error(
         invalid.length === 1
@@ -1283,7 +1295,7 @@ export function MailComposer({
             )}
             {renderRecipientField('to', 'Nome o indirizzo email', ccBccToggle)}
             {ccBccVisible && renderRecipientField('cc', 'Copia per conoscenza')}
-            {ccBccVisible && renderRecipientField('bcc', 'Copia nascosta')}
+            {ccBccVisible && bccShown && renderRecipientField('bcc', 'Copia nascosta')}
 
             <div className="flex items-center gap-2 px-2">
               <label

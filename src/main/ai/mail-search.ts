@@ -8,7 +8,7 @@ import {
   folderRoleLabel,
   type FolderRole
 } from '@shared/folders'
-import type { MailAccount, MailAddress, MailFolder, MessageRef } from '@shared/models'
+import type { MailAccount, MailAddress, MailFolder, MessageRef, PecKind } from '@shared/models'
 
 import { buildMessageSearchWhere } from '../services/database'
 import { fullTextMatchExpression, numberWords, queryNumbers } from '../services/full-text-query'
@@ -44,6 +44,8 @@ export interface AgentSearchHit {
   hasAttachments: boolean
   /** Where the search matched, or the preview. */
   snippet: string
+  /** What it is in certified mail, when it is the provider's (see `pec.ts`). */
+  pecKind: PecKind | null
 }
 
 /** The words the agent may use for a folder's role. */
@@ -145,6 +147,7 @@ interface HitRow {
   hasAttachments: number | bigint | boolean
   preview: string
   snippet: string | null
+  pecKind: string | null
 }
 
 function parseAddresses(json: string): MailAddress[] {
@@ -233,7 +236,7 @@ export async function searchMail(
         m.message_key AS messageKey, m.thread_id AS threadId, m.subject AS subject,
         m.from_json AS fromJson, m.to_json AS toJson, m.cc_json AS ccJson, m.date_iso AS dateIso,
         m.is_read AS isRead, m.has_attachments AS hasAttachments, m.preview AS preview,
-        snippet(message_fts, 3, '«', '»', '…', 16) AS snippet
+        m.pec_kind AS pecKind, snippet(message_fts, 3, '«', '»', '…', 16) AS snippet
       FROM message_fts
       JOIN message_bodies b ON b.id = message_fts.rowid
       JOIN messages m ON m.account_id = b.account_id AND m.message_key = b.message_key
@@ -250,7 +253,7 @@ export async function searchMail(
         m.message_key AS messageKey, m.thread_id AS threadId, m.subject AS subject,
         m.from_json AS fromJson, m.to_json AS toJson, m.cc_json AS ccJson, m.date_iso AS dateIso,
         m.is_read AS isRead, m.has_attachments AS hasAttachments, m.preview AS preview,
-        NULL AS snippet
+        m.pec_kind AS pecKind, NULL AS snippet
       FROM messages m
       WHERE (${scopeSql(scope)}) AND ${filterSql(query)}
       ORDER BY m.date_iso DESC
@@ -297,7 +300,8 @@ export async function searchMail(
       accountEmail: scope.accountEmails.get(row.accountId) ?? '',
       isRead: Boolean(Number(row.isRead)),
       hasAttachments: Boolean(Number(row.hasAttachments)),
-      snippet: row.snippet ?? row.preview
+      snippet: row.snippet ?? row.preview,
+      pecKind: (row.pecKind as PecKind | null) ?? null
     }
   })
 }
@@ -350,7 +354,8 @@ async function unindexedMatches(
       dateIso: true,
       isRead: true,
       hasAttachments: true,
-      preview: true
+      preview: true,
+      pecKind: true
     }
   })
 

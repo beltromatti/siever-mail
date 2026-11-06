@@ -31,6 +31,7 @@ import toolToday from './prompts/strumenti/oggi.md?raw'
 import toolReview from './prompts/strumenti/revisione.md?raw'
 import toolShow from './prompts/strumenti/mostra.md?raw'
 import toolJournal from './prompts/strumenti/diario.md?raw'
+import toolConnections from './prompts/strumenti/connessioni.md?raw'
 
 import type { TaskKind } from './agent/tool-types'
 
@@ -77,7 +78,8 @@ export const PROMPTS = {
     oggi: toolToday.trim(),
     revisione: toolReview.trim(),
     mostra: toolShow.trim(),
-    diario: toolJournal.trim()
+    diario: toolJournal.trim(),
+    connessioni: toolConnections.trim()
   }
 } as const
 

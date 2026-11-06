@@ -1151,12 +1151,14 @@ function App(): React.JSX.Element {
           return
         case 'commitment':
           // An open thing opens where it comes from: its message, its event — the user's word
-          // lives in Oggi.
+          // in its project, or in Oggi.
           void window.segretarioApi.commitmentSource(link.commitmentId).then((source) => {
             if (source?.kind === 'message') {
               openMessageRef(source.ref)
             } else if (source?.kind === 'event') {
               void openCalendarEvent(source.eventKey)
+            } else if (source?.kind === 'user' && source.projectId) {
+              openProject(source.projectId)
             } else if (source?.kind === 'user') {
               setActiveApp('oggi')
             } else {

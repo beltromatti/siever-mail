@@ -25,7 +25,8 @@ import { finalizeUpgradeMigration } from './services/data-migration'
 import { GOOGLE_MAIL_SCOPE, GoogleOAuthService } from './services/google-oauth'
 import { MailService } from './services/mail-service'
 import { MicrosoftOAuthService } from './services/microsoft-oauth'
-import { rememberMountedShares } from './services/network-volumes'
+import { canonicalPath, rememberMountedShares } from './services/network-volumes'
+import { movedUnder } from './files/paths'
 import { watchSystemSleep } from './services/system-sleep'
 import { logMainError } from './utils/error-utils'
 
@@ -292,6 +293,13 @@ export class Workspace {
             { cause: error }
           )
         }
+      },
+      // A folder the extension keeps things under moved: what the app kept under it follows.
+      relocatePaths: async (from, to) => {
+        const [was, now] = await Promise.all([canonicalPath(from), canonicalPath(to)])
+        const moved = await this.segretario.relocatePaths(was, now)
+        await this.database.relocateRecentFiles(movedUnder(was, now))
+        return moved
       },
       // What is known of earlier copies. Not knowing it is no answer: a copy saved before would
       // be saved again, so the save does not start.

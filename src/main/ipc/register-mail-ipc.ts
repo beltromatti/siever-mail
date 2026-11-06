@@ -316,7 +316,7 @@ export function registerMailIpc(
   })
 
   registerDataHandler(IPC_CHANNELS.revealFile, async (filePath: string) => {
-    mailService.revealFile(filePath)
+    await mailService.revealFile(filePath)
   })
 
   registerDataHandler(IPC_CHANNELS.openFile, async (filePath: string) =>

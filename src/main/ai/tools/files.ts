@@ -6,7 +6,7 @@ import { basename, isAbsolute, join, resolve } from 'node:path'
 import { foldSearchText } from '@shared/search'
 
 import { fileSources } from '../../files/file-sources'
-import { ensurePathReachable } from '../../services/network-volumes'
+import { reachablePath } from '../../services/network-volumes'
 import { PROMPTS } from '../prompts'
 import {
   booleanArg,
@@ -22,15 +22,16 @@ import { countOf, formatDateTime } from './format'
 const DEFAULT_FILE_LIMIT = 30
 
 /**
- * Brings back the network share a path is on, when it went away (after a
- * sleep): only with the user there to answer if the system asks for the
- * share's password — Conoscimi, or a conversation. Work on its own reads
- * what is reachable and says what is not.
+ * The path that reaches `path` now, wherever its network share is mounted;
+ * the share brought back first when it went away (after a sleep) only with
+ * the user there to answer if the system asks for its password — Conoscimi,
+ * or a conversation. Work on its own reads what is reachable and says what
+ * is not.
  */
-export async function reachShare(context: ToolContext, path: string): Promise<void> {
-  if (context.run.watched || context.run.task === 'conoscimi') {
-    await ensurePathReachable(path)
-  }
+export function reachShare(context: ToolContext, path: string): Promise<string> {
+  return reachablePath(path, {
+    mount: context.run.watched || context.run.task === 'conoscimi'
+  })
 }
 
 /** Entries a search looks at, and how long it may take, before it reports what it has. */
@@ -174,16 +175,14 @@ export const searchFilesTool: SegretarioTool = {
       ? 'Guardo nella cartella…'
       : `Cerco i file «${stringArg(args, 'nome') ?? ''}»…`,
   async execute(args, context) {
-    const folder = stringArg(args, 'cartella')
+    const given = stringArg(args, 'cartella')
     const limit = Math.min(100, Math.max(1, numberArg(args, 'limite') ?? DEFAULT_FILE_LIMIT))
 
-    if (folder && !isAbsolute(folder)) {
+    if (given && !isAbsolute(given)) {
       throw new ToolInputError('`cartella` va indicata come percorso completo.')
     }
 
-    if (folder) {
-      await reachShare(context, folder)
-    }
+    const folder = given ? await reachShare(context, given) : undefined
 
     if (booleanArg(args, 'elenca')) {
       if (!folder) {

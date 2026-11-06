@@ -57,6 +57,16 @@ import { extractPreview } from './preview'
 import { intersectUids, SERVER_SEARCH_MATCH_LIMIT } from './server-search'
 import { attachmentFileName, parseMessageSource } from './message-parts'
 import {
+  isPecProviderPart,
+  isPecReceipt,
+  PEC_HEADERS,
+  pecOfHeaders,
+  pecSender,
+  pecSubject,
+  readPec,
+  type ReadPec
+} from './pec'
+import {
   PARTIAL_BODY_THRESHOLD_BYTES,
   buildPartSource,
   buildPartialSource,
@@ -280,7 +290,8 @@ const RAW_SOURCE_BATCH_SIZE = 8
 const IDENTITY_FETCH_QUERY = {
   threadId: true,
   emailId: true,
-  headers: ['references']
+  // A certified message's own headers say what it is (see `pec.ts`).
+  headers: ['references', ...PEC_HEADERS]
 } as const satisfies FetchQueryObject
 
 /**
@@ -946,7 +957,53 @@ export class AccountConnection extends EventEmitter {
       source: true
     })
 
-    return mapFetchedToDetail(this.account.id, ref.folderPath, fetched)
+    return mapFetchedToDetail(
+      this.account.id,
+      ref.folderPath,
+      fetched,
+      await this.readPecOf(client, ref, fetched)
+    )
+  }
+
+  /**
+   * What a certified message is, when it is one (see `pec.ts`): the parts
+   * that say it, from those downloaded already, the rest fetched now.
+   */
+  private async readPecOf(
+    client: ImapFlow,
+    ref: MessageRef,
+    fetched: FetchMessageObject,
+    downloaded: ReadonlyMap<string, Buffer> = new Map()
+  ): Promise<ReadPec | null> {
+    const pec = pecOfHeaders(fetched.headers)
+
+    return pec
+      ? readPec(pec, fetched.bodyStructure, async (parts) => {
+          const found = new Map(
+            parts.flatMap((part) => {
+              const content = downloaded.get(part)
+              return content ? [[part, content] as const] : []
+            })
+          )
+          const missing = parts.filter((part) => !found.has(part))
+
+          if (missing.length > 0) {
+            const fetchedParts = (
+              await this.fetchRequested(client, ref.folderPath, [ref.uid], { bodyParts: missing })
+            ).get(ref.uid)?.bodyParts
+
+            for (const part of missing) {
+              const content = fetchedParts?.get(part)
+
+              if (content) {
+                found.set(part, content)
+              }
+            }
+          }
+
+          return found
+        })
+      : null
   }
 
   /**
@@ -996,7 +1053,13 @@ export class AccountConnection extends EventEmitter {
     const parsed = await parseMessageSource(
       buildPartialSource(head.headers, head.bodyStructure, parts)
     )
-    const detail = mergeSummaryAndParsedIntoDetail(this.account.id, ref.folderPath, head, parsed)
+    const detail = mergeSummaryAndParsedIntoDetail(
+      this.account.id,
+      ref.folderPath,
+      head,
+      parsed,
+      await this.readPecOf(client, ref, head, parts)
+    )
 
     return {
       ...detail,
@@ -3422,7 +3485,9 @@ export class AccountConnection extends EventEmitter {
     for (const [index, { fetched, envelope }] of complete.entries()) {
       const identity = identities[index]
       const flags = [...(fetched.flags ?? new Set<string>())]
-      const subject = formatSubject(envelope.subject)
+      // A certified message is listed as the message it carries, or the one it is a receipt of.
+      const pec = pecOfHeaders(fetched.headers)
+      const subject = formatSubject(pec ? pecSubject(envelope.subject ?? '') : envelope.subject)
 
       let preview = ''
       let previewHydrated = false
@@ -3439,7 +3504,10 @@ export class AccountConnection extends EventEmitter {
         }
       }
 
-      const from = mapAddresses(envelope.from)
+      const from =
+        pec && !isPecReceipt(pec.kind)
+          ? pecSender(mapAddresses(envelope.from), mapAddresses(envelope.replyTo))
+          : mapAddresses(envelope.from)
 
       summaries.push({
         accountId: this.account.id,
@@ -3458,10 +3526,14 @@ export class AccountConnection extends EventEmitter {
         flags,
         isRead: flags.includes('\\Seen'),
         isFlagged: flags.includes('\\Flagged'),
-        hasAttachments: hasAttachmentInStructure(fetched.bodyStructure),
+        hasAttachments: pec
+          ? !isPecReceipt(pec.kind) &&
+            hasAttachmentInStructure(fetched.bodyStructure, isPecProviderPart)
+          : hasAttachmentInStructure(fetched.bodyStructure),
         size: fetched.size ?? 0,
         senderName: deriveSenderName(from),
-        senderKey: deriveSenderKey(from)
+        senderKey: deriveSenderKey(from),
+        ...(pec ? { pec } : {})
       })
     }
 

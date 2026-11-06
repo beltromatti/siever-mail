@@ -126,10 +126,24 @@ export interface NewCalendarEvent {
   origin?: EventOrigin | null
 }
 
-/** Something that changed in a calendar not through this app, as the sync found it. */
+/**
+ * The days around today whose events the app keeps, read from every
+ * calendar: back, the weeks whose meetings still matter to what followed
+ * them; ahead, the months that may be planned. What a calendar holds is
+ * what can be seen of it — by the user and by the Segretario.
+ */
+export const CALENDAR_HELD_DAYS = { back: 60, ahead: 365 } as const
+
+/**
+ * Something that changed in a calendar not by the Segretario's hand: found
+ * by the sync — done elsewhere, by the user on another device or by whoever
+ * invited them — or done by the user in this app (`inApp`).
+ */
 export interface CalendarChange {
   id: number
   kind: 'nuovo' | 'cambiato' | 'annullato'
+  /** Done by the user in this app, not found by the sync. */
+  inApp: boolean
   /** The event as it is now — as it was, for one cancelled. */
   event: CalendarEvent
   /** As it was before, for one changed or cancelled. */

@@ -2,7 +2,7 @@ import { ipcMain, shell } from 'electron'
 import { z } from 'zod'
 
 import type { SegretarioService } from '@main/ai/segretario-service'
-import { ensurePathReachable } from '@main/services/network-volumes'
+import { reachablePath } from '@main/services/network-volumes'
 import { logMainError } from '@main/utils/error-utils'
 import { SEGRETARIO_IPC, type OnboardingState } from '@shared/segretario'
 
@@ -340,9 +340,8 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
     segretario.conversationProjects(z.array(threadSchema).max(1000).parse(threads))
   )
   handle(SEGRETARIO_IPC.openProjectFolder, async (id: unknown) => {
-    // The archive may be on a share a restart left unmounted: reached first.
-    const folderPath = await segretario.projectFolder(idSchema.parse(id))
-    await ensurePathReachable(folderPath)
+    // The archive may be on a share a restart left unmounted, or mounted elsewhere: reached first.
+    const folderPath = await reachablePath(await segretario.projectFolder(idSchema.parse(id)))
     const failure = await shell.openPath(folderPath)
 
     if (failure) {

@@ -45,15 +45,21 @@ import {
 const MAX_STEPS_PER_TURN = 80
 /** Tokens the model may write in one step: a long draft, its reasoning, several calls. */
 const MAX_TOKENS_PER_TURN = 16_000
-/** Past this many tokens of prompt, old tool results are cleared; past the next, the old part is summarised. */
-const CLEAR_TOOL_RESULTS_AT = 60_000
+/**
+ * Past this many tokens of prompt, old tool results are cleared; past the
+ * next, the old part is summarised. Where Anthropic's context editing
+ * clears by default: well inside the model's window, and late enough for a
+ * run that reads widely — Conoscimi — to write from what it read. Cached,
+ * what stays costs little.
+ */
+const CLEAR_TOOL_RESULTS_AT = 100_000
 const RECENT_TOOL_RESULTS_KEPT = 8
 /**
  * Results cleared at once, at the least: each clearing changes the prefix the
  * provider caches, so it happens in strokes, not at every step past the mark.
  */
 const TOOL_RESULTS_CLEARED_TOGETHER = 12
-const COMPACT_AT = 140_000
+const COMPACT_AT = 200_000
 /**
  * How long work on its own may go on before it is stopped as stuck: far
  * past what the task takes (a reading is done in under a minute, Conoscimi

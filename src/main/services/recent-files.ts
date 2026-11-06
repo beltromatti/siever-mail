@@ -27,7 +27,7 @@ import { app, shell } from 'electron'
 import type { RecentFile } from '@shared/models'
 
 import { isExecutableAttachment } from './attachment-files'
-import { unmountedShareMountPoints, volumeMountPointOf } from './network-volumes'
+import { reachablePath, unmountedShareMountPoints, volumeMountPointOf } from './network-volumes'
 
 export interface RecentFileCandidate {
   path: string
@@ -286,8 +286,15 @@ async function describeCandidate(
     return summary
   }
 
+  // A share mounted elsewhere now ("Archivio-1"): the file is looked at there, and kept as it is.
+  const reached = await withDeadline(
+    reachablePath(candidate.path, { mount: false }),
+    FILE_CHECK_DEADLINE_MS,
+    candidate.path
+  )
+
   return withDeadline(
-    stat(candidate.path).then(
+    stat(reached).then(
       (stats) => (stats.isFile() ? summary : null),
       () => null
     ),

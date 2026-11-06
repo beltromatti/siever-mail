@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path'
 
+import { canonicalPath } from '../../services/network-volumes'
 import { searchMail, searchScope } from '../mail-search'
 import { linksIn } from '../agent/entries'
 import { PROMPTS } from '../prompts'
@@ -50,7 +51,7 @@ const LINKED_BY_SEARCH_MAX = 300
  * sees it when only one project is called so. Left out, the one project
  * this run knows, when it knows one.
  */
-async function projectOf(
+export async function projectOf(
   context: ToolContext,
   args: Record<string, unknown>,
   name = 'progetto'
@@ -299,7 +300,12 @@ export const projectsTool: SegretarioTool = {
         }
         case 'collega':
         case 'scollega': {
-          const projectId = await projectOf(context, args)
+          // A project looked for by name where its reference belongs (`cerca`): the one it names.
+          const named = stringArg(args, 'cerca')
+          const projectId = await projectOf(
+            context,
+            !stringArg(args, 'progetto') && named ? { ...args, progetto: named } : args
+          )
           const events = stringListArg(args, 'evento').map((handle) =>
             resolveEvent(context, handle)
           )
@@ -474,13 +480,17 @@ export const projectsTool: SegretarioTool = {
         }
         case 'risorsa': {
           const projectId = await projectOf(context, args)
-          const folder = requireString(args, 'cartella')
+          const given = requireString(args, 'cartella')
+          const link = /^https?:\/\//i.test(given)
 
-          if (!isAbsolute(folder) && !/^https?:\/\//i.test(folder)) {
+          if (!isAbsolute(given) && !link) {
             throw new ToolInputError(
               '`cartella` è un percorso completo (o l’indirizzo di una risorsa in rete).'
             )
           }
+
+          // Kept as the app keeps paths: the same folder reached through another mount point is one.
+          const folder = link ? given : await canonicalPath(given)
 
           if (booleanArg(args, 'togli')) {
             await context.registry.removeProjectResource(projectId, folder, actor)
@@ -490,7 +500,7 @@ export const projectsTool: SegretarioTool = {
           await context.registry.addProjectResource(
             projectId,
             {
-              kind: /^https?:/i.test(folder) ? 'link' : 'cartella',
+              kind: link ? 'link' : 'cartella',
               location: folder,
               label: stringArg(args, 'etichetta') ?? null
             },

@@ -200,6 +200,11 @@ export async function prepareReflection(deps: {
         )
         break
       }
+      case 'percorso-spostato':
+        parts.push(
+          `## Una cartella si è spostata\n\nCiò che stava in ${String(payload.da ?? '')} ora sta in ${String(payload.a ?? '')}, da ${when}: le copie, le cartelle dei progetti e i file recenti seguono già. Dove la tua memoria scrive il percorso vecchio, correggilo.`
+        )
+        break
       default: {
         const source = (await messageLine(about)) ?? (await eventLine(aboutEvent))
         parts.push(

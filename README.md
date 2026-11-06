@@ -187,6 +187,10 @@ npm install
 npm run dev
 ```
 
+Development runs on a profile of its own (`siever-mail-dev`), beside the
+installed app's: the two run together without touching each other's data
+— see [Environments](docs/DOCUMENTATION.md#environments).
+
 Google's sign-in needs an OAuth client of type "Desktop app"; Microsoft's
 (Microsoft 365, Outlook.com) an app registered in Microsoft Entra as a
 public client, its id in `MICROSOFT_OAUTH_CLIENT_ID` — the redirect URI and

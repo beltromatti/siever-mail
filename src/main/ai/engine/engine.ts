@@ -1,20 +1,32 @@
 import {
+  calendarLearningKey,
+  READING_DAYS,
   setupTurnsAiOn,
   type ActivityEvent,
+  type ConnectionReading,
   type EngineState,
   type OnboardingState,
   type OnboardingStep,
   type ReadingStatus,
   type TaskKind
 } from '@shared/segretario'
+import type { CalendarEvent } from '@shared/calendar'
 
 import type { AgentRunner, RunResult } from '../agent/runner'
 import type { SegretarioCalendarPort, SegretarioMailPort } from '../agent/tool-types'
-import type { AiStore } from '../ai-store'
+import type { AiStore, StoredReading } from '../ai-store'
 import type { Notebook } from '../memory/notebook'
 import { SegretarioError } from '../openrouter'
 import type { Registry } from '../registry/registry'
-import { changeMatters, prepareCalendarChanges } from '../tasks/calendar'
+import {
+  changeMatters,
+  eventStart,
+  lookChunk,
+  lookWindow,
+  nextLook,
+  prepareCalendarChanges,
+  prepareCalendarLook
+} from '../tasks/calendar'
 import { prepareDay, prepareProjectState } from '../tasks/day'
 import { prepareKeepingUp, prepareReflection } from '../tasks/memory-work'
 import {
@@ -29,8 +41,6 @@ import { logMainError } from '../../utils/error-utils'
 import { EnginePause, Scheduler, WorkFailure, type TaskExecutor } from './scheduler'
 import { WorkQueue, type WorkUnit } from './work-queue'
 
-/** How far back the Segretario reads every message: what is older it reads when it needs to. */
-export const READING_HORIZON_DAYS = 30
 /** Mail this recent is new mail, read before the backlog; older is the backlog. */
 const NEW_MAIL_DAYS = 2
 /** How long new mail of a conversation waits for the rest of its burst. */
@@ -73,6 +83,8 @@ const CALENDAR_SETTLE_MS = 2 * 60_000
 const CALENDAR_CHANGES_READ = 100
 /** In `ai_meta`: how far the changes to the calendar have been handed to the Segretario. */
 const CALENDAR_SEEN = 'calendar_seen'
+/** The units that look at a calendar's events the first time, and as they come into the days ahead. */
+const LOOK_SCOPE = 'calendario-vista:'
 /** In `ai_meta`: when keeping up last found too little new to be worth a run. */
 const KEEP_UP_CHECKED = 'keep_up_checked'
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -315,7 +327,7 @@ export class SegretarioEngine {
         (network
           ? `La connessione con OpenRouter non risponde: riprovo alle ${new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(network.until)}.`
           : null),
-      reading: await this.deps.mail.readingProgress(this.horizonIso()),
+      reading: await this.deps.mail.readingProgress((await this.horizons()).sinceOf),
       queued,
       running,
       failed
@@ -323,13 +335,15 @@ export class SegretarioEngine {
   }
 
   /**
-   * Where the reading of the last thirty days stands: what is read, what
-   * waits, what failed after its attempts — and whether anything but that
-   * is left, which the planner would have queued.
+   * Where the reading of each connection's horizon stands: what is read,
+   * what waits, what failed after its attempts — and whether anything but
+   * that is left, which the planner would have queued; the calendars'
+   * events looked at; how far back each connection is read, and why.
    */
   async readingStatus(accountIds?: ReadonlyArray<string>): Promise<ReadingStatus> {
     const { queue, mail, store } = this.deps
-    // Of these accounts — a connection just added — or of all.
+    const { sinceOf, daysOf, readings } = await this.horizons()
+    // Of these accounts — a connection just added — or of all; their calendars with them.
     const ours = (scopeKey: string): boolean =>
       !accountIds || accountIds.some((id) => scopeKey.startsWith(`lettura:${id}:`))
     const units = (await queue.units('lettura')).filter((unit) => ours(unit.scopeKey))
@@ -341,28 +355,174 @@ export class SegretarioEngine {
       (unit) => unit.task === 'lettura' && ours(unit.scopeKey)
     )
     const failedKeys = new Set(failedUnits.map((unit) => unit.scopeKey))
-    const unread = await mail.unreadConversations(this.horizonIso(), READING_PLANNED)
+    const unread = await mail.unreadConversations(sinceOf, READING_PLANNED)
     const left = unread.filter(
       (conversation) =>
         ours(`lettura:${conversation.accountId}:`) &&
         !failedKeys.has(`lettura:${conversation.accountId}:${conversation.threadId}`)
     )
+    const titleOf = async (
+      unit: { activityId: string | null },
+      otherwise: string
+    ): Promise<string> =>
+      (unit.activityId ? (await store.getActivity(unit.activityId))?.title : null) ?? otherwise
     const failed = await Promise.all(
       failedUnits.map(async (unit) => ({
-        title:
-          (unit.activityId ? (await store.getActivity(unit.activityId))?.title : null) ??
-          'Una conversazione',
+        title: await titleOf(unit, 'Una conversazione'),
         error: unit.lastError
       }))
     )
 
+    const accounts = (await mail.listAccounts()).filter(
+      (account) => !accountIds || accountIds.includes(account.id)
+    )
+    const calendars = (await this.knownCalendars()).filter(
+      (connection) =>
+        !accountIds ||
+        (connection.mailAccountId !== null && accountIds.includes(connection.mailAccountId))
+    )
+    const looks = await Promise.all(
+      calendars.map(async (connection) => {
+        const key = calendarLearningKey(connection.id)
+        const window = lookWindow(daysOf(key))
+        const events = await this.eventsOf(connection.id, window.from, window.to)
+        const span = readings.get(key)
+        const looked = events.filter((event) => {
+          const start = eventStart(event)
+          return (
+            span?.lookedFrom != null &&
+            span.lookedUntil != null &&
+            start >= span.lookedFrom &&
+            start < span.lookedUntil
+          )
+        }).length
+        return { key, total: events.length, looked }
+      })
+    )
+    const lookUnits = (await queue.units('calendario')).filter((unit) =>
+      calendars.some((connection) => unit.scopeKey === `${LOOK_SCOPE}${connection.id}`)
+    )
+    const failedLooks = (await queue.failed(200)).filter((unit) =>
+      calendars.some((connection) => unit.scopeKey === `${LOOK_SCOPE}${connection.id}`)
+    )
+    const failedLookKeys = new Set(
+      failedLooks.map((unit) => unit.scopeKey.slice(LOOK_SCOPE.length))
+    )
+    const eventsLeft = looks.some(
+      (look, index) => look.looked < look.total && !failedLookKeys.has(calendars[index].id)
+    )
+    const downloading = (
+      await Promise.all(
+        accounts.map(
+          async (account) => !(await mail.recentMailIndexed(account.id, daysOf(account.id)))
+        )
+      )
+    ).some(Boolean)
+    const horizons: ConnectionReading[] = [
+      ...accounts.map((account) => this.horizonOf(account.id, 'posta', account.email, readings)),
+      ...calendars.map((connection) =>
+        this.horizonOf(calendarLearningKey(connection.id), 'calendario', connection.label, readings)
+      )
+    ]
+
     return {
-      ...(await mail.readingProgress(this.horizonIso(), accountIds)),
-      waiting,
-      running,
-      failed,
-      done: waiting === 0 && running === 0 && left.length === 0
+      ...(await mail.readingProgress(sinceOf, accountIds)),
+      waiting: waiting + lookUnits.filter((unit) => unit.status !== 'al_lavoro').length,
+      running: running + lookUnits.filter((unit) => unit.status === 'al_lavoro').length,
+      failed: [
+        ...failed,
+        ...(await Promise.all(
+          failedLooks.map(async (unit) => ({
+            title: await titleOf(unit, 'Un calendario'),
+            error: unit.lastError
+          }))
+        ))
+      ],
+      events: {
+        looked: looks.reduce((sum, look) => sum + look.looked, 0),
+        total: looks.reduce((sum, look) => sum + look.total, 0)
+      },
+      horizons,
+      downloading,
+      done:
+        waiting === 0 &&
+        running === 0 &&
+        left.length === 0 &&
+        !eventsLeft &&
+        lookUnits.every((unit) => unit.status === 'fallito') &&
+        !downloading
     }
+  }
+
+  /** How far back a connection is read, in the words the setup shows. */
+  private horizonOf(
+    key: string,
+    kind: ConnectionReading['kind'],
+    label: string,
+    readings: ReadonlyMap<string, StoredReading>
+  ): ConnectionReading {
+    const reading = readings.get(key)
+    return {
+      key,
+      kind,
+      label,
+      days: reading?.days ?? READING_DAYS.default,
+      reason: reading?.days != null ? reading.reason : null
+    }
+  }
+
+  /**
+   * How far back each connection is read: its days, decided — by Conoscimi,
+   * or the user in chat — or the default; for mail, as the moment its
+   * reading starts from.
+   */
+  private async horizons(): Promise<{
+    readings: Map<string, StoredReading>
+    daysOf: (key: string) => number
+    sinceOf: (accountId: string) => string
+  }> {
+    const readings = new Map((await this.deps.store.readings()).map((row) => [row.key, row]))
+    const daysOf = (key: string): number => readings.get(key)?.days ?? READING_DAYS.default
+    const now = Date.now()
+
+    return {
+      readings,
+      daysOf,
+      sinceOf: (accountId) => new Date(now - daysOf(accountId) * DAY_MS).toISOString()
+    }
+  }
+
+  /** The calendar connections Conoscimi knows: their events are looked at one by one. */
+  private async knownCalendars(): Promise<
+    Awaited<ReturnType<SegretarioCalendarPort['connections']>>
+  > {
+    const learnt = await this.deps.store.listLearning()
+    const known = new Set(
+      learnt.filter((row) => row.finishedAt !== null).map((row) => row.accountId)
+    )
+    return (await this.deps.calendar.connections().catch(() => [])).filter((connection) =>
+      known.has(calendarLearningKey(connection.id))
+    )
+  }
+
+  /** A connection's events starting in a span, of the calendars the user keeps shown. */
+  private async eventsOf(connectionId: string, from: number, to: number): Promise<CalendarEvent[]> {
+    const { calendar } = this.deps
+    const [events, calendars] = await Promise.all([
+      calendar.events(new Date(from).toISOString(), new Date(to).toISOString()),
+      calendar.calendars()
+    ])
+    const hidden = new Set(calendars.filter((entry) => entry.hidden).map((entry) => entry.key))
+
+    return events.filter((event) => {
+      const start = eventStart(event)
+      return (
+        event.connectionId === connectionId &&
+        !hidden.has(`${event.connectionId}\u0000${event.calendarId}`) &&
+        start >= from &&
+        start < to
+      )
+    })
   }
 
   /**
@@ -456,10 +616,6 @@ export class SegretarioEngine {
     this.scheduler.wake()
   }
 
-  private horizonIso(): string {
-    return new Date(Date.now() - READING_HORIZON_DAYS * DAY_MS).toISOString()
-  }
-
   /**
    * The questions the state answers, each one idempotent: asked again, it
    * queues nothing twice.
@@ -487,10 +643,12 @@ export class SegretarioEngine {
     const held = new Set(holding ? setup.accountIds : [])
     const holdsAll = holding && setupTurnsAiOn(setup) && setup.accountIds.length === 0
 
-    // Messages not read yet, conversation by conversation; what came now before the backlog.
+    // Messages not read yet, conversation by conversation, each account as far back as it is
+    // read; what came now before the backlog.
+    const { sinceOf } = await this.horizons()
     const conversations = holdsAll
       ? []
-      : (await mail.unreadConversations(this.horizonIso(), READING_PLANNED)).filter(
+      : (await mail.unreadConversations(sinceOf, READING_PLANNED)).filter(
           (conversation) => !held.has(conversation.accountId)
         )
     const failed = await queue.failedSince(
@@ -536,6 +694,10 @@ export class SegretarioEngine {
         delayMs: recent ? burstLeft : 0
       })
     }
+
+    // The calendars it knows — once Conoscimi knows them: what of their days it has not looked
+    // at yet, as part of the reading.
+    await this.planCalendarLooks()
 
     // Turning the AI on, the rest — the day, the projects, the memory — waits for the setup to
     // be over: it is written from what the reading found.
@@ -703,6 +865,100 @@ export class SegretarioEngine {
     }
   }
 
+  /**
+   * Each calendar Conoscimi knows, looked at one by one as far as its
+   * horizon: what of its days is not looked at yet — the first time all of
+   * it, then the day coming into the days ahead — queued as a look; a span
+   * with nothing in it is looked at as it is, without a run.
+   */
+  private async planCalendarLooks(): Promise<void> {
+    const { queue } = this.deps
+    const { readings, daysOf } = await this.horizons()
+
+    for (const connection of await this.knownCalendars()) {
+      const key = calendarLearningKey(connection.id)
+      const scopeKey = `${LOOK_SCOPE}${connection.id}`
+      const window = lookWindow(daysOf(key))
+      const span = readings.get(key) ?? { lookedFrom: null, lookedUntil: null }
+      const range = nextLook(span, window)
+
+      if (!range || (await queue.busy(scopeKey))) {
+        continue
+      }
+
+      if ((await this.eventsOf(connection.id, range.from, range.to)).length === 0) {
+        const { span: looked } = lookChunk([], range, span, window.today)
+        await this.deps.store.setLooked(key, looked.lookedFrom, looked.lookedUntil)
+        continue
+      }
+
+      await queue.enqueue({
+        task: 'calendario',
+        scopeKey,
+        scope: { look: connection.id },
+        priority: PRIORITY.backlog
+      })
+    }
+  }
+
+  /**
+   * A look at a calendar's events not looked at yet: a chunk of them, in
+   * order, handed to the calendar's task; done, the span looked at grows to
+   * take them in. The window is worked out again here: the horizon may have
+   * changed since the planning, or the day.
+   */
+  private async lookAtCalendar(
+    connectionId: string,
+    workId: string,
+    signal: AbortSignal
+  ): Promise<void> {
+    const { store } = this.deps
+    const connection = (await this.knownCalendars()).find(
+      (candidate) => candidate.id === connectionId
+    )
+
+    if (!connection) {
+      return
+    }
+
+    const key = calendarLearningKey(connectionId)
+    const window = lookWindow((await this.horizons()).daysOf(key))
+    const span = (await store.reading(key)) ?? { lookedFrom: null, lookedUntil: null }
+    const range = nextLook(span, window)
+
+    if (!range) {
+      return
+    }
+
+    const chunk = lookChunk(
+      await this.eventsOf(connectionId, range.from, range.to),
+      range,
+      span,
+      window.today
+    )
+
+    if (chunk.events.length > 0) {
+      const data = prepareCalendarLook(chunk.events, connection.label, range.ahead)
+      settle(
+        await startRun(this.starter, {
+          task: 'calendario',
+          background: true,
+          visibility: 'diario',
+          data,
+          origin: 'segretario',
+          shown: data.title,
+          workId,
+          scope: { look: connectionId },
+          signal,
+          onCreated: (activityId) => this.deps.queue.attachActivity(workId, activityId)
+        })
+      )
+    }
+
+    // What is left of the range is the next planning's.
+    await store.setLooked(key, chunk.span.lookedFrom, chunk.span.lookedUntil)
+  }
+
   /** How each task's units run. */
   private executors(): Record<string, TaskExecutor> {
     const deps = this.deps
@@ -717,7 +973,11 @@ export class SegretarioEngine {
         },
         run: async (unit, signal) => {
           const scope = unit.scope as ReadingScope
-          const plan = await prepareReading(deps, scope, this.horizonIso())
+          const plan = await prepareReading(
+            deps,
+            scope,
+            (await this.horizons()).sinceOf(scope.accountId)
+          )
 
           if (!plan) {
             return
@@ -812,6 +1072,13 @@ export class SegretarioEngine {
       calendario: {
         lockKeys: async () => ['calendario'],
         run: async (unit, signal) => {
+          const look = (unit.scope as { look?: string }).look
+
+          if (look) {
+            await this.lookAtCalendar(look, unit.id, signal)
+            return
+          }
+
           // From where the last look that was done left off, as far as one look takes.
           const seen = Number((await deps.store.meta(CALENDAR_SEEN)) ?? 0)
           const all = await deps.calendar.changesSince(seen, CALENDAR_CHANGES_READ)

@@ -113,7 +113,7 @@ import {
 } from './mail-engine/mail-transport'
 import { updateAppMenuShortcuts } from '../app-menu'
 import { applyThemeMode } from '../theme'
-import { ensurePathReachable } from './network-volumes'
+import { canonicalPath, reachablePath } from './network-volumes'
 import { isUserFile, listRecentFiles, privateFolders } from './recent-files'
 import { decryptSecret, encryptSecret } from './secure-storage'
 
@@ -555,7 +555,7 @@ export class MailService {
         ),
       listFolders: (accountId) => this.database.listFolders(accountId),
       // The planner asks every few seconds: one statement per account, however much is unread.
-      unreadConversations: async (sinceIso, limit) => {
+      unreadConversations: async (sinceOf, limit) => {
         const threads = new Map<
           string,
           {
@@ -570,7 +570,7 @@ export class MailService {
           const rows = await this.database.listUnnotedConversations(
             account.id,
             segretarioFolders(await this.database.listFolders(account.id)),
-            sinceIso,
+            sinceOf(account.id),
             limit,
             limit
           )
@@ -598,7 +598,7 @@ export class MailService {
           .slice(0, limit)
           .map(({ accountId, threadId, messages }) => ({ accountId, threadId, messages }))
       },
-      readingProgress: async (sinceIso, accountIds) => {
+      readingProgress: async (sinceOf, accountIds) => {
         let read = 0
         let total = 0
 
@@ -608,7 +608,7 @@ export class MailService {
           const progress = await this.database.noteProgress(
             account.id,
             segretarioFolders(await this.database.listFolders(account.id)),
-            sinceIso
+            sinceOf(account.id)
           )
           read += progress.read
           total += progress.total
@@ -676,10 +676,11 @@ export class MailService {
             : ''
 
         return {
-          ...message,
+          ...(await this.withPecReceipts(message)),
           attachments: body?.attachments ?? message.attachments,
           replyTo: body?.replyTo ?? message.replyTo,
           references: body?.references ?? message.references,
+          ...(body?.pecDetail ? { pecDetail: body.pecDetail } : {}),
           textForReading: text.replace(/\n{3,}/g, '\n\n').trim()
         }
       },
@@ -1341,11 +1342,32 @@ export class MailService {
     const { message, size } = await this.cachedMessage(ref)
 
     if (message) {
-      return message
+      return this.withPecReceipts(message)
     }
 
     const fetched = await this.engine.loadMessageBody(ref, size, 'read')
-    return fetched ? this.storedDetail(ref, fetched) : null
+    return fetched ? this.withPecReceipts(await this.storedDetail(ref, fetched)) : null
+  }
+
+  /**
+   * A message with what certified mail says around it: the receipts its
+   * provider sent back on one the user sent from a certified mailbox; for
+   * a receipt, the message sent it is about.
+   */
+  private async withPecReceipts(message: MailMessageDetail): Promise<MailMessageDetail> {
+    if (message.pec && message.pec.kind !== 'busta' && message.pec.kind !== 'anomalia') {
+      const sent = message.pec.ref
+        ? await this.database.messageRefById(message.accountId, message.pec.ref)
+        : null
+      return sent ? { ...message, pecSent: sent } : message
+    }
+
+    if (message.pec || !message.messageId) {
+      return message
+    }
+
+    const receipts = await this.database.pecReceipts(message.accountId, message.messageId)
+    return receipts.length > 0 ? { ...message, pecReceipts: receipts } : message
   }
 
   /**
@@ -1551,6 +1573,18 @@ export class MailService {
     const stored = await this.database.getStoredAccountById(payload.accountId)
     if (!stored) {
       throw new Error('Account non trovato.')
+    }
+
+    // Certified mail (PEC) takes no Bcc: its provider would refuse the whole message.
+    if (
+      payload.bcc.length > 0 &&
+      (await this.database.getAccounts()).some(
+        (account) => account.id === payload.accountId && account.pec
+      )
+    ) {
+      throw new Error(
+        'La PEC non ammette la copia nascosta: il gestore rifiuterebbe il messaggio. Sposta gli indirizzi in Ccn in A o in Cc, o toglili.'
+      )
     }
 
     // A file attached a while ago may be gone by now; say which, rather than
@@ -2063,8 +2097,9 @@ export class MailService {
     return { directory, filePaths }
   }
 
-  revealFile(filePath: string): void {
-    shell.showItemInFolder(z.string().min(1).parse(filePath))
+  /** Shows a file in the Finder — in Esplora file — where its share is now. */
+  async revealFile(filePath: string): Promise<void> {
+    shell.showItemInFolder(await reachablePath(z.string().min(1).parse(filePath)))
   }
 
   /**
@@ -2092,7 +2127,9 @@ export class MailService {
   async recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void> {
     const folders = privateFolders()
     await this.database.recordRecentFiles(
-      paths.filter((path) => isUserFile(path, folders)),
+      await Promise.all(
+        paths.filter((path) => isUserFile(path, folders)).map((path) => canonicalPath(path))
+      ),
       activity
     )
   }
@@ -2113,9 +2150,9 @@ export class MailService {
     const paths = filePathsSchema.parse(input)
 
     return Promise.all(
-      paths.map(async (filePath) => {
-        // A file on a share the restart left unmounted is still there.
-        await ensurePathReachable(filePath)
+      paths.map(async (given) => {
+        // A file on a share the restart left unmounted, or mounted elsewhere, is still there.
+        const filePath = await reachablePath(given)
         const stats = await stat(filePath).catch(() => null)
 
         if (!stats) {

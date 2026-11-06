@@ -18,6 +18,7 @@ interface ItemRow {
   thread_id: string | null
   message_key: string | null
   event_key: string | null
+  project_id: string | null
   kind: string
   text: string
   due: string | null
@@ -35,7 +36,7 @@ interface ItemRow {
   closed_at: number | null
 }
 
-const COLUMNS = `id, account_id, thread_id, message_key, event_key, kind, text, due, status, until,
+const COLUMNS = `id, account_id, thread_id, message_key, event_key, project_id, kind, text, due, status, until,
   closed_by, reason, evidence_key, question, created_by, run_id, revision, created_at, updated_at,
   closed_at`
 
@@ -53,18 +54,28 @@ function originOf(row: ItemRow): CommitmentOrigin {
     }
   }
 
-  return row.event_key !== null ? { kind: 'evento', eventKey: row.event_key } : { kind: 'utente' }
+  if (row.event_key !== null) {
+    return { kind: 'evento', eventKey: row.event_key }
+  }
+
+  return row.project_id !== null
+    ? { kind: 'utente', projectId: row.project_id }
+    : { kind: 'utente' }
 }
 
-/** An origin as the table's columns: the message's, the event's — empty for the user's word. */
+/**
+ * An origin as the table's columns — account, conversation, message, event,
+ * project: the message's, the event's, or the user's word with the project
+ * it is about, if any.
+ */
 function originColumns(
   origin: CommitmentOrigin
-): [string | null, string | null, string | null, string | null] {
+): [string | null, string | null, string | null, string | null, string | null] {
   return origin.kind === 'messaggio'
-    ? [origin.accountId, origin.threadId, origin.messageKey, null]
+    ? [origin.accountId, origin.threadId, origin.messageKey, null, null]
     : origin.kind === 'evento'
-      ? [null, null, null, origin.eventKey]
-      : [null, null, null, null]
+      ? [null, null, null, origin.eventKey, null]
+      : [null, null, null, null, origin.projectId ?? null]
 }
 
 function recordOf(row: ItemRow): CommitmentRecord {
@@ -135,32 +146,40 @@ function dayOrNull(value: string | null | undefined, name: string): string | nul
 }
 
 /**
- * Where open things come from, to choose them by: conversations, events.
- * Given, a thing must come from one of them; not given, from anywhere.
+ * Where open things come from, to choose them by: conversations, events,
+ * and — for what the user said — the projects it is about. Given, a thing
+ * must come from one of them; not given, from anywhere.
  */
-interface Places {
+export interface Places {
   threads?: ReadonlyArray<ThreadRef>
   events?: ReadonlyArray<string>
+  projects?: ReadonlyArray<string>
 }
 
-/** `Places` as a condition: undefined for anywhere, null for nowhere (both given empty). */
+/** `Places` as a condition: undefined for anywhere, null for nowhere (all given empty). */
 function placesWhere(places: Places): { sql: string; params: unknown[] } | null | undefined {
-  if (!places.threads && !places.events) {
+  if (!places.threads && !places.events && !places.projects) {
     return undefined
   }
 
   const threads = places.threads ?? []
   const events = places.events ?? []
+  const projects = places.projects ?? []
   const conditions = [
     ...threads.map(() => '(account_id = ? AND thread_id = ?)'),
-    ...(events.length > 0 ? [`event_key IN (${placeholders(events)})`] : [])
+    ...(events.length > 0 ? [`event_key IN (${placeholders(events)})`] : []),
+    ...(projects.length > 0 ? [`project_id IN (${placeholders(projects)})`] : [])
   ]
 
   return conditions.length === 0
     ? null
     : {
         sql: `(${conditions.join(' OR ')})`,
-        params: [...threads.flatMap((thread) => [thread.accountId, thread.threadId]), ...events]
+        params: [
+          ...threads.flatMap((thread) => [thread.accountId, thread.threadId]),
+          ...events,
+          ...projects
+        ]
       }
 }
 
@@ -212,7 +231,7 @@ export class CommitmentStore {
     return this.ofPlaces({ threads }, closedWithinDays)
   }
 
-  /** The same, of these places: conversations and events — a project's, an event's panel. */
+  /** The same, of these places: conversations, events, a project — a project's, an event's panel. */
   async ofPlaces(places: Places, closedWithinDays = 14): Promise<CommitmentRecord[]> {
     const where = placesWhere(places)
 
@@ -383,10 +402,10 @@ export class CommitmentStore {
     const now = Date.now()
     const row = await this.sql.get<ItemRow>(
       `INSERT INTO ai_items (
-        account_id, thread_id, message_key, event_key, kind, text, due, status, until, closed_by,
-        reason, evidence_key, question, created_by, run_id, revision, created_at, updated_at,
-        closed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'aperta', NULL, ?, NULL, NULL, ?, ?, ?, 1, ?, ?, NULL)
+        account_id, thread_id, message_key, event_key, project_id, kind, text, due, status, until,
+        closed_by, reason, evidence_key, question, created_by, run_id, revision, created_at,
+        updated_at, closed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'aperta', NULL, ?, NULL, NULL, ?, ?, ?, 1, ?, ?, NULL)
       RETURNING ${COLUMNS}`,
       ...originColumns(origin),
       input.kind,
@@ -449,7 +468,7 @@ export class CommitmentStore {
       due?: string | null
       kind?: CommitmentKind
       question?: string | null
-      /** Where it comes from, put right: a message or an event it was not given. */
+      /** Where it comes from, put right: a message or an event it was not given, the project of the user's word. */
       origin?: CommitmentOrigin
     },
     actor: Actor,
@@ -753,7 +772,7 @@ export class CommitmentStore {
       const changed = await this.sql.run(
         `UPDATE ai_items SET kind = ?, text = ?, due = ?, status = ?, until = ?, closed_by = ?,
            reason = ?, evidence_key = ?, question = ?, account_id = ?, thread_id = ?,
-           message_key = ?, event_key = ?, closed_at = ?, run_id = COALESCE(?, run_id),
+           message_key = ?, event_key = ?, project_id = ?, closed_at = ?, run_id = COALESCE(?, run_id),
            revision = revision + 1, updated_at = ?
          WHERE id = ? AND revision = ?`,
         next.kind,
