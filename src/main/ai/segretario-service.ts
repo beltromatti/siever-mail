@@ -1037,9 +1037,14 @@ export class SegretarioService {
    * correct wherever it wrote of those calendars.
    */
   async forgetCalendar(connectionId: string, calendarNames: ReadonlyArray<string>): Promise<void> {
-    await this.db.store.forgetCalendar(connectionId, calendarLearningKey(connectionId))
+    const projectIds = await this.db.store.forgetCalendar(
+      connectionId,
+      calendarLearningKey(connectionId)
+    )
+    // "Il punto" of a project that lost its events no longer says the truth.
+    await this.db.registry.projects.markStale(projectIds)
     await this.db.store.addLesson('calendario-rimosso', { calendari: calendarNames })
-    this.workChanged({ accountIds: [], threadIds: [], messageKeys: [], projectIds: [] })
+    this.workChanged({ accountIds: [], threadIds: [], messageKeys: [], projectIds })
   }
 
   /**
@@ -1471,9 +1476,13 @@ export class SegretarioService {
       return ref ? { kind: 'message', ref } : null
     }
 
-    return origin.kind === 'evento'
-      ? { kind: 'event', eventKey: origin.eventKey }
-      : { kind: 'user' }
+    if (origin.kind === 'evento') {
+      return (await this.options.calendar.event(origin.eventKey))
+        ? { kind: 'event', eventKey: origin.eventKey }
+        : null
+    }
+
+    return { kind: 'user' }
   }
 
   async listProposals(): Promise<Proposal[]> {
@@ -1870,21 +1879,21 @@ export class SegretarioService {
           })
         }
       } else if (origin.kind === 'evento') {
+        // An event no longer in the calendar — past the window kept, cancelled, its calendar
+        // gone — leaves what is open from it open: the line stays, saying so.
         const event = events.get(origin.eventKey)
 
-        if (event) {
-          lines.set(record.id, {
-            ...line,
-            priority: null,
-            source: {
-              kind: 'event',
-              eventKey: event.key,
-              title: event.title,
-              start: event.start,
-              allDay: event.allDay
-            }
-          })
-        }
+        lines.set(record.id, {
+          ...line,
+          priority: null,
+          source: {
+            kind: 'event',
+            eventKey: origin.eventKey,
+            title: event?.title ?? null,
+            start: event?.start ?? null,
+            allDay: event?.allDay ?? false
+          }
+        })
       } else {
         lines.set(record.id, {
           ...line,

@@ -659,16 +659,20 @@ export class CalendarService {
     return sync
   }
 
-  /** A sync: only in the connection's turn. */
+  /**
+   * A sync: only in the connection's turn. However it ends, the connection
+   * says so — read now, or why not — so nothing waits on it unanswered.
+   */
   private async syncConnection(connectionId: string): Promise<void> {
     const prisma = this.requirePrisma()
-    const provider = await this.providerFor(connectionId)
-
-    if (!provider) {
-      return
-    }
 
     try {
+      const provider = await this.providerFor(connectionId)
+
+      if (!provider) {
+        throw new Error('Manca l’accesso a questo calendario: scollegalo e collegalo di nuovo.')
+      }
+
       const calendars = await provider.listCalendars()
       const listed = new Set(calendars.map((calendar) => calendar.calendarId))
       const known = await prisma.calendarCalendar.findMany({ where: { connectionId } })

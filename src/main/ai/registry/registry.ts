@@ -612,6 +612,12 @@ export class Registry {
     actor: Actor
   ): Promise<void> {
     await this.projects.addResource(projectId, resource, actor)
+
+    // An appointment in the project changes where it stands: "Il punto" is behind.
+    if (resource.kind === 'evento') {
+      await this.projects.markStale([projectId])
+    }
+
     const project = await this.projects.get(projectId)
     this.emit(
       {
@@ -629,12 +635,20 @@ export class Registry {
   }
 
   async removeProjectResource(projectId: string, location: string, actor: Actor): Promise<void> {
+    const removed = (await this.projects.resources(projectId)).find(
+      (resource) => resource.location === location
+    )
     await this.projects.removeResource(projectId, location, actor)
+
+    if (removed?.kind === 'evento') {
+      await this.projects.markStale([projectId])
+    }
+
     this.emit(
       {
         object: 'progetto',
         action: 'risorsa-tolta',
-        label: `Tolta: ${location}`,
+        label: `Tolta: ${removed?.label ?? location}`,
         accountId: null,
         threadIds: [],
         messageKeys: [],

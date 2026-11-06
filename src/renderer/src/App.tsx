@@ -1004,7 +1004,8 @@ function App(): React.JSX.Element {
     accounts,
     setAccounts,
     aiOn,
-    active: shownApp === 'mail',
+    // In sight: in front, with a mailbox, past the welcome screen — its keys act on nothing else.
+    active: shownApp === 'mail' && accounts.length > 0 && !showWelcomeGate,
     show: showMail,
     uiPreferences,
     uiPreferencesRef,
@@ -1017,6 +1018,22 @@ function App(): React.JSX.Element {
     runAppCommandRef
   })
   const { openMessage: openMailMessage, selectFolder, openAskedSearch, setSelectedAccountId } = mail
+
+  /**
+   * A project, where it can be seen today: its list in the Posta — with no
+   * mailbox, the Progetti page.
+   */
+  const openProject = useCallback(
+    (projectId: string): void => {
+      if (accounts.length === 0) {
+        setActiveApp('projects')
+        return
+      }
+
+      selectFolder(segretarioProjectPath(projectId))
+    },
+    [accounts.length, selectFolder]
+  )
 
   /**
    * A message opened from anywhere — a notification, a link the Segretario
@@ -1068,7 +1085,7 @@ function App(): React.JSX.Element {
             openAskedSearch(request.search)
             return
           case 'project':
-            selectFolder(segretarioProjectPath(request.projectId))
+            openProject(request.projectId)
             return
           case 'event':
             void openCalendarEvent(request.eventKey)
@@ -1089,7 +1106,7 @@ function App(): React.JSX.Element {
       openCalendarEvent,
       openDraftById,
       openMessageRef,
-      selectFolder
+      openProject
     ]
   )
 
@@ -1127,7 +1144,7 @@ function App(): React.JSX.Element {
           }
           return
         case 'project':
-          selectFolder(segretarioProjectPath(link.projectId))
+          openProject(link.projectId)
           return
         case 'event':
           void openCalendarEvent(link.eventKey)
@@ -1150,7 +1167,7 @@ function App(): React.JSX.Element {
           })
       }
     },
-    [openCalendarEvent, openDraftById, openMessageRef, selectFolder]
+    [openCalendarEvent, openDraftById, openMessageRef, openProject]
   )
 
   /**
@@ -1176,14 +1193,15 @@ function App(): React.JSX.Element {
         setSegretarioOpen((open) => !open)
         return true
       case 'search':
-        // "Cerca" looks in the app in front: the calendar its events, otherwise the mail.
+        // "Cerca" looks in the app in front that has a search: the calendar its events, the mail
+        // its messages. Elsewhere there is nothing to search, and the key is left alone.
         if (shownApp === 'calendar') {
           calendarSearchRef.current?.focus()
           calendarSearchRef.current?.select()
           return true
         }
 
-        return mail.runCommand(commandId)
+        return shownApp === 'mail' && accounts.length > 0 && mail.runCommand(commandId)
       default:
         // The others are the mail's — and the extension's, on the mail's selection. What acts on
         // the selected messages or the reader waits for Mail to be in front: nothing is answered,
@@ -1326,26 +1344,8 @@ function App(): React.JSX.Element {
     )
   }
 
-  // The calendars are known before the first screen: one connected is enough to go in.
-  if (bootstrapLoading || onboarding === undefined || calendarConnections === null) {
-    return (
-      <AppFrame
-        windowControlsState={windowControlsState}
-        onMinimizeWindow={handleMinimizeWindow}
-        onToggleMaximizeWindow={handleToggleMaximizeWindow}
-        onCloseWindow={handleCloseWindow}
-      >
-        <div className="flex h-full items-center justify-center">
-          <div className="border-border bg-card/70 flex items-center gap-3 rounded-xl border px-5 py-4 text-sm">
-            <LoaderCircle className="text-primary size-5 animate-spin" />
-            Avvio di SIEVER Mail…
-          </div>
-        </div>
-      </AppFrame>
-    )
-  }
-
-  if (bootstrapError) {
+  // What failed to start says so, with a way to try again, before anything else waits.
+  if (!bootstrapLoading && bootstrapError) {
     return (
       <AppFrame
         windowControlsState={windowControlsState}
@@ -1360,6 +1360,25 @@ function App(): React.JSX.Element {
             <Button className="window-no-drag mt-5" onClick={() => void reloadBootstrap()}>
               Riprova
             </Button>
+          </div>
+        </div>
+      </AppFrame>
+    )
+  }
+
+  // The calendars are known before the first screen: one connected is enough to go in.
+  if (bootstrapLoading || onboarding === undefined || calendarConnections === null) {
+    return (
+      <AppFrame
+        windowControlsState={windowControlsState}
+        onMinimizeWindow={handleMinimizeWindow}
+        onToggleMaximizeWindow={handleToggleMaximizeWindow}
+        onCloseWindow={handleCloseWindow}
+      >
+        <div className="flex h-full items-center justify-center">
+          <div className="border-border bg-card/70 flex items-center gap-3 rounded-xl border px-5 py-4 text-sm">
+            <LoaderCircle className="text-primary size-5 animate-spin" />
+            Avvio di SIEVER Mail…
           </div>
         </div>
       </AppFrame>
@@ -1647,6 +1666,7 @@ function App(): React.JSX.Element {
                   focus={calendarFocus?.focus}
                   onSight={setCalendarSight}
                   searchInputRef={calendarSearchRef}
+                  keysEnabled={!shellModalOpen}
                   atWindowTopRight={!segretarioOpen}
                   onOpenMessage={openMessageRef}
                   onOpenConnections={() => startOnboarding('nuova-connessione')}
@@ -1693,7 +1713,7 @@ function App(): React.JSX.Element {
                     'Le conversazioni, gli appuntamenti, le cartelle e i documenti, le persone e le cose aperte del progetto, insieme.',
                     'Uno spazio di lavoro, non un altro archivio: ogni cosa resta dov’è, e un file usato da tre progetti è un file solo.',
                     'Un progetto è un contesto che dura — una pratica, un cliente, un viaggio, l’università —: il Segretario li riconosce e tu li correggi.',
-                    ...(aiOn
+                    ...(aiOn && accounts.length > 0
                       ? ['Intanto i progetti del Segretario sono nella barra laterale della Posta.']
                       : [])
                   ]}

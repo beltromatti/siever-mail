@@ -9,12 +9,15 @@ import {
   Sparkles
 } from 'lucide-react'
 
+import { toast } from 'sonner'
+
 import { AddConnection } from '@renderer/features/connections/add-connection'
 import { ConnectionsList } from '@renderer/features/connections/connections-list'
 import { ActivityThread } from '@renderer/features/segretario/segretario-panel'
 import type { SegretarioState } from '@renderer/features/segretario/use-segretario'
 import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
+import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { Input } from '@renderer/components/ui/input'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarConnection } from '@shared/calendar'
@@ -386,19 +389,23 @@ function preparationOf(
   return { ready: true, failed: false, line: 'Pronta' }
 }
 
-/** Where a calendar connection stands in the preparation: its first sync, or why it failed. */
+/**
+ * Where a calendar connection stands in the preparation: read once — even
+ * with a calendar of it that could not be, which it says — or why it could
+ * not be read at all.
+ */
 function calendarPreparationOf(connection: CalendarConnection): {
   ready: boolean
   failed: boolean
   line: string
 } {
-  if (connection.problem) {
-    return { ready: false, failed: true, line: `Non riesco a collegarmi: ${connection.problem}` }
+  if (connection.lastSyncAt !== null) {
+    return { ready: true, failed: false, line: connection.problem ?? 'Pronto' }
   }
 
-  return connection.lastSyncAt === null
-    ? { ready: false, failed: false, line: 'Scarico gli eventi…' }
-    : { ready: true, failed: false, line: 'Pronto' }
+  return connection.problem
+    ? { ready: false, failed: true, line: `Non riesco a collegarmi: ${connection.problem}` }
+    : { ready: false, failed: false, line: 'Scarico gli eventi…' }
 }
 
 /**
@@ -421,6 +428,25 @@ function PreparationStep({
   onNext: () => void
 }): React.JSX.Element {
   const [indexed, setIndexed] = useState<ReadonlyMap<string, boolean>>(() => new Map())
+  const { confirm, dialog } = useConfirmDialog()
+  // As Settings does: asked first, and a removal that fails says so.
+  const removeCalendar = async (connection: CalendarConnection): Promise<void> => {
+    const confirmed = await confirm({
+      title: `Scollegare il calendario di ${connection.label}?`,
+      description:
+        'I suoi eventi spariscono da SIEVER Mail; nel calendario restano come sono. Puoi ricollegarlo quando vuoi.',
+      confirmLabel: 'Scollega',
+      destructive: true
+    })
+
+    if (confirmed) {
+      await window.calendarApi
+        .disconnect(connection.id)
+        .catch((error: unknown) =>
+          toast.error('Il calendario non si è scollegato', { description: errorText(error) })
+        )
+    }
+  }
   const accountIds = useMemo(() => accounts.map((account) => account.id), [accounts])
 
   useEffect(() => {
@@ -460,7 +486,7 @@ function PreparationStep({
     ...calendarConnections.map((connection) => ({
       key: `calendar:${connection.id}`,
       name: `${connection.label} · calendari`,
-      remove: () => void window.calendarApi.disconnect(connection.id),
+      remove: () => void removeCalendar(connection),
       ...calendarPreparationOf(connection)
     }))
   ]
@@ -525,6 +551,7 @@ function PreparationStep({
           </p>
         )}
       </div>
+      {dialog}
     </StepFrame>
   )
 }
@@ -866,13 +893,19 @@ export function OnboardingWizard({
       : accounts.length > 0
   const steps = all.filter((step) => applies(step, state.case, aiOn || undecided, hasMail))
 
+  // The connections to know, read again as they come — a mailbox or a calendar added here.
+  const connectionIds = [
+    ...accounts.map(({ id }) => id),
+    ...calendarConnections.map(({ id }) => id)
+  ].join('\u0000')
+
   useEffect(() => {
     let current = true
     void window.segretarioApi.listLearning().then((loaded) => current && setLearning(loaded))
     return () => {
       current = false
     }
-  }, [accounts, state.conoscimiId])
+  }, [connectionIds, state.conoscimiId])
 
   /** The next step that applies — `aiOn` as it is now, after this step perhaps turned it on. */
   const next = useCallback(

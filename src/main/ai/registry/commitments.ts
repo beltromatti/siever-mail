@@ -368,8 +368,14 @@ export class CommitmentStore {
         Date.parse(origin.dateIso) > decided.updatedAt
       )
     ) {
+      // Only a message newer than the decision can change it from the background: said so, not
+      // a way that the user's word would then refuse.
       throw new RegistryRefusal(
-        `L'utente ha già segnato questa cosa come ${decided.status === 'fatta' ? 'fatta' : 'non serve'} (#${decided.id})${origin.kind === 'messaggio' ? ', e il messaggio non è più recente della sua decisione' : ''}: non riaprirla. Se c'è un fatto nuovo, riaprila (\`riapri\`) dicendo qual è.`,
+        `L'utente ha già segnato questa cosa come ${decided.status === 'fatta' ? 'fatta' : 'non serve'} (#${decided.id}): ${
+          origin.kind === 'messaggio'
+            ? 'il messaggio non è più recente della sua decisione, quindi non riaprirla. Se un messaggio arrivato dopo la contraddice, riaprila (`riapri`) indicandolo come `prova`.'
+            : 'è una sua decisione, lasciala com’è.'
+        }`,
         decided
       )
     }

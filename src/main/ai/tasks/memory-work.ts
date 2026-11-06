@@ -2,7 +2,7 @@ import type { CalendarConnection } from '@shared/calendar'
 import { calendarLearningKey } from '@shared/segretario'
 
 import { HandleRegistry, type HandleRecord } from '../agent/handles'
-import type { SegretarioMailPort } from '../agent/tool-types'
+import type { SegretarioCalendarPort, SegretarioMailPort } from '../agent/tool-types'
 import type { AiStore } from '../ai-store'
 import type { Registry } from '../registry/registry'
 import { formatAddresses, formatDateTime, shortDate } from '../tools/format'
@@ -105,6 +105,7 @@ export async function prepareConoscimi(
  */
 export async function prepareReflection(deps: {
   mail: SegretarioMailPort
+  calendar: Pick<SegretarioCalendarPort, 'event'>
   store: AiStore
 }): Promise<(StartingData & { lessonIds: number[] }) | null> {
   // The lessons that teach, a reflection's worth; the drafts sent as they were, all of them —
@@ -147,9 +148,28 @@ export async function prepareReflection(deps: {
     const sender = summary.from[0]
     return `Il messaggio: ${handle} · ${shortDate(summary.dateIso)} · ${sender?.name || sender?.address || ''} · «${summary.subject}»`
   }
+  // The event an open thing came from, named the same way.
+  const eventLine = async (eventKey: unknown): Promise<string | null> => {
+    if (typeof eventKey !== 'string' || !eventKey) {
+      return null
+    }
+
+    const event = await deps.calendar.event(eventKey)
+
+    if (!event) {
+      return "L'evento non è più nel calendario."
+    }
+
+    const handle = handles.name({ kind: 'event', eventKey, title: event.title }, added)
+    return `L'evento: ${handle} · ${shortDate(event.start)} · «${event.title}»`
+  }
 
   for (const lesson of lessons) {
-    const { messaggio: about, ...payload } = (lesson.payload ?? {}) as Record<string, unknown>
+    const {
+      messaggio: about,
+      evento: aboutEvent,
+      ...payload
+    } = (lesson.payload ?? {}) as Record<string, unknown>
     const when = formatDateTime(new Date(lesson.createdAt).toISOString())
     const from = emails.get(String(payload.accountId ?? '')) ?? 'un account'
 
@@ -181,9 +201,9 @@ export async function prepareReflection(deps: {
         break
       }
       default: {
-        const message = await messageLine(about)
+        const source = (await messageLine(about)) ?? (await eventLine(aboutEvent))
         parts.push(
-          `## ${lesson.kind.replace(/_/g, ' ')} · ${when}\n\n${message ? `${message}\n\n` : ''}${JSON.stringify(payload, null, 1)}`
+          `## ${lesson.kind.replace(/_/g, ' ')} · ${when}\n\n${source ? `${source}\n\n` : ''}${JSON.stringify(payload, null, 1)}`
         )
       }
     }

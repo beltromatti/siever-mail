@@ -146,16 +146,21 @@ export function CalendarSearch({
     }
 
     let current = true
+    // Searches asked in a burst of changes answer in any order: only the last one asked counts.
+    let asked = 0
     const calendarKeys = JSON.parse(shown) as string[]
-    const search = (): void =>
+    const search = (): void => {
+      const mine = (asked += 1)
+      const latest = (): boolean => current && mine === asked
       void window.calendarApi
         .search({ text, calendarKeys, limit: RESULTS_SHOWN })
-        .then((result) => current && setFound({ text, result }))
+        .then((result) => latest() && setFound({ text, result }))
         .catch(
           (error: unknown) =>
-            current &&
+            latest() &&
             setFound({ text, error: error instanceof Error ? error.message : String(error) })
         )
+    }
     const timer = window.setTimeout(search, SEARCH_DELAY_MS)
     const unsubscribe = window.calendarApi.onChanged(search)
 

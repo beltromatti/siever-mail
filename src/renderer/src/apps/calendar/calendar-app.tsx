@@ -256,7 +256,8 @@ export function CalendarApp({
   atWindowTopRight,
   onOpenMessage,
   onOpenConnections,
-  searchInputRef
+  searchInputRef,
+  keysEnabled
 }: {
   aiOn: boolean
   /** Where the calendar opens: a day, and an event of it to show. Today when not given. */
@@ -269,6 +270,8 @@ export function CalendarApp({
   onOpenConnections: () => void
   /** The search field, for the window's "Cerca" command while the calendar is in front. */
   searchInputRef?: Ref<HTMLInputElement>
+  /** Whether its keys answer: not while something of the shell is over it, a message being written. */
+  keysEnabled: boolean
 }): React.JSX.Element {
   const [view, setView] = useState<CalendarView>(() => stored(VIEW_KEY, 'settimana', isView))
   const [layers, setLayers] = useState(() =>
@@ -417,7 +420,7 @@ export function CalendarApp({
       default:
         return false
     }
-  })
+  }, keysEnabled)
 
   return (
     <div className="paper flex h-full min-h-0">

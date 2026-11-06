@@ -289,8 +289,8 @@ export function ConnectionsList({
 
 /**
  * The File family: what the computer holds — the user's folders, the disks
- * plugged in, the network shares — which the Segretario reads already, and
- * the drives to come.
+ * plugged in, the network shares — read, never written, and the drives to
+ * come. Said without the Segretario, who may be off.
  */
 function FileSourcesCard(): React.JSX.Element {
   const [sources, setSources] = useState<ReadonlyArray<FileSource> | null>(null)
@@ -317,7 +317,7 @@ function FileSourcesCard(): React.JSX.Element {
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-semibold">File</span>
           <span className="text-muted-foreground block truncate text-[11.5px]">
-            Il computer e i volumi collegati, in sola lettura per il Segretario
+            Il computer e i volumi collegati, in sola lettura
           </span>
         </span>
       </header>

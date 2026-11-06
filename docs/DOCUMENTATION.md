@@ -65,7 +65,11 @@ Startup, from `src/main/index.ts`:
 2. `Workspace.start()` opens the storage (`Workspace.openStorage()`):
    SQLite opens, the schema is reconciled, then any upgrade migration
    finishes.
-3. The sources open: the mounted network shares are remembered (see
+3. The extension installs (see [Extensions](#extensions)): its tables
+   and handlers are there before anything asks for them — the
+   Segretario's first run reads its instructions — and an extension that
+   fails is logged and leaves the sources opening.
+4. The sources open: the mounted network shares are remembered (see
    [Network shares](#network-shares)); `MailService.start()` applies the
    notification preferences and the icon badge, the mail engine connects
    the accounts and the drafts the server lacks are filed; then the
@@ -74,8 +78,17 @@ Startup, from `src/main/index.ts`:
    even when the mail engine could not start; either failing to open is
    logged and leaves the others working. When startup fails, what waits
    for the calendar and the Segretario is rejected, so their channels
-   answer with the reason instead of hanging.
-4. The extension installs (see [Extensions](#extensions)).
+   answer with the reason instead of hanging. The computer's sleep is
+   watched: a run it would cut short waits, and the calendars are read
+   again on waking.
+
+Quitting waits for `Workspace.stop()` — the extension, the calendars, the
+Segretario (its running work put back to wait), the mail (the drafts being
+typed saved), then the database closed — each part on its own, at most
+eight seconds (`QUIT_WAIT_MS`). "Elimina tutti i dati" and the removal of a
+mailbox wait for the apps they reach to be open: the clear does nothing
+rather than half, the Segretario first so no run reads the mail being
+wiped; a mailbox's connection stops before the others let go of it.
 
 The window is created right away and loads alongside. **Every IPC channel
 that touches stored data waits for step 2** (`register-mail-ipc.ts`), so
@@ -1239,8 +1252,12 @@ can read it.
 - **The day** (`day.ts`): the letter at the top of Oggi and the preparation
   of a meeting, each with when it was written and its links.
 
-A calendar connection removed takes its meetings' preparations and event
-proposals with it, and becomes a lesson (`forgetCalendar`).
+A calendar connection removed takes with it what was kept about its
+events — preparations, event proposals, what was open from them, their
+place in projects, whose "Il punto" goes behind — as a mailbox's go with
+it, and becomes a lesson (`forgetCalendar`). An event no longer in the
+calendar for another reason (past the window kept, cancelled) leaves what
+is open from it open: its line says so ("Evento non più nel calendario").
 
 Every object has a revision. A run remembers the revision of what it read
 (`RunContext.seen`) — what its context showed counts as read, and a

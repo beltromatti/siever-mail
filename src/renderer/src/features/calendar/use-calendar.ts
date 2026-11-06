@@ -2,7 +2,11 @@ import { useCallback, useEffect, useState } from 'react'
 
 import type { CalendarConnection, CalendarEvent } from '@shared/calendar'
 
-/** The accounts' calendars and how each stands, kept as they change. */
+/**
+ * The accounts' calendars and how each stands, kept as they change. Calendars
+ * that could not be read are none — or, read before, those last known — so
+ * nothing waits on them for ever.
+ */
 export function useCalendarConnections(): {
   connections: CalendarConnection[] | null
   reload: () => Promise<void>
@@ -17,7 +21,10 @@ export function useCalendarConnections(): {
   useEffect(() => {
     let current = true
     const load = (): void =>
-      void window.calendarApi.listConnections().then((loaded) => current && setConnections(loaded))
+      void window.calendarApi.listConnections().then(
+        (loaded) => current && setConnections(loaded),
+        () => current && setConnections((known) => known ?? [])
+      )
 
     load()
     const unsubscribe = window.calendarApi.onChanged(load)

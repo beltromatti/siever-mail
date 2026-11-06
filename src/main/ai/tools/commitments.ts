@@ -490,6 +490,7 @@ export const commitmentsTool: SegretarioTool = {
             },
             id: { type: 'integer' },
             messaggio: { type: 'string' },
+            evento: { type: 'string' },
             tipo: { type: 'string', enum: [...KINDS] },
             testo: { type: 'string' },
             scadenza: { type: ['string', 'null'] },

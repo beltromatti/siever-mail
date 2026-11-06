@@ -41,3 +41,53 @@ describe('AiStore.recentWork', () => {
     expect(await store.recentWork(0, 5)).toHaveLength(5)
   })
 })
+
+describe('AiStore.forgetCalendar', () => {
+  let sql: ReturnType<typeof memorySql>
+  let store: AiStore
+
+  beforeEach(async () => {
+    sql = memorySql()
+    await ensureAiSchema(sql)
+    store = new AiStore(sql)
+  })
+
+  afterEach(() => sql.close())
+
+  it('lets go of what was open from its events and of their place in projects, as a mailbox’s', async () => {
+    const ofIt = 'cal-1\u0000work\u0000e1'
+    const other = 'cal-2\u0000home\u0000e9'
+
+    for (const [eventKey, text] of [
+      [ofIt, 'Portare la planimetria'],
+      [other, 'Prenotare il campo']
+    ]) {
+      await sql.run(
+        `INSERT INTO ai_items (event_key, kind, text, status, created_at) VALUES (?, 'da_fare', ?, 'aperta', 1)`,
+        eventKey,
+        text
+      )
+    }
+    await sql.run(
+      `INSERT INTO ai_item_history (item_id, at, actor, action, after_json) VALUES (1, 1, 'segretario', 'apri', '{}')`
+    )
+    for (const [project, location] of [
+      ['p1', ofIt],
+      ['p2', other]
+    ]) {
+      await sql.run(
+        `INSERT INTO ai_project_resources (project_id, kind, location, label, added_by, created_at)
+         VALUES (?, 'evento', ?, 'Sopralluogo', 'segretario', 1)`,
+        project,
+        location
+      )
+    }
+
+    expect(await store.forgetCalendar('cal-1', 'calendario:cal-1')).toEqual(['p1'])
+    expect(await sql.all('SELECT text FROM ai_items')).toEqual([{ text: 'Prenotare il campo' }])
+    expect(await sql.all('SELECT item_id FROM ai_item_history')).toEqual([])
+    expect(await sql.all('SELECT project_id FROM ai_project_resources')).toEqual([
+      { project_id: 'p2' }
+    ])
+  })
+})

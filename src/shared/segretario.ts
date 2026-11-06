@@ -289,7 +289,14 @@ export type DayLineSource =
       from: string
       date: string
     }
-  | { kind: 'event'; eventKey: string; title: string; start: string; allDay: boolean }
+  /** An event; its title and start null once it is no longer in the calendar. */
+  | {
+      kind: 'event'
+      eventKey: string
+      title: string | null
+      start: string | null
+      allDay: boolean
+    }
   | { kind: 'user'; date: string }
 
 /** A line of the day's page, of the agenda and of a project: something to do, with what makes it count. */

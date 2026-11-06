@@ -79,6 +79,10 @@ async function settleLine(line: DayLine): Promise<boolean> {
   }
 }
 
+/** A line's body, whether it opens something or not. */
+const LINE_BODY =
+  '-mx-3 flex w-[calc(100%+1.5rem)] flex-col gap-1 rounded-[8px] px-3 py-2.5 pr-24 text-left'
+
 function Line({
   line,
   day,
@@ -93,43 +97,58 @@ function Line({
   onRemind: (commitment: Commitment) => void
 }): React.JSX.Element {
   const openLink = useOpenLink()
-  const link = dayLineLink(line)
+  const found = dayLineLink(line)
+  // Oggi is where a thing without a source to open is kept: its line opens nothing here.
+  const link = found?.kind === 'commitment' ? null : found
   const late = line.due !== null && line.due < day
   const kind = line.commitment?.kind
   const settleLabel = kind ? (kind === 'aspetti' ? 'Arrivato' : 'Fatto') : null
 
+  const body = (
+    <>
+      <span className="voice text-foreground text-[16px] leading-[1.4]">
+        {(kind || line.readyKind === 'sollecito') && (
+          <span className="text-ai mr-1.5 font-sans text-[12px] font-semibold">
+            {kind ? COMMITMENT_LABELS[kind] : 'Sollecito'}
+          </span>
+        )}
+        {line.text}
+      </span>
+      <span className="text-muted-foreground flex min-w-0 items-baseline gap-1.5 text-[12px]">
+        {line.due && (
+          <span
+            className={cn(
+              'shrink-0 font-semibold',
+              late || line.priority === 'alta' ? 'text-urgent' : 'text-foreground'
+            )}
+          >
+            {dueLabel(line.due)}
+          </span>
+        )}
+        {showWaitingSince && (
+          <span className="shrink-0">da {SINCE.format(new Date(dayLineSince(line)))}</span>
+        )}
+        <span className="min-w-0 truncate">{dayLineSourceWords(line)}</span>
+      </span>
+    </>
+  )
+
   return (
     <li className="group relative">
-      <button
-        type="button"
-        onClick={() => link && openLink(link)}
-        className="hover:bg-hover focus-visible:ring-ring/60 -mx-3 flex w-[calc(100%+1.5rem)] flex-col gap-1 rounded-[8px] px-3 py-2.5 pr-24 text-left outline-none focus-visible:ring-2"
-      >
-        <span className="voice text-foreground text-[16px] leading-[1.4]">
-          {(kind || line.readyKind === 'sollecito') && (
-            <span className="text-ai mr-1.5 font-sans text-[12px] font-semibold">
-              {kind ? COMMITMENT_LABELS[kind] : 'Sollecito'}
-            </span>
+      {link ? (
+        <button
+          type="button"
+          onClick={() => openLink(link)}
+          className={cn(
+            LINE_BODY,
+            'hover:bg-hover focus-visible:ring-ring/60 outline-none focus-visible:ring-2'
           )}
-          {line.text}
-        </span>
-        <span className="text-muted-foreground flex min-w-0 items-baseline gap-1.5 text-[12px]">
-          {line.due && (
-            <span
-              className={cn(
-                'shrink-0 font-semibold',
-                late || line.priority === 'alta' ? 'text-urgent' : 'text-foreground'
-              )}
-            >
-              {dueLabel(line.due)}
-            </span>
-          )}
-          {showWaitingSince && (
-            <span className="shrink-0">da {SINCE.format(new Date(dayLineSince(line)))}</span>
-          )}
-          <span className="min-w-0 truncate">{dayLineSourceWords(line)}</span>
-        </span>
-      </button>
+        >
+          {body}
+        </button>
+      ) : (
+        <div className={LINE_BODY}>{body}</div>
+      )}
       {settleLabel && line.commitment && (
         <span className="absolute top-2.5 -right-1 flex items-center gap-1.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 has-[[data-state=open]]:opacity-100">
           <CommitmentMenu

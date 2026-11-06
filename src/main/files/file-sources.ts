@@ -27,11 +27,13 @@ export function fileSources(): Promise<FileSource[]> {
   return recent.sources
 }
 
+/** Never fails: a lookup that does not answer leaves out what it would have found. */
 async function readFileSources(): Promise<FileSource[]> {
+  const none = (): ReadonlySet<string> => new Set()
   const [mounted, network, unmounted] = await Promise.all([
-    mountedVolumes(),
-    mountedShareMountPoints(),
-    unmountedShareMountPoints()
+    mountedVolumes().catch((): string[] => []),
+    mountedShareMountPoints().catch(none),
+    unmountedShareMountPoints().catch(none)
   ])
 
   return [
@@ -61,8 +63,11 @@ async function mountedVolumes(): Promise<string[]> {
         .filter((entry) => !entry.name.startsWith('.'))
         .map(async (entry) => {
           const path = join('/Volumes', entry.name)
-          // The startup disk is there too, as a link to "/".
-          return (await realpath(path).catch(() => path)) === '/' ? null : path
+          // The startup disk is there too, as a link to "/". Only links are followed: a share
+          // that stopped answering would hold the lookup.
+          return entry.isSymbolicLink() && (await realpath(path).catch(() => path)) === '/'
+            ? null
+            : path
         })
     )
     return volumes.filter((path): path is string => path !== null)
@@ -85,12 +90,29 @@ async function mountedVolumes(): Promise<string[]> {
     return drives.filter((drive): drive is string => drive !== null)
   }
 
-  // A Linux desktop mounts what is plugged in under /media/<user>, by hand under /mnt.
+  // A Linux desktop mounts what is plugged in under /run/media/<user> or /media/<user> — or
+  // /media itself — and by hand under /mnt.
+  const user = linuxUser()
+  const roots = [
+    ...(user ? [join('/run/media', user), join('/media', user)] : []),
+    '/media',
+    '/mnt'
+  ]
   const found = await Promise.all(
-    [join('/media', userInfo().username), '/mnt'].map(async (root) => {
+    roots.map(async (root) => {
       const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
       return entries.filter((entry) => entry.isDirectory()).map((entry) => join(root, entry.name))
     })
   )
-  return found.flat()
+  // The user's own folder under /media holds volumes; it is not one.
+  return [...new Set(found.flat())].filter((path) => !roots.includes(path))
+}
+
+/** Whose desktop this is; none when the system cannot say. */
+function linuxUser(): string | null {
+  try {
+    return userInfo().username
+  } catch {
+    return null
+  }
 }

@@ -200,6 +200,19 @@ describe('ensureAiSchema', () => {
     expect(await sql.all("SELECT name FROM sqlite_master WHERE name = 'ai_items_v5'")).toEqual([])
   })
 
+  it('gives the open things their event index after a quit just past the rebuild', async () => {
+    await ensureAiSchema(sql)
+    // Cut short after the new table was renamed, before its indexes were made.
+    await sql.run('DROP INDEX idx_ai_items_event')
+    await sql.run("UPDATE ai_meta SET value = '4' WHERE key = 'schema_version'")
+
+    await ensureAiSchema(sql)
+
+    expect(
+      await sql.all("SELECT name FROM sqlite_master WHERE name = 'idx_ai_items_event'")
+    ).toEqual([{ name: 'idx_ai_items_event' }])
+  })
+
   it('picks up a migration a quit cut short between two steps', async () => {
     await ensureAiSchema(sql)
     await sql.run("UPDATE ai_meta SET value = '1' WHERE key = 'schema_version'")

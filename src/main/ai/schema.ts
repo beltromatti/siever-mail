@@ -450,10 +450,17 @@ async function registryStep(sql: Sql): Promise<void> {
 async function itemsFromAnySource(sql: Sql): Promise<void> {
   const columns = await sql.all<{ name: string }>('PRAGMA table_info(ai_items)')
 
-  if (columns.some((column) => column.name === 'event_key')) {
-    return
+  if (!columns.some((column) => column.name === 'event_key')) {
+    await rebuildItems(sql, columns)
   }
 
+  // Also after a start cut short just past the rename: the indexes come with the new table.
+  for (const statement of ITEM_INDEXES) {
+    await sql.run(statement)
+  }
+}
+
+async function rebuildItems(sql: Sql, columns: ReadonlyArray<{ name: string }>): Promise<void> {
   await sql.run(`CREATE TABLE IF NOT EXISTS ai_items_v5 (
     id INTEGER PRIMARY KEY,
     account_id TEXT,
@@ -480,10 +487,6 @@ async function itemsFromAnySource(sql: Sql): Promise<void> {
   await sql.run(`INSERT OR IGNORE INTO ai_items_v5 (${copied}) SELECT ${copied} FROM ai_items`)
   await sql.run('DROP TABLE ai_items')
   await sql.run('ALTER TABLE ai_items_v5 RENAME TO ai_items')
-
-  for (const statement of ITEM_INDEXES) {
-    await sql.run(statement)
-  }
 }
 
 /** Brings the Segretario's tables to this build's shape; safe to run at every start. */

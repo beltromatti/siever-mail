@@ -32,6 +32,10 @@ export function dayLineSourceWords(line: DayLine): string {
   }
 
   if (source.kind === 'event') {
+    if (source.title === null || source.start === null) {
+      return 'Evento non più nel calendario'
+    }
+
     const start = new Date(source.start)
     const when = source.allDay
       ? EVENT_DAY.format(start)
@@ -49,12 +53,21 @@ export function dayLineSince(line: DayLine): string {
     : new Date(line.commitment?.createdAt ?? Date.now()).toISOString()
 }
 
-/** What a line opens, as a link: its message or its event; the user's word opens nothing. */
+/**
+ * What a line opens, as a link: its message or its event — and, for the
+ * user's word or an event no longer in the calendar, the open thing itself,
+ * which leads to where it is kept (Oggi) or says it is gone.
+ */
 export function dayLineLink(line: DayLine): HandleLink | null {
-  const { source } = line
-  return source.kind === 'message'
-    ? { handle: '', kind: 'message', ref: source.ref, messageKey: source.messageKey }
-    : source.kind === 'event'
-      ? { handle: '', kind: 'event', eventKey: source.eventKey, title: source.title }
-      : null
+  const { source, commitment } = line
+
+  if (source.kind === 'message') {
+    return { handle: '', kind: 'message', ref: source.ref, messageKey: source.messageKey }
+  }
+
+  if (source.kind === 'event' && source.title !== null) {
+    return { handle: '', kind: 'event', eventKey: source.eventKey, title: source.title }
+  }
+
+  return commitment ? { handle: '', kind: 'commitment', commitmentId: commitment.id } : null
 }

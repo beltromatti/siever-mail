@@ -18,11 +18,15 @@ function isTyping(target: EventTarget | null): boolean {
 
 /**
  * The Calendario's commands from their keys (Settings › Scorciatoie): only
- * while it is in front — it is mounted only then — with nothing over it,
- * and no field taking what is typed. `run` says whether the command
- * applied, and so whether the key is spent.
+ * while it is in front — it is mounted only then — with nothing over it
+ * (`enabled`: no message being written, no dialog of the shell), and no
+ * field taking what is typed. `run` says whether the command applied, and
+ * so whether the key is spent.
  */
-export function useCalendarKeys(run: (commandId: HostCommandId) => boolean): void {
+export function useCalendarKeys(
+  run: (commandId: HostCommandId) => boolean,
+  enabled: boolean
+): void {
   const overrides = useShortcutOverrides()
   const runRef = useRef(run)
 
@@ -31,6 +35,10 @@ export function useCalendarKeys(run: (commandId: HostCommandId) => boolean): voi
   })
 
   useEffect(() => {
+    if (!enabled) {
+      return
+    }
+
     const onKeyDown = (event: KeyboardEvent): void => {
       if (
         event.defaultPrevented ||
@@ -50,5 +58,5 @@ export function useCalendarKeys(run: (commandId: HostCommandId) => boolean): voi
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [overrides])
+  }, [enabled, overrides])
 }

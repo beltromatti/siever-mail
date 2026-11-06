@@ -695,12 +695,27 @@ export class AiStore {
 
   /**
    * A calendar connection removed: what was kept about its events — how to
-   * prepare them, proposals to change them or answer them — and Conoscimi's
-   * knowing it go with it.
+   * prepare them, proposals to change them or answer them, what was open
+   * from them, their place in projects — and Conoscimi's knowing it go with
+   * it, as a mailbox's go with it. Returns the projects that held its
+   * events.
    */
-  async forgetCalendar(connectionId: string, learningKey: string): Promise<void> {
+  async forgetCalendar(connectionId: string, learningKey: string): Promise<string[]> {
     const ofIt = `${connectionId}\u0000%`
+    const projects = await this.sql.all<{ project_id: string }>(
+      `SELECT DISTINCT project_id FROM ai_project_resources WHERE kind = 'evento' AND location LIKE ?`,
+      ofIt
+    )
     await this.sql.run('DELETE FROM ai_event_preps WHERE event_key LIKE ?', ofIt)
+    await this.sql.run(
+      'DELETE FROM ai_item_history WHERE item_id IN (SELECT id FROM ai_items WHERE event_key LIKE ?)',
+      ofIt
+    )
+    await this.sql.run('DELETE FROM ai_items WHERE event_key LIKE ?', ofIt)
+    await this.sql.run(
+      `DELETE FROM ai_project_resources WHERE kind = 'evento' AND location LIKE ?`,
+      ofIt
+    )
     await this.sql.run(
       `UPDATE ai_proposals SET status = 'superata', decided_at = ?
        WHERE status = 'aperta' AND kind = 'evento' AND json_extract(payload_json, '$.eventKey') LIKE ?`,
@@ -708,6 +723,7 @@ export class AiStore {
       ofIt
     )
     await this.sql.run('DELETE FROM ai_learning WHERE account_id = ?', learningKey)
+    return projects.map((row) => row.project_id)
   }
 
   /**
