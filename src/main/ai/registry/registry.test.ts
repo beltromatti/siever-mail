@@ -547,6 +547,23 @@ describe('Registry', () => {
       expect(await registry.viewKeys('da-gestire')).toEqual([])
       expect([...(await registry.activeKeys('acc', ['m:anna', 'm:sent']))]).toEqual(['m:sent'])
     })
+
+    it('leaves out what is open from an event or the user’s word: no message to show', async () => {
+      await registry.openCommitment(
+        { kind: 'evento', eventKey: 'g:cal:sopralluogo' },
+        { kind: 'da_fare', text: 'Portare la planimetria' },
+        BACKGROUND
+      )
+      await registry.openCommitment(
+        { kind: 'utente' },
+        { kind: 'aspetti', text: 'Il bonifico di Rossi' },
+        CHAT
+      )
+
+      expect(await registry.viewKeys('da-gestire')).toEqual([])
+      expect(await registry.viewKeys('in-attesa')).toEqual([])
+      expect(await registry.allActiveKeys()).toEqual([])
+    })
   })
 
   describe('messages deleted for good', () => {

@@ -867,6 +867,8 @@ export class Registry {
    * comes that the user owes (`da-gestire`) or waits for (`in-attesa`), or
    * that have a reply ready (`bozze-pronte`). Where the message is filed
    * does not count; the mail service drops what is only in the Trash or Spam.
+   * What is open from an event or the user's word is no message's: it is not
+   * in the mail's views.
    */
   async viewKeys(
     view: RegistryView,
@@ -891,7 +893,8 @@ export class Registry {
     return this.mapKeys(
       await this.sql.all(
         `SELECT DISTINCT account_id, message_key FROM ai_items
-         WHERE status = 'aperta' AND kind IN (${placeholders(kinds)}) ${accounts}`,
+         WHERE status = 'aperta' AND message_key IS NOT NULL
+           AND kind IN (${placeholders(kinds)}) ${accounts}`,
         ...kinds,
         ...(accountIds ?? [])
       )
@@ -1015,7 +1018,8 @@ export class Registry {
     const accounts = accountIds ? `AND account_id IN (${placeholders(accountIds)})` : ''
     return this.mapKeys(
       await this.sql.all(
-        `SELECT account_id, message_key FROM ai_items WHERE status = 'aperta' ${accounts}
+        `SELECT account_id, message_key FROM ai_items
+         WHERE status = 'aperta' AND message_key IS NOT NULL ${accounts}
          UNION
          SELECT account_id, message_key FROM ai_ready_drafts WHERE status IN ('pronta', 'da_rivedere') ${accounts}`,
         ...(accountIds ?? []),
