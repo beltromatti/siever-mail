@@ -1,10 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   CalendarDays,
   Cloud,
+  Files,
+  HardDrive,
+  Laptop,
   Link2,
   LoaderCircle,
   Mail,
+  Network,
   Server,
   type LucideIcon
 } from 'lucide-react'
@@ -14,6 +18,8 @@ import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarConnection } from '@shared/calendar'
+import type { FileSource } from '@shared/files'
+import { CONNECTION_FAMILIES } from '@shared/workspace'
 import type { AccountConnectionState, MailAccount } from '@shared/models'
 
 import {
@@ -275,7 +281,73 @@ export function ConnectionsList({
           </section>
         )
       })}
+      <FileSourcesCard />
       {dialog}
     </div>
+  )
+}
+
+/**
+ * The File family: what the computer holds — the user's folders, the disks
+ * plugged in, the network shares — which the Segretario reads already, and
+ * the drives to come.
+ */
+function FileSourcesCard(): React.JSX.Element {
+  const [sources, setSources] = useState<ReadonlyArray<FileSource> | null>(null)
+  const drives = CONNECTION_FAMILIES.find((family) => family.id === 'files')?.providers.slice(2)
+
+  useEffect(() => {
+    let current = true
+    void window.filesApi
+      .sources()
+      .then((found) => current && setSources(found))
+      .catch(() => current && setSources([]))
+    return () => {
+      current = false
+    }
+  }, [])
+
+  return (
+    <section
+      aria-label="File"
+      className="bg-card flex flex-col gap-2 rounded-[10px] border px-4 py-3"
+    >
+      <header className="flex items-center gap-2.5">
+        <Files className="text-faint-foreground size-4 shrink-0" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-semibold">File</span>
+          <span className="text-muted-foreground block truncate text-[11.5px]">
+            Il computer e i volumi collegati, in sola lettura per il Segretario
+          </span>
+        </span>
+      </header>
+      <ul className="flex flex-col gap-1 pl-6.5 text-[12px]">
+        {(sources ?? []).map((source) => {
+          const Icon =
+            source.kind === 'computer' ? Laptop : source.kind === 'rete' ? Network : HardDrive
+          return (
+            <li key={source.path} className="flex min-w-0 items-center gap-2">
+              <Icon className="text-faint-foreground size-3.5 shrink-0" />
+              <span className="font-medium">{source.label}</span>
+              <span className="text-muted-foreground min-w-0 flex-1 truncate" title={source.path}>
+                {source.kind === 'computer'
+                  ? 'le tue cartelle'
+                  : source.mounted
+                    ? source.kind === 'rete'
+                      ? 'volume di rete'
+                      : 'volume'
+                    : 'volume di rete, non montato ora'}
+              </span>
+            </li>
+          )
+        })}
+        {drives && drives.length > 0 && (
+          <li className="text-muted-foreground flex min-w-0 items-center gap-2">
+            <Cloud className="text-faint-foreground size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">In arrivo: {drives.join(', ')}</span>
+          </li>
+        )}
+      </ul>
+    </section>
   )
 }

@@ -301,6 +301,11 @@ export async function unmountedShareMountPoints(): Promise<ReadonlySet<string>> 
   return macVolumes ? macVolumes.unmountedShares() : new Set()
 }
 
+/** The volumes of the network shares mounted now (macOS), learnt as `rememberMountedShares` does. */
+export async function mountedShareMountPoints(): Promise<ReadonlySet<string>> {
+  return new Set((await macVolumes?.mountedShares())?.map((share) => share.mountPoint) ?? [])
+}
+
 /** Learns the shares mounted now, so they can be mounted again after a restart. */
 export async function rememberMountedShares(): Promise<void> {
   await macVolumes?.mountedShares()

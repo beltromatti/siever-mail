@@ -129,6 +129,11 @@ const OpenLinkContext = createContext<(link: HandleLink) => void>(() => undefine
 
 export const SegretarioLinkProvider = OpenLinkContext.Provider
 
+/** Opens what a link points at, as the app does for the Segretario's: a message, an event, a project… */
+export function useOpenLink(): (link: HandleLink) => void {
+  return useContext(OpenLinkContext)
+}
+
 /**
  * Words of the Segretario that stay — the letter of Oggi, "Il punto", a
  * meeting's preparation — set like the rest of its writing, their links

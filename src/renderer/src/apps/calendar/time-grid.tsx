@@ -4,6 +4,7 @@ import { ChevronDown, ChevronUp, Flag } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
 import type { DayLine } from '@shared/segretario'
+import { dayLineKey, dayLineSourceWords } from '@renderer/features/segretario/day-line-source'
 
 import {
   addDays,
@@ -74,7 +75,7 @@ function DueChip({
     <button
       type="button"
       onClick={() => onOpen(line)}
-      title={`${line.text} — ${line.from}, «${line.subject}»`}
+      title={`${line.text} — ${dayLineSourceWords(line)}`}
       className="text-ai bg-ai-soft/60 hover:bg-ai-soft focus-visible:ring-ring/60 flex w-full min-w-0 shrink-0 items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-left text-[11px] font-medium outline-none focus-visible:ring-2"
     >
       <Flag className="size-3 shrink-0" />
@@ -321,13 +322,7 @@ export function TimeGrid({
         )),
       ...due
         .filter((line) => line.due === dayKey(day))
-        .map((line) => (
-          <DueChip
-            key={`${line.messageKey}\u0000${line.commitment?.id ?? ''}`}
-            line={line}
-            onOpen={onOpenLine}
-          />
-        ))
+        .map((line) => <DueChip key={dayLineKey(line)} line={line} onOpen={onOpenLine} />)
     ]
   }))
   const bandOverflows = band.some(({ entries }) => entries.length > BAND_SHOWN)

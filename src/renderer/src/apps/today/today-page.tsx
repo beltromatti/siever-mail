@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, Check, LoaderCircle, RefreshCw } from 'lucide-react'
+import { AlertCircle, Check, LoaderCircle, Plus, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
+import { Input } from '@renderer/components/ui/input'
 import { cn } from '@renderer/lib/utils'
 import type { MessageRef } from '@shared/models'
 import type { Commitment, DayLine, TodayPage as Today } from '@shared/segretario'
@@ -18,7 +19,13 @@ import {
   undoTick
 } from '@renderer/features/segretario/commitment-row'
 import { ProposalCard } from '@renderer/features/segretario/message-work'
-import { LinkedWords } from '@renderer/features/segretario/segretario-text'
+import {
+  dayLineKey,
+  dayLineLink,
+  dayLineSince,
+  dayLineSourceWords
+} from '@renderer/features/segretario/day-line-source'
+import { LinkedWords, useOpenLink } from '@renderer/features/segretario/segretario-text'
 import { COMMITMENT_LABELS, dueLabel } from '@renderer/features/segretario/row-work'
 
 const DAY_TITLE = new Intl.DateTimeFormat('it-IT', {
@@ -45,11 +52,6 @@ const SECTIONS = [
   title: string
   glance: string
 }>
-
-/** A line's key: its message, and the thing open in it when it is one. */
-function lineKey(line: DayLine): string {
-  return `${line.ref.accountId}\u0000${line.messageKey}\u0000${line.commitment?.id ?? line.readyKind ?? ''}`
-}
 
 /** Ticks a line's commitment off — done, or arrived — with an undo. */
 async function settleLine(line: DayLine): Promise<boolean> {
@@ -81,17 +83,17 @@ function Line({
   line,
   day,
   showWaitingSince,
-  onOpen,
   onSettled,
   onRemind
 }: {
   line: DayLine
   day: string
   showWaitingSince?: boolean
-  onOpen: (ref: MessageRef) => void
   onSettled: (line: DayLine) => void
   onRemind: (commitment: Commitment) => void
 }): React.JSX.Element {
+  const openLink = useOpenLink()
+  const link = dayLineLink(line)
   const late = line.due !== null && line.due < day
   const kind = line.commitment?.kind
   const settleLabel = kind ? (kind === 'aspetti' ? 'Arrivato' : 'Fatto') : null
@@ -100,7 +102,7 @@ function Line({
     <li className="group relative">
       <button
         type="button"
-        onClick={() => onOpen(line.ref)}
+        onClick={() => link && openLink(link)}
         className="hover:bg-hover focus-visible:ring-ring/60 -mx-3 flex w-[calc(100%+1.5rem)] flex-col gap-1 rounded-[8px] px-3 py-2.5 pr-24 text-left outline-none focus-visible:ring-2"
       >
         <span className="voice text-foreground text-[16px] leading-[1.4]">
@@ -123,12 +125,9 @@ function Line({
             </span>
           )}
           {showWaitingSince && (
-            <span className="shrink-0">da {SINCE.format(new Date(line.date))}</span>
+            <span className="shrink-0">da {SINCE.format(new Date(dayLineSince(line)))}</span>
           )}
-          <span className="min-w-0 truncate">
-            {line.from}
-            {line.subject && ` · «${line.subject}»`}
-          </span>
+          <span className="min-w-0 truncate">{dayLineSourceWords(line)}</span>
         </span>
       </button>
       {settleLabel && line.commitment && (
@@ -152,13 +151,65 @@ function Line({
   )
 }
 
+/**
+ * Something to remember, in a few words: an open thing of the user's own,
+ * kept with the rest — its date, if it has one, comes from its menu.
+ */
+function RememberField(): React.JSX.Element {
+  const [text, setText] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const add = async (): Promise<void> => {
+    const said = text.trim()
+
+    if (!said || saving) {
+      return
+    }
+
+    setSaving(true)
+
+    try {
+      await window.segretarioApi.openCommitment(
+        { kind: 'user' },
+        { kind: 'da_fare', text: said, due: null }
+      )
+      setText('')
+    } catch (error) {
+      toast.error('Non è stata aggiunta', {
+        description: error instanceof Error ? error.message : undefined
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form
+      className="flex items-center gap-2"
+      onSubmit={(event) => {
+        event.preventDefault()
+        void add()
+      }}
+    >
+      <Plus className="text-faint-foreground size-4 shrink-0" />
+      <Input
+        value={text}
+        disabled={saving}
+        aria-label="Una cosa da ricordare"
+        placeholder="Una cosa da ricordare: scrivila e premi Invio"
+        onChange={(event) => setText(event.target.value)}
+        className="focus-visible:border-border h-9 border-transparent bg-transparent shadow-none"
+      />
+    </form>
+  )
+}
+
 function Section({
   id,
   title,
   lines,
   day,
   showWaitingSince,
-  onOpen,
   settled,
   onSettled,
   onRemind
@@ -168,13 +219,12 @@ function Section({
   lines: ReadonlyArray<DayLine>
   day: string
   showWaitingSince?: boolean
-  onOpen: (ref: MessageRef) => void
   /** Lines just dealt with here, gone before the day is read again. */
   settled: ReadonlySet<string>
   onSettled: (line: DayLine) => void
   onRemind: (commitment: Commitment) => void
 }): React.JSX.Element | null {
-  const shown = lines.filter((line) => !settled.has(lineKey(line)))
+  const shown = lines.filter((line) => !settled.has(dayLineKey(line)))
 
   if (shown.length === 0) {
     return null
@@ -188,11 +238,10 @@ function Section({
       <ul className="flex flex-col">
         {shown.map((line) => (
           <Line
-            key={lineKey(line)}
+            key={dayLineKey(line)}
             line={line}
             day={day}
             showWaitingSince={showWaitingSince}
-            onOpen={onOpen}
             onSettled={onSettled}
             onRemind={onRemind}
           />
@@ -225,7 +274,7 @@ export function TodayPage({
   const [page, setPage] = useState<Today | null>(null)
   const [settled, setSettled] = useState<ReadonlySet<string>>(() => new Set())
   const settle = useCallback(
-    (line: DayLine): void => setSettled((current) => new Set(current).add(lineKey(line))),
+    (line: DayLine): void => setSettled((current) => new Set(current).add(dayLineKey(line))),
     []
   )
   const [now] = useState(() => Date.now())
@@ -309,7 +358,7 @@ export function TodayPage({
   // At a glance, what each part holds still: a click goes to it.
   const glance = page
     ? SECTIONS.flatMap((section) => {
-        const count = page[section.key].filter((line) => !settled.has(lineKey(line))).length
+        const count = page[section.key].filter((line) => !settled.has(dayLineKey(line))).length
         return count > 0 ? [{ ...section, count }] : []
       })
     : []
@@ -464,12 +513,13 @@ export function TodayPage({
                   <ul className="flex flex-col gap-2">
                     {page.questions.flatMap((line) =>
                       line.commitment
-                        ? [<CommitmentRow key={lineKey(line)} commitment={line.commitment} />]
+                        ? [<CommitmentRow key={dayLineKey(line)} commitment={line.commitment} />]
                         : []
                     )}
                   </ul>
                 </section>
               )}
+              <RememberField />
               {SECTIONS.map((section) => (
                 <Section
                   key={section.key}
@@ -478,7 +528,6 @@ export function TodayPage({
                   lines={page[section.key]}
                   day={page.day}
                   showWaitingSince={section.key === 'awaited'}
-                  onOpen={onOpenMessage}
                   settled={settled}
                   onSettled={settle}
                   onRemind={onRemind}
@@ -505,7 +554,7 @@ export function TodayPage({
               )}
               {empty && (
                 <p className="voice text-muted-foreground text-[16px]">
-                  Niente in sospeso: la posta è in ordine.
+                  Niente in sospeso: è tutto in ordine.
                 </p>
               )}
             </>

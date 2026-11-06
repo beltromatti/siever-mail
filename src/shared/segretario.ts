@@ -114,12 +114,19 @@ export type CommitmentKind = 'ti_chiedono' | 'hai_promesso' | 'aspetti' | 'da_fa
 export type CommitmentStatus = 'aperta' | 'fatta' | 'non_serve' | 'rinviata'
 
 /** Something open between the user and someone: asked, promised, awaited, to do. */
+/**
+ * Where an open thing comes from, to open it: a message (with its
+ * conversation), an event, or the user's word — said to the Segretario or
+ * written by hand.
+ */
+export type CommitmentSource =
+  | { kind: 'message'; accountId: string; threadId: string; messageKey: string }
+  | { kind: 'event'; eventKey: string }
+  | { kind: 'user' }
+
 export interface Commitment {
   id: number
-  accountId: string
-  threadId: string
-  /** The message it came from. */
-  messageKey: string
+  source: CommitmentSource
   kind: CommitmentKind
   text: string
   due: string | null
@@ -140,6 +147,12 @@ export interface Commitment {
 export interface ProjectLabel {
   id: string
   title: string
+}
+
+/** An event's share of the work: the open things born from it (and those closed lately), its projects. */
+export interface EventWork {
+  commitments: Commitment[]
+  projects: ProjectLabel[]
 }
 
 /** A reply prepared ahead, while it waits for the user. */
@@ -254,25 +267,39 @@ export interface Project {
 }
 
 export interface ProjectDetail extends Project {
-  resources: Array<{ kind: 'cartella' | 'link'; location: string; label: string | null }>
+  /** What it gathers besides its conversations: folders, events (by key, titled), links. */
+  resources: Array<{ kind: 'cartella' | 'evento' | 'link'; location: string; label: string | null }>
   commitments: Commitment[]
 }
 
 /* ──────────────────────────────── the day ──────────────────────────────── */
 
-/** A line of the day's page, of the agenda and of a project: a message, with what makes it count. */
+/**
+ * Where a line of the day comes from, to say it and to open it: a message
+ * (who wrote it — "Tu" for the user, from any of their accounts —, its
+ * subject, when), an event (its title, when it is), or the user's word
+ * (when they said it).
+ */
+export type DayLineSource =
+  | {
+      kind: 'message'
+      ref: MessageRef
+      messageKey: string
+      subject: string
+      from: string
+      date: string
+    }
+  | { kind: 'event'; eventKey: string; title: string; start: string; allDay: boolean }
+  | { kind: 'user'; date: string }
+
+/** A line of the day's page, of the agenda and of a project: something to do, with what makes it count. */
 export interface DayLine {
   text: string
   priority: NotePriority | null
   due: string | null
   commitment: Commitment | null
   readyKind?: 'risposta' | 'sollecito'
-  ref: MessageRef
-  messageKey: string
-  subject: string
-  /** Who wrote it, as a name: "Tu" when it is the user, from any of their accounts. */
-  from: string
-  date: string
+  source: DayLineSource
 }
 
 /** The day as the Segretario sees it: "Oggi". */
@@ -684,6 +711,7 @@ export const SEGRETARIO_IPC = {
   decideProposal: 'segretario:decide-proposal',
   listProposals: 'segretario:list-proposals',
   eventPrep: 'segretario:event-prep',
+  eventWork: 'segretario:event-work',
   commitmentSource: 'segretario:commitment-source',
   getToday: 'segretario:get-today',
   refreshToday: 'segretario:refresh-today',
@@ -792,9 +820,12 @@ export interface SegretarioApi {
     id: number,
     changes: { text?: string; due?: string | null; kind?: CommitmentKind }
   ) => Promise<Commitment>
-  /** The user opens a commitment on a message. */
+  /** The user opens a commitment: from a message, from an event, or of their own. */
   openCommitment: (
-    message: { accountId: string; messageKey: string },
+    from:
+      | { kind: 'message'; accountId: string; messageKey: string }
+      | { kind: 'event'; eventKey: string }
+      | { kind: 'user' },
     input: { kind: CommitmentKind; text: string; due: string | null }
   ) => Promise<Commitment>
   /** "Segna come gestito": what these messages ask of the user is done; what they wait for stays. */
@@ -811,8 +842,20 @@ export interface SegretarioApi {
   listProposals: () => Promise<Proposal[]>
   /** How to prepare for an event, as the Segretario wrote it, and when; null when it has not. */
   eventPrep: (eventKey: string) => Promise<(LinkedText & { writtenAt: number }) | null>
-  /** The message an open thing comes from, to open it: null when it is no longer in the mail. */
-  commitmentSource: (id: number) => Promise<MessageRef | null>
+  /** What the work holds of an event, as the reader shows it of a message: its open things and its projects. */
+  eventWork: (eventKey: string) => Promise<EventWork>
+  /**
+   * Where an open thing comes from, to open it: its message where it is now,
+   * its event, the user's word; null when its message or event is gone.
+   */
+  commitmentSource: (
+    id: number
+  ) => Promise<
+    | { kind: 'message'; ref: MessageRef }
+    | { kind: 'event'; eventKey: string }
+    | { kind: 'user' }
+    | null
+  >
   /**
    * The user accepted a proposal — with what they changed — or set it aside;
    * `revision` is the version shown: one changed since is refused.

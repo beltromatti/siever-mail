@@ -530,11 +530,10 @@ export function SegretarioSection({
             <span className="min-w-0">
               <span className="block text-[12px] font-medium">Funzioni AI</span>
               <span className="text-muted-foreground block text-[11px]">
-                Il Segretario legge la posta che arriva e quella degli ultimi trenta giorni, tiene
-                il conto di cosa ti chiedono, cosa hai promesso e cosa aspetti, riconosce i
-                progetti, prepara le risposte, scrive la giornata e rilegge i messaggi prima che
-                partano. Spente, SIEVER Mail resta un normale client di posta e calendario: quello
-                che ha imparato resta.
+                Il Segretario segue la posta e i calendari mentre cambiano, tiene il conto di cosa
+                ti chiedono, cosa hai promesso e cosa aspetti, riconosce i progetti, prepara le
+                risposte e gli incontri, scrive la giornata e rilegge i messaggi prima che partano.
+                Spente, restano le app senza Segretario: quello che ha imparato resta.
               </span>
             </span>
             <Switch

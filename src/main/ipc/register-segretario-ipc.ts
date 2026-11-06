@@ -48,6 +48,12 @@ const idSchema = z.string().min(1).max(100)
 const messageKeySchema = z.string().min(1).max(1000)
 const messageSchema = z.object({ accountId: idSchema, messageKey: messageKeySchema })
 const messageKeysSchema = z.array(messageSchema).max(1000)
+/** Where an open thing the user adds comes from: a message, an event, or their own word. */
+const commitmentFromSchema = z.discriminatedUnion('kind', [
+  messageSchema.extend({ kind: z.literal('message') }).strict(),
+  z.object({ kind: z.literal('event'), eventKey: z.string().min(1).max(2000) }).strict(),
+  z.object({ kind: z.literal('user') }).strict()
+])
 const threadSchema = z.object({ accountId: idSchema, threadId: z.string().min(1).max(1000) })
 const daySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Una data AAAA-MM-GG.')
 const commitmentIdSchema = z.number().int().positive()
@@ -229,8 +235,8 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.editCommitment, (id: unknown, changes: unknown) =>
     segretario.editCommitment(commitmentIdSchema.parse(id), commitmentChangeSchema.parse(changes))
   )
-  handle(SEGRETARIO_IPC.openCommitment, (message: unknown, input: unknown) =>
-    segretario.openCommitment(messageSchema.parse(message), newCommitmentSchema.parse(input))
+  handle(SEGRETARIO_IPC.openCommitment, (from: unknown, input: unknown) =>
+    segretario.openCommitment(commitmentFromSchema.parse(from), newCommitmentSchema.parse(input))
   )
   handle(SEGRETARIO_IPC.markHandled, (messages: unknown) =>
     segretario.markHandled(messageKeysSchema.parse(messages))
@@ -258,6 +264,9 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.listProposals, () => segretario.listProposals())
   handle(SEGRETARIO_IPC.eventPrep, (eventKey: unknown) =>
     segretario.eventPrep(z.string().min(1).max(2000).parse(eventKey))
+  )
+  handle(SEGRETARIO_IPC.eventWork, (eventKey: unknown) =>
+    segretario.eventWork(z.string().min(1).max(2000).parse(eventKey))
   )
   handle(SEGRETARIO_IPC.commitmentSource, (id: unknown) =>
     segretario.commitmentSource(z.number().int().positive().parse(id))

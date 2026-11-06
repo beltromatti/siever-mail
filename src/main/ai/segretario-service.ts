@@ -24,6 +24,7 @@ import {
   type DayLine,
   type FilingContext,
   type EngineState,
+  type EventWork,
   type MemoryNote,
   type MemoryVersion,
   type MessageNote,
@@ -81,6 +82,7 @@ import {
   OWED_KINDS,
   RegistryRefusal,
   USER,
+  type CommitmentOrigin,
   type CommitmentRecord,
   type NoteRecord,
   type ProjectSummary
@@ -173,11 +175,20 @@ function noteOf(record: NoteRecord): MessageNote {
 }
 
 function commitmentOf(record: CommitmentRecord): Commitment {
+  const { origin } = record
   return {
     id: record.id,
-    accountId: record.accountId,
-    threadId: record.threadId,
-    messageKey: record.messageKey,
+    source:
+      origin.kind === 'messaggio'
+        ? {
+            kind: 'message',
+            accountId: origin.accountId,
+            threadId: origin.threadId,
+            messageKey: origin.messageKey
+          }
+        : origin.kind === 'evento'
+          ? { kind: 'event', eventKey: origin.eventKey }
+          : { kind: 'user' },
     kind: record.kind,
     text: record.text,
     due: record.due,
@@ -1226,22 +1237,52 @@ export class SegretarioService {
     return commitmentOf(record)
   }
 
+  /** The user adds an open thing: from a message, from an event, or of their own. */
   async openCommitment(
-    message: { accountId: string; messageKey: string },
+    from:
+      | { kind: 'message'; accountId: string; messageKey: string }
+      | { kind: 'event'; eventKey: string }
+      | { kind: 'user' },
     input: { kind: CommitmentKind; text: string; due: string | null }
   ): Promise<Commitment> {
-    const location = (await this.options.mail.locate(message.accountId, [message.messageKey])).get(
-      message.messageKey
-    )
+    const origin = await this.originOf(from)
+    const { record } = await plainly(this.db.registry.openCommitment(origin, input, USER))
+    return commitmentOf(record)
+  }
 
-    if (!location) {
-      throw new Error('Il messaggio non è più nella posta.')
+  /** Where the user's new open thing comes from, as the registry keeps it. */
+  private async originOf(
+    from:
+      | { kind: 'message'; accountId: string; messageKey: string }
+      | { kind: 'event'; eventKey: string }
+      | { kind: 'user' }
+  ): Promise<CommitmentOrigin> {
+    if (from.kind === 'message') {
+      const location = (await this.options.mail.locate(from.accountId, [from.messageKey])).get(
+        from.messageKey
+      )
+
+      if (!location) {
+        throw new Error('Il messaggio non è più nella posta.')
+      }
+
+      return {
+        kind: 'messaggio',
+        accountId: from.accountId,
+        threadId: location.threadId,
+        messageKey: from.messageKey
+      }
     }
 
-    const { record } = await plainly(
-      this.db.registry.openCommitment({ ...message, threadId: location.threadId }, input, USER)
-    )
-    return commitmentOf(record)
+    if (from.kind === 'event') {
+      if (!(await this.options.calendar.event(from.eventKey))) {
+        throw new Error('L’evento non è più nel calendario.')
+      }
+
+      return { kind: 'evento', eventKey: from.eventKey }
+    }
+
+    return { kind: 'utente' }
   }
 
   /**
@@ -1387,10 +1428,49 @@ export class SegretarioService {
     return this.db.registry.day.prep(eventKey)
   }
 
-  /** The message an open thing comes from, where it is now: a link to the thing opens it. */
-  async commitmentSource(id: number): Promise<MessageRef | null> {
-    const record = await this.db.registry.commitments.get(id)
-    return record ? this.replySource(record.accountId, record.messageKey) : null
+  /** What the work holds of an event: the things born from it, the projects that gather it. */
+  async eventWork(eventKey: string): Promise<EventWork> {
+    const { registry } = this.db
+    const [items, projects] = await Promise.all([
+      registry.commitments.ofPlaces({ events: [eventKey] }),
+      registry.projects.ofEvents([eventKey])
+    ])
+
+    return {
+      commitments: items.map(commitmentOf),
+      projects: (projects.get(eventKey) ?? []).map((project) => ({
+        id: project.id,
+        title: project.title
+      }))
+    }
+  }
+
+  /**
+   * Where an open thing comes from, to open it from a link: its message
+   * where it is now, its event, the user's word; null when gone.
+   */
+  async commitmentSource(
+    id: number
+  ): Promise<
+    | { kind: 'message'; ref: MessageRef }
+    | { kind: 'event'; eventKey: string }
+    | { kind: 'user' }
+    | null
+  > {
+    const origin = (await this.db.registry.commitments.get(id))?.origin
+
+    if (!origin) {
+      return null
+    }
+
+    if (origin.kind === 'messaggio') {
+      const ref = await this.replySource(origin.accountId, origin.messageKey)
+      return ref ? { kind: 'message', ref } : null
+    }
+
+    return origin.kind === 'evento'
+      ? { kind: 'event', eventKey: origin.eventKey }
+      : { kind: 'user' }
   }
 
   async listProposals(): Promise<Proposal[]> {
@@ -1724,9 +1804,10 @@ export class SegretarioService {
   }
 
   /**
-   * Lines of the day, from what is open and prepared: each with its
-   * message — in the folder the user thinks of it in, never one only in
-   * the Trash or Spam (what is open from those is set aside).
+   * Lines of the day, from what is open and prepared, each with where it
+   * comes from: its message — in the folder the user thinks of it in, never
+   * one only in the Trash or Spam (what is open from those is set aside) —,
+   * its event — while it is in the calendar —, or the user's word.
    */
   private async dayLines(
     records: ReadonlyArray<CommitmentRecord>,
@@ -1738,7 +1819,11 @@ export class SegretarioService {
   ): Promise<{ commitments: Map<number, DayLine>; replies: DayLine[] }> {
     const { registry } = this.db
     const wanted = [
-      ...records.map((record) => ({ accountId: record.accountId, messageKey: record.messageKey })),
+      ...records.flatMap(({ origin }) =>
+        origin.kind === 'messaggio'
+          ? [{ accountId: origin.accountId, messageKey: origin.messageKey }]
+          : []
+      ),
       ...replies
     ]
     const summaries = await this.messageLines(wanted)
@@ -1748,22 +1833,60 @@ export class SegretarioService {
         note
       ])
     )
+    const events = new Map(
+      await Promise.all(
+        [
+          ...new Set(
+            records.flatMap(({ origin }) => (origin.kind === 'evento' ? [origin.eventKey] : []))
+          )
+        ].map(async (key) => [key, await this.options.calendar.event(key)] as const)
+      )
+    )
     const lines = new Map<number, DayLine>()
 
     for (const record of records) {
-      const summary = summaries.get(`${record.accountId}\u0000${record.messageKey}`)
+      const { origin } = record
+      const line = { text: record.text, due: record.due, commitment: commitmentOf(record) }
 
-      if (summary) {
+      if (origin.kind === 'messaggio') {
+        const key = `${origin.accountId}\u0000${origin.messageKey}`
+        const summary = summaries.get(key)
+
+        if (summary) {
+          lines.set(record.id, {
+            ...line,
+            priority: notes.get(key)?.priority ?? null,
+            source: {
+              kind: 'message',
+              ref: summary.ref,
+              messageKey: origin.messageKey,
+              subject: summary.subject,
+              from: summary.from,
+              date: summary.dateIso
+            }
+          })
+        }
+      } else if (origin.kind === 'evento') {
+        const event = events.get(origin.eventKey)
+
+        if (event) {
+          lines.set(record.id, {
+            ...line,
+            priority: null,
+            source: {
+              kind: 'event',
+              eventKey: event.key,
+              title: event.title,
+              start: event.start,
+              allDay: event.allDay
+            }
+          })
+        }
+      } else {
         lines.set(record.id, {
-          text: record.text,
-          priority: notes.get(`${record.accountId}\u0000${record.messageKey}`)?.priority ?? null,
-          due: record.due,
-          commitment: commitmentOf(record),
-          ref: summary.ref,
-          messageKey: record.messageKey,
-          subject: summary.subject,
-          from: summary.from,
-          date: summary.dateIso
+          ...line,
+          priority: null,
+          source: { kind: 'user', date: new Date(record.createdAt).toISOString() }
         })
       }
     }
@@ -1781,11 +1904,14 @@ export class SegretarioService {
           due: note?.due ?? null,
           commitment: null,
           readyKind: reply.kind,
-          ref: summary.ref,
-          messageKey: reply.messageKey,
-          subject: summary.subject,
-          from: summary.from,
-          date: summary.dateIso
+          source: {
+            kind: 'message',
+            ref: summary.ref,
+            messageKey: reply.messageKey,
+            subject: summary.subject,
+            from: summary.from,
+            date: summary.dateIso
+          }
         })
       }
     }
@@ -1919,16 +2045,18 @@ export class SegretarioService {
       return projects
     }
 
-    const setAsideRecords = open.filter((record) => aside.has(record.id))
+    const setAsideThreads = open.flatMap(({ id, origin }) =>
+      aside.has(id) && origin.kind === 'messaggio' ? [origin] : []
+    )
     const less = new Map<string, number>()
 
-    for (const link of await registry.projects.linksOf(setAsideRecords)) {
+    for (const link of await registry.projects.linksOf(setAsideThreads)) {
       if (!link.rejected) {
         less.set(
           link.projectId,
           (less.get(link.projectId) ?? 0) +
-            setAsideRecords.filter(
-              (record) => record.accountId === link.accountId && record.threadId === link.threadId
+            setAsideThreads.filter(
+              (origin) => origin.accountId === link.accountId && origin.threadId === link.threadId
             ).length
         )
       }
@@ -1943,16 +2071,19 @@ export class SegretarioService {
   /** Of these commitments, those whose message lies only in the Trash or Spam: set aside. */
   private async setAsideOf(records: ReadonlyArray<CommitmentRecord>): Promise<Set<number>> {
     const aside = new Set<number>()
+    const fromMessages = records.flatMap(({ id, origin }) =>
+      origin.kind === 'messaggio' ? [{ id, ...origin }] : []
+    )
 
-    for (const accountId of new Set(records.map((record) => record.accountId))) {
-      const ofAccount = records.filter((record) => record.accountId === accountId)
+    for (const accountId of new Set(fromMessages.map((item) => item.accountId))) {
+      const ofAccount = fromMessages.filter((item) => item.accountId === accountId)
       const located = await this.options.mail.locate(accountId, [
-        ...new Set(ofAccount.map((record) => record.messageKey))
+        ...new Set(ofAccount.map((item) => item.messageKey))
       ])
 
-      for (const record of ofAccount) {
-        if (located.get(record.messageKey)?.setAside) {
-          aside.add(record.id)
+      for (const item of ofAccount) {
+        if (located.get(item.messageKey)?.setAside) {
+          aside.add(item.id)
         }
       }
     }
@@ -1968,11 +2099,16 @@ export class SegretarioService {
       return null
     }
 
-    const threads = await registry.projects.threadsOf(id)
-    const [items, resources] = await Promise.all([
-      registry.commitments.ofThreads(threads),
+    const [threads, resources] = await Promise.all([
+      registry.projects.threadsOf(id),
       registry.projects.resources(id)
     ])
+    const items = await registry.commitments.ofPlaces({
+      threads,
+      events: resources
+        .filter((resource) => resource.kind === 'evento')
+        .map((resource) => resource.location)
+    })
     const aside = await this.setAsideOf(items)
 
     return {

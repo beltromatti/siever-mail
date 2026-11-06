@@ -22,6 +22,29 @@ const V1_TABLES = [
   )`
 ]
 
+/** The open things as version 4 kept them: a message required, no event. */
+const V4_ITEMS = `CREATE TABLE ai_items (
+  id INTEGER PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  message_key TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  text TEXT NOT NULL,
+  due TEXT,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  closed_at INTEGER,
+  closed_by TEXT,
+  revision INTEGER NOT NULL DEFAULT 1,
+  updated_at INTEGER,
+  until TEXT,
+  reason TEXT,
+  evidence_key TEXT,
+  created_by TEXT NOT NULL DEFAULT 'segretario',
+  run_id TEXT,
+  question TEXT
+)`
+
 describe('ensureAiSchema', () => {
   let sql: ReturnType<typeof memorySql>
 
@@ -107,7 +130,7 @@ describe('ensureAiSchema', () => {
       )
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '4'
+      value: '5'
     })
   })
 
@@ -131,6 +154,50 @@ describe('ensureAiSchema', () => {
         "SELECT name FROM pragma_table_info('ai_projects') WHERE name = 'state_links_json'"
       )
     ).toEqual([{ name: 'state_links_json' }])
+  })
+
+  it('lets a version 4 database keep open things from any source, keeping those it held', async () => {
+    await ensureAiSchema(sql)
+    await sql.run('DROP TABLE ai_items')
+    await sql.run(V4_ITEMS)
+    await sql.run(
+      `INSERT INTO ai_items (id, account_id, thread_id, message_key, kind, text, status, created_at, revision, created_by)
+       VALUES (7, 'a', 'th1', 'm:1', 'da_fare', 'Mandare il computo', 'aperta', 1, 3, 'segretario')`
+    )
+    await sql.run("UPDATE ai_meta SET value = '4' WHERE key = 'schema_version'")
+
+    await ensureAiSchema(sql)
+
+    expect(
+      await sql.all('SELECT id, account_id, message_key, event_key, revision FROM ai_items')
+    ).toEqual([{ id: 7, account_id: 'a', message_key: 'm:1', event_key: null, revision: 3 }])
+    await sql.run(
+      `INSERT INTO ai_items (event_key, kind, text, status, created_at) VALUES ('g:e1', 'da_fare', 'Portare la planimetria', 'aperta', 2)`
+    )
+    await sql.run(
+      `INSERT INTO ai_items (kind, text, status, created_at) VALUES ('da_fare', 'Chiamare il geometra', 'aperta', 3)`
+    )
+    expect(
+      await sql.all("SELECT name FROM sqlite_master WHERE name = 'idx_ai_items_event'")
+    ).toEqual([{ name: 'idx_ai_items_event' }])
+  })
+
+  it('picks up the rebuilding of the open things where a quit cut it short', async () => {
+    await ensureAiSchema(sql)
+    // Cut short after the rows were copied and the old table dropped, before the new one was renamed.
+    await sql.run('ALTER TABLE ai_items RENAME TO ai_items_v5')
+    await sql.run(
+      `INSERT INTO ai_items_v5 (id, account_id, thread_id, message_key, kind, text, status, created_at)
+       VALUES (7, 'a', 'th1', 'm:1', 'da_fare', 'Mandare il computo', 'aperta', 1)`
+    )
+    await sql.run("UPDATE ai_meta SET value = '4' WHERE key = 'schema_version'")
+
+    await ensureAiSchema(sql)
+
+    expect(await sql.all('SELECT id, text FROM ai_items')).toEqual([
+      { id: 7, text: 'Mandare il computo' }
+    ])
+    expect(await sql.all("SELECT name FROM sqlite_master WHERE name = 'ai_items_v5'")).toEqual([])
   })
 
   it('picks up a migration a quit cut short between two steps', async () => {
@@ -178,7 +245,7 @@ describe('ensureAiSchema', () => {
       { id: 'p1', revision: 1 }
     ])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '4'
+      value: '5'
     })
   })
 

@@ -21,7 +21,7 @@ import {
   type ToolContext,
   UnknownHandle
 } from '../agent/tool-types'
-import { resolveMessage } from './anchors'
+import { resolveEvent, resolveMessage } from './anchors'
 import { projectLine } from './describe'
 import { countOf } from './format'
 
@@ -185,6 +185,7 @@ export const projectsTool: SegretarioTool = {
       descrizione: { type: 'string' },
       testo: { type: 'string' },
       mail: { type: 'array', items: { type: 'string' } },
+      evento: { type: 'array', items: { type: 'string' } },
       ricerca: {
         type: 'object',
         properties: {
@@ -299,12 +300,29 @@ export const projectsTool: SegretarioTool = {
         case 'collega':
         case 'scollega': {
           const projectId = await projectOf(context, args)
-          const threads = await threadsOf(context, args)
+          const events = stringListArg(args, 'evento').map((handle) =>
+            resolveEvent(context, handle)
+          )
+          const threads =
+            events.length > 0 && !args.mail && !args.ricerca ? [] : await threadsOf(context, args)
 
-          if (threads.length === 0) {
+          if (threads.length === 0 && events.length === 0) {
             throw new ToolInputError(
-              'Indica le conversazioni: `mail` (riferimenti m…) o `ricerca`.'
+              'Indica cosa: le conversazioni con `mail` (riferimenti m…) o `ricerca`, gli eventi con `evento` (riferimenti e…).'
             )
+          }
+
+          // An event is gathered as what the project holds besides its conversations.
+          for (const event of events) {
+            if (action === 'collega') {
+              await context.registry.addProjectResource(
+                projectId,
+                { kind: 'evento', location: event.eventKey, label: event.title },
+                actor
+              )
+            } else {
+              await context.registry.removeProjectResource(projectId, event.eventKey, actor)
+            }
           }
 
           let done = 0
@@ -330,11 +348,15 @@ export const projectsTool: SegretarioTool = {
           }
 
           const project = await context.registry.projects.get(projectId)
+          const what = [
+            ...(threads.length > 0 ? [countOf(done, 'conversazione', 'conversazioni')] : []),
+            ...(events.length > 0 ? [countOf(events.length, 'evento', 'eventi')] : [])
+          ].join(' e ')
           return {
-            content: `${action === 'collega' ? 'Messe' : 'Tolte'}: ${countOf(done, 'conversazione', 'conversazioni')}${
+            content: `${action === 'collega' ? 'Messi' : 'Tolti'}: ${what}${
               refused.length > 0 ? `. Non fatte: ${[...new Set(refused)].join(' ')}` : '.'
             }`,
-            summary: `${action === 'collega' ? 'In' : 'Tolte da'} ${project?.title ?? 'un progetto'}: ${countOf(done, 'conversazione', 'conversazioni')}`
+            summary: `${action === 'collega' ? 'In' : 'Tolti da'} ${project?.title ?? 'un progetto'}: ${what}`
           }
         }
         case 'rinomina': {

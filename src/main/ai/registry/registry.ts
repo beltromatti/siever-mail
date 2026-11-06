@@ -11,12 +11,14 @@ import {
   OWED_KINDS,
   type Actor,
   type CommitmentKind,
+  type CommitmentOrigin,
   type CommitmentRecord,
   type CommitmentStatus,
   type Evidence,
   type MessageAnchor,
   type NoteRecord,
   type ProjectRecord,
+  type ProjectResourceKind,
   type ProposalRecord,
   type ProposalStatus,
   type RegistryChange,
@@ -42,6 +44,18 @@ export interface RegistryHooks {
 
 /** How long a message must stay missing before it is taken as deleted. */
 const GONE_AFTER_MS = 30 * 60 * 1000
+
+/** Where a lesson about an open thing comes from: its message or its event; nothing for the user's word. */
+function lessonSource(
+  record: CommitmentRecord
+): { messaggio: { accountId: string; messageKey: string } } | { evento: string } | object {
+  const { origin } = record
+  return origin.kind === 'messaggio'
+    ? { messaggio: { accountId: origin.accountId, messageKey: origin.messageKey } }
+    : origin.kind === 'evento'
+      ? { evento: origin.eventKey }
+      : {}
+}
 
 const KIND_WORDS: Record<CommitmentKind, string> = {
   ti_chiedono: 'ti chiedono',
@@ -124,18 +138,45 @@ export class Registry {
 
   /* ───────────────────────────── commitments ───────────────────────────── */
 
+  /**
+   * Where a change to an open thing shows, from where it comes: its
+   * message's account and conversation, and the projects that gather it —
+   * the conversation's, or the event's — whose "Il punto" is now behind.
+   */
+  private async commitmentPlace(
+    record: CommitmentRecord
+  ): Promise<Pick<RegistryChange, 'accountId' | 'threadIds' | 'messageKeys' | 'projectIds'>> {
+    const { origin } = record
+
+    if (origin.kind === 'messaggio') {
+      return {
+        accountId: origin.accountId,
+        threadIds: [origin.threadId],
+        messageKeys: [origin.messageKey],
+        projectIds: await this.projects.markStaleByThreads([origin])
+      }
+    }
+
+    return {
+      accountId: null,
+      threadIds: [],
+      messageKeys: [],
+      projectIds:
+        origin.kind === 'evento' ? await this.projects.markStaleByEvents([origin.eventKey]) : []
+    }
+  }
+
   async openCommitment(
-    anchor: MessageAnchor & { dateIso?: string },
+    origin: CommitmentOrigin & { dateIso?: string },
     input: { kind: CommitmentKind; text: string; due?: string | null; question?: string | null },
     actor: Actor
   ): Promise<{ record: CommitmentRecord; created: boolean; change: RegistryChange | null }> {
-    const { record, created, historyId } = await this.commitments.create(anchor, input, actor)
+    const { record, created, historyId } = await this.commitments.create(origin, input, actor)
 
     if (!created) {
       return { record, created, change: null }
     }
 
-    const projectIds = await this.projects.markStaleByThreads([anchor])
     return {
       record,
       created,
@@ -144,10 +185,7 @@ export class Registry {
           object: 'impegno',
           action: 'aperta',
           label: `Aperta (${KIND_WORDS[record.kind]}): ${record.text}`,
-          accountId: record.accountId,
-          threadIds: [record.threadId],
-          messageKeys: [record.messageKey],
-          projectIds,
+          ...(await this.commitmentPlace(record)),
           id: record.id,
           undo: historyId ? { kind: 'impegno', itemId: record.id, historyId } : undefined
         },
@@ -169,11 +207,11 @@ export class Registry {
   ): Promise<{ record: CommitmentRecord; change: RegistryChange }> {
     const before = await this.commitments.get(id)
     const { record, historyId } = await this.commitments.edit(id, changes, actor, options)
-    const projectIds = await this.projects.markStaleByThreads([record])
+    const place = await this.commitmentPlace(record)
 
     if (actor.by === 'utente' && before) {
       this.hooks.lesson('impegno_corretto', {
-        messaggio: { accountId: record.accountId, messageKey: record.messageKey },
+        ...lessonSource(record),
         impegno: record.id,
         prima: { tipo: before.kind, testo: before.text, scadenza: before.due },
         dopo: { tipo: record.kind, testo: record.text, scadenza: record.due }
@@ -187,10 +225,7 @@ export class Registry {
           object: 'impegno',
           action: 'aggiornata',
           label: `Precisata: ${record.text}${record.due ? ` (entro il ${record.due})` : ''}`,
-          accountId: record.accountId,
-          threadIds: [record.threadId],
-          messageKeys: [record.messageKey],
-          projectIds,
+          ...place,
           id: record.id,
           undo: { kind: 'impegno', itemId: record.id, historyId }
         },
@@ -217,7 +252,7 @@ export class Registry {
       return { record, change: null }
     }
 
-    const projectIds = await this.projects.markStaleByThreads([record])
+    const place = await this.commitmentPlace(record)
 
     if (actor.by === 'utente' && before) {
       // What teaches: a thing the Segretario opened that was not needed, one it closed that was
@@ -227,7 +262,7 @@ export class Registry {
         (status === 'aperta' && before.status !== 'aperta' && before.setBy === 'segretario')
       ) {
         this.hooks.lesson(status === 'non_serve' ? 'impegno_non_serve' : 'impegno_riaperto', {
-          messaggio: { accountId: record.accountId, messageKey: record.messageKey },
+          ...lessonSource(record),
           impegno: record.id,
           tipo: record.kind,
           testo: record.text,
@@ -236,7 +271,7 @@ export class Registry {
         })
       } else if (before.question) {
         this.hooks.lesson('domanda_risposta', {
-          messaggio: { accountId: record.accountId, messageKey: record.messageKey },
+          ...lessonSource(record),
           impegno: record.id,
           tipo: record.kind,
           testo: record.text,
@@ -254,10 +289,7 @@ export class Registry {
           object: 'impegno',
           action: status,
           label: `${before?.status === status ? 'Ancora aperta' : STATUS_LABELS[status]}${until}: ${record.text}`,
-          accountId: record.accountId,
-          threadIds: [record.threadId],
-          messageKeys: [record.messageKey],
-          projectIds,
+          ...place,
           id: record.id,
           undo: { kind: 'impegno', itemId: record.id, historyId }
         },
@@ -276,17 +308,14 @@ export class Registry {
 
     for (const { record, historyId } of merged) {
       if (historyId !== null) {
-        const projectIds = await this.projects.markStaleByThreads([record])
+        const place = await this.commitmentPlace(record)
         changes.push(
           this.emit(
             {
               object: 'impegno',
               action: 'unita',
               label: `Unita a #${keepId}: ${record.text}`,
-              accountId: record.accountId,
-              threadIds: [record.threadId],
-              messageKeys: [record.messageKey],
-              projectIds,
+              ...place,
               id: record.id,
               undo: { kind: 'impegno', itemId: record.id, historyId }
             },
@@ -306,16 +335,13 @@ export class Registry {
       return null
     }
 
-    await this.projects.markStaleByThreads([undone.record])
+    const place = await this.commitmentPlace(undone.record)
     this.emit(
       {
         object: 'impegno',
         action: 'annullata',
         label: `Annullato: ${undone.record.text}`,
-        accountId: undone.record.accountId,
-        threadIds: [undone.record.threadId],
-        messageKeys: [undone.record.messageKey],
-        projectIds: [],
+        ...place,
         id: undone.record.id
       },
       actor
@@ -330,16 +356,13 @@ export class Registry {
 
     for (const record of woken) {
       // Open again, it is news for its projects: their "Il punto" is behind.
-      const projectIds = await this.projects.markStaleByThreads([record])
+      const place = await this.commitmentPlace(record)
       this.emit(
         {
           object: 'impegno',
           action: 'aperta',
           label: `Di nuovo aperta: ${record.text}`,
-          accountId: record.accountId,
-          threadIds: [record.threadId],
-          messageKeys: [record.messageKey],
-          projectIds,
+          ...place,
           id: record.id
         },
         actor
@@ -585,7 +608,7 @@ export class Registry {
 
   async addProjectResource(
     projectId: string,
-    resource: { kind: 'cartella' | 'link'; location: string; label?: string | null },
+    resource: { kind: ProjectResourceKind; location: string; label?: string | null },
     actor: Actor
   ): Promise<void> {
     await this.projects.addResource(projectId, resource, actor)

@@ -77,6 +77,22 @@ export async function resolveSentOrReceived(
   return message
 }
 
+/** The event a short name stands for, as `calendario` or `leggi` gave it. */
+export function resolveEvent(
+  context: ToolContext,
+  handle: string
+): { eventKey: string; title: string } {
+  const event = context.handles.event(handle)
+
+  if (!event) {
+    throw new UnknownHandle(
+      `Non conosco l'evento «${handle}»: usa un riferimento (e…) ricevuto da \`calendario\` o da \`leggi\`.`
+    )
+  }
+
+  return event
+}
+
 /** A message given as proof of a change: newer than the decision it overturns, or no proof. */
 export async function evidenceOf(
   context: ToolContext,

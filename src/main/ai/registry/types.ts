@@ -83,8 +83,20 @@ export type CommitmentStatus = 'aperta' | 'fatta' | 'non_serve' | 'rinviata'
 /** What the user owes, as opposed to what they wait for. */
 export const OWED_KINDS: ReadonlyArray<CommitmentKind> = ['ti_chiedono', 'hai_promesso', 'da_fare']
 
-export interface CommitmentRecord extends MessageAnchor {
+/**
+ * Where an open thing comes from: a message (with its conversation), an
+ * event, or — neither — the user's word, said to the Segretario or written
+ * by hand. In the table, the message's columns and the event's, both empty
+ * for the user's word.
+ */
+export type CommitmentOrigin =
+  | ({ kind: 'messaggio' } & MessageAnchor)
+  | { kind: 'evento'; eventKey: string }
+  | { kind: 'utente' }
+
+export interface CommitmentRecord {
   id: number
+  origin: CommitmentOrigin
   kind: CommitmentKind
   text: string
   due: string | null
@@ -157,11 +169,17 @@ export interface ProjectSummary extends ProjectRecord {
   lastMessageAt: string | null
 }
 
+/**
+ * What a project gathers besides its conversations, from any source: a
+ * folder on the computer or a network volume (later a drive's), an event
+ * (by its key, its title as the label), a link.
+ */
+export type ProjectResourceKind = 'cartella' | 'evento' | 'link'
+
 export interface ProjectResource {
   id: number
   projectId: string
-  /** `cartella` on the computer or a network disk; later a drive's. */
-  kind: 'cartella' | 'link'
+  kind: ProjectResourceKind
   location: string
   label: string | null
   addedBy: ActorKind

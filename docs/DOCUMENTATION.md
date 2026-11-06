@@ -31,8 +31,19 @@ The usual Electron split. Only the main process touches the network, the
 file system and the database; the renderer is context-isolated and reaches
 it through the typed `window.mailApi` bridge (`src/preload/index.ts`,
 channels in `src/shared/ipc.ts`), the Segretario through
-`window.segretarioApi` (channels in `src/shared/segretario.ts`) and the
-calendars through `window.calendarApi` (channels in `src/shared/calendar.ts`).
+`window.segretarioApi` (channels in `src/shared/segretario.ts`), the
+calendars through `window.calendarApi` (channels in `src/shared/calendar.ts`)
+and the File source through `window.filesApi` (`src/shared/files.ts`).
+
+SIEVER Mail is a set of apps at par, not a mail client with extras. The
+sources — Posta, Calendario and, coming, File — each bring their objects
+from their own family of connections; Contatti and Progetti are derived,
+with no connections of their own; Oggi is the Segretario's desk. The
+families and the apps are declared once (`src/shared/workspace.ts`:
+`CONNECTION_FAMILIES`, `WORKSPACE_APPS`), and the rail, Settings and the
+Segretario read them from there. A new source is a family, an object, a
+way for the Segretario to notice it, its tools and its app; the registry,
+Oggi and the projects take it in as they take mail and calendars.
 
 The main process is put together by the `Workspace`
 (`src/main/workspace.ts`). It owns what every app shares — the database,
@@ -92,7 +103,7 @@ src/
 │   ├── context-menu.ts        native menus for text, links, pictures, spelling
 │   ├── theme.ts               Sistema / Chiaro / Scuro → nativeTheme
 │   ├── config/env.ts          the OAuth clients the build carries (Google, Microsoft)
-│   ├── ipc/                   IPC handlers: the mail's, the calendars', the Segretario's
+│   ├── ipc/                   IPC handlers: the mail's, the calendars', the files', the Segretario's
 │   ├── ai/                    the Segretario (see Segretario)
 │   │   ├── segretario-service.ts  the façade the IPC calls: key, switch, setup, the user's work
 │   │   ├── agent/             the runner, the conversation rebuilt from the log, short handles, tool ports
@@ -109,7 +120,8 @@ src/
 │   │   ├── mail-overview.ts   who the user writes to and hears from, month by month
 │   │   ├── extraction.ts      the text of PDFs, Office files, spreadsheets, pictures
 │   │   └── pdf-pages.ts       scanned PDF pages drawn as pictures, in a hidden window
-│   ├── calendar/              calendar connections, sync, providers (Google, Graph, CalDAV, links), iCalendar
+│   ├── calendar/              calendar connections, sync, providers (Google, Graph, CalDAV, links), iCalendar, search
+│   ├── files/file-sources.ts  the File source as it is today: this computer, its volumes, the network shares
 │   ├── services/
 │   │   ├── mail-service.ts    the mail: the façade its IPC calls, the Segretario's port to it
 │   │   ├── database.ts        Prisma client, raw DDL, queries
@@ -128,10 +140,12 @@ src/
 │   │   ├── file-utils.ts      names, unique writes
 │   │   └── secure-storage.ts  safeStorage wrapper for secrets
 │   └── utils/                 logging to file, errors, external URLs
-├── preload/index.ts           window.mailApi, window.segretarioApi, window.calendarApi
+├── preload/index.ts           window.mailApi, window.segretarioApi, window.calendarApi, window.filesApi
 ├── renderer/src/
-│   ├── App.tsx                top-level state and wiring, the apps of the rail
-│   ├── apps/                  Oggi (today/), the Calendario (calendar/), the pages "In arrivo"
+│   ├── App.tsx                the shell: rail, the Segretario's panel, Settings, the setup,
+│   │                          opening a message, an event or a project from anywhere
+│   ├── apps/                  Oggi (today/), the Posta (mail/), the Calendario (calendar/),
+│   │                          the page of an app with nothing to show yet (app-placeholder.tsx)
 │   ├── features/              connections, onboarding, mail (list, table, reader, composer,
 │   │                          editor), calendar (invitations), segretario, settings, workspace
 │   ├── components/ui/         shared primitives (dialog, confirm, menus…)
@@ -141,7 +155,8 @@ src/
 │                              roles, address parsing, fonts, sender/subject keys,
 │                              the Segretario's contract (segretario.ts) and its links
 │                              (segretario-links.ts), the calendars' (calendar.ts),
-│                              mail discovery (connections.ts)
+│                              the files' (files.ts), the apps and connection families
+│                              (workspace.ts), mail discovery (connections.ts)
 └── extension/                 the extension contract and its no-op stubs
 ```
 
@@ -152,8 +167,11 @@ One SQLite file, `userData/siever-mail.sqlite`. The schema is declared in
 `CREATE TABLE IF NOT EXISTS` plus additive column checks in `database.ts`,
 so an older file is brought forward in place. The Segretario's tables are
 created and migrated by `src/main/ai/schema.ts`, which `database.ts` calls:
-their shape has its own version in `ai_meta` (`schema_version`, now 4;
-step 4 adds the links of the words that stay, see [Runs](#runs)), and a
+their shape has its own version in `ai_meta` (`schema_version`, now 5;
+step 4 adds the links of the words that stay, see [Runs](#runs); step 5
+rebuilds `ai_items` so a commitment may come from a message, an event or
+the user's word — the message's columns nullable, `event_key` added — and
+can run again over a rebuild cut short), and a
 fresh install runs every step in order, as an old file runs the steps it
 has not had. The step from 1.x renames the commitments' states, turns
 topics into projects (an extension's pratiche only where they had
@@ -193,8 +211,8 @@ connections with the same ids, so events keep their keys.
 | `ai_lessons`                                                | What the next reflection takes in: drafts the user corrected or sent as they were, their corrections and decisions on notes, commitments, projects, replies, proposals and the memory — each with the message it is about and the open thing's number — a mailbox or a calendar removed.                                                             |
 | `ai_drafts`                                                 | The drafts the Segretario wrote, as it wrote them, to compare with what the user sends.                                                                                                                                                                                                                                                              |
 | `ai_notes`                                                  | The note on each message, by its key: the gist, its nature (`da_rispondere`, `da_fare`, `in_attesa`, `informativo`, `rumore`), priority, reason, deadline, who wrote it last, a revision.                                                                                                                                                            |
-| `ai_items`, `ai_item_history`                               | The commitments ("cose aperte"), each from the message it came from: kind, text, deadline, status, who set it and why, the message that showed it, a question for the user, a revision; and every change to them, before and after.                                                                                                                  |
-| `ai_projects`, `ai_project_threads`, `ai_project_resources` | The projects (title and who gave it, description, "Il punto" with its links (`state_links_json`) and since when it is behind, hidden, concluded), the conversations in each — one in several, or rejected by the user, with who linked it — and the folders linked to them.                                                                          |
+| `ai_items`, `ai_item_history`                               | The commitments ("cose aperte"), each from where it came: a message (account, conversation, message), an event (`event_key`) or the user's word; kind, text, deadline, status, who set it and why, the message that showed it, a question for the user, a revision; and every change to them, before and after.                                      |
+| `ai_projects`, `ai_project_threads`, `ai_project_resources` | The projects (title and who gave it, description, "Il punto" with its links (`state_links_json`) and since when it is behind, hidden, concluded), the conversations in each — one in several, or rejected by the user, with who linked it — and the folders and events linked to them.                                                               |
 | `ai_ready_drafts`                                           | Replies and reminders prepared ahead, one per message, with where each stands.                                                                                                                                                                                                                                                                       |
 | `ai_proposals`                                              | What the Segretario recommends and may not do alone — a new event, a change to one, an answer to an invitation, an extension's action — until the user accepts it or sets it aside.                                                                                                                                                                  |
 | `ai_saved_copies`                                           | Copies an extension saved outside the mail, by message and destination, with their files.                                                                                                                                                                                                                                                            |
@@ -595,11 +613,21 @@ selected is left selects the message that came after it
 The window is a row of panes laid edge to edge, a hairline between each:
 the rail (`features/workspace/app-rail.tsx` — the apps, the Segretario's
 panel, the connection, Settings), then the app. The rail's apps (`App.tsx`,
-`apps/`) are Oggi (`apps/today/`, there only with the AI on), Posta,
-the Calendario (`apps/calendar/`, see [Calendar](#calendar)), and Contatti
-and Progetti, which open on a page saying what they will be
-(`apps/coming-soon.tsx`, "In arrivo"). Each app takes the place of the
-mail's columns; the rail and the Segretario's panel stay. Posta is the
+`apps/`, from `WORKSPACE_APPS`) come in three groups, a thin line between
+them: the desk, Oggi (`apps/today/`, there only with the AI on); the
+sources, Posta (`apps/mail/`), the Calendario (`apps/calendar/`, see
+[Calendar](#calendar)) and File; the derived apps, Contatti and Progetti.
+File, Contatti and Progetti open on a page saying what they will be
+(`apps/app-placeholder.tsx`, "In arrivo"). A connection of any family is
+enough to work: with no mailbox, Posta says so and offers to connect one,
+and the workspace opens on Oggi, else on the first source with something
+connected. Each app takes the place of the mail's columns; the rail and the
+Segretario's panel stay. The shell (`App.tsx`) keeps the frame, the rail,
+the panel, Settings, the setup and the way from anywhere to a message, an
+event or a project; the Posta's state and handlers live in
+`apps/mail/use-mail-app.ts`, which the shell calls so the mail keeps its
+place while another app is in front, and its keys answer only while it is
+shown. Posta is the
 sidebar ("Scrivi", the account, the folders), then the message list and
 the reading pane. Each pane's first band is 52 px tall and is the
 window's title bar: dragged like one, with the
@@ -930,12 +958,13 @@ came meanwhile. "Elimina tutti i dati" turns it off too.
 The guided setup (`features/onboarding/onboarding-wizard.tsx`) is one
 full-screen flow for five cases (`OnboardingCase`): the first launch, a
 connection added, the AI turned on for the first time, turned on again,
-and Conoscimi done again. Its steps run in order — `connessioni`,
-`segretario` (the key, and the switch on), `preparazione` (every
-connection synced and, with the AI, its last thirty days indexed),
+and Conoscimi done again. Its steps run in order — `connessioni` (one of
+any family is enough: a mailbox, a calendar), `segretario` (the key, and
+the switch on), `preparazione` (every mailbox synced and, with the AI, its
+last thirty days indexed; every calendar through its first sync),
 `conoscimi`, `lettura`, `entra` — and each case takes the ones it needs
-(`CASE_STEPS`, `applies`): the key only while the AI is off, Conoscimi and
-the reading only with it on. The state is kept in `ai_meta` (`onboarding`),
+(`CASE_STEPS`, `applies`): the key only while the AI is off, Conoscimi only
+with it on, the reading with it on and mail to read. The state is kept in `ai_meta` (`onboarding`),
 so a quit brings the user back to the same step. Conoscimi is started by
 the user and watched as it works; the reading of the last thirty days runs
 eight at a time, with its progress, an estimate and what failed — nothing
@@ -1151,7 +1180,13 @@ can read it.
   read again: its note is copied (`twin_account_id`), and goes when the
   account it was copied from is removed.
 - **Commitments**, "cose aperte" (`commitments.ts`): `ti_chiedono`,
-  `hai_promesso`, `aspetti`, `da_fare`, each from the message it came from.
+  `hai_promesso`, `aspetti`, `da_fare`, each from where it came
+  (`CommitmentOrigin`): a message, with its conversation; an event — what
+  an appointment asks, preparing or bringing something; or the user's word,
+  said to the Segretario in the panel or written in Oggi. Where it comes
+  from does not change what it is: it shows in Oggi, in the calendar on its
+  date and in the projects of its source; the Posta's views gather those
+  from messages, and the event panel those from its event.
   A commitment is `aperta` until it is `fatta`, turns out `non_serve`, or is
   `rinviata` to a day, when it opens again; any can be reopened, corrected,
   merged with another (all or none), or asked about — the Segretario's
@@ -1170,8 +1205,9 @@ can read it.
   like one already there — hidden or concluded too — is that one, and a
   name taken is refused to a rename. A conversation may be in several; one
   the user took out is never filed there again, and a merge keeps who
-  linked each. Folders on the computer or a network disk are linked as
-  resources. "Il punto" says where a project stands; once something moves
+  linked each. Folders on the computer or a network disk and events are
+  linked as resources (`cartella`, `evento`): a project shows its
+  appointments, counts what is open from them, and "Il punto" reads them. "Il punto" says where a project stands; once something moves
   after it, it is stale (`stale_since`) and the engine has it written
   again — also when the project moved after its writer began, other than
   by the run's own change. A run in the background does not merge the
@@ -1238,24 +1274,24 @@ history.
 Every run has the same tools (`tools/`), each described to the model by
 `prompts/strumenti/<name>.md`, the extension's after them:
 
-| Tool           | What it does                                                                                                                                                                                |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cerca_posta`  | The full-text index over every account: words, folder, project, period, unread, attachments; with `quadro`, who the user writes to and hears from, month by month (`mail-overview.ts`).     |
-| `cerca_file`   | Files and folders by name in the user's folders and the mounted disks, or a folder's listing — all of it read and sorted, folders then the newest, before it is cut.                        |
-| `leggi`        | Whatever a handle names — a message or its whole conversation with the work already on it, an attachment or a file (`extraction.ts`), an event, a project, a draft — or a file by its path. |
-| `nota`         | Writes or corrects a message's note.                                                                                                                                                        |
-| `impegni`      | Lists the commitments — by kind, date, project or person, with `chiuse` those closed in the last 14 days — and changes them, several operations a call.                                     |
-| `progetti`     | Lists, creates, links and unlinks conversations, renames, describes, writes "Il punto", merges, hides, concludes, links folders.                                                            |
-| `risposta`     | Lists the replies and reminders prepared, prepares one, confirms one to look at again, discards one.                                                                                        |
-| `scrivi_bozza` | A real draft — reply, forward, new — saved in Bozze and opened in the composer; in `scrittura`, the text for the editor.                                                                    |
-| `invia_bozza`  | Sends a draft once the user confirms its card.                                                                                                                                              |
-| `organizza`    | Archives, moves, flags, marks read or unread, moves to the Trash.                                                                                                                           |
-| `calendario`   | Lists events (with the events it proposed) and free times, creates, changes and deletes what the user organises, answers invitations, proposes, withdraws its own proposals (`ritira`).     |
-| `memoria`      | Reads, searches, edits, inserts, writes, renames and deletes notes; a note's history, and a version restored.                                                                               |
-| `oggi`         | The letter of Oggi — written by the day's run, or when the user asks: a reading puts what matters today in the commitments instead — and a meeting's preparation.                           |
-| `revisione`    | The outcome of a reread before sending: four warnings at most, each within 280 characters, or it is refused.                                                                                |
-| `mostra`       | Opens a message, a draft, a project, an event or a day on screen, or a search as a list.                                                                                                    |
-| `diario`       | What it did in the last days, run by run, with the changes each made: searched in SQL, 40 runs at most.                                                                                     |
+| Tool           | What it does                                                                                                                                                                                                                        |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cerca_posta`  | The full-text index over every account: words, folder, project, period, unread, attachments; with `quadro`, who the user writes to and hears from, month by month (`mail-overview.ts`).                                             |
+| `cerca_file`   | Files and folders by name in the user's folders and the mounted disks, or a folder's listing — all of it read and sorted, folders then the newest, before it is cut.                                                                |
+| `leggi`        | Whatever a handle names — a message or its whole conversation with the work already on it, an attachment or a file (`extraction.ts`), an event, a project, a draft — or a file by its path.                                         |
+| `nota`         | Writes or corrects a message's note.                                                                                                                                                                                                |
+| `impegni`      | Lists the commitments — by kind, date, project or person, with `chiuse` those closed in the last 14 days — and changes them, several operations a call; one opens on a message, an event, or the user's word in the panel.          |
+| `progetti`     | Lists, creates, links and unlinks conversations and events, renames, describes, writes "Il punto", merges, hides, concludes, links folders.                                                                                         |
+| `risposta`     | Lists the replies and reminders prepared, prepares one, confirms one to look at again, discards one.                                                                                                                                |
+| `scrivi_bozza` | A real draft — reply, forward, new — saved in Bozze and opened in the composer; in `scrittura`, the text for the editor.                                                                                                            |
+| `invia_bozza`  | Sends a draft once the user confirms its card.                                                                                                                                                                                      |
+| `organizza`    | Archives, moves, flags, marks read or unread, moves to the Trash.                                                                                                                                                                   |
+| `calendario`   | Lists events (with the events it proposed), searches them by words, past and coming, finds free times, creates, changes and deletes what the user organises, answers invitations, proposes, withdraws its own proposals (`ritira`). |
+| `memoria`      | Reads, searches, edits, inserts, writes, renames and deletes notes; a note's history, and a version restored.                                                                                                                       |
+| `oggi`         | The letter of Oggi — written by the day's run, or when the user asks: a reading puts what matters today in the commitments instead — and a meeting's preparation.                                                                   |
+| `revisione`    | The outcome of a reread before sending: four warnings at most, each within 280 characters, or it is refused.                                                                                                                        |
+| `mostra`       | Opens a message, a draft, a project, an event or a day on screen, or a search as a list.                                                                                                                                            |
+| `diario`       | What it did in the last days, run by run, with the changes each made: searched in SQL, 40 runs at most.                                                                                                                             |
 
 Making an event or proposing one is idempotent, as making a project or a
 commitment is: they are made one at a time, and one already there at the
@@ -1393,9 +1429,12 @@ chiedo", the Segretario's questions — what it asks about shows there
 alone; then what is due today or late, this week, what the user owes
 without a date or later, the replies prepared, what they wait on; and the
 proposals, events first, each naming the message it comes from
-(`Proposal.source`). Each line opens its message; an open thing's has the
-reader's menu too (`CommitmentMenu`: Sollecita, Non serve, Rinvia,
-Scadenza). While mail is
+(`Proposal.source`). Each line opens where it comes from — a message, an
+event, or nothing for the user's own word (`DayLine.source`,
+`day-line-source.ts`); an open thing's has the reader's menu too
+(`CommitmentMenu`: Sollecita, Non serve, Rinvia, Scadenza). "Una cosa da
+ricordare" at the bottom keeps what the user writes as an open thing of
+their own, without a date. While mail is
 still to be read the page says so, and while the Segretario is stopped it
 says why (`paused`). A letter behind is written again when the page is
 looked at (see [The engine](#the-engine)), the page saying so
@@ -1451,7 +1490,7 @@ day it runs.
 
 **Rereading before it goes.** With the AI on, pressing Invia has a
 `revisione` run reread the message as it will go, with the one it answers
-and the next 45 days with their weekdays (`review.ts`). It flags only what
+named for it to read, and the calendar there if it needs it (`review.ts`). It flags only what
 the user would want to fix — an attachment named and not attached, a
 question skipped, a greeting to someone not among the recipients, a weekday
 that does not match its date, a "[data]" left to fill — in a panel at the
@@ -1522,15 +1561,25 @@ connection's last problems are kept with it, in the user's words.
 **The Calendario** (`apps/calendar/`): day, week, month and agenda, the
 small month, and the calendars by connection with their colours, each
 shown or hidden on this computer. With the AI on it adds the Segretario's
-layers: what the mail says is due (`getDue`) and the events it proposes. A
+layers: what is due — from any source (`getDue`) — and the events it proposes. A
 click or a drag on the grid makes an event. An event the user organises
 (`CalendarEvent.organizedByUser`: theirs, a calendar's they write in, or
 one without guests) is dragged to move it (guests are asked about first),
 and changed or deleted from the panel beside it; an invitation is only
-answered. The panel also joins the call and shows the preparation the
-Segretario wrote. The Segretario is told what the calendar shows
-(`CalendarSight`), and `mostra` opens a day or an event there. Oggi lists
-the day's events under "In agenda".
+answered. The panel also joins the call and, with the AI on, shows the
+event's share of the work as the reader shows a message's: the preparation
+the Segretario wrote, the projects the event is in, the open things born
+from it and a field to add one, due on its day (`event-work.tsx`,
+`eventWork`). Events are searched by words — title, place, description,
+guests, calendar — past and coming, the coming first (`calendar:search`,
+`event-search.ts`; the Segretario's `calendario cerca` runs the same
+search), the results opening on their day. From the keyboard: T today, J
+and K the next and previous period, D, W, M and A the views, C a new event,
+⌘F the search, Esc closes the panel — commands of their own (`calendar`
+group), answering only while the calendar is in front and changed in
+Settings › Scorciatoie like the mail's. The Segretario is told what the
+calendar shows (`CalendarSight`), and `mostra` opens a day or an event
+there. Oggi lists the day's events under "In agenda".
 
 **Invitations.** An invitation in a message (its `.ics`, read by `ics.ts`)
 shows at the top of the reader (`features/calendar/invitation-card.tsx`).

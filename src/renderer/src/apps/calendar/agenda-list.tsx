@@ -6,6 +6,7 @@ import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
 import type { DayLine } from '@shared/segretario'
 
 import { COMMITMENT_LABELS } from '@renderer/features/segretario/row-work'
+import { dayLineKey, dayLineSourceWords } from '@renderer/features/segretario/day-line-source'
 
 import { dayKey, isOnDay, sameDay } from '@renderer/features/calendar/calendar-dates'
 import { dotStyle } from './event-style'
@@ -155,7 +156,7 @@ export function AgendaList({
                     </li>
                   ))}
                   {dueOfDay.map((line) => (
-                    <li key={`${line.messageKey}\u0000${line.commitment?.id ?? ''}`}>
+                    <li key={dayLineKey(line)}>
                       <button
                         type="button"
                         onClick={() => onOpenLine(line)}
@@ -170,8 +171,7 @@ export function AgendaList({
                             {line.text}
                           </span>
                           <span className="text-muted-foreground truncate text-[12px]">
-                            {line.from}
-                            {line.subject && ` · «${line.subject}»`}
+                            {dayLineSourceWords(line)}
                           </span>
                         </span>
                       </button>

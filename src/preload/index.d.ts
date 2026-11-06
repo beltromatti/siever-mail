@@ -1,4 +1,5 @@
 import type { CalendarApi } from '@shared/calendar'
+import type { FilesApi } from '@shared/files'
 import type { DesktopMailApi } from '@shared/ipc'
 import type { SegretarioApi } from '@shared/segretario'
 
@@ -7,5 +8,6 @@ declare global {
     mailApi: DesktopMailApi
     segretarioApi: SegretarioApi
     calendarApi: CalendarApi
+    filesApi: FilesApi
   }
 }

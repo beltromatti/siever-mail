@@ -17,6 +17,7 @@ import { installAppMenu } from './app-menu'
 import { installContextMenus } from './context-menu'
 import { registerMailIpc } from './ipc/register-mail-ipc'
 import { registerCalendarIpc } from './ipc/register-calendar-ipc'
+import { registerFilesIpc } from './ipc/register-files-ipc'
 import { registerSegretarioIpc } from './ipc/register-segretario-ipc'
 import { prepareUpgradeMigration } from './services/data-migration'
 import { normalizeExternalHttpUrl } from './utils/external-url'
@@ -271,6 +272,7 @@ if (hasSingleInstanceLock) {
 
     registerMailIpc(workspace, () => mainWindow)
     registerSegretarioIpc(workspace.segretario)
+    registerFilesIpc()
     registerCalendarIpc(
       workspace.calendar,
       {

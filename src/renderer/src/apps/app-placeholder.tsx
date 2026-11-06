@@ -1,22 +1,28 @@
 import type { LucideIcon } from 'lucide-react'
 
+import { Button } from '@renderer/components/ui/button'
 import { cn } from '@renderer/lib/utils'
 
 /**
- * An app of the rail not here yet: what it will be, in a few lines, so the
- * place is known before it opens.
+ * An app of the rail with nothing to show yet: not here yet ("In arrivo"),
+ * or with nothing connected to it. What it is, in a few lines, and the way
+ * on when there is one.
  */
-export function ComingSoonApp({
+export function AppPlaceholder({
   title,
   icon: Icon,
+  badge,
   lead,
   points,
+  action,
   atWindowTopRight
 }: {
   title: string
   icon: LucideIcon
+  badge?: string
   lead: string
   points: ReadonlyArray<string>
+  action?: { label: string; onClick: () => void }
   atWindowTopRight: boolean
 }): React.JSX.Element {
   return (
@@ -28,9 +34,11 @@ export function ComingSoonApp({
         )}
       >
         <h1 className="display-title text-[15px]">{title}</h1>
-        <span className="text-muted-foreground bg-hover rounded-full px-2 py-0.5 text-[11px] font-semibold">
-          In arrivo
-        </span>
+        {badge && (
+          <span className="text-muted-foreground bg-hover rounded-full px-2 py-0.5 text-[11px] font-semibold">
+            {badge}
+          </span>
+        )}
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-10">
         <article className="letter mx-auto flex max-w-[620px] flex-col gap-5 rounded-[14px] px-10 py-10">
@@ -44,6 +52,11 @@ export function ComingSoonApp({
               </li>
             ))}
           </ul>
+          {action && (
+            <Button className="window-no-drag self-start" onClick={action.onClick}>
+              {action.label}
+            </Button>
+          )}
         </article>
       </div>
     </div>

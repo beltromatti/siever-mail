@@ -5,18 +5,19 @@ import {
   type Actor,
   type CommitmentHistoryEntry,
   type CommitmentKind,
+  type CommitmentOrigin,
   type CommitmentRecord,
   type CommitmentStatus,
   type Evidence,
-  type MessageAnchor,
   type ThreadRef
 } from './types'
 
 interface ItemRow {
   id: number
-  account_id: string
-  thread_id: string
-  message_key: string
+  account_id: string | null
+  thread_id: string | null
+  message_key: string | null
+  event_key: string | null
   kind: string
   text: string
   due: string | null
@@ -34,19 +35,43 @@ interface ItemRow {
   closed_at: number | null
 }
 
-const COLUMNS = `id, account_id, thread_id, message_key, kind, text, due, status, until, closed_by,
-  reason, evidence_key, question, created_by, run_id, revision, created_at, updated_at, closed_at`
+const COLUMNS = `id, account_id, thread_id, message_key, event_key, kind, text, due, status, until,
+  closed_by, reason, evidence_key, question, created_by, run_id, revision, created_at, updated_at,
+  closed_at`
 
 /** How many times a write is tried again when another writer got there between the read and the write. */
 const WRITE_ATTEMPTS = 4
+
+/** Where a row says an open thing comes from. */
+function originOf(row: ItemRow): CommitmentOrigin {
+  if (row.account_id !== null && row.thread_id !== null && row.message_key !== null) {
+    return {
+      kind: 'messaggio',
+      accountId: row.account_id,
+      threadId: row.thread_id,
+      messageKey: row.message_key
+    }
+  }
+
+  return row.event_key !== null ? { kind: 'evento', eventKey: row.event_key } : { kind: 'utente' }
+}
+
+/** An origin as the table's columns: the message's, the event's — empty for the user's word. */
+function originColumns(
+  origin: CommitmentOrigin
+): [string | null, string | null, string | null, string | null] {
+  return origin.kind === 'messaggio'
+    ? [origin.accountId, origin.threadId, origin.messageKey, null]
+    : origin.kind === 'evento'
+      ? [null, null, null, origin.eventKey]
+      : [null, null, null, null]
+}
 
 function recordOf(row: ItemRow): CommitmentRecord {
   const createdAt = Number(row.created_at)
   return {
     id: Number(row.id),
-    accountId: row.account_id,
-    threadId: row.thread_id,
-    messageKey: row.message_key,
+    origin: originOf(row),
     kind: row.kind as CommitmentKind,
     text: row.text,
     due: row.due,
@@ -78,8 +103,7 @@ function snapshotOf(record: CommitmentRecord): Partial<CommitmentRecord> {
     reason: record.reason,
     evidenceKey: record.evidenceKey,
     question: record.question,
-    threadId: record.threadId,
-    messageKey: record.messageKey,
+    origin: record.origin,
     revision: record.revision
   }
 }
@@ -108,6 +132,36 @@ function dayOrNull(value: string | null | undefined, name: string): string | nul
   }
 
   return value
+}
+
+/**
+ * Where open things come from, to choose them by: conversations, events.
+ * Given, a thing must come from one of them; not given, from anywhere.
+ */
+interface Places {
+  threads?: ReadonlyArray<ThreadRef>
+  events?: ReadonlyArray<string>
+}
+
+/** `Places` as a condition: undefined for anywhere, null for nowhere (both given empty). */
+function placesWhere(places: Places): { sql: string; params: unknown[] } | null | undefined {
+  if (!places.threads && !places.events) {
+    return undefined
+  }
+
+  const threads = places.threads ?? []
+  const events = places.events ?? []
+  const conditions = [
+    ...threads.map(() => '(account_id = ? AND thread_id = ?)'),
+    ...(events.length > 0 ? [`event_key IN (${placeholders(events)})`] : [])
+  ]
+
+  return conditions.length === 0
+    ? null
+    : {
+        sql: `(${conditions.join(' OR ')})`,
+        params: [...threads.flatMap((thread) => [thread.accountId, thread.threadId]), ...events]
+      }
 }
 
 const STATUS_WORDS: Record<CommitmentStatus, string> = {
@@ -155,31 +209,37 @@ export class CommitmentStore {
     threads: ReadonlyArray<ThreadRef>,
     closedWithinDays = 14
   ): Promise<CommitmentRecord[]> {
-    if (threads.length === 0) {
+    return this.ofPlaces({ threads }, closedWithinDays)
+  }
+
+  /** The same, of these places: conversations and events — a project's, an event's panel. */
+  async ofPlaces(places: Places, closedWithinDays = 14): Promise<CommitmentRecord[]> {
+    const where = placesWhere(places)
+
+    if (!where) {
       return []
     }
 
     const since = Date.now() - closedWithinDays * 24 * 60 * 60 * 1000
     const rows = await this.sql.all<ItemRow>(
       `SELECT ${COLUMNS} FROM ai_items
-       WHERE (${threads.map(() => '(account_id = ? AND thread_id = ?)').join(' OR ')})
+       WHERE ${where.sql}
          AND (status IN ('aperta', 'rinviata') OR COALESCE(updated_at, created_at) >= ?)
        ORDER BY CASE status WHEN 'aperta' THEN 0 WHEN 'rinviata' THEN 1 ELSE 2 END, created_at`,
-      ...threads.flatMap((thread) => [thread.accountId, thread.threadId]),
+      ...where.params,
       since
     )
     return rows.map(recordOf)
   }
 
-  /** What was closed (done, or not needed) since a moment, the latest first: in these conversations, or anywhere. */
+  /**
+   * What was closed (done, or not needed) since a moment, the latest first:
+   * from these places — conversations, events — or anywhere.
+   */
   async closedSince(
     since: number,
-    filter: { threads?: ReadonlyArray<ThreadRef>; kinds?: ReadonlyArray<CommitmentKind> } = {}
+    filter: Places & { kinds?: ReadonlyArray<CommitmentKind> } = {}
   ): Promise<CommitmentRecord[]> {
-    if (filter.threads && filter.threads.length === 0) {
-      return []
-    }
-
     const where = ["status IN ('fatta', 'non_serve')", 'updated_at >= ?']
     const params: unknown[] = [since]
 
@@ -188,9 +248,15 @@ export class CommitmentStore {
       params.push(...filter.kinds)
     }
 
-    if (filter.threads) {
-      where.push(`(${filter.threads.map(() => '(account_id = ? AND thread_id = ?)').join(' OR ')})`)
-      params.push(...filter.threads.flatMap((thread) => [thread.accountId, thread.threadId]))
+    const places = placesWhere(filter)
+
+    if (places === null) {
+      return []
+    }
+
+    if (places) {
+      where.push(places.sql)
+      params.push(...places.params)
     }
 
     return (
@@ -208,9 +274,8 @@ export class CommitmentStore {
       kinds?: ReadonlyArray<CommitmentKind>
       /** Due on or before this day, AAAA-MM-GG. */
       dueBy?: string
-      threads?: ReadonlyArray<ThreadRef>
       includeDeferred?: boolean
-    } = {}
+    } & Places = {}
   ): Promise<CommitmentRecord[]> {
     const where: string[] = [
       filter.includeDeferred ? "status IN ('aperta', 'rinviata')" : "status = 'aperta'"
@@ -236,13 +301,15 @@ export class CommitmentStore {
       params.push(filter.dueBy)
     }
 
-    if (filter.threads) {
-      if (filter.threads.length === 0) {
-        return []
-      }
+    const places = placesWhere(filter)
 
-      where.push(`(${filter.threads.map(() => '(account_id = ? AND thread_id = ?)').join(' OR ')})`)
-      params.push(...filter.threads.flatMap((thread) => [thread.accountId, thread.threadId]))
+    if (places === null) {
+      return []
+    }
+
+    if (places) {
+      where.push(places.sql)
+      params.push(...places.params)
     }
 
     const rows = await this.sql.all<ItemRow>(
@@ -254,14 +321,16 @@ export class CommitmentStore {
   }
 
   /**
-   * Opens a commitment on a message. The same thing already open in the
-   * conversation, worded alike, is the one returned: opening twice opens
-   * once. The same thing the user closed is not opened again from the
-   * background on the strength of a message no newer than their decision:
-   * the user's word stands until a newer fact.
+   * Opens a commitment, from where it comes: a message, an event, or the
+   * user's word. The same thing already open from the same place — the
+   * conversation, the event, or the user's word —, worded alike, is the one
+   * returned: opening twice opens once. The same thing the user closed is
+   * not opened again from the background: from a message, unless the
+   * message is newer than their decision; from an event, at all — a newer
+   * fact opens it again with `riapri`, saying which.
    */
   async create(
-    anchor: MessageAnchor & { dateIso?: string },
+    origin: CommitmentOrigin & { dateIso?: string },
     input: { kind: CommitmentKind; text: string; due?: string | null; question?: string | null },
     actor: Actor
   ): Promise<{ record: CommitmentRecord; created: boolean; historyId: number | null }> {
@@ -272,46 +341,48 @@ export class CommitmentStore {
     }
 
     const due = dayOrNull(input.due, 'scadenza')
-    const existing = (
-      await this.open({ threads: [anchor], kinds: [input.kind], includeDeferred: true })
-    ).find((candidate) => sameWording(candidate.text, text))
+    const sameKind = (await this.fromSamePlace(origin, input.kind)).filter((candidate) =>
+      sameWording(candidate.text, text)
+    )
+    const existing = sameKind.find(
+      (candidate) => candidate.status === 'aperta' || candidate.status === 'rinviata'
+    )
 
     if (existing) {
       return { record: existing, created: false, historyId: null }
     }
 
-    if (actor.background) {
-      const decided = (
-        await this.sql.all<ItemRow>(
-          `SELECT ${COLUMNS} FROM ai_items
-           WHERE account_id = ? AND thread_id = ? AND kind = ? AND closed_by = 'utente'
-             AND status IN ('fatta', 'non_serve')`,
-          anchor.accountId,
-          anchor.threadId,
-          input.kind
+    const decided = actor.background
+      ? sameKind.find(
+          (candidate) =>
+            candidate.setBy === 'utente' &&
+            (candidate.status === 'fatta' || candidate.status === 'non_serve')
         )
-      )
-        .map(recordOf)
-        .find((candidate) => sameWording(candidate.text, text))
+      : undefined
 
-      if (decided && !(anchor.dateIso && Date.parse(anchor.dateIso) > decided.updatedAt)) {
-        throw new RegistryRefusal(
-          `L'utente ha già segnato questa cosa come ${decided.status === 'fatta' ? 'fatta' : 'non serve'} (#${decided.id}), e il messaggio non è più recente della sua decisione: non riaprirla. Se c'è un fatto nuovo, riaprila (\`riapri\`) dicendo qual è.`,
-          decided
-        )
-      }
+    if (
+      decided &&
+      !(
+        origin.kind === 'messaggio' &&
+        origin.dateIso &&
+        Date.parse(origin.dateIso) > decided.updatedAt
+      )
+    ) {
+      throw new RegistryRefusal(
+        `L'utente ha già segnato questa cosa come ${decided.status === 'fatta' ? 'fatta' : 'non serve'} (#${decided.id})${origin.kind === 'messaggio' ? ', e il messaggio non è più recente della sua decisione' : ''}: non riaprirla. Se c'è un fatto nuovo, riaprila (\`riapri\`) dicendo qual è.`,
+        decided
+      )
     }
 
     const now = Date.now()
     const row = await this.sql.get<ItemRow>(
       `INSERT INTO ai_items (
-        account_id, thread_id, message_key, kind, text, due, status, until, closed_by, reason,
-        evidence_key, question, created_by, run_id, revision, created_at, updated_at, closed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'aperta', NULL, ?, NULL, NULL, ?, ?, ?, 1, ?, ?, NULL)
+        account_id, thread_id, message_key, event_key, kind, text, due, status, until, closed_by,
+        reason, evidence_key, question, created_by, run_id, revision, created_at, updated_at,
+        closed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'aperta', NULL, ?, NULL, NULL, ?, ?, ?, 1, ?, ?, NULL)
       RETURNING ${COLUMNS}`,
-      anchor.accountId,
-      anchor.threadId,
-      anchor.messageKey,
+      ...originColumns(origin),
       input.kind,
       text,
       due,
@@ -337,6 +408,31 @@ export class CommitmentStore {
       null
     )
     return { record, created: true, historyId }
+  }
+
+  /**
+   * The commitments of a kind from the same place as `origin`, whatever
+   * their state: the conversation of a message, the event, or the user's
+   * word — what a new one may repeat.
+   */
+  private async fromSamePlace(
+    origin: CommitmentOrigin,
+    kind: CommitmentKind
+  ): Promise<CommitmentRecord[]> {
+    const [where, ...params] =
+      origin.kind === 'messaggio'
+        ? ['account_id = ? AND thread_id = ?', origin.accountId, origin.threadId]
+        : origin.kind === 'evento'
+          ? ['event_key = ?', origin.eventKey]
+          : ['message_key IS NULL AND event_key IS NULL']
+
+    return (
+      await this.sql.all<ItemRow>(
+        `SELECT ${COLUMNS} FROM ai_items WHERE ${where} AND kind = ?`,
+        ...params,
+        kind
+      )
+    ).map(recordOf)
   }
 
   /** Changes what a commitment says: its words, its date, its kind, the question it asks. */
@@ -568,7 +664,21 @@ export class CommitmentStore {
       return this.setStatus(current.id, 'non_serve', actor, { reason: 'Annullata.' })
     }
 
-    const before = JSON.parse(row.before_json) as Partial<CommitmentRecord>
+    // Kept before version 5, a snapshot named the message alone: its account is the same now.
+    const before = JSON.parse(row.before_json) as Partial<CommitmentRecord> & {
+      threadId?: string
+      messageKey?: string
+    }
+    const origin: CommitmentOrigin =
+      before.origin ??
+      (before.threadId && before.messageKey && current.origin.kind === 'messaggio'
+        ? {
+            kind: 'messaggio',
+            accountId: current.origin.accountId,
+            threadId: before.threadId,
+            messageKey: before.messageKey
+          }
+        : current.origin)
     return this.write(
       current.id,
       actor,
@@ -584,8 +694,7 @@ export class CommitmentStore {
         reason: before.reason ?? null,
         evidenceKey: before.evidenceKey ?? null,
         question: before.question ?? null,
-        threadId: before.threadId,
-        messageKey: before.messageKey
+        origin
       }),
       'Annullato.'
     )
@@ -634,8 +743,9 @@ export class CommitmentStore {
       const closing = next.status === 'fatta' || next.status === 'non_serve'
       const changed = await this.sql.run(
         `UPDATE ai_items SET kind = ?, text = ?, due = ?, status = ?, until = ?, closed_by = ?,
-           reason = ?, evidence_key = ?, question = ?, thread_id = ?, message_key = ?,
-           closed_at = ?, run_id = COALESCE(?, run_id), revision = revision + 1, updated_at = ?
+           reason = ?, evidence_key = ?, question = ?, account_id = ?, thread_id = ?,
+           message_key = ?, event_key = ?, closed_at = ?, run_id = COALESCE(?, run_id),
+           revision = revision + 1, updated_at = ?
          WHERE id = ? AND revision = ?`,
         next.kind,
         next.text,
@@ -646,8 +756,7 @@ export class CommitmentStore {
         next.reason,
         next.evidenceKey,
         next.question,
-        next.threadId,
-        next.messageKey,
+        ...originColumns(next.origin),
         closing ? (current.closedAt ?? now) : null,
         actor.runId ?? null,
         now,

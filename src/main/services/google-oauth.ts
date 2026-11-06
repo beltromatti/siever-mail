@@ -22,7 +22,7 @@ const MAIL_SCOPES = [GOOGLE_MAIL_SCOPE, ...IDENTITY_SCOPES]
 function callbackResponseHtml(success: boolean): string {
   const title = success ? 'Accesso completato' : 'Accesso non riuscito'
   const body = success
-    ? 'Puoi chiudere questa finestra e tornare al client email.'
+    ? 'Puoi chiudere questa finestra e tornare a SIEVER Mail.'
     : 'Autorizzazione annullata o non valida. Puoi chiudere questa finestra.'
 
   return `<!doctype html><html><head><meta charset="utf-8" /><title>${title}</title></head><body style="font-family:system-ui;padding:24px;background:#101421;color:#f1f5f9"><h2>${title}</h2><p>${body}</p></body></html>`

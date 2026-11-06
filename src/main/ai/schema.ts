@@ -9,9 +9,16 @@ import type { Sql } from './sql'
  * order, as an old one runs the steps it has not had: one path, so what a
  * fresh database looks like is what an upgraded one looks like.
  */
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 
 /** The tables of the first 2.0 builds, as they stood (version 1). */
+/** The open things' indexes: by conversation, by state, and — from version 5 — by event. */
+const ITEM_INDEXES = [
+  'CREATE INDEX IF NOT EXISTS idx_ai_items_thread ON ai_items(account_id, thread_id)',
+  'CREATE INDEX IF NOT EXISTS idx_ai_items_status ON ai_items(status, due)',
+  'CREATE INDEX IF NOT EXISTS idx_ai_items_event ON ai_items(event_key) WHERE event_key IS NOT NULL'
+] as const
+
 const BASELINE: ReadonlyArray<string> = [
   `CREATE TABLE IF NOT EXISTS ai_settings (
     id INTEGER PRIMARY KEY,
@@ -105,8 +112,8 @@ const BASELINE: ReadonlyArray<string> = [
     closed_at INTEGER,
     closed_by TEXT
   )`,
-  'CREATE INDEX IF NOT EXISTS idx_ai_items_thread ON ai_items(account_id, thread_id)',
-  'CREATE INDEX IF NOT EXISTS idx_ai_items_status ON ai_items(status, due)',
+  // The event's index comes with the column, in version 5.
+  ...ITEM_INDEXES.slice(0, 2),
   `CREATE TABLE IF NOT EXISTS ai_saved_searches (
     id TEXT PRIMARY KEY,
     question TEXT NOT NULL,
@@ -431,6 +438,54 @@ async function registryStep(sql: Sql): Promise<void> {
   await archivedToCopies(sql)
 }
 
+/**
+ * Version 5: an open thing comes from any source — a message, an event,
+ * or the user's word — so its message is no longer required, and its event
+ * is kept. SQLite cannot loosen a column, so the table is built again: a
+ * new one, the rows copied with their ids, the old one dropped, the new one
+ * renamed. A start cut short anywhere picks up where it was: rows already
+ * copied stay as they are, a table already dropped is not looked for, and
+ * a table already renamed is done.
+ */
+async function itemsFromAnySource(sql: Sql): Promise<void> {
+  const columns = await sql.all<{ name: string }>('PRAGMA table_info(ai_items)')
+
+  if (columns.some((column) => column.name === 'event_key')) {
+    return
+  }
+
+  await sql.run(`CREATE TABLE IF NOT EXISTS ai_items_v5 (
+    id INTEGER PRIMARY KEY,
+    account_id TEXT,
+    thread_id TEXT,
+    message_key TEXT,
+    event_key TEXT,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    due TEXT,
+    status TEXT NOT NULL,
+    until TEXT,
+    closed_by TEXT,
+    reason TEXT,
+    evidence_key TEXT,
+    question TEXT,
+    created_by TEXT NOT NULL DEFAULT 'segretario',
+    run_id TEXT,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER,
+    closed_at INTEGER
+  )`)
+  const copied = columns.map((column) => column.name).join(', ')
+  await sql.run(`INSERT OR IGNORE INTO ai_items_v5 (${copied}) SELECT ${copied} FROM ai_items`)
+  await sql.run('DROP TABLE ai_items')
+  await sql.run('ALTER TABLE ai_items_v5 RENAME TO ai_items')
+
+  for (const statement of ITEM_INDEXES) {
+    await sql.run(statement)
+  }
+}
+
 /** Brings the Segretario's tables to this build's shape; safe to run at every start. */
 export async function ensureAiSchema(sql: Sql): Promise<void> {
   await sql.run('CREATE TABLE IF NOT EXISTS ai_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
@@ -458,6 +513,10 @@ export async function ensureAiSchema(sql: Sql): Promise<void> {
     for (const { table, column, definition } of STEP_4_COLUMNS) {
       await addColumn(sql, table, column, definition)
     }
+  }
+
+  if (version < 5) {
+    await itemsFromAnySource(sql)
   }
 
   if (version !== SCHEMA_VERSION) {

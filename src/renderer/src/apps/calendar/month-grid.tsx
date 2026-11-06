@@ -3,6 +3,7 @@ import { Flag } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
 import type { DayLine } from '@shared/segretario'
+import { dayLineKey } from '@renderer/features/segretario/day-line-source'
 
 import {
   addDays,
@@ -99,7 +100,7 @@ export function MonthGrid({
               .filter((line) => line.due === dayKey(day))
               .map((line) => ({
                 kind: 'due' as const,
-                key: `${line.messageKey}\u0000${line.commitment?.id ?? ''}`,
+                key: dayLineKey(line),
                 line,
                 start: Infinity
               }))

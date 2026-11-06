@@ -41,10 +41,12 @@ const READING_PLANNED = 300
 
 /** Priorities: lower first; at `BACKLOG_PRIORITY` (50) and after, the backlog. */
 const PRIORITY = {
+  // What just changed in a source comes first, whichever source: mail arrived, events others
+  // moved — at par.
   newMail: 10,
+  calendar: 10,
   dayRefresh: 15,
   day: 20,
-  calendar: 30,
   project: 40,
   memory: 50,
   backlog: 60

@@ -59,7 +59,7 @@ import {
   type CalendarSight
 } from '@renderer/apps/calendar/calendar-app'
 import { dayKey, dayOfKey, eventSpan } from '@renderer/features/calendar/calendar-dates'
-import { ComingSoonApp } from '@renderer/apps/coming-soon'
+import { AppPlaceholder } from '@renderer/apps/app-placeholder'
 import { WORKSPACE_APPS, type AppId } from '@shared/workspace'
 import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
 import { segretarioSuggestions } from '@renderer/features/segretario/suggestions'
@@ -388,7 +388,12 @@ function App(): React.JSX.Element {
   // Whether any calendar is connected: what the Segretario suggests knows it.
   const { connections: calendarConnections } = useCalendarConnections()
   const calendarConnected = Boolean(calendarConnections?.length)
-  // The app in front: the mail, or another in its place. The calendar opens where it is asked to.
+  // A connection of any family is enough to work: a mailbox, a calendar.
+  const hasConnections = accounts.length > 0 || calendarConnected
+  // The source the workspace opens on without Oggi: the mail when there is a mailbox, else the
+  // calendar.
+  const firstSourceApp: AppId = accounts.length > 0 || !calendarConnected ? 'mail' : 'calendar'
+  // The app in front. The calendar opens where it is asked to.
   const [activeApp, setActiveApp] = useState<AppId>('mail')
   const [calendarFocus, setCalendarFocus] = useState<{ focus: CalendarFocus; at: number } | null>(
     null
@@ -406,9 +411,10 @@ function App(): React.JSX.Element {
   // With the AI off there is no trace of the Segretario (vision §10.1): it is turned on from
   // Settings › Segretario, which leads to the guided setup.
   const segretarioOffered = aiOn
-  // Oggi is the Segretario's: with the AI off the rail goes without it, and the mail takes its place.
+  // Oggi is the Segretario's: with the AI off the rail goes without it, and the first source
+  // takes its place.
   const railItems = aiOn ? RAIL_ITEMS : RAIL_ITEMS.filter((item) => item.id !== 'oggi')
-  const shownApp: AppId = activeApp === 'oggi' && !aiOn ? 'mail' : activeApp
+  const shownApp: AppId = activeApp === 'oggi' && !aiOn ? firstSourceApp : activeApp
 
   /** The calendar, opened on a day — and on an event of it, its panel open. */
   const openCalendar = useCallback((focus: CalendarFocus): void => {
@@ -893,14 +899,16 @@ function App(): React.JSX.Element {
   const remindAbout = useCallback(
     async (commitment: Commitment): Promise<void> => {
       try {
-        const ref = await window.segretarioApi.replySource(
-          commitment.accountId,
-          commitment.messageKey
-        )
+        // Awaited in a conversation, the reminder answers it; otherwise the Segretario finds where.
+        const { source } = commitment
+        const ref =
+          source.kind === 'message'
+            ? await window.segretarioApi.replySource(source.accountId, source.messageKey)
+            : null
         setSegretarioOpen(true)
         await startSegretario(`Prepara un sollecito: ${commitment.text}`, {
           messages: ref ? [ref] : [],
-          accountId: commitment.accountId,
+          accountId: source.kind === 'message' ? source.accountId : null,
           folderLabel: null
         })
       } catch (error) {
@@ -1026,7 +1034,7 @@ function App(): React.JSX.Element {
   useEffect(() => window.mailApi.onOpenMessageFromNotification(openMessageRef), [openMessageRef])
 
   useEffect(() => {
-    const shouldAnimateWelcome = accounts.length === 0 || showWelcomeGate
+    const shouldAnimateWelcome = !hasConnections || showWelcomeGate
 
     if (!shouldAnimateWelcome) {
       // Back to the logo, for the intro to play again whenever the welcome screen returns.
@@ -1043,7 +1051,7 @@ function App(): React.JSX.Element {
       window.clearTimeout(textRevealTimer)
       window.clearTimeout(buttonRevealTimer)
     }
-  }, [accounts.length, showWelcomeGate])
+  }, [hasConnections, showWelcomeGate])
 
   // The Segretario shows the user something: a message, a search, a draft.
   useEffect(
@@ -1125,7 +1133,21 @@ function App(): React.JSX.Element {
           void openCalendarEvent(link.eventKey)
           return
         case 'commitment':
-          openWhereItIs(window.segretarioApi.commitmentSource(link.commitmentId))
+          // An open thing opens where it comes from: its message, its event — the user's word
+          // lives in Oggi.
+          void window.segretarioApi.commitmentSource(link.commitmentId).then((source) => {
+            if (source?.kind === 'message') {
+              openMessageRef(source.ref)
+            } else if (source?.kind === 'event') {
+              void openCalendarEvent(source.eventKey)
+            } else if (source?.kind === 'user') {
+              setActiveApp('oggi')
+            } else {
+              toast.error('Non c’è più', {
+                description: 'Il messaggio o l’evento da cui veniva è stato eliminato.'
+              })
+            }
+          })
       }
     },
     [openCalendarEvent, openDraftById, openMessageRef, selectFolder]
@@ -1261,7 +1283,7 @@ function App(): React.JSX.Element {
   }
 
   const enterWorkspace = useCallback((): void => {
-    if (accounts.length === 0) {
+    if (!hasConnections) {
       return
     }
 
@@ -1273,9 +1295,9 @@ function App(): React.JSX.Element {
       return accounts[0]?.id ?? null
     })
     setShowWelcomeGate(false)
-    // The day opens on what the Segretario saw in it.
-    setActiveApp(aiOn ? 'oggi' : 'mail')
-  }, [aiOn, accounts, setSelectedAccountId])
+    // The day opens on what the Segretario saw in it; without it, on the first source.
+    setActiveApp(aiOn ? 'oggi' : firstSourceApp)
+  }, [aiOn, accounts, firstSourceApp, hasConnections, setSelectedAccountId])
 
   /** Starts the guided setup of a case, kept as it goes. */
   function startOnboarding(setupCase: OnboardingCase): void {
@@ -1304,7 +1326,8 @@ function App(): React.JSX.Element {
     )
   }
 
-  if (bootstrapLoading || onboarding === undefined) {
+  // The calendars are known before the first screen: one connected is enough to go in.
+  if (bootstrapLoading || onboarding === undefined || calendarConnections === null) {
     return (
       <AppFrame
         windowControlsState={windowControlsState}
@@ -1354,6 +1377,7 @@ function App(): React.JSX.Element {
         <OnboardingWizard
           state={onboarding}
           accounts={accounts}
+          calendarConnections={calendarConnections}
           connections={mail.accountConnections}
           removingAccountId={mail.removingAccountId}
           canUseGoogle={capabilities.googleOAuthReady}
@@ -1376,7 +1400,7 @@ function App(): React.JSX.Element {
     )
   }
 
-  if (accounts.length === 0 || showWelcomeGate) {
+  if (!hasConnections || showWelcomeGate) {
     return (
       <AppFrame
         windowControlsState={windowControlsState}
@@ -1423,7 +1447,7 @@ function App(): React.JSX.Element {
                 >
                   SIEVER Mail
                   <span className="text-muted-foreground mt-2 block font-serif text-2xl leading-tight font-normal tracking-normal whitespace-nowrap italic">
-                    La posta, con un segretario.
+                    Il tuo lavoro, con un segretario.
                   </span>
                 </h1>
               </div>
@@ -1439,7 +1463,7 @@ function App(): React.JSX.Element {
             )}
           >
             <div className="flex flex-col items-center gap-3">
-              {accounts.length > 0 ? (
+              {hasConnections ? (
                 <>
                   <Button
                     className="w-56 gap-2 rounded-lg text-sm"
@@ -1590,7 +1614,26 @@ function App(): React.JSX.Element {
               />
             }
             app={
-              shownApp === 'oggi' ? (
+              shownApp === 'mail' && accounts.length === 0 ? (
+                <AppPlaceholder
+                  title="Posta"
+                  icon={Mail}
+                  atWindowTopRight={!segretarioOpen}
+                  lead="Nessuna casella collegata. Le altre app funzionano anche così; con una casella, la posta arriva qui."
+                  points={[
+                    'Ogni casella è una connessione a sé: Gmail, Microsoft, iCloud, o qualunque altra con IMAP.',
+                    ...(aiOn
+                      ? [
+                          'Il Segretario la legge come legge i calendari: le cose aperte, i progetti e la giornata la comprendono.'
+                        ]
+                      : [])
+                  ]}
+                  action={{
+                    label: 'Collega una casella',
+                    onClick: () => startOnboarding('nuova-connessione')
+                  }}
+                />
+              ) : shownApp === 'oggi' ? (
                 <TodayPage
                   canWrite={segretario.status?.keyState === 'ready'}
                   atWindowTopRight={!segretarioOpen}
@@ -1606,15 +1649,13 @@ function App(): React.JSX.Element {
                   searchInputRef={calendarSearchRef}
                   atWindowTopRight={!segretarioOpen}
                   onOpenMessage={openMessageRef}
-                  onOpenConnections={() => {
-                    setSettingsSection('accounts')
-                    setSettingsOpen(true)
-                  }}
+                  onOpenConnections={() => startOnboarding('nuova-connessione')}
                 />
               ) : shownApp === 'files' ? (
-                <ComingSoonApp
+                <AppPlaceholder
                   title="File"
                   icon={Files}
+                  badge="In arrivo"
                   atWindowTopRight={!segretarioOpen}
                   lead="I tuoi documenti, ovunque siano: il computer, i dischi di rete, i drive. Una fonte come la posta e il calendario."
                   points={[
@@ -1629,9 +1670,10 @@ function App(): React.JSX.Element {
                   ]}
                 />
               ) : shownApp === 'contacts' ? (
-                <ComingSoonApp
+                <AppPlaceholder
                   title="Contatti"
                   icon={BookUser}
+                  badge="In arrivo"
                   atWindowTopRight={!segretarioOpen}
                   lead="Le persone e gli enti con cui lavori, in un posto solo, con quello che il Segretario sa di ciascuno."
                   points={[
@@ -1641,9 +1683,10 @@ function App(): React.JSX.Element {
                   ]}
                 />
               ) : shownApp === 'projects' ? (
-                <ComingSoonApp
+                <AppPlaceholder
                   title="Progetti"
                   icon={Briefcase}
+                  badge="In arrivo"
                   atWindowTopRight={!segretarioOpen}
                   lead="Ogni progetto con tutto ciò che gli appartiene, da ogni fonte, nello stesso posto."
                   points={[

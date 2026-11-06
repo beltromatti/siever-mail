@@ -45,14 +45,83 @@ describe('Registry', () => {
   afterEach(() => sql.close())
 
   describe('commitments', () => {
+    it('opens things from an event or from the user’s word, each once from the same place', async () => {
+      const visit = { kind: 'evento' as const, eventKey: 'g:cal:sopralluogo' }
+      const first = await registry.openCommitment(
+        visit,
+        { kind: 'da_fare', text: 'Portare la planimetria' },
+        BACKGROUND
+      )
+      const again = await registry.openCommitment(
+        visit,
+        { kind: 'da_fare', text: 'portare la planimetria.' },
+        BACKGROUND
+      )
+      const said = await registry.openCommitment(
+        { kind: 'utente' },
+        { kind: 'da_fare', text: 'Chiamare il geometra', due: '2026-11-13' },
+        CHAT
+      )
+
+      expect(first.created).toBe(true)
+      expect(again).toMatchObject({ created: false, record: { id: first.record.id } })
+      expect(said.record.origin).toEqual({ kind: 'utente' })
+      expect((await registry.commitments.open()).map((item) => item.text).sort()).toEqual([
+        'Chiamare il geometra',
+        'Portare la planimetria'
+      ])
+    })
+
+    it('does not open again from the background what the user closed, from the same event', async () => {
+      const visit = { kind: 'evento' as const, eventKey: 'g:cal:sopralluogo' }
+      const { record } = await registry.openCommitment(
+        visit,
+        { kind: 'da_fare', text: 'Portare la planimetria' },
+        BACKGROUND
+      )
+      await registry.setCommitmentStatus(record.id, 'non_serve', USER)
+
+      await expect(
+        registry.openCommitment(
+          visit,
+          { kind: 'da_fare', text: 'Portare la planimetria' },
+          BACKGROUND
+        )
+      ).rejects.toBeInstanceOf(RegistryRefusal)
+    })
+
+    it('counts in a project what is open from its events too', async () => {
+      const { record: project } = await registry.createProject('Prat2470 · Hotel Lido', USER)
+      await registry.projects.addResource(
+        project.id,
+        { kind: 'evento', location: 'g:cal:sopralluogo', label: 'Sopralluogo' },
+        USER
+      )
+      await registry.openCommitment(
+        { kind: 'evento', eventKey: 'g:cal:sopralluogo' },
+        { kind: 'da_fare', text: 'Portare la planimetria' },
+        BACKGROUND
+      )
+
+      expect((await registry.projects.summary(project.id))?.openCommitments).toBe(1)
+      expect([...(await registry.projects.ofEvents(['g:cal:sopralluogo'])).keys()]).toEqual([
+        'g:cal:sopralluogo'
+      ])
+      expect(
+        (await registry.commitments.ofPlaces({ events: ['g:cal:sopralluogo'] })).map(
+          (item) => item.text
+        )
+      ).toEqual(['Portare la planimetria'])
+    })
+
     it('opens a thing once, however many times it is opened', async () => {
       const first = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'ti_chiedono', text: 'Mandare il computo ad Anna' },
         BACKGROUND
       )
       const again = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'ti_chiedono', text: 'mandare il computo ad Anna.' },
         BACKGROUND
       )
@@ -65,7 +134,7 @@ describe('Registry', () => {
 
     it('does not open again from the background what the user closed, unless a newer message says so', async () => {
       const { record } = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'ti_chiedono', text: 'Mandare il computo ad Anna' },
         BACKGROUND
       )
@@ -74,14 +143,19 @@ describe('Registry', () => {
 
       await expect(
         registry.openCommitment(
-          { ...ANNA, dateIso: before },
+          { kind: 'messaggio', ...ANNA, dateIso: before },
           { kind: 'ti_chiedono', text: 'Mandare il computo ad Anna' },
           BACKGROUND
         )
       ).rejects.toBeInstanceOf(RegistryRefusal)
 
       const newer = await registry.openCommitment(
-        { ...ANNA, messageKey: 'm:anna-2', dateIso: new Date(Date.now() + 60_000).toISOString() },
+        {
+          kind: 'messaggio',
+          ...ANNA,
+          messageKey: 'm:anna-2',
+          dateIso: new Date(Date.now() + 60_000).toISOString()
+        },
         { kind: 'ti_chiedono', text: 'Mandare il computo ad Anna' },
         BACKGROUND
       )
@@ -90,7 +164,7 @@ describe('Registry', () => {
 
     it('keeps who closed a thing and why, and opens it again', async () => {
       const { record } = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'hai_promesso', text: 'Le slide per stasera' },
         BACKGROUND
       )
@@ -115,7 +189,7 @@ describe('Registry', () => {
 
     it('does not let a run in the background overturn the user without a newer message', async () => {
       const { record } = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'ti_chiedono', text: 'Il preventivo' },
         BACKGROUND
       )
@@ -146,7 +220,7 @@ describe('Registry', () => {
 
     it('keeps what the user corrected from a run in the background', async () => {
       const { record } = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'ti_chiedono', text: 'Il preventivo' },
         BACKGROUND
       )
@@ -160,7 +234,7 @@ describe('Registry', () => {
 
     it('refuses a write made on an old look at the thing', async () => {
       const { record } = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'da_fare', text: 'Pagare la fattura' },
         BACKGROUND
       )
@@ -178,7 +252,7 @@ describe('Registry', () => {
 
     it('puts off a thing until a day, and opens it again on that day', async () => {
       const { record } = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'da_fare', text: 'Rinnovare il dominio' },
         BACKGROUND
       )
@@ -196,12 +270,12 @@ describe('Registry', () => {
 
     it('merges duplicates into the first, and learns when the user says one is not needed', async () => {
       const keep = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'ti_chiedono', text: 'Integrazioni SCIA' },
         BACKGROUND
       )
       const dup = await registry.openCommitment(
-        { ...ANNA, threadId: 't2', messageKey: 'm:x' },
+        { kind: 'messaggio', ...ANNA, threadId: 't2', messageKey: 'm:x' },
         { kind: 'ti_chiedono', text: 'Mandare le integrazioni all’architetto' },
         BACKGROUND
       )
@@ -217,7 +291,7 @@ describe('Registry', () => {
 
     it('undoes a change only while nothing changed it since', async () => {
       const { record } = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'aspetti', text: 'Il DURC' },
         BACKGROUND
       )
@@ -344,7 +418,7 @@ describe('Registry', () => {
       expect((await registry.projects.get(record.id))?.staleSince).toBeNull()
 
       await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'aspetti', text: 'Parere del Comune' },
         BACKGROUND
       )
@@ -357,7 +431,7 @@ describe('Registry', () => {
       await registry.linkThread(record.id, ANNA, BACKGROUND)
       const begun = Date.now() - 1000
       await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'aspetti', text: 'Parere del Comune' },
         BACKGROUND
       )
@@ -452,12 +526,12 @@ describe('Registry', () => {
         BACKGROUND
       )
       const owed = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'ti_chiedono', text: 'Rispondere' },
         BACKGROUND
       )
       await registry.openCommitment(
-        { ...ANNA, messageKey: 'm:sent', threadId: 't9' },
+        { kind: 'messaggio', ...ANNA, messageKey: 'm:sent', threadId: 't9' },
         { kind: 'aspetti', text: 'Il riscontro' },
         BACKGROUND
       )
@@ -478,7 +552,7 @@ describe('Registry', () => {
   describe('messages deleted for good', () => {
     it('settles what came from a message missing everywhere, only once the account is synced', async () => {
       const { record } = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'ti_chiedono', text: 'Firmare' },
         BACKGROUND
       )
@@ -507,7 +581,7 @@ describe('Registry', () => {
 
     it('forgets a message that only moved', async () => {
       const { record } = await registry.openCommitment(
-        ANNA,
+        { kind: 'messaggio', ...ANNA },
         { kind: 'ti_chiedono', text: 'Firmare' },
         BACKGROUND
       )

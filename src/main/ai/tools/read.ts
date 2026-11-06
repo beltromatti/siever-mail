@@ -371,6 +371,14 @@ async function readEvent(
     }
   }
 
+  // What the work holds of it, as a message's reading says its note and what is open.
+  const [prep, items, projects] = await Promise.all([
+    context.registry.day.prep(eventKey),
+    context.registry.commitments.ofPlaces({ events: [eventKey] }),
+    context.registry.projects.ofEvents([eventKey])
+  ])
+  rememberCommitments(context, items)
+
   return {
     content: [
       `${handle} · ${event.title}`,
@@ -383,7 +391,18 @@ async function readEvent(
         : '',
       event.myResponse ? `La risposta dell'utente: ${event.myResponse}` : '',
       event.meetLink ? `Call: ${event.meetLink}` : '',
-      event.description ? `\n${clip(event.description, 6000).text}` : ''
+      event.description ? `\n${clip(event.description, 6000).text}` : '',
+      ...(projects.get(eventKey) ?? []).map(
+        (project) =>
+          `Progetto: ${context.handles.name(
+            { kind: 'project', projectId: project.id, title: project.title },
+            context.newHandles
+          )} ${project.title}`
+      ),
+      prep ? `\nLa preparazione che hai scritto:\n${unlinked(prep.text)}` : '',
+      items.length > 0
+        ? `\nCose aperte nate da questo evento (e chiuse di recente):\n${items.map((item) => `  ${commitmentLine(item)}`).join('\n')}`
+        : ''
     ]
       .filter(Boolean)
       .join('\n'),
@@ -392,7 +411,10 @@ async function readEvent(
 }
 
 /** What reading a project needs: the mail, the registry, the run's names and what it saw. */
-export type ProjectReader = Pick<ToolContext, 'mail' | 'registry' | 'handles' | 'newHandles'> & {
+export type ProjectReader = Pick<
+  ToolContext,
+  'mail' | 'calendar' | 'registry' | 'handles' | 'newHandles'
+> & {
   run: Pick<ToolContext['run'], 'seen'>
 }
 
@@ -405,10 +427,16 @@ export async function readProject(context: ProjectReader, projectId: string): Pr
 
   const accountIds = (await context.mail.listAccounts()).map((account) => account.id)
   const threads = await context.registry.projects.threadsOf(projectId, accountIds)
-  const [items, notes, resources] = await Promise.all([
-    context.registry.commitments.ofThreads(threads),
+  const [notes, resources] = await Promise.all([
     context.registry.notes.ofThreads(threads),
     context.registry.projects.resources(projectId)
+  ])
+  const eventKeys = resources
+    .filter((resource) => resource.kind === 'evento')
+    .map((resource) => resource.location)
+  const [items, events] = await Promise.all([
+    context.registry.commitments.ofPlaces({ threads, events: eventKeys }),
+    Promise.all(eventKeys.map((key) => context.calendar.event(key)))
   ])
   rememberCommitments(context, items)
 
@@ -451,8 +479,23 @@ export async function readProject(context: ProjectReader, projectId: string): Pr
       project.state
         ? `Il punto (scritto il ${shortDate(new Date(project.stateAt ?? project.updatedAt).toISOString())}${project.staleSince ? ', poi qualcosa si è mosso: va aggiornato' : ''}):\n${unlinked(project.state)}`
         : 'Il punto: non ancora scritto.',
-      resources.length > 0
-        ? `Risorse: ${resources.map((resource) => `${resource.label ?? ''} ${resource.location}`.trim()).join(' · ')}`
+      resources.some((resource) => resource.kind !== 'evento')
+        ? `Risorse: ${resources
+            .filter((resource) => resource.kind !== 'evento')
+            .map((resource) => `${resource.label ?? ''} ${resource.location}`.trim())
+            .join(' · ')}`
+        : '',
+      eventKeys.length > 0
+        ? `Eventi:\n${events
+            .map((event, index) =>
+              event
+                ? `  ${context.handles.name(
+                    { kind: 'event', eventKey: event.key, title: event.title },
+                    context.newHandles
+                  )} · ${event.allDay ? event.start : formatDateTime(event.start)} · ${event.title}`
+                : `  ${resources.find((resource) => resource.location === eventKeys[index])?.label ?? 'un evento'} · non più nel calendario`
+            )
+            .join('\n')}`
         : '',
       items.length > 0
         ? `Cose aperte (e chiuse di recente):\n${items.map((item) => `  ${commitmentLine(item)}`).join('\n')}`

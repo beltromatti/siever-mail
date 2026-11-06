@@ -11,6 +11,7 @@ import {
   type ProjectLink,
   type ProjectRecord,
   type ProjectResource,
+  type ProjectResourceKind,
   type ProjectSummary,
   type ThreadRef
 } from './types'
@@ -80,12 +81,37 @@ export function foldTitle(title: string): string {
     .trim()
 }
 
+interface ResourceRow {
+  id: number
+  project_id: string
+  kind: string
+  location: string
+  label: string | null
+  added_by: string
+}
+
+function resourceOf(row: ResourceRow): ProjectResource {
+  return {
+    id: Number(row.id),
+    projectId: row.project_id,
+    kind: row.kind === 'link' || row.kind === 'evento' ? row.kind : 'cartella',
+    location: row.location,
+    label: row.label,
+    addedBy: actorKind(row.added_by)
+  }
+}
+
 const SUMMARY_SELECT = `
   SELECT ${COLUMNS},
     (SELECT COUNT(*) FROM ai_project_threads t WHERE t.project_id = p.id AND t.rejected = 0) AS conversations,
     (SELECT COUNT(*) FROM ai_items i
-       JOIN ai_project_threads t ON t.account_id = i.account_id AND t.thread_id = i.thread_id
-       WHERE t.project_id = p.id AND t.rejected = 0 AND i.status = 'aperta') AS open_commitments,
+       WHERE i.status = 'aperta' AND (
+         EXISTS (SELECT 1 FROM ai_project_threads t
+           WHERE t.project_id = p.id AND t.rejected = 0
+             AND t.account_id = i.account_id AND t.thread_id = i.thread_id)
+         OR EXISTS (SELECT 1 FROM ai_project_resources r
+           WHERE r.project_id = p.id AND r.kind = 'evento' AND r.location = i.event_key))
+    ) AS open_commitments,
     (SELECT MAX(n.message_date) FROM ai_notes n
        JOIN ai_project_threads t ON t.account_id = n.account_id AND t.thread_id = n.thread_id
        WHERE t.project_id = p.id AND t.rejected = 0) AS last_message_at
@@ -548,27 +574,38 @@ export class ProjectStore {
   }
 
   async resources(projectId: string): Promise<ProjectResource[]> {
-    const rows = await this.sql.all<{
-      id: number
-      project_id: string
-      kind: string
-      location: string
-      label: string | null
-      added_by: string
-    }>('SELECT * FROM ai_project_resources WHERE project_id = ? ORDER BY id', projectId)
-    return rows.map((row) => ({
-      id: Number(row.id),
-      projectId: row.project_id,
-      kind: row.kind === 'link' ? 'link' : 'cartella',
-      location: row.location,
-      label: row.label,
-      addedBy: actorKind(row.added_by)
-    }))
+    const rows = await this.sql.all<ResourceRow>(
+      'SELECT * FROM ai_project_resources WHERE project_id = ? ORDER BY id',
+      projectId
+    )
+    return rows.map(resourceOf)
+  }
+
+  /** The projects these events are in, by event: what an event's panel and its work show. */
+  async ofEvents(eventKeys: ReadonlyArray<string>): Promise<Map<string, ProjectRecord[]>> {
+    if (eventKeys.length === 0) {
+      return new Map()
+    }
+
+    const rows = await this.sql.all<ProjectRow & { event_key: string }>(
+      `SELECT r.location AS event_key, ${COLUMNS} FROM ai_project_resources r
+       JOIN ai_projects p ON p.id = r.project_id
+       WHERE r.kind = 'evento' AND r.location IN (${placeholders(eventKeys)})
+       ORDER BY p.title`,
+      ...eventKeys
+    )
+    const byEvent = new Map<string, ProjectRecord[]>()
+
+    for (const row of rows) {
+      byEvent.set(row.event_key, [...(byEvent.get(row.event_key) ?? []), recordOf(row)])
+    }
+
+    return byEvent
   }
 
   async addResource(
     projectId: string,
-    resource: { kind: 'cartella' | 'link'; location: string; label?: string | null },
+    resource: { kind: ProjectResourceKind; location: string; label?: string | null },
     actor: Actor
   ): Promise<ProjectResource[]> {
     await this.require(projectId)
@@ -602,7 +639,9 @@ export class ProjectStore {
     )
 
     if (current?.addedBy === 'utente' && actor.background) {
-      throw new RegistryRefusal("Questa cartella l'ha collegata l'utente: lasciala.")
+      throw new RegistryRefusal(
+        `${current.kind === 'evento' ? "Questo evento l'ha collegato" : "Questa cartella l'ha collegata"} l'utente: lascialo com'è.`
+      )
     }
 
     await this.sql.run(
@@ -619,6 +658,15 @@ export class ProjectStore {
       ...new Set(
         (await this.linksOf(threads)).filter((link) => !link.rejected).map((link) => link.projectId)
       )
+    ]
+    await this.markStale(ids)
+    return ids
+  }
+
+  /** Something happened about these events: the projects that gather them are behind on "Il punto". */
+  async markStaleByEvents(eventKeys: ReadonlyArray<string>): Promise<string[]> {
+    const ids = [
+      ...new Set([...(await this.ofEvents(eventKeys)).values()].flat().map((project) => project.id))
     ]
     await this.markStale(ids)
     return ids

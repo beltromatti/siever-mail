@@ -13,6 +13,9 @@ import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
 import type { HostCommandId } from '@shared/commands'
 import type { MessageRef } from '@shared/models'
+import type { DayLine } from '@shared/segretario'
+import { dayLineLink } from '@renderer/features/segretario/day-line-source'
+import { useOpenLink } from '@renderer/features/segretario/segretario-text'
 
 import { AgendaList } from './agenda-list'
 import {
@@ -322,7 +325,15 @@ export function CalendarApp({
   }, [onSight, sightKey, sightLabel, sightTitle])
   useEffect(() => store(LAYERS_KEY, layers), [layers])
 
-  const openLine = (line: { ref: MessageRef }): void => onOpenMessage(line.ref)
+  // A deadline opens where it comes from: its message, or its event.
+  const openLink = useOpenLink()
+  const openLine = (line: DayLine): void => {
+    const link = dayLineLink(line)
+
+    if (link) {
+      openLink(link)
+    }
+  }
 
   /** An event dragged to another time: whoever is invited is told, once the user says so. */
   const moveEvent = async (event: CalendarEvent, start: number, end: number): Promise<void> => {
@@ -451,7 +462,7 @@ export function CalendarApp({
                 }
               />
               <Flag className="text-ai size-3.5" />
-              Scadenze dalla posta
+              Scadenze
             </label>
             <label className="hover:bg-hover flex cursor-pointer items-center gap-2 rounded-[6px] px-1 py-1 text-[12.5px]">
               <input

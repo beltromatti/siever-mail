@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 import installExtensionPreload from '@app/extension/preload'
 import { IPC_CHANNELS, type DesktopMailApi } from '@shared/ipc'
 import { CALENDAR_IPC, type CalendarApi } from '@shared/calendar'
+import { FILES_IPC, type FilesApi } from '@shared/files'
 import { SEGRETARIO_IPC, type SegretarioApi } from '@shared/segretario'
 
 const REMOTE_METHOD_ERROR_PREFIX =
@@ -168,7 +169,7 @@ const segretarioApi: SegretarioApi = {
     invoke(SEGRETARIO_IPC.setCommitmentStatus, id, status, options),
   editCommitment: async (id, changes) => invoke(SEGRETARIO_IPC.editCommitment, id, changes),
   undoCommitmentStatus: async (id) => invoke(SEGRETARIO_IPC.undoCommitmentStatus, id),
-  openCommitment: async (message, input) => invoke(SEGRETARIO_IPC.openCommitment, message, input),
+  openCommitment: async (from, input) => invoke(SEGRETARIO_IPC.openCommitment, from, input),
   markHandled: async (messages) => invoke(SEGRETARIO_IPC.markHandled, messages),
   undoChange: async (activityId, eventId, index) =>
     invoke(SEGRETARIO_IPC.undoChange, activityId, eventId, index),
@@ -180,6 +181,7 @@ const segretarioApi: SegretarioApi = {
     invoke(SEGRETARIO_IPC.discardReply, accountId, messageKey),
   listProposals: async () => invoke(SEGRETARIO_IPC.listProposals),
   eventPrep: async (eventKey) => invoke(SEGRETARIO_IPC.eventPrep, eventKey),
+  eventWork: async (eventKey) => invoke(SEGRETARIO_IPC.eventWork, eventKey),
   commitmentSource: async (id) => invoke(SEGRETARIO_IPC.commitmentSource, id),
   decideProposal: async (id, accepted, result, revision) =>
     invoke(SEGRETARIO_IPC.decideProposal, id, accepted, result, revision),
@@ -248,6 +250,10 @@ const calendarApi: CalendarApi = {
   onChanged: (listener) => subscribe(CALENDAR_IPC.changed, () => listener())
 }
 
+const filesApi: FilesApi = {
+  sources: async () => invoke(FILES_IPC.sources)
+}
+
 // Add any extension-provided bridge methods (the IPC channels an extension
 // registers) to the host's API surface. The host's own methods always win:
 // an extension may add, never replace (`ExtensionBridge`). The public build's
@@ -260,6 +266,7 @@ if (process.contextIsolated) {
   contextBridge.exposeInMainWorld('mailApi', mergedMailApi)
   contextBridge.exposeInMainWorld('segretarioApi', segretarioApi)
   contextBridge.exposeInMainWorld('calendarApi', calendarApi)
+  contextBridge.exposeInMainWorld('filesApi', filesApi)
 } else {
   // @ts-expect-error context isolation disabled by external override
   window.mailApi = mergedMailApi
@@ -267,4 +274,6 @@ if (process.contextIsolated) {
   window.segretarioApi = segretarioApi
   // @ts-expect-error context isolation disabled by external override
   window.calendarApi = calendarApi
+  // @ts-expect-error context isolation disabled by external override
+  window.filesApi = filesApi
 }

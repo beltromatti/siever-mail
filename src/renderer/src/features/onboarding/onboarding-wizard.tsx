@@ -75,15 +75,22 @@ const STEP_LABELS: Readonly<Record<OnboardingStep, string>> = {
 /**
  * Whether a step is for this setup: asking for the AI only when it is
  * off — a connection added with it on goes straight to its preparation —
- * and Conoscimi and the reading only with it on.
+ * Conoscimi only with it on, and the reading of the mail with it on and
+ * mail to read.
  */
-function applies(step: OnboardingStep, setupCase: OnboardingCase, aiOn: boolean): boolean {
+function applies(
+  step: OnboardingStep,
+  setupCase: OnboardingCase,
+  aiOn: boolean,
+  hasMail: boolean
+): boolean {
   switch (step) {
     case 'segretario':
       return setupCase !== 'nuova-connessione' || !aiOn
     case 'conoscimi':
-    case 'lettura':
       return aiOn
+    case 'lettura':
+      return aiOn && hasMail
     default:
       return true
   }
@@ -120,9 +127,12 @@ function StepFrame({
 /**
  * Step 1: the connections — each mailbox and each calendar on its own, by
  * the access that brought them — and adding more, the way Settings adds them.
+ * One of any family is enough.
  */
 function ConnectionsStep({
   accounts,
+  calendarConnections,
+  setupCase,
   mailStates,
   removingAccountId,
   googleReady,
@@ -133,6 +143,8 @@ function ConnectionsStep({
   onCancel
 }: {
   accounts: ReadonlyArray<MailAccount>
+  calendarConnections: ReadonlyArray<CalendarConnection>
+  setupCase: OnboardingCase
   mailStates: Readonly<Record<string, AccountConnectionState | undefined>>
   removingAccountId: string | null
   googleReady: boolean
@@ -140,31 +152,35 @@ function ConnectionsStep({
   onAccountCreated: (account: MailAccount) => void
   onRemoveMail: (accountId: string, calendars: ReadonlyArray<CalendarConnection>) => void
   onNext: () => void
-  /** Nothing added yet, from inside SIEVER Mail: the user may go back. */
+  /** From inside SIEVER Mail, before anything is added: the user may go back. */
   onCancel: (() => void) | null
 }): React.JSX.Element {
-  // Opened by itself the first time, when there is nothing yet.
-  const [adding, setAdding] = useState(accounts.length === 0)
+  const hasConnection = accounts.length > 0 || calendarConnections.length > 0
+  // Opened by itself when there is nothing yet, and when the user came to add one.
+  const [adding, setAdding] = useState(!hasConnection || setupCase === 'nuova-connessione')
+  // The calendars there when the step opened: one added since is something added here.
+  const [calendarsBefore] = useState(() => new Set(calendarConnections.map(({ id }) => id)))
+  const calendarAdded = calendarConnections.some(({ id }) => !calendarsBefore.has(id))
 
   return (
     <StepFrame
       title="Le tue connessioni"
-      lead="Collega la posta che usi, e i calendari: ogni casella e ogni calendario è una connessione a sé. Ne serve almeno una di posta."
+      lead="Collega la posta e i calendari che usi: ogni casella e ogni calendario è una connessione a sé, e presto anche i volumi e i drive dei tuoi file. Ne basta una, di qualunque tipo."
       actions={
         <>
-          {onCancel && (
+          {onCancel && !calendarAdded && (
             <Button variant="ghost" size="lg" onClick={onCancel}>
               Annulla
             </Button>
           )}
-          <Button size="lg" disabled={accounts.length === 0} onClick={onNext}>
+          <Button size="lg" disabled={!hasConnection} onClick={onNext}>
             Continua
           </Button>
         </>
       }
     >
       <div className="flex flex-col gap-2">
-        {accounts.length > 0 && (
+        {hasConnection && (
           <ConnectionsList
             accounts={accounts}
             mailStates={mailStates}
@@ -187,7 +203,7 @@ function ConnectionsStep({
             className="text-muted-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring/60 flex items-center gap-2.5 rounded-[10px] border border-dashed px-4 py-3 text-left text-[13px] font-medium outline-none focus-visible:ring-2"
           >
             <Plus className="size-4 shrink-0" />
-            {accounts.length === 0 ? 'Collega la tua posta' : 'Aggiungi una connessione'}
+            {hasConnection ? 'Aggiungi una connessione' : 'Collega la prima connessione'}
           </button>
         )}
       </div>
@@ -197,7 +213,7 @@ function ConnectionsStep({
 
 /**
  * Step 2: the Segretario — the user's own OpenRouter key, checked, and the
- * AI turned on; or not now, and SIEVER Mail is a mail and calendar client.
+ * AI turned on; or not now, and SIEVER Mail is its apps without it.
  */
 function SegretarioStep({
   segretario,
@@ -236,10 +252,10 @@ function SegretarioStep({
       title={setupCase === 'ai-riaccesa' ? 'Riaccendi il Segretario' : 'Il Segretario'}
       lead={
         <>
-          Il Segretario legge la tua posta mentre arriva, tiene il conto di quello che ti chiedono,
-          di quello che hai promesso e di quello che aspetti, riconosce i tuoi progetti, prepara le
-          risposte e la tua giornata. Lavora con un modello linguistico che usi con il tuo account
-          OpenRouter: paghi solo quello che fa.
+          Il Segretario segue la tua posta e i tuoi calendari mentre cambiano, tiene il conto di
+          quello che ti chiedono, di quello che hai promesso e di quello che aspetti, riconosce i
+          tuoi progetti, prepara le risposte, gli incontri e la tua giornata. Lavora con un modello
+          linguistico che usi con il tuo account OpenRouter: paghi solo quello che fa.
         </>
       }
       actions={
@@ -370,15 +386,35 @@ function preparationOf(
   return { ready: true, failed: false, line: 'Pronta' }
 }
 
-/** Step 3: every connection synced — and, with the AI, its recent mail read by the index. */
+/** Where a calendar connection stands in the preparation: its first sync, or why it failed. */
+function calendarPreparationOf(connection: CalendarConnection): {
+  ready: boolean
+  failed: boolean
+  line: string
+} {
+  if (connection.problem) {
+    return { ready: false, failed: true, line: `Non riesco a collegarmi: ${connection.problem}` }
+  }
+
+  return connection.lastSyncAt === null
+    ? { ready: false, failed: false, line: 'Scarico gli eventi…' }
+    : { ready: true, failed: false, line: 'Pronto' }
+}
+
+/**
+ * Step 3: every connection synced — each mailbox, with the AI its recent
+ * mail read by the index, and each calendar.
+ */
 function PreparationStep({
   accounts,
+  calendarConnections,
   connections,
   aiOn,
   onRemoveAccount,
   onNext
 }: {
   accounts: ReadonlyArray<MailAccount>
+  calendarConnections: ReadonlyArray<CalendarConnection>
   connections: Readonly<Record<string, AccountConnectionState>>
   aiOn: boolean
   onRemoveAccount: (accountId: string) => void
@@ -414,22 +450,35 @@ function PreparationStep({
     }
   }, [accountIds, aiOn])
 
-  const rows = accounts.map((account) => ({
-    account,
-    ...preparationOf(connections[account.id], indexed.get(account.id), aiOn)
-  }))
+  const rows = [
+    ...accounts.map((account) => ({
+      key: `mail:${account.id}`,
+      name: account.email,
+      remove: () => onRemoveAccount(account.id),
+      ...preparationOf(connections[account.id], indexed.get(account.id), aiOn)
+    })),
+    ...calendarConnections.map((connection) => ({
+      key: `calendar:${connection.id}`,
+      name: `${connection.label} · calendari`,
+      remove: () => void window.calendarApi.disconnect(connection.id),
+      ...calendarPreparationOf(connection)
+    }))
+  ]
   // A connection that fails never holds the setup: it tries again by itself, and the user can
   // take it away now or set it right later in Settings → Connessioni.
   const failing = rows.filter((row) => row.failed).length
   const ready = rows.length > 0 && rows.every((row) => row.ready || row.failed)
+  const hasMail = accounts.length > 0
 
   return (
     <StepFrame
-      title="Preparo la posta"
+      title="Preparo le connessioni"
       lead={
-        aiOn
-          ? 'Scarico la posta di ogni connessione e leggo il testo dei messaggi recenti: è da lì che il Segretario comincia.'
-          : 'Scarico la posta di ogni connessione. Il resto dei messaggi più vecchi continua ad arrivare mentre lavori.'
+        !hasMail
+          ? 'Scarico gli eventi di ogni calendario.'
+          : aiOn
+            ? `Scarico la posta${calendarConnections.length > 0 ? ' e i calendari' : ''} di ogni connessione e leggo il testo dei messaggi recenti: è da lì che il Segretario comincia.`
+            : `Scarico la posta${calendarConnections.length > 0 ? ' e i calendari' : ''} di ogni connessione. I messaggi più vecchi continuano ad arrivare mentre lavori.`
       }
       actions={
         <Button size="lg" disabled={!ready} onClick={onNext}>
@@ -439,11 +488,8 @@ function PreparationStep({
       }
     >
       <div className="flex flex-col gap-2">
-        {rows.map(({ account, ready: rowReady, failed, line }) => (
-          <div
-            key={account.id}
-            className="bg-hover flex items-center gap-3 rounded-[10px] px-4 py-3"
-          >
+        {rows.map(({ key, name, remove, ready: rowReady, failed, line }) => (
+          <div key={key} className="bg-hover flex items-center gap-3 rounded-[10px] px-4 py-3">
             <span className="grid size-4 shrink-0 place-items-center">
               {rowReady ? (
                 <Check className="text-status-online size-4" />
@@ -454,7 +500,7 @@ function PreparationStep({
               )}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] font-semibold">{account.email}</span>
+              <span className="block truncate text-[13px] font-semibold">{name}</span>
               <span
                 className={cn(
                   'block text-[12px]',
@@ -465,7 +511,7 @@ function PreparationStep({
               </span>
             </span>
             {failed && (
-              <Button variant="ghost" size="sm" onClick={() => onRemoveAccount(account.id)}>
+              <Button variant="ghost" size="sm" onClick={remove}>
                 Togli
               </Button>
             )}
@@ -757,8 +803,8 @@ function EnterStep({ aiOn, onEnter }: { aiOn: boolean; onEnter: () => void }): R
       title="Pronto"
       lead={
         aiOn
-          ? 'Il Segretario ha letto la tua posta: trovi la giornata in Oggi, le cose da gestire, quelle che aspetti, le risposte pronte e i tuoi progetti. Da qui in poi legge quello che arriva.'
-          : 'La tua posta è qui. Puoi accendere il Segretario quando vuoi, da Impostazioni › Segretario.'
+          ? 'Il Segretario è al passo: trovi la giornata in Oggi, con le cose da gestire, quelle che aspetti, le risposte pronte e i tuoi progetti. Da qui in poi segue quello che cambia.'
+          : 'Le tue app sono pronte. Puoi accendere il Segretario quando vuoi, da Impostazioni › Segretario.'
       }
       actions={
         <Button size="lg" onClick={onEnter}>
@@ -779,6 +825,7 @@ function EnterStep({ aiOn, onEnter }: { aiOn: boolean; onEnter: () => void }): R
 export function OnboardingWizard({
   state,
   accounts,
+  calendarConnections,
   connections,
   removingAccountId,
   canUseGoogle,
@@ -792,6 +839,7 @@ export function OnboardingWizard({
 }: {
   state: OnboardingState
   accounts: ReadonlyArray<MailAccount>
+  calendarConnections: ReadonlyArray<CalendarConnection>
   connections: Readonly<Record<string, AccountConnectionState>>
   removingAccountId: string | null
   canUseGoogle: boolean
@@ -811,7 +859,12 @@ export function OnboardingWizard({
   const all = CASE_STEPS[state.case]
   const undecided =
     all.includes('segretario') && all.indexOf(state.step) <= all.indexOf('segretario')
-  const steps = all.filter((step) => applies(step, state.case, aiOn || undecided))
+  // The mail to read: a connection added with the AI on already brings its own; else any there is.
+  const hasMail =
+    state.case === 'nuova-connessione' && aiOn && !setupTurnsAiOn(state)
+      ? state.accountIds.length > 0
+      : accounts.length > 0
+  const steps = all.filter((step) => applies(step, state.case, aiOn || undecided, hasMail))
 
   useEffect(() => {
     let current = true
@@ -827,11 +880,11 @@ export function OnboardingWizard({
       const all = CASE_STEPS[state.case]
       const following = all
         .slice(all.indexOf(state.step) + 1)
-        .find((step) => applies(step, state.case, aiOnNow))
+        .find((step) => applies(step, state.case, aiOnNow, hasMail))
 
       onChange({ ...state, ...change, step: following ?? 'entra' })
     },
-    [aiOn, onChange, state]
+    [aiOn, hasMail, onChange, state]
   )
 
   // Turned on here, the AI starts with every connection: their reading waits for Conoscimi.
@@ -887,6 +940,8 @@ export function OnboardingWizard({
           {state.step === 'connessioni' && (
             <ConnectionsStep
               accounts={accounts}
+              calendarConnections={calendarConnections}
+              setupCase={state.case}
               mailStates={connections}
               removingAccountId={removingAccountId}
               googleReady={canUseGoogle}
@@ -924,6 +979,7 @@ export function OnboardingWizard({
           {state.step === 'preparazione' && (
             <PreparationStep
               accounts={accounts}
+              calendarConnections={calendarConnections}
               connections={connections}
               aiOn={aiOn}
               onRemoveAccount={(accountId) => onRemoveAccount(accountId, [])}

@@ -30,6 +30,7 @@ import { LinkedWords } from '@renderer/features/segretario/segretario-text'
 
 import { addDays, dayOfKey } from '@renderer/features/calendar/calendar-dates'
 import { dotStyle } from './event-style'
+import { EventWorkSection } from './event-work'
 import type { ProposedEvent } from './use-calendar-data'
 
 const DAY = new Intl.DateTimeFormat('it-IT', { weekday: 'long', day: 'numeric', month: 'long' })
@@ -348,6 +349,8 @@ export function EventPanel({
             />
           </div>
         )}
+
+        {aiOn && event && <EventWorkSection event={event} />}
 
         {aiOn && event?.origin && (
           <div className="bg-ai-soft/45 flex flex-col gap-1.5 rounded-[8px] px-3 py-2">

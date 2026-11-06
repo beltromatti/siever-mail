@@ -1,4 +1,10 @@
-import type { CommitmentKind, CommitmentRecord, NoteNature, NotePriority } from '../registry/types'
+import type {
+  CommitmentKind,
+  CommitmentOrigin,
+  CommitmentRecord,
+  NoteNature,
+  NotePriority
+} from '../registry/types'
 import { RegistryRefusal, RevisionConflict } from '../registry/types'
 import { PROMPTS } from '../prompts'
 import {
@@ -14,9 +20,9 @@ import {
   type ToolContext,
   UnknownHandle
 } from '../agent/tool-types'
-import { evidenceOf, resolveSentOrReceived } from './anchors'
+import { evidenceOf, resolveEvent, resolveSentOrReceived } from './anchors'
 import { commitmentLine, rememberCommitments } from './describe'
-import { countOf } from './format'
+import { countOf, shortDate } from './format'
 
 const NATURES: ReadonlyArray<NoteNature> = [
   'da_rispondere',
@@ -141,16 +147,14 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
 
   switch (action) {
     case 'apri': {
-      const handle = requireString(operation, 'messaggio')
       const kind = kindArg(operation)
 
       if (!kind) {
         throw new ToolInputError(`Indica \`tipo\`: ${KINDS.join(', ')}.`)
       }
 
-      const message = await resolveSentOrReceived(context, handle)
       const { record, created } = await context.registry.openCommitment(
-        message,
+        await originOf(context, operation),
         {
           kind,
           text: requireString(operation, 'testo'),
@@ -237,6 +241,48 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
   }
 }
 
+/**
+ * Where a new open thing comes from: the message given, the event given,
+ * or — neither — the user's word, which only a conversation with the user
+ * can hear: alone, the Segretario opens things from what it reads.
+ */
+async function originOf(
+  context: ToolContext,
+  operation: Operation
+): Promise<CommitmentOrigin & { dateIso?: string }> {
+  const messageHandle = stringArg(operation, 'messaggio')
+  const eventHandle = stringArg(operation, 'evento')
+
+  if (messageHandle && eventHandle) {
+    throw new ToolInputError(
+      'Una cosa aperta nasce da un posto solo: `messaggio` oppure `evento`. Se riguarda anche l’altro, dillo nel testo.'
+    )
+  }
+
+  if (messageHandle) {
+    const message = await resolveSentOrReceived(context, messageHandle)
+    return {
+      kind: 'messaggio',
+      accountId: message.accountId,
+      threadId: message.threadId,
+      messageKey: message.messageKey,
+      dateIso: message.dateIso
+    }
+  }
+
+  if (eventHandle) {
+    return { kind: 'evento', eventKey: resolveEvent(context, eventHandle).eventKey }
+  }
+
+  if (context.run.actor.background) {
+    throw new ToolInputError(
+      'Lavorando da solo, una cosa aperta nasce da ciò che leggi: indica il `messaggio` o l’`evento` da cui viene.'
+    )
+  }
+
+  return { kind: 'utente' }
+}
+
 /** How far back `chiuse` looks. */
 const RECENTLY_CLOSED_MS = 14 * 24 * 60 * 60 * 1000
 
@@ -261,6 +307,83 @@ async function conversationsWith(
   return found.flat()
 }
 
+/**
+ * Where each of these things comes from, in words with a short name to
+ * open it: the message (and whether it lies in the Trash), the event, or
+ * the user's word.
+ */
+async function sourceWords(
+  context: ToolContext,
+  records: ReadonlyArray<CommitmentRecord>
+): Promise<Map<number, string>> {
+  const words = new Map<number, string>()
+  const byAccount = new Map<string, Array<{ id: number; messageKey: string }>>()
+  const eventKeys = new Set<string>()
+
+  for (const record of records) {
+    const { origin } = record
+
+    if (origin.kind === 'messaggio') {
+      byAccount.set(origin.accountId, [
+        ...(byAccount.get(origin.accountId) ?? []),
+        { id: record.id, messageKey: origin.messageKey }
+      ])
+    } else if (origin.kind === 'evento') {
+      eventKeys.add(origin.eventKey)
+    } else {
+      words.set(record.id, "detta dall'utente")
+    }
+  }
+
+  for (const [accountId, wanted] of byAccount) {
+    const located = await context.mail.locate(
+      accountId,
+      wanted.map((entry) => entry.messageKey)
+    )
+
+    for (const { id, messageKey } of wanted) {
+      const location = located.get(messageKey)
+
+      if (!location) {
+        words.set(id, 'da un messaggio non più nella posta')
+        continue
+      }
+
+      const handle = context.handles.name(
+        { kind: 'message', ref: location.ref, messageKey },
+        context.newHandles
+      )
+      words.set(
+        id,
+        `da ${handle} «${location.subject}»${location.setAside ? ' · messaggio nel cestino: sospesa' : ''}`
+      )
+    }
+  }
+
+  const events = new Map(
+    await Promise.all(
+      [...eventKeys].map(async (key) => [key, await context.calendar.event(key)] as const)
+    )
+  )
+
+  for (const record of records) {
+    if (record.origin.kind === 'evento') {
+      const event = events.get(record.origin.eventKey)
+      words.set(
+        record.id,
+        event
+          ? `dall'evento ${context.handles.name(
+              { kind: 'event', eventKey: event.key, title: event.title },
+              context.newHandles
+            )} «${event.title}» del ${shortDate(event.start)}`
+          : 'da un evento non più nel calendario'
+      )
+    }
+  }
+
+  return words
+}
+
 async function listCommitments(context: ToolContext, filter: Operation): Promise<string> {
   const kind = kindArg(filter)
   const projectHandle = stringArg(filter, 'progetto')
@@ -272,6 +395,14 @@ async function listCommitments(context: ToolContext, filter: Operation): Promise
 
   const person = stringArg(filter, 'persona')?.trim().toLowerCase()
   let threads = project ? await context.registry.projects.threadsOf(project.projectId) : undefined
+  // A project's things come from its conversations and from its events; a person's, from the
+  // conversations with them.
+  const events =
+    project && !person
+      ? (await context.registry.projects.resources(project.projectId))
+          .filter((resource) => resource.kind === 'evento')
+          .map((resource) => resource.location)
+      : undefined
 
   if (person) {
     const withPerson = await conversationsWith(context, person)
@@ -296,12 +427,14 @@ async function listCommitments(context: ToolContext, filter: Operation): Promise
     kinds: kind ? [kind] : undefined,
     dueBy: stringArg(filter, 'entro'),
     threads,
+    events,
     includeDeferred: true
   })
   // Closed lately too, when asked: what was done or not needed is not to be opened again.
   const closed = booleanArg(filter, 'chiuse')
     ? await context.registry.commitments.closedSince(Date.now() - RECENTLY_CLOSED_MS, {
         threads,
+        events,
         kinds: kind ? [kind] : undefined
       })
     : []
@@ -314,28 +447,9 @@ async function listCommitments(context: ToolContext, filter: Operation): Promise
       : 'Niente di aperto con questi criteri.'
   }
 
-  const summaries = new Map<string, string>()
-
-  for (const accountId of new Set(records.map((record) => record.accountId))) {
-    const keys = records
-      .filter((record) => record.accountId === accountId)
-      .map((record) => record.messageKey)
-    const located = await context.mail.locate(accountId, keys)
-
-    for (const [key, location] of located) {
-      const handle = context.handles.name(
-        { kind: 'message', ref: location.ref, messageKey: key },
-        context.newHandles
-      )
-      summaries.set(
-        `${accountId}\u0000${key}`,
-        `${handle} «${location.subject}»${location.setAside ? ' · messaggio nel cestino: sospesa' : ''}`
-      )
-    }
-  }
-
+  const sources = await sourceWords(context, records)
   const line = (record: CommitmentRecord): string =>
-    `${commitmentLine(record)} · da ${summaries.get(`${record.accountId}\u0000${record.messageKey}`) ?? 'un messaggio non più nella posta'}`
+    `${commitmentLine(record)} · ${sources.get(record.id) ?? ''}`
 
   return [
     open.length > 0

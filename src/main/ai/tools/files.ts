@@ -5,6 +5,7 @@ import { basename, isAbsolute, join, resolve } from 'node:path'
 
 import { foldSearchText } from '@shared/search'
 
+import { fileSources } from '../../files/file-sources'
 import { ensurePathReachable } from '../../services/network-volumes'
 import { PROMPTS } from '../prompts'
 import {
@@ -58,34 +59,21 @@ const SKIPPED_DIRECTORIES = new Set([
   'trash'
 ])
 
-/** Where a search looks when no folder is given: the user's own folders, then the disks attached. */
-function defaultRoots(): string[] {
+/**
+ * Where a search without a folder looks: the File sources (see
+ * `src/main/files`) — the user's own folders first, then their home, then
+ * each mounted volume, local or network.
+ */
+async function defaultRoots(): Promise<string[]> {
   const home = homedir()
-  const roots = ['Desktop', 'Documents', 'Downloads', 'Documenti', 'Scrivania']
+  const own = ['Desktop', 'Documents', 'Downloads', 'Documenti', 'Scrivania']
     .map((name) => join(home, name))
     .filter((path) => existsSync(path))
+  const volumes = (await fileSources())
+    .filter((source) => source.kind !== 'computer' && source.mounted)
+    .map((source) => source.path)
 
-  roots.push(home)
-
-  if (process.platform === 'darwin' && existsSync('/Volumes')) {
-    roots.push('/Volumes')
-  } else if (process.platform === 'win32') {
-    for (const letter of 'DEFGHIJKLMNOPQRSTUVWXYZ') {
-      const drive = `${letter}:\\`
-
-      if (existsSync(drive)) {
-        roots.push(drive)
-      }
-    }
-  } else {
-    for (const path of ['/media', '/mnt']) {
-      if (existsSync(path)) {
-        roots.push(path)
-      }
-    }
-  }
-
-  return roots
+  return [...own, home, ...volumes]
 }
 
 interface FoundFile {
@@ -258,7 +246,7 @@ export const searchFilesTool: SegretarioTool = {
 
     const name = requireString(args, 'nome')
     const words = foldSearchText(name).split(/\s+/).filter(Boolean)
-    const found = await findFiles(folder ? [resolve(folder)] : defaultRoots(), words, limit)
+    const found = await findFiles(folder ? [resolve(folder)] : await defaultRoots(), words, limit)
 
     if (found.length === 0) {
       return {
