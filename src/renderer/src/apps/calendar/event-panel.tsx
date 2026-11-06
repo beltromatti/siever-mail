@@ -20,6 +20,7 @@ import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { RESPONSE_LABELS } from '@renderer/features/calendar/event-line'
+import { useCommandKeys } from '@renderer/lib/command-shortcuts'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry, CalendarResponse } from '@shared/calendar'
 import type { MessageRef } from '@shared/models'
@@ -133,6 +134,7 @@ export function EventPanel({
   const [working, setWorking] = useState<string | null>(null)
   const { confirm, dialog } = useConfirmDialog()
   const prep = useEventPrep(aiOn && event ? event.key : null)
+  const closeKeys = useCommandKeys('calendar-close-event')
 
   const run = async (
     label: string,
@@ -201,6 +203,7 @@ export function EventPanel({
         </h2>
         <IconButton
           label="Chiudi"
+          shortcutKeys={closeKeys}
           className="text-faint-foreground size-[26px] shrink-0"
           onClick={onClose}
         >

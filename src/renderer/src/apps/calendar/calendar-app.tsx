@@ -1,20 +1,24 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type Ref } from 'react'
 import { ChevronLeft, ChevronRight, Flag, LoaderCircle, Plus, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { Button } from '@renderer/components/ui/button'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { useCalendarEvents } from '@renderer/features/calendar/use-calendar'
+import { useCommandKeys } from '@renderer/lib/command-shortcuts'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
+import type { HostCommandId } from '@shared/commands'
 import type { MessageRef } from '@shared/models'
 
 import { AgendaList } from './agenda-list'
 import {
   addDays,
   CALENDAR_VIEWS,
+  eventStartDay,
   sameDay,
   startOfDay,
   startOfWeek,
@@ -23,12 +27,14 @@ import {
   viewTitle,
   type CalendarView
 } from '@renderer/features/calendar/calendar-dates'
+import { CalendarSearch } from './calendar-search'
 import { EventEditor, type EditorTarget } from './event-editor'
 import { EventPanel } from './event-panel'
 import { dotStyle } from './event-style'
 import { MonthGrid } from './month-grid'
 import { TimeGrid, type CalendarSelection } from './time-grid'
 import { calendarOf, useCalendarList, useSegretarioLayers } from './use-calendar-data'
+import { useCalendarKeys } from './use-calendar-keys'
 
 const VIEW_KEY = 'siever-calendar-view'
 const LAYERS_KEY = 'siever-calendar-layers'
@@ -46,6 +52,14 @@ const SIGHT_VIEW: Readonly<Record<CalendarView, string>> = {
   settimana: 'settimana ',
   mese: '',
   agenda: 'agenda '
+}
+
+/** The command that shows each view (Settings › Scorciatoie). */
+const VIEW_COMMANDS: Readonly<Record<CalendarView, HostCommandId>> = {
+  giorno: 'calendar-view-day',
+  settimana: 'calendar-view-week',
+  mese: 'calendar-view-month',
+  agenda: 'calendar-view-agenda'
 }
 
 /** Where the calendar opens, when something asks for a day or an event. */
@@ -228,7 +242,9 @@ function CalendarsList({
  * The Calendario app: the calendars of every connection on one axis of
  * time — a day, a week, a month, the agenda — with the Segretario's
  * layers, when it is on: what the mail says is due, and the events it
- * proposes. An event opens beside it; a drag on the grid makes one.
+ * proposes. An event opens beside it; a drag on the grid makes one. The
+ * events are searched, past ones too, from the header; and moved through
+ * from the keyboard, its keys a letter each (`useCalendarKeys`).
  */
 export function CalendarApp({
   aiOn,
@@ -236,7 +252,8 @@ export function CalendarApp({
   onSight,
   atWindowTopRight,
   onOpenMessage,
-  onOpenConnections
+  onOpenConnections,
+  searchInputRef
 }: {
   aiOn: boolean
   /** Where the calendar opens: a day, and an event of it to show. Today when not given. */
@@ -247,6 +264,8 @@ export function CalendarApp({
   onOpenMessage: (ref: MessageRef) => void
   /** No calendar connected: where to connect one. */
   onOpenConnections: () => void
+  /** The search field, for the window's "Cerca" command while the calendar is in front. */
+  searchInputRef?: Ref<HTMLInputElement>
 }): React.JSX.Element {
   const [view, setView] = useState<CalendarView>(() => stored(VIEW_KEY, 'settimana', isView))
   const [layers, setLayers] = useState(() =>
@@ -330,6 +349,7 @@ export function CalendarApp({
       })
     }
   }
+  const canWrite = Boolean(calendars?.some((calendar) => calendar.writable))
   const newEvent = (): void => {
     const start = new Date()
     start.setMinutes(start.getMinutes() < 30 ? 30 : 60, 0, 0)
@@ -343,6 +363,50 @@ export function CalendarApp({
       allDay: false
     })
   }
+  /** An event, on its day, open beside the calendar. */
+  const showEvent = (event: CalendarEvent): void => {
+    setAnchor(eventStartDay(event))
+    setSelection({ kind: 'event', key: event.key })
+  }
+  const previousKeys = useCommandKeys('calendar-previous')
+  const nextKeys = useCommandKeys('calendar-next')
+
+  // Each command does the same whether pressed once or held, but the steps through time,
+  // which a held key repeats.
+  useCalendarKeys((commandId) => {
+    const shownView = CALENDAR_VIEWS.find((option) => VIEW_COMMANDS[option.value] === commandId)
+
+    if (shownView) {
+      setView(shownView.value)
+      return true
+    }
+
+    switch (commandId) {
+      case 'calendar-today':
+        setAnchor(startOfDay(new Date()))
+        return true
+      case 'calendar-previous':
+      case 'calendar-next':
+        setAnchor((current) => stepAnchor(view, current, commandId === 'calendar-next' ? 1 : -1))
+        return true
+      case 'calendar-new-event':
+        if (!canWrite) {
+          return false
+        }
+
+        newEvent()
+        return true
+      case 'calendar-close-event':
+        if (!selection) {
+          return false
+        }
+
+        setSelection(null)
+        return true
+      default:
+        return false
+    }
+  })
 
   return (
     <div className="paper flex h-full min-h-0">
@@ -350,14 +414,12 @@ export function CalendarApp({
         aria-label="Calendari"
         className="flex w-[232px] shrink-0 flex-col gap-5 overflow-y-auto border-r px-3 pt-[var(--titlebar-band)] pb-4"
       >
-        <Button
-          className="mt-2 w-full"
-          onClick={newEvent}
-          disabled={!calendars?.some((calendar) => calendar.writable)}
-        >
-          <Plus className="size-4" />
-          Nuovo evento
-        </Button>
+        <ActionTooltip label="Nuovo evento" commandId="calendar-new-event">
+          <Button className="mt-2 w-full" onClick={newEvent} disabled={!canWrite}>
+            <Plus className="size-4" />
+            Nuovo evento
+          </Button>
+        </ActionTooltip>
         <MiniMonth anchor={anchor} days={days} onPick={(day) => setAnchor(day)} />
         {calendars && calendars.length > 0 ? (
           <CalendarsList calendars={calendars} onSetHidden={setHidden} />
@@ -414,24 +476,28 @@ export function CalendarApp({
             atWindowTopRight && !selection ? 'pr-[calc(var(--titlebar-controls)+8px)]' : 'pr-3'
           )}
         >
-          <Button
-            variant="outline"
-            size="sm"
-            className="window-no-drag"
-            onClick={() => setAnchor(startOfDay(new Date()))}
-          >
-            Oggi
-          </Button>
+          <ActionTooltip label="Vai a oggi" commandId="calendar-today">
+            <Button
+              variant="outline"
+              size="sm"
+              className="window-no-drag"
+              onClick={() => setAnchor(startOfDay(new Date()))}
+            >
+              Oggi
+            </Button>
+          </ActionTooltip>
           <div className="window-no-drag flex">
             <IconButton
-              label="Prima"
+              label="Periodo precedente"
+              shortcutKeys={previousKeys}
               className="size-[28px]"
               onClick={() => setAnchor(stepAnchor(view, anchor, -1))}
             >
               <ChevronLeft className="size-4" />
             </IconButton>
             <IconButton
-              label="Dopo"
+              label="Periodo successivo"
+              shortcutKeys={nextKeys}
               className="size-[28px]"
               onClick={() => setAnchor(stepAnchor(view, anchor, 1))}
             >
@@ -442,27 +508,33 @@ export function CalendarApp({
             {viewTitle(view, anchor)}
           </h1>
           <div className="flex-1" />
+          <CalendarSearch calendars={calendars} inputRef={searchInputRef} onOpen={showEvent} />
           <div
             role="tablist"
             aria-label="Vista"
             className="window-no-drag bg-hover flex rounded-[8px] p-0.5"
           >
             {CALENDAR_VIEWS.map((option) => (
-              <button
+              <ActionTooltip
                 key={option.value}
-                type="button"
-                role="tab"
-                aria-selected={view === option.value}
-                onClick={() => setView(option.value)}
-                className={cn(
-                  'focus-visible:ring-ring/60 rounded-[6px] px-2.5 py-1 text-[12px] font-medium outline-none focus-visible:ring-2',
-                  view === option.value
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
+                label={`Vista ${option.label}`}
+                commandId={VIEW_COMMANDS[option.value]}
               >
-                {option.label}
-              </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={view === option.value}
+                  onClick={() => setView(option.value)}
+                  className={cn(
+                    'focus-visible:ring-ring/60 rounded-[6px] px-2.5 py-1 text-[12px] font-medium outline-none focus-visible:ring-2',
+                    view === option.value
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {option.label}
+                </button>
+              </ActionTooltip>
             ))}
           </div>
           <IconButton
@@ -555,8 +627,7 @@ export function CalendarApp({
           onClose={() => setEditor(null)}
           onSaved={(saved) => {
             setEditor(null)
-            setSelection({ kind: 'event', key: saved.key })
-            setAnchor(startOfDay(new Date(saved.allDay ? `${saved.start}T00:00` : saved.start)))
+            showEvent(saved)
           }}
         />
       )}

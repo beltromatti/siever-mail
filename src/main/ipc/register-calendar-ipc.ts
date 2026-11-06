@@ -39,6 +39,15 @@ const newEventSchema = z
     attendees: attendeesSchema
   })
   .strict()
+const searchSchema = z
+  .object({
+    text: z.string().max(500),
+    fromIso: isoSchema.optional(),
+    toIso: isoSchema.optional(),
+    calendarKeys: z.array(keySchema).max(1000).optional(),
+    limit: z.number().int().min(1).max(200).optional()
+  })
+  .strict()
 const eventChangeSchema = z
   .object({
     title: titleSchema.optional(),
@@ -113,6 +122,7 @@ export function registerCalendarIpc(
   handle(CALENDAR_IPC.events, (fromIso: unknown, toIso: unknown) =>
     calendar.events(isoSchema.parse(fromIso), isoSchema.parse(toIso))
   )
+  handle(CALENDAR_IPC.search, (query: unknown) => calendar.search(searchSchema.parse(query)))
   handle(CALENDAR_IPC.event, (key: unknown) => calendar.event(keySchema.parse(key)))
   handle(CALENDAR_IPC.eventByUid, (iCalUid: unknown, mailAccountId: unknown) =>
     calendar.eventByUid(

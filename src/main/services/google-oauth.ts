@@ -6,7 +6,7 @@ import { google } from 'googleapis'
 
 import type { RuntimeConfig } from '@main/config/env'
 
-interface GoogleAuthResult {
+export interface GoogleAuthResult {
   email: string
   displayName: string
   refreshToken: string

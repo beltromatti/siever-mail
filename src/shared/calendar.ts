@@ -1,4 +1,5 @@
 import type { MessageRef } from './models'
+import { foldSearchText } from './search'
 
 /**
  * The user's calendar connections — a Google or Microsoft account, a
@@ -148,6 +149,42 @@ export interface EventChange {
   attendees?: string[]
 }
 
+/**
+ * A search of the events kept, past and future: words, each of which must
+ * be in the event — its title, place, description, people or calendar's
+ * name — and, if given, a period and the calendars to look in.
+ */
+export interface CalendarSearchQuery {
+  text: string
+  /** Only events that touch the period from here (an ISO instant)… */
+  fromIso?: string
+  /** …to here (exclusive). */
+  toIso?: string
+  /** Only in these calendars (`calendarKey`): the Calendario looks in those it shows. */
+  calendarKeys?: string[]
+  /** How many at most; 50 when not said. */
+  limit?: number
+}
+
+/** The events a search found, nearest to now first on either side. */
+export interface CalendarSearchResult {
+  /** Not over yet — the one under way first — then the soonest. */
+  upcoming: CalendarEvent[]
+  /** Over, the latest first. */
+  past: CalendarEvent[]
+  /** How many more were found beyond the limit: those farthest from now. */
+  more: number
+}
+
+/**
+ * The words a search of the events looks for, folded as the text they are
+ * looked for in (`foldSearchText`): each must be found. Quotes only group
+ * words as typed; they do not make a phrase.
+ */
+export function calendarSearchWords(text: string): string[] {
+  return [...new Set(foldSearchText(text).replaceAll('"', ' ').split(/\s+/).filter(Boolean))]
+}
+
 /** The invitation a message carries, as the reader shows it. */
 export interface MessageInvitation {
   method: string
@@ -174,6 +211,7 @@ export const CALENDAR_IPC = {
   addCalDav: 'calendar:add-caldav',
   disconnect: 'calendar:disconnect',
   events: 'calendar:events',
+  search: 'calendar:search',
   event: 'calendar:event',
   eventByUid: 'calendar:event-by-uid',
   invitation: 'calendar:invitation',
@@ -214,6 +252,8 @@ export interface CalendarApi {
   disconnect: (connectionId: string) => Promise<CalendarConnection[]>
   /** The events between two instants, every connected calendar's, in order. */
   events: (fromIso: string, toIso: string) => Promise<CalendarEvent[]>
+  /** The events kept, past and future, that have every word searched for. */
+  search: (query: CalendarSearchQuery) => Promise<CalendarSearchResult>
   /** One event by its key, as the calendar has it now; null once it is gone. */
   event: (eventKey: string) => Promise<CalendarEvent | null>
   /**

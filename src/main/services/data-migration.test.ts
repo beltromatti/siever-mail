@@ -132,7 +132,7 @@ function seedUserAndCacheData(db: SqliteTestAdapter): void {
   db.prepare('INSERT INTO messages VALUES (?, ?)').run('m-1', 'Sopralluogo')
 }
 
-/** Mirrors what `MailService` hands the finalize step in production. */
+/** Mirrors what `Workspace.openStorage` hands the finalize step in production. */
 function createExecutor(db: SqliteTestAdapter): MigrationSqlExecutor {
   return {
     run: async (sql, params = []) => {

@@ -21,6 +21,19 @@ describe('the default chords', () => {
   })
 })
 
+describe('findChordConflict', () => {
+  it("counts the Calendario's commands along with the window's, which listen at the same time", () => {
+    expect(findChordConflict('calendar-today', 'Mod+KeyN', 'calendar', {})?.id).toBe('compose')
+    expect(findChordConflict('compose', 'KeyT', 'main', {})?.id).toBe('calendar-today')
+    expect(findChordConflict('calendar-today', 'KeyJ', 'calendar', {})?.id).toBe('calendar-next')
+  })
+
+  it('leaves a message being written on its own, as its dialog is over everything', () => {
+    expect(findChordConflict('attach', 'KeyT', 'composer', {})).toBeUndefined()
+    expect(findChordConflict('calendar-today', 'Mod+KeyJ', 'calendar', {})?.id).toBe('segretario')
+  })
+})
+
 describe('sanitizeShortcutOverrides', () => {
   it('keeps a valid chord and drops what would equal the default', () => {
     expect(sanitizeShortcutOverrides({ reply: 'Mod+Alt+KeyR', forward: 'Mod+Shift+KeyF' })).toEqual(

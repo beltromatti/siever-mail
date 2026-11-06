@@ -2,9 +2,9 @@ import { app, ipcMain, shell, type BrowserWindow } from 'electron'
 import { z } from 'zod'
 
 import { popupPageContextMenu } from '@main/context-menu'
-import type { MailService } from '@main/services/mail-service'
 import { normalizeExternalHttpUrl } from '@main/utils/external-url'
 import { logMainError, sanitizeForLog } from '@main/utils/error-utils'
+import type { Workspace } from '@main/workspace'
 import type { ContextMenuItem } from '@shared/context-menu'
 import { IPC_CHANNELS } from '@shared/ipc'
 import type {
@@ -49,12 +49,18 @@ function registerHandler<Args extends unknown[], ReturnValue>(
   })
 }
 
+/**
+ * The mail's channels, and those of the app as a whole the page reaches
+ * through `window.mailApi`: the storage, the sign-ins with Google and
+ * Microsoft, "Elimina tutti i dati", the window.
+ */
 export function registerMailIpc(
-  mailService: MailService,
+  workspace: Workspace,
   getMainWindow: () => BrowserWindow | null
 ): void {
+  const mailService = workspace.mail
   // Channels that read or change stored data wait for the storage to be
-  // open and any upgrade migration to be done (see `MailService.openStorage`).
+  // open and any upgrade migration to be done (see `Workspace.openStorage`).
   // Those that only drive the window or the shell, at the bottom, never
   // wait: the window must stay movable and closable during a long upgrade.
   const registerDataHandler = <Args extends unknown[], ReturnValue>(
@@ -62,7 +68,7 @@ export function registerMailIpc(
     handler: (...args: Args) => Promise<ReturnValue>
   ): void => {
     registerHandler(channel, async (...args: Args) => {
-      await mailService.openStorage()
+      await workspace.openStorage()
       return handler(...args)
     })
   }
@@ -80,19 +86,19 @@ export function registerMailIpc(
   )
 
   registerDataHandler(IPC_CHANNELS.addGoogleAccount, async (options) => {
-    return mailService.addGoogleAccount(
+    return workspace.addGoogleAccount(
       getMainWindow() ?? undefined,
       z.object({ calendar: z.boolean() }).strict().parse(options)
     )
   })
 
   registerDataHandler(IPC_CHANNELS.addMicrosoftAccount, async (options) => {
-    return mailService.addMicrosoftAccount(
+    return workspace.addMicrosoftAccount(
       z.object({ calendar: z.boolean() }).strict().parse(options)
     )
   })
 
-  registerHandler(IPC_CHANNELS.cancelSignIn, async () => mailService.cancelSignIn())
+  registerHandler(IPC_CHANNELS.cancelSignIn, async () => workspace.cancelSignIn())
 
   registerDataHandler(IPC_CHANNELS.discoverMailSettings, async (address) => {
     return mailService.discoverMailSettings(z.string().trim().email().max(320).parse(address))
@@ -282,7 +288,7 @@ export function registerMailIpc(
   })
 
   registerDataHandler(IPC_CHANNELS.clearAllDataKeepAccounts, async () => {
-    await mailService.clearAllDataKeepAccounts()
+    await workspace.clearAllDataKeepAccounts()
   })
 
   registerDataHandler(IPC_CHANNELS.pickAttachments, async () => {

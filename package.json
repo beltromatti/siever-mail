@@ -1,7 +1,7 @@
 {
   "name": "siever-mail",
   "version": "0.0.0",
-  "description": "Cross-platform desktop email client with archive workflow",
+  "description": "A personal operating system for work: mail, calendar and files at par, with an AI secretary",
   "main": "./out/main/index.js",
   "author": "siever",
   "homepage": ".",

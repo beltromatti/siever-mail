@@ -106,19 +106,20 @@ export interface ExtensionMain {
   upgradeAccountSignatureHtml(html: string, fromRevision: number): string
   /**
    * Wire IPC handlers, run DDL, kick off any startup logic. Called once
-   * after the host's mail service is ready. Idempotent across hot
-   * re-installs.
+   * after the host's mail, calendars and Segretario have started.
+   * Idempotent across hot re-installs.
    */
   install(context: ExtensionMainContext): Promise<void> | void
   /**
    * Deletes what the extension stores for the user, as part of the
    * settings' "Elimina tutti i dati" — after the host has emptied its own
-   * tables, with every account still connected. Preferences may stay, the
-   * way the host keeps its layout and sorting.
+   * tables, while the mail's connections are stopped. Preferences may stay,
+   * the way the host keeps its layout and sorting.
    */
   clearData(): Promise<void>
   /**
-   * Optional teardown hook invoked when the mail service stops.
+   * Optional teardown hook invoked when the app stops, before the host's
+   * own pieces do.
    */
   uninstall?(): Promise<void> | void
   /**

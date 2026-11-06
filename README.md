@@ -1,17 +1,32 @@
 <div align="center">
   <img src="resources/icon.png" alt="SIEVER Mail" width="160" />
   <h1>SIEVER Mail</h1>
-  <p><strong>A fast desktop mail and calendar client with a secretary in it.</strong></p>
+  <p><strong>A personal operating system for work: mail, calendar and files at par, kept in order by one secretary.</strong></p>
   <p>
     <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" />
     <img alt="Platforms" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey" />
     <img alt="Stack" src="https://img.shields.io/badge/stack-Electron%20%7C%20React%20%7C%20TypeScript-success" />
     <img alt="Status" src="https://img.shields.io/badge/status-active%20development-orange" />
   </p>
-  <p><sub>desktop email client · calendar · IMAP · Google and Microsoft OAuth · CalDAV · cross-platform · open source</sub></p>
+  <p><sub>personal work OS · mail · calendar · files · AI secretary · IMAP · Google and Microsoft OAuth · CalDAV · cross-platform · open source</sub></p>
 </div>
 
 ---
+
+## What SIEVER Mail is
+
+SIEVER Mail is a **personal operating system for work** — and for the rest
+of life — built for people with a lot to keep track of. Its apps are
+peers: **Posta** (mail), **Calendario** (calendars) and, soon, **File**
+(the computer's volumes, network shares and cloud drives) each bring their
+objects from their own connections; **Contatti** and **Progetti** gather
+what the sources hold without owning any of it; **Oggi** is the desk where
+one agent, the **Segretario**, keeps the user's work in order across all of
+them. No source is the centre: an open thing, a project, a proposal can
+come from a message, an event or the user's word, and a new source — chat,
+calls — slots in the same way. It works as a set of plain, fast apps
+without AI; with AI on, it gets intelligent. The name is still the mail
+client's it grew from, and will change.
 
 ## Why SIEVER Mail exists
 
@@ -45,12 +60,14 @@ open-source software released under the Apache License 2.0.
 ## Highlights
 
 - **A secretary that keeps your work** — the Segretario reads every
-  message as it arrives, and the last thirty days when you start: what it
-  wants of you and by when, what you promised, what you are waiting for.
-  Each of those is one open thing, wherever the mail is filed, with its
-  story — done, not needed, put off to a day, reopened — and your word wins
-  over its guesses. It files conversations into the projects they belong
-  to and keeps "Il punto" of each. Your day opens on **Oggi**, written in
+  message as it arrives, and the last thirty days when you start; it looks
+  at the calendar when others change it, and reads your files when the work
+  leads there. What is asked of you and by when, what you promised, what
+  you are waiting for, what a meeting needs, what you told it to remember:
+  each is one open thing, wherever it comes from, with its story — done,
+  not needed, put off to a day, reopened — and your word wins over its
+  guesses. It gathers conversations, events and folders into the projects
+  they belong to and keeps "Il punto" of each. Your day opens on **Oggi**, written in
   its hand; **Da gestire**, **In attesa** and **Risposte pronte** are views
   it keeps for you, and an "Attivi" filter narrows any list.
 - **Work done ahead** — replies to what matters and reminders for what is
@@ -76,7 +93,8 @@ open-source software released under the Apache License 2.0.
   forget. It is off until you turn it on in the guided setup, runs on your
   own [OpenRouter](https://openrouter.ai/) key, only through providers that
   keep no data, and you see what it costs.
-- **Mail and calendars, each its own connection** — Google, Microsoft 365 and
+- **Every source its own connection** — mail, calendars and (soon) files
+  are families of connections at par, in one tab. Google, Microsoft 365 and
   Outlook.com, iCloud, and any IMAP mailbox (PEC included), its servers
   found from the address as Thunderbird finds them; calendars from Google,
   Microsoft, any CalDAV server or a published link, each connected with or
@@ -85,11 +103,14 @@ open-source software released under the Apache License 2.0.
   calls them, and each account shows its folders as a tree. Every message
   is acted on from its own account: replies, forwards and moves never
   cross over unasked.
-- **A calendar of its own** — the Calendario shows every connected
-  calendar by day, week, month or agenda, with the deadlines the mail
-  carries and the events the Segretario proposes; draw an event on the
-  grid, drag it to move it. An invitation in a message is answered from
-  whichever calendar holds it, or by mail to its organizer.
+- **A calendar at par with the mail** — the Calendario shows every
+  connected calendar by day, week, month or agenda, with the deadlines of
+  every open thing and the events the Segretario proposes; search events by
+  words, past and future; draw an event on the grid, drag it to move it,
+  drive it from the keyboard. Each event shows what the Segretario keeps of
+  it: its preparation, the open things born from it, its projects. An
+  invitation in a message is answered from whichever calendar holds it, or
+  by mail to its organizer.
 - **Fast where it is felt** — a message opens at once, the next ones are
   read ahead, a large one shows before its attachments arrive; a new
   account shows its first screen in a moment; the list is endless and
@@ -144,12 +165,15 @@ open-source software released under the Apache License 2.0.
 
 ## Roadmap
 
-2.0 makes the Segretario part of the client — one agent woken by an
-engine, over a record of your work — and gives mail and calendars
-connections of their own: Google, Microsoft, iCloud, CalDAV, published
-calendars and any IMAP mailbox. Next: the Contatti and Progetti apps,
-already on the rail as "In arrivo", accessibility passes, localisation
-beyond Italian, and performance budgets for very large mailboxes.
+2.0 turns the client into a personal operating system: the Segretario — one
+agent woken by an engine, over a record of your work — and sources at par,
+each with connections of its own: Google, Microsoft, iCloud, CalDAV,
+published calendars and any IMAP mailbox. Next: the File app with file
+connections (the computer's volumes, network shares, Google Drive, OneDrive
+and SharePoint, Dropbox, iCloud Drive), then the Projects and Contacts apps
+— all three already on the rail as "In arrivo" —, a new name, accessibility
+passes, localisation beyond Italian, and performance budgets for very large
+mailboxes.
 
 ## Quick start
 

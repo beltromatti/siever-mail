@@ -231,6 +231,7 @@ const calendarApi: CalendarApi = {
   respondByMail: async (ref, response) => invoke(CALENDAR_IPC.respondByMail, ref, response),
   disconnect: async (connectionId) => invoke(CALENDAR_IPC.disconnect, connectionId),
   events: async (fromIso, toIso) => invoke(CALENDAR_IPC.events, fromIso, toIso),
+  search: async (query) => invoke(CALENDAR_IPC.search, query),
   event: async (eventKey) => invoke(CALENDAR_IPC.event, eventKey),
   eventByUid: async (iCalUid, mailAccountId) =>
     invoke(CALENDAR_IPC.eventByUid, iCalUid, mailAccountId),

@@ -15,6 +15,7 @@ import { logMainError } from '@main/utils/error-utils'
 import {
   CALENDAR_IPC,
   calendarKey,
+  calendarSearchWords,
   type CalendarAttendee,
   type CalendarChange,
   type CalendarConnection,
@@ -22,6 +23,8 @@ import {
   type CalendarEvent,
   type CalendarProviderKind,
   type CalendarResponse,
+  type CalendarSearchQuery,
+  type CalendarSearchResult,
   type EventChange,
   type EventOrigin,
   type NewCalendarEvent
@@ -42,6 +45,12 @@ import {
   type CalendarObjectStore,
   type StoredObject
 } from './caldav-calendar'
+import {
+  DEFAULT_SEARCH_LIMIT,
+  eventSearchText,
+  findEvents,
+  type IndexedEvent
+} from './event-search'
 import {
   addressOrNull,
   invitationEvent,
@@ -168,6 +177,11 @@ export class CalendarService {
   private readonly scheduling = new Map<string, boolean>()
   /** The user's addresses on each CalDAV server, as its last sync found them. */
   private readonly davAddresses = new Map<string, ReadonlyArray<string>>()
+  /**
+   * Every event kept, as searches read it: made at the first search after
+   * the events change, and dropped as soon as they do (`eventsChanged`).
+   */
+  private searchIndex: Promise<IndexedEvent[]> | null = null
 
   constructor(private readonly options: CalendarServiceOptions) {}
 
@@ -574,6 +588,7 @@ export class CalendarService {
           prisma.calendarConnection.deleteMany({ where: { id: connectionId } })
         ])
       )
+      this.eventsChanged()
     } finally {
       this.leaving.delete(connectionId)
       this.scheduling.delete(connectionId)
@@ -606,6 +621,7 @@ export class CalendarService {
       prisma.calendarObject.deleteMany(),
       prisma.calendarCalendar.deleteMany()
     ])
+    this.eventsChanged()
     void this.syncAll()
   }
 
@@ -668,6 +684,7 @@ export class CalendarService {
             where: { connectionId_calendarId: { connectionId, calendarId: gone.calendarId } }
           })
         ])
+        this.eventsChanged()
       }
 
       // What the connection says is wrong, while it syncs all it can: a calendar that cannot be
@@ -846,6 +863,10 @@ export class CalendarService {
       })
     }
 
+    if (goneKeys.length > 0) {
+      this.eventsChanged()
+    }
+
     await commit?.()
 
     await prisma.calendarCalendar.update({
@@ -968,6 +989,10 @@ export class CalendarService {
     }
 
     await prisma.$transaction(writes)
+
+    if (events.length > 0) {
+      this.eventsChanged()
+    }
   }
 
   /** What changed in the calendars elsewhere after a point, the oldest first. */
@@ -1150,6 +1175,112 @@ export class CalendarService {
         addresses.writing
       )
     )
+  }
+
+  /**
+   * The events kept — the past the calendars still hold and the year ahead
+   * — that have every word searched for, case and accents aside: the ones
+   * to come first, the soonest first, then the past, the latest first
+   * (`findEvents`). For the Calendario's search and the Segretario's.
+   */
+  async search(query: CalendarSearchQuery): Promise<CalendarSearchResult> {
+    const prisma = this.requirePrisma()
+    const words = calendarSearchWords(query.text)
+
+    if (words.length === 0) {
+      return { upcoming: [], past: [], more: 0 }
+    }
+
+    const [index, calendars] = await Promise.all([
+      this.indexed(),
+      prisma.calendarCalendar.findMany()
+    ])
+    const names = new Map(
+      calendars.map((calendar) => [
+        calendarKey(calendar.connectionId, calendar.calendarId),
+        calendar.name
+      ])
+    )
+    const found = findEvents(
+      index,
+      names,
+      {
+        words,
+        from: query.fromIso === undefined ? undefined : Date.parse(query.fromIso),
+        to: query.toIso === undefined ? undefined : Date.parse(query.toIso),
+        calendarKeys: query.calendarKeys ? new Set(query.calendarKeys) : undefined,
+        limit: query.limit ?? DEFAULT_SEARCH_LIMIT
+      },
+      Date.now()
+    )
+    const [rows, addresses] = await Promise.all([
+      prisma.calendarEvent.findMany({
+        where: { key: { in: [...found.upcoming, ...found.past].map((event) => event.key) } }
+      }),
+      this.userAddresses()
+    ])
+    const rowsByKey = new Map(rows.map((row) => [row.key, row]))
+    // Read as they are now: one taken away since the index was made is left out.
+    const kept = (events: ReadonlyArray<IndexedEvent>): CalendarEvent[] =>
+      events.flatMap((event) => {
+        const row = rowsByKey.get(event.key)
+        return row ? [eventOfRow(row, names.get(event.calendarKey) ?? '', addresses.writing)] : []
+      })
+
+    return { upcoming: kept(found.upcoming), past: kept(found.past), more: found.more }
+  }
+
+  /** Every event kept, as searches read it: made once, until the events change. */
+  private indexed(): Promise<IndexedEvent[]> {
+    if (this.searchIndex) {
+      return this.searchIndex
+    }
+
+    const made = this.requirePrisma()
+      .calendarEvent.findMany({
+        select: {
+          key: true,
+          connectionId: true,
+          calendarId: true,
+          startsAt: true,
+          endsAt: true,
+          title: true,
+          location: true,
+          description: true,
+          attendeesJson: true,
+          organizer: true
+        }
+      })
+      .then((rows) =>
+        rows.map((row) => ({
+          key: row.key,
+          calendarKey: calendarKey(row.connectionId, row.calendarId),
+          startsAt: Number(row.startsAt),
+          endsAt: Number(row.endsAt),
+          title: row.title,
+          text: eventSearchText({
+            ...row,
+            attendees: JSON.parse(row.attendeesJson) as CalendarAttendee[]
+          })
+        }))
+      )
+
+    this.searchIndex = made
+    // A read that failed is not kept: the next search reads again.
+    made.catch(() => {
+      if (this.searchIndex === made) {
+        this.searchIndex = null
+      }
+    })
+    return made
+  }
+
+  /**
+   * The events kept changed: what searches read of them is made again at
+   * the next one. A read under way when they change is not kept either.
+   */
+  private eventsChanged(): void {
+    this.searchIndex = null
   }
 
   /**
@@ -1361,6 +1492,7 @@ export class CalendarService {
         attendees.some((attendee) => !attendee.self)
       )
       await this.requirePrisma().calendarEvent.deleteMany({ where: { key } })
+      this.eventsChanged()
       this.options.send(CALENDAR_IPC.changed, null)
     })
   }

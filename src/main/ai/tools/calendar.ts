@@ -32,6 +32,9 @@ const DEFAULT_DAYS = 8
 const MAX_DAYS = 400
 /** Free slots offered at most. */
 const FREE_SLOTS_SHOWN = 12
+/** Events a search gives without `limite`, and at most. */
+const DEFAULT_SEARCH_LIMIT = 20
+const MAX_SEARCH_LIMIT = 50
 
 const DAY = new Intl.DateTimeFormat('it-IT', { weekday: 'short', day: 'numeric', month: 'short' })
 const TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
@@ -45,6 +48,7 @@ const RESPONSE_WORDS: Readonly<Record<CalendarResponse, string>> = {
 
 const ACTIONS = [
   'elenco',
+  'cerca',
   'liberi',
   'crea',
   'modifica',
@@ -232,6 +236,48 @@ function range(args: Record<string, unknown>): { from: Date; to: Date } {
   }
 
   return { from, to }
+}
+
+/** The period a search keeps to, when `da` or `a` say one: from the first day to the last, both in. */
+function searchPeriod(args: Record<string, unknown>): { from?: Date; to?: Date } {
+  const day = (name: 'da' | 'a'): Date | undefined => {
+    const written = stringArg(args, name)
+
+    if (!written) {
+      return undefined
+    }
+
+    const parsed = localDay(written)
+
+    if (!parsed) {
+      throw new ToolInputError(`\`${name}\` è una data AAAA-MM-GG.`)
+    }
+
+    return parsed
+  }
+  const from = day('da')
+  const lastDay = day('a')
+  const to = lastDay
+    ? new Date(lastDay.getFullYear(), lastDay.getMonth(), lastDay.getDate() + 1)
+    : undefined
+
+  if (from && to && to <= from) {
+    throw new ToolInputError('`da` è il primo giorno del periodo e `a` l’ultimo: `da` viene prima.')
+  }
+
+  return { from, to }
+}
+
+/** A search's period in words: " dal ven 6 nov al gio 12 nov", " dal …", " fino al …", or nothing. */
+function periodWords(from: Date | undefined, to: Date | undefined): string {
+  const last = to ? DAY.format(new Date(to.getTime() - 1)) : null
+  return from && last
+    ? ` dal ${DAY.format(from)} al ${last}`
+    : from
+      ? ` dal ${DAY.format(from)}`
+      : last
+        ? ` fino al ${last}`
+        : ''
 }
 
 function eventOf(context: ToolContext, args: Record<string, unknown>): string {
@@ -531,6 +577,7 @@ export const calendarTool: SegretarioTool = {
     type: 'object',
     properties: {
       azione: { type: 'string', enum: [...ACTIONS] },
+      parole: { type: 'string' },
       da: { type: 'string' },
       a: { type: 'string' },
       durata: { type: 'integer' },
@@ -547,12 +594,16 @@ export const calendarTool: SegretarioTool = {
       invitati: { type: 'array', items: { type: 'string' } },
       messaggio: { type: 'string' },
       risposta: { type: 'string', enum: ['accepted', 'tentative', 'declined'] },
-      motivo: { type: 'string' }
+      motivo: { type: 'string' },
+      limite: { type: 'integer' }
     },
     required: ['azione']
   },
   running: (args) =>
     ({
+      cerca: stringArg(args, 'parole')
+        ? `Cerco «${stringArg(args, 'parole')}» nel calendario…`
+        : 'Cerco nel calendario…',
       crea: 'Metto in calendario…',
       modifica: 'Correggo l’evento…',
       elimina: 'Tolgo l’evento…',
@@ -593,6 +644,52 @@ export const calendarTool: SegretarioTool = {
         return {
           content: lines.join('\n\n'),
           summary: `Guardato il calendario · ${countOf(events.length, 'evento', 'eventi')}`
+        }
+      }
+      case 'cerca': {
+        const words = requireString(args, 'parole')
+        const { from, to } = searchPeriod(args)
+        const limit = Math.min(
+          MAX_SEARCH_LIMIT,
+          Math.max(1, numberArg(args, 'limite') ?? DEFAULT_SEARCH_LIMIT)
+        )
+        const found = await context.calendar.search({
+          text: words,
+          fromIso: from?.toISOString(),
+          toIso: to?.toISOString(),
+          limit
+        })
+        const events = [...found.upcoming, ...found.past]
+        const period = periodWords(from, to)
+
+        if (events.length === 0) {
+          return {
+            content: `Nessun evento con «${words}»${period}. Ogni parola si cerca nel titolo, nel luogo, nella descrizione, tra gli invitati (nomi e indirizzi) e nel nome del calendario, e devono esserci tutte: prova con meno parole o con altre — il cognome, la località, una parola del titolo${period ? ', o senza `da` e `a`' : ''}. Il calendario qui tiene gli eventi da due mesi fa a un anno avanti: di un appuntamento più vecchio può dire la posta (\`cerca_posta\`).`,
+            summary: `Cercato «${words}» nel calendario · nessun evento`
+          }
+        }
+
+        const preps = await context.registry.day.preps(events.map((event) => event.key))
+        const section = (title: string, listed: ReadonlyArray<CalendarEvent>): string | null =>
+          listed.length === 0
+            ? null
+            : `${title}:\n${listed
+                .map((event) => eventLine(event, context, preps.get(event.key)?.text))
+                .join('\n')}`
+
+        return {
+          content: [
+            `${countOf(events.length, 'evento', 'eventi')} con «${words}»${period}${
+              found.more > 0
+                ? `, i più vicini a oggi: ce ne sono altri ${found.more}, più lontani (restringi con altre parole o con \`da\` e \`a\`${limit < MAX_SEARCH_LIMIT ? ', o alza `limite`' : ''})`
+                : ''
+            }.`,
+            section('In arrivo, dal più vicino', found.upcoming),
+            section('Passati, dal più recente', found.past)
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+          summary: `Cercato «${words}» nel calendario · ${countOf(events.length, 'evento', 'eventi')}`
         }
       }
       case 'liberi': {

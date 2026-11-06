@@ -29,7 +29,18 @@ const REJECTION_MESSAGES: Record<Exclude<ShortcutValidation, { ok: true }>['reas
   format: 'Questo tasto non si può usare: scegli una lettera, un numero, un tasto F o Invio.'
 }
 
-const GROUP_ORDER: ReadonlyArray<CommandGroup> = ['messages', 'navigation', 'writing', 'view']
+const GROUP_ORDER: ReadonlyArray<CommandGroup> = [
+  'messages',
+  'navigation',
+  'writing',
+  'view',
+  'calendar'
+]
+
+/** What a group's keys need, where it is not the whole window. */
+const GROUP_NOTES: Partial<Record<CommandGroup, string>> = {
+  calendar: 'Nel Calendario, quando non stai scrivendo in un campo: basta il tasto.'
+}
 
 /** Keys that always do the same thing, listed so they can be found here too. */
 const FIXED_KEYS: ReadonlyArray<{ label: string; keys: string[][] }> = [
@@ -134,9 +145,14 @@ export function ShortcutsSection({
 
         return (
           <div key={group} className="bg-hover rounded-md">
-            <p className="text-muted-foreground border-border/60 border-b px-3 py-2 text-[11px] tracking-[0.08em] uppercase">
-              {COMMAND_GROUP_LABELS[group]}
-            </p>
+            <div className="border-border/60 border-b px-3 py-2">
+              <p className="text-muted-foreground text-[11px] tracking-[0.08em] uppercase">
+                {COMMAND_GROUP_LABELS[group]}
+              </p>
+              {GROUP_NOTES[group] && (
+                <p className="text-muted-foreground mt-0.5 text-[11px]">{GROUP_NOTES[group]}</p>
+              )}
+            </div>
             <ul className="divide-border/50 divide-y">
               {commands.map((command) => (
                 <ShortcutRow

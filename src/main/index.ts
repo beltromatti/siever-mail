@@ -19,9 +19,9 @@ import { registerMailIpc } from './ipc/register-mail-ipc'
 import { registerCalendarIpc } from './ipc/register-calendar-ipc'
 import { registerSegretarioIpc } from './ipc/register-segretario-ipc'
 import { prepareUpgradeMigration } from './services/data-migration'
-import { MailService } from './services/mail-service'
 import { normalizeExternalHttpUrl } from './utils/external-url'
 import { startFileLogging } from './utils/log-file'
+import { Workspace } from './workspace'
 import {
   applyStoredThemeMode,
   followThemeWithWindowBackgrounds,
@@ -40,7 +40,7 @@ if (existsSync(dotenvPath)) {
 z.config(z.locales.it())
 
 let mainWindow: BrowserWindow | null = null
-let mailService: MailService | null = null
+let appWorkspace: Workspace | null = null
 let appTray: Tray | null = null
 let isQuitting = false
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -221,7 +221,7 @@ function createMainWindow(): BrowserWindow {
 
   // What only the page can draw — the Windows taskbar badge — is drawn anew
   // each time it loads.
-  window.webContents.on('did-finish-load', () => mailService?.windowLoaded())
+  window.webContents.on('did-finish-load', () => appWorkspace?.mail.windowLoaded())
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     void window.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -264,38 +264,20 @@ if (hasSingleInstanceLock) {
 
     prepareUpgradeMigration()
 
-    const service = new MailService(loadRuntimeConfig())
-    mailService = service
+    const workspace = new Workspace(loadRuntimeConfig())
+    appWorkspace = workspace
 
-    // Storage and the upgrade migration first, then the network, then the
-    // extension. The migration purges the resyncable cache tables, so it
-    // has to land on a reconciled schema that no IMAP sync has started
-    // writing to yet; the interface's requests wait for it too.
-    void service
-      .openStorage()
-      .then(() => service.start())
-      .then(() => service.installExtension(extensionMain))
-      .then(() => {
-        if (extensionMain.id !== 'noop') {
-          console.info(
-            `[extension] installed "${extensionMain.displayName}" (id="${extensionMain.id}")`
-          )
-        }
-      })
-      .catch((error) => {
-        console.error('[startup] initialization failed', error)
-        service.abandonStartup(error)
-      })
+    void workspace.start(extensionMain)
 
-    registerMailIpc(mailService, () => mainWindow)
-    registerSegretarioIpc(mailService.segretario)
+    registerMailIpc(workspace, () => mainWindow)
+    registerSegretarioIpc(workspace.segretario)
     registerCalendarIpc(
-      service.calendar,
+      workspace.calendar,
       {
-        of: (ref) => service.calendarInvitation(ref),
-        respondByMail: (ref, response) => service.respondToInvitationByMail(ref, response)
+        of: (ref) => workspace.calendarInvitation(ref),
+        respondByMail: (ref, response) => workspace.mail.respondToInvitationByMail(ref, response)
       },
-      () => service.calendar.whenOpen()
+      () => workspace.calendar.whenOpen()
     )
     installAppMenu(() => mainWindow)
 
@@ -317,8 +299,8 @@ app.on('before-quit', () => {
   isQuitting = true
   appTray?.destroy()
   appTray = null
-  const shuttingDown = mailService
-  mailService = null
+  const shuttingDown = appWorkspace
+  appWorkspace = null
   void shuttingDown?.stop()
 })
 

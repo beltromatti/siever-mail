@@ -1,6 +1,11 @@
 import extensionShared from '@app/extension/shared'
 
-import { normalizeChord, validateChord, type ShortcutScope } from './shortcuts'
+import {
+  normalizeChord,
+  scopesListenTogether,
+  validateChord,
+  type ShortcutScope
+} from './shortcuts'
 
 /**
  * Everything the app can be told to do from the keyboard or the macOS menu
@@ -13,13 +18,14 @@ import { normalizeChord, validateChord, type ShortcutScope } from './shortcuts'
  * platform's own (select all, settings, zoom) and are shown, not changed.
  */
 
-export type CommandGroup = 'messages' | 'navigation' | 'writing' | 'view'
+export type CommandGroup = 'messages' | 'navigation' | 'writing' | 'view' | 'calendar'
 
 export const COMMAND_GROUP_LABELS: Readonly<Record<CommandGroup, string>> = {
   messages: 'Messaggi',
   navigation: 'Navigazione',
   writing: 'Scrittura',
-  view: 'Vista'
+  view: 'Vista',
+  calendar: 'Calendario'
 }
 
 export interface CommandDefinition {
@@ -234,6 +240,89 @@ const HOST_COMMANDS = [
     scope: 'main',
     defaultChord: 'Mod+Digit0',
     editable: false
+  },
+  // The Calendario's, a key on its own as in Google Calendar: they listen only while it is in
+  // front and nothing is typed in a field.
+  {
+    id: 'calendar-today',
+    label: 'Vai a oggi',
+    description: 'Porta il calendario al giorno di oggi.',
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'KeyT',
+    editable: true
+  },
+  {
+    id: 'calendar-previous',
+    label: 'Periodo precedente',
+    description: 'Il giorno, la settimana, il mese o i giorni dell’agenda prima.',
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'KeyK',
+    editable: true
+  },
+  {
+    id: 'calendar-next',
+    label: 'Periodo successivo',
+    description: 'Il giorno, la settimana, il mese o i giorni dell’agenda dopo.',
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'KeyJ',
+    editable: true
+  },
+  {
+    id: 'calendar-view-day',
+    label: 'Vista Giorno',
+    description: 'Mostra un giorno, ora per ora.',
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'KeyD',
+    editable: true
+  },
+  {
+    id: 'calendar-view-week',
+    label: 'Vista Settimana',
+    description: 'Mostra la settimana, da lunedì a domenica.',
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'KeyW',
+    editable: true
+  },
+  {
+    id: 'calendar-view-month',
+    label: 'Vista Mese',
+    description: 'Mostra il mese intero.',
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'KeyM',
+    editable: true
+  },
+  {
+    id: 'calendar-view-agenda',
+    label: 'Vista Agenda',
+    description: 'Mostra i giorni che vengono in elenco, con le scadenze.',
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'KeyA',
+    editable: true
+  },
+  {
+    id: 'calendar-new-event',
+    label: 'Nuovo evento',
+    description: 'Apre un evento nuovo nel giorno che stai guardando.',
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'KeyC',
+    editable: true
+  },
+  {
+    id: 'calendar-close-event',
+    label: 'Chiudi l’evento',
+    description: 'Chiude il pannello dell’evento aperto.',
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'Escape',
+    editable: true
   }
 ] as const satisfies ReadonlyArray<CommandDefinition>
 
@@ -268,8 +357,9 @@ export function commandChord(command: CommandDefinition, overrides: ShortcutOver
 }
 
 /**
- * The command of `scope` that already answers to `chord`, other than
- * `commandId` — two commands on one chord would leave one never firing.
+ * The command listening alongside `scope` (`scopesListenTogether`) that
+ * already answers to `chord`, other than `commandId` — two commands on one
+ * chord would leave one never firing, or both firing at once.
  */
 export function findChordConflict(
   commandId: string,
@@ -280,7 +370,7 @@ export function findChordConflict(
   return COMMANDS.find(
     (command) =>
       command.id !== commandId &&
-      command.scope === scope &&
+      scopesListenTogether(command.scope, scope) &&
       commandChord(command, overrides) === chord
   )
 }

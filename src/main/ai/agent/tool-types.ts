@@ -5,6 +5,8 @@ import type {
   CalendarConnection,
   CalendarEvent,
   CalendarResponse,
+  CalendarSearchQuery,
+  CalendarSearchResult,
   EventChange,
   NewCalendarEvent
 } from '@shared/calendar'
@@ -150,6 +152,8 @@ export interface SegretarioCalendarPort {
   /** The calendar connections: who they are with, and their calendars. */
   connections(): Promise<CalendarConnection[]>
   events(fromIso: string, toIso: string): Promise<CalendarEvent[]>
+  /** The events kept, past and future, with every word: the ones to come first, then the latest past. */
+  search(query: CalendarSearchQuery): Promise<CalendarSearchResult>
   event(eventKey: string): Promise<CalendarEvent | null>
   create(event: NewCalendarEvent): Promise<CalendarEvent>
   update(eventKey: string, change: EventChange): Promise<CalendarEvent>

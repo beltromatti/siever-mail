@@ -328,7 +328,7 @@ function backupUserTables(dbPath: string, backupPath: string): void {
  * Detects a version change and takes the user-data backup, or — when the
  * previous upgrade never finished — sets the database aside for recovery.
  *
- * Must run BEFORE the database is opened by `MailService`. Never throws: a
+ * Must run BEFORE the database is opened by the `Workspace`. Never throws: a
  * migration that cannot even be prepared must not stop the app starting.
  */
 export function prepareUpgradeMigration(): void {

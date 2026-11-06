@@ -34,24 +34,36 @@ channels in `src/shared/ipc.ts`), the Segretario through
 `window.segretarioApi` (channels in `src/shared/segretario.ts`) and the
 calendars through `window.calendarApi` (channels in `src/shared/calendar.ts`).
 
-Startup, in `src/main/index.ts`:
+The main process is put together by the `Workspace`
+(`src/main/workspace.ts`). It owns what every app shares — the database,
+the sign-ins with Google and Microsoft — creates the sources as peers,
+`MailService` and `CalendarService`, and the `SegretarioService` over
+them, and connects them through ports: the Segretario's to the mail
+(`MailService.segretarioPort`) and to the calendars, the mail's to the
+Segretario's lists, and the hooks by which one learns of another — new
+mail wakes the Segretario, a mailbox or a calendar removed is forgotten.
+What spans sources is its own: a Google or Microsoft consent that brings
+mail and calendar, a message's invitation with its event, "Elimina tutti
+i dati". No source creates another, nor the Segretario.
+
+Startup, from `src/main/index.ts`:
 
 1. `prepareUpgradeMigration()` — before the database is opened, detects a
    version change and backs up the user data (see
    [Upgrades](#upgrades)). Never throws.
-2. `MailService.openStorage()` — opens SQLite, reconciles the schema, then
-   finishes any upgrade migration.
-3. `MailService.start()` — the notification preferences and the icon badge
-   are applied, the mounted network shares remembered (see
-   [Network shares](#network-shares)), the mail engine connects the
-   accounts, the drafts the server lacks are filed, the calendars open
-   (see [Calendar](#calendar)) and the Segretario opens (see
-   [Segretario](#segretario)). The calendar and the Segretario open even
-   when the mail engine could not start; either failing to open is logged
-   and leaves the others working. When startup fails,
-   `abandonStartup` rejects what waits for the calendar and the
-   Segretario, so their channels answer with the reason instead of
-   hanging.
+2. `Workspace.start()` opens the storage (`Workspace.openStorage()`):
+   SQLite opens, the schema is reconciled, then any upgrade migration
+   finishes.
+3. The sources open: the mounted network shares are remembered (see
+   [Network shares](#network-shares)); `MailService.start()` applies the
+   notification preferences and the icon badge, the mail engine connects
+   the accounts and the drafts the server lacks are filed; then the
+   calendars open (see [Calendar](#calendar)) and the Segretario opens
+   (see [Segretario](#segretario)). The calendar and the Segretario open
+   even when the mail engine could not start; either failing to open is
+   logged and leaves the others working. When startup fails, what waits
+   for the calendar and the Segretario is rejected, so their channels
+   answer with the reason instead of hanging.
 4. The extension installs (see [Extensions](#extensions)).
 
 The window is created right away and loads alongside. **Every IPC channel
@@ -72,7 +84,8 @@ them all.
 ```
 src/
 ├── main/                      Node side
-│   ├── index.ts               lifecycle, window, tray, permissions, startup order
+│   ├── index.ts               lifecycle, window, tray, permissions
+│   ├── workspace.ts           the root: shared database and sign-ins, the sources, the Segretario, startup order
 │   ├── app-identity.ts        the bundle id / AppUserModelID
 │   ├── app-window.ts          the window the user works in, named
 │   ├── app-menu.ts            macOS menu bar (Italian); none elsewhere
@@ -98,7 +111,7 @@ src/
 │   │   └── pdf-pages.ts       scanned PDF pages drawn as pictures, in a hidden window
 │   ├── calendar/              calendar connections, sync, providers (Google, Graph, CalDAV, links), iCalendar
 │   ├── services/
-│   │   ├── mail-service.ts    façade the IPC layer calls
+│   │   ├── mail-service.ts    the mail: the façade its IPC calls, the Segretario's port to it
 │   │   ├── database.ts        Prisma client, raw DDL, queries
 │   │   ├── data-migration.ts  upgrade lifecycle
 │   │   ├── mail-engine/       connections, sync, identity, archiving, sending, parsing, notifications
@@ -199,11 +212,12 @@ live in the same file and connection. The host never reads them.
 contacts, drafts, signatures and recent files and folders, the Segretario's
 tables but its key and settings (`AiStore.clearData`), and the calendars'
 calendars and events — the connections stay and read them anew — then
-calls the extension's `clearData()`; the AI turns off, so on again it
-starts from the guided setup. The accounts, the calendar connections and
-the preferences stay. Clearing one account's data drops its cache and
-the copies of its attachments, and keeps its signature; the mail downloads
-again.
+calls the extension's `clearData()`, all with the mail's connections
+stopped (`Workspace.clearAllDataKeepAccounts`); the AI turns off, so on
+again it starts from the guided setup. The accounts, the calendar
+connections and the preferences stay. Clearing one account's data drops
+its cache and the copies of its attachments, and keeps its signature; the
+mail downloads again.
 
 ### Upgrades
 
@@ -322,9 +336,10 @@ permissions are the scopes the code asks for (`microsoft-oauth.ts`):
 
 Removing a mail connection stops the Segretario's work on it and forgets
 what it kept of it alone (see [Segretario](#segretario)); a calendar
-connection that came with it stays, on its own. Removing a calendar
-connection forgets its meetings' preparations, its event proposals and
-Conoscimi's knowing it (`forgetCalendar`, through
+connection that came with it stays, on its own (`forgetAccount` and
+`mailAccountRemoved`, through `MailServiceOptions.onAccountRemoving`).
+Removing a calendar connection forgets its meetings' preparations, its
+event proposals and Conoscimi's knowing it (`forgetCalendar`, through
 `CalendarServiceOptions.onDisconnected`).
 
 ## Mail engine
@@ -871,7 +886,8 @@ getting to know the user, the requests in its panel (`features/segretario/`,
 ⌘J), the help in the composer and in the search field. Each run is an
 activity whose first message says its task; what it does comes back
 through its tools. `SegretarioService` is the façade the IPC calls
-(`register-segretario-ipc.ts`); underneath are the runner, the engine that
+(`register-segretario-ipc.ts`), created by the `Workspace` with its ports
+to the mail and the calendars; underneath are the runner, the engine that
 wakes it, the registry and the notebook.
 
 **The key is the user's.** There is no server of ours: the Segretario calls
@@ -1556,9 +1572,9 @@ extension code by path. The contract is `src/extension/types.ts`:
 
 | Surface                                         | What it does                                                                                                                                                                                                                                                                                                             |
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ExtensionMain.install(context)`                | Runs once after the mail service starts: DDL, IPC handlers, startup work.                                                                                                                                                                                                                                                |
-| `ExtensionMain.clearData()`                     | Deletes its data, as part of "Elimina tutti i dati", after the host emptied its own.                                                                                                                                                                                                                                     |
-| `ExtensionMain.uninstall()`                     | Optional; called when the mail service stops.                                                                                                                                                                                                                                                                            |
+| `ExtensionMain.install(context)`                | Runs once after the mail, the calendars and the Segretario start: DDL, IPC handlers, startup work.                                                                                                                                                                                                                       |
+| `ExtensionMain.clearData()`                     | Deletes its data, as part of "Elimina tutti i dati", after the host emptied its own, while the mail's connections are stopped.                                                                                                                                                                                           |
+| `ExtensionMain.uninstall()`                     | Optional; called when the app stops, before the host's own pieces.                                                                                                                                                                                                                                                       |
 | `ExtensionMain.defaultAccountSignatureHtml`     | Signature given to the first account added. Empty in the public build.                                                                                                                                                                                                                                                   |
 | `ExtensionMain.accountSignatureRevision`        | Edition of that content; stored signatures on an older one — and accounts without one — are handed, once, to `upgradeAccountSignatureHtml`.                                                                                                                                                                              |
 | `ExtensionMain.assistant.instructions()`        | What the Segretario must know of the company the build is for — how its work and projects are organised and named, where its archive is — in Italian; joined to the identity in every run and read as the run starts, so it may say what the user configured. Never the projects themselves: the Segretario finds those. |

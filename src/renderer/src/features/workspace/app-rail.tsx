@@ -1,5 +1,6 @@
 import type { LucideIcon } from 'lucide-react'
 import { Settings } from 'lucide-react'
+import { Fragment } from 'react'
 
 import appMark from '@renderer/assets/logo-128.png'
 import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
@@ -13,6 +14,8 @@ export interface RailItem {
   id: string
   label: string
   icon: LucideIcon
+  /** Items of a group sit together; a thin line parts one group from the next. */
+  group: string
   /** A dot on the icon: something there wants the user. */
   attention?: boolean
   /** Not here yet: it opens on what it will be. */
@@ -20,10 +23,10 @@ export interface RailItem {
 }
 
 /**
- * The column on the far left: the app's mark, where the user is — Posta,
- * and the other places as they arrive — and, at the bottom, how the
- * connection is and the way to Settings. It is the window's edge, so its top
- * is the title bar the window is dragged by.
+ * The column on the far left: the app's mark, the apps in their groups — the
+ * Segretario's desk, the sources, the views derived from them — and, at the
+ * bottom, how the connections are and the way to Settings. It is the
+ * window's edge, so its top is the title bar the window is dragged by.
  */
 export function AppRail({
   items,
@@ -54,38 +57,42 @@ export function AppRail({
       />
 
       <div className="window-no-drag flex flex-col items-center gap-1">
-        {items.map((item) => {
+        {items.map((item, index) => {
           const Icon = item.icon
           const active = item.id === activeItemId
+          const startsGroup = index > 0 && items[index - 1].group !== item.group
 
           return (
-            <Tooltip key={item.id}>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  aria-label={item.label}
-                  aria-current={active ? 'page' : undefined}
-                  onClick={() => onSelectItem(item.id)}
-                  className={cn(
-                    'focus-visible:ring-ring/60 relative grid size-9 place-items-center rounded-[9px] transition-colors outline-none focus-visible:ring-2',
-                    active
-                      ? 'bg-selected text-foreground'
-                      : 'text-faint-foreground hover:bg-hover hover:text-foreground'
+            <Fragment key={item.id}>
+              {startsGroup && <span aria-hidden className="bg-border my-1 h-px w-5" />}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={item.label}
+                    aria-current={active ? 'page' : undefined}
+                    onClick={() => onSelectItem(item.id)}
+                    className={cn(
+                      'focus-visible:ring-ring/60 relative grid size-9 place-items-center rounded-[9px] transition-colors outline-none focus-visible:ring-2',
+                      active
+                        ? 'bg-selected text-foreground'
+                        : 'text-faint-foreground hover:bg-hover hover:text-foreground'
+                    )}
+                  >
+                    <Icon className="size-[17px]" strokeWidth={1.7} />
+                    {item.attention && (
+                      <span className="bg-ai-star ring-background absolute top-[7px] right-[7px] size-[7px] rounded-full ring-2" />
+                    )}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  {item.label}
+                  {item.soon && (
+                    <span className="text-muted-foreground font-normal"> · in arrivo</span>
                   )}
-                >
-                  <Icon className="size-[17px]" strokeWidth={1.7} />
-                  {item.attention && (
-                    <span className="bg-ai-star ring-background absolute top-[7px] right-[7px] size-[7px] rounded-full ring-2" />
-                  )}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                {item.label}
-                {item.soon && (
-                  <span className="text-muted-foreground font-normal"> · in arrivo</span>
-                )}
-              </TooltipContent>
-            </Tooltip>
+                </TooltipContent>
+              </Tooltip>
+            </Fragment>
           )
         })}
       </div>

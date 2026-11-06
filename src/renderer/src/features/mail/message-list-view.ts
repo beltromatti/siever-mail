@@ -15,7 +15,7 @@ import type { MessageHighlightTerms, PrimaryAddressMode } from './message-list-s
 
 /**
  * Contract both list shells implement. Keeping it in one place is what lets
- * `App` swap the "apple" rows for the "outlook" table without knowing
+ * `MailMessageList` swap the "apple" rows for the "outlook" table without knowing
  * anything about either — the layout preference picks a component, the props
  * stay identical.
  */

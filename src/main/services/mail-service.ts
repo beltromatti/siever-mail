@@ -1,23 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { Resolver } from 'node:dns/promises'
 import { mkdir, stat, writeFile } from 'node:fs/promises'
-import { mkdirSync } from 'node:fs'
 import { connect as netConnect } from 'node:net'
 import { basename, join } from 'node:path'
 import { connect as tlsConnect } from 'node:tls'
 
-import { app, BrowserWindow, dialog, ipcMain, net, shell } from 'electron'
+import { BrowserWindow, dialog, net, shell } from 'electron'
 import { NodeHtmlMarkdown } from 'node-html-markdown'
-
-import type {
-  ExtensionDatabaseHandle,
-  ExtensionMain,
-  ExtensionMailEngineHandle,
-  ExtensionMainContext
-} from '@app/extension/types'
 import { z } from 'zod'
 
-import type { RuntimeConfig } from '@main/config/env'
 import type { DiscoveredMailSettings } from '@shared/connections'
 import { logMainError } from '@main/utils/error-utils'
 import type {
@@ -95,23 +86,21 @@ import {
 } from './attachment-files'
 import { APP_ID } from '@main/app-identity'
 import { getAppWindow } from '@main/app-window'
-import { SegretarioService } from '@main/ai/segretario-service'
-import { CalendarService } from '@main/calendar/calendar-service'
-import { GOOGLE_CALENDAR_SCOPE } from '@main/calendar/google-calendar'
-import { invitationParties, invitationReply, occurrenceIn } from '@main/calendar/icalendar'
-import { parseInvitation } from '@main/calendar/ics'
-import { isIcsAttachment, type CalendarResponse, type MessageInvitation } from '@shared/calendar'
+import type { SegretarioService } from '@main/ai/segretario-service'
+import { invitationReply } from '@main/calendar/icalendar'
+import { isIcsAttachment, type CalendarResponse } from '@shared/calendar'
+import type { MessageNote } from '@shared/segretario'
 import type { MessageLocation, SegretarioMailPort } from '@main/ai/agent/tool-types'
 import { AppBadge } from './app-badge'
 import { DraftService, draftRefKey } from './drafts'
-import { AppDatabase, type MessageListView } from './database'
-import { finalizeUpgradeMigration } from './data-migration'
+import type { AppDatabase, MessageListView } from './database'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
-import { GOOGLE_MAIL_SCOPE, GoogleOAuthService } from './google-oauth'
+import type { GoogleAuthResult, GoogleOAuthService } from './google-oauth'
 import { discoverMailSettings } from './mail-discovery'
 import { MailTokenBroker } from './mail-tokens'
-import { MicrosoftOAuthService } from './microsoft-oauth'
+import type { MicrosoftAuthResult, MicrosoftOAuthService } from './microsoft-oauth'
 import { MailEngine } from './mail-engine'
+import type { RawMessage } from './mail-engine/account-connection'
 import { indexedFolderPaths } from './mail-engine/mail-indexer'
 import { imapSearchGroups } from './mail-engine/server-search'
 import {
@@ -122,12 +111,11 @@ import {
   type AccountWithSecret,
   type OutgoingMessagePayload
 } from './mail-engine/mail-transport'
-import { updateAppMenuAi, updateAppMenuShortcuts } from '../app-menu'
+import { updateAppMenuShortcuts } from '../app-menu'
 import { applyThemeMode } from '../theme'
-import { ensurePathReachable, rememberMountedShares } from './network-volumes'
+import { ensurePathReachable } from './network-volumes'
 import { isUserFile, listRecentFiles, privateFolders } from './recent-files'
 import { decryptSecret, encryptSecret } from './secure-storage'
-import { watchSystemSleep } from './system-sleep'
 
 const imapAccountSchema = z.object({
   email: z.string().trim().email(),
@@ -490,6 +478,19 @@ function segretarioFolders(folders: ReadonlyArray<MailFolder>): {
   }
 }
 
+/** What the mail is given by the workspace that creates it (see `Workspace`). */
+export interface MailServiceOptions {
+  database: AppDatabase
+  google: GoogleOAuthService
+  microsoft: MicrosoftOAuthService
+  /** The Segretario's lists the mail shows as its own: its views, its projects, its searches. */
+  segretario: Pick<SegretarioService, 'viewKeys' | 'activeKeys' | 'searchRefs' | 'projectThreads'>
+  /** Messages had their text indexed, or went away: what reads the mail may look again. */
+  onMailChanged: () => void
+  /** An account is about to go: what the other apps kept of it goes first, and a failure keeps it. */
+  onAccountRemoving: (account: MailAccount) => Promise<void>
+}
+
 export class MailService {
   private readonly database: AppDatabase
   private readonly googleOAuthService: GoogleOAuthService
@@ -499,23 +500,18 @@ export class MailService {
   private readonly engine: MailEngine
   private readonly badge: AppBadge
   private readonly drafts: DraftService
-  /** SIEVER Mail's agent (see `src/main/ai`). */
-  readonly segretario: SegretarioService
-  readonly calendar: CalendarService
-  private extension: ExtensionMain | null = null
-  private unwatchSleep: (() => void) | null = null
-  private storageReady: Promise<void> | null = null
+  private readonly segretario: MailServiceOptions['segretario']
+  private readonly onAccountRemoving: MailServiceOptions['onAccountRemoving']
   // The copy of each attachment last written, and what it held, keyed by its
   // folder: an untouched copy is used again without a download.
   private readonly attachmentCopies = new Map<string, { filePath: string; digest: string }>()
 
-  constructor(config: RuntimeConfig) {
-    const userDataPath = app.getPath('userData')
-    mkdirSync(userDataPath, { recursive: true })
-    const dbPath = join(userDataPath, 'siever-mail.sqlite')
-    this.database = new AppDatabase(dbPath)
-    this.googleOAuthService = new GoogleOAuthService(config)
-    this.microsoftOAuthService = new MicrosoftOAuthService(config)
+  constructor(options: MailServiceOptions) {
+    this.database = options.database
+    this.googleOAuthService = options.google
+    this.microsoftOAuthService = options.microsoft
+    this.segretario = options.segretario
+    this.onAccountRemoving = options.onAccountRemoving
     this.tokens = new MailTokenBroker(
       this.googleOAuthService,
       this.microsoftOAuthService,
@@ -527,7 +523,7 @@ export class MailService {
       tokens: this.tokens,
       getMainWindow: getAppWindow,
       onInboxUnreadChange: (count) => this.badge.setCount(count),
-      onMailChanged: () => this.segretario.mailChanged()
+      onMailChanged: options.onMailChanged
     })
     this.drafts = new DraftService({
       database: this.database,
@@ -539,48 +535,13 @@ export class MailService {
       onStatus: (status) =>
         getAppWindow()?.webContents.send(IPC_CHANNELS.draftStatusChanged, status)
     })
-    this.calendar = new CalendarService({
-      database: this.database,
-      oauth: this.googleOAuthService,
-      microsoft: this.microsoftOAuthService,
-      fetch: (input, init) => net.fetch(input, init),
-      send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload),
-      parentWindow: () => getAppWindow(),
-      onDisconnected: (connectionId, names) =>
-        void this.segretario
-          .forgetCalendar(connectionId, names)
-          .catch((error: unknown) =>
-            logMainError('The Segretario could not let go of a calendar', error)
-          )
-    })
-    this.segretario = new SegretarioService({
-      database: this.database,
-      mail: this.segretarioMailPort(),
-      fetch: (input, init) => net.fetch(input, init),
-      send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload),
-      onReadingChange: (reading) => this.engine.setSegretarioReading(reading),
-      onEnabledChange: (on) => updateAppMenuAi(on),
-      onNoteWritten: (note) => this.engine.noteWritten(note),
-      calendar: {
-        calendars: () => this.calendar.calendars(),
-        connections: () => this.calendar.listConnections(),
-        events: (fromIso, toIso) => this.calendar.events(fromIso, toIso),
-        event: (eventKey) => this.calendar.event(eventKey),
-        create: (event) => this.calendar.create(event),
-        update: (eventKey, change) => this.calendar.update(eventKey, change),
-        remove: (eventKey) => this.calendar.remove(eventKey),
-        respond: (eventKey, response) => this.calendar.respond(eventKey, response),
-        changesSince: (afterId, limit) => this.calendar.changesSince(afterId, limit),
-        latestChangeId: () => this.calendar.latestChangeId()
-      }
-    })
   }
 
   /**
    * What the Segretario reaches of the mail: the same operations the
    * user's own clicks call, so its work shows in the views as theirs does.
    */
-  private segretarioMailPort(): SegretarioMailPort {
+  segretarioPort(): SegretarioMailPort {
     const markdown = new NodeHtmlMarkdown({ keepDataImages: false, maxConsecutiveNewlines: 2 })
 
     return {
@@ -783,55 +744,21 @@ export class MailService {
     }
   }
 
-  /**
-   * Opens the database, reconciles its schema and finishes any upgrade
-   * migration on it — purging the resyncable cache, or putting the user
-   * data back after a failed upgrade — without touching the network.
-   *
-   * Everything the interface asks for waits on this (see
-   * `register-mail-ipc`): the window loads alongside, and must never read
-   * rows the migration is about to purge or restore. The migration runs on
-   * the host's own connection on purpose: a second handle to the same file
-   * would contend on the WAL and make `VACUUM` fail with SQLITE_BUSY.
-   */
-  openStorage(): Promise<void> {
-    this.storageReady ??= this.database.waitUntilReady().then(() =>
-      finalizeUpgradeMigration({
-        run: (sql, params) => this.database.runRawSql(sql, params),
-        all: (sql, params) => this.database.runRawSqlQuery(sql, params)
-      })
-    )
-
-    return this.storageReady
-  }
-
   async start(): Promise<void> {
-    void rememberMountedShares().catch((error: unknown) =>
-      logMainError('Reading the mounted network shares failed', error)
-    )
-    try {
-      this.applyNotificationPreferences(await this.database.getNotificationPreferences())
-      this.badge.setCount(await this.engine.inboxUnreadCount())
-      await this.engine.start()
-      await this.drafts.resume()
-    } finally {
-      // The calendar and the Segretario open whatever the mail did, so what waits for them
-      // never hangs; one failing to open leaves the others working.
-      await this.calendar
-        .open()
-        .catch((error: unknown) => logMainError('The calendar did not open', error))
-      // A run the computer's sleep would cut short does not start, and waits for it to wake.
-      this.unwatchSleep = watchSystemSleep((asleep) => this.segretario.setSystemAsleep(asleep))
-      await this.segretario
-        .open()
-        .catch((error: unknown) => logMainError('The Segretario did not open', error))
-    }
+    this.applyNotificationPreferences(await this.database.getNotificationPreferences())
+    this.badge.setCount(await this.engine.inboxUnreadCount())
+    await this.engine.start()
+    await this.drafts.resume()
   }
 
-  /** The app could not start: what waits for the calendar or the Segretario is told, not left waiting. */
-  abandonStartup(error: unknown): void {
-    this.calendar.abandon(error)
-    this.segretario.abandon(error)
+  /** Whether the Segretario reads new mail as it comes: an alert for new mail waits for its note. */
+  setSegretarioReading(reading: boolean): void {
+    this.engine.setSegretarioReading(reading)
+  }
+
+  /** A message's note, written as it was read: an alert waiting for it is let go. */
+  noteWritten(note: MessageNote): void {
+    this.engine.noteWritten(note)
   }
 
   /** The window loaded anew: what only its page can draw is drawn again. */
@@ -892,146 +819,22 @@ export class MailService {
   }
 
   async stop(): Promise<void> {
-    try {
-      await this.extension?.uninstall?.()
-    } catch (error) {
-      logMainError('Extension teardown failed', error)
-    }
-
-    this.calendar.stop()
-    this.unwatchSleep?.()
-    this.unwatchSleep = null
-    await this.segretario.stop()
-
     // What is being written reaches Bozze before the connections close.
     await this.drafts
       .flushAll(DRAFT_FLUSH_ON_QUIT_MS)
       .catch((error: unknown) => logMainError('Filing drafts on quit failed', error))
     await this.engine.stop()
-    this.database.close()
   }
 
   /**
-   * Builds the host-provided context surface and hands it to the
-   * extension's `install()` hook. Called once after the engine is
-   * started so the extension can run its own DDL and register IPC
-   * handlers backed by the same SQLite connection.
+   * The raw sources of messages, of any account and folder, each handed to
+   * `onMessage` as it arrives (see `MailEngine.fetchMessageRawSources`).
    */
-  async installExtension(extension: ExtensionMain): Promise<void> {
-    const databaseHandle: ExtensionDatabaseHandle = {
-      applyDdl: (sql) => this.database.runRawSql(sql),
-      query: (sql, params) => this.database.runRawSqlQuery(sql, params),
-      execute: async (sql, params) => {
-        await this.database.runRawSql(sql, params)
-      }
-    }
-
-    const mailEngineHandle: ExtensionMailEngineHandle = {
-      fetchMessageRawSources: (refs, onMessage) =>
-        this.engine.fetchMessageRawSources(refs, onMessage),
-      archiveMessages: (refs) => this.archiveMessages(refs)
-    }
-
-    const context: ExtensionMainContext = {
-      app,
-      ipcMain,
-      userDataDirectoryPath: app.getPath('userData'),
-      database: databaseHandle,
-      mailEngine: mailEngineHandle,
-      getMainWindow: getAppWindow,
-      recordRecentFiles: (paths, activity) => this.recordRecentFiles(paths, activity),
-      // A copy is only saved once it is recorded: the record is what keeps it from being saved
-      // twice and the message from being archived without it, so a record that fails is a save
-      // that failed.
-      copiesSaved: async (entries) => {
-        const refKey = (ref: MessageRef): string =>
-          `${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`
-
-        try {
-          await this.segretario.whenReady()
-          const identities = new Map(
-            (await this.database.messageIdentities(entries.map((entry) => entry.ref))).map(
-              (identity) => [refKey(identity.ref), identity]
-            )
-          )
-
-          await this.segretario.copiesSaved(
-            entries.map((entry) => {
-              const identity = identities.get(refKey(entry.ref))
-
-              if (!identity) {
-                throw new Error(
-                  'Il messaggio non è più nella sua cartella: si è spostato mentre veniva salvato.'
-                )
-              }
-
-              return {
-                ref: entry.ref,
-                messageKey: identity.messageKey,
-                threadId: identity.threadId,
-                fromAddress: identity.fromAddress,
-                destination: entry.destination,
-                files: entry.files,
-                proposals: entry.proposals ?? []
-              }
-            })
-          )
-        } catch (error) {
-          logMainError('Copies saved outside the mail could not be recorded', error)
-          throw new Error(
-            `SIEVER Mail non è riuscito a registrare la copia, che è stata tolta: il messaggio non viene archiviato. ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error }
-          )
-        }
-      },
-      // What is known of earlier copies. Not knowing it is no answer: a copy saved before would
-      // be saved again, so the save does not start.
-      savedCopies: async (refs) => {
-        const copies: Array<{ ref: MessageRef; destination: string; files: string[] }> = []
-
-        try {
-          await this.segretario.whenReady()
-
-          for (const identity of await this.database.messageIdentities(refs)) {
-            for (const copy of await this.segretario.copiesOf(
-              identity.ref.accountId,
-              identity.messageKey
-            )) {
-              copies.push({ ref: identity.ref, destination: copy.destination, files: copy.files })
-            }
-          }
-        } catch (error) {
-          logMainError('Copies saved outside the mail could not be read', error)
-          throw new Error(
-            `SIEVER Mail non riesce a leggere le copie già salvate, e salvandole ancora le farebbe doppie: nessun messaggio è stato salvato. ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error }
-          )
-        }
-
-        return copies
-      },
-      proposalDecided: async (id, accepted, result) => {
-        try {
-          await this.segretario.whenReady()
-          await this.segretario.decideProposal(id, accepted, result ?? undefined)
-        } catch (error) {
-          logMainError('A proposal decided could not be recorded', error)
-        }
-      },
-      adoptShortcutOverride: async (commandId, chord) => {
-        const preferences = await this.database.getUiPreferences()
-
-        if (preferences.shortcutOverrides[commandId] === undefined) {
-          await this.database.setUiPreferences({
-            ...preferences,
-            shortcutOverrides: { ...preferences.shortcutOverrides, [commandId]: chord }
-          })
-        }
-      }
-    }
-
-    await extension.install(context)
-    this.extension = extension
+  fetchMessageRawSources(
+    refs: ReadonlyArray<MessageRef>,
+    onMessage: (ref: MessageRef, message: RawMessage) => Promise<void>
+  ): Promise<{ missing: MessageRef[]; unread: Array<{ ref: MessageRef; message: string }> }> {
+    return this.engine.fetchMessageRawSources(refs, onMessage)
   }
 
   async bootstrap(): Promise<AppBootstrap> {
@@ -1049,7 +852,7 @@ export class MailService {
 
     await verifyImapAccount(payload)
 
-    const account = await this.database.createAccount({
+    return this.addAccount({
       id: randomUUID(),
       type: 'imap',
       email: payload.email,
@@ -1064,60 +867,18 @@ export class MailService {
       smtpPort: payload.smtpPort,
       smtpSecure: payload.smtpSecure
     })
-
-    await this.includeAccountInUnifiedInbox(account.id)
-    this.database.learnContacts([{ address: account.email, name: account.displayName }])
-    await this.engine.addAccount(account.id)
-    await this.introduceNotifications(account)
-    return account
   }
 
-  /**
-   * A Google account, in one consent: its mail and — when asked — its
-   * calendar, two connections that came with the same access. An account
-   * whose mail is here already only adds the calendar.
-   */
-  async addGoogleAccount(
-    parentWindow: BrowserWindow | undefined,
-    options: { calendar: boolean }
-  ): Promise<MailAccount> {
-    if (!this.googleOAuthService.isConfigured()) {
-      throw new Error('Google OAuth is not configured in this environment.')
-    }
-
-    const oauthResult = await this.googleOAuthService.authorize(parentWindow, {
-      scopes: options.calendar ? [GOOGLE_MAIL_SCOPE, GOOGLE_CALENDAR_SCOPE] : [GOOGLE_MAIL_SCOPE],
-      title: options.calendar ? 'Collega la posta e il calendario di Google' : 'Collega Gmail'
-    })
-
-    if (!oauthResult.scopes.includes(GOOGLE_MAIL_SCOPE)) {
-      throw new Error(
-        "Google non ha dato l'accesso alla posta: rifallo lasciando selezionata la casella della posta."
-      )
-    }
-
-    const known = (await this.database.getAccounts()).find(
-      (candidate) => candidate.email.toLowerCase() === oauthResult.email.toLowerCase()
-    )
-    const withCalendar = options.calendar && oauthResult.scopes.includes(GOOGLE_CALENDAR_SCOPE)
-
-    if (known) {
-      if (!withCalendar) {
-        throw new Error(`La posta di ${known.email} è già collegata.`)
-      }
-
-      await this.calendar.addGoogle(oauthResult.email, oauthResult.refreshToken, oauthResult.scopes)
-      return known
-    }
-
-    const account = await this.database.createAccount({
+  /** The mailbox of a Google account the user granted: Gmail over IMAP and SMTP, with its token. */
+  addGoogleMailbox(granted: GoogleAuthResult): Promise<MailAccount> {
+    return this.addAccount({
       id: randomUUID(),
       type: 'gmail',
-      email: oauthResult.email,
-      displayName: oauthResult.displayName,
-      username: oauthResult.email,
+      email: granted.email,
+      displayName: granted.displayName,
+      username: granted.email,
       authType: 'oauth',
-      encryptedSecret: encryptSecret(oauthResult.refreshToken),
+      encryptedSecret: encryptSecret(granted.refreshToken),
       imapHost: 'imap.gmail.com',
       imapPort: 993,
       imapSecure: true,
@@ -1125,23 +886,44 @@ export class MailService {
       smtpPort: 465,
       smtpSecure: true
     })
+  }
+
+  /**
+   * The mailbox of a Microsoft account the user granted — Microsoft 365,
+   * Outlook.com — over IMAP and SMTP with OAuth.
+   */
+  addMicrosoftMailbox(granted: MicrosoftAuthResult): Promise<MailAccount> {
+    return this.addAccount({
+      id: randomUUID(),
+      type: 'imap',
+      email: granted.email,
+      displayName: granted.displayName,
+      username: granted.email,
+      authType: 'oauth',
+      encryptedSecret: encryptSecret(granted.secret),
+      imapHost: 'outlook.office365.com',
+      imapPort: 993,
+      imapSecure: true,
+      // Outlook.com sends through its own server; Microsoft 365 through Office 365's.
+      smtpHost: granted.personal ? 'smtp-mail.outlook.com' : 'smtp.office365.com',
+      smtpPort: 587,
+      smtpSecure: false
+    })
+  }
+
+  /**
+   * A new account, kept and connected: in "Tutti gli account", its address
+   * among the contacts, its mail downloading.
+   */
+  private async addAccount(
+    input: Parameters<AppDatabase['createAccount']>[0]
+  ): Promise<MailAccount> {
+    const account = await this.database.createAccount(input)
 
     await this.includeAccountInUnifiedInbox(account.id)
     this.database.learnContacts([{ address: account.email, name: account.displayName }])
     await this.engine.addAccount(account.id)
     await this.introduceNotifications(account)
-
-    // The calendar came with the same consent; a problem reading it is the calendar's, not the mail's.
-    if (withCalendar) {
-      await this.calendar
-        .addGoogle(oauthResult.email, oauthResult.refreshToken, oauthResult.scopes)
-        .catch((error: unknown) =>
-          logMainError('Google calendar not connected with its account', error, {
-            accountId: account.id
-          })
-        )
-    }
-
     return account
   }
 
@@ -1164,72 +946,6 @@ export class MailService {
     }
   }
 
-  /** Stops waiting for a sign-in left in the browser. */
-  cancelSignIn(): void {
-    this.microsoftOAuthService.cancelSignIn()
-  }
-
-  /**
-   * A Microsoft account — Microsoft 365, Outlook.com — in one consent: its
-   * mailbox over IMAP and SMTP and — when asked — its calendar over Graph.
-   * An account whose mail is here already only adds the calendar.
-   */
-  async addMicrosoftAccount(options: { calendar: boolean }): Promise<MailAccount> {
-    if (!this.microsoftOAuthService.isConfigured()) {
-      throw new Error("L'accesso con Microsoft non è attivo in questa versione di SIEVER Mail.")
-    }
-
-    // Only the scopes of what is turned on: a mailbox alone does not ask for the calendar.
-    const granted = await this.microsoftOAuthService.authorize(undefined, {
-      mail: true,
-      calendar: options.calendar
-    })
-    const known = (await this.database.getAccounts()).find(
-      (candidate) => candidate.email.toLowerCase() === granted.email.toLowerCase()
-    )
-
-    if (known) {
-      if (!options.calendar) {
-        throw new Error(`La posta di ${known.email} è già collegata.`)
-      }
-
-      await this.calendar.addMicrosoft(granted.email, granted.secret)
-      return known
-    }
-
-    const account = await this.database.createAccount({
-      id: randomUUID(),
-      type: 'imap',
-      email: granted.email,
-      displayName: granted.displayName,
-      username: granted.email,
-      authType: 'oauth',
-      encryptedSecret: encryptSecret(granted.secret),
-      imapHost: 'outlook.office365.com',
-      imapPort: 993,
-      imapSecure: true,
-      // Outlook.com sends through its own server; Microsoft 365 through Office 365's.
-      smtpHost: granted.personal ? 'smtp-mail.outlook.com' : 'smtp.office365.com',
-      smtpPort: 587,
-      smtpSecure: false
-    })
-
-    await this.includeAccountInUnifiedInbox(account.id)
-    this.database.learnContacts([{ address: account.email, name: account.displayName }])
-    await this.engine.addAccount(account.id)
-    await this.introduceNotifications(account)
-
-    if (options.calendar) {
-      await this.calendar.addMicrosoft(granted.email, granted.secret).catch((error: unknown) =>
-        logMainError('Microsoft calendar not connected with its account', error, {
-          accountId: account.id
-        })
-      )
-    }
-
-    return account
-  }
-
   /**
    * The first account connected says, in a notification, that new mail
    * will be announced so — which is when macOS asks the user to allow the
@@ -1245,9 +961,7 @@ export class MailService {
   }
 
   async removeAccount(accountId: string): Promise<void> {
-    const account = await this.ensureAccountExists(accountId)
-    await this.segretario.forgetAccount(accountId, account.email)
-    await this.calendar.mailAccountRemoved(accountId)
+    await this.onAccountRemoving(await this.ensureAccountExists(accountId))
     await this.engine.removeAccount(accountId)
     await this.database.clearAccountData(accountId)
     await this.database.deleteAccount(accountId)
@@ -2088,7 +1802,11 @@ export class MailService {
     await clearAttachmentCache(accountId)
   }
 
-  async clearAllDataKeepAccounts(): Promise<void> {
+  /**
+   * Runs `work` with every account's connection stopped, and starts them
+   * again after, whatever it did: nothing syncs into what `work` empties.
+   */
+  async whileDisconnected(work: () => Promise<void>): Promise<void> {
     const accounts = await this.database.getAccounts()
 
     // Stop every connection in parallel before we touch the DB: each stop awaits
@@ -2096,16 +1814,25 @@ export class MailService {
     // serialize the others. The wipe then runs on a quiesced state.
     await Promise.allSettled(accounts.map((account) => this.engine.removeAccount(account.id)))
 
+    try {
+      await work()
+    } finally {
+      // Re-bootstrap all accounts in parallel. engine.addAccount returns once the
+      // AccountConnection is created and its connection loop is started; the IMAP
+      // connects and the bootstrap then run concurrently across accounts.
+      await Promise.allSettled(accounts.map((account) => this.engine.addAccount(account.id)))
+    }
+  }
+
+  /**
+   * Empties what the mail keeps — its cache, the contacts, drafts,
+   * signatures, recent files and folders, the attachments' copies — while
+   * the accounts and the preferences stay. Runs with the connections
+   * stopped (see `whileDisconnected`).
+   */
+  async clearData(): Promise<void> {
     await this.database.clearAllDataKeepAccounts()
     await this.dropAttachmentCopies()
-    await this.segretario.clearData()
-    await this.calendar.clearData()
-    await this.extension?.clearData()
-
-    // Re-bootstrap all accounts in parallel. engine.addAccount returns once the
-    // AccountConnection is created and its connection loop is started; the IMAP
-    // connects and the bootstrap then run concurrently across accounts.
-    await Promise.allSettled(accounts.map((account) => this.engine.addAccount(account.id)))
   }
 
   async pickAttachments(parentWindow?: BrowserWindow): Promise<PickedAttachment[]> {
@@ -2357,7 +2084,7 @@ export class MailService {
    * Remembers the files the user handled, for "Allega" to offer back — not
    * the copies the app keeps for itself, such as a forward's attachments.
    */
-  private async recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void> {
+  async recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void> {
     const folders = privateFolders()
     await this.database.recordRecentFiles(
       paths.filter((path) => isUserFile(path, folders)),
@@ -2404,7 +2131,7 @@ export class MailService {
   }
 
   /** The iCalendar file a message carries, as text; null when it carries none. */
-  private async invitationText(ref: MessageRef): Promise<string | null> {
+  async invitationText(ref: MessageRef): Promise<string | null> {
     const message = await this.requireMessage(ref)
     const file = message.attachments.find(isIcsAttachment)
 
@@ -2418,41 +2145,6 @@ export class MailService {
       message.size
     )
     return fetched ? fetched.content.toString('utf8') : null
-  }
-
-  /** The calendar invitation a message carries, with its event in any connected calendar. */
-  async calendarInvitation(ref: MessageRef): Promise<MessageInvitation | null> {
-    const text = await this.invitationText(ref)
-    const invitation = text ? parseInvitation(text) : null
-
-    if (!text || !invitation) {
-      return null
-    }
-
-    const connected = (await this.calendar.listConnections()).length > 0
-    // The occurrence the invitation is about (its RECURRENCE-ID), not the series' next one.
-    const event = connected
-      ? await this.calendar.eventByUid(invitation.uid, ref.accountId, invitation.instance)
-      : null
-    const { organizer } = invitationParties(text)
-    const said = occurrenceIn(text, null, [])
-    const own = new Set(
-      (await this.database.getAccounts()).map((account) => account.email.toLowerCase())
-    )
-
-    return {
-      method: invitation.method,
-      summary: invitation.summary,
-      event,
-      calendarConnected: connected,
-      organizer,
-      when: said
-        ? { start: said.start, end: said.end, allDay: said.allDay, location: said.location }
-        : null,
-      answerByMail:
-        !event && invitation.method === 'REQUEST' && organizer !== null && !own.has(organizer),
-      series: invitation.series
-    }
   }
 
   /**

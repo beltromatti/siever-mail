@@ -27,6 +27,8 @@ describe('formatChordKeys', () => {
     expect(formatChordKeys('Mod+Shift+KeyR', false)).toEqual(['Ctrl', 'Shift', 'R'])
     expect(formatChordKeys('Mod+Enter', true)).toEqual(['⌘', '↩'])
     expect(formatChordKeys('Mod+Enter', false)).toEqual(['Ctrl', 'Invio'])
+    expect(formatChordKeys('Escape', true)).toEqual(['Esc'])
+    expect(formatChordKeys('KeyT', false)).toEqual(['T'])
   })
 })
 
@@ -77,6 +79,14 @@ describe('validateChord', () => {
     }
   })
 
+  it('takes a key on its own where commands never listen while something is typed', () => {
+    expect(validateChord('KeyT', 'calendar')).toEqual({ ok: true, value: 'KeyT' })
+    expect(validateChord('Shift+KeyT', 'calendar')).toEqual({ ok: true, value: 'Shift+KeyT' })
+    expect(validateChord('Escape', 'calendar')).toEqual({ ok: true, value: 'Escape' })
+    expect(validateChord('Escape', 'main')).toEqual({ ok: false, reason: 'modifier' })
+    expect(validateChord('Mod+KeyC', 'calendar')).toEqual({ ok: false, reason: 'reserved' })
+  })
+
   it("keeps the editor's own chords for the composer only", () => {
     expect(validateChord('Mod+KeyB', 'composer')).toEqual({ ok: false, reason: 'reserved' })
     expect(validateChord('Mod+KeyB', 'main')).toEqual({ ok: true, value: 'Mod+KeyB' })
@@ -122,5 +132,6 @@ describe('chordToAccelerator', () => {
     expect(chordToAccelerator('Mod+Shift+KeyR')).toBe('CommandOrControl+Shift+R')
     expect(chordToAccelerator('Mod+Enter')).toBe('CommandOrControl+Return')
     expect(chordToAccelerator('Mod+Comma')).toBe('CommandOrControl+,')
+    expect(chordToAccelerator('Mod+Escape')).toBe('CommandOrControl+Escape')
   })
 })

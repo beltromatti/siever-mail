@@ -120,6 +120,11 @@ export function eventSpan(event: Pick<CalendarEvent, 'start' | 'end' | 'allDay'>
   return { start, end: Math.max(Date.parse(event.end), start + MINUTE_MS) }
 }
 
+/** The day an event starts on, at its local midnight: where the calendar goes to show it. */
+export function eventStartDay(event: Pick<CalendarEvent, 'start' | 'allDay'>): Date {
+  return event.allDay ? dayOfKey(event.start.slice(0, 10)) : startOfDay(new Date(event.start))
+}
+
 /** Whether an event is on a day: a meeting on one, a three-day fair on three. */
 export function isOnDay(
   event: Pick<CalendarEvent, 'start' | 'end' | 'allDay'>,

@@ -11,6 +11,7 @@ import {
   formatChordKeys,
   isMacPlatform,
   matchesChord,
+  takesBareKeys,
   type ShortcutKeyEvent,
   type ShortcutScope
 } from '@shared/shortcuts'
@@ -52,8 +53,15 @@ export function commandForKeyEvent(
   scope: ShortcutScope,
   overrides: ShortcutOverrides
 ): CommandDefinition | undefined {
-  // A bare key, Shift aside, is typing — unless it is a function key.
-  if (!event.metaKey && !event.ctrlKey && !event.altKey && !/^F\d{1,2}$/.test(event.code)) {
+  // A bare key, Shift aside, is typing — unless it is a function key, or the scope's commands
+  // listen only while nothing is typed.
+  if (
+    !takesBareKeys(scope) &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !/^F\d{1,2}$/.test(event.code)
+  ) {
     return undefined
   }
 

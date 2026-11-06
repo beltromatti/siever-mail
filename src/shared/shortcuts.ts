@@ -13,8 +13,30 @@
  * into ®, `event.key` is not the key the user pressed.
  */
 
-/** Where a shortcut works: the main window, or a message being written. */
-export type ShortcutScope = 'main' | 'composer'
+/**
+ * Where a shortcut works: the main window, a message being written, or the
+ * Calendario while it is in front and no field has the keyboard.
+ */
+export type ShortcutScope = 'main' | 'composer' | 'calendar'
+
+/**
+ * The scopes whose commands never listen while something is typed: there a
+ * key on its own is a command, as in Google Calendar (T, J, K, C).
+ */
+const BARE_KEY_SCOPES: ReadonlySet<ShortcutScope> = new Set(['calendar'])
+
+export function takesBareKeys(scope: ShortcutScope): boolean {
+  return BARE_KEY_SCOPES.has(scope)
+}
+
+/**
+ * Whether the commands of two scopes listen at the same time, and so may
+ * not share a chord: the Calendario's along with the window's; a message
+ * being written, a dialog over everything, only with its own.
+ */
+export function scopesListenTogether(a: ShortcutScope, b: ShortcutScope): boolean {
+  return a === b || (a !== 'composer' && b !== 'composer')
+}
 
 export interface ShortcutKeyEvent {
   code: string
@@ -33,7 +55,7 @@ interface ChordParts {
 }
 
 const KEY_CODE_PATTERN =
-  /^(Key[A-Z]|Digit[0-9]|F(?:[1-9]|1[0-2])|Period|Comma|Slash|Semicolon|Quote|BracketLeft|BracketRight|Backslash|Minus|Equal|Backquote|Enter|Backspace|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight)$/
+  /^(Key[A-Z]|Digit[0-9]|F(?:[1-9]|1[0-2])|Period|Comma|Slash|Semicolon|Quote|BracketLeft|BracketRight|Backslash|Minus|Equal|Backquote|Enter|Escape|Backspace|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight)$/
 
 const FUNCTION_KEY_PATTERN = /^F(?:[1-9]|1[0-2])$/
 
@@ -160,7 +182,8 @@ export type ShortcutValidation =
 /**
  * Whether a chord may be bound to a command of `scope`. It needs Ctrl/⌘ or
  * Alt — Shift alone only changes what a key types, so it would fire while
- * the user writes a capital — unless the key types nothing at all (F1–F12).
+ * the user writes a capital — unless the key types nothing at all (F1–F12)
+ * or the scope's commands never listen while something is typed.
  */
 export function validateChord(value: string, scope: ShortcutScope): ShortcutValidation {
   const parts = parseChord(value)
@@ -169,7 +192,7 @@ export function validateChord(value: string, scope: ShortcutScope): ShortcutVali
     return { ok: false, reason: 'format' }
   }
 
-  if (!parts.mod && !parts.alt && !FUNCTION_KEY_PATTERN.test(parts.code)) {
+  if (!parts.mod && !parts.alt && !FUNCTION_KEY_PATTERN.test(parts.code) && !takesBareKeys(scope)) {
     return { ok: false, reason: 'modifier' }
   }
 
@@ -257,6 +280,7 @@ const PUNCTUATION_LABELS: Readonly<Record<string, string>> = {
 
 const NAMED_KEY_LABELS: Readonly<Record<string, { mac: string; other: string }>> = {
   Enter: { mac: '↩', other: 'Invio' },
+  Escape: { mac: 'Esc', other: 'Esc' },
   Backspace: { mac: '⌫', other: 'Backspace' },
   Delete: { mac: '⌦', other: 'Canc' },
   ArrowUp: { mac: '↑', other: '↑' },
@@ -300,6 +324,7 @@ export function formatChordKeys(value: string, isMac: boolean): string[] {
 
 const ACCELERATOR_KEYS: Readonly<Record<string, string>> = {
   Enter: 'Return',
+  Escape: 'Escape',
   Backspace: 'Backspace',
   Delete: 'Delete',
   ArrowUp: 'Up',
