@@ -1479,7 +1479,7 @@ memory is used (every run starts from the map and opens what it needs, many
 runs write at once, the user reads it), from which follow one note per
 subject, each fact in one place, a note of its own for whoever matters, with
 the words it will be searched by (a person's addresses). It suggests a start
-(`tu.md`, `stile.md`, `connessioni.md`, `persone/…`, `progetti/…`,
+(`tu.md`, `stile.md`, `connessioni.md`, `contatti/…`, `progetti/…`,
 `decisioni.md`) to take, change and extend; the tasks say what to learn and
 leave how to keep it to the identity. Nothing in the code depends on a path. What the notebook guarantees is
 integrity: edits are patches on the note as it is now (each passage

@@ -24,7 +24,7 @@ describe('Notebook', () => {
     await notebook.write('tu.md', '# Chi sei\n', RUN_A)
 
     for (let index = 1; index <= 13; index += 1) {
-      await notebook.write(`persone/p${index}.md`, `# Persona ${index}\n`, RUN_A)
+      await notebook.write(`contatti/p${index}.md`, `# Persona ${index}\n`, RUN_A)
     }
 
     await notebook.write('progetti/hotel.md', '# Hotel Lido\n', RUN_A)
@@ -33,9 +33,9 @@ describe('Notebook', () => {
 
     expect(map).toContain('- tu.md — Chi sei')
     expect(map).toContain('- progetti/hotel.md — Hotel Lido')
-    expect(map).toMatch(/- persone\/ — 13 note \(le ultime toccate: /)
-    expect(map).not.toContain('persone/p1.md')
-    expect(await notebook.folder('persone/')).toContain('- persone/p1.md — Persona 1')
+    expect(map).toMatch(/- contatti\/ — 13 note \(le ultime toccate: /)
+    expect(map).not.toContain('contatti/p1.md')
+    expect(await notebook.folder('contatti/')).toContain('- contatti/p1.md — Persona 1')
     expect(await notebook.folder('clienti')).toBeNull()
   })
 
@@ -116,19 +116,19 @@ describe('Notebook', () => {
   })
 
   it('refuses a whole rewrite made on an old reading, and keeps every version', async () => {
-    const { document } = await notebook.write('persone/anna.md', '# Anna\nCliente\n', RUN_A)
-    await notebook.edit('persone/anna.md', [{ old: 'Cliente', new: 'Cliente storica' }], RUN_B)
+    const { document } = await notebook.write('contatti/anna.md', '# Anna\nCliente\n', RUN_A)
+    await notebook.edit('contatti/anna.md', [{ old: 'Cliente', new: 'Cliente storica' }], RUN_B)
 
     await expect(
-      notebook.write('persone/anna.md', '# Anna\nFornitrice\n', RUN_A, {
+      notebook.write('contatti/anna.md', '# Anna\nFornitrice\n', RUN_A, {
         seenRevision: document.revision
       })
     ).rejects.toBeInstanceOf(RegistryRefusal)
 
-    const history = await notebook.history('persone/anna.md')
+    const history = await notebook.history('contatti/anna.md')
     expect(history.map((version) => version.revision)).toEqual([2, 1])
 
-    const restored = await notebook.restore('persone/anna.md', 1, { by: 'utente' })
+    const restored = await notebook.restore('contatti/anna.md', 1, { by: 'utente' })
     expect(restored).toMatchObject({
       content: '# Anna\nCliente\n',
       revision: 3,
@@ -166,17 +166,17 @@ describe('Notebook', () => {
       '> Pratica 2470\n# Hotel Lido\nCliente: Rossi\nCollaudo il 12\n'
     )
 
-    await notebook.write('persone/neri.md', '# Paolo Neri\nFarmaDelta\nDirettore lavori\n', RUN_A)
+    await notebook.write('contatti/neri.md', '# Paolo Neri\nFarmaDelta\nDirettore lavori\n', RUN_A)
     expect(await notebook.search('neri')).toEqual([
-      { path: 'persone/neri.md', line: 1, text: '# Paolo Neri' }
+      { path: 'contatti/neri.md', line: 1, text: '# Paolo Neri' }
     ])
     expect(await notebook.search('neri farmadelta')).toEqual([
-      { path: 'persone/neri.md', line: 2, text: 'FarmaDelta' }
+      { path: 'contatti/neri.md', line: 2, text: 'FarmaDelta' }
     ])
   })
 
   it('keeps paths inside the notebook', () => {
-    expect(normalizeMemoryPath('/memoria/persone\\anna')).toBe('persone/anna.md')
+    expect(normalizeMemoryPath('/memoria/contatti\\anna')).toBe('contatti/anna.md')
     expect(() => normalizeMemoryPath('../segreto')).toThrow(RegistryRefusal)
   })
 })

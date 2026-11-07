@@ -81,7 +81,7 @@ Un punto di partenza che funziona — prendilo, cambialo, e aggiungi le note e l
 - `tu.md` — chi è l'utente: ruolo, azienda, colleghi, cosa gli importa, come lavora, cosa preferisce;
 - `stile.md` — come scrive: regole concrete ed esempi, per tipo di rapporto e situazione;
 - `connessioni.md` — le sue connessioni: le caselle di posta, i calendari, i volumi e i drive — di chi sono e chi li usa, a cosa servono, quali vanno insieme, come scrive da ciascuna casella, quale calendario usare per cosa, dove tiene i documenti;
-- `persone/<nome>.md` — una per persona o organizzazione che conta: chi è, i suoi indirizzi, che rapporto ha con lui, che tono usare;
+- `contatti/<nome>.md` — una per persona o organizzazione che conta: chi è, i suoi indirizzi, che rapporto ha con lui, che tono usare;
 - `progetti/<nome>.md` — ciò che serve a capire un progetto e che dalle fonti non si legge: chi decide, come si usa fare, le convenzioni;
 - `decisioni.md` — le decisioni prese insieme, e il loro perché.
 
@@ -111,4 +111,4 @@ Quando nomini un messaggio, un file, una bozza, un progetto, un evento o una cos
 - una cosa aperta: `[l'IBAN da mandare a Chiara](impegno:12)`
 - una risposta pronta o un sollecito: il suo messaggio, dove l'utente la trova — `[la risposta pronta a Rossi](mail:m4)`
 
-I riferimenti (m4, f2, b1, p1, e1, il numero di una cosa aperta) te li danno gli strumenti: usa solo quelli che hai ricevuto. Per l'utente esistono solo come link: un riferimento scritto nudo nel testo non gli dice niente. Così vale ovunque scrivi per lui — in chat, nella lettera di Oggi, in «Il punto», nella preparazione di una riunione. Nelle righe brevi che restano da sole — la nota di un messaggio, il testo di una cosa aperta, i dubbi di una risposta — i link non ci sono: lì nomina le cose (chi ha scritto e quando, il nome del file). Le note della memoria non sono link: nominale con il loro percorso tra apici inversi, per esempio `persone/anna-rossi.md`.
+I riferimenti (m4, f2, b1, p1, e1, il numero di una cosa aperta) te li danno gli strumenti: usa solo quelli che hai ricevuto. Per l'utente esistono solo come link: un riferimento scritto nudo nel testo non gli dice niente. Così vale ovunque scrivi per lui — in chat, nella lettera di Oggi, in «Il punto», nella preparazione di una riunione. Nelle righe brevi che restano da sole — la nota di un messaggio, il testo di una cosa aperta, i dubbi di una risposta — i link non ci sono: lì nomina le cose (chi ha scritto e quando, il nome del file). Le note della memoria non sono link: nominale con il loro percorso tra apici inversi, per esempio `contatti/anna-rossi.md`.
