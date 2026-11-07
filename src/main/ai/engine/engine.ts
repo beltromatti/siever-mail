@@ -117,8 +117,8 @@ export interface EngineDeps {
   onboarding(): Promise<OnboardingState | null>
   /** What the engine is doing changed. */
   onStateChange(): void
-  /** The key was refused or the credit ran out (a reason), or that passed (null). */
-  onPause(reason: string | null): void
+  /** The key was refused or the credit ran out (why, and its code), or that passed (null). */
+  onPause(pause: EnginePause | null): void
 }
 
 /** A run settled, then — done — what follows from its being done. */
@@ -143,7 +143,7 @@ function settle(result: RunResult): void {
     // The key or the credit stops everything until the user acts; a request blocked for what it
     // carries (`blocked`) is that work's failure, not every work's.
     if (['no-key', 'invalid-key', 'no-credit'].includes(error.code)) {
-      throw new EnginePause(error.message)
+      throw new EnginePause(error.message, error.code)
     }
 
     // Nothing would get through now: the engine waits, the unit is not to blame.
@@ -190,7 +190,7 @@ export class SegretarioEngine {
       // Work queued before the AI was switched off — or before a restart with it off — waits.
       canStart: () => deps.ready(),
       onChange: () => deps.onStateChange(),
-      onPause: (reason) => deps.onPause(reason)
+      onPause: (pause) => deps.onPause(pause)
     })
   }
 

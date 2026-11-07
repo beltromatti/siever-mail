@@ -87,6 +87,7 @@ import {
   type IdentityClaim,
   type StoredIdentity
 } from './mail-engine/message-identity'
+import { isPecReceipt } from './mail-engine/pec'
 import { plainTextOfHtml } from './mail-engine/preview'
 import type { UnreadableMessage } from './mail-engine/unreadable-messages'
 import {
@@ -381,7 +382,15 @@ export const READABLE_BODY_LEVEL = 2
 /** A body as the engine hands it over to be kept. */
 export type StoredBodyInput = Pick<
   FetchedMessageDetail,
-  'html' | 'text' | 'bcc' | 'replyTo' | 'references' | 'attachments' | 'preview' | 'pecDetail'
+  | 'html'
+  | 'text'
+  | 'from'
+  | 'bcc'
+  | 'replyTo'
+  | 'references'
+  | 'attachments'
+  | 'preview'
+  | 'pecDetail'
 >
 
 /** People as the index reads them: names and addresses, the list's own name for the sender. */
@@ -645,6 +654,25 @@ function buildSenderMatchWhere(query?: string): Prisma.MessageWhereInput | null 
   }
 
   return { OR: senderTerms.map((term) => ({ searchFrom: { contains: term.value } })) }
+}
+
+/**
+ * A certified envelope fetched again, with the sender its body named
+ * (`storeMessageBodies`) — the envelope itself names only the address the
+ * provider certified.
+ */
+function withCarriedSender(
+  message: FetchedMessageSummary,
+  storedFromJson: string | undefined
+): FetchedMessageSummary {
+  const stored = storedFromJson ? parseJsonArray<MailAddress>(storedFromJson)[0] : undefined
+
+  return message.pec &&
+    !isPecReceipt(message.pec.kind) &&
+    stored?.name &&
+    stored.address.toLowerCase() === message.from[0]?.address.toLowerCase()
+    ? { ...message, from: [stored], senderName: stored.name }
+    : message
 }
 
 /** The name a message's own header gives its sender, when it gives a real one. */
@@ -2679,10 +2707,19 @@ export class AppDatabase {
     accountId: string,
     folderPath: string,
     messages: FetchedMessageSummary[]
-  ): Promise<{ added: MailMessageSummary[]; updated: MailMessageSummary[] }> {
+  ): Promise<{
+    added: MailMessageSummary[]
+    updated: MailMessageSummary[]
+    /** Rows of other folders moved into the conversation of a message added (`filePecConversations`). */
+    adopted: MailMessageSummary[]
+  }> {
     await this.ready
 
-    const result = { added: [] as MailMessageSummary[], updated: [] as MailMessageSummary[] }
+    const result = {
+      added: [] as MailMessageSummary[],
+      updated: [] as MailMessageSummary[],
+      adopted: [] as MailMessageSummary[]
+    }
 
     if (messages.length === 0) {
       return result
@@ -2718,10 +2755,21 @@ export class AppDatabase {
     const role = folder ? folderRole(folder) : null
     const contacts: ContactEntry[] = []
     const now = BigInt(Date.now())
-    const senderLabels = await this.resolveSenderLabels(messages)
+    // Fetched again, a certified envelope keeps the sender its body named; a receipt new here goes
+    // with the message sent it is about.
+    const pec = await this.filePecConversations(
+      accountId,
+      messages.filter((message) => !existingByUid.has(message.uid))
+    )
+    const rows = messages.map((fetched) => {
+      const carried = withCarriedSender(fetched, existingByUid.get(fetched.uid)?.fromJson)
+      const threadId = pec.receipts.get(fetched.uid)
+      return threadId ? { ...carried, threadId } : carried
+    })
+    const senderLabels = await this.resolveSenderLabels(rows)
 
-    await this.prisma.$transaction(
-      messages.map((message) => {
+    await this.prisma.$transaction([
+      ...rows.map((message) => {
         const existing = existingByUid.get(message.uid) || null
         const senderLabel = senderLabels.get(message) ?? message.senderName
         const senderSort = senderSortKey(senderLabel)
@@ -2766,11 +2814,16 @@ export class AppDatabase {
         // a good preview we keep it. This keeps the per-row state monotonic.
         const keepExistingPreview = existing?.previewHydrated === true && !message.previewHydrated
         const preview = keepExistingPreview ? existing!.preview : message.preview
+        // A certified envelope names only the address: its sender's name, written when its body was
+        // read (`storeMessageBodies`), is not taken back by a fetch of the envelope alone.
+        const keepsSender = message.pec !== undefined && !isPecReceipt(message.pec.kind)
         const update = {
           messageId: message.messageId ?? null,
           subject: message.subject,
           subjectSort,
-          fromJson: JSON.stringify(message.from),
+          ...(keepsSender
+            ? {}
+            : { fromJson: JSON.stringify(message.from), senderName: message.senderName }),
           toJson: JSON.stringify(message.to),
           ccJson: JSON.stringify(message.cc),
           dateIso: message.date,
@@ -2779,7 +2832,6 @@ export class AppDatabase {
           flagsJson: JSON.stringify(message.flags),
           isRead: message.isRead,
           isFlagged: message.isFlagged,
-          senderName: message.senderName,
           senderKey: message.senderKey,
           senderLabel,
           senderSort,
@@ -2815,8 +2867,9 @@ export class AppDatabase {
           create,
           update
         })
-      })
-    )
+      }),
+      ...pec.writes
+    ])
 
     const held = [...new Set(result.added.map((row) => row.messageKey).filter(isMessageIdKey))]
 
@@ -2835,7 +2888,111 @@ export class AppDatabase {
       this.scheduleSentRecount()
     }
 
+    result.adopted =
+      pec.moved.length > 0
+        ? (
+            await this.prisma.message.findMany({
+              where: { id: { in: pec.moved } },
+              select: MESSAGE_SUMMARY_SELECT
+            })
+          ).map((row) => this.mapMessageRowToSummary(row))
+        : []
     return result
+  }
+
+  /**
+   * Certified mail (PEC) in its conversations, for a batch of messages new
+   * to a folder: a receipt goes with the message sent it is about — named
+   * by the Message-ID its client gave it — which it does not reference
+   * (`fetchedIdentity` files it under that message's own conversation,
+   * right for one that started a conversation). So:
+   *   • a receipt whose message is known goes in its conversation, however
+   *     that message is keyed (`receipts`, by uid);
+   *   • the receipts stored before their message — the inbox is read before
+   *     Sent — are moved into its conversation when it comes (`moved`).
+   * `writes` puts both right, rows and the keys they hold, in the batch's
+   * own transaction. What the Segretario wrote of a receipt moved — read
+   * in the moment between the two — stays with the conversation it read.
+   */
+  private async filePecConversations(
+    accountId: string,
+    added: ReadonlyArray<FetchedMessageSummary>
+  ): Promise<{
+    receipts: Map<number, string>
+    moved: string[]
+    writes: Prisma.PrismaPromise<unknown>[]
+  }> {
+    const bare = (messageId: string): string => messageId.trim().replace(/^<|>$/g, '')
+    const receipts = new Map<number, string>()
+    const writes: Prisma.PrismaPromise<unknown>[] = []
+    const rekey = (messageKey: string, threadId: string): Prisma.PrismaPromise<unknown> =>
+      this.prisma.$executeRaw`
+        UPDATE message_id_keys SET thread_id = ${threadId}
+        WHERE account_id = ${accountId} AND message_key = ${messageKey}
+      `
+
+    const refs = [
+      ...new Set(
+        added.flatMap((message) =>
+          message.pec && isPecReceipt(message.pec.kind) && message.pec.ref ? [message.pec.ref] : []
+        )
+      )
+    ]
+
+    if (refs.length > 0) {
+      const sent = await this.prisma.message.findMany({
+        where: {
+          accountId,
+          pecKind: null,
+          messageId: { in: refs.flatMap((ref) => [ref, `<${ref}>`]) }
+        },
+        select: { messageId: true, threadId: true }
+      })
+      const threadOf = new Map(sent.map((row) => [bare(row.messageId!), row.threadId]))
+
+      for (const message of added) {
+        const threadId = message.pec?.ref ? threadOf.get(message.pec.ref) : undefined
+
+        if (threadId && isPecReceipt(message.pec!.kind) && threadId !== message.threadId) {
+          receipts.set(message.uid, threadId)
+          writes.push(rekey(message.messageKey, threadId))
+        }
+      }
+    }
+
+    const threads = new Map(
+      added.flatMap((message) =>
+        message.messageId && !message.pec
+          ? [[bare(message.messageId), message.threadId] as const]
+          : []
+      )
+    )
+    const strays = (
+      await Promise.all(
+        chunkOf([...threads.keys()], IDENTITY_LOOKUP_CHUNK).map((part) =>
+          this.prisma.message.findMany({
+            where: {
+              accountId,
+              pecRef: { in: part },
+              pecKind: { notIn: ['busta', 'anomalia'] }
+            },
+            select: { id: true, messageKey: true, threadId: true, pecRef: true }
+          })
+        )
+      )
+    )
+      .flat()
+      .filter((row) => row.threadId !== threads.get(row.pecRef!))
+
+    for (const row of strays) {
+      const threadId = threads.get(row.pecRef!)!
+      writes.push(
+        this.prisma.message.update({ where: { id: row.id }, data: { threadId } }),
+        rekey(row.messageKey, threadId)
+      )
+    }
+
+    return { receipts, moved: strays.map((row) => row.id), writes }
   }
 
   /**
@@ -4615,7 +4772,11 @@ export class AppDatabase {
    *     attachment; with the body in hand the answer is exact;
    *   • the preview — read from the whole body rather than from its first
    *     32 KB, it replaces one the list made with less;
-   *   • the Bcc a sent message carries, which only shows with its body.
+   *   • the Bcc a sent message carries, which only shows with its body;
+   *   • the name of who sent a certified message (PEC): its envelope names
+   *     only the address the provider certified, the message it carries
+   *     the sender's name too — the list files the sender under it, and
+   *     the next sync of the folder learns the contact by it.
    */
   async storeMessageBodies(
     accountId: string,
@@ -4673,7 +4834,21 @@ export class AppDatabase {
       }
 
       const envelope = keyed[0]
-      const from = parseJsonArray<MailAddress>(envelope.fromJson)
+      const certified = parseJsonArray<MailAddress>(envelope.fromJson)[0]
+      const carried =
+        body.pecDetail && !isPecReceipt(body.pecDetail.kind) ? body.from[0] : undefined
+      // The name the message carried gives its sender — the one the provider certified.
+      const carriedName =
+        certified &&
+        carried &&
+        carried.address.toLowerCase() === certified.address.toLowerCase() &&
+        isMeaningfulDisplayName(carried.name, carried.address)
+          ? carried.name!.trim()
+          : null
+      const from = carriedName
+        ? [{ name: carriedName, address: certified!.address }]
+        : parseJsonArray<MailAddress>(envelope.fromJson)
+      const senderLabel = carriedName ?? envelope.senderLabel
       const to = parseJsonArray<MailAddress>(envelope.toJson)
       const cc = parseJsonArray<MailAddress>(envelope.ccJson)
       const indexed = {
@@ -4685,7 +4860,7 @@ export class AppDatabase {
         referencesJson: JSON.stringify(body.references),
         pecJson: body.pecDetail ? JSON.stringify(body.pecDetail) : null,
         subject: envelope.subject,
-        sender: indexedAddresses(from, envelope.senderLabel),
+        sender: indexedAddresses(from, senderLabel),
         recipients: indexedAddresses([...to, ...cc, ...body.bcc]),
         body: indexedBodyText(body),
         fetchedAt: now
@@ -4707,7 +4882,8 @@ export class AppDatabase {
           row.hasAttachments !== hasAttachments ||
           row.preview !== body.preview ||
           !row.previewHydrated ||
-          (body.bcc.length > 0 && row.bccJson === '[]')
+          (body.bcc.length > 0 && row.bccJson === '[]') ||
+          (carriedName !== null && row.senderLabel !== senderLabel)
         ) {
           changedRowIds.push(row.id)
         }
@@ -4723,6 +4899,15 @@ export class AppDatabase {
             previewHydrated: true,
             searchPreview: foldSearchText(body.preview),
             searchTo,
+            ...(carriedName
+              ? {
+                  fromJson: JSON.stringify(from),
+                  senderName: carriedName,
+                  senderLabel,
+                  senderSort: senderSortKey(senderLabel),
+                  searchFrom: `${foldSearchText(senderLabel)} ${addressesSearchText(from)}`
+                }
+              : {}),
             updatedAt: now
           }
         })

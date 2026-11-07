@@ -584,6 +584,12 @@ function ConoscimiStep({
   const unknown = (learning ?? []).filter((connection) => connection.state !== 'done')
   // Doing it again is the user's choice when every connection is known: it updates, it does not start over.
   const optional = state.case !== 'conoscimi' && learning !== null && unknown.length === 0
+  // Known already, with connections it does not know yet — added, or whose reading failed.
+  const adding =
+    state.case !== 'conoscimi' &&
+    learning !== null &&
+    unknown.length > 0 &&
+    unknown.length < learning.length
   const failed = run?.status === 'failed' || run?.status === 'cancelled'
 
   useEffect(() => {
@@ -617,7 +623,9 @@ function ConoscimiStep({
         lead={
           optional
             ? 'Il Segretario ti conosce già. Rifarlo è consigliato: rilegge le tue connessioni e aggiorna quello che sa, senza cancellarlo.'
-            : 'Prima di cominciare, il Segretario legge la tua posta, i calendari e le tue cartelle per capire chi sei, come lavori, con chi e su cosa. Prende appunti che potrai leggere e correggere. Puoi guardarlo mentre lavora.'
+            : adding
+              ? `Il Segretario ti conosce già: ora legge ${unknown.length === 1 ? 'la connessione che non conosce ancora' : 'le connessioni che non conosce ancora'} — ${unknown.map((connection) => connection.label).join(', ')} — e ${unknown.length === 1 ? 'la lega' : 'le lega'} a quello che sa di te, del tuo lavoro e delle persone. Prende appunti che potrai leggere e correggere. Puoi guardarlo mentre lavora.`
+              : 'Prima di cominciare, il Segretario legge la tua posta, i calendari e le tue cartelle per capire chi sei, come lavori, con chi e su cosa. Prende appunti che potrai leggere e correggere. Puoi guardarlo mentre lavora.'
         }
         actions={
           <>

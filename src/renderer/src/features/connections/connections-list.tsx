@@ -10,6 +10,7 @@ import {
   Mail,
   Network,
   Server,
+  ShieldCheck,
   type LucideIcon
 } from 'lucide-react'
 
@@ -43,6 +44,7 @@ const ACCESS_ICONS: Readonly<Record<AccessKind, LucideIcon>> = {
   microsoft: Mail,
   icloud: Cloud,
   imap: Mail,
+  pec: ShieldCheck,
   caldav: Server,
   ics: Link2
 }

@@ -192,46 +192,47 @@ conversations) and what an extension archived (`ai_archived`) into saved
 copies; `database.ts` turns the 1.x `calendar_accounts` into calendar
 connections with the same ids, so events keep their keys.
 
-| Table                                                       | Holds                                                                                                                                                                                                                                                                                                                                                |
-| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `accounts`                                                  | The mail connections: `type` `gmail` or `imap` (Microsoft's are `imap` signed in with `oauth`); `encrypted_secret` is the password, Google's refresh token or MSAL's token cache, encrypted with `safeStorage`.                                                                                                                                      |
-| `folders`                                                   | Folder metadata and sync cursors (UIDVALIDITY, HIGHESTMODSEQ, UIDNEXT, last UID). _Cache._                                                                                                                                                                                                                                                           |
-| `messages`                                                  | Envelopes, previews, flags. `message_key` names a message wherever it is filed, `thread_id` its conversation (see [Mail engine](#mail-engine)). Denormalised `sender_label` / `sender_sort` / `subject_sort` let the database sort and group by sender or subject, and the folded `search_*` columns let it search without case or accents. _Cache._ |
-| `message_bodies`                                            | One body per `message_key`, shared by every folder that holds the message: its text for the index (level 1) or the readable message with its parts (level 2). _Cache._                                                                                                                                                                               |
-| `message_fts`                                               | The full-text index (FTS5 over `message_bodies`, kept in step by triggers), accents and case folded as the search box folds them. _Cache._                                                                                                                                                                                                           |
-| `search_hits`                                               | The index's matches for the searches on screen, so the list's query joins them instead of carrying thousands of ids. _Cache._                                                                                                                                                                                                                        |
-| `app_meta`                                                  | Small facts about the file itself: the shape of the cache (`cache_version`).                                                                                                                                                                                                                                                                         |
-| `contacts`                                                  | Everyone stored mail names, for the composer's suggestions: `usage_count` / `last_used_at` count the mail written to them, `last_received_at` the newest they sent, `hidden_at` a contact taken out of the suggestions.                                                                                                                              |
-| `drafts`                                                    | The messages being written: recipients, subject, body, files, the thread they answer; `revision` / `server_revision` say whether Bozze has the draft as it is, `server_*` where its copy is, `docked` that a composer holds it.                                                                                                                      |
-| `account_signatures`                                        | One signature per account, with the version of the page it was written for (`html_format`) and the edition of the extension's content it has (`extension_revision`).                                                                                                                                                                                 |
-| `recent_files`                                              | Files the user attached, saved or an extension filed away, offered first in "Allega".                                                                                                                                                                                                                                                                |
-| `recent_folders`                                            | The folders each account's messages were last moved to, offered first by "Sposta".                                                                                                                                                                                                                                                                   |
-| `message_id_keys`                                           | Which message holds each key made of a Message-ID, by the digest every copy shares, kept after its rows go (see [Mail engine](#mail-engine)). Not cache: a cache reset keeps who is who.                                                                                                                                                             |
-| `left_out_messages`                                         | Messages a folder's sync leaves out for now: the app's own deletions not expunged yet, and those the server refuses to give, with their tries. _Cache._                                                                                                                                                                                              |
-| `app_preferences`                                           | One row: theme, layout, list order, sort, grouping, reader zoom, "Dettagli", shortcut overrides, the accounts "Tutti gli account" gathers, the notification preferences, the extension signature edition every account has joined.                                                                                                                   |
-| `calendar_connections`                                      | Each calendar connection on its own: `provider` (`google`, `microsoft`, `caldav`, `ics`), the account or name it shows, the mail connection that came with the same access (`mail_account_id`), the server, the token, password or link encrypted with `safeStorage`, the last sync and its problem.                                                 |
-| `calendar_calendars`                                        | A connection's calendars: name, primary, writable, colour, hidden in the Calendario, and where their sync stands (`sync_token`, `window_end`).                                                                                                                                                                                                       |
-| `calendar_events`                                           | The events in the window, an instance per occurrence: times, place, guests and answers, the call's link, the iCalendar UID (Exchange's read from its Global Object ID, `canonicalUid`), and `origin_json` when the Segretario put it there.                                                                                                          |
-| `calendar_objects`                                          | A CalDAV calendar's objects as the server has them (URL, ETag, iCalendar text), to sync and to change them in place.                                                                                                                                                                                                                                 |
-| `calendar_changes`                                          | What a sync found changed not through the app — new, changed, cancelled — with the event before and after, kept a month for the Segretario.                                                                                                                                                                                                          |
-| `ai_meta`                                                   | The Segretario schema's version and the facts kept between runs: the guided setup under way (`onboarding`), how far the calendar's changes were looked at (`calendar_seen`), the day whose morning run is done (`morning_done`), when keeping up last found too little to do (`keep_up_checked`).                                                    |
-| `ai_settings`                                               | The OpenRouter key, encrypted with `safeStorage`, the last check of it, and the one switch (`SegretarioPreferences`).                                                                                                                                                                                                                                |
-| `ai_activities`, `ai_events`                                | Every run: its task, where it shows (`pannello`, `diario`, `nascosta`), the work unit it ran; and the log of everything said and done in it, which the conversation is rebuilt from.                                                                                                                                                                 |
-| `ai_work`                                                   | The engine's queue: units of work by task and scope key, with priority, status, attempts and when they may start.                                                                                                                                                                                                                                    |
-| `ai_usage`                                                  | Every call to the model: its task, tokens, cache hits and what OpenRouter billed.                                                                                                                                                                                                                                                                    |
-| `ai_memory`, `ai_memory_history`                            | The notebook, path → Markdown with a revision and who wrote it last, and the past versions of each note.                                                                                                                                                                                                                                             |
-| `ai_learning`                                               | The connections Conoscimi knows — a mailbox by its id, a calendar as `calendario:<id>` — with the run that did it.                                                                                                                                                                                                                                   |
-| `ai_lessons`                                                | What the next reflection takes in: drafts the user corrected or sent as they were, their corrections and decisions on notes, commitments, projects, replies, proposals and the memory — each with the message it is about and the open thing's number — a mailbox or a calendar removed.                                                             |
-| `ai_drafts`                                                 | The drafts the Segretario wrote, as it wrote them, to compare with what the user sends.                                                                                                                                                                                                                                                              |
-| `ai_notes`                                                  | The note on each message, by its key: the gist, its nature (`da_rispondere`, `da_fare`, `in_attesa`, `informativo`, `rumore`), priority, reason, deadline, who wrote it last, a revision.                                                                                                                                                            |
-| `ai_items`, `ai_item_history`                               | The commitments ("cose aperte"), each from where it came: a message (account, conversation, message), an event (`event_key`) or the user's word; kind, text, deadline, status, who set it and why, the message that showed it, a question for the user, a revision; and every change to them, before and after.                                      |
-| `ai_projects`, `ai_project_threads`, `ai_project_resources` | The projects (title and who gave it, description, "Il punto" with its links (`state_links_json`) and since when it is behind, hidden, concluded), the conversations in each — one in several, or rejected by the user, with who linked it — and the folders and events linked to them.                                                               |
-| `ai_ready_drafts`                                           | Replies and reminders prepared ahead, one per message, with where each stands.                                                                                                                                                                                                                                                                       |
-| `ai_proposals`                                              | What the Segretario recommends and may not do alone — a new event, a change to one, an answer to an invitation, an extension's action — until the user accepts it or sets it aside.                                                                                                                                                                  |
-| `ai_saved_copies`                                           | Copies an extension saved outside the mail, by message and destination, with their files.                                                                                                                                                                                                                                                            |
-| `ai_gone`                                                   | Messages something open came from that are missing from every folder, and since when (see [Views](#views)).                                                                                                                                                                                                                                          |
-| `ai_briefings`, `ai_event_preps`                            | The letter at the top of Oggi, by local day, and how to prepare for a meeting, by event, each with the links of its short names (`links_json`).                                                                                                                                                                                                      |
-| `ai_saved_searches`                                         | Searches asked in words that the user kept as folders: the search they became, run again each time.                                                                                                                                                                                                                                                  |
+| Table                                                       | Holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `accounts`                                                  | The mail connections: `type` `gmail` or `imap` (Microsoft's are `imap` signed in with `oauth`); `encrypted_secret` is the password, Google's refresh token or MSAL's token cache, encrypted with `safeStorage`.                                                                                                                                                                                                                                                                 |
+| `folders`                                                   | Folder metadata and sync cursors (UIDVALIDITY, HIGHESTMODSEQ, UIDNEXT, last UID). _Cache._                                                                                                                                                                                                                                                                                                                                                                                      |
+| `messages`                                                  | Envelopes, previews, flags. `message_key` names a message wherever it is filed, `thread_id` its conversation (see [Mail engine](#mail-engine)). Denormalised `sender_label` / `sender_sort` / `subject_sort` let the database sort and group by sender or subject, and the folded `search_*` columns let it search without case or accents. A certified message's kind and the message it is about (`pec_kind`, `pec_ref`, see [Certified mail](#certified-mail-pec)). _Cache._ |
+| `message_bodies`                                            | One body per `message_key`, shared by every folder that holds the message: its text for the index (level 1) or the readable message with its parts (level 2). A certified message's certification and the provider's words (`pec_json`). _Cache._                                                                                                                                                                                                                               |
+| `message_fts`                                               | The full-text index (FTS5 over `message_bodies`, kept in step by triggers), accents and case folded as the search box folds them. _Cache._                                                                                                                                                                                                                                                                                                                                      |
+| `search_hits`                                               | The index's matches for the searches on screen, so the list's query joins them instead of carrying thousands of ids. _Cache._                                                                                                                                                                                                                                                                                                                                                   |
+| `app_meta`                                                  | Small facts about the file itself: the shape of the cache (`cache_version`).                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `contacts`                                                  | Everyone stored mail names, for the composer's suggestions: `usage_count` / `last_used_at` count the mail written to them, `last_received_at` the newest they sent, `hidden_at` a contact taken out of the suggestions.                                                                                                                                                                                                                                                         |
+| `drafts`                                                    | The messages being written: recipients, subject, body, files, the thread they answer; `revision` / `server_revision` say whether Bozze has the draft as it is, `server_*` where its copy is, `docked` that a composer holds it.                                                                                                                                                                                                                                                 |
+| `account_signatures`                                        | One signature per account, with the version of the page it was written for (`html_format`) and the edition of the extension's content it has (`extension_revision`).                                                                                                                                                                                                                                                                                                            |
+| `recent_files`                                              | Files the user attached, saved or an extension filed away, offered first in "Allega".                                                                                                                                                                                                                                                                                                                                                                                           |
+| `recent_folders`                                            | The folders each account's messages were last moved to, offered first by "Sposta".                                                                                                                                                                                                                                                                                                                                                                                              |
+| `message_id_keys`                                           | Which message holds each key made of a Message-ID, by the digest every copy shares, kept after its rows go (see [Mail engine](#mail-engine)). Not cache: a cache reset keeps who is who.                                                                                                                                                                                                                                                                                        |
+| `left_out_messages`                                         | Messages a folder's sync leaves out for now: the app's own deletions not expunged yet, and those the server refuses to give, with their tries. _Cache._                                                                                                                                                                                                                                                                                                                         |
+| `app_preferences`                                           | One row: theme, layout, list order, sort, grouping, reader zoom, "Dettagli", shortcut overrides, the accounts "Tutti gli account" gathers, the notification preferences, the extension signature edition every account has joined.                                                                                                                                                                                                                                              |
+| `calendar_connections`                                      | Each calendar connection on its own: `provider` (`google`, `microsoft`, `caldav`, `ics`), the account or name it shows, the mail connection that came with the same access (`mail_account_id`), the server, the token, password or link encrypted with `safeStorage`, the last sync and its problem.                                                                                                                                                                            |
+| `calendar_calendars`                                        | A connection's calendars: name, primary, writable, colour, hidden in the Calendario, and where their sync stands (`sync_token`, `window_end`).                                                                                                                                                                                                                                                                                                                                  |
+| `calendar_events`                                           | The events in the window, an instance per occurrence: times, place, guests and answers, the call's link, the iCalendar UID (Exchange's read from its Global Object ID, `canonicalUid`), and `origin_json` when the Segretario put it there.                                                                                                                                                                                                                                     |
+| `calendar_objects`                                          | A CalDAV calendar's objects as the server has them (URL, ETag, iCalendar text), to sync and to change them in place.                                                                                                                                                                                                                                                                                                                                                            |
+| `calendar_changes`                                          | What changed in a calendar not by the Segretario's hand — new, changed, cancelled — with the event before and after: found by a sync, done elsewhere, or by the user in the app (`in_app`); kept a month for the Segretario.                                                                                                                                                                                                                                                    |
+| `ai_meta`                                                   | The Segretario schema's version and the facts kept between runs: the guided setup under way (`onboarding`), how far the calendar's changes were looked at (`calendar_seen`), the day whose morning run is done (`morning_done`), when keeping up last found too little to do (`keep_up_checked`).                                                                                                                                                                               |
+| `ai_settings`                                               | The OpenRouter key, encrypted with `safeStorage`, the last check of it, and the one switch (`SegretarioPreferences`).                                                                                                                                                                                                                                                                                                                                                           |
+| `ai_activities`, `ai_events`                                | Every run: its task, where it shows (`pannello`, `diario`, `nascosta`), the work unit it ran; and the log of everything said and done in it, which the conversation is rebuilt from.                                                                                                                                                                                                                                                                                            |
+| `ai_work`                                                   | The engine's queue: units of work by task and scope key, with priority, status, attempts and when they may start.                                                                                                                                                                                                                                                                                                                                                               |
+| `ai_usage`                                                  | Every call to the model: its task, tokens, cache hits and what OpenRouter billed.                                                                                                                                                                                                                                                                                                                                                                                               |
+| `ai_reading`                                                | How far back each connection is read (`days`, by whom, when, why) and, for a calendar, the span of its events looked at one by one.                                                                                                                                                                                                                                                                                                                                             |
+| `ai_memory`, `ai_memory_history`                            | The notebook, path → Markdown with a revision and who wrote it last, and the past versions of each note.                                                                                                                                                                                                                                                                                                                                                                        |
+| `ai_learning`                                               | The connections Conoscimi knows — a mailbox by its id, a calendar as `calendario:<id>` — with the run that did it.                                                                                                                                                                                                                                                                                                                                                              |
+| `ai_lessons`                                                | What the next reflection takes in: drafts the user corrected or sent as they were, their corrections and decisions on notes, commitments, projects, replies, proposals and the memory — each with the message it is about and the open thing's number — a mailbox or a calendar removed.                                                                                                                                                                                        |
+| `ai_drafts`                                                 | The drafts the Segretario wrote, as it wrote them, to compare with what the user sends.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `ai_notes`                                                  | The note on each message, by its key: the gist, its nature (`da_rispondere`, `da_fare`, `in_attesa`, `informativo`, `rumore`), priority, reason, deadline, who wrote it last, a revision.                                                                                                                                                                                                                                                                                       |
+| `ai_items`, `ai_item_history`                               | The commitments ("cose aperte"), each from where it came: a message (account, conversation, message), an event (`event_key`) or the user's word; kind, text, deadline, status, who set it and why, the message that showed it, a question for the user, a revision; and every change to them, before and after.                                                                                                                                                                 |
+| `ai_projects`, `ai_project_threads`, `ai_project_resources` | The projects (title and who gave it, description, "Il punto" with its links (`state_links_json`) and since when it is behind, hidden, concluded), the conversations in each — one in several, or rejected by the user, with who linked it — and the folders and events linked to them.                                                                                                                                                                                          |
+| `ai_ready_drafts`                                           | Replies and reminders prepared ahead, one per message, with where each stands.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `ai_proposals`                                              | What the Segretario recommends and may not do alone — a new event, a change to one, an answer to an invitation, an extension's action — until the user accepts it or sets it aside.                                                                                                                                                                                                                                                                                             |
+| `ai_saved_copies`                                           | Copies an extension saved outside the mail, by message and destination, with their files.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `ai_gone`                                                   | Messages something open came from that are missing from every folder, and since when (see [Views](#views)).                                                                                                                                                                                                                                                                                                                                                                     |
+| `ai_briefings`, `ai_event_preps`                            | The letter at the top of Oggi, by local day, and how to prepare for a meeting, by event, each with the links of its short names (`links_json`).                                                                                                                                                                                                                                                                                                                                 |
+| `ai_saved_searches`                                         | Searches asked in words that the user kept as folders: the search they became, run again each time.                                                                                                                                                                                                                                                                                                                                                                             |
 
 Beside the database, `network-volumes.json` remembers the URL each network
 share was mounted from (macOS).
@@ -562,18 +563,33 @@ and on Windows an overlay the renderer draws (`lib/taskbar-badge.ts`).
 
 ### Network shares
 
-After a restart macOS leaves a share mounted under `/Volumes` unmounted
-until the Finder opens it, and a path inside it does not exist.
-`network-volumes.ts` remembers the URL each share was mounted from, as
-`mount` reports it, and mounts it again — `mount volume` from Standard
-Additions, with the keychain's credentials and no Finder window — when a
-path under it is needed (`ensurePathReachable`); a stale folder in its
-place is told apart from a mount. On Windows a mapped drive left
-"Unavailable" is reconnected with `New-SmbMapping`, as Microsoft documents.
-Attaching, opening a file and the extension's archive all go through it;
-the Segretario's tools only in a run the user watches, or Conoscimi, where
-someone can answer if the system asks for the share's password
-(`reachShare` in `ai/tools/files.ts`).
+A folder the app keeps — a project's, a copy's, the extension's archive
+root — is often on a share, and a share does not stay where it was.
+`network-volumes.ts` keeps them reachable:
+
+- **macOS.** After a restart a share mounted under `/Volumes` stays
+  unmounted until the Finder opens it, and a path inside it does not exist.
+  Every share seen mounted is remembered with the URL it came from, as
+  `mount` reports it (`network-volumes.json`), and mounted again — `mount
+volume` from Standard Additions, with the keychain's credentials and no
+  Finder window — when a path under it is needed. The same share can come
+  back at another mount point, "Archivio-1" when a folder left behind holds
+  "Archivio"; a stale folder is told apart from a mount.
+- **Windows.** A mapped drive left "Unavailable" is reconnected with
+  `New-SmbMapping`, as Microsoft documents; a share mapped since to another
+  letter is reached there, one no longer mapped through its UNC path.
+
+What is kept is kept as `canonicalPath` writes it: under the mount point
+or letter the share first had, so two paths of one share always compare
+alike; `reachablePath` turns it into the path that reaches it now, mounting
+the share when asked (`{ mount }`). Only what the user asks for mounts:
+attaching, opening a file, the extension's archive, the Segretario's tools
+in a run the user watches or Conoscimi (`reachShare` in
+`ai/tools/files.ts`), where someone can answer if the system asks for a
+password. A folder that really moved — the archive's root given again
+somewhere else — takes what was kept under it along
+(`ExtensionMainContext.relocatePaths`: projects' folders, copies, recent
+files, through `movedUnder` in `files/paths.ts`).
 
 ### What counts as an attachment
 
@@ -583,6 +599,44 @@ is body content when the HTML references its Content-ID, when it sits in the
 `multipart/related` container, or when it is inline with a Content-ID.
 Everything else is an attachment. The list's paperclip, the reader and the
 extension's archive all use the same rule.
+
+### Certified mail (PEC)
+
+Italian certified mail (DM 2/11/2005 and its technical annex, RFC 6109)
+reaches a mailbox as the provider writes it (`mail-engine/pec.ts`):
+
+- **An envelope** (`X-Trasporto: posta-certificata`), signed: the
+  provider's words, what it certifies (`daticert.xml`) and the message
+  itself (`postacert.eml`, in line). It is shown as the message it carries
+  — its sender, subject, words and files — read from its own IMAP part,
+  since mailparser flattens a message in line into the envelope; the
+  envelope names only the sender's address ("Per conto di: …"), and the
+  name comes from the message once its body is read, when it is the same
+  address (`storeMessageBodies`), kept on the row across later syncs
+  (`withCarriedSender`). **An anomaly** (`X-Trasporto: errore`) is mail
+  the provider could not certify.
+- **A receipt** (`X-Ricevuta`: accettazione, avvenuta-consegna,
+  errore-consegna, preavviso-errore-consegna, non-accettazione…) names
+  the message sent by the Message-ID its client gave it
+  (`X-Riferimento-Message-ID`), the one the copy in Sent keeps, and no
+  References: it is filed in that message's conversation, however that
+  message is keyed (`fetchedIdentity`, `filePecConversations`), and
+  receipts that came before their message — the inbox is read before
+  Sent — join it when it is stored, in the same transaction.
+
+Rows keep what a message is (`pec_kind`, `pec_ref`) from the three headers
+every fetch asks for; the certification, read from `daticert.xml` (UTF-8,
+or UTF-16 with its byte order mark), is kept with the body (`pec_json`).
+The list tags them ("PEC", "PEC · anomalia", a receipt's outcome: accettata,
+consegnata, non consegnata); the reader shows above the message who
+certified it and when, with the provider's envelope a click away, an
+anomaly as one, a receipt with the message it is about, and on a message
+sent from a certified mailbox where it stands, each receipt to open
+(`features/mail/pec-panel.tsx`). A mailbox is a PEC when its servers are a
+known PEC provider's or it holds certified mail (`MailAccount.pec`); its
+composer offers no Bcc and sending refuses one, as the providers refuse
+the whole message. The Segretario reads the same: a message's PEC line in
+what it reads, the kind in a search's results.
 
 ## Interface
 
@@ -953,11 +1007,17 @@ and the last thirty days by function.
 **The model is not a setting.** Requests go to the alias of the newest
 DeepSeek Flash (`~deepseek/deepseek-flash-latest`), so a new checkpoint is
 used as soon as it ships, with a routing policy rather than a named
-provider: only endpoints with zero data retention that do not train on the
-data, the cheapest of those fast enough (`PROVIDER_POLICY` in
-`openrouter.ts`). A `session_id` per activity keeps it on one provider, so
-the prompt cache holds. Answers stream; rate limits and outages are retried
-before the first token, and every error reaches the user in their words.
+provider (`PROVIDER_POLICY` in `openrouter.ts`): only endpoints with zero
+data retention that do not train on the data, the fast ones preferred, in
+OpenRouter's default routing — which weighs what an endpoint really costs
+with its cache, its uptime and the tool calls it returns well formed — less
+the few measured to drop arguments the Segretario's actions need, which
+OpenRouter's schema check cannot see. A `session_id` per activity keeps it
+on one provider, so the prompt cache holds. Answers stream; rate limits
+and outages are retried before the first token, and every error reaches
+the user in their words. A request refused for want of credit pauses the
+work until more credit is left than then — OpenRouter refuses before the
+credit reads zero — or the user checks the key again (`creditSpent`).
 
 ### One switch, and the guided setup
 
@@ -979,9 +1039,11 @@ last thirty days indexed; every calendar through its first sync),
 (`CASE_STEPS`, `applies`): the key only while the AI is off, Conoscimi only
 with it on, the reading with it on and mail to read. The state is kept in `ai_meta` (`onboarding`),
 so a quit brings the user back to the same step. Conoscimi is started by
-the user and watched as it works; the reading of the last thirty days runs
-eight at a time, with its progress, an estimate and what failed — nothing
-passes for read, and the user enters anyway. A connection that cannot
+the user and watched as it works; the reading step shows each connection's
+horizon with Conoscimi's reason, and the messages and events within it are
+read eight at a time, with the progress, an estimate and what failed —
+nothing passes for read, and the user enters anyway. A connection added to
+a Segretario that knows the user is what that Conoscimi reads, said so. A connection that cannot
 sync does not hold the preparation back: it says which, and "Continua
 senza" goes on. "Rifai Conoscimi" cancelled goes back to the app with the
 memory as it was. The engine follows the setup: until its Conoscimi is
@@ -1089,8 +1151,8 @@ idempotent: asked again, it queues nothing twice. In order:
 - what was put off until today opens again, and what came from messages
   deleted for good is settled (see [Views](#views));
 - the conversations with messages not read yet, in every folder but the
-  Trash, Spam and Bozze, thirty days back (`READING_HORIZON_DAYS`), at most
-  the 300 newest a planning, found by one window-function query per account
+  Trash, Spam and Bozze, as far back as the mailbox's reading horizon
+  (below), at most the 300 newest a planning, found by one window-function query per account
   (`mail-engine/unnoted-conversations.ts`): those with mail of the last two
   days as new mail, after 15 seconds for the rest of its burst, the others
   as backlog. A reply prepared before the new messages is marked to be
@@ -1103,18 +1165,35 @@ idempotent: asked again, it queues nothing twice. In order:
   other than by the day's own run (`CommitmentStore.changedSince`), and it
   is older than three hours — one, when Oggi is looked at
   (`LETTER_LOOKED_AT_STALE_MS` in `segretario-service.ts`);
+- the events of each calendar Conoscimi knows, looked at one by one as
+  messages are read: the next two months first (`CALENDAR_LOOK_AHEAD_DAYS`),
+  then back as far as its horizon and what the calendar keeps
+  (`CALENDAR_HELD_DAYS`, 60 days back), fifty at a time (`lookChunk`, a
+  `calendario` run with `scope.look`), the span looked at kept in
+  `ai_reading` (`lookedFrom`, `lookedUntil`) — so a day coming into the
+  window is looked at as it comes, and a horizon moved back is looked at
+  for what it adds;
 - the calendar's changes, looked at two minutes after the first of them
   (what comes meanwhile joins the same look), those from yesterday to two
-  months ahead (the first time, the past is passed over); the mark
-  (`calendar_seen`) moves only once a look is done, so one that fails leaves
-  them to the next, and one that failed for good rests a day unless the
-  calendar changed after it;
+  months ahead, each said as done in the app by the user (`in_app` in
+  `calendar_changes`) or elsewhere; the mark (`calendar_seen`) moves only
+  once a look is done, so one that fails leaves them to the next, and one
+  that failed for good rests a day unless the calendar changed after it;
 - "Il punto" of the projects behind on it: at once for one that has none,
   else once a day from the morning, the latest moved first, ten at most —
   a project the user opens behind has it written then;
 - the reflection, and keeping up — once some connection is known through
   Conoscimi — when a dozen notes on messages that say something came since
   and twenty hours passed.
+
+**How far back.** Each connection — a mailbox, a calendar connection — is
+read one by one as far back as its horizon (`ai_reading`, `READING_DAYS`:
+30 days unless decided, 14 to 365). Conoscimi decides it once it knows the
+connection, from what the `connessioni` tool shows — how many messages
+each period holds, what reading one costs from the readings of the last
+month — and says why; the user can ask for another in chat, and what they
+asked stands. A horizon moved back has what it adds read, the same way;
+moved forward, what was read stays.
 
 What the user asks for — the day looked at again, "Il punto" of a project
 opened — starts at once, a waiting unit moved to now
@@ -1661,13 +1740,16 @@ extension code by path. The contract is `src/extension/types.ts`:
 `install()` receives an `ExtensionMainContext`: `app`, `ipcMain`, the user
 data path, a database handle (`applyDdl`, `query`, `execute`) on the host's
 connection, a mail engine handle, `getMainWindow()`, `recordRecentFiles()`
-and `adoptShortcutOverride()`, and three ways into the Segretario's
+and `adoptShortcutOverride()`, and four ways into the Segretario's
 registry: `copiesSaved(entries)` records copies of messages the extension
 saved outside the mail, as facts on each message wherever it goes;
 `savedCopies(refs)` says where these messages were saved before, so what is
 saved already is not saved again; `proposalDecided(id, accepted, result)`
 settles one of its proposals with what the user chose, for the reflection
-to learn from. A copy counts as saved only once it is recorded:
+to learn from. `relocatePaths(from, to)` tells the host that a folder the
+extension keeps things under moved — its archive's root, given again
+elsewhere — and what the host kept under it follows: projects' folders,
+saved copies, recent files. A copy counts as saved only once it is recorded:
 `copiesSaved` fails when the record cannot be written — the Segretario
 unable to open, a message no longer where `ref` says — and that message's
 save with it, so it is not archived. An entry may carry the proposals the

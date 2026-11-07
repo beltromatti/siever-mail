@@ -3039,6 +3039,8 @@ export class AccountConnection extends EventEmitter {
             bootstrap: !arrivals
           })
         }
+
+        this.emitUpdatedRows(result.adopted)
       }
 
       await this.recordUnreadable(

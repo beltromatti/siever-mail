@@ -390,14 +390,14 @@ describe('Scheduler', () => {
           lockKeys: async (unit) => [unit.scopeKey],
           run: async (unit) => {
             if (refuse) {
-              throw new EnginePause('Chiave non valida')
+              throw new EnginePause('Chiave non valida', 'invalid-key')
             }
 
             ran.push(unit.scopeKey)
           }
         }
       },
-      { concurrency: () => 1, onPause: (reason) => (paused = reason) }
+      { concurrency: () => 1, onPause: (pause) => (paused = pause?.reason ?? null) }
     )
     await queue.enqueue({ task: 'lettura', scopeKey: 'a', scope: {}, priority: 10 })
     await scheduler.start()

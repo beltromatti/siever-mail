@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  creditSpent,
   OpenRouterClient,
   PROVIDER_POLICY,
   SEGRETARIO_MODEL,
@@ -146,7 +147,7 @@ describe('errorFromResponse', () => {
 })
 
 describe('OpenRouterClient', () => {
-  it('asks for the newest DeepSeek Flash on a private, fast and cheap provider', async () => {
+  it('asks for the newest DeepSeek Flash on a private, fast provider whose tool calls hold', async () => {
     const fetchImpl = vi.fn(
       async () =>
         new Response(
@@ -169,6 +170,15 @@ describe('OpenRouterClient', () => {
     expect(url).toBe('https://openrouter.ai/api/v1/chat/completions')
     expect(body.model).toBe(SEGRETARIO_MODEL)
     expect(body.provider).toEqual(PROVIDER_POLICY)
+    // OpenRouter's own routing — the cache, the uptime, the tool calls well formed — not a sort
+    // by price, which skips it; less the endpoints measured to lose arguments of tool calls.
+    expect(body.provider).toEqual({
+      zdr: true,
+      data_collection: 'deny',
+      ignore: ['wafer', 'together', 'ionstream', 'relace'],
+      preferred_min_throughput: 150,
+      preferred_max_latency: 1.5
+    })
     expect(body.session_id).toBe('activity-1')
     expect(body.reasoning).toEqual({ effort: 'none' })
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-test')
@@ -273,5 +283,28 @@ describe('OpenRouterClient', () => {
       limitReset: 'monthly',
       balance: 7.25
     })
+  })
+})
+
+describe('creditSpent', () => {
+  it('holds a refusal for want of credit until more is left than when it came', () => {
+    // Refused with a few cents left: the cents are not enough, however often asked.
+    const refusal = creditSpent(0.004, { available: 0.004 })
+    expect(refusal).toEqual({ spent: true, refusal: { available: 0.004 } })
+    expect(creditSpent(0.003, refusal.refusal)).toEqual({
+      spent: true,
+      refusal: { available: 0.004 }
+    })
+    // Topped up, or the key's limit raised: enough again.
+    expect(creditSpent(10, refusal.refusal)).toEqual({ spent: false, refusal: null })
+    // The credit not said says nothing: the refusal stands.
+    expect(creditSpent(null, refusal.refusal).spent).toBe(true)
+    expect(creditSpent(2, { available: null })).toEqual({ spent: false, refusal: null })
+  })
+
+  it('reads the credit alone when nothing was refused', () => {
+    expect(creditSpent(0, null)).toEqual({ spent: true, refusal: null })
+    expect(creditSpent(1.5, null)).toEqual({ spent: false, refusal: null })
+    expect(creditSpent(null, null)).toEqual({ spent: false, refusal: null })
   })
 })

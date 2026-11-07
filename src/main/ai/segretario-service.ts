@@ -73,8 +73,10 @@ import { WorkQueue } from './engine/work-queue'
 import { folderQueryLabel, searchMail, searchScope } from './mail-search'
 import { MAX_NOTE_CHARS, normalizeMemoryPath, Notebook } from './memory/notebook'
 import {
+  creditSpent,
   OpenRouterClient,
   SegretarioError,
+  type CreditRefusal,
   type FetchFunction,
   type GenerationBill
 } from './openrouter'
@@ -254,6 +256,13 @@ export class SegretarioService {
   private engine: SegretarioEngine | null = null
   private readonly client: OpenRouterClient
   private status: SegretarioStatus = EMPTY_STATUS
+  /**
+   * The credit OpenRouter said was left when it refused a request for want
+   * of credit — null when it did not say. A refusal comes before the credit
+   * reads zero (a request needs more than the cents left), so until more is
+   * left than then, or the user says they put it right, it is not enough.
+   */
+  private creditRefusal: CreditRefusal | null = null
   private recheckTimer: ReturnType<typeof setInterval> | null = null
   private readonly opened = (() => {
     const opened = Promise.withResolvers<void>()
@@ -369,8 +378,10 @@ export class SegretarioService {
       blocked: () => this.blocked(),
       onboarding: () => this.getOnboarding(),
       onStateChange: () => this.engineChanged(),
-      onPause: (reason) => {
-        if (reason) {
+      onPause: (pause) => {
+        if (pause?.code === 'no-credit') {
+          void this.creditRefused()
+        } else if (pause) {
           void this.checkKey()
         }
 
@@ -379,6 +390,11 @@ export class SegretarioService {
     })
     this.engine.setAsleep(this.asleep)
     this.status = (await store.getStoredStatus()) ?? EMPTY_STATUS
+
+    // Without credit when last open: still so, until more is left.
+    if (this.status.keyState === 'exhausted') {
+      this.creditRefusal = { available: this.status.credit?.available ?? null }
+    }
 
     // A conversation a quit cut short cannot go on by itself: it says so, and
     // waits for the user. Work done alone starts over from the queue.
@@ -575,7 +591,8 @@ export class SegretarioService {
     let status: SegretarioStatus
 
     try {
-      status = await this.statusFor(key)
+      // Another key has its own credit: no refusal of the one it replaces.
+      status = (await this.statusFor(key, null)).status
     } catch (error) {
       if (error instanceof SegretarioError && error.code === 'invalid-key') {
         throw new Error(
@@ -592,18 +609,23 @@ export class SegretarioService {
     }
 
     await this.db.store.setApiKey(key, status)
+    this.creditRefusal = null
     return this.setStatus(status)
   }
 
   async removeKey(): Promise<SegretarioStatus> {
+    this.creditRefusal = null
     this.runner?.cancelAll()
     this.engine?.cancelRunning()
     await this.db.store.setApiKey(null, EMPTY_STATUS)
     return this.setStatus(EMPTY_STATUS)
   }
 
-  /** Asks OpenRouter again about the key and its credit. */
-  async checkKey(): Promise<SegretarioStatus> {
+  /**
+   * Asks OpenRouter again about the key and its credit — `byUser`, the user
+   * saying they put the credit right, which lets the work try again.
+   */
+  async checkKey({ byUser = false }: { byUser?: boolean } = {}): Promise<SegretarioStatus> {
     const key = await this.db.store.getApiKey()
 
     if (!key) {
@@ -611,7 +633,9 @@ export class SegretarioService {
     }
 
     try {
-      return await this.setStatus(await this.statusFor(key))
+      const { status, refusal } = await this.statusFor(key, byUser ? null : this.creditRefusal)
+      this.creditRefusal = refusal
+      return await this.setStatus(status)
     } catch (error) {
       const problem = error instanceof Error ? error.message : String(error)
 
@@ -628,7 +652,33 @@ export class SegretarioService {
     }
   }
 
-  private async statusFor(key: string): Promise<SegretarioStatus> {
+  /**
+   * A request was refused for want of credit: the work stays paused, with
+   * the credit as it stands now, until more is left (`statusFor`).
+   */
+  private async creditRefused(): Promise<void> {
+    const key = await this.db.store.getApiKey()
+
+    if (!key) {
+      return
+    }
+
+    const now = (await this.statusFor(key, null).catch(() => null))?.status ?? null
+    this.creditRefusal = { available: now?.credit?.available ?? null }
+    // The credit not read now is not known: an older figure would hold the work after a top-up.
+    await this.setStatus({
+      ...(now ?? { ...this.status, credit: null }),
+      keyState: 'exhausted',
+      problem: 'Il credito OpenRouter è finito: ricaricalo su openrouter.ai per riprendere.',
+      checkedAt: Date.now()
+    })
+  }
+
+  /** What OpenRouter says of a key and its credit, with a refusal for want of it (`creditSpent`). */
+  private async statusFor(
+    key: string,
+    refused: CreditRefusal | null
+  ): Promise<{ status: SegretarioStatus; refusal: CreditRefusal | null }> {
     const [check, modelName] = await Promise.all([
       this.client.checkKey(key),
       this.client.modelName(key).catch(() => this.status.modelName)
@@ -637,9 +687,10 @@ export class SegretarioService {
       (value): value is number => value !== null
     )
     const available = limits.length > 0 ? Math.min(...limits) : null
+    const { spent: exhausted, refusal } = creditSpent(available, refused)
 
-    return {
-      keyState: available !== null && available <= 0 ? 'exhausted' : 'ready',
+    const status: SegretarioStatus = {
+      keyState: exhausted ? 'exhausted' : 'ready',
       keyLabel: check.label,
       credit:
         available === null
@@ -652,12 +703,13 @@ export class SegretarioService {
               keyLimitReset: check.limitReset
             },
       checkedAt: Date.now(),
-      problem:
-        available !== null && available <= 0
-          ? 'Il credito OpenRouter è finito: ricaricalo su openrouter.ai per riprendere.'
-          : null,
+      problem: exhausted
+        ? 'Il credito OpenRouter è finito: ricaricalo su openrouter.ai per riprendere.'
+        : null,
       modelName
     }
+
+    return { status, refusal }
   }
 
   /** The key, or the reason the Segretario cannot work now. */

@@ -1583,7 +1583,7 @@ export class MailService {
       )
     ) {
       throw new Error(
-        'La PEC non ammette la copia nascosta: il gestore rifiuterebbe il messaggio. Sposta gli indirizzi in Ccn in A o in Cc, o toglili.'
+        'La PEC non ammette la copia nascosta: il gestore rifiuterebbe il messaggio. Sposta gli indirizzi della Ccn in A o in Cc, o toglili.'
       )
     }
 

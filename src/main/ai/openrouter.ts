@@ -6,10 +6,21 @@
  * the benchmark of 2026-10-27 in the project notes):
  *   • the model is OpenRouter's alias for the newest DeepSeek Flash, so a
  *     new checkpoint is picked up the day it ships;
- *   • the provider is not named but described: among those that keep no
- *     data and train on none, the cheapest that is fast — at least 150
- *     tokens a second and an answer within a second and a half. It chose
- *     Wafer on the day it was measured, and follows the market after.
+ *   • the provider is OpenRouter's choice among those that keep no data
+ *     and train on none, preferring the fast ones (150 tokens a second, an
+ *     answer within a second and a half): its default routing weighs what
+ *     an endpoint really costs with its cache, its uptime and whether its
+ *     tool calls come back well formed. Measured on the studio's
+ *     onboardings of 7/11/2026 (DeepSeek V4.1 Flash 1017): a few endpoints
+ *     lose an argument an action needs — `titolo` to create a project,
+ *     `tipo` and `testo` to open a commitment — once in twenty to forty
+ *     calls (Wafer 94 in 2.106, Together 14 in 249, Ionstream 6 in 55,
+ *     Relace 3 in 109), every other one about once in three hundred; the
+ *     model then spends a turn finding out. OpenRouter cannot see it — for
+ *     the schema those arguments are optional — so they are left out by
+ *     name, until measured again. A sort by price would skip the cache:
+ *     the cheapest list price left caches badly, and cost a third more a
+ *     call than the default routing.
  * Every request of a conversation carries its `session_id`, which keeps it
  * on one provider and its cache warm: a long activity costs a tenth.
  */
@@ -21,7 +32,7 @@ export const SEGRETARIO_MODEL = '~deepseek/deepseek-flash-latest'
 export const PROVIDER_POLICY = {
   zdr: true,
   data_collection: 'deny',
-  sort: 'price',
+  ignore: ['wafer', 'together', 'ionstream', 'relace'],
   preferred_min_throughput: 150,
   preferred_max_latency: 1.5
 } as const
@@ -241,6 +252,30 @@ export interface KeyCheck {
   limitReset: string | null
   /** Credits bought less credits used; null when OpenRouter did not say. */
   balance: number | null
+}
+
+/** The credit left when OpenRouter refused a request for want of it: null when it did not say. */
+export interface CreditRefusal {
+  available: number | null
+}
+
+/**
+ * Whether the credit is spent, and the refusal that still stands.
+ * OpenRouter refuses a request for want of credit before the credit reads
+ * zero — a request needs more than the cents left — so a refusal stands
+ * until more is left than when it came: a top-up, or the key's limit
+ * raised. The credit not said says nothing either way.
+ */
+export function creditSpent(
+  available: number | null,
+  refusal: CreditRefusal | null
+): { spent: boolean; refusal: CreditRefusal | null } {
+  const standing =
+    refusal && available !== null && (refusal.available === null || available > refusal.available)
+      ? null
+      : refusal
+
+  return { spent: (available !== null && available <= 0) || standing !== null, refusal: standing }
 }
 
 /**

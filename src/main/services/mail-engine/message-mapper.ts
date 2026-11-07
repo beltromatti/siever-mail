@@ -148,6 +148,10 @@ export function fetchedIdentity(
   references: ReadonlyArray<string> = messageIdsIn(headerValue(fetched.headers, 'references'))
 ): { messageKey: string; threadId: string } {
   const envelope = fetched.envelope
+  // A PEC receipt names neither References nor In-Reply-To: it is in the
+  // conversation of the message sent it is about, which it names otherwise.
+  const pec = pecOfHeaders(fetched.headers)
+  const receiptOf = pec && isPecReceipt(pec.kind) ? (pec.ref ?? undefined) : undefined
   const messageKey = messageKeyFor({
     emailId: fetched.emailId,
     messageId: envelope?.messageId,
@@ -162,7 +166,7 @@ export function fetchedIdentity(
     threadId: threadKeyFor({
       serverThreadId: fetched.threadId,
       references,
-      inReplyTo: envelope?.inReplyTo,
+      inReplyTo: envelope?.inReplyTo || receiptOf,
       messageId: envelope?.messageId,
       messageKey
     })
@@ -366,7 +370,7 @@ export function mergeSummaryAndParsedIntoDetail(
           pecDetail: {
             ...pec.message,
             certification: pec.certification,
-            envelopeText: pec.inner ? outer.text?.trim() || null : null
+            envelopeText: pec.inner ? pec.words : null
           }
         }
       : {})

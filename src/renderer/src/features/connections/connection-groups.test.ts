@@ -37,7 +37,7 @@ const calendar = (id: string, change: Partial<CalendarConnection>): CalendarConn
 })
 
 describe('connectionGroups', () => {
-  it('puts a calendar with the mail it came with, by consent or by address', () => {
+  it('puts a calendar with the mail it came with, by consent or by address, and says a PEC is one', () => {
     const groups = connectionGroups(
       [
         mail('a', 'beltromatti@gmail.com'),
@@ -45,6 +45,12 @@ describe('connectionGroups', () => {
           type: 'imap',
           authType: 'password',
           imapHost: 'imap.mail.me.com'
+        }),
+        mail('p', 'mattia@pec.studio.it', {
+          type: 'imap',
+          authType: 'password',
+          imapHost: 'imaps.pec.aruba.it',
+          pec: true
         })
       ],
       [
@@ -61,7 +67,8 @@ describe('connectionGroups', () => {
       groups.map((group) => [group.title, group.kind, group.calendars.map((c) => c.id)])
     ).toEqual([
       ['beltromatti@gmail.com', 'google', ['a']],
-      ['mattia@me.com', 'icloud', ['c']]
+      ['mattia@me.com', 'icloud', ['c']],
+      ['mattia@pec.studio.it', 'pec', []]
     ])
   })
 

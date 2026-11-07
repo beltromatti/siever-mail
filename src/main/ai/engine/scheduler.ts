@@ -48,9 +48,12 @@ export class WorkFailure extends Error {
 /** While the connection or the provider does not answer, the waits between tries, growing. */
 const UNREACHABLE_WAITS_MS = [30_000, 60_000, 120_000, 300_000]
 
-/** Nothing can run until the user acts: the key was refused, the credit ran out. */
+/** Nothing can run until the user acts: the key was refused, the credit ran out (`code`). */
 export class EnginePause extends Error {
-  constructor(readonly reason: string) {
+  constructor(
+    readonly reason: string,
+    readonly code: string
+  ) {
     super(reason)
     this.name = 'EnginePause'
   }
@@ -96,8 +99,8 @@ export class Scheduler {
       canStart?: () => Promise<boolean>
       /** Something started, finished or failed. */
       onChange?: () => void
-      /** The engine paused, or resumed (null). */
-      onPause?: (reason: string | null) => void
+      /** The engine paused, and why (`EnginePause`), or resumed (null). */
+      onPause?: (pause: EnginePause | null) => void
     }
   ) {}
 
@@ -417,7 +420,7 @@ export class Scheduler {
 
       if (this.pausedFor === null) {
         this.pausedFor = error.reason
-        this.options.onPause?.(error.reason)
+        this.options.onPause?.(error)
       }
 
       return

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { FetchMessageObject, MessageStructureObject } from 'imapflow'
 
-import { mergeSummaryAndParsedIntoDetail } from './message-mapper'
+import { fetchedIdentity, mergeSummaryAndParsedIntoDetail } from './message-mapper'
 import { parseMessageSource } from './message-parts'
 import {
   decodePart,
@@ -118,7 +118,13 @@ const STRUCTURE = {
       type: 'multipart/mixed',
       parameters: { boundary: 'MIXED' },
       childNodes: [
-        { part: '1.1', type: 'text/plain', disposition: 'inline' },
+        {
+          part: '1.1',
+          type: 'text/plain',
+          encoding: 'quoted-printable',
+          parameters: { charset: 'iso-8859-1' },
+          disposition: 'inline'
+        },
         {
           part: '1.2',
           type: 'application/xml',
@@ -171,6 +177,24 @@ describe('certified mail (PEC)', () => {
     expect(pecOfHeaders('X-Ricevuta: errore-consegna')?.kind).toBe('errore-consegna')
     expect(pecOfHeaders('Subject: Ricevuta di accettazione\r\nFrom: a@b.it')).toBeNull()
     expect(pecOfHeaders('X-Ricevuta: mancata-consegna')).toBeNull()
+  })
+
+  it('files a receipt in the conversation of the message sent it is about', () => {
+    const receipt = {
+      uid: 7,
+      headers: Buffer.from(DELIVERED),
+      envelope: {
+        subject: 'CONSEGNA: Invio conferma domanda bando startup',
+        messageId: '<1221306412.1061659807.1432134501798vliaspec02@legalmail.it>',
+        from: [{ name: 'Posta Certificata Legalmail', address: 'posta-certificata@legalmail.it' }]
+      },
+      internalDate: new Date('2015-05-20T15:08:21Z'),
+      size: 4096
+    } as unknown as FetchMessageObject
+
+    expect(fetchedIdentity(receipt).threadId).toBe(
+      'r:1432134489.5583-openerp-private@roberto-ubuntu12'
+    )
   })
 
   it('reads the subject and the sender the people wrote, not the provider’s', () => {
@@ -241,11 +265,49 @@ describe('certified mail (PEC)', () => {
   it('finds the message carried and the certification in the envelope’s structure', () => {
     expect(pecPartsOf(STRUCTURE)).toEqual({
       message: '1.3',
-      certification: { part: '1.2', encoding: '7bit' }
+      certification: { part: '1.2', encoding: '7bit' },
+      words: { part: '1.1', encoding: 'quoted-printable', charset: 'iso-8859-1', html: false }
     })
     expect(
       decodePart(Buffer.from(Buffer.from('<x/>').toString('base64')), 'base64').toString()
     ).toBe('<x/>')
+  })
+
+  it('reads the provider’s words from its HTML when it wrote no plain text', async () => {
+    const htmlOnly = {
+      ...STRUCTURE,
+      childNodes: [
+        {
+          ...STRUCTURE.childNodes![0],
+          childNodes: [
+            {
+              part: '1.1',
+              type: 'text/html',
+              encoding: '7bit',
+              parameters: { charset: 'utf-8' },
+              disposition: 'inline'
+            },
+            ...STRUCTURE.childNodes![0].childNodes!.slice(1)
+          ]
+        },
+        STRUCTURE.childNodes![1]
+      ]
+    } as MessageStructureObject
+    const pec = await readPec(
+      pecOfHeaders(ENVELOPE_HEADERS)!,
+      htmlOnly,
+      async () =>
+        new Map([
+          [
+            '1.1',
+            Buffer.from('<html><body><p>Messaggio di <b>Posta Certificata</b></p></body></html>')
+          ],
+          ['1.3', Buffer.from(CARRIED)]
+        ])
+    )
+
+    expect(pecPartsOf(htmlOnly).words).toMatchObject({ part: '1.1', html: true })
+    expect(pec.words).toBe('Messaggio di Posta Certificata')
   })
 
   it('shows an envelope as the message it carries, with what was certified and its own files only', async () => {
@@ -269,11 +331,12 @@ describe('certified mail (PEC)', () => {
       size: ENVELOPE.length
     } as unknown as FetchMessageObject
     const parts = new Map([
+      ['1.1', Buffer.from('--Questo =E8 un Messaggio di Posta Certificata--\r\n')],
       ['1.2', Buffer.from(DATICERT)],
       ['1.3', Buffer.from(CARRIED)]
     ])
     const pec = await readPec(pecOfHeaders(ENVELOPE_HEADERS)!, STRUCTURE, async (wanted) => {
-      expect(wanted.sort()).toEqual(['1.2', '1.3'])
+      expect(wanted.sort()).toEqual(['1.1', '1.2', '1.3'])
       return parts
     })
 
@@ -291,6 +354,7 @@ describe('certified mail (PEC)', () => {
     expect(detail.attachments.map((attachment) => attachment.fileName)).toEqual(['elaborati.pdf'])
     expect(detail.pec).toEqual({ kind: 'busta', ref: 'client-123@pec.example.it' })
     expect(detail.pecDetail?.certification?.provider).toBe('ARUBA PEC S.p.A.')
-    expect(detail.pecDetail?.envelopeText).toContain('Messaggio di Posta Certificata')
+    // The provider's words only: mailparser runs the envelope's text on into the message's.
+    expect(detail.pecDetail?.envelopeText).toBe('--Questo è un Messaggio di Posta Certificata--')
   })
 })

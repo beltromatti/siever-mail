@@ -2,13 +2,14 @@ import type { CalendarConnection } from '@shared/calendar'
 import type { MailAccount } from '@shared/models'
 
 /** Who an access is with, as the user knows it. */
-export type AccessKind = 'google' | 'microsoft' | 'icloud' | 'imap' | 'caldav' | 'ics'
+export type AccessKind = 'google' | 'microsoft' | 'icloud' | 'imap' | 'pec' | 'caldav' | 'ics'
 
 export const ACCESS_LABELS: Readonly<Record<AccessKind, string>> = {
   google: 'Google',
   microsoft: 'Microsoft',
   icloud: 'iCloud',
   imap: 'Posta IMAP',
+  pec: 'PEC',
   caldav: 'CalDAV',
   ics: 'Calendario da un link'
 }
@@ -37,6 +38,10 @@ export function accessOfMail(account: MailAccount): AccessKind {
 
   if (account.authType === 'oauth') {
     return 'microsoft'
+  }
+
+  if (account.pec) {
+    return 'pec'
   }
 
   return ICLOUD_MAIL.test(account.imapHost) ? 'icloud' : 'imap'

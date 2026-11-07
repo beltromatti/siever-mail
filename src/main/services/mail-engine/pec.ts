@@ -26,6 +26,7 @@ import type { MailAddress, PecCertification, PecKind, PecMessage } from '@shared
 
 import { headerValue } from './message-identity'
 import { parseMessageSource } from './message-parts'
+import { plainTextOfHtml } from './preview'
 
 /** The headers that say a message is the provider's, fetched with every message. */
 export const PEC_HEADERS = ['x-trasporto', 'x-ricevuta', 'x-riferimento-message-id'] as const
@@ -130,6 +131,11 @@ export interface PecParts {
   message?: string
   /** What the provider certifies (`daticert.xml`), and how its content is encoded. */
   certification?: { part: string; encoding: string }
+  /**
+   * The provider's own words beside them — in plain text, or in HTML when
+   * it wrote no plain text: how they are encoded, in which charset.
+   */
+  words?: { part: string; encoding: string; charset: string; html: boolean }
 }
 
 /**
@@ -161,6 +167,19 @@ export function pecPartsOf(structure: MessageStructureObject | undefined): PecPa
       parts.certification ??= {
         part: node.part,
         encoding: (node.encoding ?? '7bit').toLowerCase()
+      }
+    } else if (
+      (type === 'text/plain' || type === 'text/html') &&
+      node.disposition?.toLowerCase() !== 'attachment'
+    ) {
+      // The first plain text; HTML only while none came.
+      if (!parts.words || (parts.words.html && type === 'text/plain')) {
+        parts.words = {
+          part: node.part,
+          encoding: (node.encoding ?? '7bit').toLowerCase(),
+          charset: (node.parameters?.charset ?? 'us-ascii').toLowerCase(),
+          html: type === 'text/html'
+        }
       }
     } else if (type === 'message/rfc822') {
       if (name === MESSAGE_FILE) {
@@ -199,6 +218,29 @@ export function decodePart(content: Buffer, encoding: string): Buffer {
     default:
       return content
   }
+}
+
+/**
+ * Text in the charset its part declares: the providers write theirs in
+ * ISO-8859-1 or UTF-8, both known to the WHATWG decoder; one it does not
+ * know is read as UTF-8, its stray bytes replaced.
+ */
+function textIn(content: Buffer, charset: string): string {
+  let decoder: TextDecoder
+
+  try {
+    decoder = new TextDecoder(charset)
+  } catch {
+    decoder = new TextDecoder('utf-8')
+  }
+
+  return decoder.decode(content)
+}
+
+/** The provider's words, as plain text. */
+function wordsOf(content: Buffer, words: NonNullable<PecParts['words']>): string | null {
+  const text = textIn(decodePart(content, words.encoding), words.charset)
+  return (words.html ? plainTextOfHtml(text).replace(/[ \t]+/g, ' ') : text).trim() || null
 }
 
 /** The certification's text: UTF-8 as the annex wants it, UTF-16 when it carries the byte order mark. */
@@ -350,6 +392,11 @@ export interface ReadPec {
   message: PecMessage
   /** The message carried, parsed — for an envelope; null for a receipt, or when it cannot be read. */
   inner: ParsedMail | null
+  /**
+   * The provider's own words around the message carried — for an envelope,
+   * whose text as mailparser reads it runs on into the message's own.
+   */
+  words: string | null
   certification: PecCertification | null
 }
 
@@ -364,20 +411,20 @@ export async function readPec(
   partsOf: (parts: string[]) => Promise<Map<string, Buffer>>
 ): Promise<ReadPec> {
   const parts = pecPartsOf(structure)
+  const envelope = !isPecReceipt(message.kind) && parts.message !== undefined
   const wanted = [
     ...(parts.certification ? [parts.certification.part] : []),
-    ...(parts.message && !isPecReceipt(message.kind) ? [parts.message] : [])
+    ...(envelope ? [parts.message!, ...(parts.words ? [parts.words.part] : [])] : [])
   ]
   const contents = wanted.length > 0 ? await partsOf(wanted) : new Map<string, Buffer>()
   const certification = parts.certification ? contents.get(parts.certification.part) : undefined
-  const carried = parts.message ? contents.get(parts.message) : undefined
+  const carried = envelope ? contents.get(parts.message!) : undefined
+  const words = envelope && parts.words ? contents.get(parts.words.part) : undefined
 
   return {
     message,
-    inner:
-      carried && !isPecReceipt(message.kind)
-        ? await parseMessageSource(carried).catch(() => null)
-        : null,
+    inner: carried ? await parseMessageSource(carried).catch(() => null) : null,
+    words: words ? wordsOf(words, parts.words!) : null,
     certification: certification
       ? parseCertification(decodePart(certification, parts.certification!.encoding))
       : null
