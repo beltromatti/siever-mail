@@ -947,6 +947,11 @@ export class MailService {
     }
   }
 
+  /** Says something to the user in the system's alerts. */
+  showNotice(title: string, body: string): void {
+    this.engine.showNotice(title, body)
+  }
+
   /**
    * The first account connected says, in a notification, that new mail
    * will be announced so — which is when macOS asks the user to allow the

@@ -15,6 +15,8 @@ import { Input } from '@renderer/components/ui/input'
 import { Switch } from '@renderer/components/ui/switch'
 import { cn } from '@renderer/lib/utils'
 import {
+  OPENROUTER_CREDITS_URL,
+  OPENROUTER_KEYS_URL,
   TASK_LABELS,
   type EngineState,
   type SegretarioKeyState,
@@ -23,9 +25,6 @@ import {
   type SegretarioStatus,
   type TaskKind
 } from '@shared/segretario'
-
-const KEYS_URL = 'https://openrouter.ai/settings/keys'
-const CREDITS_URL = 'https://openrouter.ai/settings/credits'
 
 const DOLLARS = new Intl.NumberFormat('it-IT', {
   style: 'currency',
@@ -84,14 +83,14 @@ function EngineLine({
 
   return (
     <div className="text-muted-foreground flex flex-col gap-1 text-[11.5px]">
-      {engine.paused && (
-        <p className="text-destructive-soft-foreground flex items-start gap-2">
+      {engine.waiting && (
+        <p className="flex items-start gap-2">
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          <span className="min-w-0">Fermo: {engine.paused}</span>
+          <span className="min-w-0">{engine.waiting}</span>
         </p>
       )}
       <p>
-        Posta degli ultimi trenta giorni: letti{' '}
+        Posta da leggere, fin dove si legge ogni connessione: letti{' '}
         <span className="text-foreground tabular font-medium">
           {engine.reading.read.toLocaleString('it-IT')}
         </span>{' '}
@@ -174,11 +173,14 @@ export function SegretarioSection({
 
     const unsubscribe = window.segretarioApi.onStatusChanged(setStatus)
     const unsubscribeEngine = window.segretarioApi.onEngineChanged(setEngine)
+    // The AI goes off by itself when the key or the credit gives out: the switch follows.
+    const unsubscribePreferences = window.segretarioApi.onPreferencesChanged(setPreferences)
 
     return () => {
       current = false
       unsubscribe()
       unsubscribeEngine()
+      unsubscribePreferences()
     }
   }, [])
 
@@ -430,7 +432,7 @@ export function SegretarioSection({
               <button
                 type="button"
                 className="text-foreground inline-flex items-center gap-1 underline underline-offset-2"
-                onClick={() => openExternal(KEYS_URL)}
+                onClick={() => openExternal(OPENROUTER_KEYS_URL)}
               >
                 Apri openrouter.ai
                 <ExternalLink className="size-3" />
@@ -467,7 +469,7 @@ export function SegretarioSection({
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => openExternal(CREDITS_URL)}
+              onClick={() => openExternal(OPENROUTER_CREDITS_URL)}
             >
               <ExternalLink className="size-3.5" />
               Ricarica il credito
@@ -533,7 +535,9 @@ export function SegretarioSection({
                 Il Segretario segue la posta e i calendari mentre cambiano, tiene il conto di cosa
                 ti chiedono, cosa hai promesso e cosa aspetti, riconosce i progetti, prepara le
                 risposte e gli incontri, scrive la giornata e rilegge i messaggi prima che partano.
-                Spente, restano le app senza Segretario: quello che ha imparato resta.
+                Spente, restano le app senza Segretario: quello che ha imparato resta. Si spengono
+                da sole se il credito OpenRouter finisce o la chiave viene rifiutata: le riaccendi
+                da qui, dopo aver ricaricato.
               </span>
             </span>
             <Switch

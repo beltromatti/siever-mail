@@ -466,11 +466,11 @@ export function TodayPage({
                 )}
               />
             )}
-            {page?.paused ? (
-              <p className="text-destructive-soft-foreground flex items-start gap-2 text-[13px]">
+            {page?.network ? (
+              <p className="text-muted-foreground flex items-start gap-2 text-[13px]">
                 <AlertCircle className="mt-0.5 size-4 shrink-0" />
                 <span>
-                  Sono fermo: {page.paused}
+                  {page.network}
                   {page.reading > 0 &&
                     ` Restano da leggere ${page.reading === 1 ? 'un messaggio' : `${page.reading.toLocaleString('it-IT')} messaggi`}.`}
                 </span>

@@ -141,6 +141,8 @@ const segretarioApi: SegretarioApi = {
   removeKey: async () => invoke(SEGRETARIO_IPC.removeKey),
   forgetAll: async () => invoke(SEGRETARIO_IPC.forgetAll),
   checkKey: async () => invoke(SEGRETARIO_IPC.checkKey),
+  getNotice: async () => invoke(SEGRETARIO_IPC.getNotice),
+  dismissNotice: async () => invoke(SEGRETARIO_IPC.dismissNotice),
   getPreferences: async () => invoke(SEGRETARIO_IPC.getPreferences),
   setPreferences: async (preferences) => invoke(SEGRETARIO_IPC.setPreferences, preferences),
   getSpending: async () => invoke(SEGRETARIO_IPC.getSpending),
@@ -219,6 +221,7 @@ const segretarioApi: SegretarioApi = {
     invoke(SEGRETARIO_IPC.completeCompose, requestId, result),
   onStatusChanged: (listener) => subscribe(SEGRETARIO_IPC.statusChanged, listener),
   onPreferencesChanged: (listener) => subscribe(SEGRETARIO_IPC.preferencesChanged, listener),
+  onNotice: (listener) => subscribe(SEGRETARIO_IPC.notice, listener),
   onActivityEvent: (listener) => subscribe(SEGRETARIO_IPC.activityEvent, listener),
   onComposeRequest: (listener) => subscribe(SEGRETARIO_IPC.composeRequest, listener),
   onShowRequest: (listener) => subscribe(SEGRETARIO_IPC.showRequest, listener)

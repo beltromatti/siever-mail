@@ -44,6 +44,7 @@ import {
   SegretarioPanel,
   type SegretarioContextChip
 } from '@renderer/features/segretario/segretario-panel'
+import { AiNotice } from '@renderer/features/segretario/ai-notice'
 import { SegretarioLinkProvider } from '@renderer/features/segretario/segretario-text'
 import { useSegretario } from '@renderer/features/segretario/use-segretario'
 import { MailDialogs, MailNotice } from '@renderer/apps/mail/mail-app'
@@ -275,7 +276,8 @@ function AppFrame({
   dock,
   dockVisible = false,
   rightInset = 0,
-  framed = false
+  framed = false,
+  onNoticeOpenChange
 }: {
   children: ReactNode
   windowControlsState: WindowControlsState
@@ -292,6 +294,8 @@ function AppFrame({
   rightInset?: number
   /** The workspace: its panes' headers are the title bar the window is dragged by. */
   framed?: boolean
+  /** A notice about the AI shown, or gone (`AiNotice`). */
+  onNoticeOpenChange: (open: boolean) => void
 }): React.JSX.Element {
   // Where the window's own chrome sits, for the panes to keep clear of it:
   // macOS draws its three lights in the top left corner of the rail and the
@@ -348,6 +352,7 @@ function AppFrame({
         </div>
       </div>
       {dock}
+      <AiNotice onOpenChange={onNoticeOpenChange} />
       {/* In front of a message being written, notices come in at the top: at
           the bottom they would sit on its Invia. */}
       <Toaster
@@ -471,6 +476,8 @@ function App(): React.JSX.Element {
     }
   }, [])
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // A notice about the AI waits for an answer: the app's keys rest meanwhile.
+  const [noticeOpen, setNoticeOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId | null>(null)
   const [showWelcomeGate, setShowWelcomeGate] = useState(true)
   const [emptyStateIntroStep, setEmptyStateIntroStep] = useState<'logo' | 'text' | 'button'>('logo')
@@ -522,7 +529,12 @@ function App(): React.JSX.Element {
 
   // What the shell has open in front: the mail's keys and commands rest under it too.
   const shellModalOpen =
-    composerOpen || failedSend !== null || confirmOpen || Boolean(onboarding) || settingsOpen
+    composerOpen ||
+    failedSend !== null ||
+    confirmOpen ||
+    noticeOpen ||
+    Boolean(onboarding) ||
+    settingsOpen
 
   /**
    * Brings a message to write in front — a new one, or a draft: one already
@@ -1354,6 +1366,7 @@ function App(): React.JSX.Element {
         onMinimizeWindow={handleMinimizeWindow}
         onToggleMaximizeWindow={handleToggleMaximizeWindow}
         onCloseWindow={handleCloseWindow}
+        onNoticeOpenChange={setNoticeOpen}
       >
         <div className="mx-auto flex h-full max-w-xl items-center px-6">
           <div className="border-destructive/40 bg-destructive/15 w-full rounded-xl border p-6">
@@ -1376,6 +1389,7 @@ function App(): React.JSX.Element {
         onMinimizeWindow={handleMinimizeWindow}
         onToggleMaximizeWindow={handleToggleMaximizeWindow}
         onCloseWindow={handleCloseWindow}
+        onNoticeOpenChange={setNoticeOpen}
       >
         <div className="flex h-full items-center justify-center">
           <div className="border-border bg-card/70 flex items-center gap-3 rounded-xl border px-5 py-4 text-sm">
@@ -1394,6 +1408,7 @@ function App(): React.JSX.Element {
         onMinimizeWindow={handleMinimizeWindow}
         onToggleMaximizeWindow={handleToggleMaximizeWindow}
         onCloseWindow={handleCloseWindow}
+        onNoticeOpenChange={setNoticeOpen}
       >
         <OnboardingWizard
           state={onboarding}
@@ -1428,6 +1443,7 @@ function App(): React.JSX.Element {
         onMinimizeWindow={handleMinimizeWindow}
         onToggleMaximizeWindow={handleToggleMaximizeWindow}
         onCloseWindow={handleCloseWindow}
+        onNoticeOpenChange={setNoticeOpen}
       >
         <div className="relative mx-auto h-full w-full max-w-5xl px-6 py-12">
           <div className="flex h-full items-center justify-center">
@@ -1563,6 +1579,7 @@ function App(): React.JSX.Element {
           onMinimizeWindow={handleMinimizeWindow}
           onToggleMaximizeWindow={handleToggleMaximizeWindow}
           onCloseWindow={handleCloseWindow}
+          onNoticeOpenChange={setNoticeOpen}
           inert={composerOpen}
           framed
           dockVisible={!composerOpen && composeSessions.length > 0}
@@ -1730,10 +1747,6 @@ function App(): React.JSX.Element {
                   suggestions={segretarioSuggestionList}
                   atWindowTopRight
                   onClose={() => setSegretarioOpen(false)}
-                  onOpenSettings={() => {
-                    setSettingsSection('segretario')
-                    setSettingsOpen(true)
-                  }}
                   onOpenHandle={openSegretarioHandle}
                   onApprove={(activityId, approval, approved) =>
                     void answerSegretarioApproval(activityId, approval, approved)

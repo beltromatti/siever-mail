@@ -48,14 +48,14 @@ export class WorkFailure extends Error {
 /** While the connection or the provider does not answer, the waits between tries, growing. */
 const UNREACHABLE_WAITS_MS = [30_000, 60_000, 120_000, 300_000]
 
-/** Nothing can run until the user acts: the key was refused, the credit ran out (`code`). */
-export class EnginePause extends Error {
-  constructor(
-    readonly reason: string,
-    readonly code: string
-  ) {
+/**
+ * OpenRouter refused the key or the credit: the AI goes off (the
+ * Segretario's service turns it off), and nothing more starts meanwhile.
+ */
+export class KeyRefused extends Error {
+  constructor(readonly reason: string) {
     super(reason)
-    this.name = 'EnginePause'
+    this.name = 'KeyRefused'
   }
 }
 
@@ -73,8 +73,8 @@ interface Running {
  * Runs the Segretario's work from the queue: the most urgent first, as many
  * at once as it is given, never two that hold the same key, and always one
  * place kept for what is not backlog — mail that just came never waits
- * behind a month being read. A failure is tried again later; a pause (the
- * key, the credit) stops everything until it is lifted, and so does the
+ * behind a month being read. A failure is tried again later; a key or a
+ * credit refused stops everything — the AI goes off — and so does the
  * computer's sleep, until it wakes.
  */
 export class Scheduler {
@@ -82,11 +82,14 @@ export class Scheduler {
   private readonly held = new Set<string>()
   private loop: Promise<void> | null = null
   private stopped = true
-  private pausedFor: string | null = null
+  /** A run met a refused key or credit: nothing starts until the AI is turned off, or on again. */
+  private refused = false
   /** The connection or the provider stopped answering: one try at a time, ever more spaced. */
   private unreachable: { since: number; tries: number; until: number } | null = null
   private asleep = false
   private wakeUp: (() => void) | null = null
+  /** Woken while awake: the next sleep does not happen. */
+  private nudged = false
   private timer: NodeJS.Timeout | null = null
 
   constructor(
@@ -99,8 +102,6 @@ export class Scheduler {
       canStart?: () => Promise<boolean>
       /** Something started, finished or failed. */
       onChange?: () => void
-      /** The engine paused, and why (`EnginePause`), or resumed (null). */
-      onPause?: (pause: EnginePause | null) => void
     }
   ) {}
 
@@ -134,10 +135,6 @@ export class Scheduler {
     this.nudge()
   }
 
-  get paused(): string | null {
-    return this.pausedFor
-  }
-
   /** Since when, and until when, the work waits for the connection or the provider to answer. */
   get waitingForNetwork(): { since: number; until: number } | null {
     return this.unreachable
@@ -153,11 +150,10 @@ export class Scheduler {
     }
   }
 
-  /** The user fixed what paused the engine: work goes on. */
-  resume(): void {
-    if (this.pausedFor !== null) {
-      this.pausedFor = null
-      this.options.onPause?.(null)
+  /** The AI was turned off, or on again: a refusal holds nothing back any more. */
+  reset(): void {
+    if (this.refused) {
+      this.refused = false
       this.nudge()
     }
   }
@@ -214,14 +210,19 @@ export class Scheduler {
   }
 
   private nudge(): void {
-    this.wakeUp?.()
+    if (this.wakeUp) {
+      this.wakeUp()
+    } else {
+      // The loop is looking at the queue: what changed meanwhile is looked at again at once.
+      this.nudged = true
+    }
   }
 
   private async work(): Promise<void> {
     while (!this.stopped) {
       try {
         if (
-          this.pausedFor === null &&
+          !this.refused &&
           !this.asleep &&
           (await (this.options.canStart?.() ?? Promise.resolve(true)))
         ) {
@@ -310,7 +311,7 @@ export class Scheduler {
       looked = units
 
       for (const unit of units) {
-        if (free <= 0 || this.stopped || this.pausedFor !== null || this.asleep) {
+        if (free <= 0 || this.stopped || this.refused || this.asleep) {
           return
         }
 
@@ -411,18 +412,13 @@ export class Scheduler {
       return
     }
 
-    if (error instanceof EnginePause) {
+    if (error instanceof KeyRefused) {
       await this.queue.fail(unit.id, error.reason, {
         retry: true,
         counts: false,
         maxAttempts: MAX_ATTEMPTS
       })
-
-      if (this.pausedFor === null) {
-        this.pausedFor = error.reason
-        this.options.onPause?.(error)
-      }
-
+      this.refused = true
       return
     }
 
@@ -468,7 +464,8 @@ export class Scheduler {
 
   /** Sleeps until woken, or until the next unit waiting may start. */
   private async sleep(): Promise<void> {
-    if (this.stopped) {
+    if (this.stopped || this.nudged) {
+      this.nudged = false
       return
     }
 
@@ -481,6 +478,12 @@ export class Scheduler {
     )
     const delay =
       due.length === 0 ? IDLE_MS : Math.min(Math.max(Math.min(...due) - now, 50), IDLE_MS)
+
+    // Woken while the queue was asked when next: awake.
+    if (this.nudged) {
+      this.nudged = false
+      return
+    }
 
     await new Promise<void>((resolve) => {
       this.wakeUp = () => {

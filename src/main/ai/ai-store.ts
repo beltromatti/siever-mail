@@ -505,12 +505,17 @@ export class AiStore {
     }))
   }
 
+  /**
+   * A run gets to know these connections. One known already stays known
+   * while it is got to know again — its reading goes on, and a run that
+   * does not finish leaves it as it was.
+   */
   async startLearning(accountIds: ReadonlyArray<string>, activityId: string): Promise<void> {
     for (const accountId of accountIds) {
       await this.sql.run(
         `INSERT INTO ai_learning (account_id, activity_id, started_at, finished_at) VALUES (?, ?, ?, NULL)
          ON CONFLICT(account_id) DO UPDATE SET activity_id = excluded.activity_id,
-           started_at = excluded.started_at, finished_at = NULL`,
+           started_at = excluded.started_at`,
         accountId,
         activityId,
         Date.now()

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   creditSpent,
+  creditWarning,
   OpenRouterClient,
   PROVIDER_POLICY,
   SEGRETARIO_MODEL,
@@ -147,7 +148,7 @@ describe('errorFromResponse', () => {
 })
 
 describe('OpenRouterClient', () => {
-  it('asks for the newest DeepSeek Flash on a private, fast provider whose tool calls hold', async () => {
+  it('asks for the newest DeepSeek Flash on a private, fast and cheap provider', async () => {
     const fetchImpl = vi.fn(
       async () =>
         new Response(
@@ -170,12 +171,11 @@ describe('OpenRouterClient', () => {
     expect(url).toBe('https://openrouter.ai/api/v1/chat/completions')
     expect(body.model).toBe(SEGRETARIO_MODEL)
     expect(body.provider).toEqual(PROVIDER_POLICY)
-    // OpenRouter's own routing — the cache, the uptime, the tool calls well formed — not a sort
-    // by price, which skips it; less the endpoints measured to lose arguments of tool calls.
+    // The cheapest of those that keep no data and are fast: a rule, no provider named.
     expect(body.provider).toEqual({
       zdr: true,
       data_collection: 'deny',
-      ignore: ['wafer', 'together', 'ionstream', 'relace'],
+      sort: 'price',
       preferred_min_throughput: 150,
       preferred_max_latency: 1.5
     })
@@ -287,24 +287,73 @@ describe('OpenRouterClient', () => {
 })
 
 describe('creditSpent', () => {
+  const read = (available: number | null): { available: number | null; balanceKnown: boolean } => ({
+    available,
+    balanceKnown: available !== null
+  })
+
   it('holds a refusal for want of credit until more is left than when it came', () => {
     // Refused with a few cents left: the cents are not enough, however often asked.
-    const refusal = creditSpent(0.004, { available: 0.004 })
+    const refusal = creditSpent(read(0.004), { available: 0.004 })
     expect(refusal).toEqual({ spent: true, refusal: { available: 0.004 } })
-    expect(creditSpent(0.003, refusal.refusal)).toEqual({
+    expect(creditSpent(read(0.003), refusal.refusal, true)).toEqual({
       spent: true,
       refusal: { available: 0.004 }
     })
     // Topped up, or the key's limit raised: enough again.
-    expect(creditSpent(10, refusal.refusal)).toEqual({ spent: false, refusal: null })
-    // The credit not said says nothing: the refusal stands.
-    expect(creditSpent(null, refusal.refusal).spent).toBe(true)
-    expect(creditSpent(2, { available: null })).toEqual({ spent: false, refusal: null })
+    expect(creditSpent(read(10), refusal.refusal)).toEqual({ spent: false, refusal: null })
+    expect(creditSpent(read(2), { available: null })).toEqual({ spent: false, refusal: null })
+  })
+
+  it('lets the user lift a refusal where the account’s balance cannot be read', () => {
+    // The key's own limit only, or nothing: a top-up of the account would not show.
+    const limitOnly = { available: 4, balanceKnown: false }
+    expect(creditSpent(limitOnly, { available: 4 }).spent).toBe(true)
+    expect(creditSpent(limitOnly, { available: 4 }, true)).toEqual({ spent: false, refusal: null })
+    expect(creditSpent(read(null), { available: null }).spent).toBe(true)
+    expect(creditSpent(read(null), { available: null }, true).spent).toBe(false)
   })
 
   it('reads the credit alone when nothing was refused', () => {
-    expect(creditSpent(0, null)).toEqual({ spent: true, refusal: null })
-    expect(creditSpent(1.5, null)).toEqual({ spent: false, refusal: null })
-    expect(creditSpent(null, null)).toEqual({ spent: false, refusal: null })
+    expect(creditSpent(read(0), null)).toEqual({ spent: true, refusal: null })
+    expect(creditSpent(read(1.5), null)).toEqual({ spent: false, refusal: null })
+    expect(creditSpent(read(null), null)).toEqual({ spent: false, refusal: null })
+  })
+})
+
+describe('creditWarning', () => {
+  it('says the credit runs low once on the way down, graver after, again after a top-up', () => {
+    // 0,40 $ a day: low under a week's worth, nearly out under two days'.
+    expect(creditWarning(10, 0.4, null)).toEqual({ raise: null, days: null, warned: null })
+    const low = creditWarning(2.5, 0.4, null)
+    expect(low).toEqual({
+      raise: 'credito-basso',
+      days: 6,
+      warned: { kind: 'credito-basso', available: 2.5 }
+    })
+    expect(creditWarning(2.1, 0.4, low.warned).raise).toBeNull()
+    const out = creditWarning(0.7, 0.4, low.warned)
+    expect(out).toMatchObject({ raise: 'credito-quasi-finito', days: 1 })
+    expect(creditWarning(0.5, 0.4, out.warned).raise).toBeNull()
+    // The pace slowing is no top-up: nothing said again.
+    expect(creditWarning(0.5, 0, out.warned)).toEqual({
+      raise: null,
+      days: null,
+      warned: out.warned
+    })
+    // Topped up: the next way down warns again.
+    expect(creditWarning(20, 0.4, out.warned)).toEqual({ raise: null, days: null, warned: null })
+    expect(creditWarning(2.5, 0.4, { kind: 'credito-basso', available: 2 }).raise).toBe(
+      'credito-basso'
+    )
+  })
+
+  it('warns by what is left when little was spent, without saying how long it lasts', () => {
+    expect(creditWarning(0.9, 0, null)).toMatchObject({ raise: 'credito-basso', days: null })
+    expect(creditWarning(0.25, 0.01, null)).toMatchObject({
+      raise: 'credito-quasi-finito',
+      days: null
+    })
+    expect(creditWarning(1.5, 0, null).raise).toBeNull()
   })
 })

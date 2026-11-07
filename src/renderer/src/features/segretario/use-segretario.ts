@@ -221,12 +221,8 @@ export function useSegretario(visible: boolean): SegretarioState {
     []
   )
   const streaming = selectedId && stream?.id === selectedId ? stream.text : ''
-  // Something waits for the user: an answer, work not looked at — or the key or the credit,
-  // without which nothing goes on.
-  const attention =
-    (preferences?.enabled === true &&
-      (status?.keyState === 'invalid' || status?.keyState === 'exhausted')) ||
-    activities.some((activity) => activity.status === 'waiting' || activity.unseen)
+  // Something waits for the user: an answer, work not looked at.
+  const attention = activities.some((activity) => activity.status === 'waiting' || activity.unseen)
 
   // The same object while nothing in it changes: what depends on it is not redrawn.
   return useMemo(

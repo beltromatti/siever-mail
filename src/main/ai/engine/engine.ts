@@ -38,7 +38,7 @@ import {
 import { startRun, type RunStarter } from '../tasks/start-run'
 import { localDay } from '../tools/day'
 import { logMainError } from '../../utils/error-utils'
-import { EnginePause, Scheduler, WorkFailure, type TaskExecutor } from './scheduler'
+import { KeyRefused, Scheduler, WorkFailure, type TaskExecutor } from './scheduler'
 import { WorkQueue, type WorkUnit } from './work-queue'
 
 /** Mail this recent is new mail, read before the backlog; older is the backlog. */
@@ -108,17 +108,10 @@ export interface EngineDeps {
   emit(event: ActivityEvent): void
   /** Whether the AI is on and has a key: the engine plans and runs only then. */
   ready(): Promise<boolean>
-  /**
-   * With the AI on, why nothing can run in the user's words — the key refused,
-   * the credit gone, no key — or null when it can.
-   */
-  blocked(): Promise<string | null>
   /** The guided setup under way, which holds some of the work back (see `plan`). */
   onboarding(): Promise<OnboardingState | null>
   /** What the engine is doing changed. */
   onStateChange(): void
-  /** The key was refused or the credit ran out (why, and its code), or that passed (null). */
-  onPause(pause: EnginePause | null): void
 }
 
 /** A run settled, then — done — what follows from its being done. */
@@ -140,10 +133,10 @@ function settle(result: RunResult): void {
   const error = result.error
 
   if (error instanceof SegretarioError) {
-    // The key or the credit stops everything until the user acts; a request blocked for what it
-    // carries (`blocked`) is that work's failure, not every work's.
+    // The key or the credit refused stops everything — the AI goes off; a request blocked for
+    // what it carries (`blocked`) is that work's failure, not every work's.
     if (['no-key', 'invalid-key', 'no-credit'].includes(error.code)) {
-      throw new EnginePause(error.message, error.code)
+      throw new KeyRefused(error.message)
     }
 
     // Nothing would get through now: the engine waits, the unit is not to blame.
@@ -189,8 +182,7 @@ export class SegretarioEngine {
       concurrency: () => (this.preparing ? PREPARING_CONCURRENCY : CONCURRENCY),
       // Work queued before the AI was switched off — or before a restart with it off — waits.
       canStart: () => deps.ready(),
-      onChange: () => deps.onStateChange(),
-      onPause: (pause) => deps.onPause(pause)
+      onChange: () => deps.onStateChange()
     })
   }
 
@@ -251,14 +243,9 @@ export class SegretarioEngine {
     this.scheduler.wake()
   }
 
-  /** The user fixed the key or the credit. */
-  resume(): void {
-    this.scheduler.resume()
-  }
-
-  /** Why the engine is paused (the key, the credit), or null. */
-  get paused(): string | null {
-    return this.scheduler.paused
+  /** The AI was turned off, or on again: a key or a credit refused holds nothing back. */
+  reset(): void {
+    this.scheduler.reset()
   }
 
   /** The computer sleeps: the work in the background waits for it to wake (see `Scheduler`). */
@@ -293,6 +280,7 @@ export class SegretarioEngine {
    * again, the planning finds from the state what is still to do.
    */
   async switchedOff(): Promise<void> {
+    this.scheduler.reset()
     this.cancelRunning()
     await this.deps.queue.cancelWaiting()
     this.deps.onStateChange()
@@ -319,14 +307,9 @@ export class SegretarioEngine {
     const network = this.scheduler.waitingForNetwork
 
     return {
-      // Whatever keeps the work from going on, said: a run that met it, the key or the
-      // credit as last checked, the connection.
-      paused:
-        this.scheduler.paused ??
-        (await this.deps.blocked()) ??
-        (network
-          ? `La connessione con OpenRouter non risponde: riprovo alle ${new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(network.until)}.`
-          : null),
+      waiting: network
+        ? `La connessione con OpenRouter non risponde: riprovo alle ${new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(network.until)}.`
+        : null,
       reading: await this.deps.mail.readingProgress((await this.horizons()).sinceOf),
       queued,
       running,

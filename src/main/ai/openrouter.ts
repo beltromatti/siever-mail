@@ -6,21 +6,15 @@
  * the benchmark of 2026-10-27 in the project notes):
  *   • the model is OpenRouter's alias for the newest DeepSeek Flash, so a
  *     new checkpoint is picked up the day it ships;
- *   • the provider is OpenRouter's choice among those that keep no data
- *     and train on none, preferring the fast ones (150 tokens a second, an
- *     answer within a second and a half): its default routing weighs what
- *     an endpoint really costs with its cache, its uptime and whether its
- *     tool calls come back well formed. Measured on the studio's
- *     onboardings of 7/11/2026 (DeepSeek V4.1 Flash 1017): a few endpoints
- *     lose an argument an action needs — `titolo` to create a project,
- *     `tipo` and `testo` to open a commitment — once in twenty to forty
- *     calls (Wafer 94 in 2.106, Together 14 in 249, Ionstream 6 in 55,
- *     Relace 3 in 109), every other one about once in three hundred; the
- *     model then spends a turn finding out. OpenRouter cannot see it — for
- *     the schema those arguments are optional — so they are left out by
- *     name, until measured again. A sort by price would skip the cache:
- *     the cheapest list price left caches badly, and cost a third more a
- *     call than the default routing.
+ *   • the provider is not named but described: among those that keep no
+ *     data and train on none, the cheapest that is fast — at least 150
+ *     tokens a second and an answer within a second and a half. It chose
+ *     Wafer on the day it was measured, and follows the market after.
+ *     Measured again on 7/11/2026: Wafer loses an argument an action needs
+ *     once in about twenty tool calls (others once in three hundred), and
+ *     the model puts it right on the next turn; OpenRouter's own routing
+ *     without those endpoints costs twice as much. Kept as it is: the
+ *     quality of the work is the same (vision §1.3).
  * Every request of a conversation carries its `session_id`, which keeps it
  * on one provider and its cache warm: a long activity costs a tenth.
  */
@@ -32,12 +26,12 @@ export const SEGRETARIO_MODEL = '~deepseek/deepseek-flash-latest'
 export const PROVIDER_POLICY = {
   zdr: true,
   data_collection: 'deny',
-  ignore: ['wafer', 'together', 'ionstream', 'relace'],
+  sort: 'price',
   preferred_min_throughput: 150,
   preferred_max_latency: 1.5
 } as const
 
-const API_BASE = 'https://openrouter.ai/api/v1'
+export const OPENROUTER_API = 'https://openrouter.ai/api/v1'
 
 /** Who is calling, for OpenRouter's app attribution. */
 const ATTRIBUTION_HEADERS = {
@@ -264,18 +258,74 @@ export interface CreditRefusal {
  * OpenRouter refuses a request for want of credit before the credit reads
  * zero — a request needs more than the cents left — so a refusal stands
  * until more is left than when it came: a top-up, or the key's limit
- * raised. The credit not said says nothing either way.
+ * raised. Where that cannot be told — the account's balance not readable
+ * with this key — the user saying they topped it up (`toldTopUp`) lifts it.
  */
 export function creditSpent(
-  available: number | null,
-  refusal: CreditRefusal | null
+  credit: { available: number | null; balanceKnown: boolean },
+  refusal: CreditRefusal | null,
+  toldTopUp = false
 ): { spent: boolean; refusal: CreditRefusal | null } {
+  const { available } = credit
+  const grown =
+    available !== null && (refusal?.available === null || available > (refusal?.available ?? 0))
   const standing =
-    refusal && available !== null && (refusal.available === null || available > refusal.available)
-      ? null
-      : refusal
+    refusal && !grown && !(toldTopUp && (!credit.balanceKnown || available === null))
+      ? refusal
+      : null
 
   return { spent: (available !== null && available <= 0) || standing !== null, refusal: standing }
+}
+
+/**
+ * When the credit is said to run low, by what is left at the pace of the
+ * last week — never less than `floor` dollars, below which a few requests
+ * are all there is: the graver first.
+ */
+const CREDIT_WARNINGS = [
+  { kind: 'credito-quasi-finito', days: 2, floor: 0.3 },
+  { kind: 'credito-basso', days: 7, floor: 1 }
+] as const
+
+export type CreditWarning = (typeof CREDIT_WARNINGS)[number]['kind']
+
+/** The warning last given, and the credit then: a top-up above it gives them again. */
+export interface CreditWarned {
+  kind: CreditWarning
+  available: number
+}
+
+/**
+ * The warning to give now (`raise`), with how many days the credit lasts
+ * when it is the pace that says so (`days`, null when it is the floor), and
+ * what to keep for the next check (`warned`). A warning is given once on the
+ * way down, graver after; they are given again only after a top-up — more
+ * credit than at the last one — not because the pace slowed.
+ */
+export function creditWarning(
+  available: number,
+  dailySpend: number,
+  warned: CreditWarned | null
+): { raise: CreditWarning | null; days: number | null; warned: CreditWarned | null } {
+  const reached = CREDIT_WARNINGS.find(
+    ({ days, floor }) => available < Math.max(floor, days * dailySpend)
+  )
+  const gravity = (kind: CreditWarning | undefined): number =>
+    kind === undefined
+      ? 0
+      : CREDIT_WARNINGS.length - CREDIT_WARNINGS.findIndex((warning) => warning.kind === kind)
+  const toppedUp = warned !== null && available > warned.available
+  const before = toppedUp ? null : warned
+  const raise = reached && gravity(reached.kind) > gravity(before?.kind) ? reached.kind : null
+
+  return {
+    raise,
+    days:
+      reached && dailySpend > 0 && available < reached.days * dailySpend
+        ? Math.floor(available / dailySpend)
+        : null,
+    warned: raise ? { kind: raise, available } : before
+  }
 }
 
 /**
@@ -297,7 +347,16 @@ async function traceCall(request: ChatRequest, result: ChatResult): Promise<void
 }
 
 export class OpenRouterClient {
-  constructor(private readonly fetchImpl: FetchFunction) {}
+  constructor(
+    private readonly fetchImpl: FetchFunction,
+    /**
+     * OpenRouter refused a request for its key or its credit (`invalid-key`,
+     * `no-credit`): whatever asked, the AI can no longer work.
+     */
+    private readonly onRefused: (error: SegretarioError) => void = () => undefined,
+    /** OpenRouter's API — in development, the studio's own in front of it. */
+    private readonly apiBase: string = OPENROUTER_API
+  ) {}
 
   /**
    * What OpenRouter says about a key: its label, its own spending limit,
@@ -396,6 +455,10 @@ export class OpenRouterClient {
       } catch (raw) {
         const error = networkError(raw)
 
+        if (error.code === 'invalid-key' || error.code === 'no-credit') {
+          this.onRefused(error)
+        }
+
         if (!error.retryable || started || attempt >= MAX_ATTEMPTS || options.signal?.aborted) {
           throw error
         }
@@ -416,7 +479,7 @@ export class OpenRouterClient {
 
       try {
         response = await this.fetchImpl(
-          `${API_BASE}/generation?id=${encodeURIComponent(generationId)}`,
+          `${this.apiBase}/generation?id=${encodeURIComponent(generationId)}`,
           { headers: { Authorization: `Bearer ${key}`, ...ATTRIBUTION_HEADERS } }
         )
       } catch {
@@ -482,7 +545,7 @@ export class OpenRouterClient {
         : {})
     }
 
-    const response = await this.fetchImpl(`${API_BASE}/chat/completions`, {
+    const response = await this.fetchImpl(`${this.apiBase}/chat/completions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${key}`,
@@ -525,7 +588,7 @@ export class OpenRouterClient {
     let response: Response
 
     try {
-      response = await this.fetchImpl(`${API_BASE}${path}`, {
+      response = await this.fetchImpl(`${this.apiBase}${path}`, {
         headers: { Authorization: `Bearer ${key}`, ...ATTRIBUTION_HEADERS },
         signal
       })

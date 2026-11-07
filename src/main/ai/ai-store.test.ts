@@ -91,3 +91,35 @@ describe('AiStore.forgetCalendar', () => {
     ])
   })
 })
+
+describe('AiStore learning', () => {
+  let sql: ReturnType<typeof memorySql>
+  let store: AiStore
+
+  beforeEach(async () => {
+    sql = memorySql()
+    await ensureAiSchema(sql)
+    store = new AiStore(sql)
+  })
+
+  afterEach(() => {
+    sql.close()
+  })
+
+  it('keeps a connection known while Conoscimi is done again, and after a run that did not finish', async () => {
+    await store.startLearning(['work'], 'first')
+    await store.endLearning('first', true)
+    const known = (await store.listLearning())[0].finishedAt
+
+    // Done again with a mailbox added, and stopped halfway — the credit gave out.
+    await store.startLearning(['work', 'pec'], 'again')
+    expect((await store.listLearning()).find((row) => row.accountId === 'work')?.finishedAt).toBe(
+      known
+    )
+    await store.endLearning('again', false)
+
+    expect(await store.listLearning()).toEqual([
+      { accountId: 'work', activityId: 'again', finishedAt: known }
+    ])
+  })
+})

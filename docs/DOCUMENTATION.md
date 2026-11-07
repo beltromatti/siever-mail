@@ -990,12 +990,34 @@ wakes it, the registry and the notebook.
 given in the guided setup or Settings → Segretario, checked there
 (`/api/v1/key` and `/api/v1/credits`: unknown, without credit, at its limit)
 and kept encrypted with `safeStorage` like the accounts' passwords. It is
-checked again every 20 minutes while the app runs; a key refused or out of
-credit pauses the engine until the user acts. The panel then says why and
-the one way on — a key refused: Settings › Segretario; the credit gone:
-OpenRouter's page to recharge it — and the rail's star shows a dot while
-the key or the credit is the problem (`SetupNotice` in
-`segretario-panel.tsx`). Without a key the AI is off — the page, the panel
+checked again every 20 minutes while the app runs, and whenever a tenth of
+the credit left (at least 5 cents) has been spent since; a check overtaken
+by a later one leaves the status to it.
+
+**The AI is on or off, never paused.** A key OpenRouter refuses, or a
+credit run out — a request refused with 401 or 402, whatever asked for it
+(`OpenRouterClient`'s `onRefused`), confirmed by a check of its own, or a
+check that finds it so — turns the AI off at once, as the user would
+(`followCredit`, `turnOff` in `segretario-service.ts`); a refused key the
+check finds working after all leaves the AI on and its work going: every run stops, the queue empties, SIEVER Mail
+is the app without the Segretario, and what it learnt stays. The user is
+told by a notice (`SegretarioNotice`, kept in `ai_meta` until seen and
+shown by `AiNotice` wherever the app stands — the setup, the launch
+screen, the workspace — and in the system's alerts when the window is not
+in front). It comes back the way it is turned on: the switch, then the
+guided setup, whose Segretario step does not turn it on while the credit
+is spent — OpenRouter refuses before the credit reads zero, so a refusal
+stands until more is left than then (`creditSpent`), or, where the key
+cannot read the account's balance, until the user says they topped it
+up — and asks for
+another key when it was refused. A setup at Conoscimi or the reading when
+the AI goes off goes back to that step; Conoscimi done again from Settings
+ends, and the connections it knew stay known. Before that happens, the
+credit running low is said in time, where OpenRouter tells it: under what
+lasts a week at the pace of the last seven days (at least 1 $), then
+under two days' (at least 0,30 $), each once on the way down and again
+only after a top-up (`creditWarning`), never in place of the notice that
+the AI went off. While a notice is shown, the app's keys rest. Without a key the AI is off too — the page, the panel
 and the app menu all go by the switch up and a key given — and the switch
 leads to the guided setup. What every call cost
 (`usage.cost`) is recorded by task — a generation that ended before saying
@@ -1007,17 +1029,15 @@ and the last thirty days by function.
 **The model is not a setting.** Requests go to the alias of the newest
 DeepSeek Flash (`~deepseek/deepseek-flash-latest`), so a new checkpoint is
 used as soon as it ships, with a routing policy rather than a named
-provider (`PROVIDER_POLICY` in `openrouter.ts`): only endpoints with zero
-data retention that do not train on the data, the fast ones preferred, in
-OpenRouter's default routing — which weighs what an endpoint really costs
-with its cache, its uptime and the tool calls it returns well formed — less
-the few measured to drop arguments the Segretario's actions need, which
-OpenRouter's schema check cannot see. A `session_id` per activity keeps it
-on one provider, so the prompt cache holds. Answers stream; rate limits
-and outages are retried before the first token, and every error reaches
-the user in their words. A request refused for want of credit pauses the
-work until more credit is left than then — OpenRouter refuses before the
-credit reads zero — or the user checks the key again (`creditSpent`).
+provider (`PROVIDER_POLICY` in `openrouter.ts`): among the endpoints with
+zero data retention that do not train on the data, the cheapest that is
+fast — 150 tokens a second, an answer within a second and a half. It picks
+Wafer: measured on 7/11/2026, it drops an argument of about one tool call
+in twenty (others one in three hundred), which the model puts right on
+its next turn; kept for its price and speed (see the vision). A
+`session_id` per activity keeps it on one provider, so the prompt cache
+holds. Answers stream; rate limits and outages are retried before the
+first token, and every error reaches the user in their words.
 
 ### One switch, and the guided setup
 
@@ -1242,10 +1262,9 @@ a lock never hides one that may start. Between, it sleeps until the next
 unit's time comes (a minute at most); one ready but held starts when what
 holds it ends, which wakes it.
 
-A key refused, a credit run out or no key pauses everything until the
-user acts; `EngineState.paused` says why — what a run met, the key as last
-checked (`blocked()` in `segretario-service.ts`), or the wait for the
-network — and Oggi, the setup and Settings show it. When the network or
+A key refused or a credit run out stops the scheduler from starting
+anything more (`KeyRefused`) for the moment the AI takes to go off, and
+going off empties the queue. When the network or
 the provider does not answer (`network`, `unavailable`, `rate-limited`),
 the whole engine waits — 30 s, 1 min, 2 min, then 5 min between tries —
 with one unit trying at a time; it tries at once when the computer wakes
@@ -1819,7 +1838,10 @@ profile — can be kept on a machine with a launcher of its own in the
 repository's root (`studio.mjs`, ignored by git: it belongs to that
 machine). It runs the app in development on that profile, public by
 default, with the extension when asked: the same data, with what each
-variant can do with it.
+variant can do with it. In development only, `SIEVER_OPENROUTER_URL`
+points the Segretario at another OpenRouter — the studio's, in front of
+the real one, which passes everything on and can play the credit running
+low or out, or the key refused; an installed app ignores it.
 
 ## Testing
 

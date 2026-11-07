@@ -43,6 +43,59 @@ export interface SegretarioStatus {
 }
 
 /**
+ * What SIEVER Mail has to tell the user about the AI, kept until they have
+ * seen it: the credit or the key gave out — and the AI is off from then on
+ * — or the credit runs low, in time to top it up before it does.
+ */
+export type SegretarioNotice =
+  | { kind: 'credito-finito' | 'chiave-rifiutata'; at: number }
+  | {
+      kind: 'credito-basso' | 'credito-quasi-finito'
+      at: number
+      /** What is left, in dollars. */
+      available: number
+      /** Days it lasts at the pace of the last week; null with nothing spent. */
+      days: number | null
+    }
+
+/** Where the credit is topped up, and the keys made. */
+export const OPENROUTER_CREDITS_URL = 'https://openrouter.ai/settings/credits'
+export const OPENROUTER_KEYS_URL = 'https://openrouter.ai/settings/keys'
+
+function dollars(amount: number): string {
+  return amount.toLocaleString('it-IT', { style: 'currency', currency: 'USD' })
+}
+
+/** A notice in words: its title, and what it says — the same in the app and in the system's alert. */
+export function noticeWords(notice: SegretarioNotice): { title: string; body: string } {
+  switch (notice.kind) {
+    case 'credito-finito':
+      return {
+        title: 'Credito AI finito',
+        body: 'Il credito OpenRouter è finito, o la chiave ha raggiunto il suo limite di spesa: da ora le funzioni AI sono spente e SIEVER Mail continua senza il Segretario. Quello che ha imparato resta. Per riaccenderle ricarica il credito su OpenRouter, poi riattiva «Funzioni AI» in Impostazioni › Segretario.'
+      }
+    case 'chiave-rifiutata':
+      return {
+        title: 'Chiave OpenRouter rifiutata',
+        body: 'OpenRouter non accetta più la chiave: da ora le funzioni AI sono spente e SIEVER Mail continua senza il Segretario. Quello che ha imparato resta. Per riaccenderle riattiva «Funzioni AI» in Impostazioni › Segretario e inserisci una chiave valida.'
+      }
+    default: {
+      const lasts =
+        notice.days === null
+          ? ''
+          : notice.days < 1
+            ? ' — al ritmo degli ultimi giorni, meno di un giorno'
+            : ` — al ritmo degli ultimi giorni, circa ${notice.days === 1 ? 'un giorno' : `${notice.days} giorni`}`
+
+      return {
+        title: notice.kind === 'credito-basso' ? 'Credito AI basso' : 'Credito AI quasi finito',
+        body: `Restano ${dollars(notice.available)} di credito OpenRouter${lasts}. Ricaricalo per tempo: quando finisce, le funzioni AI si spengono finché non lo ricarichi.`
+      }
+    }
+  }
+}
+
+/**
  * The AI is one switch: on, every function of the Segretario is there; off,
  * SIEVER Mail is a mail and calendar client with no trace of it, and what it
  * learnt is kept.
@@ -67,8 +120,8 @@ export interface SegretarioSpending {
 
 /** Where the Segretario's own work stands: what it reads, what waits, what failed. */
 export interface EngineState {
-  /** The key was refused or the credit ran out: nothing runs until the user acts. */
-  paused: string | null
+  /** OpenRouter does not answer: the work waits for it, and tries again when said. */
+  waiting: string | null
   /** Of the messages of the last thirty days the Segretario reads, how many it has read. */
   reading: { read: number; total: number }
   /** Units of work waiting or running, by task. */
@@ -322,8 +375,8 @@ export interface TodayPage {
   letterRewriting: boolean
   /** Messages still to be read: while there are, the day is not complete. */
   reading: number
-  /** Why the Segretario is stopped (the key, the credit, the connection), when it is. */
-  paused: string | null
+  /** OpenRouter does not answer: the work waits for it — said, while it does. */
+  network: string | null
   /** What is due today, or overdue. */
   today: DayLine[]
   /** What is due in the next seven days. */
@@ -717,6 +770,8 @@ export const SEGRETARIO_IPC = {
   removeKey: 'segretario:remove-key',
   forgetAll: 'segretario:forget-all',
   checkKey: 'segretario:check-key',
+  getNotice: 'segretario:get-notice',
+  dismissNotice: 'segretario:dismiss-notice',
   getPreferences: 'segretario:get-preferences',
   setPreferences: 'segretario:set-preferences',
   getSpending: 'segretario:get-spending',
@@ -784,6 +839,7 @@ export const SEGRETARIO_IPC = {
   completeCompose: 'segretario:complete-compose',
   statusChanged: 'segretario:status-changed',
   preferencesChanged: 'segretario:preferences-changed',
+  notice: 'segretario:notice',
   activityEvent: 'segretario:activity-event',
   composeRequest: 'segretario:compose-request',
   showRequest: 'segretario:show-request'
@@ -797,6 +853,10 @@ export interface SegretarioApi {
   /** Everything the Segretario knows and did, gone; the key and the archived copies stay, the AI turns off. */
   forgetAll: () => Promise<void>
   checkKey: () => Promise<SegretarioStatus>
+  /** What SIEVER Mail has to tell the user about the AI and they have not seen, or null. */
+  getNotice: () => Promise<SegretarioNotice | null>
+  /** The user saw it. */
+  dismissNotice: () => Promise<void>
   getPreferences: () => Promise<SegretarioPreferences>
   setPreferences: (preferences: SegretarioPreferences) => Promise<SegretarioPreferences>
   getSpending: () => Promise<SegretarioSpending>
@@ -960,6 +1020,7 @@ export interface SegretarioApi {
   onStatusChanged: (listener: (status: SegretarioStatus) => void) => () => void
   /** The AI was switched on or off, here or in another window. */
   onPreferencesChanged: (listener: (preferences: SegretarioPreferences) => void) => () => void
+  onNotice: (listener: (notice: SegretarioNotice | null) => void) => () => void
   onActivityEvent: (listener: (event: ActivityEvent) => void) => () => void
   onComposeRequest: (
     listener: (request: { requestId: string; spec: ComposeSpec }) => void

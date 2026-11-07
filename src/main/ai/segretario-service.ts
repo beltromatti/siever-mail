@@ -6,6 +6,7 @@ import extensionMain from '@app/extension/main'
 import type { CalendarResponse, EventChange } from '@shared/calendar'
 import type { MessageRef } from '@shared/models'
 import {
+  noticeWords,
   SEGRETARIO_IPC,
   TASK_LABELS,
   type ActivityDetail,
@@ -34,6 +35,7 @@ import {
   type Project,
   type ProjectDetail,
   type ProjectLabel,
+  type SegretarioNotice,
   type LinkedText,
   type Proposal,
   type ReadingStatus,
@@ -74,9 +76,11 @@ import { folderQueryLabel, searchMail, searchScope } from './mail-search'
 import { MAX_NOTE_CHARS, normalizeMemoryPath, Notebook } from './memory/notebook'
 import {
   creditSpent,
+  creditWarning,
   OpenRouterClient,
   SegretarioError,
   type CreditRefusal,
+  type CreditWarned,
   type FetchFunction,
   type GenerationBill
 } from './openrouter'
@@ -102,6 +106,21 @@ import { localDay } from './tools/day'
 import { comparableText, formatDateTime, shortDate } from './tools/format'
 
 const KEY_RECHECK_MS = 20 * 60 * 1000
+
+/**
+ * The credit spent, in words: OpenRouter refuses a request before the
+ * credit reads zero, so what is left may be said and not be enough.
+ */
+function spentCredit(available: number | null): string {
+  return available !== null && available > 0
+    ? `Il credito OpenRouter che resta (${available.toLocaleString('it-IT', { style: 'currency', currency: 'USD' })}) non basta più per lavorare: ricaricalo su openrouter.ai per riaccendere le funzioni AI.`
+    : 'Il credito OpenRouter è finito: ricaricalo su openrouter.ai per riaccendere le funzioni AI.'
+}
+/** The week whose spending tells how long the credit lasts. */
+const CREDIT_PACE_DAYS = 7
+/** Spent since the last check, the credit is asked for again: this part of what was left, at least the floor. */
+const CREDIT_RECHECK_SHARE = 0.1
+const CREDIT_RECHECK_FLOOR = 0.05
 /** New mail wakes the engine at most this often. */
 const MAIL_WAKE_MS = 2_000
 /** How long a draft the Segretario wrote is remembered, to learn from what the user sends. */
@@ -159,6 +178,14 @@ export interface SegretarioServiceOptions {
   onEnabledChange(on: boolean): void
   /** A message's note, written as it was read: an alert waiting for it is let go. */
   onNoteWritten(note: MessageNote): void
+  /** Says something to the user in the system's alerts, when the window is not in front. */
+  notify(title: string, body: string): void
+  /**
+   * OpenRouter's API, when not OpenRouter's own: in development, the
+   * studio's, which passes requests on and can play the credit running
+   * low or out (`SIEVER_OPENROUTER_URL`).
+   */
+  openRouterUrl?: string
 }
 
 function noteOf(record: NoteRecord): MessageNote {
@@ -263,6 +290,16 @@ export class SegretarioService {
    * left than then, or the user says they put it right, it is not enough.
    */
   private creditRefusal: CreditRefusal | null = null
+  /** Spent since the credit was last asked for, in dollars. */
+  private spentSinceCheck = 0
+  /** A check of the key the work asked for, under way: whoever asks meanwhile shares it. */
+  private checking: Promise<SegretarioStatus> | null = null
+  /** The AI going off for the key or the credit, under way. */
+  private turningOff: Promise<void> | null = null
+  /** A refusal being followed: those that come meanwhile — the runs at once — are the same. */
+  private refusing: Promise<void> | null = null
+  /** The checks of the key, numbered: one overtaken by a later one does not set the status. */
+  private statusSeq = 0
   private recheckTimer: ReturnType<typeof setInterval> | null = null
   private readonly opened = (() => {
     const opened = Promise.withResolvers<void>()
@@ -290,7 +327,11 @@ export class SegretarioService {
   private asleep = false
 
   constructor(private readonly options: SegretarioServiceOptions) {
-    this.client = new OpenRouterClient(options.fetch)
+    this.client = new OpenRouterClient(
+      options.fetch,
+      (error) => this.refused(error),
+      options.openRouterUrl
+    )
   }
 
   whenReady(): Promise<void> {
@@ -375,18 +416,8 @@ export class SegretarioService {
       queue: new WorkQueue(sql),
       emit: (event) => this.emit(event),
       ready: () => this.ready(),
-      blocked: () => this.blocked(),
       onboarding: () => this.getOnboarding(),
-      onStateChange: () => this.engineChanged(),
-      onPause: (pause) => {
-        if (pause?.code === 'no-credit') {
-          void this.creditRefused()
-        } else if (pause) {
-          void this.checkKey()
-        }
-
-        this.engineChanged()
-      }
+      onStateChange: () => this.engineChanged()
     })
     this.engine.setAsleep(this.asleep)
     this.status = (await store.getStoredStatus()) ?? EMPTY_STATUS
@@ -525,24 +556,6 @@ export class SegretarioService {
     )
   }
 
-  /** With the AI on, why the Segretario cannot work — said to the user — or null. */
-  private async blocked(): Promise<string | null> {
-    if (!(await this.db.store.getPreferences()).enabled) {
-      return null
-    }
-
-    switch (this.status.keyState) {
-      case 'invalid':
-        return 'OpenRouter ha rifiutato la chiave: inseriscine una valida in Impostazioni › Segretario.'
-      case 'exhausted':
-        return 'Il credito OpenRouter è finito: ricaricalo su openrouter.ai, poi il lavoro riprende da solo.'
-      case 'missing':
-        return 'Manca la chiave OpenRouter: inseriscila in Impostazioni › Segretario.'
-      default:
-        return null
-    }
-  }
-
   private async sayWhetherReading(): Promise<void> {
     const { enabled } = await this.db.store.getPreferences()
     const reading = this.status.keyState === 'ready' && enabled
@@ -557,27 +570,132 @@ export class SegretarioService {
     if (on !== this.on) {
       this.on = on
       this.options.onEnabledChange(on)
+
+      // On again: what a refused key or credit held back is gone with the switch.
+      if (on) {
+        this.engine?.reset()
+        this.engine?.wake()
+      }
     }
   }
 
   private async setStatus(status: SegretarioStatus): Promise<SegretarioStatus> {
-    // A key found working lifts a pause — the credit topped up leaves the key as it was, ready.
-    const lifts =
-      status.keyState === 'ready' &&
-      (this.status.keyState !== 'ready' || (this.engine?.paused ?? null) !== null)
     this.status = status
     await this.db.store.setStoredStatus(status)
     this.options.send(SEGRETARIO_IPC.statusChanged, status)
     await this.sayWhetherReading()
-    // Whether the work can go on is part of the engine's state: the setup and the panel say it.
     this.engineChanged()
+    await this.followCredit(status)
+    return status
+  }
 
-    if (lifts) {
-      this.engine?.resume()
-      this.engine?.wake()
+  /**
+   * What the key and its credit, as just checked, mean for the AI. Refused
+   * or spent, the AI goes off — there is no AI that waits — and the user is
+   * told why; running low, the user is told in time to top it up, once on
+   * the way down at each warning (`creditWarning`), again after a top-up.
+   */
+  private async followCredit(status: SegretarioStatus): Promise<void> {
+    const { enabled } = await this.db.store.getPreferences()
+
+    if (!enabled) {
+      return
     }
 
-    return status
+    if (status.keyState === 'exhausted' || status.keyState === 'invalid') {
+      await this.turnOff(status.keyState === 'exhausted' ? 'credito-finito' : 'chiave-rifiutata')
+      return
+    }
+
+    if (status.keyState !== 'ready' || !status.credit) {
+      return
+    }
+
+    const { store } = this.db
+    const available = status.credit.available
+    const daily =
+      (await store.spentSince(Date.now() - CREDIT_PACE_DAYS * DAY_MS)) / CREDIT_PACE_DAYS
+    const kept = await store.meta('credit_warned')
+    const before = kept ? (JSON.parse(kept) as CreditWarned) : null
+    const { raise, days, warned } = creditWarning(available, daily, before)
+
+    if (warned === null) {
+      await store.deleteMeta('credit_warned')
+    } else if (JSON.stringify(warned) !== kept) {
+      await store.setMeta('credit_warned', JSON.stringify(warned))
+    }
+
+    // A warning never takes the place of the notice that the AI went off.
+    const pending = await this.getNotice()
+
+    if (raise && pending?.kind !== 'credito-finito' && pending?.kind !== 'chiave-rifiutata') {
+      await this.raiseNotice({ kind: raise, at: Date.now(), available, days })
+    }
+  }
+
+  /**
+   * The key or the credit gave out: the AI goes off as the user would turn
+   * it off — every run stops, nothing of the Segretario shows, what it
+   * learnt is kept — and the user is told. It comes back the way it is
+   * turned on, from the setup, once the key or the credit is put right.
+   */
+  private turnOff(kind: 'credito-finito' | 'chiave-rifiutata'): Promise<void> {
+    this.turningOff ??= (async () => {
+      if ((await this.db.store.getPreferences()).enabled) {
+        await this.setPreferences({ enabled: false })
+        await this.raiseNotice({ kind, at: Date.now() })
+      }
+    })().finally(() => {
+      this.turningOff = null
+    })
+
+    return this.turningOff
+  }
+
+  /**
+   * OpenRouter refused a request for its key or its credit
+   * (`OpenRouterClient`): a check of its own says which, and the AI goes
+   * off. A refused key the check finds working after all — a passing
+   * refusal, or OpenRouter not answering — leaves the AI on, and the work
+   * it held back goes on.
+   */
+  private refused(error: SegretarioError): void {
+    this.refusing ??= (async () => {
+      const status =
+        error.code === 'no-credit' ? await this.creditRefused() : await this.checkKeyNow(false)
+      const { enabled } = await this.db.store.getPreferences()
+
+      if (enabled && (status.keyState === 'ready' || status.keyState === 'unchecked')) {
+        this.engine?.reset()
+        this.engine?.wake()
+      }
+    })()
+      .catch((failure: unknown) =>
+        logMainError('A refused key or credit could not be followed', failure)
+      )
+      .finally(() => {
+        this.refusing = null
+      })
+  }
+
+  async getNotice(): Promise<SegretarioNotice | null> {
+    await this.opened.promise
+    const kept = await this.db.store.meta('notice')
+    return kept ? (JSON.parse(kept) as SegretarioNotice) : null
+  }
+
+  async dismissNotice(): Promise<void> {
+    await this.opened.promise
+    await this.db.store.deleteMeta('notice')
+    this.options.send(SEGRETARIO_IPC.notice, null)
+  }
+
+  /** Something the user must know about the AI: kept until seen, and said outside the window too. */
+  private async raiseNotice(notice: SegretarioNotice): Promise<void> {
+    await this.db.store.setMeta('notice', JSON.stringify(notice))
+    this.options.send(SEGRETARIO_IPC.notice, notice)
+    const { title, body } = noticeWords(notice)
+    this.options.notify(title, body)
   }
 
   /** Checks a key and keeps it, encrypted, if OpenRouter knows it. */
@@ -589,6 +707,7 @@ export class SegretarioService {
     }
 
     let status: SegretarioStatus
+    const seq = ++this.statusSeq
 
     try {
       // Another key has its own credit: no refusal of the one it replaces.
@@ -610,10 +729,11 @@ export class SegretarioService {
 
     await this.db.store.setApiKey(key, status)
     this.creditRefusal = null
-    return this.setStatus(status)
+    return seq === this.statusSeq ? this.setStatus(status) : this.status
   }
 
   async removeKey(): Promise<SegretarioStatus> {
+    ++this.statusSeq
     this.creditRefusal = null
     this.runner?.cancelAll()
     this.engine?.cancelRunning()
@@ -622,54 +742,80 @@ export class SegretarioService {
   }
 
   /**
-   * Asks OpenRouter again about the key and its credit — `byUser`, the user
-   * saying they put the credit right, which lets the work try again.
+   * Asks OpenRouter again about the key and its credit — `byUser`, now, not
+   * sharing a check the work asked for, the user saying they put the credit
+   * right. Credit refused stays spent until more is left than then
+   * (`creditSpent`); where the balance cannot be read, the user's word lifts it.
    */
   async checkKey({ byUser = false }: { byUser?: boolean } = {}): Promise<SegretarioStatus> {
+    if (byUser) {
+      return this.checkKeyNow(true)
+    }
+
+    this.checking ??= this.checkKeyNow(false).finally(() => {
+      this.checking = null
+    })
+    return this.checking
+  }
+
+  /** A check of the key; overtaken by a later one meanwhile, it leaves the status to it. */
+  private async checkKeyNow(byUser: boolean): Promise<SegretarioStatus> {
+    this.spentSinceCheck = 0
+    const seq = ++this.statusSeq
     const key = await this.db.store.getApiKey()
 
     if (!key) {
       return this.setStatus(EMPTY_STATUS)
     }
 
+    let next: SegretarioStatus
+    let refusal = this.creditRefusal
+
     try {
-      const { status, refusal } = await this.statusFor(key, byUser ? null : this.creditRefusal)
-      this.creditRefusal = refusal
-      return await this.setStatus(status)
+      const checked = await this.statusFor(key, this.creditRefusal, byUser)
+      next = checked.status
+      refusal = checked.refusal
     } catch (error) {
       const problem = error instanceof Error ? error.message : String(error)
-
-      if (error instanceof SegretarioError && error.code === 'invalid-key') {
-        return this.setStatus({
-          ...this.status,
-          keyState: 'invalid',
-          problem,
-          checkedAt: Date.now()
-        })
-      }
-
-      return this.setStatus({ ...this.status, keyState: 'unchecked', problem })
+      next =
+        error instanceof SegretarioError && error.code === 'invalid-key'
+          ? { ...this.status, keyState: 'invalid', problem, checkedAt: Date.now() }
+          : { ...this.status, keyState: 'unchecked', problem }
     }
+
+    if (seq !== this.statusSeq) {
+      return this.status
+    }
+
+    this.creditRefusal = refusal
+    return this.setStatus(next)
   }
 
   /**
-   * A request was refused for want of credit: the work stays paused, with
-   * the credit as it stands now, until more is left (`statusFor`).
+   * A request was refused for want of credit: the credit as it stands now
+   * is not enough until more is left (`creditSpent`), and the AI goes off
+   * (`followCredit`) — turned on again only with more credit than this.
    */
-  private async creditRefused(): Promise<void> {
+  private async creditRefused(): Promise<SegretarioStatus> {
+    const seq = ++this.statusSeq
     const key = await this.db.store.getApiKey()
 
     if (!key) {
-      return
+      return this.status
     }
 
     const now = (await this.statusFor(key, null).catch(() => null))?.status ?? null
+
+    if (seq !== this.statusSeq) {
+      return this.status
+    }
+
     this.creditRefusal = { available: now?.credit?.available ?? null }
     // The credit not read now is not known: an older figure would hold the work after a top-up.
-    await this.setStatus({
+    return this.setStatus({
       ...(now ?? { ...this.status, credit: null }),
       keyState: 'exhausted',
-      problem: 'Il credito OpenRouter è finito: ricaricalo su openrouter.ai per riprendere.',
+      problem: spentCredit(now?.credit?.available ?? null),
       checkedAt: Date.now()
     })
   }
@@ -677,7 +823,8 @@ export class SegretarioService {
   /** What OpenRouter says of a key and its credit, with a refusal for want of it (`creditSpent`). */
   private async statusFor(
     key: string,
-    refused: CreditRefusal | null
+    refused: CreditRefusal | null,
+    toldTopUp = false
   ): Promise<{ status: SegretarioStatus; refusal: CreditRefusal | null }> {
     const [check, modelName] = await Promise.all([
       this.client.checkKey(key),
@@ -687,7 +834,11 @@ export class SegretarioService {
       (value): value is number => value !== null
     )
     const available = limits.length > 0 ? Math.min(...limits) : null
-    const { spent: exhausted, refusal } = creditSpent(available, refused)
+    const { spent: exhausted, refusal } = creditSpent(
+      { available, balanceKnown: check.balance !== null },
+      refused,
+      toldTopUp
+    )
 
     const status: SegretarioStatus = {
       keyState: exhausted ? 'exhausted' : 'ready',
@@ -703,9 +854,7 @@ export class SegretarioService {
               keyLimitReset: check.limitReset
             },
       checkedAt: Date.now(),
-      problem: exhausted
-        ? 'Il credito OpenRouter è finito: ricaricalo su openrouter.ai per riprendere.'
-        : null,
+      problem: exhausted ? spentCredit(available) : null,
       modelName
     }
 
@@ -735,7 +884,28 @@ export class SegretarioService {
    * what was learnt is kept. On: the engine catches up with what came meanwhile.
    */
   async setPreferences(preferences: SegretarioPreferences): Promise<SegretarioPreferences> {
+    // On only with a key that works and credit to spend: else it would go off at its first step.
+    if (preferences.enabled && this.status.keyState === 'exhausted') {
+      throw new Error(
+        'Il credito OpenRouter è finito: ricaricalo su openrouter.ai, poi riaccendi le funzioni AI.'
+      )
+    }
+
+    if (preferences.enabled && this.status.keyState === 'invalid') {
+      throw new Error('OpenRouter non accetta la chiave: inseriscine una valida, poi riaccendi.')
+    }
+
     const stored = await this.db.store.setPreferences(preferences)
+
+    // Turned on, what said why it had gone off is over.
+    if (stored.enabled) {
+      const notice = await this.getNotice()
+
+      if (notice?.kind === 'credito-finito' || notice?.kind === 'chiave-rifiutata') {
+        await this.dismissNotice()
+      }
+    }
+
     this.options.send(SEGRETARIO_IPC.preferencesChanged, stored)
 
     if (!stored.enabled) {
@@ -786,6 +956,18 @@ export class SegretarioService {
       provider: result.provider,
       usage: result.usage
     })
+
+    // Spent a good part of what was left since the last check: the credit is asked for again,
+    // so a warning comes in time however fast it goes.
+    this.spentSinceCheck += result.usage.cost
+    const left = this.status.credit?.available
+
+    if (
+      left !== undefined &&
+      this.spentSinceCheck >= Math.max(CREDIT_RECHECK_FLOOR, left * CREDIT_RECHECK_SHARE)
+    ) {
+      void this.checkKey()
+    }
   }
 
   async getEngineState(): Promise<EngineState> {
@@ -2059,7 +2241,7 @@ export class SegretarioService {
       letterAt: letter?.writtenAt ?? null,
       letterRewriting: await engine.dayInProgress(),
       reading: Math.max(0, state.reading.total - state.reading.read),
-      paused: state.paused,
+      network: state.waiting,
       today: owed
         .filter((record) => record.due !== null && record.due <= today)
         .flatMap(lineOf)

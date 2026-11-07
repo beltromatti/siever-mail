@@ -30,8 +30,18 @@ const MESSAGE_PARSE_OPTIONS = {
   skipTextLinks: true
 } as const
 
-export async function parseMessageSource(source: Buffer | string): Promise<ParsedMail> {
-  return simpleParser(source, MESSAGE_PARSE_OPTIONS)
+/**
+ * A message's source, parsed. A message carried inside it — a certified
+ * mail's `postacert.eml`, a message forwarded in line — is read, as the
+ * reader shows it, into the message's own text and files; `keepEmbedded`
+ * keeps each one an attachment, whole, however it is marked: a copy of
+ * the message saves it as the mail it is.
+ */
+export async function parseMessageSource(
+  source: Buffer | string,
+  { keepEmbedded = false }: { keepEmbedded?: boolean } = {}
+): Promise<ParsedMail> {
+  return simpleParser(source, { ...MESSAGE_PARSE_OPTIONS, ignoreEmbedded: keepEmbedded })
 }
 
 export interface ClassifiedAttachment {

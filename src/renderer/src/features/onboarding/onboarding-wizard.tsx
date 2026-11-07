@@ -23,6 +23,8 @@ import { cn } from '@renderer/lib/utils'
 import type { CalendarConnection } from '@shared/calendar'
 import type { AccountConnectionState, MailAccount } from '@shared/models'
 import {
+  OPENROUTER_CREDITS_URL,
+  OPENROUTER_KEYS_URL,
   setupTurnsAiOn,
   type ConnectionLearning,
   type EngineState,
@@ -32,7 +34,6 @@ import {
   type ReadingStatus
 } from '@shared/segretario'
 
-const KEYS_URL = 'https://openrouter.ai/settings/keys'
 /** How often the preparation and the reading are looked at again while the user waits. */
 const POLL_MS = 2500
 
@@ -236,6 +237,8 @@ function SegretarioStep({
   const [problem, setProblem] = useState<string | null>(null)
   const status = segretario.status
   const hasKey = status !== null && status.keyState !== 'missing' && status.keyState !== 'invalid'
+  // The credit gave out: topped up and checked again, the AI can be turned on.
+  const exhausted = status?.keyState === 'exhausted'
 
   const run = async (action: () => Promise<unknown>): Promise<void> => {
     setWorking(true)
@@ -273,7 +276,11 @@ function SegretarioStep({
               Non ora
             </Button>
           )}
-          <Button size="lg" disabled={!hasKey || working} onClick={() => void run(onEnable)}>
+          <Button
+            size="lg"
+            disabled={!hasKey || exhausted || working}
+            onClick={() => void run(onEnable)}
+          >
             {working ? (
               <LoaderCircle className="size-4 animate-spin" />
             ) : (
@@ -284,7 +291,40 @@ function SegretarioStep({
         </>
       }
     >
-      {hasKey ? (
+      {exhausted ? (
+        <div className="bg-destructive/10 flex flex-col gap-3 rounded-[10px] px-4 py-3 text-[13px]">
+          <span className="text-destructive-soft-foreground">
+            Il credito OpenRouter è finito, o la chiave ha raggiunto il suo limite di spesa: le
+            funzioni AI si possono riaccendere quando c&apos;è di nuovo credito.
+          </span>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              onClick={() => void window.mailApi.openExternalUrl(OPENROUTER_CREDITS_URL)}
+            >
+              <ExternalLink className="size-3.5" />
+              Ricarica su OpenRouter
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={working}
+              onClick={() =>
+                void run(async () => {
+                  if ((await window.segretarioApi.checkKey()).keyState === 'exhausted') {
+                    throw new Error(
+                      'Il credito risulta ancora finito: se hai appena ricaricato, riprova tra qualche istante.'
+                    )
+                  }
+                })
+              }
+            >
+              {working && <LoaderCircle className="size-3.5 animate-spin" />}
+              Ho ricaricato, verifica
+            </Button>
+          </div>
+        </div>
+      ) : hasKey ? (
         <div className="bg-hover flex items-center gap-2.5 rounded-[10px] px-4 py-3 text-[13px]">
           <Check className="text-status-online size-4 shrink-0" />
           <span className="min-w-0 flex-1">
@@ -340,7 +380,7 @@ function SegretarioStep({
             <button
               type="button"
               className="text-foreground inline-flex items-center gap-1 underline underline-offset-2"
-              onClick={() => void window.mailApi.openExternalUrl(KEYS_URL)}
+              onClick={() => void window.mailApi.openExternalUrl(OPENROUTER_KEYS_URL)}
             >
               Apri openrouter.ai
               <ExternalLink className="size-3" />
@@ -773,7 +813,8 @@ function ReadingStep({
     status && readSince > 0 && elapsed > 20_000
       ? ((status.total - status.read) * elapsed) / readSince
       : null
-  const paused = engine?.paused ?? null
+  // OpenRouter not answering: the reading waits for it, and the user need not.
+  const waiting = engine?.waiting ?? null
   const done = status?.done ?? false
 
   return (
@@ -781,9 +822,9 @@ function ReadingStep({
       title="Il Segretario si mette al passo"
       lead="Legge ogni connessione fin dove ha deciso conoscendoti: i messaggi uno per uno, come se fossero appena arrivati, e gli impegni del calendario. Annota cosa ti chiedono, apre le cose da fare, riconosce i progetti, prepara le risposte che servono."
       actions={
-        <Button size="lg" disabled={!done && !paused} onClick={onNext}>
-          {!done && !paused && <LoaderCircle className="size-4 animate-spin" />}
-          {done ? 'Continua' : paused ? 'Entra comunque' : 'Sto leggendo…'}
+        <Button size="lg" disabled={!done && !waiting} onClick={onNext}>
+          {!done && !waiting && <LoaderCircle className="size-4 animate-spin" />}
+          {done ? 'Continua' : waiting ? 'Entra comunque' : 'Sto leggendo…'}
         </Button>
       }
     >
@@ -838,13 +879,10 @@ function ReadingStep({
             ))}
           </ul>
         )}
-        {paused && (
-          <p className="text-destructive-soft-foreground flex items-start gap-2 text-[12.5px]">
+        {waiting && (
+          <p className="text-muted-foreground flex items-start gap-2 text-[12.5px]">
             <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-            <span>
-              Il Segretario si è fermato: {paused} Riprenderà da solo quando sarà risolto; intanto
-              puoi entrare.
-            </span>
+            <span>{waiting} Il Segretario riprende da solo; intanto puoi entrare.</span>
           </p>
         )}
         {status && status.failed.length > 0 && (
@@ -966,6 +1004,27 @@ export function OnboardingWizard({
     },
     [aiOn, hasReading, onChange, state]
   )
+
+  // The key or the credit gave out while the AI worked here — or was being prepared for — and it
+  // went off: the setup goes back to turning it on, which says why; Conoscimi done again from
+  // Settings ends.
+  const known = segretario.status !== null && segretario.preferences !== null
+  const workingWithAi =
+    state.step === 'conoscimi' ||
+    state.step === 'lettura' ||
+    (state.step === 'preparazione' && state.turnsAiOn === true)
+
+  useEffect(() => {
+    if (!known || aiOn || !workingWithAi) {
+      return
+    }
+
+    if (CASE_STEPS[state.case].includes('segretario')) {
+      onChange({ ...state, step: 'segretario', conoscimiId: null, turnsAiOn: false })
+    } else {
+      onFinish(true)
+    }
+  }, [aiOn, known, onChange, onFinish, state, workingWithAi])
 
   // Turned on here, the AI starts with every connection: their reading waits for Conoscimi.
   const enable = async (): Promise<void> => {

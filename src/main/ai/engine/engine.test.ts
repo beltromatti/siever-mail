@@ -11,7 +11,7 @@ vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
 import { ensureAiSchema } from '../schema'
 import { memorySql } from '../testing/memory-sql'
 import { SegretarioEngine, type EngineDeps } from './engine'
-import { EnginePause, Scheduler, WorkFailure, type TaskExecutor } from './scheduler'
+import { KeyRefused, Scheduler, WorkFailure, type TaskExecutor } from './scheduler'
 import { WorkQueue, type WorkUnit } from './work-queue'
 
 type Scope = { threads: string[] }
@@ -379,10 +379,10 @@ describe('Scheduler', () => {
     }
   })
 
-  it('pauses everything when the key is refused, and goes on once resumed', async () => {
+  it('starts nothing more once the key or the credit is refused, until the AI goes off or on again', async () => {
     let refuse = true
+    let refused = 0
     const ran: string[] = []
-    let paused: string | null = null
     scheduler = new Scheduler(
       queue,
       {
@@ -390,24 +390,27 @@ describe('Scheduler', () => {
           lockKeys: async (unit) => [unit.scopeKey],
           run: async (unit) => {
             if (refuse) {
-              throw new EnginePause('Chiave non valida', 'invalid-key')
+              refused += 1
+              throw new KeyRefused('Il credito OpenRouter è finito.')
             }
 
             ran.push(unit.scopeKey)
           }
         }
       },
-      { concurrency: () => 1, onPause: (pause) => (paused = pause?.reason ?? null) }
+      { concurrency: () => 1 }
     )
     await queue.enqueue({ task: 'lettura', scopeKey: 'a', scope: {}, priority: 10 })
+    await queue.enqueue({ task: 'lettura', scopeKey: 'b', scope: {}, priority: 10 })
     await scheduler.start()
 
-    await until(() => paused !== null)
-    expect(paused).toBe('Chiave non valida')
+    await until(() => refused === 1)
+    await new Promise((done) => setTimeout(done, 100))
+    expect(refused).toBe(1)
     refuse = false
     await sql.run('UPDATE ai_work SET not_before = 0')
-    scheduler.resume()
-    await until(() => ran.length === 1)
+    scheduler.reset()
+    await until(() => ran.length === 2)
   })
 
   it('records a failure and tries again', async () => {
