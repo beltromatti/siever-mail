@@ -104,8 +104,6 @@ export class Workspace {
       onReadingChange: (reading) => this.mail.setSegretarioReading(reading),
       onEnabledChange: (on) => updateAppMenuAi(on),
       onNoteWritten: (note) => this.mail.noteWritten(note),
-      // Development only: an installed app talks to OpenRouter itself, never elsewhere with the key.
-      openRouterUrl: app.isPackaged ? undefined : process.env.SIEVER_OPENROUTER_URL,
       notify: (title, body) => {
         if (!getAppWindow()?.isFocused()) {
           this.mail.showNotice(title, body)

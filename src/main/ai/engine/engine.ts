@@ -97,6 +97,36 @@ const BEFORE_READING: ReadonlyArray<OnboardingStep> = [
   'conoscimi'
 ]
 
+/**
+ * What the guided setup under way holds back until its reading: Conoscimi
+ * comes first, so the reading starts informed. The setup that turns the AI
+ * on holds every connection; one adding connections, those — its mailboxes
+ * by id, its calendars as the ones not known yet. Conoscimi done again by
+ * hand holds nothing back. Past Conoscimi — done, or gone on without —
+ * nothing is held: a connection left unknown is read as far as the
+ * horizon it has, mail and calendars alike.
+ */
+export interface SetupHold {
+  holding: boolean
+  all: boolean
+  mail: ReadonlySet<string>
+}
+
+export function setupHold(setup: OnboardingState | null): SetupHold {
+  const holding =
+    setup !== null && setup.case !== 'conoscimi' && BEFORE_READING.includes(setup.step)
+  return {
+    holding,
+    all: holding && setupTurnsAiOn(setup) && setup.accountIds.length === 0,
+    mail: new Set(holding ? setup.accountIds : [])
+  }
+}
+
+/** Whether a calendar (by its learning key) waits for the setup: every one, or one not known yet. */
+export function calendarHeld(hold: SetupHold, key: string, known: ReadonlySet<string>): boolean {
+  return hold.all || (hold.holding && !known.has(key))
+}
+
 export interface EngineDeps {
   store: AiStore
   registry: Registry
@@ -359,7 +389,7 @@ export class SegretarioEngine {
     const accounts = (await mail.listAccounts()).filter(
       (account) => !accountIds || accountIds.includes(account.id)
     )
-    const calendars = (await this.knownCalendars()).filter(
+    const calendars = (await this.lookedCalendars(setupHold(await this.deps.onboarding()))).filter(
       (connection) =>
         !accountIds ||
         (connection.mailAccountId !== null && accountIds.includes(connection.mailAccountId))
@@ -475,16 +505,22 @@ export class SegretarioEngine {
     }
   }
 
-  /** The calendar connections Conoscimi knows: their events are looked at one by one. */
-  private async knownCalendars(): Promise<
-    Awaited<ReturnType<SegretarioCalendarPort['connections']>>
-  > {
-    const learnt = await this.deps.store.listLearning()
+  /**
+   * The calendar connections whose events are looked at one by one: all of
+   * them, but those the setup under way holds back for Conoscimi (§3.1).
+   */
+  private async lookedCalendars(
+    hold: SetupHold
+  ): Promise<Awaited<ReturnType<SegretarioCalendarPort['connections']>>> {
+    const [connections, learnt] = await Promise.all([
+      this.deps.calendar.connections().catch(() => []),
+      this.deps.store.listLearning()
+    ])
     const known = new Set(
       learnt.filter((row) => row.finishedAt !== null).map((row) => row.accountId)
     )
-    return (await this.deps.calendar.connections().catch(() => [])).filter((connection) =>
-      known.has(calendarLearningKey(connection.id))
+    return connections.filter(
+      (connection) => !calendarHeld(hold, calendarLearningKey(connection.id), known)
     )
   }
 
@@ -616,23 +652,16 @@ export class SegretarioEngine {
     await registry.wakeDeferred(today)
     await registry.settleDeleted()
 
-    // The guided setup under way: Conoscimi comes first, so the reading of its connections
-    // waits for it — the reading starts informed.
-    // Conoscimi done again by hand holds nothing back: the mail that comes is read meanwhile.
     const setup = await this.deps.onboarding()
-    const holding =
-      setup !== null && setup.case !== 'conoscimi' && BEFORE_READING.includes(setup.step)
-    // The setup that turns the AI on is for every connection; one adding connections, for those.
-    const held = new Set(holding ? setup.accountIds : [])
-    const holdsAll = holding && setupTurnsAiOn(setup) && setup.accountIds.length === 0
+    const hold = setupHold(setup)
 
     // Messages not read yet, conversation by conversation, each account as far back as it is
     // read; what came now before the backlog.
     const { sinceOf } = await this.horizons()
-    const conversations = holdsAll
+    const conversations = hold.all
       ? []
       : (await mail.unreadConversations(sinceOf, READING_PLANNED)).filter(
-          (conversation) => !held.has(conversation.accountId)
+          (conversation) => !hold.mail.has(conversation.accountId)
         )
     const failed = await queue.failedSince(
       conversations.map(
@@ -678,9 +707,9 @@ export class SegretarioEngine {
       })
     }
 
-    // The calendars it knows — once Conoscimi knows them: what of their days it has not looked
-    // at yet, as part of the reading.
-    await this.planCalendarLooks()
+    // The calendars not held back: what of their days it has not looked at yet, as part of the
+    // reading.
+    await this.planCalendarLooks(hold)
 
     // Turning the AI on, the rest — the day, the projects, the memory — waits for the setup to
     // be over: it is written from what the reading found.
@@ -849,16 +878,16 @@ export class SegretarioEngine {
   }
 
   /**
-   * Each calendar Conoscimi knows, looked at one by one as far as its
+   * Each calendar not held back, looked at one by one as far as its
    * horizon: what of its days is not looked at yet — the first time all of
    * it, then the day coming into the days ahead — queued as a look; a span
    * with nothing in it is looked at as it is, without a run.
    */
-  private async planCalendarLooks(): Promise<void> {
+  private async planCalendarLooks(hold: SetupHold): Promise<void> {
     const { queue } = this.deps
     const { readings, daysOf } = await this.horizons()
 
-    for (const connection of await this.knownCalendars()) {
+    for (const connection of await this.lookedCalendars(hold)) {
       const key = calendarLearningKey(connection.id)
       const scopeKey = `${LOOK_SCOPE}${connection.id}`
       const window = lookWindow(daysOf(key))
@@ -896,7 +925,7 @@ export class SegretarioEngine {
     signal: AbortSignal
   ): Promise<void> {
     const { store } = this.deps
-    const connection = (await this.knownCalendars()).find(
+    const connection = (await this.deps.calendar.connections().catch(() => [])).find(
       (candidate) => candidate.id === connectionId
     )
 

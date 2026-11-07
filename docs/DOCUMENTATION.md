@@ -1185,8 +1185,11 @@ idempotent: asked again, it queues nothing twice. In order:
   other than by the day's own run (`CommitmentStore.changedSince`), and it
   is older than three hours — one, when Oggi is looked at
   (`LETTER_LOOKED_AT_STALE_MS` in `segretario-service.ts`);
-- the events of each calendar Conoscimi knows, looked at one by one as
-  messages are read: the next two months first (`CALENDAR_LOOK_AHEAD_DAYS`),
+- the events of each calendar, looked at one by one as messages are read
+  — held back, like the mail, only while a guided setup is before its
+  reading (one turning the AI on holds every calendar, one adding
+  connections those not known yet), so a calendar left unknown by a
+  Conoscimi the user went on without is looked at all the same: the next two months first (`CALENDAR_LOOK_AHEAD_DAYS`),
   then back as far as its horizon and what the calendar keeps
   (`CALENDAR_HELD_DAYS`, 60 days back), fifty at a time (`lookChunk`, a
   `calendario` run with `scope.look`), the span looked at kept in
@@ -1467,11 +1470,18 @@ created, changed or deleted.
 
 The notebook (`memory/notebook.ts`, `ai_memory`) is Markdown notes the
 Segretario organises itself, shared by every run. Its shape is the
-Segretario's: the identity suggests a start (`tu.md`, `stile.md`,
-`connessioni.md`, `persone/…`, `progetti/…`, `decisioni.md`) and principles
-— what the mail does not say goes in, what a search finds again or what
-changes by the day does not; one note per subject, each fact in one place —
-and nothing in the code depends on a path. What the notebook guarantees is
+Segretario's. The identity (`segretario.md`, "La tua memoria") gives it, once,
+a criterion — what will still be true when today's matters are closed goes
+in; the state of matters (things to do, dates, offers and amounts,
+deliveries) and what a search finds again do not, since the registry, the
+calendar, "Il punto" and the mail hold them — and the facts of how the
+memory is used (every run starts from the map and opens what it needs, many
+runs write at once, the user reads it), from which follow one note per
+subject, each fact in one place, a note of its own for whoever matters, with
+the words it will be searched by (a person's addresses). It suggests a start
+(`tu.md`, `stile.md`, `connessioni.md`, `persone/…`, `progetti/…`,
+`decisioni.md`) to take, change and extend; the tasks say what to learn and
+leave how to keep it to the identity. Nothing in the code depends on a path. What the notebook guarantees is
 integrity: edits are patches on the note as it is now (each passage
 replaced found exactly once, all or none), so two runs editing different
 lines both land; a whole rewrite made on an older reading is refused, as
@@ -1838,10 +1848,7 @@ profile — can be kept on a machine with a launcher of its own in the
 repository's root (`studio.mjs`, ignored by git: it belongs to that
 machine). It runs the app in development on that profile, public by
 default, with the extension when asked: the same data, with what each
-variant can do with it. In development only, `SIEVER_OPENROUTER_URL`
-points the Segretario at another OpenRouter — the studio's, in front of
-the real one, which passes everything on and can play the credit running
-low or out, or the key refused; an installed app ignores it.
+variant can do with it.
 
 ## Testing
 

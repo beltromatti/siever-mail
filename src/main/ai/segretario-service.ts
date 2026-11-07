@@ -180,12 +180,6 @@ export interface SegretarioServiceOptions {
   onNoteWritten(note: MessageNote): void
   /** Says something to the user in the system's alerts, when the window is not in front. */
   notify(title: string, body: string): void
-  /**
-   * OpenRouter's API, when not OpenRouter's own: in development, the
-   * studio's, which passes requests on and can play the credit running
-   * low or out (`SIEVER_OPENROUTER_URL`).
-   */
-  openRouterUrl?: string
 }
 
 function noteOf(record: NoteRecord): MessageNote {
@@ -327,11 +321,7 @@ export class SegretarioService {
   private asleep = false
 
   constructor(private readonly options: SegretarioServiceOptions) {
-    this.client = new OpenRouterClient(
-      options.fetch,
-      (error) => this.refused(error),
-      options.openRouterUrl
-    )
+    this.client = new OpenRouterClient(options.fetch, (error) => this.refused(error))
   }
 
   whenReady(): Promise<void> {

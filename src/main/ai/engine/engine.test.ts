@@ -8,9 +8,10 @@ vi.mock('electron', () => ({
 }))
 vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
 
+import type { OnboardingState } from '@shared/segretario'
 import { ensureAiSchema } from '../schema'
 import { memorySql } from '../testing/memory-sql'
-import { SegretarioEngine, type EngineDeps } from './engine'
+import { calendarHeld, SegretarioEngine, setupHold, type EngineDeps } from './engine'
 import { KeyRefused, Scheduler, WorkFailure, type TaskExecutor } from './scheduler'
 import { WorkQueue, type WorkUnit } from './work-queue'
 
@@ -473,5 +474,47 @@ describe('Engine', () => {
     await engineWith({ text: 'La giornata.' }).writeDayNow()
 
     expect(await queuedDays()).toBe(0)
+  })
+})
+
+describe('What the guided setup holds back', () => {
+  const setup = (
+    over: Partial<OnboardingState> & Pick<OnboardingState, 'case' | 'step'>
+  ): OnboardingState => ({ accountIds: [], conoscimiId: null, startedAt: 0, ...over })
+  const known = new Set(['calendario:c1'])
+
+  it('holds every connection while the setup turning the AI on is before its reading', () => {
+    const hold = setupHold(setup({ case: 'ai-prima-volta', step: 'conoscimi', turnsAiOn: true }))
+
+    expect(hold.all).toBe(true)
+    expect(calendarHeld(hold, 'calendario:c1', known)).toBe(true)
+    expect(calendarHeld(hold, 'calendario:c2', known)).toBe(true)
+  })
+
+  it('holds a new connection, mailbox or calendar, while it waits for Conoscimi', () => {
+    const hold = setupHold(
+      setup({ case: 'nuova-connessione', step: 'conoscimi', accountIds: ['a2'] })
+    )
+
+    expect(hold.all).toBe(false)
+    expect([...hold.mail]).toEqual(['a2'])
+    expect(calendarHeld(hold, 'calendario:c1', known)).toBe(false)
+    expect(calendarHeld(hold, 'calendario:c2', known)).toBe(true)
+  })
+
+  it('holds nothing past Conoscimi, even when the user went on without it', () => {
+    const hold = setupHold(setup({ case: 'ai-prima-volta', step: 'lettura', turnsAiOn: true }))
+
+    expect(hold.holding).toBe(false)
+    expect(hold.mail.size).toBe(0)
+    expect(calendarHeld(hold, 'calendario:c2', known)).toBe(false)
+    expect(calendarHeld(setupHold(null), 'calendario:c2', known)).toBe(false)
+  })
+
+  it('holds nothing back for Conoscimi done again by hand', () => {
+    const hold = setupHold(setup({ case: 'conoscimi', step: 'conoscimi' }))
+
+    expect(hold.holding).toBe(false)
+    expect(calendarHeld(hold, 'calendario:c2', known)).toBe(false)
   })
 })

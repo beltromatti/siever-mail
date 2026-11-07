@@ -31,7 +31,7 @@ export const PROVIDER_POLICY = {
   preferred_max_latency: 1.5
 } as const
 
-export const OPENROUTER_API = 'https://openrouter.ai/api/v1'
+const API_BASE = 'https://openrouter.ai/api/v1'
 
 /** Who is calling, for OpenRouter's app attribution. */
 const ATTRIBUTION_HEADERS = {
@@ -353,9 +353,7 @@ export class OpenRouterClient {
      * OpenRouter refused a request for its key or its credit (`invalid-key`,
      * `no-credit`): whatever asked, the AI can no longer work.
      */
-    private readonly onRefused: (error: SegretarioError) => void = () => undefined,
-    /** OpenRouter's API — in development, the studio's own in front of it. */
-    private readonly apiBase: string = OPENROUTER_API
+    private readonly onRefused: (error: SegretarioError) => void = () => undefined
   ) {}
 
   /**
@@ -479,7 +477,7 @@ export class OpenRouterClient {
 
       try {
         response = await this.fetchImpl(
-          `${this.apiBase}/generation?id=${encodeURIComponent(generationId)}`,
+          `${API_BASE}/generation?id=${encodeURIComponent(generationId)}`,
           { headers: { Authorization: `Bearer ${key}`, ...ATTRIBUTION_HEADERS } }
         )
       } catch {
@@ -545,7 +543,7 @@ export class OpenRouterClient {
         : {})
     }
 
-    const response = await this.fetchImpl(`${this.apiBase}/chat/completions`, {
+    const response = await this.fetchImpl(`${API_BASE}/chat/completions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${key}`,
@@ -588,7 +586,7 @@ export class OpenRouterClient {
     let response: Response
 
     try {
-      response = await this.fetchImpl(`${this.apiBase}${path}`, {
+      response = await this.fetchImpl(`${API_BASE}${path}`, {
         headers: { Authorization: `Bearer ${key}`, ...ATTRIBUTION_HEADERS },
         signal
       })
