@@ -8,10 +8,18 @@ vi.mock('electron', () => ({
 }))
 vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
 
+import type { CalendarEvent } from '@shared/calendar'
 import type { OnboardingState } from '@shared/segretario'
+import { AiStore } from '../ai-store'
 import { ensureAiSchema } from '../schema'
 import { memorySql } from '../testing/memory-sql'
-import { calendarHeld, SegretarioEngine, setupHold, type EngineDeps } from './engine'
+import {
+  calendarHeld,
+  calendarLookScope,
+  SegretarioEngine,
+  setupHold,
+  type EngineDeps
+} from './engine'
 import { Reachability } from './reachability'
 import { KeyRefused, Scheduler, WorkFailure, type TaskExecutor } from './scheduler'
 import { WorkQueue, type WorkUnit } from './work-queue'
@@ -529,5 +537,112 @@ describe('What the guided setup holds back', () => {
 
     expect(hold.holding).toBe(false)
     expect(calendarHeld(hold, 'calendario:c2', known)).toBe(false)
+  })
+})
+
+describe("A calendar's first look", () => {
+  let sql: ReturnType<typeof memorySql>
+  let queue: WorkQueue
+  let store: AiStore
+
+  beforeEach(async () => {
+    sql = memorySql()
+    await ensureAiSchema(sql)
+    queue = new WorkQueue(sql)
+    store = new AiStore(sql)
+  })
+
+  afterEach(() => sql.close())
+
+  const DAY = 86_400_000
+  /** A busy calendar: two meetings a day for 120 days, and a weekly one all year. */
+  const events: CalendarEvent[] = [
+    ...Array.from({ length: 240 }, (_, index) => ({
+      key: `e${index}`,
+      eventId: `e${index}`,
+      seriesId: null,
+      start: new Date(
+        Date.now() + (Math.floor(index / 2) + 1) * DAY + (index % 2) * 3_600_000
+      ).toISOString()
+    })),
+    ...Array.from({ length: 52 }, (_, week) => ({
+      key: `w${week}`,
+      eventId: `w${week}`,
+      seriesId: 'riunione',
+      start: new Date(Date.now() + (week * 7 + 2) * DAY + 7_200_000).toISOString()
+    }))
+  ].map((event) => ({
+    connectionId: 'c1',
+    calendarId: 'lavoro',
+    calendarName: 'Lavoro',
+    iCalUid: null,
+    title: event.key,
+    end: event.start,
+    allDay: false,
+    location: null,
+    description: null,
+    attendees: [],
+    organizer: null,
+    myResponse: null,
+    meetLink: null,
+    htmlLink: null,
+    origin: null,
+    ...event
+  }))
+
+  const engine = (lastSyncAt: number | null = Date.now()): SegretarioEngine =>
+    new SegretarioEngine({
+      queue,
+      store,
+      calendar: {
+        connections: async () => [{ id: 'c1', label: 'Lavoro', calendars: [], lastSyncAt }],
+        calendars: async () => [],
+        events: async () => events
+      }
+    } as unknown as EngineDeps)
+
+  const plan = (on: SegretarioEngine): Promise<void> =>
+    (on as unknown as { planCalendarLooks(hold: unknown): Promise<void> }).planCalendarLooks(
+      setupHold(null)
+    )
+
+  it('queues the whole window at once, in blocks that go in parallel, a series once', async () => {
+    const looking = engine()
+    await plan(looking)
+    const blocks = await queue.within(calendarLookScope('c1'))
+
+    // 240 events and one series: 241 things, in blocks of fifty.
+    expect(blocks).toHaveLength(5)
+    expect(new Set(blocks.map((block) => block.scopeKey)).size).toBe(5)
+
+    // Planned again while they wait, nothing more is queued.
+    await plan(looking)
+    expect(await queue.within(calendarLookScope('c1'))).toHaveLength(5)
+  })
+
+  it('waits for a calendar to be read before looking at it, rather than finding it empty', async () => {
+    await plan(engine(null))
+
+    expect(await queue.within(calendarLookScope('c1'))).toEqual([])
+    expect(await store.readings()).toEqual([])
+  })
+
+  it('is done once every block is, and is not planned again as the days pass', async () => {
+    const looking = engine()
+    await plan(looking)
+
+    for (const block of await queue.within(calendarLookScope('c1'))) {
+      await queue.claim(block.id)
+      await queue.complete(block.id)
+    }
+
+    await plan(looking)
+    const [reading] = await store.readings()
+    expect(reading.lookedUntil! - reading.lookedFrom!).toBeGreaterThanOrEqual(425 * DAY)
+
+    await plan(looking)
+    expect(
+      (await queue.within(calendarLookScope('c1'))).every((unit) => unit.status === 'fatto')
+    ).toBe(true)
   })
 })

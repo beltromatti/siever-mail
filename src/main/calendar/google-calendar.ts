@@ -118,6 +118,8 @@ function eventOf(
     calendarId,
     eventId: event.id,
     iCalUid: event.iCalUID ?? null,
+    // An instance of a recurring event carries its series' id.
+    seriesId: event.recurringEventId ?? null,
     title: event.summary?.trim() || '(senza titolo)',
     start,
     end,

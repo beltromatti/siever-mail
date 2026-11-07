@@ -1010,7 +1010,7 @@ function ReadingStep({
                   <span className="text-muted-foreground">
                     {' · '}
                     {horizon.kind === 'calendario'
-                      ? `da ${horizon.days} giorni fa ai prossimi due mesi`
+                      ? `tutto: da ${horizon.days} giorni fa a un anno avanti`
                       : `ultimi ${horizon.days} giorni`}
                   </span>
                 </span>

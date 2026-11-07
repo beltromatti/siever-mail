@@ -384,3 +384,48 @@ describe('CalendarService, a CalDAV password the server no longer takes', () => 
     expect(told).toHaveLength(1)
   })
 })
+
+describe('CalendarService, the window sliding with the days', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('reads the year ahead again each day: a series coming in is no change, a new event is', async () => {
+    const DAY = 86_400_000
+    const stamp = (at: number): string => new Date(at).toISOString().replace(/[-:]|\.\d{3}/g, '')
+    const start = Date.now()
+    const weekly = `BEGIN:VEVENT
+UID:riunione@studio
+DTSTAMP:20261101T000000Z
+DTSTART:${stamp(start + DAY)}
+DURATION:PT1H
+RRULE:FREQ=WEEKLY
+SUMMARY:Riunione ufficio tecnico
+END:VEVENT`
+    const fair = `BEGIN:VEVENT
+UID:fiera@mce
+DTSTAMP:20261101T000000Z
+DTSTART:${stamp(start + 300 * DAY)}
+DURATION:PT8H
+SUMMARY:Fiera MCE
+END:VEVENT`
+    let events = [weekly]
+    const feed = (): string =>
+      `BEGIN:VCALENDAR\nVERSION:2.0\nX-WR-CALNAME:Lavoro\n${events.join('\n')}\nEND:VCALENDAR`
+    const { calendar } = await calendars(async () => new Response(feed()))
+    await calendar.addIcs('https://studio.example/lavoro.ics', null)
+
+    // A week and a day on, read whole again: the week coming in brings one more of the series.
+    vi.useFakeTimers({ toFake: ['Date'], now: start + 8 * DAY })
+    await calendar.syncAll()
+    expect(await calendar.changesSince(0, 100)).toEqual([])
+
+    // An event new to the window — however far — is a change.
+    events = [weekly, fair]
+    vi.setSystemTime(start + 10 * DAY)
+    await calendar.syncAll()
+    expect(
+      (await calendar.changesSince(0, 100)).map((change) => [change.kind, change.event.title])
+    ).toEqual([['nuovo', 'Fiera MCE']])
+  })
+})

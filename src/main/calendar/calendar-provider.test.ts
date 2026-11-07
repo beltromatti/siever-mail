@@ -46,6 +46,7 @@ describe('changedEvent', () => {
     calendarName: 'Lavoro',
     eventId: 'e',
     iCalUid: null,
+    seriesId: null,
     title: 'Chiamare Rossi',
     start: nine.toISOString(),
     end: nine.toISOString(),

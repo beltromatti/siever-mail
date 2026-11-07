@@ -418,6 +418,20 @@ export class WorkQueue {
     return tried.size
   }
 
+  /**
+   * The units of a piece of work made of many — a calendar's first look, by
+   * its blocks — whose scopes begin the same: waiting, running, done (until
+   * forgotten) or failed; not those let go.
+   */
+  async within(scopePrefix: string): Promise<WorkUnit[]> {
+    const rows = await this.sql.all<WorkRow>(
+      `SELECT * FROM ai_work WHERE substr(scope_key, 1, ?) = ? AND status <> 'annullato'`,
+      scopePrefix.length,
+      scopePrefix
+    )
+    return rows.map((row) => unitOf(row))
+  }
+
   /** A task's units waiting or running. */
   async units(task: string): Promise<WorkUnit[]> {
     const rows = await this.sql.all<WorkRow>(

@@ -52,7 +52,7 @@ export const ORIGIN_PROPERTY = 'x-siever-origin'
  * or one instance of a series with its exceptions applied — ready for a
  * provider to name it.
  */
-export type Occurrence = Omit<ProviderEvent, 'calendarId' | 'eventId'> & {
+export type Occurrence = Omit<ProviderEvent, 'calendarId' | 'eventId' | 'seriesId'> & {
   /** The instance's RECURRENCE-ID, as iCalendar writes it; null for an event that does not repeat. */
   recurrenceId: string | null
 }

@@ -526,9 +526,6 @@ export function setupTurnsAiOn(state: OnboardingState): boolean {
  */
 export const READING_DAYS = { default: 30, min: 14 } as const
 
-/** How far ahead a calendar's events are looked at one by one: what is coming is alive until it comes. */
-export const CALENDAR_LOOK_AHEAD_DAYS = 60
-
 /** How far back a connection is read, as decided — for the setup's reading step. */
 export interface ConnectionReading {
   /** The connection as Conoscimi records it (see `ConnectionLearning`). */
@@ -536,8 +533,9 @@ export interface ConnectionReading {
   kind: 'posta' | 'calendario'
   /** Its address, or a calendar connection's name. */
   label: string
+  /** How far back it is read; a calendar holds this many days back, and a year ahead (`CALENDAR_HELD_DAYS`). */
   days: number
-  /** Why, in the Segretario's words; null when it is the default. */
+  /** Why, in the Segretario's words; null when it is the default — and for a calendar, which has no horizon. */
   reason: string | null
 }
 

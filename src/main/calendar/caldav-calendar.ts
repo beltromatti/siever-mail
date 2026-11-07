@@ -377,7 +377,13 @@ export class CalDavCalendarProvider implements CalendarProvider {
 
   private eventOf(calendarId: string, url: string, occurrence: Occurrence): ProviderEvent {
     const { recurrenceId, ...event } = occurrence
-    return { ...event, calendarId, eventId: eventIdOf(url, recurrenceId) }
+    // A series is one object on the server: its instances share its address.
+    return {
+      ...event,
+      calendarId,
+      eventId: eventIdOf(url, recurrenceId),
+      seriesId: recurrenceId ? url : null
+    }
   }
 
   async changes(

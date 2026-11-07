@@ -808,6 +808,8 @@ model CalendarEvent {
   calendarId    String  @map("calendar_id")
   eventId       String  @map("event_id")
   iCalUid       String? @map("ical_uid")
+  /// The series a recurring event's instance belongs to (`CalendarEvent.seriesId`).
+  seriesId      String? @map("series_id")
   title         String
   start         String
   end           String

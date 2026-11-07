@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest'
 
-import type { CalendarEvent } from '@shared/calendar'
+import type { CalendarChange, CalendarEvent } from '@shared/calendar'
 
-import { CALENDAR_LOOK_CHUNK, lookChunk, lookWindow, nextLook } from './calendar'
+import {
+  CALENDAR_LOOK_CHUNK,
+  changeHeld,
+  firstLookDone,
+  heldWindow,
+  lookBlocks,
+  lookItems,
+  prepareCalendarLook,
+  unlooked
+} from './calendar'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const NOW = new Date(2026, 10, 6, 17, 30).getTime()
@@ -15,6 +24,7 @@ function event(key: string, start: Date): CalendarEvent {
     calendarName: 'Lavoro',
     eventId: key,
     iCalUid: null,
+    seriesId: null,
     title: key,
     start: start.toISOString(),
     end: new Date(start.getTime() + 60 * 60 * 1000).toISOString(),
@@ -30,76 +40,92 @@ function event(key: string, start: Date): CalendarEvent {
   }
 }
 
-describe('looking at a calendar one event at a time', () => {
-  const window = lookWindow(30, NOW)
+describe('looking at a calendar the first time', () => {
+  const window = heldWindow(NOW)
+  const at = (day: number, hour: number): Date => new Date(2026, 10, day, hour)
 
-  it('spans the horizon back — as far as the calendar keeps — and the days ahead, from midnight', () => {
+  it('holds from two months back to a year ahead, from midnight, sliding with the days', () => {
     expect(window.today).toBe(new Date(2026, 10, 6).getTime())
-    expect(window.from).toBe(new Date(2026, 9, 7).getTime())
-    expect(window.to).toBe(new Date(2027, 0, 6).getTime())
-    expect(lookWindow(365, NOW).from).toBe(new Date(2026, 8, 7).getTime())
+    expect(window.from).toBe(new Date(2026, 8, 7).getTime())
+    expect(window.to).toBe(new Date(2027, 10, 7).getTime())
+    expect(heldWindow(NOW + DAY_MS).to).toBe(new Date(2027, 10, 8).getTime())
   })
 
-  it('looks ahead first, then back, then at the days coming into the window', () => {
-    const first = nextLook({ lookedFrom: null, lookedUntil: null }, window)
-    expect(first).toEqual({ from: window.today, to: window.to, ahead: true })
+  it('takes a series as one thing, at its next instance — or its last, all past', () => {
+    const weekly = [2, 9, 16, 23].map((day) => ({
+      ...event(`lun${day}`, at(day, 9)),
+      seriesId: 'riunione'
+    }))
+    const gone = [3, 10].map((day) => ({
+      ...event(`old${day}`, new Date(2026, 9, day, 9)),
+      seriesId: 'finita'
+    }))
+    const items = lookItems([...weekly, ...gone, event('dentista', at(12, 15))], window.today)
 
-    const back = nextLook({ lookedFrom: window.today, lookedUntil: window.to }, window)
-    expect(back).toEqual({ from: window.from, to: window.today, ahead: false })
+    expect(items.map((item) => [item.event.key, item.instances.length])).toEqual([
+      ['old10', 2],
+      ['lun9', 4],
+      ['dentista', 1]
+    ])
+    expect(prepareCalendarLook(items, 'Lavoro', true).data).toContain(
+      'si ripete 4 volte nel calendario, dal 2 nov al 23 nov, ogni lunedì alle 09:00'
+    )
 
-    expect(nextLook({ lookedFrom: window.from, lookedUntil: window.to }, window)).toBeNull()
-
-    const tomorrow = lookWindow(30, NOW + DAY_MS)
-    expect(nextLook({ lookedFrom: window.from, lookedUntil: window.to }, tomorrow)).toEqual({
-      from: window.to,
-      to: tomorrow.to,
-      ahead: true
-    })
+    // A series across the new year says the years.
+    const yearly = [0, 1].map((year) => ({
+      ...event(`cena${year}`, new Date(2026 + year, 11, 20, 20)),
+      seriesId: 'cena'
+    }))
+    expect(prepareCalendarLook(lookItems(yearly, window.today), 'Lavoro', true).data).toContain(
+      'dal 20 dic 2026 al 20 dic 2027'
+    )
   })
 
-  it('takes a chunk in order, never splitting a moment, and grows the span by it', () => {
-    const at = (day: number, hour: number): Date => new Date(2026, 10, day, hour)
+  it('splits the window into blocks of a chunk — the past apart, a moment never split — that cover it all', () => {
     const many = Array.from({ length: CALENDAR_LOOK_CHUNK + 5 }, (_, index) =>
       event(`e${index}`, at(7 + Math.floor(index / 4), 9 + (index % 4)))
     )
-    // The chunk's last moment, twice: both go in.
-    const last = many[CALENDAR_LOOK_CHUNK - 1]
-    many.push(event('same', new Date(last.start)))
-    const range = { from: window.today, to: window.to, ahead: true }
+    // The chunk's last moment, twice: both go in the same block.
+    many.push(event('same', new Date(many[CALENDAR_LOOK_CHUNK - 1].start)))
+    const items = lookItems([event('ieri', at(5, 10)), ...many], window.today)
+    const blocks = lookBlocks(items, window, window.today)
 
-    const chunk = lookChunk(many, range, { lookedFrom: null, lookedUntil: null }, window.today)
-
-    expect(chunk.events).toHaveLength(CALENDAR_LOOK_CHUNK + 1)
-    expect(chunk.events.map((item) => item.key)).toContain('same')
-    expect(chunk.span.lookedFrom).toBe(window.today)
-    expect(chunk.span.lookedUntil).toBe(Date.parse(many[CALENDAR_LOOK_CHUNK].start))
-
-    const rest = lookChunk(
-      many,
-      { ...range, from: chunk.span.lookedUntil },
-      chunk.span,
-      window.today
-    )
-    expect(rest.events).toHaveLength(5)
-    expect(rest.span.lookedUntil).toBe(window.to)
+    expect(blocks).toEqual([
+      { from: window.from, to: window.today, ahead: false },
+      { from: window.today, to: Date.parse(many[CALENDAR_LOOK_CHUNK].start), ahead: true },
+      { from: Date.parse(many[CALENDAR_LOOK_CHUNK].start), to: window.to, ahead: true }
+    ])
+    const inBlock = (block: (typeof blocks)[number]): number =>
+      items.filter((item) => item.at >= block.from && item.at < block.to).length
+    expect(blocks.map(inBlock)).toEqual([1, CALENDAR_LOOK_CHUNK + 1, 5])
+    expect(lookBlocks([], window, window.today)).toEqual([])
   })
 
-  it('looks back from the latest, and covers the whole range when it ends', () => {
-    const past = [
-      event('ieri', new Date(2026, 10, 5, 10)),
-      event('lunedì', new Date(2026, 10, 2, 9))
-    ]
-    const range = { from: window.from, to: window.today, ahead: false }
+  it('is done once a whole window is looked at; a nearer look before leaves the rest to see', () => {
+    expect(firstLookDone({ lookedFrom: window.from, lookedUntil: window.to })).toBe(true)
+    expect(firstLookDone({ lookedFrom: null, lookedUntil: null })).toBe(false)
 
-    const chunk = lookChunk(
-      past,
-      range,
-      { lookedFrom: window.today, lookedUntil: window.to },
-      window.today
-    )
+    const earlier = {
+      lookedFrom: window.from - 30 * DAY_MS,
+      lookedUntil: window.today + 61 * DAY_MS
+    }
+    expect(firstLookDone(earlier)).toBe(false)
+    expect(unlooked(earlier, window)).toEqual([{ from: earlier.lookedUntil, to: window.to }])
+    expect(unlooked(undefined, window)).toEqual([{ from: window.from, to: window.to }])
+  })
 
-    expect(chunk.events.map((item) => item.key)).toEqual(['ieri', 'lunedì'])
-    expect(chunk.span).toEqual({ lookedFrom: window.from, lookedUntil: window.to })
-    expect(lookChunk([], range, chunk.span, window.today).span).toEqual(chunk.span)
+  it('hands over a change anywhere the calendar holds, and not beyond', () => {
+    const change = (start: Date): CalendarChange => ({
+      id: 1,
+      kind: 'nuovo',
+      inApp: false,
+      event: event('x', start),
+      before: null,
+      at: NOW
+    })
+
+    expect(changeHeld(change(new Date(2027, 2, 16, 9)), NOW)).toBe(true)
+    expect(changeHeld(change(new Date(2026, 9, 1, 9)), NOW)).toBe(true)
+    expect(changeHeld(change(new Date(2028, 0, 10, 9)), NOW)).toBe(false)
   })
 })

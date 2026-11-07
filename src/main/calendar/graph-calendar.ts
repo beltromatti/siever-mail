@@ -51,6 +51,8 @@ export interface GraphEvent {
    * wrapped, and each instance's date in it (see `canonicalUid`).
    */
   iCalUId?: string | null
+  /** The series an occurrence or an exception belongs to (its master's id). */
+  seriesMasterId?: string | null
   subject?: string | null
   body?: { contentType?: 'text' | 'html'; content?: string | null } | null
   start?: GraphDateTime | null
@@ -146,6 +148,7 @@ export function eventOfGraph(
     calendarId,
     eventId: item.id,
     iCalUid: item.iCalUId ? canonicalUid(item.iCalUId) : null,
+    seriesId: item.seriesMasterId ?? null,
     title: item.subject?.trim() || '(senza titolo)',
     start: allDay ? dayOf(start) : new Date(startsAt).toISOString(),
     end: allDay ? dayOf(end) : new Date(Math.max(endsAt, startsAt)).toISOString(),
@@ -179,6 +182,7 @@ function removedEvent(id: string, calendarId: string): ProviderEvent {
     calendarId,
     eventId: id,
     iCalUid: null,
+    seriesId: null,
     title: '',
     start: '',
     end: '',

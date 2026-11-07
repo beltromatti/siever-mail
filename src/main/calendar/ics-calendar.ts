@@ -138,7 +138,13 @@ export class IcsCalendarProvider implements CalendarProvider {
           .digest('hex')
           .slice(0, 24)
 
-      return { ...event, calendarId, eventId: recurrenceId ? `${uid}/${recurrenceId}` : uid }
+      // The instances of a series share its UID.
+      return {
+        ...event,
+        calendarId,
+        eventId: recurrenceId ? `${uid}/${recurrenceId}` : uid,
+        seriesId: recurrenceId ? uid : null
+      }
     })
 
     return { events, syncToken: read.token }

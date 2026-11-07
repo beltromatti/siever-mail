@@ -1,10 +1,5 @@
 import { CALENDAR_HELD_DAYS } from '@shared/calendar'
-import {
-  CALENDAR_LOOK_AHEAD_DAYS,
-  calendarLearningKey,
-  READING_DAYS,
-  type TaskKind
-} from '@shared/segretario'
+import { calendarLearningKey, READING_DAYS, type TaskKind } from '@shared/segretario'
 
 import { fileSources } from '../../files/file-sources'
 import { PROMPTS } from '../prompts'
@@ -17,7 +12,7 @@ import {
   type SegretarioTool,
   type ToolContext
 } from '../agent/tool-types'
-import { eventStart, lookWindow } from '../tasks/calendar'
+import { firstLookDone, heldWindow, lookItems } from '../tasks/calendar'
 import { countOf } from './format'
 
 const ACTIONS = ['elenco', 'lettura'] as const
@@ -103,39 +98,30 @@ async function mailLine(
   ].join('\n')
 }
 
+/** A calendar's line: what it holds, a series once, and whether the first look is done. */
 async function calendarLine(
   context: ToolContext,
   connection: Connection,
   reading: StoredReading | undefined
 ): Promise<string> {
   const connectionId = connection.names[0]
-  const days = reading?.days ?? READING_DAYS.default
-  const window = lookWindow(days)
-  const events = (
-    await context.calendar.events(
-      new Date(window.today - CALENDAR_HELD_DAYS.back * DAY_MS).toISOString(),
-      new Date(window.to).toISOString()
-    )
-  ).filter((event) => event.connectionId === connectionId)
-  const within = events.filter((event) => eventStart(event) >= window.from)
-  const looked = within.filter((event) => {
-    const start = eventStart(event)
-    return (
-      reading?.lookedFrom != null &&
-      reading.lookedUntil != null &&
-      start >= reading.lookedFrom &&
-      start < reading.lookedUntil
-    )
-  }).length
-  const back = [14, 30, CALENDAR_HELD_DAYS.back].map(
-    (period) =>
-      `${period} g ${events.filter((event) => eventStart(event) >= window.today - period * DAY_MS && eventStart(event) < window.today).length}`
+  const window = heldWindow()
+  const items = lookItems(
+    (
+      await context.calendar.events(
+        new Date(window.from).toISOString(),
+        new Date(window.to).toISOString()
+      )
+    ).filter((event) => event.connectionId === connectionId),
+    window.today
   )
+  const past = items.filter((item) => item.at < window.today).length
 
-  return [
-    `- Calendario ${connection.label} — gli eventi si guardano uno per uno da ${decidedWords(reading)} fa ai prossimi ${CALENDAR_LOOK_AHEAD_DAYS}: ${countOf(within.length, 'evento', 'eventi')}, ${looked} guardati.`,
-    `  Eventi passati per periodo: ${back.join(' · ')} (il calendario ne tiene ${CALENDAR_HELD_DAYS.back} giorni).`
-  ].join('\n')
+  return `- Calendario ${connection.label} — si guarda tutto ciò che tiene, da ${CALENDAR_HELD_DAYS.back} giorni fa a un anno avanti: ${countOf(items.length, 'evento', 'eventi')} (una serie ricorrente conta per uno), ${past} passati e ${items.length - past} in arrivo; ${
+    firstLookDone(reading)
+      ? 'li hai guardati tutti, e da qui guardi ciò che vi appare o cambia'
+      : 'la prima occhiata non è ancora finita'
+  }.`
 }
 
 async function list(context: ToolContext): Promise<string> {
@@ -204,6 +190,13 @@ async function setReading(
   }
 
   const connection = await connectionNamed(context, requireString(args, 'connessione'))
+
+  if (connection.kind === 'calendario') {
+    throw new ToolInputError(
+      `Un calendario non ha un orizzonte da decidere: di ${connection.label} si guarda tutto ciò che tiene, da ${CALENDAR_HELD_DAYS.back} giorni fa a un anno avanti, quando un evento appare e quando cambia.`
+    )
+  }
+
   const asked = numberArg(args, 'giorni')
 
   if (asked === undefined || !Number.isFinite(asked)) {
@@ -230,13 +223,6 @@ async function setReading(
     days !== Math.round(asked)
       ? ` (non meno di ${READING_DAYS.min}: le funzioni partono piene)`
       : ''
-
-  if (connection.kind === 'calendario') {
-    return {
-      content: `Da ora gli eventi di ${connection.label} si guardano uno per uno da ${days} giorni fa${clamped}${days > CALENDAR_HELD_DAYS.back ? ` — il calendario ne tiene ${CALENDAR_HELD_DAYS.back}: da lì` : ''} ai prossimi ${CALENDAR_LOOK_AHEAD_DAYS}; prima ${was}. Quelli che non hai guardato li guardi a blocchi, nel compito del calendario.`,
-      summary: `Calendario ${connection.label}: ${days} giorni indietro`
-    }
-  }
 
   const since = new Date(Date.now() - days * DAY_MS).toISOString()
   const progress = await context.mail.readingProgress(() => since, [connection.key])

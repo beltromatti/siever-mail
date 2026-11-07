@@ -3230,6 +3230,7 @@ export class AppDatabase {
         calendar_id TEXT NOT NULL,
         event_id TEXT NOT NULL,
         ical_uid TEXT,
+        series_id TEXT,
         title TEXT NOT NULL,
         start TEXT NOT NULL,
         end TEXT NOT NULL,
@@ -3308,6 +3309,15 @@ export class AppDatabase {
 
     if (!(await columns('calendar_events')).has('origin_json')) {
       await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_events ADD COLUMN origin_json TEXT')
+    }
+
+    // Kept before a series was told from its instances: every calendar is read whole again at
+    // its next sync, which says them — a read of a calendar anew, no change for the Segretario —
+    // and is looked at only once it is (`planCalendarLooks`).
+    if (!(await columns('calendar_events')).has('series_id')) {
+      await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_events ADD COLUMN series_id TEXT')
+      await this.prisma.$executeRawUnsafe('UPDATE calendar_calendars SET window_end = NULL')
+      await this.prisma.$executeRawUnsafe('UPDATE calendar_connections SET last_sync_at = NULL')
     }
 
     // Kept before the user's own changes in the app were noted for the Segretario.

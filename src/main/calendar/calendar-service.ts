@@ -18,6 +18,7 @@ import {
 import { decryptSecret, encryptSecret } from '@main/services/secure-storage'
 import { logMainError } from '@main/utils/error-utils'
 import {
+  CALENDAR_CHANGES_KEPT_DAYS,
   CALENDAR_HELD_DAYS,
   CALENDAR_IPC,
   calendarKey,
@@ -76,10 +77,14 @@ const SYNC_EVERY_MS = 5 * 60 * 1000
 /** How far back the events are kept, and how far ahead they are read (`CALENDAR_HELD_DAYS`). */
 const WINDOW_BACK_MS = CALENDAR_HELD_DAYS.back * 24 * 60 * 60 * 1000
 const WINDOW_AHEAD_MS = CALENDAR_HELD_DAYS.ahead * 24 * 60 * 60 * 1000
-/** Less than this ahead, the window is read again from today, so the months coming are in it. */
-const WINDOW_MIN_AHEAD_MS = 180 * 24 * 60 * 60 * 1000
+/**
+ * The window slides with the days: read whole again once a day, so it always
+ * holds a year ahead — what comes into it a day at a time, not half a year at
+ * once.
+ */
+const WINDOW_SLIDES_EVERY_MS = 24 * 60 * 60 * 1000
 /** How long what changed in the calendars is kept for the Segretario to look at. */
-const CHANGES_KEPT_MS = 30 * 24 * 60 * 60 * 1000
+const CHANGES_KEPT_MS = CALENDAR_CHANGES_KEPT_DAYS * 24 * 60 * 60 * 1000
 
 export interface CalendarServiceOptions {
   database: {
@@ -157,6 +162,7 @@ function eventOfRow(
     calendarName,
     eventId: row.eventId,
     iCalUid: row.iCalUid,
+    seriesId: row.seriesId,
     title: row.title,
     start: row.start,
     end: row.end,
@@ -1039,7 +1045,7 @@ export class CalendarService {
 
   /**
    * A calendar's events: what changed since the last read, or — the first
-   * time, when the token expired, or as the window's end comes near —
+   * time, when the token expired, and once a day as the window slides —
    * every one from two months back to a year ahead.
    */
   private async syncCalendar(
@@ -1053,7 +1059,7 @@ export class CalendarService {
     const fresh =
       stored?.syncToken &&
       stored.windowEnd !== null &&
-      Number(stored.windowEnd) - now > WINDOW_MIN_AHEAD_MS
+      Number(stored.windowEnd) > now + WINDOW_AHEAD_MS - WINDOW_SLIDES_EVERY_MS
 
     if (fresh && stored.syncToken) {
       try {
@@ -1087,7 +1093,10 @@ export class CalendarService {
     // expired token starts over — so what changed elsewhere is noted all the same; the
     // first read of a calendar is no change.
     const readBefore = stored !== null && stored.windowEnd !== null
-    await this.applyChanges(connectionId, events, { logChanges: readBefore })
+    await this.applyChanges(connectionId, events, {
+      logChanges: readBefore,
+      slidFrom: readBefore ? Number(stored.windowEnd) : undefined
+    })
     const read = new Set(
       events
         .filter((event) => !event.cancelled)
@@ -1152,12 +1161,14 @@ export class CalendarService {
    * new, different or cancelled compared with what was kept is noted in
    * `calendar_changes`, for the Segretario: the sync's finds, and the
    * user's own writes in the app (`inApp`). The Segretario's writes are not
-   * noted: it knows them.
+   * noted: it knows them. Nor is, after `slidFrom` — where the window ended
+   * before it slid —, an instance of a series the window already held: the
+   * time passing is no change; a series, or an event, new there is one.
    */
   private async applyChanges(
     connectionId: string,
     events: ReadonlyArray<ProviderEvent>,
-    options: { logChanges?: boolean; inApp?: boolean } = {}
+    options: { logChanges?: boolean; inApp?: boolean; slidFrom?: number } = {}
   ): Promise<void> {
     const prisma = this.requirePrisma()
     const keyOf = (event: ProviderEvent): string =>
@@ -1191,6 +1202,21 @@ export class CalendarService {
       })
     const now = BigInt(Date.now())
     const writes: Prisma.PrismaPromise<unknown>[] = []
+    // The series the window held before it slid: those of the instances read that start before.
+    const { slidFrom } = options
+    const heldSeries =
+      slidFrom === undefined
+        ? new Set<string>()
+        : new Set(
+            events
+              .filter((event) => event.seriesId !== null && event.startsAt < slidFrom)
+              .map((event) => `${event.calendarId}\u0000${event.seriesId}`)
+          )
+    const cameInto = (event: ProviderEvent): boolean =>
+      slidFrom !== undefined &&
+      event.startsAt >= slidFrom &&
+      event.seriesId !== null &&
+      heldSeries.has(`${event.calendarId}\u0000${event.seriesId}`)
 
     for (const event of events) {
       const key = keyOf(event)
@@ -1202,7 +1228,9 @@ export class CalendarService {
             ? 'annullato'
             : null
           : !before
-            ? 'nuovo'
+            ? cameInto(event)
+              ? null
+              : 'nuovo'
             : differs(before, event)
               ? 'cambiato'
               : null
@@ -1236,6 +1264,7 @@ export class CalendarService {
         calendarId: event.calendarId,
         eventId: event.eventId,
         iCalUid: event.iCalUid ? canonicalUid(event.iCalUid) : null,
+        seriesId: event.seriesId,
         title: event.title,
         start: event.start,
         end: event.end,

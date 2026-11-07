@@ -10,7 +10,11 @@ import {
   type ReadingStatus,
   type TaskKind
 } from '@shared/segretario'
-import type { CalendarEvent } from '@shared/calendar'
+import {
+  CALENDAR_CHANGES_KEPT_DAYS,
+  CALENDAR_HELD_DAYS,
+  type CalendarEvent
+} from '@shared/calendar'
 
 import type { AgentRunner, RunResult } from '../agent/runner'
 import type { SegretarioCalendarPort, SegretarioMailPort } from '../agent/tool-types'
@@ -19,13 +23,17 @@ import type { Notebook } from '../memory/notebook'
 import { SegretarioError } from '../openrouter'
 import type { Registry } from '../registry/registry'
 import {
-  changeMatters,
+  changeHeld,
   eventStart,
-  lookChunk,
-  lookWindow,
-  nextLook,
+  firstLookDone,
+  heldWindow,
+  lookBlocks,
+  lookItems,
   prepareCalendarChanges,
-  prepareCalendarLook
+  prepareCalendarLook,
+  unlooked,
+  type LookBlock,
+  type LookItem
 } from '../tasks/calendar'
 import { prepareDay, prepareProjectState } from '../tasks/day'
 import { prepareKeepingUp, prepareReflection } from '../tasks/memory-work'
@@ -84,12 +92,21 @@ const CALENDAR_SETTLE_MS = 2 * 60_000
 const CALENDAR_CHANGES_READ = 100
 /** In `ai_meta`: how far the changes to the calendar have been handed to the Segretario. */
 const CALENDAR_SEEN = 'calendar_seen'
-/** The units that look at a calendar's events the first time, and as they come into the days ahead. */
+/** In `ai_meta`: when the Segretario last had every change to the calendar handed to it. */
+const CALENDAR_SEEN_AT = 'calendar_seen_at'
+/** The units of a calendar's first look, a block each. */
 const LOOK_SCOPE = 'calendario-vista:'
 
-/** The scope of the looks at a calendar connection's events: its work, which goes with it. */
+/** The scope the blocks of a calendar connection's first look begin with: its work, which goes with it. */
 export function calendarLookScope(connectionId: string): string {
-  return `${LOOK_SCOPE}${connectionId}`
+  return `${LOOK_SCOPE}${connectionId}:`
+}
+
+/** What a block of a calendar's first look holds, as queued. */
+interface LookScope extends LookBlock {
+  look: string
+  /** The window the look was planned in: where a series is placed, and where it ends. */
+  window: { from: number; today: number; to: number }
 }
 /** In `ai_meta`: when keeping up last found too little new to be worth a run. */
 const KEEP_UP_CHECKED = 'keep_up_checked'
@@ -389,35 +406,14 @@ export class SegretarioEngine {
     )
     const calendars = await this.readingCalendars(accountIds)
     const looks = await Promise.all(
-      calendars.map(async (connection) => {
-        const key = calendarLearningKey(connection.id)
-        const window = lookWindow(daysOf(key))
-        const events = await this.eventsOf(connection.id, window.from, window.to)
-        const span = readings.get(key)
-        const looked = events.filter((event) => {
-          const start = eventStart(event)
-          return (
-            span?.lookedFrom != null &&
-            span.lookedUntil != null &&
-            start >= span.lookedFrom &&
-            start < span.lookedUntil
-          )
-        }).length
-        return { key, total: events.length, looked }
-      })
+      calendars.map((connection) =>
+        this.lookProgress(connection.id, readings.get(calendarLearningKey(connection.id)))
+      )
     )
-    const lookUnits = (await queue.units('calendario')).filter((unit) =>
-      calendars.some((connection) => unit.scopeKey === calendarLookScope(connection.id))
-    )
-    const failedLooks = (await queue.failed('calendario')).filter((unit) =>
-      calendars.some((connection) => unit.scopeKey === calendarLookScope(connection.id))
-    )
-    const failedLookKeys = new Set(
-      failedLooks.map((unit) => unit.scopeKey.slice(LOOK_SCOPE.length))
-    )
-    const eventsLeft = looks.some(
-      (look, index) => look.looked < look.total && !failedLookKeys.has(calendars[index].id)
-    )
+    const lookUnits = looks.flatMap((look) => look.units)
+    const pendingLooks = lookUnits.filter((unit) => unit.status !== 'fatto')
+    const failedLooks = lookUnits.filter((unit) => unit.status === 'fallito')
+    const eventsLeft = looks.some((look) => look.left)
     const downloading = (
       await Promise.all(
         accounts.map(
@@ -427,15 +423,23 @@ export class SegretarioEngine {
     ).some(Boolean)
     const horizons: ConnectionReading[] = [
       ...accounts.map((account) => this.horizonOf(account.id, 'posta', account.email, readings)),
-      ...calendars.map((connection) =>
-        this.horizonOf(calendarLearningKey(connection.id), 'calendario', connection.label, readings)
-      )
+      // A calendar has no horizon of its own: what it holds is looked at (§9.2).
+      ...calendars.map((connection): ConnectionReading => ({
+        key: calendarLearningKey(connection.id),
+        kind: 'calendario',
+        label: connection.label,
+        days: CALENDAR_HELD_DAYS.back,
+        reason: null
+      }))
     ]
 
     return {
       ...(await mail.readingProgress(sinceOf, accountIds)),
-      waiting: waiting + lookUnits.filter((unit) => unit.status !== 'al_lavoro').length,
-      running: running + lookUnits.filter((unit) => unit.status === 'al_lavoro').length,
+      waiting:
+        waiting +
+        pendingLooks.filter((unit) => unit.status === 'in_coda' || unit.status === 'da_riprovare')
+          .length,
+      running: running + pendingLooks.filter((unit) => unit.status === 'al_lavoro').length,
       failed: [
         ...failed,
         ...(await Promise.all(
@@ -451,13 +455,47 @@ export class SegretarioEngine {
       },
       horizons,
       downloading,
-      done:
-        waiting === 0 &&
-        running === 0 &&
-        left.length === 0 &&
-        !eventsLeft &&
-        lookUnits.every((unit) => unit.status === 'fallito') &&
-        !downloading
+      done: waiting === 0 && running === 0 && left.length === 0 && !eventsLeft && !downloading
+    }
+  }
+
+  /**
+   * Where a calendar's first look stands: the things of its window — a
+   * series once — how many are looked at, the blocks of the look, and
+   * whether any is still to be looked at by itself (not failed).
+   */
+  private async lookProgress(
+    connectionId: string,
+    span: StoredReading | undefined
+  ): Promise<{ total: number; looked: number; units: WorkUnit[]; left: boolean }> {
+    const window = heldWindow()
+    const items = lookItems(await this.eventsOf(connectionId, window.from, window.to), window.today)
+
+    if (firstLookDone(span)) {
+      return { total: items.length, looked: items.length, units: [], left: false }
+    }
+
+    const units = await this.deps.queue.within(calendarLookScope(connectionId))
+    // Before it is planned, what an earlier look reached; then all but what its blocks still hold.
+    const notLooked =
+      units.length === 0
+        ? items.filter((item) =>
+            unlooked(span, window).some((range) => item.at >= range.from && item.at < range.to)
+          )
+        : items.filter((item) =>
+            units.some((unit) => {
+              const block = unit.scope as LookScope
+              return unit.status !== 'fatto' && item.at >= block.from && item.at < block.to
+            })
+          )
+
+    return {
+      total: items.length,
+      looked: items.length - notLooked.length,
+      units,
+      left:
+        units.length === 0 ||
+        units.some((unit) => unit.status !== 'fatto' && unit.status !== 'fallito')
     }
   }
 
@@ -491,7 +529,7 @@ export class SegretarioEngine {
     const failed = [
       ...(await queue.failed('lettura')).filter((unit) => ours(unit.scopeKey)),
       ...(await queue.failed('calendario')).filter((unit) =>
-        calendars.some((connection) => unit.scopeKey === calendarLookScope(connection.id))
+        calendars.some((connection) => unit.scopeKey.startsWith(calendarLookScope(connection.id)))
       )
     ]
 
@@ -860,8 +898,10 @@ export class SegretarioEngine {
    * Hands what changed in the calendar to a look of the Segretario's, once
    * at a time. The point reached moves when a look is done, so what a look
    * that failed did not see is seen by the next; a look that failed waits
-   * for "Riprova", or for the calendar to change after it. Changes far from now
-   * are passed over; the first time, the past is.
+   * for "Riprova", or for the calendar to change after it. Changes outside
+   * what the calendar holds are passed over; the first time, the past is.
+   * Changes let go before they were seen — the AI off for longer than they
+   * are kept — leave the calendars to be looked at whole again.
    */
   private async planCalendar(): Promise<void> {
     const { store, calendar, queue } = this.deps
@@ -869,19 +909,36 @@ export class SegretarioEngine {
 
     if (seen === null) {
       await store.setMeta(CALENDAR_SEEN, String(await calendar.latestChangeId()))
+      await store.setMeta(CALENDAR_SEEN_AT, String(Date.now()))
+      return
+    }
+
+    const seenAt = Number((await store.meta(CALENDAR_SEEN_AT)) ?? Date.now())
+
+    // Away for longer than changes are kept: some may be gone unseen. Every calendar is looked at
+    // whole again, from where it stands now.
+    if (Date.now() - seenAt > CALENDAR_CHANGES_KEPT_DAYS * DAY_MS) {
+      for (const connection of await calendar.connections().catch(() => [])) {
+        await store.forgetLooked(calendarLearningKey(connection.id))
+      }
+
+      await store.setMeta(CALENDAR_SEEN, String(await calendar.latestChangeId()))
+      await store.setMeta(CALENDAR_SEEN_AT, String(Date.now()))
       return
     }
 
     const changes = await calendar.changesSince(Number(seen), CALENDAR_CHANGES_READ)
 
     if (changes.length === 0) {
+      await store.setMeta(CALENDAR_SEEN_AT, String(Date.now()))
       return
     }
 
     // Nothing among them for the Segretario: seen. Otherwise its look is asked once, and the
     // mark moves when that look is done — one that fails leaves them to the next.
-    if (!changes.some((change) => changeMatters(change))) {
+    if (!changes.some((change) => changeHeld(change))) {
       await store.setMeta(CALENDAR_SEEN, String(changes[changes.length - 1].id))
+      await store.setMeta(CALENDAR_SEEN_AT, String(Date.now()))
       return
     }
 
@@ -903,97 +960,115 @@ export class SegretarioEngine {
   }
 
   /**
-   * Each calendar not held back, looked at one by one as far as its
-   * horizon: what of its days is not looked at yet — the first time all of
-   * it, then the day coming into the days ahead — queued as a look; a span
-   * with nothing in it is looked at as it is, without a run.
+   * Each calendar not held back, the first time, looked at whole — once it
+   * has been read: all its window holds — a series once — in blocks, queued
+   * together and looked at in parallel, as conversations are. Once every block is done the first
+   * look is, and from then on the calendar is looked at by what changes in
+   * it. A block that failed stays so, until "Riprova".
    */
   private async planCalendarLooks(hold: SetupHold): Promise<void> {
-    const { queue } = this.deps
-    const { readings, daysOf } = await this.horizons()
+    const { queue, store } = this.deps
+    const { readings } = await this.horizons()
 
     for (const connection of await this.lookedCalendars(hold)) {
       const key = calendarLearningKey(connection.id)
-      const scopeKey = calendarLookScope(connection.id)
-      const window = lookWindow(daysOf(key))
-      const span = readings.get(key) ?? { lookedFrom: null, lookedUntil: null }
-      const range = nextLook(span, window)
+      const span = readings.get(key)
 
-      if (!range || (await queue.busy(scopeKey))) {
+      // Not read yet — just added, or read anew after an update: nothing to look at until it is.
+      if (firstLookDone(span) || connection.lastSyncAt === null) {
         continue
       }
 
-      if ((await this.eventsOf(connection.id, range.from, range.to)).length === 0) {
-        const { span: looked } = lookChunk([], range, span, window.today)
-        await this.deps.store.setLooked(key, looked.lookedFrom, looked.lookedUntil)
+      const units = await queue.within(calendarLookScope(connection.id))
+
+      if (units.some((unit) => unit.status !== 'fatto')) {
         continue
       }
 
-      await queue.enqueue({
-        task: 'calendario',
-        scopeKey,
-        scope: { look: connection.id },
-        priority: PRIORITY.backlog
-      })
+      // Every block done: the first look is, over the window it was planned in.
+      if (units.length > 0) {
+        const { window } = units[0].scope as LookScope
+        await store.setLooked(
+          key,
+          Math.min(span?.lookedFrom ?? window.from, window.from),
+          window.to
+        )
+        continue
+      }
+
+      const window = heldWindow()
+      const items = lookItems(
+        await this.eventsOf(connection.id, window.from, window.to),
+        window.today
+      )
+      const blocks = unlooked(span, window).flatMap((range) =>
+        lookBlocks(items, range, window.today)
+      )
+
+      // Nothing in it to look at: looked at as it is, without a run.
+      if (blocks.length === 0) {
+        await store.setLooked(
+          key,
+          Math.min(span?.lookedFrom ?? window.from, window.from),
+          window.to
+        )
+        continue
+      }
+
+      for (const block of blocks) {
+        await queue.enqueue({
+          task: 'calendario',
+          scopeKey: `${calendarLookScope(connection.id)}${block.from}`,
+          scope: { ...block, look: connection.id, window } satisfies LookScope,
+          priority: PRIORITY.backlog
+        })
+      }
     }
   }
 
   /**
-   * A look at a calendar's events not looked at yet: a chunk of them, in
-   * order, handed to the calendar's task; done, the span looked at grows to
-   * take them in. The window is worked out again here: the horizon may have
-   * changed since the planning, or the day.
+   * A block of a calendar's first look: the things of the window that stand
+   * in it — a series once, placed as the look was planned — handed to the
+   * calendar's task.
    */
   private async lookAtCalendar(
-    connectionId: string,
+    block: LookScope,
     workId: string,
     signal: AbortSignal
   ): Promise<void> {
-    const { store } = this.deps
     const connection = (await this.deps.calendar.connections().catch(() => [])).find(
-      (candidate) => candidate.id === connectionId
+      (candidate) => candidate.id === block.look
     )
 
     if (!connection) {
       return
     }
 
-    const key = calendarLearningKey(connectionId)
-    const window = lookWindow((await this.horizons()).daysOf(key))
-    const span = (await store.reading(key)) ?? { lookedFrom: null, lookedUntil: null }
-    const range = nextLook(span, window)
+    const { window } = block
+    const items: LookItem[] = lookItems(
+      await this.eventsOf(block.look, window.from, window.to),
+      window.today
+    ).filter((item) => item.at >= block.from && item.at < block.to)
 
-    if (!range) {
+    if (items.length === 0) {
       return
     }
 
-    const chunk = lookChunk(
-      await this.eventsOf(connectionId, range.from, range.to),
-      range,
-      span,
-      window.today
+    const data = prepareCalendarLook(items, connection.label, block.ahead)
+    settle(
+      await startRun(this.starter, {
+        task: 'calendario',
+        background: true,
+        visibility: 'diario',
+        data,
+        origin: 'segretario',
+        shown: data.title,
+        workId,
+        scope: { look: block.look },
+        signal,
+        onCreated: (activityId) => this.deps.queue.attachActivity(workId, activityId)
+      })
     )
-
-    if (chunk.events.length > 0) {
-      const data = prepareCalendarLook(chunk.events, connection.label, range.ahead)
-      settle(
-        await startRun(this.starter, {
-          task: 'calendario',
-          background: true,
-          visibility: 'diario',
-          data,
-          origin: 'segretario',
-          shown: data.title,
-          workId,
-          scope: { look: connectionId },
-          signal,
-          onCreated: (activityId) => this.deps.queue.attachActivity(workId, activityId)
-        })
-      )
-    }
-
-    // What is left of the range is the next planning's.
-    await store.setLooked(key, chunk.span.lookedFrom, chunk.span.lookedUntil)
   }
 
   /** How each task's units run. */
@@ -1107,12 +1182,15 @@ export class SegretarioEngine {
         }
       },
       calendario: {
-        lockKeys: async () => ['calendario'],
+        // The blocks of a first look go in parallel, as conversations do; what changed, one look
+        // at a time: changes are few, and they touch one another.
+        lockKeys: async (unit) =>
+          (unit.scope as Partial<LookScope>).look ? [unit.scopeKey] : ['calendario'],
         run: async (unit, signal) => {
-          const look = (unit.scope as { look?: string }).look
+          const block = unit.scope as Partial<LookScope>
 
-          if (look) {
-            await this.lookAtCalendar(look, unit.id, signal)
+          if (block.look) {
+            await this.lookAtCalendar(block as LookScope, unit.id, signal)
             return
           }
 
@@ -1125,7 +1203,7 @@ export class SegretarioEngine {
           }
 
           const through = all[all.length - 1].id
-          const changes = all.filter((change) => changeMatters(change))
+          const changes = all.filter((change) => changeHeld(change))
 
           if (changes.length > 0) {
             const data = prepareCalendarChanges(changes)
@@ -1146,6 +1224,7 @@ export class SegretarioEngine {
           }
 
           await deps.store.setMeta(CALENDAR_SEEN, String(through))
+          await deps.store.setMeta(CALENDAR_SEEN_AT, String(Date.now()))
         }
       },
       riflessione: {

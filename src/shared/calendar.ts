@@ -30,6 +30,13 @@ export interface CalendarEvent {
   eventId: string
   /** The id an invitation in mail carries (iCalendar UID). */
   iCalUid: string | null
+  /**
+   * The series an instance of a recurring event belongs to, as its provider
+   * names it — every instance has the same; null for an event that does not
+   * repeat. A series is one thing to the Segretario: looked at once, and an
+   * instance of it coming into the calendar's window is no change.
+   */
+  seriesId: string | null
   title: string
   /** An ISO date-time — or, for an all-day event, AAAA-MM-GG. */
   start: string
@@ -177,6 +184,9 @@ export interface NewCalendarEvent {
  * what can be seen of it — by the user and by the Segretario.
  */
 export const CALENDAR_HELD_DAYS = { back: 60, ahead: 365 } as const
+
+/** How long what changed in the calendars is kept for the Segretario to look at. */
+export const CALENDAR_CHANGES_KEPT_DAYS = 30
 
 /**
  * Something that changed in a calendar not by the Segretario's hand: found

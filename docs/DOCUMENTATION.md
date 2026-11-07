@@ -219,7 +219,7 @@ connections with the same ids, so events keep their keys.
 | `ai_activities`, `ai_events`                                | Every run: its task, where it shows (`pannello`, `diario`, `nascosta`), the work unit it ran; and the log of everything said and done in it, which the conversation is rebuilt from.                                                                                                                                                                                                                                                                                            |
 | `ai_work`                                                   | The engine's queue: units of work by task and scope key, with priority, status, attempts and when they may start.                                                                                                                                                                                                                                                                                                                                                               |
 | `ai_usage`                                                  | Every call to the model: its task, tokens, cache hits and what OpenRouter billed.                                                                                                                                                                                                                                                                                                                                                                                               |
-| `ai_reading`                                                | How far back each connection is read (`days`, by whom, when, why) and, for a calendar, the span of its events looked at one by one.                                                                                                                                                                                                                                                                                                                                             |
+| `ai_reading`                                                | How far back each mailbox is read (`days`, by whom, when, why) and, for a calendar, the span its first look covered.                                                                                                                                                                                                                                                                                                                                                            |
 | `ai_memory`, `ai_memory_history`                            | The notebook, path → Markdown with a revision and who wrote it last, and the past versions of each note.                                                                                                                                                                                                                                                                                                                                                                        |
 | `ai_learning`                                               | The connections Conoscimi knows — a mailbox by its id, a calendar as `calendario:<id>` — with the run that did it.                                                                                                                                                                                                                                                                                                                                                              |
 | `ai_lessons`                                                | What the next reflection takes in: drafts the user corrected or sent as they were, their corrections and decisions on notes, commitments, projects, replies, proposals and the memory — each with the message it is about and the open thing's number — a mailbox or a calendar removed.                                                                                                                                                                                        |
@@ -1062,9 +1062,10 @@ last thirty days indexed; every calendar through its first sync),
 (`CASE_STEPS`, `applies`): the key only while the AI is off, Conoscimi only
 with it on, the reading with it on and mail to read. The state is kept in `ai_meta` (`onboarding`),
 so a quit brings the user back to the same step. Conoscimi is started by
-the user and watched as it works; the reading step shows each connection's
-horizon with Conoscimi's reason, and the messages and events within it are
-read eight at a time, with the progress and an estimate. Nothing is
+the user and watched as it works; the reading step shows each mailbox's
+horizon with Conoscimi's reason and each calendar's window, and the
+messages and the calendars' blocks are read eight at a time, with the
+progress and an estimate. Nothing is
 skipped with the AI on: what does not go is tried again, as often as the
 user wants, or the setup ends without the AI (`continueWithoutAi`: the AI
 goes off, the setup goes to its last step, and turned on again it starts
@@ -1220,23 +1221,31 @@ idempotent: asked again, it queues nothing twice. In order:
   other than by the day's own run (`CommitmentStore.changedSince`), and it
   is older than three hours — one, when Oggi is looked at
   (`LETTER_LOOKED_AT_STALE_MS` in `segretario-service.ts`);
-- the events of each calendar, looked at one by one as messages are read
-  — held back, like the mail, only while a guided setup is before its
-  reading (one turning the AI on holds every calendar, one adding
-  connections those not known yet), so a calendar left unknown by a
-  Conoscimi the user went on without is looked at all the same: the next two months first (`CALENDAR_LOOK_AHEAD_DAYS`),
-  then back as far as its horizon and what the calendar keeps
-  (`CALENDAR_HELD_DAYS`, 60 days back), fifty at a time (`lookChunk`, a
-  `calendario` run with `scope.look`), the span looked at kept in
-  `ai_reading` (`lookedFrom`, `lookedUntil`) — so a day coming into the
-  window is looked at as it comes, and a horizon moved back is looked at
-  for what it adds;
+- each calendar's first look — held back, like the mail, only while a
+  guided setup is before its reading (one turning the AI on holds every
+  calendar, one adding connections those not known yet), so a calendar
+  left unknown by a Conoscimi the user went on without is looked at all
+  the same: the whole window the calendar holds (`heldWindow`,
+  `CALENDAR_HELD_DAYS`: 60 days back, a year ahead), no horizon to decide;
+  its things (`lookItems`: an event, or a recurring series once, at its
+  next instance) in blocks of fifty (`lookBlocks`, the past apart from what
+  is coming, a moment never split), all queued at once — scope key
+  `calendario-vista:<connection>:<from>` — and looked at in parallel, as
+  conversations are, each a `calendario` run that may look beyond its
+  block. When every block is done the span is kept in `ai_reading`
+  (`lookedFrom`, `lookedUntil`), and the first look is done
+  (`firstLookDone`): from then on the calendar is looked at by what changes
+  in it. A calendar looked at before only up to a nearer day (the earlier
+  sixty days ahead) has the rest looked at (`unlooked`);
 - the calendar's changes, looked at two minutes after the first of them
-  (what comes meanwhile joins the same look), those from yesterday to two
-  months ahead, each said as done in the app by the user (`in_app` in
-  `calendar_changes`) or elsewhere; the mark (`calendar_seen`) moves only
-  once a look is done, so one that fails leaves them to the next, and one
-  that failed for good rests a day unless the calendar changed after it;
+  (what comes meanwhile joins the same look), one look at a time, anywhere
+  in the window the calendar holds (`changeHeld`), each said as done in the
+  app by the user (`in_app` in `calendar_changes`) or elsewhere, the same
+  change to a series said once; the mark (`calendar_seen`) moves only once
+  a look is done, so one that fails leaves them to the next, and one that
+  failed for good waits for the calendar to change after it. Away for
+  longer than changes are kept (`CALENDAR_CHANGES_KEPT_DAYS`, the AI off a
+  month — `calendar_seen_at`), every calendar is looked at whole again;
 - "Il punto" of the projects behind on it: at once for one that has none,
   else once a day from the morning, the latest moved first, ten at most —
   a project the user opens behind has it written then;
@@ -1244,15 +1253,16 @@ idempotent: asked again, it queues nothing twice. In order:
   Conoscimi — when a dozen notes on messages that say something came since
   and twenty hours passed.
 
-**How far back.** Each connection — a mailbox, a calendar connection — is
-read one by one as far back as its horizon (`ai_reading`, `READING_DAYS`:
+**How far back.** Each mailbox is read one by one as far back as its
+horizon (`ai_reading`, `READING_DAYS`:
 30 days unless decided, never under 14 so the work starts full, with no
 upper bound). Conoscimi decides it once it knows the connection, from what
 the `connessioni` tool shows — how many messages each period holds, up to
 all of them, what reading one costs from the readings of the last month —
 and says why; the user can ask for another in chat, and what they
 asked stands. A horizon moved back has what it adds read, the same way;
-moved forward, what was read stays.
+moved forward, what was read stays. A calendar has no horizon: what it
+holds is looked at, as it appears and as it changes.
 
 What the user asks for — the day looked at again, "Il punto" of a project
 opened — starts at once, a waiting unit moved to now
@@ -1717,8 +1727,12 @@ in the file. An event the Segretario put in a calendar says so
 (`inTurn`), so a sync never reads an event while it is written. The
 calendars listed (one no longer there takes its events and CalDAV objects
 with it), then each calendar's events — from two months back to a year
-ahead the first time, then only what changed; when the token expires or
-the window's end comes within six months, the window is read again. A
+ahead the first time, then only what changed; when the token expires, and
+once a day as the window slides with the days, the window is read whole
+again, so it always holds a year ahead. An event coming into the window
+is a change only when it is new to it: another instance of a series the
+window held (`seriesId` — Google's `recurringEventId`, Graph's
+`seriesMasterId`, a CalDAV object's address, an ICS UID) is not. A
 CalDAV object read is kept only once its events are (`commit`), so a sync
 cut short reads it again. What a sync finds changed that the app did not
 change — new, moved, cancelled, an invitation answered — is noted in

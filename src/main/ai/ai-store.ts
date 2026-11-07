@@ -601,7 +601,15 @@ export class AiStore {
     return notes >= 20 && cost > 0 ? cost / notes : null
   }
 
-  /** How far a calendar's events have been looked at: from one start to another, both in. */
+  /** A calendar to be looked at whole again: what it looked at no longer says what is there. */
+  async forgetLooked(key: string): Promise<void> {
+    await this.sql.run(
+      'UPDATE ai_reading SET looked_from = NULL, looked_until = NULL WHERE connection_key = ?',
+      key
+    )
+  }
+
+  /** How far a calendar's first look has come: from one start to another. */
   async setLooked(key: string, from: number, until: number): Promise<void> {
     await this.sql.run(
       `INSERT INTO ai_reading (connection_key, looked_from, looked_until) VALUES (?, ?, ?)
