@@ -55,6 +55,29 @@ const COMPACT_AT_SHARE = 0.85
  * Not a limit on how much a run works or reads: only on turning in place.
  */
 const TURNS_WITHOUT_PROGRESS = 10
+
+/**
+ * How much the Segretario thinks, by task — always, never off. `max` where
+ * the work is deep and nobody hurries it: getting to know the user, keeping
+ * the memory, learning from corrections, the day's letter, a conversation
+ * the user opened. `low` where the work is many small readings, or the user
+ * waits on it as on a button: each message, the calendar's changes, "Il
+ * punto" of a project opened, the writing in the editor, the reread before
+ * sending, the search in words. How long it thinks within that is the model's.
+ */
+export const TASK_EFFORT: Readonly<Record<TaskKind, 'low' | 'max'>> = {
+  richiesta: 'max',
+  conoscimi: 'max',
+  al_passo: 'max',
+  riflessione: 'max',
+  giornata: 'max',
+  lettura: 'low',
+  calendario: 'low',
+  punto: 'low',
+  scrittura: 'low',
+  revisione: 'low',
+  ricerca: 'low'
+}
 const STREAM_FLUSH_MS = 60
 
 export interface RunnerDeps {
@@ -128,7 +151,8 @@ interface LiveRun {
  * The loop every run of the Segretario turns — the chat and the work it
  * does on its own alike: the model writes, calls its tools, reads what
  * they found, and goes on until the work is done. How many turns, how long,
- * how deep it thinks, how much it writes: the model's. The harness is plain
+ * how much it writes: the model's; how deep it thinks, by the task
+ * (`TASK_EFFORT`), within which the model decides. The harness is plain
  * on purpose; what it keeps is what cannot be left to the model: the user's
  * confirmation before anything leaves, the log every run is rebuilt from,
  * the model's own context (compacted near its edge), the wait for a model
@@ -184,6 +208,13 @@ export class AgentRunner {
   async run(options: RunOptions): Promise<RunResult> {
     const { store } = this.deps
     const id = options.activityId
+
+    // One run at a time writes an activity's log: a second — "Riprova" pressed twice, a message
+    // on top of it — would write into the same conversation.
+    if (this.live.has(id)) {
+      throw new SegretarioError('cancelled', 'Sto già lavorando su questo.')
+    }
+
     const controller = new AbortController()
     const context: RunContext = {
       activityId: id,
@@ -238,7 +269,12 @@ export class AgentRunner {
           () =>
             this.deps.client.chat(
               key,
-              { messages: buildConversation(system, events), tools, sessionId: id },
+              {
+                messages: buildConversation(system, events),
+                tools,
+                reasoningEffort: TASK_EFFORT[options.task],
+                sessionId: id
+              },
               {
                 signal,
                 onLateBill: (bill) => this.deps.recordUsage(id, options.task, bill),
@@ -300,7 +336,7 @@ export class AgentRunner {
         )
         stalled = outcomes.some((progressed) => progressed) ? 0 : stalled + 1
         this.stopIfStuck(stalled)
-        await this.manageContext(id, key, system, result.usage.promptTokens, signal)
+        await this.manageContext(id, key, system, options.task, result.usage.promptTokens, signal)
       }
 
       await store.updateActivity(id, { status: 'done', unseen: !options.background })
@@ -598,6 +634,7 @@ export class AgentRunner {
     id: string,
     key: string,
     system: string,
+    task: TaskKind,
     promptTokens: number,
     signal: AbortSignal
   ): Promise<void> {
@@ -629,6 +666,8 @@ export class AgentRunner {
           ],
           tools: toolDefinitions(this.deps.tools),
           toolChoice: 'none',
+          // Summarised as deeply as the work it stands for is done.
+          reasoningEffort: TASK_EFFORT[task],
           sessionId: id
         },
         { signal, onLateBill: (bill) => this.deps.recordUsage(id, 'compattazione', bill) }

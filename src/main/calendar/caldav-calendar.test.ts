@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { CalDavCalendarProvider } from './caldav-calendar'
+import { CalDavCalendarProvider, davStatusOf } from './caldav-calendar'
+import { refusalOfCalendar } from './calendar-refusal'
+import type { Fetch } from './ics-calendar'
 
 const SERVER = 'https://dav.example.it/'
 const HOME = `${SERVER}mattia/`
@@ -126,5 +128,88 @@ describe('CalDavCalendarProvider.schedules', () => {
     const { provider: plain } = davServer(() => new Response(null, { status: 405 }))
     await plain.listCalendars()
     expect(await plain.schedules(CALENDAR)).toBe(false)
+  })
+})
+
+describe('CalDavCalendarProvider, turned down', () => {
+  const signedIn = (fetch: Fetch): CalDavCalendarProvider =>
+    new CalDavCalendarProvider({
+      serverUrl: SERVER,
+      username: 'mattia@studio.it',
+      password: 'vecchia',
+      store: {
+        list: async () => [],
+        get: async () => null,
+        put: async () => undefined,
+        remove: async () => undefined,
+        replace: async () => undefined
+      },
+      fetch
+    })
+
+  it('reads the status tsdav reports only in its words', () => {
+    expect(
+      davStatusOf(new Error('Invalid credentials: PROPFIND https://x/ returned 401 Unauthorized'))
+    ).toBe(401)
+    expect(davStatusOf(new Error('Calendar discovery failed: 404 Not Found'))).toBe(404)
+    expect(davStatusOf(new Error('Collection query failed: 403 Forbidden. '))).toBe(403)
+    // A property the server would not give is not the collection's answer.
+    expect(
+      davStatusOf(new Error('Calendar discovery failed: resourcetype returned 404 Not Found'))
+    ).toBeNull()
+    expect(davStatusOf(new Error('cannot find homeUrl'))).toBeNull()
+  })
+
+  it('takes a password the server refuses for the access refused: the whole connection’s', async () => {
+    const refused = await signedIn(async () => new Response(null, { status: 401 }))
+      .listCalendars()
+      .catch((error: unknown) => error)
+
+    expect(refusalOfCalendar(refused)).toMatchObject({
+      refusal: 'accesso',
+      problem: 'Il server del calendario non ha accettato nome utente e password.',
+      detail: expect.stringMatching(/^Invalid credentials/)
+    })
+  })
+
+  it('takes a home of calendars no longer on the server for the calendars gone', async () => {
+    const gone = await signedIn(async (url, init) => {
+      const depth = new Headers(init?.headers).get('depth')
+
+      if (url === SERVER) {
+        return multistatus(
+          ok('/', '<current-user-principal><href>/mattia/</href></current-user-principal>')
+        )
+      }
+
+      if (url === HOME && depth === '0') {
+        return multistatus(
+          ok('/mattia/', '<C:calendar-home-set><href>/mattia/</href></C:calendar-home-set>')
+        )
+      }
+
+      return new Response(null, { status: 404 })
+    })
+      .listCalendars()
+      .catch((error: unknown) => error)
+
+    expect(refusalOfCalendar(gone)).toMatchObject({
+      refusal: 'sparito',
+      problem: 'I calendari non sono più a quell’indirizzo del server.'
+    })
+  })
+
+  it('takes a calendar the server will not let be asked for that request alone', async () => {
+    const { provider } = davServer(() => new Response(null, { status: 403 }))
+    await provider.listCalendars()
+
+    const denied = await provider.schedules(CALENDAR).catch((error: unknown) => error)
+    expect(denied).toMatchObject({
+      message:
+        'Il server del calendario non ha detto se manda gli inviti: il server non lo permette.',
+      status: 403,
+      refusal: null
+    })
+    expect(refusalOfCalendar(denied)).toBeNull()
   })
 })

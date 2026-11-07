@@ -89,11 +89,12 @@ export interface ChatRequest {
   /** `none` keeps the tools in the prefix (for the cache) while the model answers in words. */
   toolChoice?: 'auto' | 'none'
   /**
-   * Left out, the model thinks as long as it decides — the Segretario's runs
-   * always; `none` turns the thinking off, for the small calls of the
+   * How much the model thinks: the Segretario thinks always, `low` for the
+   * work that wants speed, `max` for the work that wants depth (see
+   * `TASK_EFFORT`); `none` turns the thinking off, for the small calls of the
    * infrastructure (an activity's title).
    */
-  reasoningEffort?: 'none'
+  reasoningEffort: 'none' | 'low' | 'max'
   maxTokens?: number
   /** Keeps a conversation on one provider, its prefix in the cache. */
   sessionId?: string
@@ -129,10 +130,21 @@ export type GenerationBill = Pick<ChatResult, 'usage' | 'model' | 'provider'>
 
 /* ───────────────────────────────── errors ───────────────────────────────── */
 
+/**
+ * What went wrong, in three kinds. OpenRouter or the model away for now —
+ * `rate-limited`, `unavailable`, `network`, `timeout` — passes by itself:
+ * the call waits and is made again (`unreachable`). The whole service
+ * refused — `no-key`, `invalid-key`, `no-credit`, `model-unavailable` —
+ * does not pass without the user: the AI goes off, said (`refusesService`).
+ * One request refused — `blocked`, `bad-request` — is that request's: the
+ * run that made it fails, and nothing else stops.
+ */
 export type SegretarioErrorCode =
   | 'no-key'
   | 'invalid-key'
   | 'no-credit'
+  /** The model is no longer on OpenRouter, or no provider serves it as the routing asks. */
+  | 'model-unavailable'
   | 'blocked'
   | 'rate-limited'
   | 'unavailable'
@@ -162,7 +174,27 @@ export class SegretarioError extends Error {
   get unreachable(): boolean {
     return this.retryable || this.code === 'timeout'
   }
+
+  /** The whole service refused — key, credit, model: no request would go through, the AI goes off. */
+  get refusesService(): boolean {
+    return (
+      this.code === 'no-key' ||
+      this.code === 'invalid-key' ||
+      this.code === 'no-credit' ||
+      this.code === 'model-unavailable'
+    )
+  }
 }
+
+/** OpenRouter's 404 for a request that needs what no provider offers ("No endpoints found that support image input"). */
+const NEEDS_A_CAPABILITY = /\bthat support\b/i
+
+/** The budgets OpenRouter refuses a request for before it reaches a provider: the key's, the account's. */
+const SPENDING_LIMITS = new Set([
+  'openrouter_key_limit',
+  'openrouter_workspace_budget',
+  'openrouter_guardrail_budget'
+])
 
 /** The error OpenRouter answered with, in the user's words. */
 export function errorFromResponse(
@@ -172,6 +204,12 @@ export function errorFromResponse(
 ): SegretarioError {
   const detail = body?.error?.message?.trim()
   const retryAfterMs = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) * 1000 : null
+  const metadata = (body?.error?.metadata ?? {}) as { limit_source?: unknown }
+  const limit = typeof metadata.limit_source === 'string' ? metadata.limit_source : null
+  const noCredit = new SegretarioError(
+    'no-credit',
+    'Il credito OpenRouter è finito, o la chiave ha raggiunto il suo limite di spesa. Ricarica il credito su openrouter.ai.'
+  )
 
   switch (status) {
     case 401:
@@ -180,18 +218,38 @@ export function errorFromResponse(
         'OpenRouter non riconosce la chiave: è sbagliata o è stata revocata. Inseriscine una valida in Impostazioni → Segretario.'
       )
     case 402:
-      return new SegretarioError(
-        'no-credit',
-        'Il credito OpenRouter è finito, o la chiave ha raggiunto il suo limite di spesa. Ricarica il credito su openrouter.ai.'
-      )
+      // Too much spent at once, with a time to come back: a wait, not the credit run out.
+      return retryAfterMs !== null || limit === 'openrouter_in_flight_budget'
+        ? new SegretarioError(
+            'rate-limited',
+            'OpenRouter ha troppe richieste in corso su questa chiave: riprovo tra poco.',
+            retryAfterMs
+          )
+        : noCredit
     case 403:
-      return new SegretarioError(
-        'blocked',
-        detail
-          ? `OpenRouter ha bloccato la richiesta: ${detail}`
-          : 'OpenRouter ha bloccato la richiesta.'
-      )
+      // A budget spent refuses every request; a moderation flag or a guardrail, this one.
+      return limit && SPENDING_LIMITS.has(limit)
+        ? noCredit
+        : new SegretarioError(
+            'blocked',
+            detail
+              ? `OpenRouter ha bloccato la richiesta: ${detail}`
+              : 'OpenRouter ha bloccato la richiesta.'
+          )
+    case 404:
+      // No provider for what this request needs — an image, a tool — is this request's; none for
+      // the model at all, as the routing asks, is every request's.
+      return detail && NEEDS_A_CAPABILITY.test(detail)
+        ? new SegretarioError(
+            'bad-request',
+            `Nessun fornitore del modello accetta questa richiesta: ${detail}`
+          )
+        : new SegretarioError(
+            'model-unavailable',
+            'Il modello del Segretario non è disponibile su OpenRouter, o nessun fornitore lo serve senza tenere i dati.'
+          )
     case 408:
+    case 504:
       return new SegretarioError('timeout', 'Il modello ha impiegato troppo a rispondere.')
     case 429:
       return new SegretarioError(
@@ -357,8 +415,8 @@ export class OpenRouterClient {
   constructor(
     private readonly fetchImpl: FetchFunction,
     /**
-     * OpenRouter refused a request for its key or its credit (`invalid-key`,
-     * `no-credit`): whatever asked, the AI can no longer work.
+     * OpenRouter refused the whole service — the key, the credit, the model
+     * (`refusesService`): whatever asked, the AI can no longer work.
      */
     private readonly onRefused: (error: SegretarioError) => void = () => undefined
   ) {}
@@ -471,7 +529,7 @@ export class OpenRouterClient {
       } catch (raw) {
         const error = networkError(raw)
 
-        if (error.code === 'invalid-key' || error.code === 'no-credit') {
+        if (error.refusesService) {
           this.onRefused(error)
         }
 
@@ -541,7 +599,7 @@ export class OpenRouterClient {
       messages: request.messages,
       stream: true,
       provider: PROVIDER_POLICY,
-      ...(request.reasoningEffort ? { reasoning: { effort: request.reasoningEffort } } : {}),
+      reasoning: { effort: request.reasoningEffort },
       ...(request.tools && request.tools.length > 0 ? { tools: request.tools } : {}),
       ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
       ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
@@ -640,7 +698,7 @@ interface GenerationRecord {
 interface StreamChunk {
   model?: string
   provider?: string
-  error?: { message?: string; code?: number | string }
+  error?: { message?: string; code?: number | string; metadata?: unknown }
   choices?: Array<{
     delta?: {
       content?: string | null

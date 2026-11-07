@@ -116,6 +116,12 @@ export function registerCalendarIpc(
         .parse(input)
     )
   )
+  handle(CALENDAR_IPC.reconnect, (connectionId: unknown, password: unknown) =>
+    calendar.reconnect(
+      idSchema.parse(connectionId),
+      z.string().min(1, 'Scrivi la password.').max(1000).optional().parse(password)
+    )
+  )
   handle(CALENDAR_IPC.disconnect, (connectionId: unknown) =>
     calendar.disconnect(idSchema.parse(connectionId))
   )

@@ -1,5 +1,6 @@
 import { google, type calendar_v3 } from 'googleapis'
 
+import { refusalOf } from '@main/services/connection-refusal'
 import type { CalendarResponse, EventOrigin } from '@shared/calendar'
 
 import {
@@ -9,6 +10,7 @@ import {
   type ProviderEvent,
   type ProviderEventInput
 } from './calendar-provider'
+import { CalendarRequestError } from './calendar-refusal'
 
 /** Events read and written, on every calendar the user has. */
 export const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar'
@@ -45,17 +47,28 @@ function statusCode(error: unknown): number | undefined {
       : undefined
 }
 
-/** Google's errors in the user's words, where they are the user's to act on. */
-function readableError(error: unknown): Error {
-  const status = statusCode(error)
+/**
+ * Google's errors in the user's words, where they are the user's to act
+ * on: the token refused, or without the calendar in what it allows, is the
+ * account's authorization withdrawn whatever was asked — only consenting
+ * again restores it.
+ */
+export function readableError(error: unknown): Error {
+  const status = statusCode(error) ?? null
   const message = error instanceof Error ? error.message : String(error)
 
-  if (status === 401 || /invalid_grant/i.test(message)) {
-    return new Error("Google non riconosce più l'accesso al calendario: collegalo di nuovo.")
+  if (status === 401 || refusalOf(error) === 'autorizzazione') {
+    return new CalendarRequestError(
+      "Google non riconosce più l'accesso al calendario: collegalo di nuovo.",
+      { status, refusal: 'autorizzazione', cause: error }
+    )
   }
 
   if (status === 403 && /insufficient|scope/i.test(message)) {
-    return new Error("Google non ha dato l'accesso al calendario: collegalo di nuovo.")
+    return new CalendarRequestError(
+      "Google non ha dato l'accesso al calendario: collegalo di nuovo.",
+      { status, refusal: 'autorizzazione', cause: error }
+    )
   }
 
   return error instanceof Error ? error : new Error(message)

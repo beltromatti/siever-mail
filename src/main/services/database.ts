@@ -1509,6 +1509,7 @@ export class AppDatabase {
       this.prisma.recentFile.deleteMany(),
       this.prisma.recentFolder.deleteMany(),
       this.prisma.draft.deleteMany(),
+      this.prisma.$executeRaw`DELETE FROM outbox`,
       this.prisma.$executeRaw`DELETE FROM account_signatures`,
       // Reset the singleton row of app preferences (unified inbox toggle)
       // back to its empty state; how the app looks stays as chosen.
@@ -1819,6 +1820,47 @@ export class AppDatabase {
       ...this.mapAccountRow(row),
       encryptedSecret: row.encryptedSecret
     }
+  }
+
+  /** A message waiting to go: sent while its server could not be reached. */
+  async queueOutgoing(entry: {
+    id: string
+    accountId: string
+    draftId: string | null
+    payload: unknown
+  }): Promise<void> {
+    await this.ready
+    await this.prisma.$executeRaw`
+      INSERT INTO outbox (id, account_id, draft_id, payload_json, queued_at)
+      VALUES (${entry.id}, ${entry.accountId}, ${entry.draftId}, ${JSON.stringify(entry.payload)}, ${Date.now()})
+    `
+  }
+
+  /** The messages waiting to go, the oldest first. */
+  async listOutgoing(): Promise<
+    Array<{ id: string; accountId: string; draftId: string | null; payload: unknown }>
+  > {
+    await this.ready
+    const rows = await this.prisma.$queryRaw<
+      Array<{ id: string; account_id: string; draft_id: string | null; payload_json: string }>
+    >`SELECT id, account_id, draft_id, payload_json FROM outbox ORDER BY queued_at`
+    return rows.map((row) => ({
+      id: row.id,
+      accountId: row.account_id,
+      draftId: row.draft_id,
+      payload: JSON.parse(row.payload_json) as unknown
+    }))
+  }
+
+  /**
+   * A message no longer waiting — gone, given up, or taken back by its draft:
+   * sent by hand, opened to change. How many left the outbox.
+   */
+  async removeOutgoing(where: { id: string } | { draftId: string }): Promise<number> {
+    await this.ready
+    return 'id' in where
+      ? this.prisma.$executeRaw`DELETE FROM outbox WHERE id = ${where.id}`
+      : this.prisma.$executeRaw`DELETE FROM outbox WHERE draft_id = ${where.draftId}`
   }
 
   /** The account's access, renewed (a provider that rotates its tokens): kept encrypted as it comes. */
@@ -5336,6 +5378,17 @@ export class AppDatabase {
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_drafts_account ON drafts(account_id)'
     )
+
+    // The messages sent while the server could not be reached: each goes by itself once it can.
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS outbox (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        draft_id TEXT,
+        payload_json TEXT NOT NULL,
+        queued_at INTEGER NOT NULL
+      )
+    `)
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS app_preferences (

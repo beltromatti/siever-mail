@@ -147,6 +147,61 @@ describe('errorFromResponse', () => {
   })
 })
 
+describe('the kinds of error', () => {
+  it('waits for what passes, turns the AI off for the service refused, fails one request alone', () => {
+    // Passing: the call waits and is made again.
+    for (const status of [408, 429, 500, 502, 503, 504]) {
+      expect(errorFromResponse(status, null, null).unreachable).toBe(true)
+    }
+    // Too much in flight on the key, with a time to come back: a wait, not the credit spent.
+    expect(errorFromResponse(402, null, '5')).toMatchObject({
+      code: 'rate-limited',
+      retryAfterMs: 5000
+    })
+    expect(
+      errorFromResponse(
+        402,
+        { error: { metadata: { limit_source: 'openrouter_in_flight_budget' } } },
+        null
+      ).unreachable
+    ).toBe(true)
+
+    // The whole service refused: the AI goes off.
+    expect(errorFromResponse(401, null, null).refusesService).toBe(true)
+    expect(errorFromResponse(402, null, null)).toMatchObject({
+      code: 'no-credit',
+      refusesService: true
+    })
+    expect(
+      errorFromResponse(
+        403,
+        { error: { metadata: { limit_source: 'openrouter_key_limit' } } },
+        null
+      ).code
+    ).toBe('no-credit')
+    expect(errorFromResponse(404, null, null)).toMatchObject({
+      code: 'model-unavailable',
+      refusesService: true
+    })
+
+    // One request refused: that run's failure only.
+    const flagged = errorFromResponse(403, { error: { message: 'Input flagged' } }, null)
+    expect(flagged).toMatchObject({ code: 'blocked', refusesService: false, unreachable: false })
+    expect(errorFromResponse(400, null, null)).toMatchObject({
+      code: 'bad-request',
+      refusesService: false,
+      unreachable: false
+    })
+    expect(
+      errorFromResponse(
+        404,
+        { error: { message: 'No endpoints found that support image input' } },
+        null
+      )
+    ).toMatchObject({ code: 'bad-request', refusesService: false })
+  })
+})
+
 describe('OpenRouterClient', () => {
   it('asks for the newest DeepSeek Flash on a private, fast and cheap provider', async () => {
     const fetchImpl = vi.fn(

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { CalendarConnection } from '@shared/calendar'
 import type { MailAccount } from '@shared/models'
 
-import { canAddCalendar, canReconnect, connectionGroups } from './connection-groups'
+import { canAddCalendar, canRenewConsent, connectionGroups } from './connection-groups'
 
 const mail = (id: string, email: string, change: Partial<MailAccount> = {}): MailAccount => ({
   id,
@@ -32,6 +32,8 @@ const calendar = (id: string, change: Partial<CalendarConnection>): CalendarConn
   serverUrl: null,
   lastSyncAt: null,
   problem: null,
+  refused: null,
+  renewConsent: false,
   calendars: [],
   ...change
 })
@@ -95,14 +97,14 @@ describe('connectionGroups', () => {
   })
 })
 
-describe('canReconnect', () => {
-  it('signs in again a Google or Microsoft calendar that could not be read, not a server or a link', () => {
-    const problem = 'Microsoft non accetta più l’accesso a questo calendario: ricollegalo.'
+describe('canRenewConsent', () => {
+  it('signs in again a calendar whose consent lacks what writing needs, not one that only failed', () => {
+    const problem = 'Il server non risponde.'
 
-    expect(canReconnect(calendar('a', { provider: 'microsoft', problem }))).toBe(true)
-    expect(canReconnect(calendar('b', { provider: 'google', problem }))).toBe(true)
-    expect(canReconnect(calendar('c', { provider: 'google' }))).toBe(false)
-    expect(canReconnect(calendar('d', { provider: 'caldav', problem }))).toBe(false)
-    expect(canReconnect(calendar('e', { provider: 'ics', problem }))).toBe(false)
+    expect(canRenewConsent(calendar('a', { provider: 'microsoft', renewConsent: true }))).toBe(true)
+    expect(canRenewConsent(calendar('b', { provider: 'google', problem }))).toBe(false)
+    expect(canRenewConsent(calendar('c', { renewConsent: true, refused: 'autorizzazione' }))).toBe(
+      false
+    )
   })
 })

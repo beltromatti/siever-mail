@@ -113,13 +113,10 @@ export function canAddCalendar(group: ConnectionGroup): boolean {
 }
 
 /**
- * Whether a calendar connection that could not be read is signed in again
- * from here: Google's and Microsoft's, in their own sign-in. A CalDAV
- * server's password is given again by adding it anew; a link has none.
+ * Whether a calendar connection is signed in again from here though it
+ * works: its provider's consent lacks what writing needs. One turned down
+ * is put right in the refusal's window (`showConnectionRefused`).
  */
-export function canReconnect(connection: CalendarConnection): boolean {
-  return (
-    connection.problem !== null &&
-    (connection.provider === 'google' || connection.provider === 'microsoft')
-  )
+export function canRenewConsent(connection: CalendarConnection): boolean {
+  return connection.renewConsent && connection.refused === null
 }

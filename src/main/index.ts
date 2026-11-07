@@ -21,6 +21,7 @@ import { registerFilesIpc } from './ipc/register-files-ipc'
 import { registerSegretarioIpc } from './ipc/register-segretario-ipc'
 import { prepareUpgradeMigration } from './services/data-migration'
 import { normalizeExternalHttpUrl } from './utils/external-url'
+import { logMainError } from './utils/error-utils'
 import { startFileLogging } from './utils/log-file'
 import { Workspace } from './workspace'
 import {
@@ -39,6 +40,18 @@ if (existsSync(dotenvPath)) {
 
 // Input the main process turns down is described in the app's language.
 z.config(z.locales.it())
+
+// An error no part caught is written down and the rest goes on: one part failing neither takes
+// the app down nor goes unsaid (§13ter.3).
+process.on('uncaughtException', (error) =>
+  logMainError('Uncaught exception in the main process', error)
+)
+process.on('unhandledRejection', (reason) =>
+  logMainError('Unhandled rejection in the main process', reason)
+)
+
+/** The page comes back by itself once a minute at most: one that keeps dying is not reloaded in a loop. */
+const PAGE_RELOAD_EVERY_MS = 60_000
 
 // Development keeps a profile of its own beside the installed app's: the schema only moves
 // forward, so a build in development would carry the installed one's data where that build cannot
@@ -233,6 +246,37 @@ function createMainWindow(): BrowserWindow {
   })
 
   installContextMenus(window)
+
+  // What goes wrong in the page is written in the same log as the rest (§13ter.3).
+  window.webContents.on('console-message', ({ level, message, sourceId, lineNumber }) => {
+    if (level === 'error') {
+      console.error(`[renderer] ${message} (${sourceId}:${lineNumber})`)
+    }
+  })
+
+  // The page died — a crash, out of memory: written down, and loaded again rather than left white;
+  // one that keeps dying, a minute after the last time.
+  let reloadedAt = 0
+  let reloadTimer: NodeJS.Timeout | null = null
+  window.webContents.on('render-process-gone', (_event, details) => {
+    logMainError('The window page went away', details.reason, details)
+
+    if (details.reason === 'clean-exit' || reloadTimer) {
+      return
+    }
+
+    reloadTimer = setTimeout(
+      () => {
+        reloadTimer = null
+
+        if (!window.isDestroyed()) {
+          reloadedAt = Date.now()
+          window.webContents.reload()
+        }
+      },
+      Math.max(0, reloadedAt + PAGE_RELOAD_EVERY_MS - Date.now())
+    )
+  })
 
   // What only the page can draw — the Windows taskbar badge — is drawn anew
   // each time it loads.

@@ -50,6 +50,8 @@ const desktopMailApi: DesktopMailApi = {
   removeAccount: async (accountId) => invoke(IPC_CHANNELS.removeAccount, accountId),
   setActiveMailboxContext: async (context) => invoke(IPC_CHANNELS.setActiveMailboxContext, context),
   checkMailNow: async () => invoke(IPC_CHANNELS.checkMailNow),
+  reconnectAccount: async (accountId, password) =>
+    invoke(IPC_CHANNELS.reconnectAccount, accountId, password),
   listFolders: async (accountId) => invoke(IPC_CHANNELS.listFolders, accountId),
   listRecentFolders: async (accountId) => invoke(IPC_CHANNELS.listRecentFolders, accountId),
   createFolder: async (input) => invoke(IPC_CHANNELS.createFolder, input),
@@ -130,6 +132,11 @@ const desktopMailApi: DesktopMailApi = {
     invoke(IPC_CHANNELS.setTaskbarBadgeImage, dataUrl, description),
   onAccountConnectionChanged: (listener) =>
     subscribe(IPC_CHANNELS.accountConnectionChanged, listener),
+  onConnectionRefused: (listener) => subscribe(IPC_CHANNELS.connectionRefused, listener),
+  listConnectionRefusals: async () => invoke(IPC_CHANNELS.listConnectionRefusals),
+  takeBackOutgoing: async (draftId) => invoke(IPC_CHANNELS.takeBackOutgoing, draftId),
+  onOutboxSent: (listener) => subscribe(IPC_CHANNELS.outboxSent, listener),
+  onOutboxFailed: (listener) => subscribe(IPC_CHANNELS.outboxFailed, listener),
   onAppMenuCommand: (listener) => subscribe(IPC_CHANNELS.appMenuCommand, listener),
   showContextMenu: async (items) => invoke(IPC_CHANNELS.showContextMenu, items),
   onContextMenuRequest: (listener) => subscribe(IPC_CHANNELS.contextMenuRequest, listener)
@@ -147,7 +154,7 @@ const segretarioApi: SegretarioApi = {
   setPreferences: async (preferences) => invoke(SEGRETARIO_IPC.setPreferences, preferences),
   getSpending: async () => invoke(SEGRETARIO_IPC.getSpending),
   getEngineState: async () => invoke(SEGRETARIO_IPC.getEngineState),
-  retryFailedWork: async () => invoke(SEGRETARIO_IPC.retryFailedWork),
+  retryReading: async (accountIds) => invoke(SEGRETARIO_IPC.retryReading, accountIds),
   listMemory: async () => invoke(SEGRETARIO_IPC.listMemory),
   writeMemory: async (path, content, seenRevision) =>
     invoke(SEGRETARIO_IPC.writeMemory, path, content, seenRevision),
@@ -213,6 +220,7 @@ const segretarioApi: SegretarioApi = {
   getActivity: async (id) => invoke(SEGRETARIO_IPC.getActivity, id),
   startActivity: async (text, context) => invoke(SEGRETARIO_IPC.startActivity, text, context),
   sendMessage: async (id, text, context) => invoke(SEGRETARIO_IPC.sendMessage, id, text, context),
+  retryActivity: async (id) => invoke(SEGRETARIO_IPC.retryActivity, id),
   cancelActivity: async (id) => invoke(SEGRETARIO_IPC.cancelActivity, id),
   removeActivity: async (id) => invoke(SEGRETARIO_IPC.removeActivity, id),
   markActivitySeen: async (id) => invoke(SEGRETARIO_IPC.markActivitySeen, id),
@@ -234,6 +242,8 @@ const calendarApi: CalendarApi = {
   connectMicrosoft: async (mailAccountId) => invoke(CALENDAR_IPC.connectMicrosoft, mailAccountId),
   addIcs: async (link, name) => invoke(CALENDAR_IPC.addIcs, link, name),
   addCalDav: async (input) => invoke(CALENDAR_IPC.addCalDav, input),
+  reconnect: async (connectionId, password) =>
+    invoke(CALENDAR_IPC.reconnect, connectionId, password),
   respondByMail: async (ref, response) => invoke(CALENDAR_IPC.respondByMail, ref, response),
   disconnect: async (connectionId) => invoke(CALENDAR_IPC.disconnect, connectionId),
   events: async (fromIso, toIso) => invoke(CALENDAR_IPC.events, fromIso, toIso),

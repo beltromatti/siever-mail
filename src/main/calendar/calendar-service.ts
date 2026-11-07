@@ -1,4 +1,9 @@
-import type { CalendarEvent as CalendarEventRow, Prisma, PrismaClient } from '@prisma/client'
+import type {
+  CalendarConnection as CalendarConnectionRow,
+  CalendarEvent as CalendarEventRow,
+  Prisma,
+  PrismaClient
+} from '@prisma/client'
 import { randomUUID } from 'node:crypto'
 
 import type { BrowserWindow } from 'electron'
@@ -16,6 +21,7 @@ import {
   CALENDAR_HELD_DAYS,
   CALENDAR_IPC,
   calendarKey,
+  calendarRefusedNotice,
   calendarSearchWords,
   type CalendarAttendee,
   type CalendarChange,
@@ -30,7 +36,7 @@ import {
   type EventOrigin,
   type NewCalendarEvent
 } from '@shared/calendar'
-import type { MailAccount } from '@shared/models'
+import type { ConnectionRefusal, ConnectionRefusedNotice, MailAccount } from '@shared/models'
 
 import {
   changedEvent,
@@ -46,6 +52,7 @@ import {
   type CalendarObjectStore,
   type StoredObject
 } from './caldav-calendar'
+import { refusalOfCalendar, type CalendarRefusalFound } from './calendar-refusal'
 import {
   DEFAULT_SEARCH_LIMIT,
   eventSearchText,
@@ -88,6 +95,20 @@ export interface CalendarServiceOptions {
   parentWindow(): BrowserWindow | null
   /** A connection was taken away, with its calendars' names: what was kept about it goes too. */
   onDisconnected?(connectionId: string, calendarNames: string[]): void
+  /**
+   * A connection was turned down for good and stopped: the user is to be
+   * told, once. Not for one being added, signed in again or retried: who
+   * did it is told by the answer.
+   */
+  onRefused?(notice: ConnectionRefusedNotice): void
+}
+
+/** Why a connection turned down stopped, as a write refused for it says. */
+const STOPPED_BECAUSE: Readonly<Record<ConnectionRefusal, string>> = {
+  accesso: 'il server ha rifiutato l’accesso',
+  autorizzazione: 'l’autorizzazione non vale più',
+  certificato: 'il certificato del server non è valido',
+  sparito: 'non si trova più dove era collegato'
 }
 
 /** Whether two addresses are the same mailbox: the case of an address does not matter. */
@@ -169,6 +190,18 @@ export class CalendarService {
   private readonly turns = new Map<string, Promise<unknown>>()
   /** Connections being taken away: their sync stops, and none starts. */
   private readonly leaving = new Set<string>()
+  /**
+   * Connections turned down for good, why, and what the user is told: no
+   * sync tries them again, nor does a write, until the user puts them
+   * right. Not kept: at the next start each is tried once more.
+   */
+  private readonly refused = new Map<string, CalendarRefusalFound>()
+  /** The connections whose consent lacks what writing needs, as their last sync found. */
+  private readonly consentShort = new Set<string>()
+  /** The connections whose certificate was refused once: the next sync confirms it. */
+  private readonly certificateToConfirm = new Set<string>()
+  /** Connections being added or signed in again: a refusal of theirs is told to whoever does it. */
+  private readonly adding = new Set<string>()
   /**
    * Whether each CalDAV connection's server schedules — sends invitations
    * and answers itself — as its last sync found: a calendar there takes an
@@ -267,6 +300,8 @@ export class CalendarService {
       serverUrl: connection.serverUrl,
       lastSyncAt: connection.lastSyncAt ? Number(connection.lastSyncAt) : null,
       problem: connection.problem,
+      refused: this.refused.get(connection.id)?.refusal ?? null,
+      renewConsent: this.consentShort.has(connection.id),
       calendars: calendars
         .filter((calendar) => calendar.connectionId === connection.id)
         .map((calendar) => ({
@@ -281,10 +316,15 @@ export class CalendarService {
   /**
    * Asks Google for a calendar, in Google's window: the calendar of a
    * Google mail connection — that account already chosen — or, with none,
-   * of the account the user picks, the calendar alone. Resolves once its
-   * events are in.
+   * of the account the user picks, the calendar alone. With `connectionId`,
+   * a calendar connection signed in again — turned down, or its access to
+   * renew — its account suggested and required. Resolves once its events
+   * are in.
    */
-  async connectGoogle(mailAccountId: string | null): Promise<CalendarConnection[]> {
+  async connectGoogle(
+    mailAccountId: string | null,
+    connectionId: string | null = null
+  ): Promise<CalendarConnection[]> {
     const account = mailAccountId
       ? (await this.options.database.getAccounts()).find(
           (candidate) => candidate.id === mailAccountId
@@ -295,15 +335,18 @@ export class CalendarService {
       throw new Error('Il calendario di Google si collega per un account Google.')
     }
 
+    const address =
+      account?.email ??
+      (connectionId ? (await this.connectionOf(connectionId, 'google')).label : null)
     const granted = await this.options.oauth.authorize(this.options.parentWindow() ?? undefined, {
       scopes: [GOOGLE_CALENDAR_SCOPE],
-      loginHint: account?.email,
-      title: account ? `Collega il calendario di ${account.email}` : 'Collega un calendario Google'
+      loginHint: address ?? undefined,
+      title: address ? `Collega il calendario di ${address}` : 'Collega un calendario Google'
     })
 
-    if (account && granted.email.toLowerCase() !== account.email.toLowerCase()) {
+    if (address && !sameAddress(granted.email, address)) {
       throw new Error(
-        `Hai scelto ${granted.email} in Google: per questo calendario serve ${account.email}.`
+        `Hai scelto ${granted.email} in Google: per questo calendario serve ${address}.`
       )
     }
 
@@ -350,28 +393,36 @@ export class CalendarService {
       create: { id, provider: 'google', ...fields },
       update: fields
     })
-    await this.sync(id)
+    await this.firstRead(id, existing !== undefined)
   }
 
   /**
    * Asks Microsoft for a calendar, in the browser: of a mail connection
    * signed in with Microsoft — that account suggested — or of any Microsoft
-   * account, the calendar alone. Resolves once its events are in.
+   * account, the calendar alone. With `connectionId`, a calendar connection
+   * signed in again, its account suggested and required. Resolves once its
+   * events are in.
    */
-  async connectMicrosoft(mailAccountId: string | null): Promise<CalendarConnection[]> {
+  async connectMicrosoft(
+    mailAccountId: string | null,
+    connectionId: string | null = null
+  ): Promise<CalendarConnection[]> {
     const account = mailAccountId
       ? (await this.options.database.getAccounts()).find(
           (candidate) => candidate.id === mailAccountId
         )
       : undefined
-    const granted = await this.options.microsoft.authorize(account?.email, {
+    const address =
+      account?.email ??
+      (connectionId ? (await this.connectionOf(connectionId, 'microsoft')).label : null)
+    const granted = await this.options.microsoft.authorize(address ?? undefined, {
       mail: false,
       calendar: true
     })
 
-    if (account && !sameAddress(granted.email, account.email)) {
+    if (address && !sameAddress(granted.email, address)) {
       throw new Error(
-        `Hai scelto ${granted.email} in Microsoft: per questo calendario serve ${account.email}.`
+        `Hai scelto ${granted.email} in Microsoft: per questo calendario serve ${address}.`
       )
     }
 
@@ -408,7 +459,7 @@ export class CalendarService {
       create: { id, provider: 'microsoft', ...fields },
       update: fields
     })
-    await this.sync(id)
+    await this.firstRead(id, existing !== undefined)
   }
 
   /**
@@ -441,17 +492,7 @@ export class CalendarService {
         connection.serverUrl === serverUrl && sameAddress(connection.username ?? '', input.username)
     )
     const id = known?.id ?? randomUUID()
-    const probe = new CalDavCalendarProvider({
-      serverUrl,
-      username: input.username.trim(),
-      password: input.password,
-      fetch: this.options.fetch,
-      store: this.objectStore(id)
-    })
-
-    if ((await probe.listCalendars()).length === 0) {
-      throw new Error('Su questo server non ci sono calendari di eventi.')
-    }
+    await this.verifyCalDav(id, serverUrl, input.username.trim(), input.password)
 
     const fields = {
       label: input.label.trim() || input.username.trim(),
@@ -468,8 +509,105 @@ export class CalendarService {
       create: { id, provider: 'caldav', ...fields },
       update: fields
     })
-    await this.sync(id)
+    await this.firstRead(id, known !== undefined)
     return this.listConnections()
+  }
+
+  /**
+   * A CalDAV connection whose password the server no longer takes, signed
+   * in again with a new one: kept only once the server took it and showed
+   * its calendars, then read at once.
+   */
+  async reconnectCalDav(connectionId: string, password: string): Promise<CalendarConnection[]> {
+    const connection = await this.connectionOf(connectionId, 'caldav')
+
+    if (!connection.serverUrl || !connection.username) {
+      throw new Error('Manca l’indirizzo di questo calendario: scollegalo e collegalo di nuovo.')
+    }
+
+    await this.verifyCalDav(connectionId, connection.serverUrl, connection.username, password)
+    await this.requirePrisma().calendarConnection.update({
+      where: { id: connectionId },
+      data: { encryptedSecret: encryptSecret(password) }
+    })
+    await this.firstRead(connectionId, true)
+    return this.listConnections()
+  }
+
+  /**
+   * A connection put right by the user, as its kind asks: a CalDAV server
+   * with its new password (`reconnectCalDav`); a certificate, a source the
+   * user believes back, a link or a server without a new password, tried
+   * again as it is (`retryConnection`); else the provider's sign-in done
+   * again on the same account.
+   */
+  async reconnect(connectionId: string, password?: string): Promise<CalendarConnection[]> {
+    const connection = await this.connectionOf(connectionId)
+    const refusal = this.refused.get(connectionId)?.refusal
+
+    switch (connection.provider as CalendarProviderKind) {
+      case 'caldav':
+        return password === undefined
+          ? this.retryConnection(connectionId)
+          : this.reconnectCalDav(connectionId, password)
+      case 'ics':
+        return this.retryConnection(connectionId)
+      case 'google':
+        return refusal === 'certificato' || refusal === 'sparito'
+          ? this.retryConnection(connectionId)
+          : this.connectGoogle(null, connectionId)
+      case 'microsoft':
+        return refusal === 'certificato' || refusal === 'sparito'
+          ? this.retryConnection(connectionId)
+          : this.connectMicrosoft(null, connectionId)
+    }
+  }
+
+  /**
+   * Tries a connection again at once — one turned down whose server, or
+   * link, the user believes put right: turned down again, it stays stopped,
+   * and the user, who asked, is told why here.
+   */
+  async retryConnection(connectionId: string): Promise<CalendarConnection[]> {
+    await this.connectionOf(connectionId)
+    await this.firstRead(connectionId, true)
+    return this.listConnections()
+  }
+
+  /** Signs in to a CalDAV server, and finds calendars of events there; or says why not. */
+  private async verifyCalDav(
+    connectionId: string,
+    serverUrl: string,
+    username: string,
+    password: string
+  ): Promise<void> {
+    const probe = new CalDavCalendarProvider({
+      serverUrl,
+      username,
+      password,
+      fetch: this.options.fetch,
+      store: this.objectStore(connectionId)
+    })
+
+    if ((await probe.listCalendars()).length === 0) {
+      throw new Error('Su questo server non ci sono calendari di eventi.')
+    }
+  }
+
+  /** A connection by its id — of that provider, when one is said — or why it cannot be had. */
+  private async connectionOf(
+    connectionId: string,
+    provider?: CalendarProviderKind
+  ): Promise<CalendarConnectionRow> {
+    const connection = await this.requirePrisma().calendarConnection.findUnique({
+      where: { id: connectionId }
+    })
+
+    if (!connection || (provider && connection.provider !== provider)) {
+      throw new Error('Questo calendario non è più collegato.')
+    }
+
+    return connection
   }
 
   /** A connection's CalDAV objects, kept in `calendar_objects`. */
@@ -564,16 +702,27 @@ export class CalendarService {
         connectedAt: BigInt(Date.now())
       }
     })
-    await this.sync(id)
+    await this.firstRead(id, false)
     return this.listConnections()
   }
 
   /** Forgets a calendar connection here — its calendars and events; the provider keeps them. */
   async disconnect(connectionId: string): Promise<CalendarConnection[]> {
-    const prisma = this.requirePrisma()
     const names = (
-      await prisma.calendarCalendar.findMany({ where: { connectionId }, select: { name: true } })
+      await this.requirePrisma().calendarCalendar.findMany({
+        where: { connectionId },
+        select: { name: true }
+      })
     ).map((calendar) => calendar.name)
+
+    await this.forget(connectionId)
+    this.options.onDisconnected?.(connectionId, names)
+    return this.listConnections()
+  }
+
+  /** Forgets a connection here: it, its calendars, its events and what was kept to sync them. */
+  private async forget(connectionId: string): Promise<void> {
+    const prisma = this.requirePrisma()
     // A sync under way stops at its next calendar; it, and a write under way, end before
     // anything is forgotten, and what waits after finds the connection gone.
     this.leaving.add(connectionId)
@@ -589,6 +738,8 @@ export class CalendarService {
         ])
       )
       this.eventsChanged()
+      this.refused.delete(connectionId)
+      this.consentShort.delete(connectionId)
     } finally {
       this.leaving.delete(connectionId)
       this.scheduling.delete(connectionId)
@@ -596,8 +747,6 @@ export class CalendarService {
     }
 
     this.options.send(CALENDAR_IPC.changed, null)
-    this.options.onDisconnected?.(connectionId, names)
-    return this.listConnections()
   }
 
   /**
@@ -634,7 +783,10 @@ export class CalendarService {
     await this.prisma.calendarChange.deleteMany({
       where: { at: { lt: BigInt(Date.now() - CHANGES_KEPT_MS) } }
     })
-    await Promise.all(connected.map((row) => this.sync(row.id)))
+    // One turned down waits for the user: tried again, it would only be turned down again.
+    await Promise.all(
+      connected.filter((row) => !this.refused.has(row.id)).map((row) => this.sync(row.id))
+    )
   }
 
   /**
@@ -660,8 +812,92 @@ export class CalendarService {
   }
 
   /**
+   * Reads a connection again at once, put right — signed in again, its
+   * password given, its server or link back: no longer turned down, by a
+   * read that begins now — one under way began before, and is waited for.
+   */
+  private async reread(connectionId: string): Promise<void> {
+    await this.syncing.get(connectionId)?.catch(() => undefined)
+    this.refused.delete(connectionId)
+    await this.sync(connectionId)
+  }
+
+  /**
+   * The read the user waits for: of a connection just added, signed in
+   * again by adding it anew, or put right (`retryConnection`,
+   * `reconnectCalDav`). One the provider turns down for good is not added:
+   * whoever asked is told why, here rather than by `onRefused`; one new goes
+   * again, one known stays turned down, with what it kept. One that cannot
+   * be read for now stays: it is read again by itself.
+   */
+  private async firstRead(connectionId: string, known: boolean): Promise<void> {
+    this.adding.add(connectionId)
+
+    try {
+      await this.reread(connectionId)
+    } finally {
+      this.adding.delete(connectionId)
+    }
+
+    const refused = this.refused.get(connectionId)
+
+    if (!refused) {
+      return
+    }
+
+    if (!known) {
+      await this.forget(connectionId)
+    }
+
+    throw new Error(known ? refused.problem : `${refused.problem} SIEVER Mail non l’ha aggiunto.`)
+  }
+
+  /**
+   * A connection turned down for good stops: no sync tries it again, and a
+   * write is refused at once, until the user puts it right. They are told
+   * once — unless they were adding it, and are told by that.
+   */
+  private async refuse(connectionId: string, found: CalendarRefusalFound): Promise<void> {
+    const connection = await this.requirePrisma().calendarConnection.findUnique({
+      where: { id: connectionId }
+    })
+
+    if (!connection || this.leaving.has(connectionId)) {
+      return
+    }
+
+    this.refused.set(connectionId, found)
+
+    if (!this.adding.has(connectionId)) {
+      this.options.onRefused?.(
+        calendarRefusedNotice(
+          { ...connection, provider: connection.provider as CalendarProviderKind },
+          found.refusal,
+          found.detail
+        )
+      )
+    }
+  }
+
+  /** A write on a connection turned down is refused at once: it would only be turned down too. */
+  private async notRefused(connectionId: string): Promise<void> {
+    const refused = this.refused.get(connectionId)
+
+    if (refused) {
+      const { label } = await this.connectionOf(connectionId)
+      throw new Error(
+        `Il calendario ${label} è fermo: ${STOPPED_BECAUSE[refused.refusal]}. Ricollegalo da Impostazioni › Connessioni.`
+      )
+    }
+  }
+
+  /**
    * A sync: only in the connection's turn. However it ends, the connection
-   * says so — read now, or why not — so nothing waits on it unanswered.
+   * says so — read now, or why not — so nothing waits on it unanswered. A
+   * calendar that cannot be read says so, and the others are read all the
+   * same; an error that turns the whole connection down — its access, its
+   * authorization, its certificate, its source — wherever it comes, stops it
+   * (`refuse`).
    */
   private async syncConnection(connectionId: string): Promise<void> {
     const prisma = this.requirePrisma()
@@ -704,6 +940,10 @@ export class CalendarService {
         try {
           this.scheduling.set(connectionId, await provider.schedules(calendars[0].calendarId))
         } catch (error) {
+          if (refusalOfCalendar(error)) {
+            throw error
+          }
+
           logMainError('A CalDAV server did not say whether it schedules', error, { connectionId })
           problems.push(error instanceof Error ? error.message : String(error))
         }
@@ -712,7 +952,10 @@ export class CalendarService {
       // Connected before the mailbox's time zone was asked for: it syncs, and asks to be
       // connected again before its all-day events can be written.
       if (provider instanceof GraphCalendarProvider && !(await provider.mailboxZoneGranted())) {
+        this.consentShort.add(connectionId)
         problems.push(MAILBOX_ZONE_NOT_GRANTED)
+      } else {
+        this.consentShort.delete(connectionId)
       }
 
       for (const calendar of calendars) {
@@ -741,6 +984,10 @@ export class CalendarService {
         try {
           await this.syncCalendar(provider, connectionId, calendar.calendarId, stored ?? null)
         } catch (error) {
+          if (refusalOfCalendar(error)) {
+            throw error
+          }
+
           logMainError('A calendar could not be read', error, {
             connectionId,
             calendarId: calendar.calendarId
@@ -758,12 +1005,33 @@ export class CalendarService {
           problem: problems.length > 0 ? problems.join(' ') : null
         }
       })
+      this.certificateToConfirm.delete(connectionId)
     } catch (error) {
       logMainError('Calendar sync failed', error, { connectionId })
+      const refused = refusalOfCalendar(error)
       await prisma.calendarConnection.updateMany({
         where: { id: connectionId },
-        data: { problem: error instanceof Error ? error.message : String(error) }
+        data: {
+          problem: refused?.problem ?? (error instanceof Error ? error.message : String(error))
+        }
       })
+
+      // A certificate refused may be a hotel Wi-Fi's sign-in page answering in the server's
+      // place: the next sync confirms it before the connection stops — but not while it is added.
+      const confirming =
+        refused?.refusal === 'certificato' &&
+        !this.adding.has(connectionId) &&
+        !this.certificateToConfirm.has(connectionId)
+
+      if (confirming) {
+        this.certificateToConfirm.add(connectionId)
+      } else {
+        this.certificateToConfirm.delete(connectionId)
+
+        if (refused) {
+          await this.refuse(connectionId, refused)
+        }
+      }
     }
 
     this.options.send(CALENDAR_IPC.changed, null)
@@ -1358,6 +1626,7 @@ export class CalendarService {
     options: { series?: boolean; byUser?: boolean } = {}
   ): Promise<CalendarEvent> {
     return this.inTurn(connectionOfKey(key), async () => {
+      await this.notRefused(connectionOfKey(key))
       const row = await this.requirePrisma().calendarEvent.findUnique({ where: { key } })
       const provider = row ? await this.providerFor(row.connectionId) : null
 
@@ -1444,6 +1713,7 @@ export class CalendarService {
     options: { byUser?: boolean } = {}
   ): Promise<CalendarEvent> {
     return this.inTurn(connectionOfKey(event.calendarKey), async () => {
+      await this.notRefused(connectionOfKey(event.calendarKey))
       const prisma = this.requirePrisma()
       const calendar = (await prisma.calendarCalendar.findMany()).find(
         (candidate) =>
@@ -1481,6 +1751,7 @@ export class CalendarService {
     options: { byUser?: boolean } = {}
   ): Promise<CalendarEvent> {
     return this.inTurn(connectionOfKey(key), async () => {
+      await this.notRefused(connectionOfKey(key))
       const { row, provider } = await this.changeable(key)
       const current = {
         ...(await this.eventOrThrow(key)),
@@ -1510,6 +1781,7 @@ export class CalendarService {
   /** Takes an event away; whoever is invited is told. `byUser`: noted for the Segretario, as `create`. */
   async remove(key: string, options: { byUser?: boolean } = {}): Promise<void> {
     return this.inTurn(connectionOfKey(key), async () => {
+      await this.notRefused(connectionOfKey(key))
       const { row, provider } = await this.changeable(key)
       const attendees = JSON.parse(row.attendeesJson) as CalendarAttendee[]
 

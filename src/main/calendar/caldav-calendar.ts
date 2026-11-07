@@ -10,6 +10,7 @@ import type {
   ProviderEvent,
   ProviderEventInput
 } from './calendar-provider'
+import { CalendarRequestError } from './calendar-refusal'
 import {
   changeEventResource,
   newEventResource,
@@ -111,12 +112,73 @@ const UNSCHEDULED_CHANGE =
 const UNSCHEDULED_ANSWER =
   'Questo server di calendario non avvisa l’organizzatore: rispondi dall’invito che hai ricevuto per mail.'
 
-async function davError(response: Pick<Response, 'status'>, what: string): Promise<Error> {
-  return new Error(
-    response.status === 401 || response.status === 403
+/**
+ * A request about one calendar or one event that the server answered with
+ * an error: it fails that request alone. Refused there, the access may be
+ * the reason — a 401 says so — or that calendar, or that event, may not be
+ * the user's to touch (403).
+ */
+async function davError(
+  response: Pick<Response, 'status'>,
+  what: string
+): Promise<CalendarRequestError> {
+  return new CalendarRequestError(
+    response.status === 401
       ? 'Il server del calendario non accetta più l’accesso: ricollega il calendario.'
-      : `${what}: il server ha risposto ${response.status}.`
+      : response.status === 403
+        ? `${what}: il server non lo permette.`
+        : `${what}: il server ha risposto ${response.status}.`,
+    { status: response.status }
   )
+}
+
+/**
+ * The status of the answer an error of tsdav's reports, which gives none
+ * apart: "Invalid credentials: PROPFIND … returned 401", "Calendar
+ * discovery failed: 404 Not Found". Null for any other error.
+ */
+export function davStatusOf(error: unknown): number | null {
+  const message = error instanceof Error ? error.message : ''
+
+  if (message.startsWith('Invalid credentials')) {
+    return 401
+  }
+
+  const status = /^[A-Z][\w -]* failed: ([1-5]\d\d)\b/.exec(message)?.[1]
+  return status ? Number(status) : null
+}
+
+/**
+ * An error of the requests that reach the account itself — its sign-in,
+ * the calendars in its home: the access refused (401, 403) or the home no
+ * longer there (404, 410) turn the whole connection down. Anything else
+ * stays as it came.
+ */
+function accountError(error: unknown): unknown {
+  const status = davStatusOf(error)
+
+  switch (status) {
+    case 401:
+      return new CalendarRequestError(
+        'Il server del calendario non ha accettato nome utente e password.',
+        { status, refusal: 'accesso', cause: error }
+      )
+    case 403:
+      return new CalendarRequestError('Il server non dà più l’accesso a questi calendari.', {
+        status,
+        refusal: 'accesso',
+        cause: error
+      })
+    case 404:
+    case 410:
+      return new CalendarRequestError('I calendari non sono più a quell’indirizzo del server.', {
+        status,
+        refusal: 'sparito',
+        cause: error
+      })
+    default:
+      return error
+  }
 }
 
 /**
@@ -165,9 +227,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
         await client.login()
         this.client = client
       } catch (error) {
-        throw /401|Invalid credentials/i.test(error instanceof Error ? error.message : '')
-          ? new Error('Il server del calendario non ha accettato nome utente e password.')
-          : error
+        throw accountError(error)
       }
     }
 
@@ -261,10 +321,14 @@ export class CalDavCalendarProvider implements CalendarProvider {
   private async fetchCalendars(): Promise<DAVCalendar[]> {
     const client = await this.dav()
     this.calendars = (
-      await client.fetchCalendars({
-        props: CALENDAR_PROPS,
-        projectedProps: { currentUserPrivilegeSet: true, calendarOrder: true }
-      })
+      await client
+        .fetchCalendars({
+          props: CALENDAR_PROPS,
+          projectedProps: { currentUserPrivilegeSet: true, calendarOrder: true }
+        })
+        .catch((error: unknown) => {
+          throw accountError(error)
+        })
     )
       // Calendars of events only: a list of tasks is not one.
       .filter((calendar) => !calendar.components?.length || calendar.components.includes('VEVENT'))

@@ -120,6 +120,21 @@ export function registerMailIpc(
     mailService.checkMailNow()
   })
 
+  registerDataHandler(IPC_CHANNELS.takeBackOutgoing, async (draftId) =>
+    mailService.takeBackOutgoing(z.string().uuid().parse(draftId))
+  )
+
+  registerDataHandler(IPC_CHANNELS.listConnectionRefusals, async () =>
+    workspace.connectionRefusals()
+  )
+
+  registerDataHandler(IPC_CHANNELS.reconnectAccount, async (accountId, password) =>
+    workspace.reconnectMailAccount(
+      z.string().min(1).parse(accountId),
+      z.string().min(1, 'Scrivi la password.').max(1000).optional().parse(password)
+    )
+  )
+
   registerDataHandler(IPC_CHANNELS.setActiveMailboxContext, async (context) => {
     await mailService.setActiveMailboxContext((context as ActiveMailboxContext | null) ?? null)
   })
@@ -236,9 +251,9 @@ export function registerMailIpc(
     mailService.setMessagesFlagged(payload as SetMessagesKeywordInput)
   )
 
-  registerDataHandler(IPC_CHANNELS.sendMail, async (payload) => {
-    await mailService.sendMail(payload as ComposeMailInput)
-  })
+  registerDataHandler(IPC_CHANNELS.sendMail, async (payload) =>
+    mailService.sendMail(payload as ComposeMailInput)
+  )
 
   registerDataHandler(IPC_CHANNELS.suggestContacts, async (query: string, limit?: number) => {
     return mailService.suggestContacts(query, limit)

@@ -22,7 +22,7 @@ import { Registry } from '../registry/registry'
 import { ensureAiSchema } from '../schema'
 import { memorySql } from '../testing/memory-sql'
 import type { CompactionPayload, ToolPayload } from './conversation'
-import { AgentRunner, type RunnerDeps } from './runner'
+import { AgentRunner, TASK_EFFORT, type RunnerDeps } from './runner'
 import { ToolInputError, type SegretarioTool } from './tool-types'
 
 type Turn = {
@@ -123,7 +123,7 @@ describe('AgentRunner', () => {
     return id
   }
 
-  it('goes on for as many turns as the work takes, and leaves effort and length to the model', async () => {
+  it('goes on for as many turns as the work takes, thinking as its task asks, its length the model’s', async () => {
     const runner = runnerWith(
       (_request, index) =>
         answer(index < 120 ? { calls: [{ name: 'fai', args: { n: index } }] } : {}),
@@ -138,7 +138,11 @@ describe('AgentRunner', () => {
 
     expect(result.status).toBe('done')
     expect(requests).toHaveLength(121)
-    expect(requests.every((request) => request.reasoningEffort === undefined)).toBe(true)
+    expect(requests.every((request) => request.reasoningEffort === TASK_EFFORT.richiesta)).toBe(
+      true
+    )
+    expect(TASK_EFFORT.richiesta).toBe('max')
+    expect(TASK_EFFORT.lettura).toBe('low')
     expect(requests.every((request) => request.maxTokens === undefined)).toBe(true)
   })
 
@@ -283,7 +287,7 @@ describe('AgentRunner', () => {
     )
 
     const compaction = requests.find((request) => request.toolChoice === 'none')
-    expect(compaction?.reasoningEffort).toBeUndefined()
+    expect(compaction?.reasoningEffort).toBe(TASK_EFFORT.richiesta)
     expect(compaction?.maxTokens).toBeUndefined()
 
     const events = await store.listEvents(id)

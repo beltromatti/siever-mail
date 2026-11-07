@@ -10,6 +10,7 @@ import {
   type ProviderEvent,
   type ProviderEventInput
 } from './calendar-provider'
+import { CalendarRequestError } from './calendar-refusal'
 import type { Fetch } from './ics-calendar'
 import { canonicalUid, originValue } from './icalendar'
 
@@ -613,17 +614,23 @@ export class GraphCalendarProvider implements CalendarProvider {
   }
 }
 
-/** Graph's error, said as Graph says it. */
-async function graphError(response: Response): Promise<Error> {
+/**
+ * Graph's error, said as Graph says it. A token Graph no longer takes is
+ * the account's authorization withdrawn, whatever was asked: only signing
+ * in again restores it.
+ */
+async function graphError(response: Response): Promise<CalendarRequestError> {
   const body = (await response.json().catch(() => null)) as {
     error?: { code?: string; message?: string }
   } | null
+  const said = `Microsoft ha risposto ${response.status}${body?.error?.code ? ` (${body.error.code})` : ''}${
+    body?.error?.message ? `: ${body.error.message}` : ''
+  }`
 
-  return new Error(
-    response.status === 401
-      ? 'Microsoft non accetta più l’accesso a questo calendario: ricollegalo.'
-      : `Microsoft ha risposto ${response.status}${body?.error?.code ? ` (${body.error.code})` : ''}${
-          body?.error?.message ? `: ${body.error.message}` : ''
-        }`
-  )
+  return response.status === 401
+    ? new CalendarRequestError(
+        'Microsoft non accetta più l’accesso a questo calendario: ricollegalo.',
+        { status: 401, refusal: 'autorizzazione', cause: new Error(said) }
+      )
+    : new CalendarRequestError(said, { status: response.status })
 }

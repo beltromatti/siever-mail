@@ -81,6 +81,7 @@ import { SettingsDialog, type SettingsSectionId } from '@renderer/features/setti
 import { Button } from '@renderer/components/ui/button'
 import type { RailItem } from '@renderer/features/workspace/app-rail'
 import { ConfirmDialog, useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
+import { ConnectionRefusedDialog } from '@renderer/features/connections/connection-refused'
 import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { useTaskbarBadge } from '@renderer/lib/taskbar-badge'
@@ -88,7 +89,7 @@ import { cn, formatAppVersion } from '@renderer/lib/utils'
 import { segretarioProjectPath } from '@shared/folders'
 import { CommandShortcutsProvider, isOverlaySurfaceOpen } from '@renderer/lib/command-shortcuts'
 import { buildOutgoingMailHtml } from '@renderer/lib/outgoing-mail-html'
-import { summaryToMessageRef } from '@renderer/lib/message-selection'
+import { messageRefKey, summaryToMessageRef } from '@renderer/lib/message-selection'
 import { clampReaderZoom, DEFAULT_UI_PREFERENCES } from '@shared/models'
 import { findCommand, type HostCommandId } from '@shared/commands'
 import { replyRecipients, replyReferences } from '@shared/reply'
@@ -96,6 +97,7 @@ import { forwardSubject, replySubject } from '@shared/subject'
 import type {
   AppCapabilities,
   ComposeMailInput,
+  ConnectionRefusedNotice,
   DraftStatus,
   MailAccount,
   MailAddress,
@@ -277,7 +279,8 @@ function AppFrame({
   dockVisible = false,
   rightInset = 0,
   framed = false,
-  onNoticeOpenChange
+  onNoticeOpenChange,
+  overlay
 }: {
   children: ReactNode
   windowControlsState: WindowControlsState
@@ -296,6 +299,8 @@ function AppFrame({
   framed?: boolean
   /** A notice about the AI shown, or gone (`AiNotice`). */
   onNoticeOpenChange: (open: boolean) => void
+  /** What asks the user wherever the window stands: a refusal, a confirmation. */
+  overlay: ReactNode
 }): React.JSX.Element {
   // Where the window's own chrome sits, for the panes to keep clear of it:
   // macOS draws its three lights in the top left corner of the rail and the
@@ -353,6 +358,7 @@ function AppFrame({
       </div>
       {dock}
       <AiNotice onOpenChange={onNoticeOpenChange} />
+      {overlay}
       {/* In front of a message being written, notices come in at the top: at
           the bottom they would sit on its Invia. */}
       <Toaster
@@ -478,6 +484,8 @@ function App(): React.JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false)
   // A notice about the AI waits for an answer: the app's keys rest meanwhile.
   const [noticeOpen, setNoticeOpen] = useState(false)
+  // A connection turned down for good waits for an answer (`ConnectionRefusedDialog`).
+  const [refusedOpen, setRefusedOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId | null>(null)
   const [showWelcomeGate, setShowWelcomeGate] = useState(true)
   const [emptyStateIntroStep, setEmptyStateIntroStep] = useState<'logo' | 'text' | 'button'>('logo')
@@ -533,6 +541,7 @@ function App(): React.JSX.Element {
     failedSend !== null ||
     confirmOpen ||
     noticeOpen ||
+    refusedOpen ||
     Boolean(onboarding) ||
     settingsOpen
 
@@ -559,6 +568,24 @@ function App(): React.JSX.Element {
             ]
       )
       setActiveComposeId(id)
+
+      // A draft whose message waits in the outbox is the user's again, opened to change.
+      if (data.draftId) {
+        window.mailApi
+          .takeBackOutgoing(data.draftId)
+          .then(
+            (taken) =>
+              taken &&
+              toast.info('Non è più in uscita', {
+                description: 'Il messaggio è tornato nelle tue mani: invialo quando è pronto.'
+              })
+          )
+          .catch((error: unknown) =>
+            toast.error('Non è stato tolto dalla posta in uscita', {
+              description: error instanceof Error ? error.message : undefined
+            })
+          )
+      }
     },
     []
   )
@@ -1252,12 +1279,22 @@ function App(): React.JSX.Element {
         const sendingToast = toast.loading('Invio in corso…')
 
         try {
-          await window.mailApi.sendMail({
+          const { queued } = await window.mailApi.sendMail({
             ...payload,
             html: await buildOutgoingMailHtml(payload.html)
           })
-          toast.success('Messaggio inviato', { id: sendingToast })
-          settleSegretarioSend(payload.draftId, { sent: true })
+
+          if (queued) {
+            toast.info('In uscita', {
+              id: sendingToast,
+              description:
+                'Il server della posta ora non si raggiunge: il messaggio parte da solo appena risponde.'
+            })
+          } else {
+            toast.success('Messaggio inviato', { id: sendingToast })
+          }
+
+          settleSegretarioSend(payload.draftId, { sent: true, queued })
 
           // What the user wrote, for the Segretario to compare with a draft of its own.
           if (payload.draftId) {
@@ -1288,6 +1325,35 @@ function App(): React.JSX.Element {
     },
     [removeComposeSession]
   )
+
+  // The outbox: a message that waited for its server went, or gave up — its draft offered back.
+  useEffect(() => {
+    const offSent = window.mailApi.onOutboxSent(({ subject }) =>
+      toast.success('Messaggio partito', {
+        description: `«${subject || 'Senza oggetto'}» era in uscita: il server ora risponde.`
+      })
+    )
+    const offFailed = window.mailApi.onOutboxFailed(({ draftId, message }) => {
+      void (async () => {
+        const stored = draftId ? await window.mailApi.getStoredDraft(draftId) : null
+
+        if (!stored) {
+          toast.error('Invio non riuscito', { description: message, duration: Infinity })
+          return
+        }
+
+        setFailedSends((current) => [
+          ...current,
+          { id: ++failedSendIdRef.current, draft: draftToInitialData(stored.content), message }
+        ])
+      })()
+    })
+
+    return () => {
+      offSent()
+      offFailed()
+    }
+  }, [])
 
   const settleFailedSend = useCallback(
     (retry: boolean): void => {
@@ -1358,6 +1424,62 @@ function App(): React.JSX.Element {
     )
   }
 
+  // Whether a connection turned down still is, by what the page knows of it: undefined until it
+  // knows — at launch the refusals come before the states — false once put right or taken away.
+  const isConnectionRefused = useCallback(
+    (notice: ConnectionRefusedNotice): boolean | undefined => {
+      if (notice.family === 'calendario') {
+        return calendarConnections
+          ? calendarConnections.some(
+              (connection) => connection.id === notice.id && connection.refused
+            )
+          : undefined
+      }
+
+      if (bootstrapLoading) {
+        return undefined
+      }
+
+      const state = mail.accountConnections[notice.id]
+      return accounts.some((account) => account.id === notice.id)
+        ? state
+          ? state.refused !== undefined
+          : undefined
+        : false
+    },
+    [accounts, bootstrapLoading, calendarConnections, mail.accountConnections]
+  )
+
+  // What asks the user wherever the window stands — the launch, the setup, the workspace.
+  const frameOverlay = (
+    <>
+      <ConnectionRefusedDialog
+        isRefused={isConnectionRefused}
+        onOpenChange={setRefusedOpen}
+        onReconnect={async (notice, password) => {
+          if (notice.family === 'posta') {
+            await window.mailApi.reconnectAccount(notice.id, password)
+          } else {
+            await window.calendarApi.reconnect(notice.id, password)
+          }
+        }}
+        onRemove={(notice) => {
+          if (notice.family === 'posta') {
+            void mail.removeAccount(notice.id, [], { confirmed: true })
+            return
+          }
+
+          window.calendarApi.disconnect(notice.id).catch((error: unknown) =>
+            toast.error('Il calendario non si è scollegato', {
+              description: error instanceof Error ? error.message : undefined
+            })
+          )
+        }}
+      />
+      {confirmDialog}
+    </>
+  )
+
   // What failed to start says so, with a way to try again, before anything else waits.
   if (!bootstrapLoading && bootstrapError) {
     return (
@@ -1367,6 +1489,7 @@ function App(): React.JSX.Element {
         onToggleMaximizeWindow={handleToggleMaximizeWindow}
         onCloseWindow={handleCloseWindow}
         onNoticeOpenChange={setNoticeOpen}
+        overlay={frameOverlay}
       >
         <div className="mx-auto flex h-full max-w-xl items-center px-6">
           <div className="border-destructive/40 bg-destructive/15 w-full rounded-xl border p-6">
@@ -1390,6 +1513,7 @@ function App(): React.JSX.Element {
         onToggleMaximizeWindow={handleToggleMaximizeWindow}
         onCloseWindow={handleCloseWindow}
         onNoticeOpenChange={setNoticeOpen}
+        overlay={frameOverlay}
       >
         <div className="flex h-full items-center justify-center">
           <div className="border-border bg-card/70 flex items-center gap-3 rounded-xl border px-5 py-4 text-sm">
@@ -1409,6 +1533,7 @@ function App(): React.JSX.Element {
         onToggleMaximizeWindow={handleToggleMaximizeWindow}
         onCloseWindow={handleCloseWindow}
         onNoticeOpenChange={setNoticeOpen}
+        overlay={frameOverlay}
       >
         <OnboardingWizard
           state={onboarding}
@@ -1431,7 +1556,6 @@ function App(): React.JSX.Element {
             }
           }}
         />
-        {confirmDialog}
       </AppFrame>
     )
   }
@@ -1444,6 +1568,7 @@ function App(): React.JSX.Element {
         onToggleMaximizeWindow={handleToggleMaximizeWindow}
         onCloseWindow={handleCloseWindow}
         onNoticeOpenChange={setNoticeOpen}
+        overlay={frameOverlay}
       >
         <div className="relative mx-auto h-full w-full max-w-5xl px-6 py-12">
           <div className="flex h-full items-center justify-center">
@@ -1580,6 +1705,7 @@ function App(): React.JSX.Element {
           onToggleMaximizeWindow={handleToggleMaximizeWindow}
           onCloseWindow={handleCloseWindow}
           onNoticeOpenChange={setNoticeOpen}
+          overlay={frameOverlay}
           inert={composerOpen}
           framed
           dockVisible={!composerOpen && composeSessions.length > 0}
@@ -1603,6 +1729,7 @@ function App(): React.JSX.Element {
           <WorkspaceLayout
             mode={uiPreferences.layoutMode}
             readerExpanded={mail.isMessageExpanded}
+            readerKey={mail.readingRef ? messageRefKey(mail.readingRef) : null}
             rail={
               <AppRail
                 items={railItems}
@@ -1807,7 +1934,6 @@ function App(): React.JSX.Element {
             onCancel={() => settleFailedSend(false)}
           />
 
-          {confirmDialog}
           <MailDialogs mail={mail} />
 
           <SettingsDialog

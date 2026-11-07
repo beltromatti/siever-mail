@@ -9,8 +9,15 @@ import type {
   ExtensionMailEngineHandle,
   ExtensionMainContext
 } from '@app/extension/types'
-import type { MessageInvitation } from '@shared/calendar'
-import type { MailAccount, MessageRef } from '@shared/models'
+import { calendarRefusedNotice, type MessageInvitation } from '@shared/calendar'
+import { IPC_CHANNELS, type AddedAccount } from '@shared/ipc'
+import {
+  mailRefusedNotice,
+  refusalWords,
+  type ConnectionRefusedNotice,
+  type MailAccount,
+  type MessageRef
+} from '@shared/models'
 
 import { SegretarioService } from './ai/segretario-service'
 import { updateAppMenuAi } from './app-menu'
@@ -67,6 +74,7 @@ export class Workspace {
         projectThreads: (projectId) => this.segretario.projectThreads(projectId)
       },
       onMailChanged: () => this.segretario.mailChanged(),
+      onConnectionRefused: (notice) => this.connectionRefused(notice),
       // The Segretario's work on the mailbox stops and what it kept of it alone goes; a
       // calendar that came with the same access stays, on its own. Each waits to be open; one
       // that could not open does not keep the mailbox from going.
@@ -88,6 +96,7 @@ export class Workspace {
       fetch: (input, init) => net.fetch(input, init),
       send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload),
       parentWindow: () => getAppWindow(),
+      onRefused: (notice) => this.connectionRefused(notice),
       onDisconnected: (connectionId, names) =>
         void this.segretario
           .whenReady()
@@ -364,7 +373,7 @@ export class Workspace {
   async addGoogleAccount(
     parentWindow: BrowserWindow | undefined,
     options: { calendar: boolean }
-  ): Promise<MailAccount> {
+  ): Promise<AddedAccount> {
     if (!this.googleOAuthService.isConfigured()) {
       throw new Error('Google OAuth is not configured in this environment.')
     }
@@ -391,23 +400,37 @@ export class Workspace {
       }
 
       await this.calendar.addGoogle(oauthResult.email, oauthResult.refreshToken, oauthResult.scopes)
-      return known
+      return { account: known, calendarProblem: null }
     }
 
     const account = await this.mail.addGoogleMailbox(oauthResult)
 
-    // The calendar came with the same consent; a problem reading it is the calendar's, not the mail's.
-    if (withCalendar) {
-      await this.calendar
-        .addGoogle(oauthResult.email, oauthResult.refreshToken, oauthResult.scopes)
-        .catch((error: unknown) =>
-          logMainError('Google calendar not connected with its account', error, {
-            accountId: account.id
-          })
-        )
+    return {
+      account,
+      calendarProblem: withCalendar
+        ? await this.calendarWithAccount(account, () =>
+            this.calendar.addGoogle(oauthResult.email, oauthResult.refreshToken, oauthResult.scopes)
+          )
+        : null
     }
+  }
 
-    return account
+  /**
+   * The calendar that came with a mailbox's consent: a problem reading it is
+   * the calendar's, not the mail's — the mailbox stays, and the user is told
+   * why the calendar did not come.
+   */
+  private async calendarWithAccount(
+    account: MailAccount,
+    add: () => Promise<unknown>
+  ): Promise<string | null> {
+    try {
+      await add()
+      return null
+    } catch (error) {
+      logMainError('Calendar not connected with its account', error, { accountId: account.id })
+      return error instanceof Error ? error.message : 'Il calendario non si è collegato.'
+    }
   }
 
   /**
@@ -415,7 +438,7 @@ export class Workspace {
    * mailbox over IMAP and SMTP and — when asked — its calendar over Graph.
    * An account whose mail is here already only adds the calendar.
    */
-  async addMicrosoftAccount(options: { calendar: boolean }): Promise<MailAccount> {
+  async addMicrosoftAccount(options: { calendar: boolean }): Promise<AddedAccount> {
     if (!this.microsoftOAuthService.isConfigured()) {
       throw new Error("L'accesso con Microsoft non è attivo in questa versione di SIEVER Mail.")
     }
@@ -435,20 +458,102 @@ export class Workspace {
       }
 
       await this.calendar.addMicrosoft(granted.email, granted.secret)
-      return known
+      return { account: known, calendarProblem: null }
     }
 
     const account = await this.mail.addMicrosoftMailbox(granted)
 
-    if (options.calendar) {
-      await this.calendar.addMicrosoft(granted.email, granted.secret).catch((error: unknown) =>
-        logMainError('Microsoft calendar not connected with its account', error, {
-          accountId: account.id
-        })
-      )
+    return {
+      account,
+      calendarProblem: options.calendar
+        ? await this.calendarWithAccount(account, () =>
+            this.calendar.addMicrosoft(granted.email, granted.secret)
+          )
+        : null
+    }
+  }
+
+  /**
+   * A connection turned down for good: the user is told now — the window
+   * says it, and the system too while the window is behind (§13ter).
+   */
+  private connectionRefused(notice: ConnectionRefusedNotice): void {
+    getAppWindow()?.webContents.send(IPC_CHANNELS.connectionRefused, notice)
+
+    if (!getAppWindow()?.isFocused()) {
+      const { title, body } = refusalWords(notice)
+      this.mail.showNotice(title, body)
+    }
+  }
+
+  /**
+   * The connections turned down now — the mailboxes and the calendars — as
+   * their notices: a page just loaded says what it missed, at launch above
+   * all, when the first refusals come before the page listens.
+   */
+  async connectionRefusals(): Promise<ConnectionRefusedNotice[]> {
+    const accounts = await this.database.getAccounts()
+    const mail = this.mail
+      .getAccountConnectionStates()
+      .flatMap((state): ConnectionRefusedNotice[] => {
+        const account = accounts.find((candidate) => candidate.id === state.accountId)
+        return account && state.refused
+          ? [mailRefusedNotice(account, state.refused, state.errorMessage ?? '')]
+          : []
+      })
+    const calendars = (await this.calendar.listConnections()).flatMap(
+      (connection): ConnectionRefusedNotice[] =>
+        connection.refused ? [calendarRefusedNotice(connection, connection.refused)] : []
+    )
+    return [...mail, ...calendars]
+  }
+
+  /**
+   * A mailbox stopped for good, put right by the user: its password given
+   * again, or the provider's sign-in done again on the same account — the
+   * same one, or it is refused — or, for a server's certificate, tried again.
+   */
+  async reconnectMailAccount(accountId: string, password?: string): Promise<void> {
+    const account = (await this.database.getAccounts()).find(
+      (candidate) => candidate.id === accountId
+    )
+
+    if (!account) {
+      throw new Error('Questa casella non è più collegata.')
     }
 
-    return account
+    const sameAccount = (email: string): void => {
+      if (email.toLowerCase() !== account.email.toLowerCase()) {
+        throw new Error(
+          `Hai fatto l'accesso con ${email}, non con ${account.email}: rifallo con ${account.email}.`
+        )
+      }
+    }
+
+    // A certificate is put right on the server: tried again as it is, whatever it signs in with.
+    if (password !== undefined) {
+      await this.mail.replacePassword(accountId, password)
+    } else if (
+      account.authType === 'password' ||
+      this.mail.accountRefusal(accountId) === 'certificato'
+    ) {
+      await this.mail.retryAccount(accountId)
+    } else if (account.type === 'gmail') {
+      const granted = await this.googleOAuthService.authorize(getAppWindow() ?? undefined, {
+        scopes: [GOOGLE_MAIL_SCOPE],
+        loginHint: account.email,
+        title: `Ricollega ${account.email}`
+      })
+      sameAccount(granted.email)
+      await this.mail.replaceAuthorization(accountId, granted.refreshToken)
+    } else {
+      const granted = await this.microsoftOAuthService.authorize(account.email, {
+        mail: true,
+        calendar: false
+      })
+      sameAccount(granted.email)
+      await this.mail.replaceAuthorization(accountId, granted.secret)
+    }
   }
 
   /** Stops waiting for a sign-in left in the browser. */

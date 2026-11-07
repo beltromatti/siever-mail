@@ -2,6 +2,7 @@ import type { SegretarioView } from './folders'
 import type { ContextMenuItem, ContextMenuRequest } from './context-menu'
 import type {
   AccountConnectionState,
+  ConnectionRefusedNotice,
   AddImapAccountInput,
   AppMenuCommand,
   AttachmentRef,
@@ -58,6 +59,7 @@ export const IPC_CHANNELS = {
   removeAccount: 'account:remove',
   setActiveMailboxContext: 'app:set-active-mailbox-context',
   checkMailNow: 'app:check-mail-now',
+  reconnectAccount: 'app:reconnect-account',
   listFolders: 'folder:list',
   listRecentFolders: 'folder:list-recent',
   createFolder: 'folder:create',
@@ -126,10 +128,21 @@ export const IPC_CHANNELS = {
   taskbarBadgeChanged: 'app:taskbar-badge-changed',
   setTaskbarBadgeImage: 'app:set-taskbar-badge-image',
   accountConnectionChanged: 'engine:account-connection-changed',
+  connectionRefused: 'connections:refused',
+  listConnectionRefusals: 'connections:list-refusals',
+  takeBackOutgoing: 'outbox:take-back',
+  outboxSent: 'outbox:sent',
+  outboxFailed: 'outbox:failed',
   appMenuCommand: 'app:menu-command',
   showContextMenu: 'app:show-context-menu',
   contextMenuRequest: 'app:context-menu-request'
 } as const
+
+/** A mailbox added with its provider, and why its calendar, asked for too, did not come. */
+export interface AddedAccount {
+  account: MailAccount
+  calendarProblem: string | null
+}
 
 export interface DesktopMailApi {
   bootstrap: () => Promise<AppBootstrap>
@@ -144,11 +157,14 @@ export interface DesktopMailApi {
   getUiPreferences: () => Promise<UiPreferences>
   /** Persists the whole record and echoes back what was actually stored. */
   setUiPreferences: (preferences: UiPreferences) => Promise<UiPreferences>
-  /** A Google account, in one consent: its mail, and its calendar when asked. */
-  addGoogleAccount: (options: { calendar: boolean }) => Promise<MailAccount>
+  /**
+   * A Google account, in one consent: its mail, and its calendar when asked —
+   * with why the calendar did not come, when it did not (`calendarProblem`).
+   */
+  addGoogleAccount: (options: { calendar: boolean }) => Promise<AddedAccount>
   addImapAccount: (input: AddImapAccountInput) => Promise<MailAccount>
   /** A Microsoft account, in one consent in the browser: its mail, and its calendar when asked. */
-  addMicrosoftAccount: (options: { calendar: boolean }) => Promise<MailAccount>
+  addMicrosoftAccount: (options: { calendar: boolean }) => Promise<AddedAccount>
   /** Stops waiting for a sign-in left in the browser (Microsoft): the user went back. */
   cancelSignIn: () => Promise<void>
   /** A mailbox's servers found from its address alone; null when nothing tells them. */
@@ -158,6 +174,12 @@ export interface DesktopMailApi {
   setActiveMailboxContext: (context: ActiveMailboxContext | null) => Promise<void>
   /** Asks every account now whether new mail has arrived. */
   checkMailNow: () => Promise<void>
+  /**
+   * A mailbox its server turned down for good, put right: with its new
+   * password, or — without — the provider's sign-in again (Google,
+   * Microsoft), or tried again as it is (a server's certificate fixed).
+   */
+  reconnectAccount: (accountId: string, password?: string) => Promise<void>
   listFolders: (accountId: string) => Promise<MailFolder[]>
   /** An account's recent destinations of "Sposta", the latest first. */
   listRecentFolders: (accountId: string) => Promise<string[]>
@@ -206,7 +228,8 @@ export interface DesktopMailApi {
   archiveMessages: (refs: MessageRef[]) => Promise<MessagesActionResult>
   setMessagesSeen: (input: SetMessagesKeywordInput) => Promise<MessagesActionResult>
   setMessagesFlagged: (input: SetMessagesKeywordInput) => Promise<MessagesActionResult>
-  sendMail: (input: ComposeMailInput) => Promise<void>
+  /** Sent, or — its server out of reach — queued in the outbox, to go by itself (`queued`). */
+  sendMail: (input: ComposeMailInput) => Promise<{ queued: boolean }>
   suggestContacts: (query: string, limit?: number) => Promise<MailContactSuggestion[]>
   /** Keeps the draft as it is now and files it in Bozze once typing settles. */
   saveDraft: (content: DraftContent) => Promise<DraftStatus>
@@ -277,6 +300,20 @@ export interface DesktopMailApi {
   onTaskbarBadgeChanged: (listener: (count: number) => void) => () => void
   setTaskbarBadgeImage: (dataUrl: string | null, description: string) => Promise<void>
   onAccountConnectionChanged: (listener: (state: AccountConnectionState) => void) => () => void
+  /** A message of the outbox went: its server could be reached again. */
+  onOutboxSent: (
+    listener: (sent: { draftId: string | null; subject: string }) => void
+  ) => () => void
+  /** A message of the outbox gave up — refused, or broken off midway: its draft waits in Bozze. */
+  onOutboxFailed: (
+    listener: (failed: { draftId: string | null; subject: string; message: string }) => void
+  ) => () => void
+  /** A connection — a mailbox, a calendar — turned down for good: said once, for the user to act. */
+  onConnectionRefused: (listener: (notice: ConnectionRefusedNotice) => void) => () => void
+  /** The connections turned down now: what the page, just loaded, has to say. */
+  listConnectionRefusals: () => Promise<ConnectionRefusedNotice[]>
+  /** A draft opened to change: its message waiting in the outbox is taken back. Whether it was. */
+  takeBackOutgoing: (draftId: string) => Promise<boolean>
   onAppMenuCommand: (listener: (command: AppMenuCommand) => void) => () => void
   /**
    * Shows a context menu the page composed, as a native one, and settles

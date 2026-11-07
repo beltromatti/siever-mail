@@ -15,20 +15,23 @@ import {
 } from 'imapflow'
 import type { ParsedMail } from 'mailparser'
 
-import { extractErrorDetails, logMainError } from '@main/utils/error-utils'
-import type {
-  AccountConnectionState,
-  AccountConnectionStatus,
-  FetchedMessageDetail,
-  FetchedMessageSummary,
-  MailFolder,
-  MailMessageSummary,
-  MessageRef,
-  MessagesActionResult
+import { logMainError } from '@main/utils/error-utils'
+import {
+  REFUSAL_LINES,
+  type AccountConnectionState,
+  type AccountConnectionStatus,
+  type ConnectionRefusal,
+  type FetchedMessageDetail,
+  type FetchedMessageSummary,
+  type MailFolder,
+  type MailMessageSummary,
+  type MessageRef,
+  type MessagesActionResult
 } from '@shared/models'
 import { folderForRole, folderRoleLabel, type FolderRole } from '@shared/folders'
 import { deriveSenderKey, deriveSenderName } from '@shared/sender'
 
+import { refusalNeedsConfirming, refusalOf, serverWords } from '../connection-refusal'
 import type { AppDatabase, FolderSyncState, LeftOutMessages } from '../database'
 import type { MailTokens } from '../mail-tokens'
 
@@ -144,6 +147,8 @@ const FOLDER_CURRENT_MARK_MS = 5 * 60_000
 const ACTIVE_FOLDER_POLL_INTERVAL_MS = 20_000
 const RECONNECT_BACKOFF_INITIAL_MS = 2_000
 const RECONNECT_BACKOFF_MAX_MS = 60_000
+/** How long a refusal that may yet pass is given before the try that confirms it. */
+const REFUSAL_CONFIRM_AFTER_MS = 60_000
 const FOLDER_POLL_TASK_LABEL = 'folder-poll'
 // While the computer reports no network, how often to look again. Cheap: it
 // reads a flag Chromium keeps current, no packet leaves the machine.
@@ -257,6 +262,8 @@ export interface FetchedAttachment {
 
 type AccountConnectionEvents = {
   state: (state: AccountConnectionSnapshot) => void
+  /** Turned down for good: the connection stopped, and the user is to be told, once. */
+  refused: (refusal: ConnectionRefusal, detail: string) => void
   folders: (folders: MailFolder[]) => void
   'folder-counts': (update: {
     accountId: string
@@ -429,7 +436,13 @@ export class AccountConnection extends EventEmitter {
   // A server search waiting its turn (see `searchMessages`).
   private waitingSearch: { task: QueuedTask; settle: (uids: null) => void } | null = null
   private status: AccountConnectionStatus = 'disconnected'
-  private lastError: { message: string; authFailed: boolean } | null = null
+  private lastError: { message: string } | null = null
+  // Turned down for good: nothing is tried again until the user puts it right (`reconnect`).
+  private refused: ConnectionRefusal | null = null
+  // Turned down in a way that may yet pass: tried once more a while later before it stops.
+  private refusalToConfirm = false
+  // The user put it right and waits to know how the next attempt goes (`reconnect`).
+  private reconnecting: { resolve: () => void; reject: (error: Error) => void } | null = null
   private lastContactAt: number | undefined
   // Folders downloading their mail for the first time: what "syncing" means
   // to the user. Incremental catch-ups take a second and are not reported.
@@ -453,7 +466,21 @@ export class AccountConnection extends EventEmitter {
       isConnected: () => this.status === 'connected',
       openClient: async () => {
         const client = this.buildClient(await resolveImapAuth(this.account, this.tokens), 'index')
-        await client.connect()
+
+        try {
+          await client.connect()
+        } catch (error) {
+          // A login refused here is the account's: a server that keeps the sessions it has open
+          // after a password change refuses only the new ones. The links close, and the
+          // connection that follows, refused too, stops the account — no retrying every round.
+          if (refusalOf(error)) {
+            this.primaryClient?.close()
+            this.syncClient?.close()
+          }
+
+          throw error
+        }
+
         return client
       },
       onRowsUpdated: (rows) => this.emitUpdatedRows(rows),
@@ -488,12 +515,45 @@ export class AccountConnection extends EventEmitter {
     this.account = account
   }
 
+  /**
+   * Put right by the user — signed in again, its password given, the server
+   * fixed: the account, with what it now signs in with, connects again at
+   * once. Settles with that attempt: connected, or not reached for now — it
+   * goes on by itself — or turned down again, said to the user who asked
+   * rather than in a window of its own.
+   */
+  reconnect(account: AccountWithSecret): Promise<void> {
+    this.account = account
+    this.refused = null
+    this.refusalToConfirm = false
+    this.backoffMs = RECONNECT_BACKOFF_INITIAL_MS
+    this.reconnecting?.resolve()
+
+    return new Promise((resolve, reject) => {
+      this.reconnecting = { resolve, reject }
+      this.setStatus('connecting')
+      this.wakeRetry?.()
+    })
+  }
+
+  /** The attempt the user waits for settled: connected, refused, or left to go on by itself. */
+  private settleReconnecting(error?: Error): void {
+    const waiting = this.reconnecting
+    this.reconnecting = null
+
+    if (error) {
+      waiting?.reject(error)
+    } else {
+      waiting?.resolve()
+    }
+  }
+
   getState(): AccountConnectionSnapshot {
     return {
       status: this.status,
       syncing: this.status === 'connected' && this.bootstrappingFolders.size > 0,
       errorMessage: this.status === 'error' ? this.lastError?.message : undefined,
-      authFailed: this.status === 'error' ? this.lastError?.authFailed : undefined,
+      refused: this.status === 'error' ? (this.refused ?? undefined) : undefined,
       lastContactAt: this.lastContactAt,
       index: this.indexProgress
     }
@@ -612,6 +672,7 @@ export class AccountConnection extends EventEmitter {
   async stop(): Promise<void> {
     this.shuttingDown = true
     this.running = false
+    this.settleReconnecting(new Error('Questa casella non è più collegata.'))
     // The loop may be parked between attempts; let it see `running` is off.
     this.wakeRetry?.()
     const indexerStopped = this.indexer.stop()
@@ -2063,20 +2124,11 @@ export class AccountConnection extends EventEmitter {
     }
   }
 
-  private setStatus(status: AccountConnectionStatus, error?: unknown): void {
+  private setStatus(status: AccountConnectionStatus, error?: unknown, force = false): void {
     const nextError =
-      status === 'error' && error !== undefined
-        ? {
-            message: error instanceof Error ? error.message : String(error),
-            authFailed: extractErrorDetails(error).authenticationFailed === true
-          }
-        : this.lastError
+      status === 'error' && error !== undefined ? { message: serverWords(error) } : this.lastError
 
-    if (
-      this.status === status &&
-      nextError?.message === this.lastError?.message &&
-      nextError?.authFailed === this.lastError?.authFailed
-    ) {
+    if (!force && this.status === status && nextError?.message === this.lastError?.message) {
       return
     }
 
@@ -2100,7 +2152,8 @@ export class AccountConnection extends EventEmitter {
 
   private async runConnectionLoop(): Promise<void> {
     while (this.running) {
-      if (this.suspended) {
+      // Turned down for good, or asleep: nothing is tried until the user reconnects it, or the wake.
+      if (this.suspended || this.refused) {
         await this.waitBeforeRetry(null)
         continue
       }
@@ -2172,6 +2225,8 @@ export class AccountConnection extends EventEmitter {
         this.markContact()
         this.setStatus('connected')
         this.backoffMs = RECONNECT_BACKOFF_INITIAL_MS
+        this.refusalToConfirm = false
+        this.settleReconnecting()
         this.startPrimaryWorkerIfNeeded()
         this.startSyncWorkerIfNeeded()
         this.indexer.start()
@@ -2213,14 +2268,43 @@ export class AccountConnection extends EventEmitter {
         logMainError('IMAP connection error', error, {
           accountId: this.account.id
         })
-        this.setStatus(net.isOnline() ? 'error' : 'offline', error)
+        const refusal = net.isOnline() ? refusalOf(error) : null
+        // A refusal that may yet pass is tried once more, a while later, before it counts — unless
+        // the user is there, having just put it right.
+        const confirming =
+          refusal !== null &&
+          !this.reconnecting &&
+          !this.refusalToConfirm &&
+          refusalNeedsConfirming(error)
+        this.refusalToConfirm = confirming
+
+        // Turned down for good — the access, the authorization, the certificate: it stops, and
+        // says so once. Trying again a refused password gets the account locked by the server.
+        if (refusal && !confirming) {
+          this.refused = refusal
+          this.setStatus('error', error, true)
+
+          if (this.reconnecting) {
+            this.settleReconnecting(
+              new Error(`${REFUSAL_LINES[refusal]}: ${this.lastError?.message ?? ''}`)
+            )
+          } else {
+            this.emit('refused', refusal, this.lastError?.message ?? '')
+          }
+        } else {
+          this.setStatus(net.isOnline() ? 'error' : 'offline', error)
+          // Not reached for now: it goes on by itself, as the user sees.
+          this.settleReconnecting()
+        }
       }
 
       // Offline, the top of the loop does the waiting — and retries the
       // moment the network is back instead of after a grown backoff; asleep,
-      // it waits for the wake.
-      if (this.running && !this.suspended && net.isOnline()) {
-        await this.waitBeforeRetry(this.nextBackoffDelay())
+      // or turned down, it waits for the wake or for the user.
+      if (this.running && !this.suspended && !this.refused && net.isOnline()) {
+        await this.waitBeforeRetry(
+          this.refusalToConfirm ? REFUSAL_CONFIRM_AFTER_MS : this.nextBackoffDelay()
+        )
       }
     }
 
@@ -3753,8 +3837,12 @@ export class AccountConnection extends EventEmitter {
       }
     }
 
-    if (this.status === 'error' && this.lastError?.authFailed) {
-      reject(new Error(`Accesso a ${this.account.email} non riuscito: ricollega l'account.`))
+    if (this.refused) {
+      reject(
+        new Error(
+          `La casella ${this.account.email} è ferma: ${REFUSAL_LINES[this.refused].toLowerCase()}. Ricollegala da Impostazioni › Connessioni.`
+        )
+      )
       return { promise, task }
     }
 

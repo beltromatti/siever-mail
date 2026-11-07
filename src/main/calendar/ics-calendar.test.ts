@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { SyncTokenExpired } from './calendar-provider'
+import { CalendarRequestError, refusalOfCalendar } from './calendar-refusal'
 import { FEED_CALENDAR_ID, feedUrl, IcsCalendarProvider, type Fetch } from './ics-calendar'
 
 const feed = (summary: string): string => `BEGIN:VCALENDAR
@@ -68,6 +69,34 @@ describe('IcsCalendarProvider', () => {
     expect(reread.events[0].title).toBe('Partita spostata')
     expect(reread.syncToken).toBe('etag:"2"')
     expect(remote.calls).toEqual(['full', '"1"'])
+  })
+
+  it('takes a link no longer there for the calendar gone, and a server that fails for now for nothing more', async () => {
+    const answering = (status: number): IcsCalendarProvider =>
+      new IcsCalendarProvider(
+        'https://x/feed.ics',
+        'Calcetto',
+        async () => new Response(null, { status })
+      )
+
+    for (const status of [404, 410]) {
+      const gone = await answering(status)
+        .changes(FEED_CALENDAR_ID, window)
+        .catch((error: unknown) => error)
+      expect(refusalOfCalendar(gone)).toEqual({
+        refusal: 'sparito',
+        problem: 'Il calendario non è più a quel link.',
+        detail: `Il calendario non è più a quel link. (HTTP ${status})`
+      })
+    }
+
+    for (const status of [429, 503]) {
+      const passing = await answering(status)
+        .changes(FEED_CALENDAR_ID, window)
+        .catch((error: unknown) => error)
+      expect(passing).toBeInstanceOf(CalendarRequestError)
+      expect(refusalOfCalendar(passing)).toBeNull()
+    }
   })
 
   it('takes a webcal link as https, and nothing that is not a web link', () => {

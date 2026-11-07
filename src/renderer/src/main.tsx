@@ -1,9 +1,11 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { toast } from 'sonner'
 
 import extensionRenderer from '@app/extension/renderer'
 
 import App from './App'
+import { ErrorBoundary } from './components/error-boundary'
 // The app's own faces, bundled: Mona Sans for the interface, every weight
 // and width; Newsreader for what the Segretario writes.
 import '@fontsource-variable/mona-sans/standard.css'
@@ -34,8 +36,25 @@ for (const type of ['dragover', 'drop'] as const) {
   })
 }
 
+// A promise nobody waited on that failed: written in the log, and said — an action the user
+// asked for never fails in silence (§13ter.3). A request stopped on purpose is not a failure.
+window.addEventListener('unhandledrejection', (event) => {
+  const reason: unknown = event.reason
+
+  if (reason instanceof DOMException && reason.name === 'AbortError') {
+    return
+  }
+
+  console.error('[renderer] Unhandled rejection', reason)
+  // The same failure again, from every call it breaks, is said once.
+  const message = reason instanceof Error ? reason.message : undefined
+  toast.error('Qualcosa non è andato', { id: `unhandled:${message ?? ''}`, description: message })
+})
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary whole className="paper h-screen">
+      <App />
+    </ErrorBoundary>
   </StrictMode>
 )

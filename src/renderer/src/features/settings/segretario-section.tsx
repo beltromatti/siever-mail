@@ -66,16 +66,8 @@ function openExternal(url: string): void {
   void window.mailApi.openExternalUrl(url)
 }
 
-/** Where the Segretario's own work stands: what it has read, what waits, what failed. */
-function EngineLine({
-  engine,
-  retrying,
-  onRetry
-}: {
-  engine: EngineState
-  retrying: boolean
-  onRetry: () => void
-}): React.JSX.Element {
+/** Where the Segretario's own work stands: what it has read, what waits. */
+function EngineLine({ engine }: { engine: EngineState }): React.JSX.Element {
   const busy = (Object.entries(engine.running) as Array<[TaskKind, number]>).filter(
     ([, count]) => count > 0
   )
@@ -103,23 +95,6 @@ function EngineLine({
           {waiting > 0 && `${waiting.toLocaleString('it-IT')} in coda.`}
         </p>
       )}
-      {engine.failed > 0 && (
-        <p className="flex items-center gap-2">
-          <span>
-            {engine.failed === 1
-              ? 'Un lavoro non è riuscito dopo tre tentativi.'
-              : `${engine.failed.toLocaleString('it-IT')} lavori non sono riusciti dopo tre tentativi.`}
-          </span>
-          <button
-            type="button"
-            disabled={retrying}
-            onClick={onRetry}
-            className="text-foreground focus-visible:ring-ring/60 rounded-sm font-semibold underline-offset-2 outline-none hover:underline focus-visible:ring-2 disabled:opacity-50"
-          >
-            Riprova
-          </button>
-        </p>
-      )}
     </div>
   )
 }
@@ -140,7 +115,6 @@ export function SegretarioSection({
   const [spending, setSpending] = useState<SegretarioSpending | null>(null)
   const [preferences, setPreferences] = useState<SegretarioPreferences | null>(null)
   const [engine, setEngine] = useState<EngineState | null>(null)
-  const [retrying, setRetrying] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [keyInput, setKeyInput] = useState('')
   const [replacing, setReplacing] = useState(false)
@@ -183,18 +157,6 @@ export function SegretarioSection({
       unsubscribePreferences()
     }
   }, [])
-
-  const retryFailed = async (): Promise<void> => {
-    setRetrying(true)
-
-    try {
-      setEngine(await window.segretarioApi.retryFailedWork())
-    } catch (error) {
-      toast.error('Non riprovato', { description: errorText(error) })
-    } finally {
-      setRetrying(false)
-    }
-  }
 
   const saveKey = async (): Promise<void> => {
     setBusy('save')
@@ -549,9 +511,7 @@ export function SegretarioSection({
             />
           </label>
 
-          {preferences.enabled && engine && (
-            <EngineLine engine={engine} retrying={retrying} onRetry={() => void retryFailed()} />
-          )}
+          {preferences.enabled && engine && <EngineLine engine={engine} />}
         </div>
       )}
 

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import { SyncTokenExpired, type CalendarProvider, type ProviderEvent } from './calendar-provider'
+import { CalendarRequestError } from './calendar-refusal'
 import { occurrencesOf } from './icalendar'
 
 /** A link's one calendar, by this id. */
@@ -166,11 +167,14 @@ export class IcsCalendarProvider implements CalendarProvider {
       return null
     }
 
+    // Not at the link any more: the link is the whole calendar, gone with it.
     if (!response.ok) {
-      throw new Error(
-        response.status === 404 || response.status === 410
+      const gone = response.status === 404 || response.status === 410
+      throw new CalendarRequestError(
+        gone
           ? 'Il calendario non è più a quel link.'
-          : `Il server del calendario ha risposto ${response.status}.`
+          : `Il server del calendario ha risposto ${response.status}.`,
+        { status: response.status, refusal: gone ? 'sparito' : null }
       )
     }
 

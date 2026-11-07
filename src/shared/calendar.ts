@@ -1,4 +1,4 @@
-import type { MessageRef } from './models'
+import type { ConnectionRefusal, ConnectionRefusedNotice, MessageRef } from './models'
 import { foldSearchText } from './search'
 
 /**
@@ -102,9 +102,53 @@ export interface CalendarConnection {
   /** The CalDAV server or the link, for those. */
   serverUrl: string | null
   lastSyncAt: number | null
-  /** What went wrong at the last sync, in the user's words; null when it went. */
+  /**
+   * What went wrong at the last sync, in the user's words; null when it
+   * went. Without `refused`, it passes: the sync tries again by itself.
+   */
   problem: string | null
+  /**
+   * Turned down for good, and stopped — `problem` says how: no sync tries
+   * it again, nor a write, until the user puts it right (signing in again,
+   * a new password, trying again) or takes it away. What it kept stays.
+   * Null when it is not.
+   */
+  refused: ConnectionRefusal | null
+  /**
+   * Read, but its provider's consent lacks what writing needs — Microsoft's
+   * mailbox time zone, for a connection made before it was asked: signing
+   * in again gives it (`problem` says so).
+   */
+  renewConsent: boolean
   calendars: CalendarInfo[]
+}
+
+/** How each provider's connection signs in again. */
+const SIGN_IN: Readonly<Record<CalendarProviderKind, ConnectionRefusedNotice['signIn']>> = {
+  google: 'google',
+  microsoft: 'microsoft',
+  caldav: 'password',
+  ics: 'none'
+}
+
+/**
+ * A calendar connection turned down for good, as the user is told it:
+ * with what the server said — or, where only the connection is at hand,
+ * its `problem`.
+ */
+export function calendarRefusedNotice(
+  connection: Pick<CalendarConnection, 'id' | 'provider' | 'label' | 'problem'>,
+  refusal: ConnectionRefusal,
+  detail: string = connection.problem ?? ''
+): ConnectionRefusedNotice {
+  return {
+    family: 'calendario',
+    id: connection.id,
+    label: connection.label,
+    refusal,
+    detail,
+    signIn: SIGN_IN[connection.provider]
+  }
 }
 
 /** The key a calendar goes by, for `NewCalendarEvent.calendarKey`: its connection's and its own id. */
@@ -223,6 +267,7 @@ export const CALENDAR_IPC = {
   connectMicrosoft: 'calendar:connect-microsoft',
   addIcs: 'calendar:add-ics',
   addCalDav: 'calendar:add-caldav',
+  reconnect: 'calendar:reconnect',
   disconnect: 'calendar:disconnect',
   events: 'calendar:events',
   search: 'calendar:search',
@@ -262,6 +307,13 @@ export interface CalendarApi {
     password: string
     label: string
   }) => Promise<CalendarConnection[]>
+  /**
+   * A connection turned down — or whose access failed — put right: with its
+   * new password, a CalDAV server's; for a certificate, a source gone or a
+   * link, tried again as it is; else the provider's sign-in done again on
+   * the same account. Resolves once it is read again.
+   */
+  reconnect: (connectionId: string, password?: string) => Promise<CalendarConnection[]>
   /** Forgets a calendar connection here; the provider keeps the calendar as it is. */
   disconnect: (connectionId: string) => Promise<CalendarConnection[]>
   /** The events between two instants, every connected calendar's, in order. */

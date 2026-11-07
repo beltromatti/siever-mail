@@ -5,6 +5,7 @@ import {
   noticeWords,
   OPENROUTER_CREDITS_URL,
   OPENROUTER_KEYS_URL,
+  OPENROUTER_MODELS_URL,
   type SegretarioNotice
 } from '@shared/segretario'
 
@@ -48,7 +49,17 @@ export function AiNotice({
   }
 
   const { title, body } = noticeWords(notice)
-  const off = notice.kind === 'credito-finito' || notice.kind === 'chiave-rifiutata'
+  const off =
+    notice.kind === 'credito-finito' ||
+    notice.kind === 'chiave-rifiutata' ||
+    notice.kind === 'modello-non-disponibile'
+  // Where to put it right: the keys, the models, the credit.
+  const where =
+    notice.kind === 'chiave-rifiutata'
+      ? { label: 'Apri OpenRouter', url: OPENROUTER_KEYS_URL }
+      : notice.kind === 'modello-non-disponibile'
+        ? { label: 'Apri i modelli', url: OPENROUTER_MODELS_URL }
+        : { label: 'Ricarica su OpenRouter', url: OPENROUTER_CREDITS_URL }
   const seen = (): void => {
     setNotice(null)
     void window.segretarioApi.dismissNotice()
@@ -59,14 +70,10 @@ export function AiNotice({
       open
       title={title}
       description={body}
-      confirmLabel={
-        notice.kind === 'chiave-rifiutata' ? 'Apri OpenRouter' : 'Ricarica su OpenRouter'
-      }
+      confirmLabel={where.label}
       cancelLabel={off ? 'Ho capito' : 'Più tardi'}
       onConfirm={() => {
-        void window.mailApi.openExternalUrl(
-          notice.kind === 'chiave-rifiutata' ? OPENROUTER_KEYS_URL : OPENROUTER_CREDITS_URL
-        )
+        void window.mailApi.openExternalUrl(where.url)
         seen()
       }}
       onCancel={seen}

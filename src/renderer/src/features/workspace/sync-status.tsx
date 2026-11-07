@@ -1,6 +1,6 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { cn } from '@renderer/lib/utils'
-import type { AccountConnectionState, MailAccount } from '@shared/models'
+import { REFUSAL_LINES, type AccountConnectionState, type MailAccount } from '@shared/models'
 
 export type SyncTone = 'ok' | 'busy' | 'problem'
 
@@ -79,15 +79,16 @@ function summarizeConnections(
   const withStatus = (...statuses: AccountConnectionState['status'][]): typeof entries =>
     entries.filter((entry) => entry.state && statuses.includes(entry.state.status))
 
-  const refused = withStatus('error').filter((entry) => entry.state?.authFailed)
+  const refused = withStatus('error').filter((entry) => entry.state?.refused)
 
   if (refused.length > 0) {
     return {
       tone: 'problem',
-      label: 'Accesso non riuscito',
+      label: 'Connessione ferma',
       detail:
-        `Il server di ${accountLabel(refused[0].account)}${andOthers(refused.length)} ha ` +
-        "rifiutato l'accesso. Se la password è cambiata, ricollega l'account dalle Impostazioni."
+        refused.length === 1
+          ? `La casella ${accountLabel(refused[0].account)} è ferma: ${REFUSAL_LINES[refused[0].state?.refused ?? 'accesso'].toLowerCase()}. Ricollegala dalle Impostazioni › Connessioni.`
+          : `${accountLabel(refused[0].account)}${andOthers(refused.length)} sono fermi: le Impostazioni › Connessioni dicono perché, e li ricollegano.`
     }
   }
 

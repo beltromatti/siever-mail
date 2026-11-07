@@ -156,7 +156,7 @@ function formatConnectionMode(secure: boolean): string {
   return secure ? 'SSL/TLS' : 'STARTTLS'
 }
 
-export function composeImapVerificationError(input: AddImapAccountInput, error: unknown): Error {
+export function composeImapVerificationError(input: ImapServer, error: unknown): Error {
   const details = extractErrorDetails(error)
 
   const lines = [
@@ -184,10 +184,10 @@ export function composeImapVerificationError(input: AddImapAccountInput, error: 
     )
   }
 
-  return new Error(lines.join('\n'))
+  return new Error(lines.join('\n'), { cause: error })
 }
 
-export function composeSmtpVerificationError(input: AddImapAccountInput, error: unknown): Error {
+export function composeSmtpVerificationError(input: SmtpServer, error: unknown): Error {
   const details = extractErrorDetails(error)
 
   const lines = [
@@ -211,7 +211,7 @@ export function composeSmtpVerificationError(input: AddImapAccountInput, error: 
     )
   }
 
-  return new Error(lines.join('\n'))
+  return new Error(lines.join('\n'), { cause: error })
 }
 
 /**
@@ -289,15 +289,30 @@ function smtpConnection(
   return { host, port, ...smtpEncryption(secure), getSocket: openSmtpSocket }
 }
 
+type ImapServer = Pick<AddImapAccountInput, 'username' | 'imapHost' | 'imapPort' | 'imapSecure'>
+type SmtpServer = Pick<AddImapAccountInput, 'username' | 'smtpHost' | 'smtpPort' | 'smtpSecure'>
+
+/** A mailbox signed in with its password, tried on both servers before it is kept (§13ter.1). */
 export async function verifyImapAccount(input: AddImapAccountInput): Promise<void> {
+  const auth = { user: input.username, pass: input.password }
+  await verifyImapLogin(input, auth)
+  await verifySmtpLogin(input, auth)
+}
+
+/**
+ * Signs in to a mailbox's IMAP server, and leaves: how a mailbox is tried
+ * before it is kept — with its password, or with the token its provider
+ * gave, since a consent is not yet a mailbox that answers (§13ter.1).
+ */
+export async function verifyImapLogin(
+  server: ImapServer,
+  auth: { user: string; pass: string } | { user: string; accessToken: string }
+): Promise<void> {
   const client = new ImapFlow({
-    host: input.imapHost,
-    port: input.imapPort,
-    ...imapEncryption(input.imapSecure),
-    auth: {
-      user: input.username,
-      pass: input.password
-    },
+    host: server.imapHost,
+    port: server.imapPort,
+    ...imapEncryption(server.imapSecure),
+    auth,
     connectionTimeout: IMAP_CONNECTION_TIMEOUT_MS,
     greetingTimeout: IMAP_GREETING_TIMEOUT_MS,
     socketTimeout: IMAP_SOCKET_TIMEOUT_MS,
@@ -306,39 +321,39 @@ export async function verifyImapAccount(input: AddImapAccountInput): Promise<voi
   })
 
   try {
-    try {
-      await client.connect()
-    } catch (error) {
-      logMainError('IMAP account verification failed', error, {
-        host: input.imapHost,
-        port: input.imapPort,
-        secure: input.imapSecure,
-        username: input.username
-      })
-      throw composeImapVerificationError(input, error)
-    }
+    await client.connect()
+  } catch (error) {
+    logMainError('IMAP account verification failed', error, {
+      host: server.imapHost,
+      port: server.imapPort,
+      secure: server.imapSecure,
+      username: server.username
+    })
+    throw composeImapVerificationError(server, error)
   } finally {
     await client.logout().catch(() => undefined)
   }
+}
 
+async function verifySmtpLogin(
+  server: SmtpServer,
+  auth: { user: string; pass: string }
+): Promise<void> {
   const transport = nodemailer.createTransport({
-    ...smtpConnection(input.smtpHost, input.smtpPort, input.smtpSecure),
-    auth: {
-      user: input.username,
-      pass: input.password
-    }
+    ...smtpConnection(server.smtpHost, server.smtpPort, server.smtpSecure),
+    auth
   })
 
   try {
     await transport.verify()
   } catch (error) {
     logMainError('SMTP account verification failed', error, {
-      host: input.smtpHost,
-      port: input.smtpPort,
-      secure: input.smtpSecure,
-      username: input.username
+      host: server.smtpHost,
+      port: server.smtpPort,
+      secure: server.smtpSecure,
+      username: server.username
     })
-    throw composeSmtpVerificationError(input, error)
+    throw composeSmtpVerificationError(server, error)
   } finally {
     transport.close()
   }

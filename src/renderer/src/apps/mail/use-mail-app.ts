@@ -268,7 +268,11 @@ export interface MailForShell {
   clearingAccountDataId: string | null
   clearingDatabaseData: boolean
   /** A mail connection taken away — with the calendars given, the whole access — once the user says so. */
-  removeAccount: (accountId: string, calendars?: ReadonlyArray<CalendarConnection>) => Promise<void>
+  removeAccount: (
+    accountId: string,
+    calendars?: ReadonlyArray<CalendarConnection>,
+    options?: { confirmed?: boolean }
+  ) => Promise<void>
   clearAccountData: (accountId: string) => Promise<void>
   clearAllDataKeepAccounts: () => Promise<void>
   /** "Tutti gli account" now gathers other accounts: its folders, counts and list follow. */
@@ -1027,20 +1031,27 @@ export function useMailApp({
 
   /** A mail connection taken away — with the calendars given, the whole access — once the user says so. */
   const removeAccount = useCallback(
-    async (accountId: string, calendars: ReadonlyArray<CalendarConnection> = []): Promise<void> => {
+    async (
+      accountId: string,
+      calendars: ReadonlyArray<CalendarConnection> = [],
+      options: { confirmed?: boolean } = {}
+    ): Promise<void> => {
       if (removingAccountId) {
         return
       }
 
       const account = accounts.find((entry) => entry.id === accountId)
-      const confirmed = await confirm({
-        title: `Disconnettere ${account?.email ?? "l'account"}?`,
-        description: `SIEVER Mail smette di ricevere e inviare con questo account e toglie dal computer la sua posta, la sua firma e quello che il Segretario aveva annotato su questo account${
-          calendars.length > 0 ? ', e i suoi calendari' : ''
-        }. Sul server non cambia nulla: puoi ricollegarlo quando vuoi.`,
-        confirmLabel: 'Disconnetti',
-        destructive: true
-      })
+      // Asked already where the user chose it — a refusal's window — or asked now.
+      const confirmed =
+        options.confirmed ||
+        (await confirm({
+          title: `Disconnettere ${account?.email ?? "l'account"}?`,
+          description: `SIEVER Mail smette di ricevere e inviare con questo account e toglie dal computer la sua posta, la sua firma e quello che il Segretario aveva annotato su questo account${
+            calendars.length > 0 ? ', e i suoi calendari' : ''
+          }. Sul server non cambia nulla: puoi ricollegarlo quando vuoi.`,
+          confirmLabel: 'Disconnetti',
+          destructive: true
+        }))
 
       if (!confirmed) {
         return
@@ -3681,11 +3692,12 @@ export function useMailApp({
       .askMail(question, requestId)
       .then(openAskedSearch)
       .catch((error: unknown) => {
-        // Stopped by the user: nothing to say.
+        // Stopped by the user: nothing to say. Else the user waits for it: "Riprova" (§13ter.2).
         if (askingRequestRef.current === requestId) {
-          setViewError(
-            error instanceof Error ? error.message : 'Il Segretario non ha potuto cercare.'
-          )
+          toast.error('Il Segretario non ha cercato', {
+            description: error instanceof Error ? error.message : undefined,
+            action: { label: 'Riprova', onClick: () => askSegretario(question) }
+          })
         }
       })
       .finally(() => {

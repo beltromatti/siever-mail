@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { ArrowUp, LoaderCircle, Square } from 'lucide-react'
+import { ArrowUp, LoaderCircle, RotateCcw, Square } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
@@ -7,6 +7,8 @@ import { IconButton } from '@renderer/components/ui/icon-button'
 import { Popover, PopoverContent, PopoverTrigger } from '@renderer/components/ui/popover'
 import { ShortcutKeys } from '@renderer/components/ui/shortcut-keys'
 import { useCommandKeys } from '@renderer/lib/command-shortcuts'
+
+import { useAiWaiting } from './use-segretario'
 
 const REWRITES = [
   'Più breve',
@@ -50,7 +52,9 @@ export function ComposeAssist({
 }): React.JSX.Element {
   const [instruction, setInstruction] = useState('')
   const [writing, setWriting] = useState(false)
-  const [problem, setProblem] = useState<string | null>(null)
+  // What did not get written, with what was asked: "Riprova" asks it again (§13ter.2).
+  const [problem, setProblem] = useState<{ message: string; asked: string } | null>(null)
+  const waiting = useAiWaiting()
   // Stopped by the user: what it says on the way out is not a problem to show.
   const stopped = useRef(false)
   const keys = useCommandKeys('segretario-write')
@@ -73,7 +77,10 @@ export function ComposeAssist({
       onOpenChange(false)
     } catch (error) {
       if (!stopped.current) {
-        setProblem(error instanceof Error ? error.message : 'Non sono riuscito a scrivere.')
+        setProblem({
+          message: error instanceof Error ? error.message : 'Non sono riuscito a scrivere.',
+          asked: trimmed
+        })
       }
     } finally {
       setWriting(false)
@@ -173,11 +180,26 @@ export function ComposeAssist({
           )}
           {writing && (
             <p className="text-muted-foreground flex items-center gap-1.5 text-[11.5px]">
-              <LoaderCircle className="text-ai size-3 animate-spin" />
-              Scrivo come scriveresti tu…
+              <LoaderCircle className="text-ai size-3 shrink-0 animate-spin" />
+              {waiting ?? 'Scrivo come scriveresti tu…'}
             </p>
           )}
-          {problem && <p className="text-destructive-soft-foreground text-[11.5px]">{problem}</p>}
+          {problem && !writing && (
+            <div className="flex items-start gap-2">
+              <p className="text-destructive-soft-foreground min-w-0 flex-1 text-[11.5px]">
+                {problem.message}
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 shrink-0 px-2 text-[11px]"
+                onClick={() => void ask(problem.asked)}
+              >
+                <RotateCcw className="size-3" />
+                Riprova
+              </Button>
+            </div>
+          )}
         </PopoverContent>
       </Popover>
       {onUndo && (

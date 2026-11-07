@@ -20,6 +20,7 @@ import {
   NotebookPen,
   Paperclip,
   PenLine,
+  RotateCcw,
   Plus,
   Search,
   Send,
@@ -472,16 +473,20 @@ export function ActivityThread({
   state,
   onOpen,
   onApprove,
-  onOpenDraft
+  onOpenDraft,
+  onRetry
 }: {
   state: SegretarioState
   onOpen: (link: HandleLink) => void
   onApprove: (approval: ApprovalRequest, approved: boolean) => void
   onOpenDraft: (draftId: string) => void
+  /** The work on screen stopped short and the user waits for it: "Riprova", by its error. */
+  onRetry?: () => void
 }): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
   const entries = state.entries ?? []
+  const lastError = entries.findLastIndex((entry) => entry.kind === 'error')
 
   // Follows the work as it is written, unless the user scrolled up to read.
   useLayoutEffect(() => {
@@ -567,12 +572,17 @@ export function ActivityThread({
               )
             case 'error':
               return (
-                <div
-                  key={entry.id}
-                  className="text-destructive-soft-foreground flex items-start gap-2 text-[12.5px] leading-[1.45]"
-                >
-                  <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-                  <span>{entry.message}</span>
+                <div key={entry.id} className="flex flex-col items-start gap-2">
+                  <div className="text-destructive-soft-foreground flex items-start gap-2 text-[12.5px] leading-[1.45]">
+                    <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                    <span>{entry.message}</span>
+                  </div>
+                  {onRetry && index === lastError && (
+                    <Button variant="outline" size="sm" className="ml-5.5" onClick={onRetry}>
+                      <RotateCcw className="size-3.5" />
+                      Riprova
+                    </Button>
+                  )}
                 </div>
               )
           }
@@ -675,6 +685,16 @@ export function SegretarioPanel({
       input.style.height = `${Math.min(input.scrollHeight, 180)}px`
     }
   }, [text])
+
+  const retry = async (id: string): Promise<void> => {
+    setError(null)
+
+    try {
+      await state.retry(id)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Non sono riuscito a riprendere.')
+    }
+  }
 
   const submit = async (message: string): Promise<void> => {
     const trimmed = message.trim()
@@ -782,6 +802,11 @@ export function SegretarioPanel({
             state.selectedId && onApprove(state.selectedId, approval, approved)
           }
           onOpenDraft={onOpenDraft}
+          onRetry={
+            ready && selected?.task === 'richiesta' && selected.status === 'failed'
+              ? () => void retry(selected.id)
+              : undefined
+          }
         />
       ) : (
         <Introduction
@@ -835,7 +860,9 @@ export function SegretarioPanel({
             <div className="flex items-center justify-between gap-2 pt-1">
               <span className="text-faint-foreground px-1 text-[11px]">
                 {working
-                  ? STATUS_LABEL[selected!.status]
+                  ? selected!.status === 'running' && state.waiting
+                    ? state.waiting
+                    : STATUS_LABEL[selected!.status]
                   : 'Invio per mandare · ⇧ Invio per andare a capo'}
               </span>
               {working ? (

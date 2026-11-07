@@ -310,6 +310,14 @@ export const sendDraftTool: SegretarioTool = {
       }
     }
 
+    if (outcome?.queued) {
+      return {
+        content:
+          'Il server della posta ora non si raggiunge: il messaggio è in uscita e parte da solo appena risponde.',
+        summary: `In uscita · «${draft.subject || 'Senza oggetto'}»`
+      }
+    }
+
     return {
       content: 'Inviato.',
       summary: `Inviato con la tua conferma · «${draft.subject || 'Senza oggetto'}»`

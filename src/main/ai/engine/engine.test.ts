@@ -81,7 +81,8 @@ describe('WorkQueue', () => {
     expect([...(await queue.failedAt(['k'])).keys()]).toEqual(['k'])
     expect(await queue.ready(10)).toEqual([])
 
-    await queue.retryFailed()
+    expect((await queue.failed('lettura')).map(({ id }) => id)).toEqual([unit.id])
+    await queue.retryFailed([unit.id])
     expect((await queue.get(unit.id))?.status).toBe('in_coda')
   })
 
@@ -135,11 +136,10 @@ describe('WorkQueue', () => {
       await queue.fail(unit.id, 'no', { retry: false })
       return unit.id
     }
-    await fail()
-    await fail()
+    const ids = [await fail(), await fail()]
 
     expect(await queue.busy('p')).toBe(true)
-    expect(await queue.retryFailed()).toBe(1)
+    expect(await queue.retryFailed(ids)).toBe(1)
 
     const statuses = (
       await sql.all<{ status: string }>("SELECT status FROM ai_work WHERE scope_key = 'p'")

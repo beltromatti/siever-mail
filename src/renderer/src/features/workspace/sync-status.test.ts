@@ -73,10 +73,10 @@ describe('summarizeSyncStatus', () => {
   it('puts a refused login ahead of a missing network', () => {
     const summary = summarizeSyncStatus([A, B], {
       a: state('a', 'offline'),
-      b: state('b', 'error', { authFailed: true })
+      b: state('b', 'error', { refused: 'accesso' })
     })
 
-    expect(summary?.label).toBe('Accesso non riuscito')
+    expect(summary?.label).toBe('Connessione ferma')
   })
 
   it('reports a missing network as such', () => {

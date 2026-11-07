@@ -17,16 +17,22 @@ import {
 import { Button } from '@renderer/components/ui/button'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
+import { showConnectionRefused } from '@renderer/features/connections/connection-refused'
 import { cn } from '@renderer/lib/utils'
-import type { CalendarConnection } from '@shared/calendar'
+import { calendarRefusedNotice, type CalendarConnection } from '@shared/calendar'
 import type { FileSource } from '@shared/files'
 import { CONNECTION_FAMILIES } from '@shared/workspace'
-import type { AccountConnectionState, MailAccount } from '@shared/models'
+import {
+  mailRefusedNotice,
+  REFUSAL_LINES,
+  type AccountConnectionState,
+  type MailAccount
+} from '@shared/models'
 
 import {
   ACCESS_LABELS,
   canAddCalendar,
-  canReconnect,
+  canRenewConsent,
   connectionGroups,
   type AccessKind,
   type ConnectionGroup
@@ -49,7 +55,10 @@ const ACCESS_ICONS: Readonly<Record<AccessKind, LucideIcon>> = {
   ics: Link2
 }
 
-/** How a mail connection stands, in a few words. */
+/**
+ * How a mail connection stands, in a few words. A server that does not
+ * answer is not a problem of the user's: it retries by itself (§13ter).
+ */
 function mailStatus(state: AccountConnectionState | undefined): { text: string; problem: boolean } {
   switch (state?.status) {
     case 'connected':
@@ -60,12 +69,9 @@ function mailStatus(state: AccountConnectionState | undefined): { text: string; 
     case 'offline':
       return { text: 'Senza rete: riprova da sola', problem: false }
     case 'error':
-      return {
-        text: state.authFailed
-          ? 'Il server non accetta più l’accesso: ricollegala'
-          : (state.errorMessage ?? 'Non riesce a connettersi'),
-        problem: true
-      }
+      return state.refused
+        ? { text: `Ferma · ${REFUSAL_LINES[state.refused]}`, problem: true }
+        : { text: 'Il server non risponde: riprova da sola', problem: false }
     default:
       return { text: 'In attesa', problem: false }
   }
@@ -153,7 +159,10 @@ export function ConnectionsList({
         const Icon = ACCESS_ICONS[group.kind]
         const busy =
           working === group.key || (group.mail !== null && removingAccountId === group.mail.id)
-        const status = group.mail ? mailStatus(mailStates[group.mail.id]) : null
+        const mail = group.mail
+        const mailState = mail ? mailStates[mail.id] : undefined
+        const refused = mailState?.refused
+        const status = mail ? mailStatus(mailState) : null
         const problem = problems[group.key]
 
         return (
@@ -205,6 +214,22 @@ export function ConnectionsList({
                   >
                     {status.text}
                   </span>
+                  {mail && refused && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-[11px]"
+                      disabled={busy}
+                      onClick={() =>
+                        showConnectionRefused(
+                          mailRefusedNotice(mail, refused, mailState?.errorMessage ?? '')
+                        )
+                      }
+                    >
+                      Ricollega
+                    </Button>
+                  )}
                 </li>
               )}
               {group.calendars.map((calendar) => (
@@ -214,15 +239,17 @@ export function ConnectionsList({
                   <span
                     className={cn(
                       'min-w-0 flex-1 truncate',
-                      calendar.problem
+                      calendar.refused || calendar.renewConsent
                         ? 'text-destructive-soft-foreground'
                         : 'text-muted-foreground'
                     )}
                     title={calendar.problem ?? undefined}
                   >
-                    {calendar.problem ?? calendarStatus(calendar)}
+                    {calendar.refused
+                      ? `Fermo · ${REFUSAL_LINES[calendar.refused]}`
+                      : (calendar.problem ?? calendarStatus(calendar))}
                   </span>
-                  {canReconnect(calendar) && (
+                  {(calendar.refused || canRenewConsent(calendar)) && (
                     <Button
                       type="button"
                       size="sm"
@@ -230,11 +257,9 @@ export function ConnectionsList({
                       className="h-6 px-2 text-[11px]"
                       disabled={busy || (calendar.provider === 'google' && !googleReady)}
                       onClick={() =>
-                        void run(group.key, () =>
-                          calendar.provider === 'google'
-                            ? window.calendarApi.connectGoogle(calendar.mailAccountId)
-                            : window.calendarApi.connectMicrosoft(calendar.mailAccountId)
-                        )
+                        calendar.refused
+                          ? showConnectionRefused(calendarRefusedNotice(calendar, calendar.refused))
+                          : void run(group.key, () => window.calendarApi.reconnect(calendar.id))
                       }
                     >
                       Ricollega

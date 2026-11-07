@@ -639,7 +639,9 @@ export class SegretarioService {
    * learnt is kept — and the user is told. It comes back the way it is
    * turned on, from the setup, once the key or the credit is put right.
    */
-  private turnOff(kind: 'credito-finito' | 'chiave-rifiutata'): Promise<void> {
+  private turnOff(
+    kind: 'credito-finito' | 'chiave-rifiutata' | 'modello-non-disponibile'
+  ): Promise<void> {
     this.turningOff ??= (async () => {
       if ((await this.db.store.getPreferences()).enabled) {
         await this.setPreferences({ enabled: false })
@@ -660,6 +662,15 @@ export class SegretarioService {
    * it held back goes on.
    */
   private refused(error: SegretarioError): void {
+    // The model gone, or served by no provider as the routing asks: no check of the key says
+    // otherwise, and nothing would go through.
+    if (error.code === 'model-unavailable') {
+      void this.turnOff('modello-non-disponibile').catch((failure: unknown) =>
+        logMainError('The AI could not go off for a model unavailable', failure)
+      )
+      return
+    }
+
     this.refusing ??= (async () => {
       const status =
         error.code === 'no-credit' ? await this.creditRefused() : await this.checkKeyNow(false)
@@ -991,10 +1002,10 @@ export class SegretarioService {
     return this.db.engine.state()
   }
 
-  async retryFailedWork(): Promise<EngineState> {
-    await this.db.engine.queue.retryFailed()
-    this.db.engine.wake()
-    return this.getEngineState()
+  /** The setup's "Riprova": the reading's failures, and only those (§13ter.2). */
+  async retryReading(accountIds?: string[]): Promise<void> {
+    await this.requireKey()
+    await this.db.engine.retryReading(accountIds)
   }
 
   /** The first reading is prepared with the user waiting: more runs at once. */
@@ -2789,6 +2800,28 @@ export class SegretarioService {
     await this.requireKey()
     await this.appendUserMessage(id, text, context)
     void this.converse(id, activity.task === 'richiesta' ? 'richiesta' : activity.task)
+  }
+
+  /**
+   * A request of the user's that stopped short — it went nowhere for too
+   * long, or a call of it was refused (§13ter.2) — taken up again from where
+   * it was: what it did stays done, and it sees it.
+   */
+  async retryActivity(id: string): Promise<void> {
+    const { store, runner } = this.db
+
+    if (runner.isRunning(id)) {
+      return
+    }
+
+    const activity = await store.getActivity(id)
+
+    if (activity?.task !== 'richiesta' || activity.status !== 'failed') {
+      throw new Error('Questo lavoro non è da riprovare.')
+    }
+
+    await this.requireKey()
+    void this.converse(id)
   }
 
   /** One turn of a conversation in the panel: the user is there, so it may ask and act. */

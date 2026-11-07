@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   Check,
+  Clock,
   ExternalLink,
   KeyRound,
   LoaderCircle,
@@ -12,6 +13,7 @@ import {
 import { toast } from 'sonner'
 
 import { AddConnection } from '@renderer/features/connections/add-connection'
+import { showConnectionRefused } from '@renderer/features/connections/connection-refused'
 import { ConnectionsList } from '@renderer/features/connections/connections-list'
 import { ActivityThread } from '@renderer/features/segretario/segretario-panel'
 import type { SegretarioState } from '@renderer/features/segretario/use-segretario'
@@ -20,8 +22,14 @@ import { CompassStar } from '@renderer/components/ui/compass-star'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { Input } from '@renderer/components/ui/input'
 import { cn } from '@renderer/lib/utils'
-import type { CalendarConnection } from '@shared/calendar'
-import type { AccountConnectionState, MailAccount } from '@shared/models'
+import { calendarRefusedNotice, type CalendarConnection } from '@shared/calendar'
+import {
+  mailRefusedNotice,
+  REFUSAL_LINES,
+  type AccountConnectionState,
+  type ConnectionRefusedNotice,
+  type MailAccount
+} from '@shared/models'
 import {
   OPENROUTER_CREDITS_URL,
   OPENROUTER_KEYS_URL,
@@ -397,60 +405,84 @@ function SegretarioStep({
   )
 }
 
-/** Where a connection stands in the preparation, in words, and whether it is ready. */
+/**
+ * Where a connection stands in the preparation (§13ter): ready; at work —
+ * downloading, reading; waiting for a server that does not answer, or for
+ * the network, which it retries by itself; or turned down, which only the
+ * user puts right: "Ricollega", or "Togli".
+ */
+type Preparation =
+  | { stage: 'ready' | 'working' | 'waiting'; line: string }
+  | { stage: 'refused'; line: string; notice: ConnectionRefusedNotice }
+
 function preparationOf(
+  account: MailAccount,
   state: AccountConnectionState | undefined,
   recentMailIndexed: boolean | undefined,
   aiOn: boolean
-): { ready: boolean; failed: boolean; line: string } {
-  if (state?.status === 'error' || state?.authFailed) {
+): Preparation {
+  if (state?.refused) {
     return {
-      ready: false,
-      failed: true,
-      line: state.errorMessage
-        ? `Non riesco a collegarmi: ${state.errorMessage}`
-        : 'Non riesco a collegarmi.'
+      stage: 'refused',
+      line: REFUSAL_LINES[state.refused],
+      notice: mailRefusedNotice(account, state.refused, state.errorMessage ?? '')
     }
   }
 
-  if (!state || state.status === 'connecting' || state.syncing || !state.index) {
-    return { ready: false, failed: false, line: 'Scarico la posta…' }
+  if (state?.status === 'offline') {
+    return { stage: 'waiting', line: 'Senza rete: riprende da sola appena torna.' }
+  }
+
+  if (state?.status === 'error') {
+    return { stage: 'waiting', line: 'Il server non risponde: riprova da sola.' }
+  }
+
+  if (!state || state.status !== 'connected' || state.syncing || !state.index) {
+    return {
+      stage: 'working',
+      line: state?.status === 'reconnecting' ? 'Si ricollega…' : 'Scarico la posta…'
+    }
   }
 
   if (aiOn && !recentMailIndexed) {
     const { total, indexed } = state.index
     return {
-      ready: false,
-      failed: false,
+      stage: 'working',
       line: `Leggo il testo dei messaggi recenti…${total > 0 ? ` ${Math.round((indexed / total) * 100)}%` : ''}`
     }
   }
 
-  return { ready: true, failed: false, line: 'Pronta' }
+  return { stage: 'ready', line: 'Pronta' }
 }
 
 /**
  * Where a calendar connection stands in the preparation: read once — even
- * with a calendar of it that could not be, which it says — or why it could
- * not be read at all.
+ * with a calendar of it that could not be, which it says — waiting for its
+ * server, or turned down.
  */
-function calendarPreparationOf(connection: CalendarConnection): {
-  ready: boolean
-  failed: boolean
-  line: string
-} {
+function calendarPreparationOf(connection: CalendarConnection): Preparation {
+  if (connection.refused) {
+    return {
+      stage: 'refused',
+      line: REFUSAL_LINES[connection.refused],
+      notice: calendarRefusedNotice(connection, connection.refused)
+    }
+  }
+
   if (connection.lastSyncAt !== null) {
-    return { ready: true, failed: false, line: connection.problem ?? 'Pronto' }
+    return { stage: 'ready', line: connection.problem ?? 'Pronto' }
   }
 
   return connection.problem
-    ? { ready: false, failed: true, line: `Non riesco a collegarmi: ${connection.problem}` }
-    : { ready: false, failed: false, line: 'Scarico gli eventi…' }
+    ? { stage: 'waiting', line: `${connection.problem} Riprova da solo.` }
+    : { stage: 'working', line: 'Scarico gli eventi…' }
 }
 
 /**
  * Step 3: every connection synced — each mailbox, with the AI its recent
- * mail read by the index, and each calendar.
+ * mail read by the index, and each calendar. A connection that does not
+ * work does not go on (§13ter), with or without the AI: the user puts it
+ * right, waits for its server, or takes it away and adds it again later.
  */
 function PreparationStep({
   accounts,
@@ -458,7 +490,6 @@ function PreparationStep({
   connections,
   aiOn,
   onRemoveAccount,
-  onContinueWithoutAi,
   onNext
 }: {
   accounts: ReadonlyArray<MailAccount>
@@ -466,8 +497,6 @@ function PreparationStep({
   connections: Readonly<Record<string, AccountConnectionState>>
   aiOn: boolean
   onRemoveAccount: (accountId: string) => void
-  /** With the AI on: the setup ends without it, where a connection does not go. */
-  onContinueWithoutAi: () => void
   onNext: () => void
 }): React.JSX.Element {
   const [indexed, setIndexed] = useState<ReadonlyMap<string, boolean>>(() => new Map())
@@ -524,7 +553,7 @@ function PreparationStep({
       key: `mail:${account.id}`,
       name: account.email,
       remove: () => onRemoveAccount(account.id),
-      ...preparationOf(connections[account.id], indexed.get(account.id), aiOn)
+      ...preparationOf(account, connections[account.id], indexed.get(account.id), aiOn)
     })),
     ...calendarConnections.map((connection) => ({
       key: `calendar:${connection.id}`,
@@ -533,13 +562,11 @@ function PreparationStep({
       ...calendarPreparationOf(connection)
     }))
   ]
-  // A connection that fails is tried again, or taken away. With the AI, it does not go on without
-  // it — the Segretario would read a connection it never got to know — but the setup may go on
-  // without the AI; without the AI, the connection keeps trying by itself.
-  const failing = rows.filter((row) => row.failed).length
-  const ready = rows.length > 0 && rows.every((row) => row.ready || row.failed)
+  const ready = rows.length > 0 && rows.every((row) => row.stage === 'ready')
+  const refused = rows.filter((row) => row.stage === 'refused').length
+  const waiting = rows.filter((row) => row.stage === 'waiting').length
   const hasMail = accounts.length > 0
-  const retry = (): void => {
+  const retryNow = (): void => {
     void window.mailApi.checkMailNow()
     void window.calendarApi.syncNow().catch(() => undefined)
   }
@@ -555,66 +582,63 @@ function PreparationStep({
             : `Scarico la posta${calendarConnections.length > 0 ? ' e i calendari' : ''} di ogni connessione. I messaggi più vecchi continuano ad arrivare mentre lavori.`
       }
       actions={
-        ready && failing > 0 ? (
-          <>
-            {aiOn ? (
-              <Button variant="ghost" size="lg" onClick={onContinueWithoutAi}>
-                Continua senza AI
-              </Button>
-            ) : (
-              <Button variant="ghost" size="lg" onClick={onNext}>
-                Continua
-              </Button>
-            )}
-            <Button size="lg" onClick={retry}>
-              Riprova
+        <>
+          {waiting > 0 && (
+            <Button variant="ghost" size="lg" onClick={retryNow}>
+              Riprova ora
             </Button>
-          </>
-        ) : (
+          )}
           <Button size="lg" disabled={!ready} onClick={onNext}>
-            {!ready && <LoaderCircle className="size-4 animate-spin" />}
+            {!ready && refused === 0 && <LoaderCircle className="size-4 animate-spin" />}
             Continua
           </Button>
-        )
+        </>
       }
     >
       <div className="flex flex-col gap-2">
-        {rows.map(({ key, name, remove, ready: rowReady, failed, line }) => (
-          <div key={key} className="bg-hover flex items-center gap-3 rounded-[10px] px-4 py-3">
+        {rows.map((row) => (
+          <div key={row.key} className="bg-hover flex items-center gap-3 rounded-[10px] px-4 py-3">
             <span className="grid size-4 shrink-0 place-items-center">
-              {rowReady ? (
+              {row.stage === 'ready' ? (
                 <Check className="text-status-online size-4" />
-              ) : failed ? (
+              ) : row.stage === 'refused' ? (
                 <AlertCircle className="text-destructive size-4" />
+              ) : row.stage === 'waiting' ? (
+                <Clock className="text-muted-foreground size-4" />
               ) : (
                 <LoaderCircle className="text-ai size-4 animate-spin" />
               )}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] font-semibold">{name}</span>
+              <span className="block truncate text-[13px] font-semibold">{row.name}</span>
               <span
                 className={cn(
                   'block text-[12px]',
-                  failed ? 'text-destructive-soft-foreground' : 'text-muted-foreground'
+                  row.stage === 'refused'
+                    ? 'text-destructive-soft-foreground'
+                    : 'text-muted-foreground'
                 )}
               >
-                {line}
+                {row.line}
               </span>
             </span>
-            {failed && (
-              <Button variant="ghost" size="sm" onClick={remove}>
+            {(row.stage === 'refused' || row.stage === 'waiting') && (
+              <Button variant="ghost" size="sm" onClick={row.remove}>
                 Togli
+              </Button>
+            )}
+            {row.stage === 'refused' && (
+              <Button variant="outline" size="sm" onClick={() => showConnectionRefused(row.notice)}>
+                Ricollega
               </Button>
             )}
           </div>
         ))}
-        {ready && failing > 0 && (
+        {(refused > 0 || waiting > 0) && (
           <p className="text-muted-foreground text-[12px] leading-[1.45]">
-            {aiOn
-              ? `${failing === 1 ? 'Una connessione non si collega' : `${failing} connessioni non si collegano`}: riprova, o togli ${failing === 1 ? 'quella' : 'quelle'} che non vuoi più e ricollegala dopo. Il Segretario non legge una connessione che non conosce: se il problema resta, continua senza AI e riaccendila quando è tutto a posto.`
-              : failing === 1
-                ? 'Una connessione non si collega: riprova da sola, e puoi sistemarla dopo in Impostazioni → Connessioni.'
-                : `${failing} connessioni non si collegano: riprovano da sole, e puoi sistemarle dopo in Impostazioni → Connessioni.`}
+            {refused > 0
+              ? `${refused === 1 ? 'Una connessione non funziona' : `${refused} connessioni non funzionano`}, e una connessione che non funziona non si collega: ricollega${refused === 1 ? 'la' : 'le'}, o togli${refused === 1 ? 'la' : 'le'} e aggiungi${refused === 1 ? 'la' : 'le'} quando è a posto.`
+              : `${waiting === 1 ? 'Un server non risponde' : `${waiting} server non rispondono`}: SIEVER Mail riprova da solo, e si va avanti appena ${waiting === 1 ? 'risponde' : 'rispondono'}. Se non vuoi aspettare, togli la connessione e aggiungila più tardi.`}
           </p>
         )}
       </div>
@@ -907,7 +931,10 @@ function ReadingStep({
     setRetrying(true)
 
     try {
-      await window.segretarioApi.retryFailedWork()
+      await window.segretarioApi.retryReading(accountIds)
+      setStatus(await window.segretarioApi.getReadingStatus(accountIds))
+    } catch (error) {
+      toast.error('Non riesco a riprovare', { description: errorText(error) })
     } finally {
       setRetrying(false)
     }
@@ -1144,9 +1171,27 @@ export function OnboardingWizard({
     }
   }, [aiOn, known, onChange, onFinish, state, workingWithAi])
 
-  // Where something does not go — a connection, Conoscimi, a reading — the user may end the setup
+  // Every connection taken away in the preparation: nothing is left to prepare. The setup goes
+  // back to adding one; turning the AI on, which has none to add, ends — the app asks for one.
+  const nothingToPrepare =
+    state.step === 'preparazione' && accounts.length === 0 && calendarConnections.length === 0
+
+  useEffect(() => {
+    if (!nothingToPrepare) {
+      return
+    }
+
+    if (CASE_STEPS[state.case].includes('connessioni')) {
+      onChange({ ...state, step: 'connessioni' })
+    } else {
+      onFinish(true)
+    }
+  }, [nothingToPrepare, onChange, onFinish, state])
+
+  // Where the Segretario's work does not go — Conoscimi, a reading — the user may end the setup
   // without the AI: it goes off, as in a setup that never turned it on, and nothing is left half
-  // known; on again, it starts from what it does not know yet.
+  // known; on again, it starts from what it does not know yet. A connection is not its work: one
+  // that does not work is put right or taken away, with or without the AI (§13ter).
   const continueWithoutAi = async (): Promise<void> => {
     onChange({ ...state, step: 'entra', conoscimiId: null, turnsAiOn: false })
     await window.segretarioApi.setPreferences({ enabled: false })
@@ -1248,7 +1293,6 @@ export function OnboardingWizard({
               connections={connections}
               aiOn={aiOn}
               onRemoveAccount={(accountId) => onRemoveAccount(accountId, [])}
-              onContinueWithoutAi={() => void continueWithoutAi()}
               onNext={() => next()}
             />
           )}

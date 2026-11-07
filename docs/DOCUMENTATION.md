@@ -291,9 +291,10 @@ never depends on it, nor it on the mail. Settings → "Connessioni"
 (`features/connections/connections-list.tsx`) shows them by the access that
 brought them (`connection-groups.ts`): each account, server or link with its
 mail, its calendar or both, how each stands, the calendar an account can
-still give (a Google account's), "Ricollega" for a Google or Microsoft
-calendar connection with a problem (`canReconnect`: its sign-in again), and
-what can be taken away — one service or the whole access. Adding one
+still give (a Google account's), "Ricollega" for a connection stopped for
+good (see [Errors](#errors)) and for a Microsoft calendar whose consent lacks
+the mailbox's time zone (`renewConsent`), and what can be taken away — one
+service or the whole access. Adding one
 (`add-connection.tsx`) is the same there and in the guided setup:
 
 | Choice                  | Mail                                                                    | Calendar                                                                     |
@@ -519,7 +520,8 @@ What the user asks for is reported truthfully:
   new flags, never as the messages asked for.
 - Without a connection, an operation waits up to 20 s for a reconnect and
   then fails with the reason, so the interface puts back what it had
-  already shown. An account whose login was refused fails at once.
+  already shown. An account stopped for good (see [Errors](#errors)) fails
+  at once.
 - Sending goes over SMTP — through Graph for a Microsoft account whose
   organisation turned SMTP off (see [Connections](#connections)); for IMAP
   accounts a copy is filed in the Sent folder afterwards, in the background
@@ -994,8 +996,9 @@ checked again every 20 minutes while the app runs, and whenever a tenth of
 the credit left (at least 5 cents) has been spent since; a check overtaken
 by a later one leaves the status to it.
 
-**The AI is on or off, never paused.** A key OpenRouter refuses, or a
-credit run out — a request refused with 401 or 402, whatever asked for it
+**The AI is on or off, never paused.** A key OpenRouter refuses, a
+credit run out or a spending limit reached, a model no longer served — a
+request refused with 401, 402, a 403 of a limit or 404, whatever asked for it
 (`OpenRouterClient`'s `onRefused`), confirmed by a check of its own, or a
 check that finds it so — turns the AI off at once, as the user would
 (`followCredit`, `turnOff` in `segretario-service.ts`); a refused key the
@@ -1065,10 +1068,13 @@ read eight at a time, with the progress and an estimate. Nothing is
 skipped with the AI on: what does not go is tried again, as often as the
 user wants, or the setup ends without the AI (`continueWithoutAi`: the AI
 goes off, the setup goes to its last step, and turned on again it starts
-from what it does not know yet) — a connection that cannot sync ("Riprova"
-reconnects every mailbox and calendar, or "Togli"; with the AI off it may
-go on, trying by itself), a Conoscimi that stopped, the readings that
-failed (asked at the end of the bar, "Riprova" trying only those). While
+from what it does not know yet) — a Conoscimi that stopped, the readings
+that failed (asked at the end of the bar, "Riprova" trying only those,
+`retryReading`). A connection is not the AI's: one that does not work
+stops the preparation, with or without it — waiting for its server, with
+"Riprova ora", or put right ("Ricollega") or taken away ("Togli"), see
+[Errors](#errors); with every connection taken away the setup goes back to
+adding one. While
 OpenRouter does not answer, Conoscimi and the reading wait for it and go
 on by themselves, and the user may still end without the AI. A connection
 added to a Segretario that knows the user is what that Conoscimi reads,
@@ -1093,9 +1099,14 @@ conversation is rebuilt at every step from the run's log (`ai_events`,
 and tool calls, the results, confirmations, compactions, the changes made.
 At start, a conversation in the panel that a quit cut short says so and
 waits for the user; work done alone starts over from the queue. How many turns a run takes, how
-long, how deep the model thinks (no reasoning effort is sent) and how much
-it writes (no `max_tokens`) are the model's: the harness sets no limit on
-any of them. What it keeps for itself is what cannot be left to the model:
+long and how much it writes (no `max_tokens`) are the model's: the harness
+sets no limit on any of them. The model always thinks; how deep is the
+task's (`TASK_EFFORT`): `max` for the work that understands — Conoscimi,
+keeping up with what was learnt, the memory's reflection, the day, the
+user's requests — and `low` for the work done many times — reading a
+conversation, a calendar, "Il punto", the writing in the editor, the
+reread, a search — whose quality is in the context and the tools. A
+compaction thinks as its task does; a title does not think. What it keeps for itself is what cannot be left to the model:
 
 - the user's confirmation, on the run's card, before anything reaches
   others — only a conversation in the panel can ask for it
@@ -1258,10 +1269,11 @@ may no longer be of use — and its scope is not queued again (`busy`,
 come after the failure (a message in the conversation, a calendar change);
 that new work, done, settles the failure (`complete`). A failure is never
 forgotten with the work done (`prune` keeps it); it goes with its
-connection when that is removed. Where it shows the user decides: the
-guided setup's reading asks to try again what failed, or to go on without
-the AI; the panel and Settings show it with "Riprova", the latest failure of
-each scope tried again unless work for it already waits. Cut short by a
+connection when that is removed. Only where the user waits for it is it
+shown: the guided setup's reading asks to try again what failed of it, or
+to go on without the AI (`retryReading`: the latest failure of each scope
+tried again unless work for it already waits); in the background a failure
+ends there (see [Errors](#errors)). Cut short by a
 quit, the sleep or a refused key, a unit waits to start again, as it was;
 when a unit for the same scope is already waiting, that one takes its
 place. The AI switched
@@ -1759,6 +1771,106 @@ the file. The Segretario's `calendario` tool lists events and free times,
 creates, changes and deletes, answers, proposes and withdraws, within what
 a run may do (see [What a run may do](#what-a-run-may-do)); an event has a
 short handle (`e1`) the panel links to the Calendario.
+
+## Errors
+
+Every error belongs to one of two families, handled the same way wherever
+it happens (the vision, §13ter).
+
+**The stack's** — the network, the servers, the accounts, OpenRouter —
+are passing or permanent.
+
+- **Passing** errors are never failures: no network, a server that does
+  not answer, is slow, busy or briefly unavailable (an IMAP
+  `[UNAVAILABLE]`, `[INUSE]`, `[LIMIT]`; HTTP 408, 429, 5xx; a 402 with a
+  time to retry). They are tried again by themselves and said calmly, never
+  in a popup: a mailbox reconnects with its backoff, a calendar at its next
+  sync, a call to the model waits for OpenRouter (`Reachability`) and is
+  made again from the same step — the run is not lost.
+- **Permanent errors of a service** are said once, in a window, and stop
+  that service from that moment, keeping its data. For the AI — a key
+  refused (401), the credit or a spending limit reached (402, a 403 with
+  `limit_source`), the model no longer served (404) — the AI goes off
+  (`SegretarioError.refusesService`, `turnOff`, see [Segretario](#segretario)).
+  For a connection — the access refused (`[AUTHENTICATIONFAILED]`, a CalDAV
+  401/403), the authorization withdrawn (`invalid_grant`,
+  `MicrosoftSignInNeeded`, a Graph or Google 401), a certificate that
+  cannot be trusted, a calendar no longer at its address (404/410) — the
+  connection stops (`ConnectionRefusal` in `shared/models.ts`, recognised by
+  `refusalOf` in `services/connection-refusal.ts` and
+  `refusalOfCalendar` in `calendar/calendar-refusal.ts`): no more attempts —
+  a wrong password retried gets the account locked by its server — no
+  writes, no sends; the search index's own login stops with it. A refusal
+  that may yet pass — a login refused without a definite answer
+  (`[AUTHENTICATIONFAILED]`, `[AUTHORIZATIONFAILED]`, `[EXPIRED]`), such as
+  Gmail's "[ALERT] Too many simultaneous connections" or Office 365's bare
+  "AUTHENTICATE failed", or a certificate, which a hotel Wi-Fi's sign-in page
+  can present — is confirmed by one more try a minute later (a calendar's, at
+  its next sync) before the connection stops (`refusalNeedsConfirming`).
+  `ConnectionRefusedDialog` (`features/connections/connection-refused.tsx`),
+  on every screen of the window — the launch, the setup, the workspace —
+  says what the server said, and offers "Ricollega" (the password again,
+  verified before it is kept; the provider's sign-in again on the same
+  account; or, for a certificate or a source gone, a new try — which waits
+  for its outcome, and says there if it is refused again), "Togli" (asked
+  in the same window) or "Più tardi". Its queue lives outside the screens,
+  is filled at load with the refusals already standing
+  (`listConnectionRefusals`: at launch they come before the page), and lets
+  go of a connection put right or taken away meanwhile. The refusal is kept
+  in memory: at the next launch the connection is tried once more. Settings
+  and the status bar show it stopped, with "Ricollega".
+- **Permanent errors of one request** fail that request alone, said where
+  it was asked: a send refused, a message the server will not give, a
+  request OpenRouter moderates.
+
+**A connection that does not work is not added.** A mailbox with a
+password is signed in on its IMAP and SMTP servers before it is kept
+(`verifyImapAccount`); one signed in with Google or Microsoft on its IMAP
+server with the token just given (`tryWithToken`; Microsoft sends through
+Graph where SMTP is off, so its SMTP is not a condition); a calendar is read
+once, and one turned down at that first read is not kept. A calendar asked
+for with a mailbox that does not come says why, the mailbox kept
+(`AddedAccount.calendarProblem`). In the guided setup, a connection that
+does not work stops the setup, with or without the AI: a passing problem
+waits, with "Riprova ora"; a permanent one is "Ricollega" or "Togli".
+
+**Sends belong to the user** (`sendFailureOf`,
+`services/mail-engine/send-failure.ts`). A send that failed before
+anything was handed over — the network, the server unreachable, a token
+not fetched, a 4xx reply — waits in the outbox (`outbox`) and goes by itself
+when the server answers, every 20 s while online (the first round after
+the mailboxes connected), said once ("In uscita") and again when it goes;
+its files are looked for again before it goes. One that broke off within
+the SMTP session is not sent again by itself — nodemailer names a dropped
+link "CONN" at any step, the message included, so it may have gone: said so
+("potrebbe essere arrivato") — nor is one refused: the user is told, the
+draft in Bozze. Sending a draft by hand takes it out of the outbox; opening
+it to change takes it back too (`takeBackOutgoing`, said), so an old version
+never goes; a message leaving the outbox cannot be sent again meanwhile.
+"Elimina tutti i dati" empties it.
+
+**The Segretario's** — a run that does not reach its end by itself: ten
+turns without progress, or a request of its own that OpenRouter refuses —
+is not the stack's. Where the user waits for it, it fails with "Riprova":
+a request in the panel (`retryActivity`, taken up from where it was; one
+run at a time writes an activity's log), the
+writing in the editor, the search asked in words, Conoscimi and the reading
+in the guided setup (`retryReading`: only what failed of it). In the
+background — the readings of new mail, the calendar, the day, "Il punto",
+the memory — it ends there: nothing to manage, no list. The failure is kept
+only so the same work is not done again by itself (`busy`, `failedAt`); new
+facts on the same matter are new work.
+
+**The program's** — an exception nobody caught — are written to the log
+and the rest goes on: the main process logs what is uncaught
+(`uncaughtException`, `unhandledRejection`); the page's errors reach the
+same log (`console-message`), a page that dies is loaded again (a minute
+after the last time, at most once a minute), a promise of the page that
+failed unwaited is said in a toast (once per message), and each pane of the
+window breaks alone (`ErrorBoundary`; the reader draws afresh for another
+message), with "Riprova". A 404 of OpenRouter for what one request needs
+("No endpoints found that support image input") fails that request; only
+one for the model itself turns the AI off.
 
 ## Extensions
 

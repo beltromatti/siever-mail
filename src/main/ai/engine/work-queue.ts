@@ -337,8 +337,8 @@ export class WorkQueue {
 
   /**
    * Whether work for a scope waits, runs, or failed: then it is not queued
-   * again — a failure is not tried again by itself — until the user says
-   * "Riprova".
+   * again — a failure is not tried again by itself (§13ter.2): where the
+   * user waited for it, they say "Riprova"; in the background it ended.
    */
   async busy(scopeKey: string): Promise<boolean> {
     return (
@@ -368,25 +368,29 @@ export class WorkQueue {
     return new Map(rows.map((row) => [row.scope_key, Number(row.failed_at)]))
   }
 
-  /** The units that failed for good, the newest first. */
-  async failed(limit = 50): Promise<WorkUnit[]> {
+  /** A task's units that failed, the newest first. */
+  async failed(task: string): Promise<WorkUnit[]> {
     const rows = await this.sql.all<WorkRow>(
-      "SELECT * FROM ai_work WHERE status = 'fallito' ORDER BY updated_at DESC LIMIT ?",
-      limit
+      "SELECT * FROM ai_work WHERE task = ? AND status = 'fallito' ORDER BY updated_at DESC",
+      task
     )
     return rows.map((row) => unitOf(row))
   }
 
   /**
-   * Tries failed work again, now: the user asked. One unit waits per scope:
-   * the latest failure of each is tried, unless work for it waits already;
-   * the others are let go.
+   * Tries these failed units again, now: the user asked, where they waited
+   * for the result (§13ter.2). One unit waits per scope: the latest failure
+   * of each is tried, unless work for it waits already; the others are let go.
    */
-  async retryFailed(ids?: ReadonlyArray<string>): Promise<number> {
+  async retryFailed(ids: ReadonlyArray<string>): Promise<number> {
+    if (ids.length === 0) {
+      return 0
+    }
+
     const failed = await this.sql.all<WorkRow>(
-      `SELECT * FROM ai_work WHERE status = 'fallito' ${ids ? `AND id IN (${placeholders(ids)})` : ''}
+      `SELECT * FROM ai_work WHERE status = 'fallito' AND id IN (${placeholders(ids)})
        ORDER BY updated_at DESC`,
-      ...(ids ?? [])
+      ...ids
     )
     const tried = new Set<string>()
 
@@ -445,7 +449,10 @@ export class WorkQueue {
     }))
   }
 
-  /** Forgets work long done or let go. A failure stays, in sight, until it is tried again. */
+  /**
+   * Forgets work long done or let go. A failure stays: it is how the same
+   * work is not done again by itself.
+   */
   async prune(olderThanMs: number): Promise<void> {
     await this.sql.run(
       "DELETE FROM ai_work WHERE status IN ('fatto', 'annullato') AND updated_at < ?",

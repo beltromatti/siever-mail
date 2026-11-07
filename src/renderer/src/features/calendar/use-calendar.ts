@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { toast } from 'sonner'
 
 import type { CalendarConnection, CalendarEvent } from '@shared/calendar'
 
@@ -49,6 +50,14 @@ export function useCalendarEvents(fromIso: string, toIso: string): CalendarEvent
       void window.calendarApi
         .events(fromIso, toIso)
         .then((loaded) => current && setEvents({ range, events: loaded }))
+        .catch(
+          (error: unknown) =>
+            current &&
+            toast.error('Gli eventi non si leggono', {
+              id: 'calendar-events',
+              description: error instanceof Error ? error.message : undefined
+            })
+        )
 
     load()
     const unsubscribe = window.calendarApi.onChanged(load)

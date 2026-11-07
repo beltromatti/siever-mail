@@ -13,6 +13,8 @@ import type { DiscoveredMailSettings } from '@shared/connections'
 import { logMainError } from '@main/utils/error-utils'
 import type {
   AccountConnectionState,
+  ConnectionRefusal,
+  ConnectionRefusedNotice,
   ActiveMailboxContext,
   AddImapAccountInput,
   AppBootstrap,
@@ -66,6 +68,8 @@ import {
   type SegretarioView
 } from '@shared/folders'
 import {
+  mailRefusedNotice,
+  REFUSAL_LINES,
   MAX_MESSAGES_PER_ACTION,
   MESSAGE_LIST_PAGE_SIZE,
   READER_ZOOM_MAX,
@@ -97,17 +101,24 @@ import type { AppDatabase, MessageListView } from './database'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
 import type { GoogleAuthResult, GoogleOAuthService } from './google-oauth'
 import { discoverMailSettings } from './mail-discovery'
+import { refusalOf, serverWords } from './connection-refusal'
 import { MailTokenBroker } from './mail-tokens'
-import type { MicrosoftAuthResult, MicrosoftOAuthService } from './microsoft-oauth'
+import {
+  MICROSOFT_MAIL_SCOPES,
+  type MicrosoftAuthResult,
+  type MicrosoftOAuthService
+} from './microsoft-oauth'
 import { MailEngine } from './mail-engine'
 import type { RawMessage } from './mail-engine/account-connection'
 import { indexedFolderPaths } from './mail-engine/mail-indexer'
+import { sendFailureOf } from './mail-engine/send-failure'
 import { imapSearchGroups } from './mail-engine/server-search'
 import {
   buildRawOutgoingMessage,
   createOutgoingMessagePayload,
   createSmtpTransport,
   verifyImapAccount,
+  verifyImapLogin,
   type AccountWithSecret,
   type OutgoingMessagePayload
 } from './mail-engine/mail-transport'
@@ -232,6 +243,8 @@ const notificationPreferencesSchema = z.object({
 const MAX_DRAFT_RECIPIENTS = 2_000
 /** Long enough for the drafts being written to reach Bozze; never long enough to hold the quit up. */
 const DRAFT_FLUSH_ON_QUIT_MS = 4_000
+/** How often the outbox is tried while it holds something and the network is there. */
+const OUTBOX_EVERY_MS = 20_000
 
 const draftAddressSchema = z.object({
   name: z.string().max(256).optional(),
@@ -489,6 +502,8 @@ export interface MailServiceOptions {
   onMailChanged: () => void
   /** An account is about to go: what the other apps kept of it goes first, and a failure keeps it. */
   onAccountRemoving: (account: MailAccount) => Promise<void>
+  /** A mailbox turned down for good, and stopped: the user is told, once. */
+  onConnectionRefused: (notice: ConnectionRefusedNotice) => void
 }
 
 export class MailService {
@@ -505,6 +520,11 @@ export class MailService {
   // The copy of each attachment last written, and what it held, keyed by its
   // folder: an untouched copy is used again without a download.
   private readonly attachmentCopies = new Map<string, { filePath: string; digest: string }>()
+  // The outbox's turn: messages sent while their server could not be reached go when it can.
+  private outboxTimer: ReturnType<typeof setInterval> | null = null
+  private sendingOutbox: Promise<void> | null = null
+  /** The drafts whose message is leaving the outbox now: not sent again by hand meanwhile. */
+  private readonly leavingOutbox = new Set<string>()
 
   constructor(options: MailServiceOptions) {
     this.database = options.database
@@ -523,7 +543,16 @@ export class MailService {
       tokens: this.tokens,
       getMainWindow: getAppWindow,
       onInboxUnreadChange: (count) => this.badge.setCount(count),
-      onMailChanged: options.onMailChanged
+      onMailChanged: options.onMailChanged,
+      onRefused: (accountId, refusal, detail) =>
+        void this.database
+          .getStoredAccountById(accountId)
+          .then((account) => {
+            if (account) {
+              options.onConnectionRefused(mailRefusedNotice(account, refusal, detail))
+            }
+          })
+          .catch((error: unknown) => logMainError('A refused mailbox could not be told', error))
     })
     this.drafts = new DraftService({
       database: this.database,
@@ -768,6 +797,8 @@ export class MailService {
     this.badge.setCount(await this.engine.inboxUnreadCount())
     await this.engine.start()
     await this.drafts.resume()
+    // First at the next round, not at once: the mailboxes have connected, or said they are refused.
+    this.outboxTimer = setInterval(() => void this.sendOutbox(), OUTBOX_EVERY_MS)
   }
 
   /** Whether the Segretario reads new mail as it comes: an alert for new mail waits for its note. */
@@ -838,6 +869,11 @@ export class MailService {
   }
 
   async stop(): Promise<void> {
+    if (this.outboxTimer) {
+      clearInterval(this.outboxTimer)
+      this.outboxTimer = null
+    }
+
     // What is being written reaches Bozze before the connections close.
     await this.drafts
       .flushAll(DRAFT_FLUSH_ON_QUIT_MS)
@@ -888,19 +924,90 @@ export class MailService {
     })
   }
 
+  /**
+   * A mailbox put right with a new password — the one the server refused
+   * changed: tried first, as when the account was added, then kept, and the
+   * mailbox connects again with it.
+   */
+  async replacePassword(accountId: string, password: string): Promise<void> {
+    const stored = await this.database.getStoredAccountById(accountId)
+
+    if (!stored || stored.authType !== 'password') {
+      throw new Error('Questa casella non si collega con una password.')
+    }
+
+    await verifyImapAccount({
+      email: stored.email,
+      displayName: stored.displayName,
+      username: stored.username,
+      password,
+      imapHost: stored.imapHost,
+      imapPort: stored.imapPort,
+      imapSecure: stored.imapSecure,
+      smtpHost: stored.smtpHost,
+      smtpPort: stored.smtpPort,
+      smtpSecure: stored.smtpSecure
+    }).catch((error: unknown) => {
+      // The servers are the user's to know: a refused password is said plainly, anything else as is.
+      const cause = error instanceof Error ? error.cause : undefined
+
+      if (refusalOf(cause) === 'accesso' || (cause as { code?: unknown })?.code === 'EAUTH') {
+        throw new Error(
+          `Il server non accetta questa password per ${stored.email}: controllala e riprova.`
+        )
+      }
+
+      throw error
+    })
+    await this.database.setAccountSecret(accountId, encryptSecret(password))
+    await this.engine.reconnectAccount(accountId)
+  }
+
+  /**
+   * A mailbox signed in again with its provider: tried with the new
+   * authorization — IMAP turned off stays off whatever the consent — then
+   * kept, and it connects.
+   */
+  async replaceAuthorization(accountId: string, secret: string): Promise<void> {
+    const stored = await this.database.getStoredAccountById(accountId)
+
+    if (!stored || stored.authType !== 'oauth') {
+      throw new Error('Questa casella non si collega con un fornitore.')
+    }
+
+    const kept = await this.tryWithToken(stored, secret)
+    await this.database.setAccountSecret(accountId, encryptSecret(kept))
+    await this.engine.reconnectAccount(accountId)
+  }
+
+  /** How a mailbox stands turned down, if it is (`ConnectionRefusal`). */
+  accountRefusal(accountId: string): ConnectionRefusal | null {
+    return this.engine.accountRefusal(accountId)
+  }
+
+  /** A mailbox tried again as it is — its server's certificate put right meanwhile. */
+  retryAccount(accountId: string): Promise<void> {
+    return this.engine.reconnectAccount(accountId)
+  }
+
   /** The mailbox of a Google account the user granted: Gmail over IMAP and SMTP, with its token. */
-  addGoogleMailbox(granted: GoogleAuthResult): Promise<MailAccount> {
-    return this.addAccount({
-      id: randomUUID(),
-      type: 'gmail',
+  async addGoogleMailbox(granted: GoogleAuthResult): Promise<MailAccount> {
+    const mailbox = {
+      type: 'gmail' as const,
       email: granted.email,
-      displayName: granted.displayName,
       username: granted.email,
-      authType: 'oauth',
-      encryptedSecret: encryptSecret(granted.refreshToken),
       imapHost: 'imap.gmail.com',
       imapPort: 993,
-      imapSecure: true,
+      imapSecure: true
+    }
+    const secret = await this.tryWithToken(mailbox, granted.refreshToken)
+
+    return this.addAccount({
+      id: randomUUID(),
+      ...mailbox,
+      displayName: granted.displayName,
+      authType: 'oauth',
+      encryptedSecret: encryptSecret(secret),
       smtpHost: 'smtp.gmail.com',
       smtpPort: 465,
       smtpSecure: true
@@ -911,23 +1018,71 @@ export class MailService {
    * The mailbox of a Microsoft account the user granted — Microsoft 365,
    * Outlook.com — over IMAP and SMTP with OAuth.
    */
-  addMicrosoftMailbox(granted: MicrosoftAuthResult): Promise<MailAccount> {
-    return this.addAccount({
-      id: randomUUID(),
-      type: 'imap',
+  async addMicrosoftMailbox(granted: MicrosoftAuthResult): Promise<MailAccount> {
+    const mailbox = {
+      type: 'imap' as const,
       email: granted.email,
-      displayName: granted.displayName,
       username: granted.email,
-      authType: 'oauth',
-      encryptedSecret: encryptSecret(granted.secret),
       imapHost: 'outlook.office365.com',
       imapPort: 993,
-      imapSecure: true,
+      imapSecure: true
+    }
+    const secret = await this.tryWithToken(mailbox, granted.secret)
+
+    return this.addAccount({
+      id: randomUUID(),
+      ...mailbox,
+      displayName: granted.displayName,
+      authType: 'oauth',
+      encryptedSecret: encryptSecret(secret),
       // Outlook.com sends through its own server; Microsoft 365 through Office 365's.
       smtpHost: granted.personal ? 'smtp-mail.outlook.com' : 'smtp.office365.com',
       smtpPort: 587,
       smtpSecure: false
     })
+  }
+
+  /**
+   * A mailbox signed in with its provider, tried before it is kept: the
+   * consent is not yet a mailbox that answers — Gmail with IMAP turned off,
+   * a company that turned it off for Microsoft 365 (§13ter.1). Its IMAP
+   * server only: a Microsoft account whose SMTP is off sends through Graph.
+   * Gives back the secret to keep — Microsoft's, renewed on the way.
+   */
+  private async tryWithToken(
+    mailbox: Pick<MailAccount, 'type' | 'username' | 'imapHost' | 'imapPort' | 'imapSecure'>,
+    secret: string
+  ): Promise<string> {
+    let kept = secret
+    const accessToken =
+      mailbox.type === 'gmail'
+        ? await this.googleOAuthService.getAccessToken(secret)
+        : await this.microsoftOAuthService.accessToken(
+            secret,
+            MICROSOFT_MAIL_SCOPES,
+            async (renewed) => {
+              kept = renewed
+            }
+          )
+
+    await verifyImapLogin(mailbox, { user: mailbox.username, accessToken }).catch(
+      (error: unknown) => {
+        const cause = error instanceof Error ? error.cause : undefined
+
+        // The consent given, the mailbox closed to IMAP: said plainly, with what to do.
+        if (refusalOf(cause) === 'accesso') {
+          throw new Error(
+            mailbox.type === 'gmail'
+              ? `Google ha dato il consenso, ma la casella ${mailbox.username} non si apre via IMAP: controlla che l’IMAP sia attivo nelle impostazioni di Gmail, poi riprova. Il server ha detto: ${serverWords(cause)}`
+              : `Microsoft ha dato il consenso, ma la casella ${mailbox.username} non si apre via IMAP: per un account di lavoro può averlo spento l’amministratore. Il server ha detto: ${serverWords(cause)}`,
+            { cause }
+          )
+        }
+
+        throw error
+      }
+    )
+    return kept
   }
 
   /**
@@ -1591,11 +1746,36 @@ export class MailService {
     }
   }
 
-  async sendMail(input: ComposeMailInput): Promise<void> {
+  /**
+   * Sends a message. Sent while its server cannot be reached — no network,
+   * the server down — it is not lost: it waits in the outbox, says so
+   * (`queued`), and goes by itself when it can (`sendOutbox`). Sent again by
+   * hand, the copy waiting is let go.
+   */
+  async sendMail(input: ComposeMailInput): Promise<{ queued: boolean }> {
     const payload = composeSchema.parse(input)
     const stored = await this.database.getStoredAccountById(payload.accountId)
     if (!stored) {
       throw new Error('Account non trovato.')
+    }
+
+    if (payload.draftId) {
+      if (this.leavingOutbox.has(payload.draftId)) {
+        throw new Error(
+          'Questo messaggio sta partendo dalla posta in uscita: guarda in Posta inviata tra un momento.'
+        )
+      }
+
+      await this.database.removeOutgoing({ draftId: payload.draftId })
+    }
+
+    // A mailbox its server turned down for good sends nothing until it is put right.
+    const refusal = this.engine.accountRefusal(payload.accountId)
+
+    if (refusal) {
+      throw new Error(
+        `La casella ${stored.email} è ferma: ${REFUSAL_LINES[refusal].toLowerCase()}. Ricollegala da Impostazioni › Connessioni, poi invia.`
+      )
     }
 
     // Certified mail (PEC) takes no Bcc: its provider would refuse the whole message.
@@ -1627,9 +1807,46 @@ export class MailService {
         void this.drafts.flush(payload.draftId)
       }
 
+      const failure = sendFailureOf(error, net.isOnline())
+
+      // It never reached the server: it waits, and goes by itself.
+      if (failure === 'passing') {
+        logMainError('Sending waits for the server', error, { accountId: account.id })
+        await this.database.queueOutgoing({
+          id: randomUUID(),
+          accountId: account.id,
+          draftId: payload.draftId ?? null,
+          payload
+        })
+        return { queued: true }
+      }
+
+      // Broken off while it went: it may have arrived — said, before the user sends it again.
+      if (failure === 'uncertain') {
+        throw new Error(
+          `L’invio si è interrotto mentre partiva: il messaggio potrebbe essere arrivato. Controlla in Posta inviata prima di rimandarlo. (${error instanceof Error ? error.message : String(error)})`,
+          { cause: error }
+        )
+      }
+
       throw error
     }
 
+    await this.afterSent(payload)
+    return { queued: false }
+  }
+
+  /**
+   * A draft opened again to change: its message, waiting in the outbox, is
+   * taken back — sent as it was, it would not be what the user now writes.
+   * Whether it was waiting.
+   */
+  async takeBackOutgoing(draftId: string): Promise<boolean> {
+    return (await this.database.removeOutgoing({ draftId })) > 0
+  }
+
+  /** A message gone: its draft, who it went to, the files it took. */
+  private async afterSent(payload: ComposeMailInput): Promise<void> {
     if (payload.draftId) {
       void this.drafts
         .sent(payload.draftId)
@@ -1647,6 +1864,103 @@ export class MailService {
   }
 
   /**
+   * The outbox, tried in order when the network is there: what goes is said
+   * (`outboxSent`); what still cannot reach its server waits; what fails
+   * otherwise — refused, or broken off midway, so perhaps gone — leaves the
+   * outbox and is said (`outboxFailed`), its draft in Bozze for the user.
+   */
+  private sendOutbox(): Promise<void> {
+    this.sendingOutbox ??= (async () => {
+      if (!net.isOnline()) {
+        return
+      }
+
+      const tried = new Set<string>()
+
+      // Read again at each step: a message sent by hand meanwhile, by its draft, has left it.
+      for (;;) {
+        const entry = (await this.database.listOutgoing()).find(({ id }) => !tried.has(id))
+
+        if (!entry) {
+          break
+        }
+
+        tried.add(entry.id)
+        const payload = entry.payload as ComposeMailInput
+        const stored = await this.database.getStoredAccountById(entry.accountId)
+
+        if (!stored || this.engine.accountRefusal(entry.accountId)) {
+          continue
+        }
+
+        const account = { ...stored, secret: decryptSecret(stored.encryptedSecret) }
+        const failed = (message: string): void => {
+          getAppWindow()?.webContents.send(IPC_CHANNELS.outboxFailed, {
+            draftId: entry.draftId,
+            subject: payload.subject,
+            message
+          })
+        }
+
+        if (entry.draftId) {
+          this.leavingOutbox.add(entry.draftId)
+        }
+
+        try {
+          // A file attached may be gone since: said, rather than half sent.
+          const filesGone = await this.describeFiles(
+            payload.attachments.map((attachment) => attachment.path)
+          ).then(
+            () => null,
+            (error: unknown) => (error instanceof Error ? error.message : String(error))
+          )
+
+          if (filesGone) {
+            await this.database.removeOutgoing({ id: entry.id })
+            failed(`«${payload.subject || 'Senza oggetto'}» non è partito: ${filesGone}`)
+            continue
+          }
+
+          try {
+            await this.deliver(account, createOutgoingMessagePayload(account, payload))
+          } catch (error) {
+            const failure = sendFailureOf(error, net.isOnline())
+
+            if (failure === 'passing') {
+              continue
+            }
+
+            await this.database.removeOutgoing({ id: entry.id })
+            failed(
+              failure === 'uncertain'
+                ? `L’invio di «${payload.subject || 'senza oggetto'}» si è interrotto mentre partiva: potrebbe essere arrivato. Controlla in Posta inviata prima di rimandarlo; la bozza è in Bozze.`
+                : `«${payload.subject || 'Senza oggetto'}» non è partito: ${error instanceof Error ? error.message : String(error)}`
+            )
+            continue
+          }
+
+          await this.database.removeOutgoing({ id: entry.id })
+          await this.afterSent(payload)
+          getAppWindow()?.webContents.send(IPC_CHANNELS.outboxSent, {
+            draftId: entry.draftId,
+            subject: payload.subject
+          })
+        } finally {
+          if (entry.draftId) {
+            this.leavingOutbox.delete(entry.draftId)
+          }
+        }
+      }
+    })()
+      .catch((error: unknown) => logMainError('The outbox could not be sent', error))
+      .finally(() => {
+        this.sendingOutbox = null
+      })
+
+    return this.sendingOutbox
+  }
+
+  /**
    * A message sent from an account: through its SMTP server — through
    * Graph where a Microsoft organisation turned SMTP off — and its copy
    * filed in Inviata where the server does not file it itself (Gmail and
@@ -1657,7 +1971,12 @@ export class MailService {
     outgoing: OutgoingMessagePayload
   ): Promise<void> {
     const rawOutgoing = account.type === 'imap' ? await buildRawOutgoingMessage(outgoing) : null
-    const transport = await createSmtpTransport(account, this.tokens)
+    // The provider's token, fetched before anything is handed over (`sendFailureOf`).
+    const transport = await createSmtpTransport(account, this.tokens).catch((error: unknown) => {
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+        beforeSending: true
+      })
+    })
 
     try {
       let sentThroughGraph = false
@@ -1706,14 +2025,24 @@ export class MailService {
       (secret) => this.database.setAccountSecret(account.id, encryptSecret(secret))
     )
     const graph = async (path: string, init: RequestInit): Promise<Response> => {
-      const response = await net.fetch(`https://graph.microsoft.com/v1.0${path}`, {
-        ...init,
-        headers: { Authorization: `Bearer ${token}`, ...init.headers }
-      })
+      const response = await net
+        .fetch(`https://graph.microsoft.com/v1.0${path}`, {
+          ...init,
+          headers: { Authorization: `Bearer ${token}`, ...init.headers }
+        })
+        .catch((error: unknown) => {
+          // Broken off on the way: the message may have reached Microsoft (`sendFailureOf`).
+          throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+            command: 'GRAPH'
+          })
+        })
 
       if (!response.ok) {
-        throw new Error(
-          `Microsoft non ha inviato il messaggio (${response.status}): ${await response.text()}`
+        throw Object.assign(
+          new Error(
+            `Microsoft non ha inviato il messaggio (${response.status}): ${await response.text()}`
+          ),
+          { status: response.status }
         )
       }
 
@@ -1773,8 +2102,11 @@ export class MailService {
     return this.drafts.close(z.string().uuid().parse(id))
   }
 
-  discardDraft(id: string): Promise<void> {
-    return this.drafts.discard(z.string().uuid().parse(id))
+  async discardDraft(id: string): Promise<void> {
+    const draftId = z.string().uuid().parse(id)
+    // A message in the outbox thrown away does not go.
+    await this.database.removeOutgoing({ draftId })
+    await this.drafts.discard(draftId)
   }
 
   getStoredDraft(id: string): Promise<StoredDraft | null> {

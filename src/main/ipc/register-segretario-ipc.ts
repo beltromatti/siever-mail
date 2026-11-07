@@ -92,7 +92,7 @@ const projectChangeSchema = z
   .strict()
 
 const sendOutcomeSchema = z.union([
-  z.object({ sent: z.literal(true) }),
+  z.object({ sent: z.literal(true), queued: z.boolean() }),
   z.object({ sent: z.literal(false), error: z.string().max(2000) })
 ])
 
@@ -161,7 +161,6 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   )
   handle(SEGRETARIO_IPC.getSpending, () => segretario.getSpending())
   handle(SEGRETARIO_IPC.getEngineState, () => segretario.getEngineState())
-  handle(SEGRETARIO_IPC.retryFailedWork, () => segretario.retryFailedWork())
 
   // The memory, and getting to know the connections.
   handle(SEGRETARIO_IPC.listMemory, () => segretario.listMemory())
@@ -198,6 +197,9 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   )
   handle(SEGRETARIO_IPC.getReadingStatus, (accountIds: unknown) =>
     segretario.getReadingStatus(z.array(idSchema).max(200).optional().parse(accountIds))
+  )
+  handle(SEGRETARIO_IPC.retryReading, (accountIds: unknown) =>
+    segretario.retryReading(z.array(idSchema).max(200).optional().parse(accountIds))
   )
   handle(SEGRETARIO_IPC.setPreparing, (preparing: unknown) =>
     segretario.setPreparing(z.boolean().parse(preparing))
@@ -373,6 +375,9 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   )
   handle(SEGRETARIO_IPC.sendMessage, (id: unknown, text: unknown, context: unknown) =>
     segretario.sendMessage(idSchema.parse(id), textSchema.parse(text), contextSchema.parse(context))
+  )
+  handle(SEGRETARIO_IPC.retryActivity, (id: unknown) =>
+    segretario.retryActivity(idSchema.parse(id))
   )
   handle(SEGRETARIO_IPC.cancelActivity, (id: unknown) =>
     segretario.cancelActivity(idSchema.parse(id))

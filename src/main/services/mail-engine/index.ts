@@ -5,6 +5,7 @@ import { logMainError } from '@main/utils/error-utils'
 import { IPC_CHANNELS } from '@shared/ipc'
 import type {
   AccountConnectionState,
+  ConnectionRefusal,
   MessagesActionResult,
   ActiveMailboxContext,
   FetchedMessageDetail,
@@ -41,6 +42,8 @@ export interface MailEngineDependencies {
   onInboxUnreadChange: (count: number) => void
   /** Messages had their text indexed, or went away: what reads the mail may look again. */
   onMailChanged: () => void
+  /** An account's server turned it down for good: it stopped, and the user is to be told. */
+  onRefused: (accountId: string, refusal: ConnectionRefusal, detail: string) => void
 }
 
 // How often to compare the network state with the last one seen. Reading it
@@ -168,6 +171,26 @@ export class MailEngine {
 
   async addAccount(accountId: string): Promise<void> {
     await this.attachAccount(accountId)
+  }
+
+  /** Whether an account's server turned it down for good: it stopped, until put right. */
+  accountRefusal(accountId: string): ConnectionRefusal | null {
+    return this.connections.get(accountId)?.getState().refused ?? null
+  }
+
+  /**
+   * An account put right — its secret replaced, or the server fixed: its
+   * connection signs in again with what is stored now, at once.
+   */
+  async reconnectAccount(accountId: string): Promise<void> {
+    const stored = await this.deps.database.getStoredAccountById(accountId)
+    const connection = this.connections.get(accountId)
+
+    if (!stored || !connection) {
+      throw new Error('Questa casella non è più collegata.')
+    }
+
+    await connection.reconnect({ ...stored, secret: decryptSecret(stored.encryptedSecret) })
   }
 
   async removeAccount(accountId: string): Promise<void> {
@@ -648,6 +671,8 @@ export class MailEngine {
         this.deps.onMailChanged()
       }
     })
+
+    connection.on('refused', (refusal, detail) => this.deps.onRefused(accountId, refusal, detail))
 
     connection.on('folders', (folders) => {
       this.broadcast(IPC_CHANNELS.foldersChanged, { accountId, folders })

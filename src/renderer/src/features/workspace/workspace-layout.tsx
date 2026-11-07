@@ -26,10 +26,11 @@
  * the next launch start from the default again. Expanded reading keeps its
  * fixed strip.
  */
-import type { ReactNode } from 'react'
+import { isValidElement, type ReactNode } from 'react'
 
 import { ASSISTANT_WIDTH } from './assistant-width'
 
+import { ErrorBoundary } from '@renderer/components/error-boundary'
 import { ResizableSplit } from '@renderer/components/ui/resizable-split'
 import {
   MESSAGE_TABLE_MAX_SPLIT_SHARE,
@@ -96,6 +97,8 @@ export interface WorkspaceLayoutProps {
   sidebar: ReactNode
   messageList: ReactNode
   reader: ReactNode
+  /** The message the reader shows: another one draws afresh, after a broken one. */
+  readerKey: string | null
   /** Error banner, rendered above the reader when present. */
   notice: ReactNode
   /** The Segretario's panel, on the right edge when it is open. */
@@ -124,12 +127,22 @@ export function WorkspaceLayout({
   sidebar,
   messageList,
   reader,
+  readerKey,
   notice,
   assistant,
   app,
   readerExpanded
 }: WorkspaceLayoutProps): React.JSX.Element {
   const assistantTrack = assistant ? ` ${ASSISTANT_WIDTH}` : ''
+  // Each pane breaks on its own: the others stay, and the user goes on (§13ter.3).
+  const sidebarPane = <ErrorBoundary>{sidebar}</ErrorBoundary>
+  const listPane = <ErrorBoundary>{messageList}</ErrorBoundary>
+  const readerPane = <ErrorBoundary resetKey={readerKey}>{reader}</ErrorBoundary>
+  const assistantPane = assistant && (
+    <div className="min-h-0 min-w-0">
+      <ErrorBoundary className="border-l">{assistant}</ErrorBoundary>
+    </div>
+  )
 
   if (app) {
     return (
@@ -140,9 +153,12 @@ export function WorkspaceLayout({
         {rail}
         <div className="flex min-h-0 min-w-0 flex-col">
           {notice}
-          <div className="min-h-0 flex-1">{app}</div>
+          <div className="min-h-0 flex-1">
+            {/* Another app in its place draws afresh. */}
+            <ErrorBoundary resetKey={isValidElement(app) ? app.type : null}>{app}</ErrorBoundary>
+          </div>
         </div>
-        {assistant && <div className="min-h-0 min-w-0">{assistant}</div>}
+        {assistantPane}
       </div>
     )
   }
@@ -170,12 +186,12 @@ export function WorkspaceLayout({
           unbroken subject. Without it the list panel grew past its track
           and slid under the reading pane instead of truncating.
         */}
-        <div className="min-h-0 min-w-0 border-r">{messageList}</div>
+        <div className="min-h-0 min-w-0 border-r">{listPane}</div>
         <div className="flex min-h-0 min-w-0 flex-col">
           {notice}
-          <div className="min-h-0 flex-1">{reader}</div>
+          <div className="min-h-0 flex-1">{readerPane}</div>
         </div>
-        {assistant && <div className="min-h-0 min-w-0">{assistant}</div>}
+        {assistantPane}
       </div>
     )
   }
@@ -192,7 +208,7 @@ export function WorkspaceLayout({
     >
       {rail}
       <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r">
-        {sidebar}
+        {sidebarPane}
       </aside>
       <div className="flex min-h-0 min-w-0 flex-col">
         {notice}
@@ -205,8 +221,8 @@ export function WorkspaceLayout({
             minSecond={READER_MIN_HEIGHT}
             label={RESIZE_LABEL}
             className="flex-1"
-            first={messageList}
-            second={reader}
+            first={listPane}
+            second={readerPane}
           />
         ) : (
           <ResizableSplit
@@ -217,12 +233,12 @@ export function WorkspaceLayout({
             minSecond={READER_MIN_WIDTH}
             label={RESIZE_LABEL}
             className="flex-1"
-            first={messageList}
-            second={reader}
+            first={listPane}
+            second={readerPane}
           />
         )}
       </div>
-      {assistant && <div className="min-h-0 min-w-0">{assistant}</div>}
+      {assistantPane}
     </div>
   )
 }

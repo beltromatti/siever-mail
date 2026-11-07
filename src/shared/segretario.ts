@@ -48,7 +48,7 @@ export interface SegretarioStatus {
  * — or the credit runs low, in time to top it up before it does.
  */
 export type SegretarioNotice =
-  | { kind: 'credito-finito' | 'chiave-rifiutata'; at: number }
+  | { kind: 'credito-finito' | 'chiave-rifiutata' | 'modello-non-disponibile'; at: number }
   | {
       kind: 'credito-basso' | 'credito-quasi-finito'
       at: number
@@ -57,6 +57,9 @@ export type SegretarioNotice =
       /** Days it lasts at the pace of the last week; null with nothing spent. */
       days: number | null
     }
+
+/** Where the models are, to see the Segretario's. */
+export const OPENROUTER_MODELS_URL = 'https://openrouter.ai/models'
 
 /** Where the credit is topped up, and the keys made. */
 export const OPENROUTER_CREDITS_URL = 'https://openrouter.ai/settings/credits'
@@ -78,6 +81,11 @@ export function noticeWords(notice: SegretarioNotice): { title: string; body: st
       return {
         title: 'Chiave OpenRouter rifiutata',
         body: 'OpenRouter non accetta più la chiave: da ora le funzioni AI sono spente e SIEVER Mail continua senza il Segretario. Quello che ha imparato resta. Per riaccenderle riattiva «Funzioni AI» in Impostazioni › Segretario e inserisci una chiave valida.'
+      }
+    case 'modello-non-disponibile':
+      return {
+        title: 'Modello AI non disponibile',
+        body: 'OpenRouter non offre più il modello del Segretario, o nessun fornitore lo serve senza tenere i tuoi dati: da ora le funzioni AI sono spente e SIEVER Mail continua senza il Segretario. Quello che ha imparato resta. Riattiva «Funzioni AI» in Impostazioni › Segretario quando vuoi riprovare.'
       }
     default: {
       const lasts =
@@ -115,7 +123,7 @@ export interface SegretarioSpending {
   byFunction: Array<{ purpose: string; label: string; cost: number }>
 }
 
-/** Where the Segretario's own work stands: what it reads, what waits, what failed. */
+/** Where the Segretario's own work stands: what it reads, what waits. */
 export interface EngineState {
   /** OpenRouter does not answer: the work waits for it, and tries again when said. */
   waiting: string | null
@@ -124,8 +132,6 @@ export interface EngineState {
   /** Units of work waiting or running, by task. */
   queued: Partial<Record<TaskKind, number>>
   running: Partial<Record<TaskKind, number>>
-  /** Units of work left failed after their attempts. */
-  failed: number
 }
 
 /* ─────────────────────────────── the user's work ─────────────────────────────── */
@@ -760,8 +766,8 @@ export type ShowRequest =
   | { kind: 'event'; eventKey: string }
   | { kind: 'day'; day: string }
 
-/** How an approved send went, as the page reports it. */
-export type SendOutcome = { sent: true } | { sent: false; error: string }
+/** How a send the user confirmed went: gone, waiting in the outbox for its server (`queued`), or not. */
+export type SendOutcome = { sent: true; queued: boolean } | { sent: false; error: string }
 
 /* ───────────────────────────────── IPC ───────────────────────────────── */
 
@@ -777,7 +783,7 @@ export const SEGRETARIO_IPC = {
   setPreferences: 'segretario:set-preferences',
   getSpending: 'segretario:get-spending',
   getEngineState: 'segretario:get-engine-state',
-  retryFailedWork: 'segretario:retry-failed-work',
+  retryReading: 'segretario:retry-reading',
   listMemory: 'segretario:list-memory',
   writeMemory: 'segretario:write-memory',
   deleteMemory: 'segretario:delete-memory',
@@ -834,6 +840,7 @@ export const SEGRETARIO_IPC = {
   getActivity: 'segretario:get-activity',
   startActivity: 'segretario:start-activity',
   sendMessage: 'segretario:send-message',
+  retryActivity: 'segretario:retry-activity',
   cancelActivity: 'segretario:cancel-activity',
   removeActivity: 'segretario:remove-activity',
   markActivitySeen: 'segretario:mark-activity-seen',
@@ -863,8 +870,8 @@ export interface SegretarioApi {
   setPreferences: (preferences: SegretarioPreferences) => Promise<SegretarioPreferences>
   getSpending: () => Promise<SegretarioSpending>
   getEngineState: () => Promise<EngineState>
-  /** Tries the work that failed again, now. */
-  retryFailedWork: () => Promise<EngineState>
+  /** The setup's "Riprova", at the end of the reading: what failed of it, and only that. */
+  retryReading: (accountIds?: string[]) => Promise<void>
   listMemory: () => Promise<MemoryNote[]>
   /** Writes a note as the user corrected it; `seenRevision`, the version they opened: changed since, the write is refused. */
   writeMemory: (path: string, content: string, seenRevision?: number) => Promise<MemoryNote[]>
@@ -1011,6 +1018,8 @@ export interface SegretarioApi {
   getActivity: (id: string) => Promise<ActivityDetail | null>
   startActivity: (text: string, context: SegretarioContext) => Promise<ActivitySummary>
   sendMessage: (id: string, text: string, context: SegretarioContext) => Promise<void>
+  /** A request in the panel that stopped short (§13ter.2), taken up again from where it was. */
+  retryActivity: (id: string) => Promise<void>
   cancelActivity: (id: string) => Promise<void>
   removeActivity: (id: string) => Promise<void>
   markActivitySeen: (id: string) => Promise<void>

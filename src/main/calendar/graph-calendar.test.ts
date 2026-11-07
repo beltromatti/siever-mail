@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { SyncTokenExpired } from './calendar-provider'
+import { refusalOfCalendar } from './calendar-refusal'
 import {
   GraphCalendarProvider,
   MAILBOX_ZONE_NOT_GRANTED,
@@ -325,6 +326,41 @@ describe('GraphCalendarProvider', () => {
     expect(asked.map((request) => request.url).filter((url) => url.includes('/events/'))).toEqual(
       []
     )
+  })
+
+  it('takes a token Graph refuses for the authorization withdrawn — the whole connection’s — and a calendar refused for that calendar’s', async () => {
+    const { provider } = graph([
+      [
+        'GET',
+        /\/me\/calendars\?\$select=/,
+        () =>
+          new Response(
+            JSON.stringify({
+              error: { code: 'InvalidAuthenticationToken', message: 'Lifetime validation failed' }
+            }),
+            { status: 401 }
+          )
+      ],
+      [
+        'GET',
+        /calendarView\/delta/,
+        () =>
+          new Response(JSON.stringify({ error: { code: 'ErrorAccessDenied' } }), { status: 403 })
+      ]
+    ])
+
+    const withdrawn = await provider.listCalendars().catch((error: unknown) => error)
+    expect(withdrawn).toMatchObject({ status: 401, refusal: 'autorizzazione' })
+    expect(refusalOfCalendar(withdrawn)).toEqual({
+      refusal: 'autorizzazione',
+      problem: 'Microsoft non accetta più l’accesso a questo calendario: ricollegalo.',
+      detail: 'Microsoft ha risposto 401 (InvalidAuthenticationToken): Lifetime validation failed'
+    })
+
+    const window = { fromIso: '2026-11-01T00:00:00.000Z', toIso: '2026-12-31T00:00:00.000Z' }
+    const denied = await provider.changes('cal-luca', window).catch((error: unknown) => error)
+    expect(denied).toMatchObject({ status: 403, refusal: null })
+    expect(refusalOfCalendar(denied)).toBeNull()
   })
 
   it('reads again from the start when Graph no longer knows the delta', async () => {

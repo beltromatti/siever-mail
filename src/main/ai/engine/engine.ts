@@ -176,14 +176,16 @@ function settle(result: RunResult): void {
 
   // The key or the credit refused stops everything — the AI goes off; a request blocked for what
   // it carries (`blocked`) is that work's failure, not every work's.
-  if (
-    error instanceof SegretarioError &&
-    ['no-key', 'invalid-key', 'no-credit'].includes(error.code)
-  ) {
+  if (error instanceof SegretarioError && error.refusesService) {
     throw new KeyRefused(error.message)
   }
 
   throw new WorkFailure(error?.message ?? 'Il lavoro non è finito.')
+}
+
+/** Whether a unit of work reads a conversation of these accounts — a connection just added — or of any. */
+function readingOf(accountIds: ReadonlyArray<string> | undefined): (scopeKey: string) => boolean {
+  return (scopeKey) => !accountIds || accountIds.some((id) => scopeKey.startsWith(`lettura:${id}:`))
 }
 
 /**
@@ -323,16 +325,14 @@ export class SegretarioEngine {
     const counts = await this.deps.queue.counts()
     const queued: Partial<Record<TaskKind, number>> = {}
     const running: Partial<Record<TaskKind, number>> = {}
-    let failed = 0
 
+    // A failure is not shown: in the background it ends there (§13ter.2).
     for (const count of counts) {
       const task = count.task as TaskKind
 
       if (count.status === 'al_lavoro') {
         running[task] = (running[task] ?? 0) + count.count
-      } else if (count.status === 'fallito') {
-        failed += count.count
-      } else {
+      } else if (count.status !== 'fallito') {
         queued[task] = (queued[task] ?? 0) + count.count
       }
     }
@@ -345,8 +345,7 @@ export class SegretarioEngine {
         : null,
       reading: await this.deps.mail.readingProgress((await this.horizons()).sinceOf),
       queued,
-      running,
-      failed
+      running
     }
   }
 
@@ -359,17 +358,13 @@ export class SegretarioEngine {
   async readingStatus(accountIds?: ReadonlyArray<string>): Promise<ReadingStatus> {
     const { queue, mail, store } = this.deps
     const { sinceOf, daysOf, readings } = await this.horizons()
-    // Of these accounts — a connection just added — or of all; their calendars with them.
-    const ours = (scopeKey: string): boolean =>
-      !accountIds || accountIds.some((id) => scopeKey.startsWith(`lettura:${id}:`))
+    const ours = readingOf(accountIds)
     const units = (await queue.units('lettura')).filter((unit) => ours(unit.scopeKey))
     const waiting = units.filter(
       (unit) => unit.status === 'in_coda' || unit.status === 'da_riprovare'
     ).length
     const running = units.filter((unit) => unit.status === 'al_lavoro').length
-    const failedUnits = (await queue.failed(200)).filter(
-      (unit) => unit.task === 'lettura' && ours(unit.scopeKey)
-    )
+    const failedUnits = (await queue.failed('lettura')).filter((unit) => ours(unit.scopeKey))
     const failedKeys = new Set(failedUnits.map((unit) => unit.scopeKey))
     const unread = await mail.unreadConversations(sinceOf, READING_PLANNED)
     const left = unread.filter(
@@ -392,11 +387,7 @@ export class SegretarioEngine {
     const accounts = (await mail.listAccounts()).filter(
       (account) => !accountIds || accountIds.includes(account.id)
     )
-    const calendars = (await this.lookedCalendars(setupHold(await this.deps.onboarding()))).filter(
-      (connection) =>
-        !accountIds ||
-        (connection.mailAccountId !== null && accountIds.includes(connection.mailAccountId))
-    )
+    const calendars = await this.readingCalendars(accountIds)
     const looks = await Promise.all(
       calendars.map(async (connection) => {
         const key = calendarLearningKey(connection.id)
@@ -418,7 +409,7 @@ export class SegretarioEngine {
     const lookUnits = (await queue.units('calendario')).filter((unit) =>
       calendars.some((connection) => unit.scopeKey === calendarLookScope(connection.id))
     )
-    const failedLooks = (await queue.failed(200)).filter((unit) =>
+    const failedLooks = (await queue.failed('calendario')).filter((unit) =>
       calendars.some((connection) => unit.scopeKey === calendarLookScope(connection.id))
     )
     const failedLookKeys = new Set(
@@ -485,6 +476,40 @@ export class SegretarioEngine {
       days: reading?.days ?? READING_DAYS.default,
       reason: reading?.days != null ? reading.reason : null
     }
+  }
+
+  /**
+   * The setup's "Riprova", at the end of its reading: what failed of it —
+   * the conversations of these accounts, or of all, and the looks at their
+   * calendars — tried again now, and only that: what failed in the
+   * background ended there (§13ter.2).
+   */
+  async retryReading(accountIds?: ReadonlyArray<string>): Promise<void> {
+    const { queue } = this.deps
+    const ours = readingOf(accountIds)
+    const calendars = await this.readingCalendars(accountIds)
+    const failed = [
+      ...(await queue.failed('lettura')).filter((unit) => ours(unit.scopeKey)),
+      ...(await queue.failed('calendario')).filter((unit) =>
+        calendars.some((connection) => unit.scopeKey === calendarLookScope(connection.id))
+      )
+    ]
+
+    if (failed.length > 0) {
+      await queue.retryFailed(failed.map((unit) => unit.id))
+      this.wake()
+    }
+  }
+
+  /** The calendars a reading looks at: those of these accounts — a connection just added — or all. */
+  private async readingCalendars(
+    accountIds: ReadonlyArray<string> | undefined
+  ): Promise<Awaited<ReturnType<SegretarioCalendarPort['connections']>>> {
+    return (await this.lookedCalendars(setupHold(await this.deps.onboarding()))).filter(
+      (connection) =>
+        !accountIds ||
+        (connection.mailAccountId !== null && accountIds.includes(connection.mailAccountId))
+    )
   }
 
   /**

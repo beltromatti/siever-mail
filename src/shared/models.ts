@@ -678,12 +678,101 @@ export interface WindowControlsState {
  *   • 'connected'    — both IMAP links are up; changes arrive in real time.
  *   • 'reconnecting' — an established link dropped and is being rebuilt.
  *   • 'offline'      — the computer has no network; retries wait for it.
- *   • 'error'        — the server could not be reached, or refused the
- *                      login. Retries go on by themselves, backing off.
+ *   • 'error'        — the server could not be reached: retries go on by
+ *                      themselves, backing off — or, `refused`, it turned the
+ *                      connection down for good, and it stopped.
  *   • 'disconnected' — the account's engine is stopped.
  */
 export type AccountConnectionStatus =
   'connecting' | 'connected' | 'reconnecting' | 'offline' | 'error' | 'disconnected'
+
+/**
+ * What turns a connection down for good — retrying cannot fix it, the user
+ * can: the access refused (a password changed or expired, IMAP turned off),
+ * the authorization withdrawn (Google's or Microsoft's sign-in to do again),
+ * the server's certificate not trusted, the source gone (a calendar no
+ * longer at its link). The connection stops, says so once, and keeps its
+ * data: "Ricollega" puts it right, "Togli" takes it away.
+ */
+export type ConnectionRefusal = 'accesso' | 'autorizzazione' | 'certificato' | 'sparito'
+
+/** A connection turned down for good, as the user is told it, once. */
+export interface ConnectionRefusedNotice {
+  family: 'posta' | 'calendario'
+  /** The account's id, or the calendar connection's. */
+  id: string
+  /** The address, or the calendar connection's name. */
+  label: string
+  refusal: ConnectionRefusal
+  /** What the server said. */
+  detail: string
+  /** How it signs in again: its password, or the provider's sign-in. */
+  signIn: 'password' | 'google' | 'microsoft' | 'none'
+}
+
+/** A refusal in a line, where a connection's state is listed. */
+export const REFUSAL_LINES: Readonly<Record<ConnectionRefusal, string>> = {
+  accesso: 'Il server non accetta più l’accesso',
+  autorizzazione: 'L’accesso va rifatto',
+  certificato: 'Il certificato del server non è valido',
+  sparito: 'Non si trova più al suo indirizzo'
+}
+
+/** A mailbox turned down, as its notice: the same from the engine and from Settings. */
+export function mailRefusedNotice(
+  account: Pick<MailAccount, 'id' | 'email' | 'type' | 'authType'>,
+  refusal: ConnectionRefusal,
+  detail: string
+): ConnectionRefusedNotice {
+  return {
+    family: 'posta',
+    id: account.id,
+    label: account.email,
+    refusal,
+    detail,
+    signIn:
+      account.authType === 'password'
+        ? 'password'
+        : account.type === 'gmail'
+          ? 'google'
+          : 'microsoft'
+  }
+}
+
+/** What a refusal means and what to do, in the user's words: of a mailbox, or of a calendar. */
+export function refusalWords(
+  notice: Pick<ConnectionRefusedNotice, 'family' | 'refusal' | 'label'>
+): { title: string; body: string } {
+  const { refusal, label } = notice
+  const calendar = notice.family === 'calendario'
+  const of = calendar ? `del calendario ${label}` : `di ${label}`
+  const to = calendar ? `al calendario ${label}` : `a ${label}`
+  const it = calendar ? 'lo' : 'la'
+  const stopped = 'SIEVER Mail ha smesso di riprovare: quello che c’è resta.'
+
+  switch (refusal) {
+    case 'accesso':
+      return {
+        title: `Accesso rifiutato · ${label}`,
+        body: `Il server non accetta più l’accesso ${to} — la password è cambiata o scaduta, o l’accesso è stato spento. SIEVER Mail ha smesso di riprovare, per non far bloccare l’account: quello che c’è resta. Ricollega${it} con l’accesso giusto, o togli${it}.`
+      }
+    case 'autorizzazione':
+      return {
+        title: `Accesso da rinnovare · ${label}`,
+        body: `L’autorizzazione ${to} non vale più: va rifatto l’accesso con il fornitore. ${stopped} Ricollega${it}, o togli${it}.`
+      }
+    case 'certificato':
+      return {
+        title: `Server non attendibile · ${label}`,
+        body: `Il certificato del server ${of} non è valido, e SIEVER Mail non manda la password a un server che non può verificare. ${stopped} Quando il server è a posto, ricollega${it}; oppure togli${it}.`
+      }
+    case 'sparito':
+      return {
+        title: `Non c’è più · ${label}`,
+        body: `${calendar ? `Il calendario ${label}` : label} non si trova più dove era collegato — il link non esiste più, o è stato tolto dal server. SIEVER Mail ha smesso di cercarlo: quello che c’è resta. Riprova se pensi che torni, oppure toglilo.`
+      }
+  }
+}
 
 export interface AccountConnectionState {
   accountId: string
@@ -692,8 +781,8 @@ export interface AccountConnectionState {
   syncing: boolean
   /** Why the last attempt failed; set with 'error'. */
   errorMessage?: string
-  /** The server turned the credentials down: retrying cannot fix it. */
-  authFailed?: boolean
+  /** Turned down for good, and stopped: retrying cannot fix it, the user can (`ConnectionRefusal`). */
+  refused?: ConnectionRefusal
   /** The last moment the server answered, as epoch milliseconds. */
   lastContactAt?: number
   /**

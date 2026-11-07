@@ -24,9 +24,13 @@ export interface SegretarioState {
   handles: ReadonlyMap<string, HandleLink>
   /** An activity is waiting for the user, or finished unseen: the rail says so. */
   attention: boolean
+  /** OpenRouter does not answer: what runs waits for it, and says until when (§13ter.1). */
+  waiting: string | null
   select(id: string | null): void
   start(text: string, context: SegretarioContext): Promise<void>
   send(text: string, context: SegretarioContext): Promise<void>
+  /** A request that stopped short, taken up again from where it was (§13ter.2). */
+  retry(id: string): Promise<void>
   cancel(id: string): void
   remove(id: string): Promise<void>
   resolveApproval(
@@ -58,6 +62,30 @@ function upsertEntry(entries: ActivityEntry[], entry: ActivityEntry): ActivityEn
 }
 
 /**
+ * Whether OpenRouter answers: while it does not, what the Segretario does
+ * waits for it — a request, a rewrite — and this says until when (§13ter.1).
+ */
+export function useAiWaiting(): string | null {
+  const [waiting, setWaiting] = useState<string | null>(null)
+
+  useEffect(() => {
+    let current = true
+    void window.segretarioApi
+      .getEngineState()
+      .then((engine) => current && setWaiting(engine.waiting))
+      .catch(() => undefined)
+    const unsubscribe = window.segretarioApi.onEngineChanged((engine) => setWaiting(engine.waiting))
+
+    return () => {
+      current = false
+      unsubscribe()
+    }
+  }, [])
+
+  return waiting
+}
+
+/**
  * The Segretario as the page sees it: the key's state, the activities and
  * the one on screen, kept in step with the main process's events. `visible`
  * says whether the panel is open: an activity on screen while it is, is
@@ -73,6 +101,7 @@ export function useSegretario(visible: boolean): SegretarioState {
   // What the activity on screen is writing, as it writes: only that one's, so the work done
   // alone, step after step, does not redraw the app.
   const [stream, setStream] = useState<{ id: string; text: string } | null>(null)
+  const waiting = useAiWaiting()
   const selectedRef = useRef<string | null>(null)
   const visibleRef = useRef(visible)
 
@@ -84,7 +113,6 @@ export function useSegretario(visible: boolean): SegretarioState {
     void window.segretarioApi.getStatus().then(setStatus)
     void window.segretarioApi.getPreferences().then(setPreferences)
     void window.segretarioApi.listActivities().then((list) => setActivities(sortActivities(list)))
-
     const offStatus = window.segretarioApi.onStatusChanged(setStatus)
     const offPreferences = window.segretarioApi.onPreferencesChanged(setPreferences)
     const offEvents = window.segretarioApi.onActivityEvent((event) => {
@@ -236,8 +264,10 @@ export function useSegretario(visible: boolean): SegretarioState {
       handles,
       attention,
       select,
+      waiting,
       start,
       send,
+      retry: retryActivity,
       cancel: cancelActivity,
       remove: removeActivity,
       resolveApproval: resolveActivityApproval,
@@ -254,6 +284,7 @@ export function useSegretario(visible: boolean): SegretarioState {
       streaming,
       handles,
       attention,
+      waiting,
       select,
       start,
       send,
@@ -262,6 +293,10 @@ export function useSegretario(visible: boolean): SegretarioState {
       loadDiary
     ]
   )
+}
+
+async function retryActivity(id: string): Promise<void> {
+  await window.segretarioApi.retryActivity(id)
 }
 
 function cancelActivity(id: string): void {

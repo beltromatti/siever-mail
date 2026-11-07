@@ -11,6 +11,7 @@ import {
   Server,
   type LucideIcon
 } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { Button } from '@renderer/components/ui/button'
 import { Checkbox } from '@renderer/components/ui/checkbox'
@@ -384,16 +385,21 @@ export function AddConnection({
 
   const signIn = (provider: 'google' | 'microsoft'): void =>
     void run(async () => {
-      if (provider === 'google') {
-        if (services.mail) {
-          onMailAdded(await window.mailApi.addGoogleAccount({ calendar: services.calendar }))
-        } else {
-          await window.calendarApi.connectGoogle(null)
-        }
-      } else if (services.mail) {
-        onMailAdded(await window.mailApi.addMicrosoftAccount({ calendar: services.calendar }))
-      } else {
-        await window.calendarApi.connectMicrosoft(null)
+      if (!services.mail) {
+        await (provider === 'google'
+          ? window.calendarApi.connectGoogle(null)
+          : window.calendarApi.connectMicrosoft(null))
+        return
+      }
+
+      const added = await (provider === 'google'
+        ? window.mailApi.addGoogleAccount({ calendar: services.calendar })
+        : window.mailApi.addMicrosoftAccount({ calendar: services.calendar }))
+      onMailAdded(added.account)
+
+      // The mailbox came; its calendar, asked for with it, did not: said, to add it again later.
+      if (added.calendarProblem) {
+        toast.error('Il calendario non si è collegato', { description: added.calendarProblem })
       }
     }, 'L’accesso non è riuscito.')
 
