@@ -1,4 +1,5 @@
 import { logMainError } from '../../utils/error-utils'
+import type { Reachability } from './reachability'
 import type { WorkQueue, WorkUnit } from './work-queue'
 
 /** Work at this priority or later is the backlog: it never takes the last free place. */
@@ -6,9 +7,6 @@ export const BACKLOG_PRIORITY = 50
 
 /** How long the scheduler sleeps at most between two looks at the queue. */
 const IDLE_MS = 60_000
-
-/** How many times a unit is tried before it is left failed. */
-const MAX_ATTEMPTS = 3
 
 /** How far down the waiting work one look goes, past what a key in use holds up. */
 const MAX_SCANNED = 120
@@ -29,24 +27,18 @@ export interface TaskExecutor {
   run(unit: WorkUnit, signal: AbortSignal): Promise<void>
 }
 
-/** A unit did not do its work. */
+/**
+ * A unit did not do its work, and is left failed — not tried again by
+ * itself: later it may no longer be of use. Where it shows, the user tries
+ * it again, or goes on without the AI; new facts on the same matter are new
+ * work (see `WorkQueue.complete`).
+ */
 export class WorkFailure extends Error {
-  constructor(
-    message: string,
-    /** Worth trying again later. */
-    readonly retry: boolean,
-    /** Its own fault — counted against it — or the world's (network, provider). */
-    readonly counts: boolean,
-    /** The world's: the connection or the provider did not answer — nothing else would now either. */
-    readonly unreachable = false
-  ) {
+  constructor(message: string) {
     super(message)
     this.name = 'WorkFailure'
   }
 }
-
-/** While the connection or the provider does not answer, the waits between tries, growing. */
-const UNREACHABLE_WAITS_MS = [30_000, 60_000, 120_000, 300_000]
 
 /**
  * OpenRouter refused the key or the credit: the AI goes off (the
@@ -73,9 +65,10 @@ interface Running {
  * Runs the Segretario's work from the queue: the most urgent first, as many
  * at once as it is given, never two that hold the same key, and always one
  * place kept for what is not backlog — mail that just came never waits
- * behind a month being read. A failure is tried again later; a key or a
- * credit refused stops everything — the AI goes off — and so does the
- * computer's sleep, until it wakes.
+ * behind a month being read. A unit that fails stays failed; while
+ * OpenRouter does not answer, the runs wait for it and one unit at a time
+ * starts (`Reachability`); a key or a credit refused stops everything — the
+ * AI goes off — and so does the computer's sleep, until it wakes.
  */
 export class Scheduler {
   private readonly running = new Map<string, Running>()
@@ -84,8 +77,6 @@ export class Scheduler {
   private stopped = true
   /** A run met a refused key or credit: nothing starts until the AI is turned off, or on again. */
   private refused = false
-  /** The connection or the provider stopped answering: one try at a time, ever more spaced. */
-  private unreachable: { since: number; tries: number; until: number } | null = null
   private asleep = false
   private wakeUp: (() => void) | null = null
   /** Woken while awake: the next sleep does not happen. */
@@ -96,6 +87,8 @@ export class Scheduler {
     private readonly queue: WorkQueue,
     private readonly executors: Readonly<Record<string, TaskExecutor>>,
     private readonly options: {
+      /** Whether OpenRouter answers: while it does not, one unit at a time starts. */
+      reachability: Reachability
       /** How many units may run at once now. */
       concurrency: () => number
       /** Whether anything may start now at all: the AI on, with a key. */
@@ -135,19 +128,9 @@ export class Scheduler {
     this.nudge()
   }
 
-  /** Since when, and until when, the work waits for the connection or the provider to answer. */
+  /** Since when, and until when, the work waits for OpenRouter to answer. */
   get waitingForNetwork(): { since: number; until: number } | null {
-    return this.unreachable
-      ? { since: this.unreachable.since, until: this.unreachable.until }
-      : null
-  }
-
-  /** The computer is back online: try again now. */
-  online(): void {
-    if (this.unreachable) {
-      this.unreachable.until = Date.now()
-      this.nudge()
-    }
+    return this.options.reachability.waiting
   }
 
   /** The AI was turned off, or on again: a refusal holds nothing back any more. */
@@ -177,7 +160,7 @@ export class Scheduler {
       }
     } else {
       // Awake, the connection is likely back too: what waited for it tries at once.
-      this.online()
+      this.options.reachability.online()
       this.nudge()
     }
   }
@@ -237,12 +220,14 @@ export class Scheduler {
   }
 
   private async startWhatCan(): Promise<void> {
-    if (this.unreachable && Date.now() < this.unreachable.until) {
+    const { reachability } = this.options
+
+    if (!reachability.open) {
       return
     }
 
-    // Waiting for the network, one unit tries; the rest follow once it answers.
-    const capacity = this.unreachable ? 1 : this.options.concurrency()
+    // Waiting for OpenRouter, one unit tries; the rest follow once it answers.
+    const capacity = reachability.waiting ? 1 : this.options.concurrency()
     let free = capacity - this.running.size
 
     if (free <= 0) {
@@ -369,12 +354,6 @@ export class Scheduler {
       try {
         await executor.run(unit, controller.signal)
         await this.queue.complete(unit.id)
-
-        if (this.unreachable) {
-          this.unreachable = null
-          this.options.onChange?.()
-          this.nudge()
-        }
       } catch (error) {
         await this.failed(running, error)
       } finally {
@@ -399,12 +378,7 @@ export class Scheduler {
       // Stopped by a quit, the sleep or the user: a quit or the sleep leaves it to wait again,
       // the user cancels it.
       if (this.stopped || running.stoppedBy === 'sleep') {
-        await this.queue.fail(unit.id, 'Interrotto.', {
-          retry: true,
-          counts: false,
-          maxAttempts: MAX_ATTEMPTS,
-          delayMs: 0
-        })
+        await this.queue.fail(unit.id, 'Interrotto.', { retry: true })
       } else {
         await this.queue.cancel(unit.id)
       }
@@ -413,52 +387,17 @@ export class Scheduler {
     }
 
     if (error instanceof KeyRefused) {
-      await this.queue.fail(unit.id, error.reason, {
-        retry: true,
-        counts: false,
-        maxAttempts: MAX_ATTEMPTS
-      })
+      await this.queue.fail(unit.id, error.reason, { retry: true })
       this.refused = true
       return
     }
-
-    const failure =
-      error instanceof WorkFailure
-        ? error
-        : new WorkFailure(error instanceof Error ? error.message : String(error), true, true)
 
     if (!(error instanceof WorkFailure)) {
       logMainError('Segretario work failed', error, { task: unit.task, scope: unit.scopeKey })
     }
 
-    if (failure.unreachable) {
-      // A try is a unit that started while the engine waited: those already running when the
-      // network went fail with it, as one.
-      if (!this.unreachable || running.startedAt >= this.unreachable.since) {
-        const tries = (this.unreachable?.tries ?? 0) + 1
-        const wait = UNREACHABLE_WAITS_MS[Math.min(tries, UNREACHABLE_WAITS_MS.length) - 1]
-        this.unreachable = {
-          since: this.unreachable?.since ?? Date.now(),
-          tries,
-          until: Date.now() + wait
-        }
-      }
-
-      // Waiting for the network is the engine's, not the unit's: it waits, uncounted, for the
-      // engine to try again.
-      await this.queue.fail(unit.id, failure.message, {
-        retry: true,
-        counts: false,
-        maxAttempts: MAX_ATTEMPTS,
-        delayMs: 0
-      })
-      return
-    }
-
-    await this.queue.fail(unit.id, failure.message, {
-      retry: failure.retry,
-      counts: failure.counts,
-      maxAttempts: MAX_ATTEMPTS
+    await this.queue.fail(unit.id, error instanceof Error ? error.message : String(error), {
+      retry: false
     })
   }
 
@@ -473,9 +412,10 @@ export class Scheduler {
     // taken) starts when what holds it ends, which wakes the loop — or the network wait ends.
     const now = Date.now()
     const next = await this.queue.nextStart().catch(() => null)
-    const due = [next !== null && next > now ? next : null, this.unreachable?.until ?? null].filter(
-      (at): at is number => at !== null && at > now
-    )
+    const due = [
+      next !== null && next > now ? next : null,
+      this.options.reachability.waiting?.until ?? null
+    ].filter((at): at is number => at !== null && at > now)
     const delay =
       due.length === 0 ? IDLE_MS : Math.min(Math.max(Math.min(...due) - now, 50), IDLE_MS)
 

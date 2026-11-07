@@ -4,6 +4,7 @@ import type { ActivityEvent, ActivityStatus, SendOutcome } from '@shared/segreta
 
 import { logMainError } from '../../utils/error-utils'
 import type { AiStore, StoredEvent } from '../ai-store'
+import type { Reachability } from '../engine/reachability'
 import type { Notebook } from '../memory/notebook'
 import {
   SegretarioError,
@@ -21,7 +22,6 @@ import {
   type ApprovalPayload,
   type AssistantPayload,
   type ChangesPayload,
-  type ClearingPayload,
   type CompactionPayload,
   type ErrorPayload,
   type ToolPayload,
@@ -42,42 +42,27 @@ import {
   type ToolContext
 } from './tool-types'
 
-const MAX_STEPS_PER_TURN = 80
-/** Tokens the model may write in one step: a long draft, its reasoning, several calls. */
-const MAX_TOKENS_PER_TURN = 16_000
 /**
- * Past this many tokens of prompt, old tool results are cleared; past the
- * next, the old part is summarised. Where Anthropic's context editing
- * clears by default: well inside the model's window, and late enough for a
- * run that reads widely — Conoscimi — to write from what it read. Cached,
- * what stays costs little.
+ * The share of the model's context past which the older part of a run is
+ * summarised: near the edge, so a run keeps everything it read for as long
+ * as the model can hold it — cached, what stays costs little — with room
+ * left for the summary and the turns after it.
  */
-const CLEAR_TOOL_RESULTS_AT = 100_000
-const RECENT_TOOL_RESULTS_KEPT = 8
+const COMPACT_AT_SHARE = 0.85
 /**
- * Results cleared at once, at the least: each clearing changes the prefix the
- * provider caches, so it happens in strokes, not at every step past the mark.
+ * Turns in a row that get nowhere — every call failing or refused, or the
+ * task's result asked for and not left — after which a run stops as stuck.
+ * Not a limit on how much a run works or reads: only on turning in place.
  */
-const TOOL_RESULTS_CLEARED_TOGETHER = 12
-const COMPACT_AT = 200_000
-/**
- * How long work on its own may go on before it is stopped as stuck: far
- * past what the task takes (a reading is done in under a minute, Conoscimi
- * in minutes), so only a call that never returns meets it. It counts as a
- * failure, tried again later; the user's own work has no such limit.
- */
-const BACKGROUND_DEADLINE_MS: Partial<Record<TaskKind, number>> = {
-  conoscimi: 60 * 60_000,
-  al_passo: 30 * 60_000,
-  riflessione: 30 * 60_000
-}
-const DEFAULT_BACKGROUND_DEADLINE_MS = 15 * 60_000
-/** How often a run that stops short of its task is told what is missing. */
-const MAX_NUDGES = 2
+const TURNS_WITHOUT_PROGRESS = 10
 const STREAM_FLUSH_MS = 60
 
 export interface RunnerDeps {
   client: OpenRouterClient
+  /** Whether OpenRouter answers: a run that cannot reach it waits there, and goes on. */
+  reachability: Reachability
+  /** How many tokens the model reads at once. */
+  contextLength(): Promise<number>
   store: AiStore
   registry: Registry
   notebook: Notebook
@@ -142,10 +127,13 @@ interface LiveRun {
 /**
  * The loop every run of the Segretario turns — the chat and the work it
  * does on its own alike: the model writes, calls its tools, reads what
- * they found, and goes on until the work is done. The harness is plain on
- * purpose; what it keeps is what cannot be left to the model: the user's
+ * they found, and goes on until the work is done. How many turns, how long,
+ * how deep it thinks, how much it writes: the model's. The harness is plain
+ * on purpose; what it keeps is what cannot be left to the model: the user's
  * confirmation before anything leaves, the log every run is rebuilt from,
- * the size of what the model reads, and what its task must leave behind.
+ * the model's own context (compacted near its edge), the wait for a model
+ * that does not answer, what its task must leave behind, and a stop for a
+ * run that only turns in place.
  */
 export class AgentRunner {
   private readonly live = new Map<string, LiveRun>()
@@ -207,13 +195,15 @@ export class AgentRunner {
       seen: new Map([...(this.seenByConversation.get(id) ?? []), ...(options.seen ?? [])]),
       changes: [],
       results: {},
-      editor: options.editor ?? null
+      editor: options.editor ?? null,
+      fileSearches: new Map()
     }
     const live: LiveRun = { context, controller, approvals: new Map(), failedCalls: new Map() }
     const { signal } = controller
     let ended: ActivityStatus = 'failed'
     let failure: SegretarioError | Error | null = null
-    let nudges = 0
+    /** Turns in a row that got nowhere. */
+    let stalled = 0
 
     // Stopped before it began (the AI switched off, the computer asleep): it does not run.
     if (options.signal?.aborted) {
@@ -221,17 +211,6 @@ export class AgentRunner {
     }
 
     options.signal?.addEventListener('abort', () => controller.abort(), { once: true })
-    const deadlineMs = options.background
-      ? (BACKGROUND_DEADLINE_MS[options.task] ?? DEFAULT_BACKGROUND_DEADLINE_MS)
-      : null
-    let overDeadline = false
-    const deadline =
-      deadlineMs === null
-        ? null
-        : setTimeout(() => {
-            overDeadline = true
-            controller.abort()
-          }, deadlineMs)
     this.live.set(id, live)
     await store.updateActivity(id, { status: 'running' })
     await this.emitSummary(id)
@@ -241,38 +220,46 @@ export class AgentRunner {
       const system = await systemPrompt()
       const tools = toolDefinitions(this.deps.tools)
 
-      for (let step = 0; step < MAX_STEPS_PER_TURN; step += 1) {
+      for (;;) {
         signal.throwIfAborted()
         const events = await store.listEvents(id)
         const handles = new HandleRegistry(handleRecords(events))
         let streamed = ''
         let flushTimer: ReturnType<typeof setTimeout> | null = null
+        const stopStream = (): void => {
+          if (flushTimer) {
+            clearTimeout(flushTimer)
+            flushTimer = null
+          }
+        }
 
-        const result = await this.deps.client.chat(
-          key,
-          {
-            messages: buildConversation(system, events),
-            tools,
-            reasoningEffort: 'low',
-            maxTokens: MAX_TOKENS_PER_TURN,
-            sessionId: id
-          },
-          {
-            signal,
-            onLateBill: (bill) => this.deps.recordUsage(id, options.task, bill),
-            onText: (text) => {
-              streamed += text
-              flushTimer ??= setTimeout(() => {
-                flushTimer = null
-                this.deps.emit({ type: 'stream', activityId: id, text: streamed })
-              }, STREAM_FLUSH_MS)
-            }
+        const result = await this.reach(
+          signal,
+          () =>
+            this.deps.client.chat(
+              key,
+              { messages: buildConversation(system, events), tools, sessionId: id },
+              {
+                signal,
+                onLateBill: (bill) => this.deps.recordUsage(id, options.task, bill),
+                onText: (text) => {
+                  streamed += text
+                  flushTimer ??= setTimeout(() => {
+                    flushTimer = null
+                    this.deps.emit({ type: 'stream', activityId: id, text: streamed })
+                  }, STREAM_FLUSH_MS)
+                }
+              }
+            ),
+          // Cut off mid-answer: what was shown of it goes, the turn is written again.
+          () => {
+            stopStream()
+            streamed = ''
+            this.deps.emit({ type: 'stream', activityId: id, text: '' })
           }
         )
 
-        if (flushTimer) {
-          clearTimeout(flushTimer)
-        }
+        stopStream()
 
         await this.deps.recordUsage(id, options.task, result)
         const assistant = await store.appendEvent<AssistantPayload>(id, 'assistant', {
@@ -287,77 +274,61 @@ export class AgentRunner {
         if (result.toolCalls.length === 0) {
           const missing = options.missing ? await options.missing(context) : null
 
-          if (missing && nudges < MAX_NUDGES) {
-            nudges += 1
-            const nudge = await store.appendEvent<UserPayload>(id, 'user', {
-              text: missing,
-              forModel: missing,
-              handles: [],
-              origin: 'segretario'
-            })
-            this.emitEntry(id, nudge)
-            continue
+          if (!missing) {
+            break
           }
 
-          if (missing) {
-            throw new SegretarioError('incomplete', missing)
-          }
-
-          break
+          // Stopped short of what its task must leave: told what is missing, for as long as it
+          // gets somewhere.
+          stalled += 1
+          this.stopIfStuck(stalled)
+          const nudge = await store.appendEvent<UserPayload>(id, 'user', {
+            text: missing,
+            forModel: missing,
+            handles: [],
+            origin: 'segretario'
+          })
+          this.emitEntry(id, nudge)
+          continue
         }
 
-        // Written past the length a step may have, the calls' arguments are cut: said as such.
+        // Written past the length the provider gives one answer, the calls' arguments are cut:
+        // said as such.
         const truncated = result.finishReason === 'length'
-        await Promise.all(
+        const outcomes = await Promise.all(
           result.toolCalls.map((call) => this.runTool(live, call, handles, truncated))
         )
+        stalled = outcomes.some((progressed) => progressed) ? 0 : stalled + 1
+        this.stopIfStuck(stalled)
         await this.manageContext(id, key, system, result.usage.promptTokens, signal)
-
-        if (step === MAX_STEPS_PER_TURN - 1) {
-          throw new SegretarioError(
-            'too-long',
-            'Mi sono fermato: il lavoro stava richiedendo troppi passaggi.'
-          )
-        }
       }
 
       await store.updateActivity(id, { status: 'done', unseen: !options.background })
       ended = 'done'
     } catch (raw) {
       const error = raw instanceof SegretarioError ? raw : null
-      failure = overDeadline
-        ? new Error(
-            `Il lavoro è andato oltre ${Math.round((deadlineMs ?? 0) / 60_000)} minuti ed è stato fermato.`
-          )
-        : raw instanceof Error
-          ? raw
-          : new Error(String(raw))
+      failure = raw instanceof Error ? raw : new Error(String(raw))
 
-      if (!overDeadline && (signal.aborted || error?.code === 'cancelled')) {
+      if (signal.aborted || error?.code === 'cancelled') {
         await store.updateActivity(id, { status: 'cancelled' })
         ended = 'cancelled'
       } else {
-        const message = overDeadline
-          ? failure.message
-          : (error?.message ??
-            (raw instanceof Error ? raw.message : 'Qualcosa è andato storto mentre lavoravo.'))
+        const message =
+          error?.message ??
+          (raw instanceof Error ? raw.message : 'Qualcosa è andato storto mentre lavoravo.')
 
-        if (!error && !overDeadline) {
+        if (!error) {
           logMainError('Segretario run failed', raw, { activityId: id, task: options.task })
         }
 
         const event = await store.appendEvent<ErrorPayload>(id, 'error', {
-          code: overDeadline ? 'internal' : (error?.code ?? 'internal'),
+          code: error?.code ?? 'internal',
           message
         })
         this.emitEntry(id, event)
         await store.updateActivity(id, { status: 'failed', unseen: !options.background })
       }
     } finally {
-      if (deadline) {
-        clearTimeout(deadline)
-      }
-
       for (const approval of live.approvals.values()) {
         approval.reject(new SegretarioError('cancelled', 'Interrotto.'))
       }
@@ -380,12 +351,17 @@ export class AgentRunner {
     return { status: ended, run: context, error: ended === 'done' ? null : failure }
   }
 
+  /**
+   * Runs one call, and says whether it got the work anywhere: done — even in
+   * part — or refused for a change made meanwhile, which shows the run how
+   * things are now. A call that failed, or was refused as made before, did not.
+   */
   private async runTool(
     live: LiveRun,
     call: ToolCall,
     handles: HandleRegistry,
     truncated = false
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { store } = this.deps
     const activityId = live.context.activityId
     const tool = this.deps.tools.find((candidate) => candidate.name === call.function.name)
@@ -440,7 +416,7 @@ export class AgentRunner {
           : (argsProblem ??
             `Non esiste lo strumento «${call.function.name}»: usa uno di ${this.deps.tools.map((candidate) => candidate.name).join(', ')}.`)
       })
-      return
+      return false
     }
 
     if (live.failedCalls.has(signature)) {
@@ -450,7 +426,7 @@ export class AgentRunner {
         result:
           "Hai già fatto esattamente questa chiamata e non è riuscita: non ripeterla uguale. Rileggi l'errore e rifalla diversa, o lascia stare."
       })
-      return
+      return false
     }
 
     const context: ToolContext = {
@@ -489,6 +465,7 @@ export class AgentRunner {
         files: outcome.files,
         handles: context.newHandles
       })
+      return !outcome.failed
     } catch (error) {
       if (error instanceof SegretarioError && error.code === 'cancelled') {
         await finish({ status: 'error', summary: 'Interrotto', result: 'Interrotto.' })
@@ -512,6 +489,49 @@ export class AgentRunner {
         result: `Errore: ${message}`,
         handles: context.newHandles
       })
+      return error instanceof ToolConflict
+    }
+  }
+
+  /** A run that got nowhere for too many turns in a row stops: it fails, and says so. */
+  private stopIfStuck(stalled: number): void {
+    if (stalled >= TURNS_WITHOUT_PROGRESS) {
+      throw new SegretarioError(
+        'stuck',
+        `Mi sono fermato: da ${TURNS_WITHOUT_PROGRESS} passaggi di fila non riuscivo ad andare avanti.`
+      )
+    }
+  }
+
+  /**
+   * A call to the model that waits for it: with OpenRouter or the network
+   * away, the run does not fail — it waits (`Reachability`) and makes the
+   * same call again, from the same log, for as long as it takes. A call cut
+   * off midway is said (`onRetry`) before it is made again.
+   */
+  private async reach<T>(
+    signal: AbortSignal,
+    call: () => Promise<T>,
+    onRetry?: () => void
+  ): Promise<T> {
+    const { reachability } = this.deps
+
+    for (;;) {
+      await reachability.wait(signal)
+      const startedAt = Date.now()
+
+      try {
+        const result = await call()
+        reachability.answered()
+        return result
+      } catch (error) {
+        if (!(error instanceof SegretarioError) || !error.unreachable || signal.aborted) {
+          throw error
+        }
+
+        reachability.failed(startedAt)
+        onRetry?.()
+      }
     }
   }
 
@@ -568,10 +588,11 @@ export class AgentRunner {
   }
 
   /**
-   * Keeps what the model reads within reach: past a size, old tool results
-   * are cleared in one stroke; past a larger one, the older part of the run
-   * is summarised (`compattazione.md`) and the summary takes its place. The
-   * log keeps everything.
+   * Keeps the run within what the model reads at once: near the edge of its
+   * context, the older part of the run is summarised (`compattazione.md`)
+   * and the summary takes its place; the step under way — its calls and what
+   * they found — stays word for word. The log keeps everything, and every
+   * reference still reads again.
    */
   private async manageContext(
     id: string,
@@ -581,10 +602,25 @@ export class AgentRunner {
     signal: AbortSignal
   ): Promise<void> {
     const { store } = this.deps
+    const contextLength = await this.reach(signal, () => this.deps.contextLength())
 
-    if (promptTokens >= COMPACT_AT) {
-      const events = await store.listEvents(id)
-      const result = await this.deps.client.chat(
+    if (promptTokens < contextLength * COMPACT_AT_SHARE) {
+      return
+    }
+
+    const events = await store.listEvents(id)
+    const lastStep = events.findLast((event) => event.type === 'assistant')
+    const coveredUntil = events.findLast((event) => lastStep && event.id < lastStep.id)?.id ?? 0
+    const compacted = events.findLast((event) => event.type === 'compaction')?.payload as
+      CompactionPayload | undefined
+
+    // Nothing older than the step under way left to summarise.
+    if (coveredUntil <= (compacted?.coveredUntil ?? 0)) {
+      return
+    }
+
+    const result = await this.reach(signal, () =>
+      this.deps.client.chat(
         key,
         {
           messages: [
@@ -593,42 +629,18 @@ export class AgentRunner {
           ],
           tools: toolDefinitions(this.deps.tools),
           toolChoice: 'none',
-          reasoningEffort: 'low',
-          maxTokens: 8_000,
           sessionId: id
         },
         { signal, onLateBill: (bill) => this.deps.recordUsage(id, 'compattazione', bill) }
       )
+    )
 
-      await this.deps.recordUsage(id, 'compattazione', result)
-      const event = await store.appendEvent<CompactionPayload>(id, 'compaction', {
-        summary: result.content.trim(),
-        coveredUntil: events[events.length - 1]?.id ?? 0
-      })
-      this.emitEntry(id, event)
-      return
-    }
-
-    if (promptTokens >= CLEAR_TOOL_RESULTS_AT) {
-      const events = await store.listEvents(id)
-      const cleared = events
-        .filter((event) => event.type === 'clearing')
-        .reduce(
-          (boundary, event) => Math.max(boundary, (event.payload as ClearingPayload).before),
-          0
-        )
-      const tools = events.filter((event) => event.type === 'tool' && event.id >= cleared)
-
-      // The first time past the mark, at once; then in strokes.
-      if (
-        tools.length > RECENT_TOOL_RESULTS_KEPT &&
-        (cleared === 0 || tools.length >= RECENT_TOOL_RESULTS_KEPT + TOOL_RESULTS_CLEARED_TOGETHER)
-      ) {
-        await store.appendEvent<ClearingPayload>(id, 'clearing', {
-          before: tools[tools.length - RECENT_TOOL_RESULTS_KEPT].id
-        })
-      }
-    }
+    await this.deps.recordUsage(id, 'compattazione', result)
+    const event = await store.appendEvent<CompactionPayload>(id, 'compaction', {
+      summary: result.content.trim(),
+      coveredUntil
+    })
+    this.emitEntry(id, event)
   }
 
   private async emitSummary(id: string): Promise<void> {

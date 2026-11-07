@@ -35,7 +35,6 @@ const LISTED_MAX = 150
 const FREE_SLOTS_SHOWN = 12
 /** Events a search gives without `limite`, and at most. */
 const DEFAULT_SEARCH_LIMIT = 20
-const MAX_SEARCH_LIMIT = 50
 
 const DAY = new Intl.DateTimeFormat('it-IT', { weekday: 'short', day: 'numeric', month: 'short' })
 const TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
@@ -699,10 +698,7 @@ export const calendarTool: SegretarioTool = {
         }
 
         const { from, to } = searchPeriod(args)
-        const limit = Math.min(
-          MAX_SEARCH_LIMIT,
-          Math.max(1, numberArg(args, 'limite') ?? DEFAULT_SEARCH_LIMIT)
-        )
+        const limit = Math.max(1, numberArg(args, 'limite') ?? DEFAULT_SEARCH_LIMIT)
         const found = await context.calendar.search({
           text: words,
           fromIso: from?.toISOString(),
@@ -731,7 +727,7 @@ export const calendarTool: SegretarioTool = {
           content: [
             `${countOf(events.length, 'evento', 'eventi')} con «${words}»${period}${
               found.more > 0
-                ? `, i più vicini a oggi: ce ne sono altri ${found.more}, più lontani (restringi con altre parole o con \`da\` e \`a\`${limit < MAX_SEARCH_LIMIT ? ', o alza `limite`' : ''})`
+                ? `, i più vicini a oggi: ce ne sono altri ${found.more}, più lontani (restringi con altre parole o con \`da\` e \`a\`, o alza \`limite\`)`
                 : ''
             }.`,
             section('In arrivo, dal più vicino', found.upcoming),

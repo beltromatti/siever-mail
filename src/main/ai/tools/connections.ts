@@ -22,7 +22,7 @@ import { countOf } from './format'
 
 const ACTIONS = ['elenco', 'lettura'] as const
 /** The periods the list counts a mailbox's messages over, in days. */
-const PERIODS = [14, 30, 60, 90, 180, 365] as const
+const PERIODS = [14, 30, 60, 90, 180, 365, 730] as const
 /** Who decides how far a connection is read: Conoscimi, which has just got to know it, and the user in chat. */
 const DECIDING: ReadonlyArray<TaskKind> = ['conoscimi', 'richiesta']
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -88,12 +88,14 @@ async function mailLine(
   const days = reading?.days ?? READING_DAYS.default
   const since = (period: number): string => new Date(Date.now() - period * DAY_MS).toISOString()
   const now = await context.mail.readingProgress(() => since(days), [connection.key])
-  const counts = await Promise.all(
-    PERIODS.map(
+  const counts = await Promise.all([
+    ...PERIODS.map(
       async (period) =>
         `${period} g ${(await context.mail.readingProgress(() => since(period), [connection.key])).total}`
-    )
-  )
+    ),
+    (async () =>
+      `tutti ${(await context.mail.readingProgress(() => new Date(0).toISOString(), [connection.key])).total}`)()
+  ])
 
   return [
     `- ${connection.label} — si legge uno per uno indietro di ${decidedWords(reading)}: ${countOf(now.total, 'messaggio', 'messaggi')}, ${now.read} letti.`,
@@ -206,11 +208,11 @@ async function setReading(
 
   if (asked === undefined || !Number.isFinite(asked)) {
     throw new ToolInputError(
-      `Indica \`giorni\`: quanto indietro leggere ${connection.label}, da ${READING_DAYS.min} a ${READING_DAYS.max}.`
+      `Indica \`giorni\`: quanto indietro leggere ${connection.label}, almeno ${READING_DAYS.min}.`
     )
   }
 
-  const days = Math.min(READING_DAYS.max, Math.max(READING_DAYS.min, Math.round(asked)))
+  const days = Math.max(READING_DAYS.min, Math.round(asked))
   const before = await context.store.reading(connection.key)
   const byUser = context.run.task === 'richiesta'
 
@@ -226,7 +228,7 @@ async function setReading(
   const was = before?.days ?? READING_DAYS.default
   const clamped =
     days !== Math.round(asked)
-      ? ` (non meno di ${READING_DAYS.min} e non più di ${READING_DAYS.max})`
+      ? ` (non meno di ${READING_DAYS.min}: le funzioni partono piene)`
       : ''
 
   if (connection.kind === 'calendario') {

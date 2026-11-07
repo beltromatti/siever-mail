@@ -21,7 +21,10 @@ const contextSchema = z.object({
 
 const preferencesSchema = z.object({ enabled: z.boolean() }).strict()
 
+const requestIdSchema = z.string().min(1).max(100)
+
 const reviewRequestSchema = z.object({
+  requestId: requestIdSchema,
   accountId: z.string().min(1),
   to: z.array(z.string().max(500)).max(500),
   cc: z.array(z.string().max(500)).max(500),
@@ -34,6 +37,7 @@ const reviewRequestSchema = z.object({
 const memoryPathSchema = z.string().trim().min(1).max(300)
 
 const writingRequestSchema = z.object({
+  requestId: requestIdSchema,
   draftId: z.string().min(1).max(100),
   accountId: z.string().min(1),
   instruction: z.string().trim().min(1, 'Scrivi cosa vuoi che scriva.').max(4000),
@@ -298,8 +302,14 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.reviewDraft, (request: unknown) =>
     segretario.reviewDraft(reviewRequestSchema.parse(request))
   )
-  handle(SEGRETARIO_IPC.askMail, (question: unknown) =>
-    segretario.askMail(z.string().trim().min(2, 'Scrivi cosa cerchi.').max(1000).parse(question))
+  handle(SEGRETARIO_IPC.askMail, (question: unknown, requestId: unknown) =>
+    segretario.askMail(
+      z.string().trim().min(2, 'Scrivi cosa cerchi.').max(1000).parse(question),
+      requestIdSchema.parse(requestId)
+    )
+  )
+  handle(SEGRETARIO_IPC.stopAsking, (requestId: unknown) =>
+    segretario.stopAsking(requestIdSchema.parse(requestId))
   )
   handle(SEGRETARIO_IPC.listSavedSearches, () => segretario.listSavedSearches())
   handle(SEGRETARIO_IPC.saveSearch, (id: unknown) => segretario.saveSearch(idSchema.parse(id)))

@@ -129,23 +129,14 @@ export class NoteStore {
   }
 
   /** The notes written since a moment on messages that say something — noise and copies aside. */
-  async writtenSince(
-    sinceMs: number,
-    limit: number
-  ): Promise<{ notes: NoteRecord[]; total: number }> {
-    const where = "created_at > ? AND state <> 'rumore' AND twin_account_id IS NULL"
-    const [rows, total] = await Promise.all([
-      this.sql.all<NoteRow>(
-        `SELECT ${COLUMNS} FROM ai_notes WHERE ${where} ORDER BY message_date DESC LIMIT ?`,
-        sinceMs,
-        limit
-      ),
-      this.sql.get<{ total: number }>(
-        `SELECT COUNT(*) AS total FROM ai_notes WHERE ${where}`,
-        sinceMs
-      )
-    ])
-    return { notes: rows.reverse().map(recordOf), total: Number(total?.total ?? 0) }
+  async writtenSince(sinceMs: number): Promise<NoteRecord[]> {
+    const rows = await this.sql.all<NoteRow>(
+      `SELECT ${COLUMNS} FROM ai_notes
+       WHERE created_at > ? AND state <> 'rumore' AND twin_account_id IS NULL
+       ORDER BY message_date`,
+      sinceMs
+    )
+    return rows.map(recordOf)
   }
 
   /**

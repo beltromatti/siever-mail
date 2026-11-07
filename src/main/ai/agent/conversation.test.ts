@@ -64,7 +64,7 @@ describe('buildConversation', () => {
     expect((messages[4] as { content: string }).content).toContain('Interrotto')
   })
 
-  it('replaces old tool results after a clearing, and what a compaction covers by its summary', () => {
+  it('puts a compaction’s summary in place of what it covers', () => {
     id = 0
     const call = {
       id: 'a',
@@ -84,9 +84,6 @@ describe('buildConversation', () => {
         handles: []
       })
     ]
-    const cleared = buildConversation('S', [...events, event('clearing', { before: 5 })])
-    expect((cleared[3] as { content: string }).content).toContain('Letto X')
-
     const compacted = buildConversation('S', [
       ...events,
       event('compaction', { summary: 'RIASSUNTO', coveredUntil: 4 }),

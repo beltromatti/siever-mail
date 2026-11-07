@@ -458,6 +458,7 @@ function PreparationStep({
   connections,
   aiOn,
   onRemoveAccount,
+  onContinueWithoutAi,
   onNext
 }: {
   accounts: ReadonlyArray<MailAccount>
@@ -465,6 +466,8 @@ function PreparationStep({
   connections: Readonly<Record<string, AccountConnectionState>>
   aiOn: boolean
   onRemoveAccount: (accountId: string) => void
+  /** With the AI on: the setup ends without it, where a connection does not go. */
+  onContinueWithoutAi: () => void
   onNext: () => void
 }): React.JSX.Element {
   const [indexed, setIndexed] = useState<ReadonlyMap<string, boolean>>(() => new Map())
@@ -530,11 +533,16 @@ function PreparationStep({
       ...calendarPreparationOf(connection)
     }))
   ]
-  // A connection that fails never holds the setup: it tries again by itself, and the user can
-  // take it away now or set it right later in Settings → Connessioni.
+  // A connection that fails is tried again, or taken away. With the AI, it does not go on without
+  // it — the Segretario would read a connection it never got to know — but the setup may go on
+  // without the AI; without the AI, the connection keeps trying by itself.
   const failing = rows.filter((row) => row.failed).length
   const ready = rows.length > 0 && rows.every((row) => row.ready || row.failed)
   const hasMail = accounts.length > 0
+  const retry = (): void => {
+    void window.mailApi.checkMailNow()
+    void window.calendarApi.syncNow().catch(() => undefined)
+  }
 
   return (
     <StepFrame
@@ -547,10 +555,27 @@ function PreparationStep({
             : `Scarico la posta${calendarConnections.length > 0 ? ' e i calendari' : ''} di ogni connessione. I messaggi più vecchi continuano ad arrivare mentre lavori.`
       }
       actions={
-        <Button size="lg" disabled={!ready} onClick={onNext}>
-          {!ready && <LoaderCircle className="size-4 animate-spin" />}
-          {ready && failing > 0 ? 'Continua senza' : 'Continua'}
-        </Button>
+        ready && failing > 0 ? (
+          <>
+            {aiOn ? (
+              <Button variant="ghost" size="lg" onClick={onContinueWithoutAi}>
+                Continua senza AI
+              </Button>
+            ) : (
+              <Button variant="ghost" size="lg" onClick={onNext}>
+                Continua
+              </Button>
+            )}
+            <Button size="lg" onClick={retry}>
+              Riprova
+            </Button>
+          </>
+        ) : (
+          <Button size="lg" disabled={!ready} onClick={onNext}>
+            {!ready && <LoaderCircle className="size-4 animate-spin" />}
+            Continua
+          </Button>
+        )
       }
     >
       <div className="flex flex-col gap-2">
@@ -585,9 +610,11 @@ function PreparationStep({
         ))}
         {ready && failing > 0 && (
           <p className="text-muted-foreground text-[12px] leading-[1.45]">
-            {failing === 1
-              ? 'Una connessione non si collega: riprova da sola, e puoi sistemarla dopo in Impostazioni → Connessioni.'
-              : `${failing} connessioni non si collegano: riprovano da sole, e puoi sistemarle dopo in Impostazioni → Connessioni.`}
+            {aiOn
+              ? `${failing === 1 ? 'Una connessione non si collega' : `${failing} connessioni non si collegano`}: riprova, o togli ${failing === 1 ? 'quella' : 'quelle'} che non vuoi più e ricollegala dopo. Il Segretario non legge una connessione che non conosce: se il problema resta, continua senza AI e riaccendila quando è tutto a posto.`
+              : failing === 1
+                ? 'Una connessione non si collega: riprova da sola, e puoi sistemarla dopo in Impostazioni → Connessioni.'
+                : `${failing} connessioni non si collegano: riprovano da sole, e puoi sistemarle dopo in Impostazioni → Connessioni.`}
           </p>
         )}
       </div>
@@ -607,15 +634,21 @@ function ConoscimiStep({
   learning,
   onStarted,
   onNext,
-  onCancel
+  onCancel,
+  onContinueWithoutAi
 }: {
   segretario: SegretarioState
   state: OnboardingState
   learning: ReadonlyArray<ConnectionLearning> | null
   onStarted: (activityId: string) => void
   onNext: () => void
-  /** Asked from Settings, it can be left before it starts: nothing is spent. */
+  /**
+   * Asked from Settings, it can be left before it starts — nothing is spent —
+   * or after it stops: what was known before stays known.
+   */
   onCancel: (() => void) | null
+  /** Turning the AI on: where Conoscimi does not finish, the setup ends without the AI. */
+  onContinueWithoutAi: () => void
 }): React.JSX.Element {
   const [starting, setStarting] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
@@ -631,6 +664,8 @@ function ConoscimiStep({
     unknown.length > 0 &&
     unknown.length < learning.length
   const failed = run?.status === 'failed' || run?.status === 'cancelled'
+  // OpenRouter not answering: Conoscimi waits for it and goes on; the user may not want to wait.
+  const waiting = useEngineWaiting()
 
   useEffect(() => {
     if (state.conoscimiId) {
@@ -721,18 +756,42 @@ function ConoscimiStep({
         />
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {failed && (
+        {failed ? (
           <>
             <span className="text-destructive-soft-foreground mr-auto text-[12.5px]">
-              {problem ?? 'Conoscimi si è fermato prima della fine.'}
+              {problem ??
+                (onCancel
+                  ? 'Conoscimi si è fermato prima della fine: quello che sapeva prima resta.'
+                  : 'Conoscimi si è fermato prima della fine. Senza conoscerti il Segretario non comincia: riprova, o continua senza AI e riaccendila quando vuoi.')}
             </span>
-            <Button variant="ghost" size="lg" onClick={onNext}>
-              Continua senza
-            </Button>
+            {onCancel ? (
+              <Button variant="ghost" size="lg" onClick={onCancel}>
+                Chiudi
+              </Button>
+            ) : (
+              <Button variant="ghost" size="lg" onClick={onContinueWithoutAi}>
+                Continua senza AI
+              </Button>
+            )}
             <Button size="lg" disabled={starting} onClick={() => void start()}>
               Riprova
             </Button>
           </>
+        ) : (
+          !done &&
+          waiting && (
+            <>
+              <span className="text-muted-foreground mr-auto flex items-start gap-2 text-[12.5px]">
+                <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                <span>{waiting} Conoscimi riprende da solo da dove era.</span>
+              </span>
+              {!onCancel && (
+                <Button variant="ghost" size="lg" onClick={onContinueWithoutAi}>
+                  Continua senza AI
+                </Button>
+              )}
+            </>
+          )
         )}
         {done && (
           <Button size="lg" onClick={onNext}>
@@ -742,6 +801,29 @@ function ConoscimiStep({
       </div>
     </div>
   )
+}
+
+/** What the engine waits for now — OpenRouter not answering — as it says it, or null. */
+function useEngineWaiting(): string | null {
+  const [waiting, setWaiting] = useState<string | null>(null)
+
+  useEffect(() => {
+    let current = true
+    void window.segretarioApi
+      .getEngineState()
+      .then((state) => current && setWaiting(state.waiting))
+      .catch(() => undefined)
+    const unsubscribe = window.segretarioApi.onEngineChanged(
+      (state) => current && setWaiting(state.waiting)
+    )
+
+    return () => {
+      current = false
+      unsubscribe()
+    }
+  }, [])
+
+  return waiting
 }
 
 /** "3 minuti", "meno di un minuto": what is left, said plainly. */
@@ -759,16 +841,20 @@ function remaining(milliseconds: number): string {
  * Conoscimi decided, the mail message by message as if each had just come,
  * the calendars' events in chunks, many at once: of the connections a setup
  * adds, when it adds some with the AI on already — the rest is read
- * already — else of all. What fails is listed and tried again later: the
- * user enters anyway, nothing passes for read.
+ * already — else of all. What fails is listed at the end of the bar, to try
+ * again — only that — as often as the user wants, or to go on without the
+ * AI: nothing passes for read.
  */
 function ReadingStep({
   accountIds,
-  onNext
+  onNext,
+  onContinueWithoutAi
 }: {
   accountIds: string[] | undefined
   onNext: () => void
+  onContinueWithoutAi: () => void
 }): React.JSX.Element {
+  const [retrying, setRetrying] = useState(false)
   const [status, setStatus] = useState<ReadingStatus | null>(null)
   const [engine, setEngine] = useState<EngineState | null>(null)
   const started = useRef<{ at: number; read: number } | null>(null)
@@ -813,19 +899,48 @@ function ReadingStep({
     status && readSince > 0 && elapsed > 20_000
       ? ((status.total - status.read) * elapsed) / readSince
       : null
-  // OpenRouter not answering: the reading waits for it, and the user need not.
+  // OpenRouter not answering: the reading waits for it and goes on by itself.
   const waiting = engine?.waiting ?? null
   const done = status?.done ?? false
+  const failures = status?.failed.length ?? 0
+  const retry = async (): Promise<void> => {
+    setRetrying(true)
+
+    try {
+      await window.segretarioApi.retryFailedWork()
+    } finally {
+      setRetrying(false)
+    }
+  }
 
   return (
     <StepFrame
       title="Il Segretario si mette al passo"
       lead="Legge ogni connessione fin dove ha deciso conoscendoti: i messaggi uno per uno, come se fossero appena arrivati, e gli impegni del calendario. Annota cosa ti chiedono, apre le cose da fare, riconosce i progetti, prepara le risposte che servono."
       actions={
-        <Button size="lg" disabled={!done && !waiting} onClick={onNext}>
-          {!done && !waiting && <LoaderCircle className="size-4 animate-spin" />}
-          {done ? 'Continua' : waiting ? 'Entra comunque' : 'Sto leggendo…'}
-        </Button>
+        done && failures > 0 ? (
+          <>
+            <Button variant="ghost" size="lg" onClick={onContinueWithoutAi}>
+              Continua senza AI
+            </Button>
+            <Button size="lg" disabled={retrying} onClick={() => void retry()}>
+              {retrying && <LoaderCircle className="size-4 animate-spin" />}
+              Riprova
+            </Button>
+          </>
+        ) : (
+          <>
+            {!done && waiting && (
+              <Button variant="ghost" size="lg" onClick={onContinueWithoutAi}>
+                Continua senza AI
+              </Button>
+            )}
+            <Button size="lg" disabled={!done} onClick={onNext}>
+              {!done && <LoaderCircle className="size-4 animate-spin" />}
+              {done ? 'Continua' : 'Sto leggendo…'}
+            </Button>
+          </>
+        )
       }
     >
       <div className="flex flex-col gap-2">
@@ -882,15 +997,18 @@ function ReadingStep({
         {waiting && (
           <p className="text-muted-foreground flex items-start gap-2 text-[12.5px]">
             <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-            <span>{waiting} Il Segretario riprende da solo; intanto puoi entrare.</span>
+            <span>
+              {waiting} Il Segretario riprende da solo da dove era; se il problema resta, puoi
+              continuare senza AI.
+            </span>
           </p>
         )}
         {status && status.failed.length > 0 && (
           <div className="mt-2 flex flex-col gap-1">
             <p className="text-[12.5px] font-semibold">
               {status.failed.length === 1
-                ? 'Una conversazione non sono riuscito a leggerla: ci riprovo più tardi.'
-                : `${status.failed.length} conversazioni non sono riuscito a leggerle: ci riprovo più tardi.`}
+                ? 'Una lettura non è riuscita: riprovala, o continua senza AI.'
+                : `${status.failed.length} letture non sono riuscite: riprovale, o continua senza AI.`}
             </p>
             <ul className="text-muted-foreground flex flex-col gap-0.5 text-[12px]">
               {status.failed.slice(0, 6).map((failure, index) => (
@@ -1026,6 +1144,14 @@ export function OnboardingWizard({
     }
   }, [aiOn, known, onChange, onFinish, state, workingWithAi])
 
+  // Where something does not go — a connection, Conoscimi, a reading — the user may end the setup
+  // without the AI: it goes off, as in a setup that never turned it on, and nothing is left half
+  // known; on again, it starts from what it does not know yet.
+  const continueWithoutAi = async (): Promise<void> => {
+    onChange({ ...state, step: 'entra', conoscimiId: null, turnsAiOn: false })
+    await window.segretarioApi.setPreferences({ enabled: false })
+  }
+
   // Turned on here, the AI starts with every connection: their reading waits for Conoscimi.
   const enable = async (): Promise<void> => {
     await window.segretarioApi.setPreferences({ enabled: true })
@@ -1122,6 +1248,7 @@ export function OnboardingWizard({
               connections={connections}
               aiOn={aiOn}
               onRemoveAccount={(accountId) => onRemoveAccount(accountId, [])}
+              onContinueWithoutAi={() => void continueWithoutAi()}
               onNext={() => next()}
             />
           )}
@@ -1133,6 +1260,7 @@ export function OnboardingWizard({
               onStarted={(conoscimiId) => onChange({ ...state, conoscimiId })}
               onNext={() => next()}
               onCancel={state.case === 'conoscimi' ? () => onFinish(true) : null}
+              onContinueWithoutAi={() => void continueWithoutAi()}
             />
           )}
           {state.step === 'lettura' && (
@@ -1146,6 +1274,7 @@ export function OnboardingWizard({
                   : undefined
               }
               onNext={() => next()}
+              onContinueWithoutAi={() => void continueWithoutAi()}
             />
           )}
           {state.step === 'entra' && <EnterStep aiOn={aiOn} onEnter={() => onFinish(true)} />}

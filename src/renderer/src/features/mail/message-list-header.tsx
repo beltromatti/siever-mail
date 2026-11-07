@@ -1,4 +1,4 @@
-import { ListFilter, LoaderCircle, Search, X } from 'lucide-react'
+import { ListFilter, LoaderCircle, Search, Square, X } from 'lucide-react'
 
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import {
@@ -177,20 +177,26 @@ export function MessageListHeader({
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  disabled={askSegretario.busy}
-                  onClick={() => askSegretario.onAsk(search.trim())}
-                  aria-label="Chiedi al Segretario"
-                  className="text-ai-star hover:bg-ai-soft focus-visible:ring-ring/60 grid size-5 shrink-0 place-items-center rounded-[4px] outline-none focus-visible:ring-2 disabled:opacity-60"
+                  onClick={() =>
+                    askSegretario.busy ? askSegretario.onStop() : askSegretario.onAsk(search.trim())
+                  }
+                  aria-label={askSegretario.busy ? 'Ferma la ricerca' : 'Chiedi al Segretario'}
+                  className="text-ai-star hover:bg-ai-soft focus-visible:ring-ring/60 group grid size-5 shrink-0 place-items-center rounded-[4px] outline-none focus-visible:ring-2"
                 >
                   {askSegretario.busy ? (
-                    <LoaderCircle className="size-3.5 animate-spin" />
+                    <>
+                      <LoaderCircle className="size-3.5 animate-spin group-hover:hidden" />
+                      <Square className="hidden size-3 fill-current group-hover:block" />
+                    </>
                   ) : (
                     <CompassStar className="size-3.5" />
                   )}
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                Chiedi al Segretario: cerca come lo diresti · ⌘↵
+                {askSegretario.busy
+                  ? 'Il Segretario sta cercando: ferma'
+                  : 'Chiedi al Segretario: cerca come lo diresti · ⌘↵'}
               </TooltipContent>
             </Tooltip>
           )}

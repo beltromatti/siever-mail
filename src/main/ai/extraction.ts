@@ -34,16 +34,16 @@ export type ExtractedContent =
 
 /** Characters handed over at once: about a dozen thousand tokens. */
 export const EXTRACT_PAGE_CHARS = 40_000
-/** A picture larger than this is described, not sent. */
+/** A picture larger than this is drawn smaller before it is sent: what a provider takes at once. */
 const IMAGE_MAX_BYTES = 5 * 1024 * 1024
+/** How wide a picture drawn smaller is: as legible as a scanned page. */
+const IMAGE_FIT_WIDTH = 2048
 /** A PDF page with less text than this is a scan, or a picture: it is looked at instead. */
 const PDF_TEXT_PAGE_MIN_CHARS = 20
 /** Scanned pages looked at in one read: each is a picture the model reads. */
 const PDF_PICTURES_PER_READ = 5
 /** How wide a scanned page is drawn: small print stays legible. */
 const PDF_PICTURE_WIDTH = 1600
-/** Rows of a sheet read at most. */
-const SHEET_MAX_ROWS = 2_000
 
 const IMAGE_TYPES: Readonly<Record<string, string>> = {
   '.png': 'image/png',
@@ -109,15 +109,35 @@ export async function extractContent(
   }
 
   if (IMAGE_TYPES[extension] || type.startsWith('image/')) {
-    if (data.length > IMAGE_MAX_BYTES) {
-      return { kind: 'unreadable', reason: "L'immagine è troppo grande da guardare." }
+    const mimeType = IMAGE_TYPES[extension] ?? type
+
+    if (data.length <= IMAGE_MAX_BYTES) {
+      return {
+        kind: 'image',
+        mimeType,
+        dataUrl: `data:${mimeType};base64,${data.toString('base64')}`
+      }
     }
 
-    const mimeType = IMAGE_TYPES[extension] ?? type
+    // Too large to send as it is: drawn smaller, as a scanned page is.
+    const { nativeImage } = await import('electron')
+    const picture = nativeImage.createFromBuffer(data)
+
+    if (picture.isEmpty()) {
+      return {
+        kind: 'unreadable',
+        reason: `L'immagine è grande (${Math.round(data.length / (1024 * 1024))} MB) e in un formato che non riesco a ridurre.`
+      }
+    }
+
+    const fitted =
+      picture.getSize().width > IMAGE_FIT_WIDTH
+        ? picture.resize({ width: IMAGE_FIT_WIDTH, quality: 'best' })
+        : picture
     return {
       kind: 'image',
-      mimeType,
-      dataUrl: `data:${mimeType};base64,${data.toString('base64')}`
+      mimeType: 'image/jpeg',
+      dataUrl: `data:image/jpeg;base64,${fitted.toJPEG(85).toString('base64')}`
     }
   }
 
@@ -202,12 +222,9 @@ async function extractPdf(data: Buffer, fromPage: number): Promise<ExtractedCont
         break
       }
 
-      const kept = pageText.slice(0, EXTRACT_PAGE_CHARS)
-      read.push({
-        page,
-        text: kept.length < pageText.length ? `${kept}\n[Pagina accorciata.]` : kept
-      })
-      chars += kept.length
+      // A page is read whole, however long: it is what the reading moves by.
+      read.push({ page, text: pageText })
+      chars += pageText.length
     } else {
       if (pictures === PDF_PICTURES_PER_READ) {
         next = page
@@ -253,7 +270,7 @@ async function extractPdf(data: Buffer, fromPage: number): Promise<ExtractedCont
 
 async function sheetsText(data: Buffer): Promise<string> {
   const XLSX = await import('xlsx')
-  const workbook = XLSX.read(data, { type: 'buffer', cellDates: true, sheetRows: SHEET_MAX_ROWS })
+  const workbook = XLSX.read(data, { type: 'buffer', cellDates: true })
 
   return workbook.SheetNames.map((name) => {
     const sheet = workbook.Sheets[name]

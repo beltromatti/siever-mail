@@ -27,7 +27,8 @@ import {
   AccountConnection,
   type BodyLoadIntent,
   type FetchedAttachment,
-  type RawMessage
+  type RawMessage,
+  type TaskPriority
 } from './account-connection'
 import type { AccountWithSecret } from './mail-transport'
 import { NotificationManager } from './notifications'
@@ -518,10 +519,11 @@ export class MailEngine {
   /** See `AccountConnection.searchMessages`. */
   async searchMessages(
     mailbox: { accountId: string; folderPath: string },
-    groups: ReadonlyArray<SearchObject>
+    groups: ReadonlyArray<SearchObject>,
+    asked?: { priority: TaskPriority }
   ): Promise<number[] | null> {
     const connection = await this.requestConnection(mailbox.accountId)
-    return connection.searchMessages(mailbox.folderPath, groups)
+    return connection.searchMessages(mailbox.folderPath, groups, asked)
   }
 
   /** See `AccountConnection.hydratePreviews`; messages of any account and folder. */

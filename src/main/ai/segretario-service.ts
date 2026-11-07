@@ -51,7 +51,6 @@ import {
   type WorkChange,
   type WritingRequest,
   READING_DAYS,
-  REVIEW_TIMEOUT_MS,
   setupTurnsAiOn
 } from '@shared/segretario'
 
@@ -70,10 +69,11 @@ import {
 import { AiStore } from './ai-store'
 import { periodWords, searchPeriod, type AskedSearch } from './ask-mail'
 import { canonicalPath } from '../services/network-volumes'
-import { SegretarioEngine } from './engine/engine'
+import { calendarLookScope, SegretarioEngine } from './engine/engine'
+import { Reachability } from './engine/reachability'
 import { WorkQueue } from './engine/work-queue'
 import { folderQueryLabel, searchMail, searchScope } from './mail-search'
-import { MAX_NOTE_CHARS, normalizeMemoryPath, Notebook } from './memory/notebook'
+import { normalizeMemoryPath, Notebook } from './memory/notebook'
 import {
   creditSpent,
   creditWarning,
@@ -128,8 +128,6 @@ const DRAFT_RECORD_TTL_MS = 90 * 24 * 60 * 60 * 1000
 /** How long the diary keeps the work done alone. */
 const DIARY_KEPT_MS = 21 * 24 * 60 * 60 * 1000
 const COMPOSE_TIMEOUT_MS = 30_000
-/** How long the writing in the editor and the search asked in words may take at most. */
-const INLINE_TIMEOUT_MS = 90_000
 const ASK_MAIL_LIMIT = 200
 const ASKED_SEARCHES_KEPT = 20
 const WEEK_DAYS = 7
@@ -294,6 +292,10 @@ export class SegretarioService {
   private refusing: Promise<void> | null = null
   /** The checks of the key, numbered: one overtaken by a later one does not set the status. */
   private statusSeq = 0
+  /** How many tokens the model reads at once, as OpenRouter says: null until asked. */
+  private modelContext: number | null = null
+  /** The requests the user waits for, by name: theirs to stop (`stopAsking`). */
+  private readonly asking = new Map<string, AbortController>()
   private recheckTimer: ReturnType<typeof setInterval> | null = null
   private readonly opened = (() => {
     const opened = Promise.withResolvers<void>()
@@ -378,8 +380,15 @@ export class SegretarioService {
         return entry.count
       }
     }
+    // OpenRouter back, or a wait over: the interface says it, and the queue goes on at once.
+    const reachability = new Reachability(() => {
+      this.engineChanged()
+      this.engine?.wake()
+    })
     const runner = new AgentRunner({
       client: this.client,
+      reachability,
+      contextLength: () => this.contextLength(),
       store,
       registry,
       notebook,
@@ -404,6 +413,7 @@ export class SegretarioService {
       mail: this.options.mail,
       calendar: this.options.calendar,
       queue: new WorkQueue(sql),
+      reachability,
       emit: (event) => this.emit(event),
       ready: () => this.ready(),
       onboarding: () => this.getOnboarding(),
@@ -816,10 +826,12 @@ export class SegretarioService {
     refused: CreditRefusal | null,
     toldTopUp = false
   ): Promise<{ status: SegretarioStatus; refusal: CreditRefusal | null }> {
-    const [check, modelName] = await Promise.all([
+    const [check, model] = await Promise.all([
       this.client.checkKey(key),
-      this.client.modelName(key).catch(() => this.status.modelName)
+      this.client.modelInfo(key).catch(() => null)
     ])
+    const modelName = model ? model.name : this.status.modelName
+    this.modelContext = model?.contextLength ?? this.modelContext
     const limits = [check.balance, check.limitRemaining].filter(
       (value): value is number => value !== null
     )
@@ -849,6 +861,21 @@ export class SegretarioService {
     }
 
     return { status, refusal }
+  }
+
+  /** How many tokens the model reads at once: asked of OpenRouter the first time it is needed. */
+  private async contextLength(): Promise<number> {
+    if (this.modelContext === null) {
+      const { contextLength } = await this.client.modelInfo(await this.requireKey())
+
+      if (contextLength === null) {
+        throw new Error('OpenRouter non dice quanti token legge il modello.')
+      }
+
+      this.modelContext = contextLength
+    }
+
+    return this.modelContext
   }
 
   /** The key, or the reason the Segretario cannot work now. */
@@ -1066,10 +1093,6 @@ export class SegretarioService {
    * over a version the Segretario changed since they opened it, refused.
    */
   async writeMemory(path: string, content: string, seenRevision?: number): Promise<MemoryNote[]> {
-    if (content.length > MAX_NOTE_CHARS) {
-      throw new Error('La nota è troppo lunga: dividila in più note.')
-    }
-
     const normalized = normalizeMemoryPath(path)
     const before = await this.db.notebook.read(normalized)
 
@@ -1272,6 +1295,8 @@ export class SegretarioService {
       connectionId,
       calendarLearningKey(connectionId)
     )
+    // Its looks go with it — a failed one too, no longer to try again.
+    await this.db.engine.queue.cancelWaiting({ scopePrefix: calendarLookScope(connectionId) })
     // "Il punto" of a project that lost its events no longer says the truth.
     await this.db.registry.projects.markStale(projectIds)
     await this.db.store.addLesson('calendario-rimosso', { calendari: calendarNames })
@@ -2489,20 +2514,26 @@ export class SegretarioService {
   async assistWriting(request: WritingRequest): Promise<{ text: string }> {
     await this.requireKey()
     const data = await prepareWriting({ mail: this.options.mail }, request)
-    const result = await startRun(this.starter(), {
-      task: 'scrittura',
-      background: false,
-      visibility: 'nascosta',
-      data,
-      shown: request.instruction,
-      editor: { draftId: request.draftId, selection: request.selectedText },
-      signal: AbortSignal.timeout(INLINE_TIMEOUT_MS),
-      missing: async (run) =>
-        run.results.editorText
-          ? null
-          : 'Scrivi il testo nel messaggio con `scrivi_bozza` (il solo `testo`).'
-    })
+    const result = await this.asked(request.requestId, (signal) =>
+      startRun(this.starter(), {
+        task: 'scrittura',
+        background: false,
+        visibility: 'nascosta',
+        data,
+        shown: request.instruction,
+        editor: { draftId: request.draftId, selection: request.selectedText },
+        signal,
+        missing: async (run) =>
+          run.results.editorText
+            ? null
+            : 'Scrivi il testo nel messaggio con `scrivi_bozza` (il solo `testo`).'
+      })
+    )
     const text = result.run.results.editorText
+
+    if (result.status === 'cancelled') {
+      throw new SegretarioError('cancelled', 'Interrotto.')
+    }
 
     if (!text) {
       throw new Error(result.error?.message ?? 'Non sono riuscito a scrivere il testo.')
@@ -2524,14 +2555,17 @@ export class SegretarioService {
   async reviewDraft(request: ReviewRequest): Promise<string[]> {
     await this.requireKey()
     const data = await prepareReview({ mail: this.options.mail }, request)
-    const result = await startRun(this.starter(), {
-      task: 'revisione',
-      background: false,
-      visibility: 'nascosta',
-      data,
-      signal: AbortSignal.timeout(REVIEW_TIMEOUT_MS),
-      missing: async (run) => (run.results.review ? null : 'Dai l’esito con `revisione`.')
-    })
+    // Stopped by the user — who sends at once — it has nothing to say.
+    const result = await this.asked(request.requestId, (signal) =>
+      startRun(this.starter(), {
+        task: 'revisione',
+        background: false,
+        visibility: 'nascosta',
+        data,
+        signal,
+        missing: async (run) => (run.results.review ? null : 'Dai l’esito con `revisione`.')
+      })
+    )
     return result.run.results.review ?? []
   }
 
@@ -2539,26 +2573,49 @@ export class SegretarioService {
    * A search asked in words: the Segretario finds the search that shows
    * what the user means, and its list is kept for the page to open.
    */
-  async askMail(question: string): Promise<AskedMail> {
+  async askMail(question: string, requestId: string): Promise<AskedMail> {
     await this.requireKey()
     const data = await prepareSearch({ mail: this.options.mail }, question)
-    const result = await startRun(this.starter(), {
-      task: 'ricerca',
-      background: false,
-      visibility: 'nascosta',
-      data,
-      shown: question,
-      signal: AbortSignal.timeout(INLINE_TIMEOUT_MS),
-      missing: async (run) =>
-        run.results.search ? null : 'Mostra la ricerca con `mostra` (`ricerca`).'
-    })
+    const result = await this.asked(requestId, (signal) =>
+      startRun(this.starter(), {
+        task: 'ricerca',
+        background: false,
+        visibility: 'nascosta',
+        data,
+        shown: question,
+        signal,
+        missing: async (run) =>
+          run.results.search ? null : 'Mostra la ricerca con `mostra` (`ricerca`).'
+      })
+    )
     const search = result.run.results.search
+
+    if (result.status === 'cancelled') {
+      throw new SegretarioError('cancelled', 'Interrotto.')
+    }
 
     if (!search) {
       throw new Error(result.error?.message ?? 'Non sono riuscito a capire cosa cercare.')
     }
 
     return this.keepSearch(search, question)
+  }
+
+  /** Stops a request the user waits for: they no longer want to. */
+  async stopAsking(requestId: string): Promise<void> {
+    this.asking.get(requestId)?.abort()
+  }
+
+  /** A request the user waits for, theirs to stop for as long as it goes on. */
+  private async asked<T>(requestId: string, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController()
+    this.asking.set(requestId, controller)
+
+    try {
+      return await work(controller.signal)
+    } finally {
+      this.asking.delete(requestId)
+    }
   }
 
   /** A search run over every account's mail as it is now, kept for this session. */

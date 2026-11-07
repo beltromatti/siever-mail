@@ -1,4 +1,4 @@
-Cerca nella posta dell'utente, in tutti i suoi account. Il testo completo di ogni messaggio è indicizzato (oggetto, persone, corpo e nomi degli allegati), quindi trovi anche ciò che sta solo nel corpo di una mail vecchia, in qualunque cartella.
+Cerca nella posta dell'utente, in tutti i suoi account, in qualunque cartella. Dei messaggi scaricati cerca il testo completo (oggetto, persone, corpo e nomi degli allegati); di quelli non ancora scaricati — di solito i più vecchi — oggetto, persone e anteprima, e te lo dice: per cercare anche nel loro testo chiedilo ai server con `nel_server`.
 
 Parametri:
 
@@ -6,10 +6,11 @@ Parametri:
 - `account`: l'indirizzo di un account, per cercare solo lì.
 - `cartella`: dove cercare — `arrivo`, `inviata`, `bozze`, `archivio`, `cestino`, `spam`, oppure il nome di una cartella. Senza, cerca in tutta la posta tranne cestino e spam.
 - `ovunque`: true per cercare anche nel cestino e nello spam.
+- `nel_server`: true per chiedere anche ai server della posta di cercare il `testo` nel testo intero di ogni messaggio, scaricato o no. È più lento: usalo quando la ricerca ti dice che il testo di molti messaggi non è scaricato e ciò che cerchi può stare lì — una mail vecchia, una cosa detta solo nel corpo.
 - `progetto`: il riferimento di un progetto (p…), per cercare solo nelle sue conversazioni.
 - `dal`, `al`: date (AAAA-MM-GG) che delimitano il periodo.
 - `non_lette`, `con_allegati`: solo i messaggi non letti, o con allegati.
-- `limite`: quanti risultati al massimo (predefinito 20, massimo 50).
+- `limite`: quanti risultati al massimo (predefinito 20).
 
 Restituisce i messaggi trovati, i più pertinenti per primi (o i più recenti, se cerchi solo con i filtri): il riferimento (m1, m2…), data, mittente, destinatari, oggetto, cartella e account, e la tua nota se l'hai già letto, altrimenti un estratto. Per leggerli usa `leggi`.
 

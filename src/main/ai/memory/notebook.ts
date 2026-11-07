@@ -2,8 +2,12 @@ import type { Sql } from '../sql'
 import { foldTitle } from '../registry/projects'
 import { RegistryRefusal, type Actor } from '../registry/types'
 
-/** Notes are short by design: a note this long is a note to split. */
-export const MAX_NOTE_CHARS = 20_000
+/**
+ * Past this length a note is long for what it is — every run that opens it
+ * reads it all — and the tool says so; whether to put it in order, or split
+ * it, is the Segretario's.
+ */
+export const LONG_NOTE_CHARS = 20_000
 
 /** A folder of more notes than this shows in the index as one line, opened when needed. */
 const INDEX_FOLDER_LISTED = 12
@@ -105,14 +109,6 @@ function asWritten(
   return old !== edit.old && content.split(old).length === 2
     ? { old, new: unmargined(edit.new) }
     : edit
-}
-
-function checkSize(path: string, content: string): void {
-  if (content.length > MAX_NOTE_CHARS) {
-    throw new RegistryRefusal(
-      `${path} arriverebbe a ${content.length} caratteri, oltre il massimo di ${MAX_NOTE_CHARS}: così non entra. È il segno che va messa in ordine: rileggila, togli ciò che non serve più (cose del giorno, dettagli che si ritrovano cercando nella posta), unisci ciò che si ripete; se tratta argomenti diversi, dividila per argomento. Poi aggiungi, se vale ancora la pena.`
-    )
-  }
 }
 
 /**
@@ -249,7 +245,6 @@ export class Notebook {
     options: { seenRevision?: number } = {}
   ): Promise<{ document: MemoryDocument; created: boolean }> {
     const text = content.trimEnd() + '\n'
-    checkSize(path, text)
     const current = await this.read(path)
 
     if (
@@ -328,8 +323,6 @@ export class Notebook {
         text = text.replace(old, () => replacement)
       }
 
-      checkSize(path, text)
-
       try {
         return await this.replace(current, text, 'modifica', actor)
       } catch (error) {
@@ -378,7 +371,6 @@ export class Notebook {
       const at = Math.max(0, Math.min(lines.length, afterLine ?? lines.length))
       lines.splice(at, 0, ...text.replace(/\n$/, '').split('\n'))
       const next = lines.join('\n') + '\n'
-      checkSize(path, next)
 
       try {
         return await this.replace(current, next, 'inserisci', actor)

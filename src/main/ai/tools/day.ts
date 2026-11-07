@@ -171,19 +171,6 @@ export const reviewTool: SegretarioTool = {
       .map((warning) => warning.replace(/\s+/g, ' ').trim())
       .filter(Boolean)
 
-    // The card before sending has room for a few short lines: what does not fit is said back.
-    if (warnings.length > MAX_REVIEW_WARNINGS) {
-      throw new ToolInputError(
-        `Al massimo ${MAX_REVIEW_WARNINGS} avvisi: tieni quelli che contano davvero prima di inviare.`
-      )
-    }
-
-    if (warnings.some((warning) => warning.length > MAX_REVIEW_WARNING_CHARS)) {
-      throw new ToolInputError(
-        `Ogni avviso in una frase, entro ${MAX_REVIEW_WARNING_CHARS} caratteri: l'utente lo legge mentre sta per inviare.`
-      )
-    }
-
     context.run.results.review = warnings
     return {
       content:
@@ -197,10 +184,6 @@ export const reviewTool: SegretarioTool = {
     }
   }
 }
-
-/** What the card before sending shows at most. */
-const MAX_REVIEW_WARNINGS = 4
-const MAX_REVIEW_WARNING_CHARS = 280
 
 /** The runs one look at the diary shows at most: past them, the search narrows. */
 const DIARY_RUNS_SHOWN = 40

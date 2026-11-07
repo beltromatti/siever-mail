@@ -653,6 +653,24 @@ export class MailService {
           new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
         ),
       searchClient: () => this.database.storeClient(),
+      searchServer: async (mailboxes, text, { background }) => {
+        const groups = imapSearchGroups(parseSearchQuery(text))
+
+        if (groups.length === 0) {
+          return []
+        }
+
+        const found = await Promise.all(
+          mailboxes.map(async (mailbox) =>
+            (
+              (await this.engine.searchMessages(mailbox, groups, {
+                priority: background ? 'background' : 'user'
+              })) ?? []
+            ).map((uid) => ({ ...mailbox, uid }))
+          )
+        )
+        return found.flat()
+      },
       readMessage: async (ref) => {
         await this.ensureAccountExists(ref.accountId)
         let message = await this.database.getMessage(ref)

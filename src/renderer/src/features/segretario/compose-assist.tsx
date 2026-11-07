@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ArrowUp, LoaderCircle } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { ArrowUp, LoaderCircle, Square } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
@@ -31,6 +31,7 @@ export function ComposeAssist({
   isReply,
   hasText,
   onAsk,
+  onStop,
   onUndo
 }: {
   open: boolean
@@ -42,12 +43,16 @@ export function ComposeAssist({
   isReply: boolean
   hasText: boolean
   onAsk: (instruction: string) => Promise<void>
+  /** Stops the writing under way: the message stays as it was. */
+  onStop: () => void
   /** Puts back what was written before its last rewrite; undefined when there is none. */
   onUndo?: () => void
 }): React.JSX.Element {
   const [instruction, setInstruction] = useState('')
   const [writing, setWriting] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
+  // Stopped by the user: what it says on the way out is not a problem to show.
+  const stopped = useRef(false)
   const keys = useCommandKeys('segretario-write')
   const suggestions = selection || hasText ? REWRITES : isReply ? ['Scrivi la risposta'] : []
 
@@ -60,13 +65,16 @@ export function ComposeAssist({
 
     setWriting(true)
     setProblem(null)
+    stopped.current = false
 
     try {
       await onAsk(trimmed)
       setInstruction('')
       onOpenChange(false)
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : 'Non sono riuscito a scrivere.')
+      if (!stopped.current) {
+        setProblem(error instanceof Error ? error.message : 'Non sono riuscito a scrivere.')
+      }
     } finally {
       setWriting(false)
     }
@@ -123,19 +131,30 @@ export function ComposeAssist({
               }
               className="field placeholder:text-faint-foreground min-h-[52px] flex-1 resize-none rounded-md px-2.5 py-1.5 text-[12.5px] leading-[1.45] outline-none"
             />
-            <IconButton
-              type="submit"
-              label="Scrivi"
-              variant="default"
-              className="size-[28px] rounded-full"
-              disabled={!instruction.trim() || writing}
-            >
-              {writing ? (
-                <LoaderCircle className="size-3.5 animate-spin" />
-              ) : (
+            {writing ? (
+              <IconButton
+                type="button"
+                label="Ferma"
+                variant="default"
+                className="size-[28px] rounded-full"
+                onClick={() => {
+                  stopped.current = true
+                  onStop()
+                }}
+              >
+                <Square className="size-3 fill-current" />
+              </IconButton>
+            ) : (
+              <IconButton
+                type="submit"
+                label="Scrivi"
+                variant="default"
+                className="size-[28px] rounded-full"
+                disabled={!instruction.trim()}
+              >
                 <ArrowUp className="size-3.5" />
-              )}
-            </IconButton>
+              </IconButton>
+            )}
           </form>
           {suggestions.length > 0 && (
             <div className="flex flex-wrap gap-1">

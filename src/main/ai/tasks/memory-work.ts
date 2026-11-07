@@ -9,11 +9,6 @@ import { formatAddresses, formatDateTime, shortDate } from '../tools/format'
 import { nowLine } from './context'
 import type { StartingData } from './day'
 
-/** Lessons taken in by one reflection at most. */
-const LESSONS_PER_REFLECTION = 30
-/** Notes Al passo reads at most, the newest. */
-const KEEP_UP_NOTES_SHOWN = 150
-
 const NATURE_WORDS: Record<string, string> = {
   da_rispondere: 'da rispondere',
   da_fare: 'da fare',
@@ -108,12 +103,9 @@ export async function prepareReflection(deps: {
   calendar: Pick<SegretarioCalendarPort, 'event'>
   store: AiStore
 }): Promise<(StartingData & { lessonIds: number[] }) | null> {
-  // The lessons that teach, a reflection's worth; the drafts sent as they were, all of them —
-  // they are told as a count. Taken in order alone, a run of those would hide what comes after.
+  // Every lesson that teaches; the drafts sent as they were are told as a count.
   const pending = await deps.store.pendingLessons()
-  const teaching = pending
-    .filter((lesson) => lesson.kind !== 'confermata')
-    .slice(0, LESSONS_PER_REFLECTION)
+  const teaching = pending.filter((lesson) => lesson.kind !== 'confermata')
 
   if (teaching.length === 0) {
     return null
@@ -239,9 +231,9 @@ export async function prepareKeepingUp(
   sinceMs: number,
   minimum: number
 ): Promise<StartingData | null> {
-  const { notes, total } = await deps.registry.notes.writtenSince(sinceMs, KEEP_UP_NOTES_SHOWN)
+  const notes = await deps.registry.notes.writtenSince(sinceMs)
 
-  if (total < minimum) {
+  if (notes.length < minimum) {
     return null
   }
 
@@ -282,9 +274,7 @@ export async function prepareKeepingUp(
 
   return {
     title: 'Al passo',
-    data: `${nowLine()}\n\nLe note dal ${formatDateTime(new Date(sinceMs).toISOString())}:\n\n${sections.join('\n\n')}${
-      total > notes.length ? `\n\n(Le più recenti ${notes.length} di ${total}.)` : ''
-    }`,
+    data: `${nowLine()}\n\nLe note dal ${formatDateTime(new Date(sinceMs).toISOString())}:\n\n${sections.join('\n\n')}`,
     handles: added,
     seen: new Map()
   }

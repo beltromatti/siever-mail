@@ -4,15 +4,15 @@ import { placeholders, type Sql } from '../sql'
 
 /**
  * `in_coda` waiting for its turn; `al_lavoro` running; `fatto`;
- * `da_riprovare` after a failure, from `notBefore`; `fallito` after too
- * many; `annullato`.
+ * `da_riprovare` cut short by a quit, the sleep or a refused key, to start
+ * again; `fallito` when it did not do its work — left so until the user
+ * tries it again or new work on the same matter takes its place;
+ * `annullato`.
  */
 export type WorkStatus =
   'in_coda' | 'al_lavoro' | 'fatto' | 'da_riprovare' | 'fallito' | 'annullato'
 
 const WAITING: ReadonlyArray<WorkStatus> = ['in_coda', 'da_riprovare']
-/** How long work that failed for good is left alone before the planning may queue it again. */
-const FAILED_REST_MS = 24 * 60 * 60 * 1000
 
 export interface WorkUnit<Scope = unknown> {
   id: string
@@ -62,14 +62,6 @@ function unitOf<Scope>(row: WorkRow): WorkUnit<Scope> {
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at)
   }
-}
-
-/**
- * How long a failed unit waits before it is tried again, by how many times it failed: a minute,
- * then five. The third failure leaves it failed, in sight with "Riprova" (see `fail`).
- */
-export function retryDelayMs(attempts: number): number {
-  return attempts <= 1 ? 60_000 : 5 * 60_000
 }
 
 /**
@@ -215,34 +207,37 @@ export class WorkQueue {
     )
   }
 
+  /** Done: an earlier failure of the same scope is done with it — it no longer waits for "Riprova". */
   async complete(id: string): Promise<void> {
+    const now = Date.now()
     await this.sql.run(
       "UPDATE ai_work SET status = 'fatto', last_error = NULL, updated_at = ? WHERE id = ?",
-      Date.now(),
+      now,
+      id
+    )
+    await this.sql.run(
+      `UPDATE ai_work SET status = 'annullato', updated_at = ?
+       WHERE status = 'fallito' AND scope_key = (SELECT scope_key FROM ai_work WHERE id = ?)`,
+      now,
       id
     )
   }
 
   /**
-   * A unit failed. One that may be tried again waits a while — `delayMs`, or longer the more it
-   * failed; a failure that is not the work's own — the network, the provider, a quit, the
-   * computer's sleep — does not count against it. One unit waits per scope: when what came for
-   * the same scope waits already, that unit takes this one's place, with its attempts.
+   * A unit did not finish. Cut short by a quit, the sleep or a refused key
+   * (`retry`), it waits to start again, as it was; otherwise it failed, and
+   * stays failed. One unit waits per scope: when what came for the same
+   * scope waits already, that unit takes this one's place.
    */
-  async fail(
-    id: string,
-    error: string,
-    options: { retry: boolean; counts: boolean; maxAttempts: number; delayMs?: number }
-  ): Promise<WorkStatus> {
+  async fail(id: string, error: string, options: { retry: boolean }): Promise<WorkStatus> {
     const unit = await this.get(id)
 
     if (!unit) {
       return 'annullato'
     }
 
-    const attempts = options.counts ? unit.attempts : Math.max(unit.attempts - 1, 0)
-    const status: WorkStatus =
-      options.retry && attempts < options.maxAttempts ? 'da_riprovare' : 'fallito'
+    const attempts = options.retry ? Math.max(unit.attempts - 1, 0) : unit.attempts
+    const status: WorkStatus = options.retry ? 'da_riprovare' : 'fallito'
     const message = error.slice(0, 1000)
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -272,7 +267,7 @@ export class WorkQueue {
           status,
           attempts,
           message,
-          Date.now() + (options.delayMs ?? retryDelayMs(Math.max(attempts, 1))),
+          Date.now(),
           Date.now(),
           id
         )
@@ -296,14 +291,18 @@ export class WorkQueue {
     )
   }
 
-  /** Cancels all waiting work of a task — the AI switched off, a connection removed. */
+  /**
+   * Cancels the waiting work — the AI switched off — or the work on what goes
+   * away (a connection removed: `scopePrefix`), its failures too.
+   */
   async cancelWaiting(filter: { task?: string; scopePrefix?: string } = {}): Promise<number> {
+    const statuses: WorkStatus[] = filter.scopePrefix ? [...WAITING, 'fallito'] : [...WAITING]
     return this.sql.run(
       `UPDATE ai_work SET status = 'annullato', updated_at = ?
-       WHERE status IN (${placeholders(WAITING)})
+       WHERE status IN (${placeholders(statuses)})
        ${filter.task ? 'AND task = ?' : ''} ${filter.scopePrefix ? 'AND scope_key LIKE ?' : ''}`,
       Date.now(),
-      ...WAITING,
+      ...statuses,
       ...(filter.task ? [filter.task] : []),
       ...(filter.scopePrefix ? [`${filter.scopePrefix}%`] : [])
     )
@@ -337,36 +336,33 @@ export class WorkQueue {
   }
 
   /**
-   * Whether work for a scope waits, runs, or failed for good in the last day:
-   * then it is not queued again — a failure repeated every planning would be
-   * paid for each time — until the user says "Riprova", or the day passes.
+   * Whether work for a scope waits, runs, or failed: then it is not queued
+   * again — a failure is not tried again by itself — until the user says
+   * "Riprova".
    */
   async busy(scopeKey: string): Promise<boolean> {
     return (
       (await this.sql.get(
         `SELECT 1 AS found FROM ai_work WHERE scope_key = ?
-         AND (status IN ('in_coda', 'da_riprovare', 'al_lavoro')
-           OR (status = 'fallito' AND updated_at >= ?)) LIMIT 1`,
-        scopeKey,
-        Date.now() - FAILED_REST_MS
+         AND status IN ('in_coda', 'da_riprovare', 'al_lavoro', 'fallito') LIMIT 1`,
+        scopeKey
       )) !== null
     )
   }
 
-  /** Of these scopes, those whose work failed for good since a moment, with when it failed last. */
-  async failedSince(
-    scopeKeys: ReadonlyArray<string>,
-    sinceMs: number
-  ): Promise<Map<string, number>> {
+  /**
+   * Of these scopes, those whose work failed, with when it failed last: the
+   * planning queues them again only for what came after.
+   */
+  async failedAt(scopeKeys: ReadonlyArray<string>): Promise<Map<string, number>> {
     if (scopeKeys.length === 0) {
       return new Map()
     }
 
     const rows = await this.sql.all<{ scope_key: string; failed_at: number }>(
       `SELECT scope_key, MAX(updated_at) AS failed_at FROM ai_work
-       WHERE status = 'fallito' AND updated_at >= ? AND scope_key IN (${placeholders(scopeKeys)})
+       WHERE status = 'fallito' AND scope_key IN (${placeholders(scopeKeys)})
        GROUP BY scope_key`,
-      sinceMs,
       ...scopeKeys
     )
     return new Map(rows.map((row) => [row.scope_key, Number(row.failed_at)]))
@@ -449,10 +445,10 @@ export class WorkQueue {
     }))
   }
 
-  /** Forgets work long done, let go or failed: a failure that old is no longer shown. */
+  /** Forgets work long done or let go. A failure stays, in sight, until it is tried again. */
   async prune(olderThanMs: number): Promise<void> {
     await this.sql.run(
-      "DELETE FROM ai_work WHERE status IN ('fatto', 'annullato', 'fallito') AND updated_at < ?",
+      "DELETE FROM ai_work WHERE status IN ('fatto', 'annullato') AND updated_at < ?",
       Date.now() - olderThanMs
     )
   }

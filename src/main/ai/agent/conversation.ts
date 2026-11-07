@@ -49,11 +49,6 @@ export interface CompactionPayload {
   coveredUntil: number
 }
 
-export interface ClearingPayload {
-  /** Tool results of events before this one are taken out of the conversation. */
-  before: number
-}
-
 export interface ErrorPayload {
   message: string
   code: string
@@ -65,11 +60,6 @@ export interface ChangesPayload {
   changes: Array<RegistryChange & { undoneAt?: number }>
 }
 
-/** A tool result taken out of the conversation for room: where to get it back. */
-function clearedResult(payload: ToolPayload): string {
-  return `[Risultato di ${payload.name} tolto per fare spazio: ${payload.summary}. Se ti serve ancora, ripeti la chiamata.]`
-}
-
 /**
  * The conversation the model reads, rebuilt from the activity's log at
  * every turn — the log is the truth, the context is a view of it:
@@ -77,8 +67,6 @@ function clearedResult(payload: ToolPayload): string {
  *     block the activity began with, inside the first user message, so the
  *     prefix the provider caches is as long and as stable as it can be;
  *   • after a compaction, its summary in place of what it covers;
- *   • tool results older than the last clearing replaced by a line saying
- *     what they were — in one stroke, so the cache breaks once for it;
  *   • every tool call answered: one a quit interrupted reads as interrupted.
  */
 export function buildConversation(
@@ -89,9 +77,6 @@ export function buildConversation(
     ContextPayload | undefined
   const compaction = [...events].reverse().find((event) => event.type === 'compaction')?.payload as
     CompactionPayload | undefined
-  const clearing = events
-    .filter((event) => event.type === 'clearing')
-    .reduce((boundary, event) => Math.max(boundary, (event.payload as ClearingPayload).before), 0)
   const messages: ChatMessage[] = [{ role: 'system', content: system }]
   let preamble = context?.text ?? ''
 
@@ -159,8 +144,7 @@ export function buildConversation(
           messages.push({
             role: 'tool',
             tool_call_id: call.id,
-            content:
-              toolEvent && toolEvent.id < clearing ? clearedResult(toolPayload) : toolPayload.result
+            content: toolPayload.result
           })
         }
         break

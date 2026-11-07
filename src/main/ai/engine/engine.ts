@@ -38,6 +38,7 @@ import {
 import { startRun, type RunStarter } from '../tasks/start-run'
 import { localDay } from '../tools/day'
 import { logMainError } from '../../utils/error-utils'
+import type { Reachability } from './reachability'
 import { KeyRefused, Scheduler, WorkFailure, type TaskExecutor } from './scheduler'
 import { WorkQueue, type WorkUnit } from './work-queue'
 
@@ -85,6 +86,11 @@ const CALENDAR_CHANGES_READ = 100
 const CALENDAR_SEEN = 'calendar_seen'
 /** The units that look at a calendar's events the first time, and as they come into the days ahead. */
 const LOOK_SCOPE = 'calendario-vista:'
+
+/** The scope of the looks at a calendar connection's events: its work, which goes with it. */
+export function calendarLookScope(connectionId: string): string {
+  return `${LOOK_SCOPE}${connectionId}`
+}
 /** In `ai_meta`: when keeping up last found too little new to be worth a run. */
 const KEEP_UP_CHECKED = 'keep_up_checked'
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -135,6 +141,8 @@ export interface EngineDeps {
   mail: SegretarioMailPort
   calendar: SegretarioCalendarPort
   queue: WorkQueue
+  /** Whether OpenRouter answers: the runs wait for it, the scheduler starts one at a time meanwhile. */
+  reachability: Reachability
   emit(event: ActivityEvent): void
   /** Whether the AI is on and has a key: the engine plans and runs only then. */
   ready(): Promise<boolean>
@@ -150,38 +158,32 @@ async function settled(result: RunResult, done: () => Promise<void>): Promise<vo
   await done()
 }
 
-/** A run that did not finish, as the scheduler takes it: a pause, a failure to try again, or not. */
+/**
+ * A run that did not finish, as the scheduler takes it: the key or the
+ * credit refused — the AI goes off — or the unit's failure. Waiting for
+ * OpenRouter is no failure: the run waits, inside, and goes on.
+ */
 function settle(result: RunResult): void {
   if (result.status === 'done') {
     return
   }
 
   if (result.status === 'cancelled') {
-    throw new WorkFailure('Interrotto.', false, false)
+    throw new WorkFailure('Interrotto.')
   }
 
   const error = result.error
 
-  if (error instanceof SegretarioError) {
-    // The key or the credit refused stops everything — the AI goes off; a request blocked for
-    // what it carries (`blocked`) is that work's failure, not every work's.
-    if (['no-key', 'invalid-key', 'no-credit'].includes(error.code)) {
-      throw new KeyRefused(error.message)
-    }
-
-    // Nothing would get through now: the engine waits, the unit is not to blame.
-    if (['network', 'unavailable', 'rate-limited'].includes(error.code)) {
-      throw new WorkFailure(error.message, true, false, true)
-    }
-
-    // A request that hung: tried again, and counted — the same one hanging every time is the
-    // unit's, and must not hold the engine.
-    if (error.code === 'timeout') {
-      throw new WorkFailure(error.message, true, true)
-    }
+  // The key or the credit refused stops everything — the AI goes off; a request blocked for what
+  // it carries (`blocked`) is that work's failure, not every work's.
+  if (
+    error instanceof SegretarioError &&
+    ['no-key', 'invalid-key', 'no-credit'].includes(error.code)
+  ) {
+    throw new KeyRefused(error.message)
   }
 
-  throw new WorkFailure(error?.message ?? 'Il lavoro non è finito.', true, true)
+  throw new WorkFailure(error?.message ?? 'Il lavoro non è finito.')
 }
 
 /**
@@ -209,6 +211,7 @@ export class SegretarioEngine {
       emit: deps.emit
     }
     this.scheduler = new Scheduler(deps.queue, this.executors(), {
+      reachability: deps.reachability,
       concurrency: () => (this.preparing ? PREPARING_CONCURRENCY : CONCURRENCY),
       // Work queued before the AI was switched off — or before a restart with it off — waits.
       canStart: () => deps.ready(),
@@ -413,10 +416,10 @@ export class SegretarioEngine {
       })
     )
     const lookUnits = (await queue.units('calendario')).filter((unit) =>
-      calendars.some((connection) => unit.scopeKey === `${LOOK_SCOPE}${connection.id}`)
+      calendars.some((connection) => unit.scopeKey === calendarLookScope(connection.id))
     )
     const failedLooks = (await queue.failed(200)).filter((unit) =>
-      calendars.some((connection) => unit.scopeKey === `${LOOK_SCOPE}${connection.id}`)
+      calendars.some((connection) => unit.scopeKey === calendarLookScope(connection.id))
     )
     const failedLookKeys = new Set(
       failedLooks.map((unit) => unit.scopeKey.slice(LOOK_SCOPE.length))
@@ -663,11 +666,10 @@ export class SegretarioEngine {
       : (await mail.unreadConversations(sinceOf, READING_PLANNED)).filter(
           (conversation) => !hold.mail.has(conversation.accountId)
         )
-    const failed = await queue.failedSince(
+    const failed = await queue.failedAt(
       conversations.map(
         (conversation) => `lettura:${conversation.accountId}:${conversation.threadId}`
-      ),
-      now.getTime() - DAY_MS
+      )
     )
 
     for (const conversation of conversations) {
@@ -684,7 +686,7 @@ export class SegretarioEngine {
       // A reply prepared before these messages no longer knows them: it is to be looked at again.
       await registry.markRepliesStale(conversation, oldest, 'la conversazione è andata avanti')
 
-      // A conversation whose reading failed rests a day — unless something came after.
+      // A conversation whose reading failed waits for "Riprova" — or for what comes after.
       if (failedAt !== undefined && newest <= failedAt) {
         continue
       }
@@ -832,8 +834,8 @@ export class SegretarioEngine {
   /**
    * Hands what changed in the calendar to a look of the Segretario's, once
    * at a time. The point reached moves when a look is done, so what a look
-   * that failed did not see is seen by the next; a look that failed for good
-   * rests a day, unless the calendar changed after it. Changes far from now
+   * that failed did not see is seen by the next; a look that failed waits
+   * for "Riprova", or for the calendar to change after it. Changes far from now
    * are passed over; the first time, the past is.
    */
   private async planCalendar(): Promise<void> {
@@ -858,9 +860,7 @@ export class SegretarioEngine {
       return
     }
 
-    const failedAt = (await queue.failedSince(['calendario'], Date.now() - DAY_MS)).get(
-      'calendario'
-    )
+    const failedAt = (await queue.failedAt(['calendario'])).get('calendario')
 
     if (failedAt !== undefined && !changes.some((change) => change.at > failedAt)) {
       return
@@ -889,7 +889,7 @@ export class SegretarioEngine {
 
     for (const connection of await this.lookedCalendars(hold)) {
       const key = calendarLearningKey(connection.id)
-      const scopeKey = `${LOOK_SCOPE}${connection.id}`
+      const scopeKey = calendarLookScope(connection.id)
       const window = lookWindow(daysOf(key))
       const span = readings.get(key) ?? { lookedFrom: null, lookedUntil: null }
       const range = nextLook(span, window)

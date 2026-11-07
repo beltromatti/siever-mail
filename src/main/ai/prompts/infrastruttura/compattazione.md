@@ -1,4 +1,4 @@
-Il lavoro che stai facendo è diventato lungo e la parte più vecchia della conversazione sta per essere tolta dal tuo contesto. Scrivi ora il riassunto che la sostituirà: è tutto ciò che saprai di quanto è successo finora, quindi deve bastarti per continuare esattamente da dove sei, senza ripetere lavoro già fatto e senza perdere nulla di ciò che conta.
+Il lavoro che stai facendo ha quasi riempito ciò che riesci a tenere a mente: la parte più vecchia della conversazione sta per essere tolta dal tuo contesto. L'ultimo passo — le chiamate che hai appena fatto e ciò che hanno trovato — resta com'è; tutto ciò che viene prima lo sostituisce il riassunto che scrivi ora. È tutto ciò che saprai di quella parte, quindi deve bastarti per continuare esattamente da dove sei, senza ripetere lavoro già fatto e senza perdere nulla di ciò che conta.
 
 Scrivi in italiano, in modo denso e ordinato, con queste parti:
 

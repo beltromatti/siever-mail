@@ -283,27 +283,134 @@ export async function searchMail(
     }
   }
 
-  return order.slice(0, query.limit).map((key) => {
-    const row = byKey.get(key) as HitRow
-    const folder = scope.folders.get(row.accountId)?.find((item) => item.path === row.folderPath)
+  return order.slice(0, query.limit).map((key) => hitOf(scope, byKey.get(key) as HitRow))
+}
 
-    return {
-      ref: { accountId: row.accountId, folderPath: row.folderPath, uid: Number(row.uid) },
-      messageKey: row.messageKey,
-      threadId: row.threadId,
-      subject: row.subject,
-      from: parseAddresses(row.fromJson),
-      to: parseAddresses(row.toJson),
-      cc: parseAddresses(row.ccJson),
-      date: row.dateIso,
-      folderLabel: folder ? folderDisplayName(folder) : row.folderPath,
-      accountEmail: scope.accountEmails.get(row.accountId) ?? '',
-      isRead: Boolean(Number(row.isRead)),
-      hasAttachments: Boolean(Number(row.hasAttachments)),
-      snippet: row.snippet ?? row.preview,
-      pecKind: (row.pecKind as PecKind | null) ?? null
-    }
+function hitOf(scope: SearchScope, row: HitRow): AgentSearchHit {
+  const folder = scope.folders.get(row.accountId)?.find((item) => item.path === row.folderPath)
+
+  return {
+    ref: { accountId: row.accountId, folderPath: row.folderPath, uid: Number(row.uid) },
+    messageKey: row.messageKey,
+    threadId: row.threadId,
+    subject: row.subject,
+    from: parseAddresses(row.fromJson),
+    to: parseAddresses(row.toJson),
+    cc: parseAddresses(row.ccJson),
+    date: row.dateIso,
+    folderLabel: folder ? folderDisplayName(folder) : row.folderPath,
+    accountEmail: scope.accountEmails.get(row.accountId) ?? '',
+    isRead: Boolean(Number(row.isRead)),
+    hasAttachments: Boolean(Number(row.hasAttachments)),
+    snippet: row.snippet ?? row.preview,
+    pecKind: (row.pecKind as PecKind | null) ?? null
+  }
+}
+
+/**
+ * How many messages a search's folders and filters hold whose text is not
+ * downloaded: found by the cache only for their subject, people and
+ * preview — the servers search their whole text (`searchServer`).
+ */
+export async function unindexedCount(
+  prisma: PrismaClient,
+  scope: SearchScope,
+  query: AgentSearchQuery
+): Promise<number> {
+  if (scope.mailboxes.size === 0) {
+    return 0
+  }
+
+  const [row] = await prisma.$queryRaw<Array<{ count: number | bigint }>>`
+    SELECT COUNT(DISTINCT m.account_id || char(0) || m.message_key) AS count
+    FROM messages m
+    LEFT JOIN message_bodies b ON b.account_id = m.account_id AND b.message_key = m.message_key
+    WHERE b.id IS NULL AND (${scopeSql(scope)}) AND ${filterSql(query)}
+  `
+  return Number(row?.count ?? 0)
+}
+
+/**
+ * The folders a server search asks, of a search's: in an account that keeps
+ * all of its mail in one folder (Gmail's "Tutti i messaggi"), that one —
+ * every label is in it — otherwise each.
+ */
+export function serverMailboxes(
+  scope: SearchScope
+): Array<{ accountId: string; folderPath: string }> {
+  return [...scope.mailboxes].flatMap(([accountId, paths]) => {
+    const all = scope.folders
+      .get(accountId)
+      ?.find((folder) => folder.specialUse === '\\All' && paths.includes(folder.path))
+    return (all ? [all.path] : paths).map((folderPath) => ({ accountId, folderPath }))
   })
+}
+
+/**
+ * What the servers found, as the search shows it: the messages among `refs`
+ * that pass its filters, the newest first, one per message, without those
+ * already found (`skip`).
+ */
+export async function hitsOfRefs(
+  prisma: PrismaClient,
+  scope: SearchScope,
+  query: AgentSearchQuery,
+  refs: ReadonlyArray<MessageRef>,
+  skip: ReadonlySet<string>
+): Promise<AgentSearchHit[]> {
+  // By folder, the newest of each — a folder's UIDs grow as its mail comes — as many as can be
+  // shown past those found already.
+  const wanted = query.limit + skip.size
+  const byMailbox = new Map<string, { accountId: string; folderPath: string; uids: number[] }>()
+
+  for (const ref of refs) {
+    const key = `${ref.accountId}\u0000${ref.folderPath}`
+    const mailbox = byMailbox.get(key) ?? {
+      accountId: ref.accountId,
+      folderPath: ref.folderPath,
+      uids: []
+    }
+    mailbox.uids.push(ref.uid)
+    byMailbox.set(key, mailbox)
+  }
+
+  if (byMailbox.size === 0) {
+    return []
+  }
+
+  const rows = await prisma.$queryRaw<HitRow[]>`
+    SELECT m.account_id AS accountId, m.folder_path AS folderPath, m.uid AS uid,
+      m.message_key AS messageKey, m.thread_id AS threadId, m.subject AS subject,
+      m.from_json AS fromJson, m.to_json AS toJson, m.cc_json AS ccJson, m.date_iso AS dateIso,
+      m.is_read AS isRead, m.has_attachments AS hasAttachments, m.preview AS preview,
+      m.pec_kind AS pecKind, NULL AS snippet
+    FROM messages m
+    WHERE (${Prisma.join(
+      [...byMailbox.values()].map(
+        (mailbox) =>
+          Prisma.sql`(m.account_id = ${mailbox.accountId} AND m.folder_path = ${mailbox.folderPath}
+            AND m.uid IN (${Prisma.join(mailbox.uids.sort((a, b) => b - a).slice(0, wanted))}))`
+      ),
+      ' OR '
+    )})
+      AND ${filterSql(query)}
+    ORDER BY m.date_iso DESC
+    LIMIT ${wanted}
+  `
+  const seen = new Set(skip)
+
+  return rows
+    .filter((row) => {
+      const key = `${row.accountId}\u0000${row.messageKey}`
+
+      if (seen.has(key)) {
+        return false
+      }
+
+      seen.add(key)
+      return true
+    })
+    .map((row) => hitOf(scope, row))
 }
 
 /**

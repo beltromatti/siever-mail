@@ -2,4 +2,4 @@ L'esito della rilettura di un messaggio che l'utente sta per inviare: si usa sol
 
 Parametri:
 
-- `avvisi`: gli errori da segnalare, al massimo quattro — quelli che contano di più —, ognuno in una frase breve rivolta all'utente con il tu, entro 280 caratteri; lista vuota se il messaggio può partire così.
+- `avvisi`: gli errori da segnalare, ognuno in una frase breve rivolta all'utente con il tu; lista vuota se il messaggio può partire così. L'utente li legge in una piccola scheda mentre sta per inviare: pochi, quelli che contano di più, si leggono in un attimo.

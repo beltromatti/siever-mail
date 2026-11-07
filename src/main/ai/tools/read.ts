@@ -35,9 +35,7 @@ const MESSAGE_PAGE_CHARS = 30_000
 /** Characters of each message, and of the whole, when a conversation is read. */
 const THREAD_MESSAGE_CHARS = 8_000
 const THREAD_TOTAL_CHARS = 60_000
-/** Files read at most, in bytes: a document larger is not one to read in a conversation. */
-const READ_MAX_BYTES = 40 * 1024 * 1024
-/** Conversations of a project shown when it is read. */
+/** Conversations of a project shown at once when it is read: the others by `pagina`. */
 const PROJECT_CONVERSATIONS_SHOWN = 30
 
 type ReadMessage = Awaited<ReturnType<ToolContext['mail']['readMessage']>>
@@ -197,12 +195,6 @@ export function describeExtraction(
         summary: `Letto ${fileName}`
       }
   }
-}
-
-function sizeLabel(bytes: number): string {
-  return bytes >= 1024 * 1024
-    ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-    : `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
 
 async function readOneMessage(
@@ -368,12 +360,6 @@ async function readFileAt(
     throw new ToolInputError(`Il file «${path}» non c'è o non si può aprire.`)
   }
 
-  if (info.size > READ_MAX_BYTES) {
-    throw new ToolInputError(
-      `«${basename(path)}» è troppo grande da leggere (${sizeLabel(info.size)}).`
-    )
-  }
-
   const handle = context.handles.name(
     { kind: 'file', file: { kind: 'path', path, fileName: basename(path) } },
     context.newHandles
@@ -452,7 +438,11 @@ export type ProjectReader = Pick<
   run: Pick<ToolContext['run'], 'seen'>
 }
 
-export async function readProject(context: ProjectReader, projectId: string): Promise<ToolOutcome> {
+export async function readProject(
+  context: ProjectReader,
+  projectId: string,
+  page = 1
+): Promise<ToolOutcome> {
   const project = await context.registry.projects.summary(projectId)
 
   if (!project) {
@@ -491,7 +481,10 @@ export async function readProject(context: ProjectReader, projectId: string): Pr
   )
   const lines: string[] = []
 
-  for (const note of conversations.slice(0, PROJECT_CONVERSATIONS_SHOWN)) {
+  const first = (Math.max(1, page) - 1) * PROJECT_CONVERSATIONS_SHOWN
+  const rest = conversations.length - first - PROJECT_CONVERSATIONS_SHOWN
+
+  for (const note of conversations.slice(first, first + PROJECT_CONVERSATIONS_SHOWN)) {
     const summary = (await context.mail.messageSummaries(note.accountId, [note.messageKey])).get(
       note.messageKey
     )
@@ -534,7 +527,7 @@ export async function readProject(context: ProjectReader, projectId: string): Pr
       items.length > 0
         ? `Cose aperte (e chiuse di recente):\n${items.map((item) => `  ${commitmentLine(item)}`).join('\n')}`
         : 'Niente di aperto.',
-      `Conversazioni, dalla più recente${conversations.length > PROJECT_CONVERSATIONS_SHOWN ? ` (le ultime ${PROJECT_CONVERSATIONS_SHOWN} di ${conversations.length})` : ''}:\n${lines.join('\n') || '(nessuna)'}`
+      `Conversazioni, dalla più recente${conversations.length > PROJECT_CONVERSATIONS_SHOWN ? ` (${conversations.length}; dalla ${first + 1}ª)` : ''}:\n${lines.join('\n') || '(nessuna)'}${rest > 0 ? `\n[Altre ${rest}: continua con pagina=${Math.max(1, page) + 1}.]` : ''}`
     ]
       .filter(Boolean)
       .join('\n\n'),
@@ -601,7 +594,7 @@ export const readTool: SegretarioTool = {
       case 'event':
         return readEvent(context, reference, target.eventKey)
       case 'project':
-        return readProject(context, target.projectId)
+        return readProject(context, target.projectId, numberArg(args, 'pagina') ?? 1)
       case 'draft': {
         const draft = await context.mail.getDraft(target.draftId)
 

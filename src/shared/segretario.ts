@@ -107,9 +107,6 @@ export interface SegretarioPreferences {
 /** Off until the user turns it on, in the guided setup: the AI starts with Conoscimi, never by itself. */
 export const DEFAULT_SEGRETARIO_PREFERENCES: SegretarioPreferences = { enabled: false }
 
-/** How long a send waits for the Segretario's reread: past it the message goes as it is, and the reread stops. */
-export const REVIEW_TIMEOUT_MS = 12_000
-
 /** What the Segretario costs, in dollars, as OpenRouter billed each call. */
 export interface SegretarioSpending {
   today: number
@@ -404,6 +401,8 @@ export interface LinkedText {
 
 /** What the user asks of the Segretario while writing a message. */
 export interface WritingRequest {
+  /** Names the request, for the user to stop it (`stopAsking`). */
+  requestId: string
   draftId: string
   accountId: string
   instruction: string
@@ -416,6 +415,8 @@ export interface WritingRequest {
 
 /** A message about to be sent, for the Segretario to reread. */
 export interface ReviewRequest {
+  /** Names the request, for the user to stop it — and send at once (`stopAsking`). */
+  requestId: string
   accountId: string
   to: string[]
   cc: string[]
@@ -515,9 +516,9 @@ export function setupTurnsAiOn(state: OnboardingState): boolean {
  * How far back a connection is read one by one — each message, each event
  * looked at — so the work starts with what is still alive: decided by the
  * Segretario for each connection when it gets to know it (Conoscimi), or by
- * the user in chat. Without a decision, `default`; within `min` and `max`.
+ * the user in chat. Without a decision, `default`; never under `min`, so the work starts full.
  */
-export const READING_DAYS = { default: 30, min: 14, max: 365 } as const
+export const READING_DAYS = { default: 30, min: 14 } as const
 
 /** How far ahead a calendar's events are looked at one by one: what is coming is alive until it comes. */
 export const CALENDAR_LOOK_AHEAD_DAYS = 60
@@ -814,6 +815,7 @@ export const SEGRETARIO_IPC = {
   assistWriting: 'segretario:assist-writing',
   reviewDraft: 'segretario:review-draft',
   askMail: 'segretario:ask-mail',
+  stopAsking: 'segretario:stop-asking',
   listSavedSearches: 'segretario:list-saved-searches',
   saveSearch: 'segretario:save-search',
   removeSavedSearch: 'segretario:remove-saved-search',
@@ -974,7 +976,9 @@ export interface SegretarioApi {
   getDue: (throughDay: string) => Promise<DayLine[]>
   assistWriting: (request: WritingRequest) => Promise<{ text: string }>
   reviewDraft: (request: ReviewRequest) => Promise<string[]>
-  askMail: (question: string) => Promise<AskedMail>
+  askMail: (question: string, requestId: string) => Promise<AskedMail>
+  /** Stops a request the user waits for: the writing, the reread, the search in words. */
+  stopAsking: (requestId: string) => Promise<void>
   listSavedSearches: () => Promise<SavedSearch[]>
   saveSearch: (id: string) => Promise<SavedSearch[]>
   removeSavedSearch: (id: string) => Promise<SavedSearch[]>

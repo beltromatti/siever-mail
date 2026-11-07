@@ -4,7 +4,7 @@ Parametri:
 
 - `cosa`: il riferimento — un messaggio (m…), un allegato o un file (f…), un evento (e…), un progetto (p…), una bozza (b…) — oppure il percorso completo di un file.
 - `conversazione`: per un messaggio, true per leggere tutta la sua conversazione in ordine di data, comprese le risposte dell'utente. Usalo quando serve capire una storia.
-- `da_carattere`: per riprendere un testo lungo da un certo punto; `pagina`: per un PDF, la pagina da cui partire.
+- `da_carattere`: per riprendere un testo lungo da un certo punto; `pagina`: per un PDF, la pagina da cui partire, e per un progetto, le sue conversazioni più vecchie (30 per pagina).
 
 Cosa restituisce:
 

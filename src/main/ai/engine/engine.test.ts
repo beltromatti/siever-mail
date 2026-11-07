@@ -12,6 +12,7 @@ import type { OnboardingState } from '@shared/segretario'
 import { ensureAiSchema } from '../schema'
 import { memorySql } from '../testing/memory-sql'
 import { calendarHeld, SegretarioEngine, setupHold, type EngineDeps } from './engine'
+import { Reachability } from './reachability'
 import { KeyRefused, Scheduler, WorkFailure, type TaskExecutor } from './scheduler'
 import { WorkQueue, type WorkUnit } from './work-queue'
 
@@ -64,26 +65,54 @@ describe('WorkQueue', () => {
     expect(second.id).not.toBe(first.id)
   })
 
-  it('tries a failure again, does not count the network, and leaves it failed after three', async () => {
+  it('puts back what was cut short, and leaves a failure failed until it is tried again', async () => {
     const unit = await queue.enqueue({ task: 'lettura', scopeKey: 'k', scope: {}, priority: 10 })
 
     await queue.claim(unit.id)
-    expect(await queue.fail(unit.id, 'rete', { retry: true, counts: false, maxAttempts: 3 })).toBe(
-      'da_riprovare'
-    )
+    expect(await queue.fail(unit.id, 'Interrotto.', { retry: true })).toBe('da_riprovare')
     expect((await queue.get(unit.id))?.attempts).toBe(0)
 
-    for (const expected of ['da_riprovare', 'da_riprovare', 'fallito']) {
-      await sql.run('UPDATE ai_work SET not_before = 0 WHERE id = ?', unit.id)
-      await queue.claim(unit.id)
-      expect(
-        await queue.fail(unit.id, 'nota mancante', { retry: true, counts: true, maxAttempts: 3 })
-      ).toBe(expected)
-    }
+    await queue.claim(unit.id)
+    expect(await queue.fail(unit.id, 'Mi sono fermato.', { retry: false })).toBe('fallito')
+    // Not tried again by itself, however long it waits: only when the user says so.
+    await sql.run('UPDATE ai_work SET updated_at = 0 WHERE id = ?', unit.id)
+    await queue.prune(0)
+    expect(await queue.busy('k')).toBe(true)
+    expect([...(await queue.failedAt(['k'])).keys()]).toEqual(['k'])
+    expect(await queue.ready(10)).toEqual([])
 
-    expect([...(await queue.failedSince(['k'], 0)).keys()]).toEqual(['k'])
     await queue.retryFailed()
     expect((await queue.get(unit.id))?.status).toBe('in_coda')
+  })
+
+  it('lets new work on the same matter settle an earlier failure when it is done', async () => {
+    const failed = await queue.enqueue({ task: 'lettura', scopeKey: 'k', scope: {}, priority: 10 })
+    await queue.claim(failed.id)
+    await queue.fail(failed.id, 'Mi sono fermato.', { retry: false })
+
+    const next = await queue.enqueue({ task: 'lettura', scopeKey: 'k', scope: {}, priority: 10 })
+    await queue.claim(next.id)
+    await queue.complete(next.id)
+
+    expect((await queue.get(failed.id))?.status).toBe('annullato')
+    expect(await queue.busy('k')).toBe(false)
+  })
+
+  it('takes away the failures of what goes away, and keeps them when the AI only goes off', async () => {
+    const unit = await queue.enqueue({
+      task: 'lettura',
+      scopeKey: 'lettura:a1:t1',
+      scope: {},
+      priority: 10
+    })
+    await queue.claim(unit.id)
+    await queue.fail(unit.id, 'Mi sono fermato.', { retry: false })
+
+    await queue.cancelWaiting()
+    expect((await queue.get(unit.id))?.status).toBe('fallito')
+
+    await queue.cancelWaiting({ scopePrefix: 'lettura:a1:' })
+    expect((await queue.get(unit.id))?.status).toBe('annullato')
   })
 
   it('lets the unit that waits take the place of one that failed for the same scope', async () => {
@@ -91,14 +120,11 @@ describe('WorkQueue', () => {
     await queue.claim(running.id)
     const waiting = await queue.enqueue({ task: 'lettura', scopeKey: 'k', scope: {}, priority: 10 })
 
-    expect(
-      await queue.fail(running.id, 'nota mancante', { retry: true, counts: true, maxAttempts: 3 })
-    ).toBe('da_riprovare')
+    expect(await queue.fail(running.id, 'Interrotto.', { retry: true })).toBe('da_riprovare')
     expect((await queue.get(running.id))?.status).toBe('annullato')
     expect(await queue.get(waiting.id)).toMatchObject({
       status: 'in_coda',
-      attempts: 1,
-      lastError: 'nota mancante'
+      lastError: 'Interrotto.'
     })
   })
 
@@ -106,7 +132,7 @@ describe('WorkQueue', () => {
     const fail = async (): Promise<string> => {
       const unit = await queue.enqueue({ task: 'punto', scopeKey: 'p', scope: {}, priority: 30 })
       await queue.claim(unit.id)
-      await queue.fail(unit.id, 'no', { retry: false, counts: true, maxAttempts: 3 })
+      await queue.fail(unit.id, 'no', { retry: false })
       return unit.id
     }
     await fail()
@@ -147,12 +173,14 @@ describe('Scheduler', () => {
   let sql: ReturnType<typeof memorySql>
   let queue: WorkQueue
   let scheduler: Scheduler | null
+  let reachability: Reachability
 
   beforeEach(async () => {
     sql = memorySql()
     await ensureAiSchema(sql)
     queue = new WorkQueue(sql)
     scheduler = null
+    reachability = new Reachability()
   })
 
   afterEach(async () => {
@@ -209,7 +237,7 @@ describe('Scheduler', () => {
         )
       }
     }
-    scheduler = new Scheduler(queue, { giornata: executor }, { concurrency: () => 2 })
+    scheduler = new Scheduler(queue, { giornata: executor }, { reachability, concurrency: () => 2 })
     const unit = await queue.enqueue({ task: 'giornata', scopeKey: 'g', scope: {}, priority: 20 })
     await scheduler.start()
     await until(() => runs === 1)
@@ -237,7 +265,7 @@ describe('Scheduler', () => {
         )
       }
     }
-    scheduler = new Scheduler(queue, { lettura: executor }, { concurrency: () => 2 })
+    scheduler = new Scheduler(queue, { lettura: executor }, { reachability, concurrency: () => 2 })
 
     for (let n = 0; n < 18; n += 1) {
       await queue.enqueue({
@@ -261,7 +289,7 @@ describe('Scheduler', () => {
 
   it('never runs together two units that hold the same key', async () => {
     const executor = gatedExecutor((unit) => [(unit.scope as { project: string }).project])
-    scheduler = new Scheduler(queue, { lettura: executor }, { concurrency: () => 4 })
+    scheduler = new Scheduler(queue, { lettura: executor }, { reachability, concurrency: () => 4 })
     await queue.enqueue({ task: 'lettura', scopeKey: 'a', scope: { project: 'p1' }, priority: 10 })
     await queue.enqueue({ task: 'lettura', scopeKey: 'b', scope: { project: 'p1' }, priority: 10 })
     await queue.enqueue({ task: 'lettura', scopeKey: 'c', scope: { project: 'p2' }, priority: 10 })
@@ -282,7 +310,7 @@ describe('Scheduler', () => {
       ...gatedExecutor((unit) => [(unit.scope as { who: string }).who]),
       order: (unit: WorkUnit) => Date.parse((unit.scope as { newest: string }).newest)
     }
-    scheduler = new Scheduler(queue, { lettura: executor }, { concurrency: () => 4 })
+    scheduler = new Scheduler(queue, { lettura: executor }, { reachability, concurrency: () => 4 })
     // Queued newest first, as the planner does: Rossi's later conversation, then his earlier one.
     await queue.enqueue({
       task: 'lettura',
@@ -306,60 +334,42 @@ describe('Scheduler', () => {
     executor.release('rossi-ricevuto')
   })
 
-  it('waits, one try at a time, while the connection does not answer, and counts nothing', async () => {
-    let answering = false
-    let together = 0
-    let most = 0
-    const ran: string[] = []
-    scheduler = new Scheduler(
-      queue,
-      {
-        lettura: {
-          lockKeys: async (unit) => [unit.scopeKey],
-          run: async (unit) => {
-            together += 1
-            most = Math.max(most, together)
-            await new Promise((resolve) => setTimeout(resolve, 5))
-            together -= 1
-
-            if (!answering) {
-              throw new WorkFailure('Rete assente', true, false, true)
-            }
-
-            ran.push(unit.scopeKey)
-          }
-        }
-      },
-      { concurrency: () => 4 }
-    )
+  it('starts one unit at a time while OpenRouter does not answer, and the rest once it does', async () => {
+    const executor = gatedExecutor((unit) => [unit.scopeKey])
+    scheduler = new Scheduler(queue, { lettura: executor }, { reachability, concurrency: () => 4 })
 
     for (const key of ['a', 'b', 'c']) {
       await queue.enqueue({ task: 'lettura', scopeKey: key, scope: {}, priority: 10 })
     }
 
+    // A run found OpenRouter away: until the wait is over, nothing new starts.
+    reachability.failed(Date.now())
     await scheduler.start()
-    await until(() => scheduler?.waitingForNetwork !== null)
-    // The three that ran when the network went fail as one try: the first wait, not the third.
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(scheduler.waitingForNetwork!.until - Date.now()).toBeLessThanOrEqual(30_000)
-    // Found out: from now on one tries, and only when the wait is over.
-    const tried = ran.length
-    most = 0
-    scheduler.online()
     await new Promise((resolve) => setTimeout(resolve, 40))
-    expect(most).toBe(1)
-    expect(ran.length).toBe(tried)
-    expect((await queue.counts()).every((count) => count.status !== 'fallito')).toBe(true)
+    expect(executor.started).toEqual([])
+    expect(scheduler.waitingForNetwork).not.toBeNull()
 
-    answering = true
-    scheduler.online()
-    await until(() => ran.length === 3)
+    // The wait over, one tries.
+    reachability.online()
+    scheduler.wake()
+    await until(() => executor.started.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(executor.started).toHaveLength(1)
+
+    // It got through: the rest follow.
+    reachability.answered()
+    scheduler.wake()
+    await until(() => executor.started.length === 3)
     expect(scheduler.waitingForNetwork).toBeNull()
+
+    for (const key of ['a', 'b', 'c']) {
+      executor.release(key)
+    }
   })
 
   it('keeps a place for new mail while the backlog is read', async () => {
     const executor = gatedExecutor((unit) => [unit.scopeKey])
-    scheduler = new Scheduler(queue, { lettura: executor }, { concurrency: () => 2 })
+    scheduler = new Scheduler(queue, { lettura: executor }, { reachability, concurrency: () => 2 })
 
     for (const key of ['old1', 'old2', 'old3']) {
       await queue.enqueue({ task: 'lettura', scopeKey: key, scope: {}, priority: 60 })
@@ -399,7 +409,7 @@ describe('Scheduler', () => {
           }
         }
       },
-      { concurrency: () => 1 }
+      { reachability, concurrency: () => 1 }
     )
     await queue.enqueue({ task: 'lettura', scopeKey: 'a', scope: {}, priority: 10 })
     await queue.enqueue({ task: 'lettura', scopeKey: 'b', scope: {}, priority: 10 })
@@ -414,7 +424,7 @@ describe('Scheduler', () => {
     await until(() => ran.length === 2)
   })
 
-  it('records a failure and tries again', async () => {
+  it('leaves a unit that failed failed, without trying it again by itself', async () => {
     let calls = 0
     scheduler = new Scheduler(
       queue,
@@ -423,18 +433,21 @@ describe('Scheduler', () => {
           lockKeys: async () => [],
           run: async () => {
             calls += 1
-            throw new WorkFailure('Manca la nota di m2', true, true)
+            throw new WorkFailure(
+              'Mi sono fermato: da 10 passaggi di fila non riuscivo ad andare avanti.'
+            )
           }
         }
       },
-      { concurrency: () => 1 }
+      { reachability, concurrency: () => 1 }
     )
     const unit = await queue.enqueue({ task: 'lettura', scopeKey: 'a', scope: {}, priority: 10 })
     await scheduler.start()
 
-    await until(async () => (await queue.get(unit.id))?.status === 'da_riprovare')
+    await until(async () => (await queue.get(unit.id))?.status === 'fallito')
+    await new Promise((resolve) => setTimeout(resolve, 50))
     expect(calls).toBe(1)
-    expect((await queue.get(unit.id))?.lastError).toBe('Manca la nota di m2')
+    expect((await queue.get(unit.id))?.lastError).toContain('Mi sono fermato')
   })
 })
 

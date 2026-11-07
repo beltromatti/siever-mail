@@ -116,6 +116,16 @@ export interface SegretarioMailPort {
   recentMailIndexed(accountId: string, days: number): Promise<boolean>
   /** The client the search and the threads read from (see `mail-search.ts`). */
   searchClient(): Promise<PrismaClient>
+  /**
+   * What the servers find for the words in these folders, over the whole text
+   * of every message — the cache holds it only for the messages downloaded —
+   * the newest first. Slower than the cache: asked when the search needs it.
+   */
+  searchServer(
+    mailboxes: ReadonlyArray<{ accountId: string; folderPath: string }>,
+    text: string,
+    options: { background: boolean }
+  ): Promise<MessageRef[]>
   /** A message with its text, downloaded when the cache does not have it. */
   readMessage(ref: MessageRef): Promise<MailMessageDetail & { textForReading: string }>
   attachmentContent(
@@ -227,6 +237,26 @@ export interface RunContext {
   results: RunResults
   /** For `scrittura`: the draft open in the editor, and the passage selected in it. */
   editor: { draftId: string; selection: string | null } | null
+  /** File searches not finished yet, by name (`s1`): where each goes on from. */
+  fileSearches: Map<string, FileSearch>
+}
+
+/**
+ * A file search under way: what it looks for, the folders it has not looked
+ * in yet, and what it found and has not shown yet.
+ */
+export interface FileSearch {
+  words: string[]
+  queue: string[]
+  seen: Set<string>
+  pending: FoundFile[]
+}
+
+export interface FoundFile {
+  path: string
+  directory: boolean
+  size: number
+  modified: number
 }
 
 /** The key the run remembers a revision under: `item:12`, `note:acc:key`, `memory:tu.md`… */

@@ -1061,12 +1061,19 @@ with it on, the reading with it on and mail to read. The state is kept in `ai_me
 so a quit brings the user back to the same step. Conoscimi is started by
 the user and watched as it works; the reading step shows each connection's
 horizon with Conoscimi's reason, and the messages and events within it are
-read eight at a time, with the progress, an estimate and what failed —
-nothing passes for read, and the user enters anyway. A connection added to
-a Segretario that knows the user is what that Conoscimi reads, said so. A connection that cannot
-sync does not hold the preparation back: it says which, and "Continua
-senza" goes on. "Rifai Conoscimi" cancelled goes back to the app with the
-memory as it was. The engine follows the setup: until its Conoscimi is
+read eight at a time, with the progress and an estimate. Nothing is
+skipped with the AI on: what does not go is tried again, as often as the
+user wants, or the setup ends without the AI (`continueWithoutAi`: the AI
+goes off, the setup goes to its last step, and turned on again it starts
+from what it does not know yet) — a connection that cannot sync ("Riprova"
+reconnects every mailbox and calendar, or "Togli"; with the AI off it may
+go on, trying by itself), a Conoscimi that stopped, the readings that
+failed (asked at the end of the bar, "Riprova" trying only those). While
+OpenRouter does not answer, Conoscimi and the reading wait for it and go
+on by themselves, and the user may still end without the AI. A connection
+added to a Segretario that knows the user is what that Conoscimi reads,
+said so. "Rifai Conoscimi" cancelled, or stopped, goes back to the app
+with what was known as it was. The engine follows the setup: until its Conoscimi is
 done, the setup's connections are not read, so the reading starts
 informed. Only the setup that turns the AI on (`setupTurnsAiOn`: its own
 cases, or a connection added with the AI off and turned on along the way,
@@ -1085,31 +1092,48 @@ conversation is rebuilt at every step from the run's log (`ai_events`,
 `agent/conversation.ts`) — the context, the user's words, the model's turns
 and tool calls, the results, confirmations, compactions, the changes made.
 At start, a conversation in the panel that a quit cut short says so and
-waits for the user; work done alone starts over from the queue. What the harness
-keeps for itself is what cannot be left to the model:
+waits for the user; work done alone starts over from the queue. How many turns a run takes, how
+long, how deep the model thinks (no reasoning effort is sent) and how much
+it writes (no `max_tokens`) are the model's: the harness sets no limit on
+any of them. What it keeps for itself is what cannot be left to the model:
 
 - the user's confirmation, on the run's card, before anything reaches
   others — only a conversation in the panel can ask for it
   (`RunContext.watched`, see [What a run may do](#what-a-run-may-do));
-- the size of what the model reads: past 60 000 prompt tokens old tool
-  results are cleared, the eight newest kept — at once the first time, then
-  twelve at a time, since each clearing changes the prefix the provider
-  caches; past 140 000 the older part of the run is summarised
-  (`infrastruttura/compattazione.md`), and a run compacted in the middle
-  goes on from its context and the summary; 80 steps at most;
+- the model's own context: past 85% of what the model reads at once
+  (`COMPACT_AT_SHARE`, of the `context_length` OpenRouter gives for the
+  model, asked with the key's check and kept by the service) the older part
+  of the run is summarised (`infrastruttura/compattazione.md`), with no cap
+  on the summary, and the summary takes its place; the step under way — the
+  last turn's calls and their results — stays word for word, and a run
+  compacted in the middle goes on from its context, the summary and that
+  step. Nothing is cleared before: cached, what the run read costs little,
+  and taking it out would break the cache. The log keeps everything;
+- a model that does not answer: a call that finds OpenRouter or the network
+  away (`network`, `unavailable`, `rate-limited`, `timeout` — after the
+  client's own quick retries) does not fail the run: the run waits
+  (`engine/reachability.ts`, the same waits the scheduler keeps, below) and
+  makes the same call again from the same log, for as long as it takes; a
+  turn cut off midway has what was shown of it cleared first. The AI going
+  off, the user, a quit or the sleep stop the wait;
 - a tool call that failed is not made again as it was, remembered by its
   cause: one that failed on a short name the run had not been given
   (`UnknownHandle`) may be made again once a tool gives new names, one
   refused for a conflict at once (see [The registry](#the-registry));
   invalid JSON and an unknown tool count as failures, and a step cut off by
   its length says so instead of "invalid JSON";
-- how long work alone may take: a background run is stopped after 15
-  minutes (Conoscimi 60, `al_passo` and `riflessione` 30) and that counts
-  as a failure — only a call that never returns gets there; the user's own
-  runs have no limit. A run stopped before it began (the AI switched off,
-  the computer asleep) does not run;
 - what the task must leave (`missing`): a run that stops short is told what
-  is missing, twice at most, then fails.
+  is missing, for as long as it gets somewhere;
+- a run that only turns in place: ten turns in a row that get nowhere
+  (`TURNS_WITHOUT_PROGRESS`) — every call failing or refused (a conflict,
+  which shows how things are now, counts as getting somewhere), or the
+  task's result asked for and not left — stop it as stuck (`stuck`). Not a
+  limit on how much it works: the only stop a run has. A run stopped before
+  it began (the AI switched off, the computer asleep) does not run. The
+  requests the user waits for — the writing in the editor, the reread
+  before sending, the search asked in words — have no time limit either:
+  the user stops them (`stopAsking`; "Invia subito" sends while the reread
+  goes on).
 
 What the model reads is its own choice: the harness checks a tool call,
 never the text the model writes, and decides only the little a run begins
@@ -1211,10 +1235,11 @@ idempotent: asked again, it queues nothing twice. In order:
 
 **How far back.** Each connection — a mailbox, a calendar connection — is
 read one by one as far back as its horizon (`ai_reading`, `READING_DAYS`:
-30 days unless decided, 14 to 365). Conoscimi decides it once it knows the
-connection, from what the `connessioni` tool shows — how many messages
-each period holds, what reading one costs from the readings of the last
-month — and says why; the user can ask for another in chat, and what they
+30 days unless decided, never under 14 so the work starts full, with no
+upper bound). Conoscimi decides it once it knows the connection, from what
+the `connessioni` tool shows — how many messages each period holds, up to
+all of them, what reading one costs from the readings of the last month —
+and says why; the user can ask for another in chat, and what they
 asked stands. A horizon moved back has what it adds read, the same way;
 moved forward, what was read stays.
 
@@ -1227,15 +1252,19 @@ The queue (`work-queue.ts`, `ai_work`) is durable. One unit waits per scope
 key (`lettura:<account>:<thread>`, `giornata:<day>`, `punto:<project>`…, a
 partial unique index): what comes for a scope while it waits joins it — the
 scopes merged, the more urgent priority kept, a burst's start moved on. A
-failed unit is tried again after a minute, then five, three attempts in
-all; a request that hung (`timeout`) counts against it, the network or the
-provider not answering does not (the scheduler waits, below). Work
-failed for good is not queued again for its scope for a day
-(`FAILED_REST_MS`) — a failure repeated at every planning would be paid
-each time — and is then forgotten with the work done. Settings shows what
-failed, with "Riprova": the latest failure of each scope is tried again,
-unless work for it already waits. When a unit for the same scope is
-already waiting, a failing one joins it, with its attempts. The AI switched
+unit that fails stays failed: it is not tried again by itself — later it
+may no longer be of use — and its scope is not queued again (`busy`,
+`failedAt`) until the user says "Riprova" or new facts on the same matter
+come after the failure (a message in the conversation, a calendar change);
+that new work, done, settles the failure (`complete`). A failure is never
+forgotten with the work done (`prune` keeps it); it goes with its
+connection when that is removed. Where it shows the user decides: the
+guided setup's reading asks to try again what failed, or to go on without
+the AI; the panel and Settings show it with "Riprova", the latest failure of
+each scope tried again unless work for it already waits. Cut short by a
+quit, the sleep or a refused key, a unit waits to start again, as it was;
+when a unit for the same scope is already waiting, that one takes its
+place. The AI switched
 off stops what runs and lets go of what waits (`switchedOff`): on again,
 the planning finds from the state what is still to do; nothing queued
 starts while it is off. After a quit, what was
@@ -1267,12 +1296,13 @@ holds it ends, which wakes it.
 
 A key refused or a credit run out stops the scheduler from starting
 anything more (`KeyRefused`) for the moment the AI takes to go off, and
-going off empties the queue. When the network or
-the provider does not answer (`network`, `unavailable`, `rate-limited`),
-the whole engine waits — 30 s, 1 min, 2 min, then 5 min between tries —
-with one unit trying at a time; it tries at once when the computer wakes
-and goes back to full pace at the first success. A request the provider
-blocks for what it carries (`blocked`) is that unit's failure only.
+going off empties the queue. When OpenRouter does not answer, the runs
+under way wait inside (above) and the scheduler keeps the same wait
+(`Reachability`): 30 s, 1 min, 2 min, then 5 min between tries, one unit
+starting at a time; it tries at once when the computer wakes, and every run
+and the scheduler go back to full pace at the first call that gets
+through. A request the provider blocks for what it carries (`blocked`) is
+that unit's failure only.
 
 ### The registry
 
@@ -1392,24 +1422,24 @@ history.
 Every run has the same tools (`tools/`), each described to the model by
 `prompts/strumenti/<name>.md`, the extension's after them:
 
-| Tool           | What it does                                                                                                                                                                                                                                                             |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `cerca_posta`  | The full-text index over every account: words, folder, project, period, unread, attachments; with `quadro`, who the user writes to and hears from, month by month (`mail-overview.ts`).                                                                                  |
-| `cerca_file`   | Files and folders by name in the user's folders and the mounted disks, or a folder's listing — all of it read and sorted, folders then the newest, before it is cut.                                                                                                     |
-| `leggi`        | Whatever a handle names — a message or its whole conversation with the work already on it, an attachment or a file (`extraction.ts`), an event, a project, a draft — or a file by its path.                                                                              |
-| `nota`         | Writes or corrects a message's note.                                                                                                                                                                                                                                     |
-| `impegni`      | Lists the commitments — by kind, date, project or person, with `chiuse` those closed in the last 14 days — and changes them, several operations a call; one opens on a message, an event, or the user's word in the panel; an update can put right where one comes from. |
-| `progetti`     | Lists, creates, links and unlinks conversations and events, renames, describes, writes "Il punto", merges, hides, concludes, links folders.                                                                                                                              |
-| `risposta`     | Lists the replies and reminders prepared, prepares one, confirms one to look at again, discards one.                                                                                                                                                                     |
-| `scrivi_bozza` | A real draft — reply, forward, new — saved in Bozze and opened in the composer; in `scrittura`, the text for the editor.                                                                                                                                                 |
-| `invia_bozza`  | Sends a draft once the user confirms its card.                                                                                                                                                                                                                           |
-| `organizza`    | Archives, moves, flags, marks read or unread, moves to the Trash.                                                                                                                                                                                                        |
-| `calendario`   | Lists events (with the events it proposed), searches them by words, past and coming, finds free times, creates, changes and deletes what the user organises, answers invitations, proposes, withdraws its own proposals (`ritira`).                                      |
-| `memoria`      | Reads, searches, edits, inserts, writes, renames and deletes notes; a note's history, and a version restored.                                                                                                                                                            |
-| `oggi`         | The letter of Oggi — written by the day's run, or when the user asks: a reading puts what matters today in the commitments instead — and a meeting's preparation.                                                                                                        |
-| `revisione`    | The outcome of a reread before sending: four warnings at most, each within 280 characters, or it is refused.                                                                                                                                                             |
-| `mostra`       | Opens a message, a draft, a project, an event or a day on screen, or a search as a list.                                                                                                                                                                                 |
-| `diario`       | What it did in the last days, run by run, with the changes each made: searched in SQL, 40 runs at most.                                                                                                                                                                  |
+| Tool           | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cerca_posta`  | The full-text index over every account: words, folder, project, period, unread, attachments, no cap on how many; it says how many messages in reach have no text downloaded (found there by envelope only), and with `nel_server` asks the servers for the words in every message's whole text (`searchServer`: Gmail's All Mail alone, a search that never yields to the list's); with `quadro`, who the user writes to and hears from, month by month (`mail-overview.ts`). |
+| `cerca_file`   | Files and folders by name in the user's folders and the mounted disks, a few seconds at a time: a search that has not looked everywhere says so and goes on from where it stopped (`continua`), what it found past `limite` kept for the next turn; or a folder's listing — all of it read and sorted, folders then the newest — page by page (`pagina`).                                                                                                                     |
+| `leggi`        | Whatever a handle names — a message or its whole conversation with the work already on it, an attachment or a file of any size (`extraction.ts`: a PDF page by page and each page whole, a sheet whole, a picture over 5 MB drawn smaller), an event, a project (its conversations 30 a `pagina`), a draft — or a file by its path.                                                                                                                                           |
+| `nota`         | Writes or corrects a message's note.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `impegni`      | Lists the commitments — by kind, date, project or person, with `chiuse` those closed in the last 14 days — and changes them, several operations a call; one opens on a message, an event, or the user's word in the panel; an update can put right where one comes from.                                                                                                                                                                                                      |
+| `progetti`     | Lists, creates, links and unlinks conversations and events, renames, describes, writes "Il punto", merges, hides, concludes, links folders.                                                                                                                                                                                                                                                                                                                                   |
+| `risposta`     | Lists the replies and reminders prepared, prepares one, confirms one to look at again, discards one.                                                                                                                                                                                                                                                                                                                                                                          |
+| `scrivi_bozza` | A real draft — reply, forward, new — saved in Bozze and opened in the composer; in `scrittura`, the text for the editor.                                                                                                                                                                                                                                                                                                                                                      |
+| `invia_bozza`  | Sends a draft once the user confirms its card.                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `organizza`    | Archives, moves, flags, marks read or unread, moves to the Trash.                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `calendario`   | Lists events (with the events it proposed), searches them by words, past and coming, finds free times, creates, changes and deletes what the user organises, answers invitations, proposes, withdraws its own proposals (`ritira`).                                                                                                                                                                                                                                           |
+| `memoria`      | Reads, searches, edits, inserts, writes, renames and deletes notes; a note's history, and a version restored.                                                                                                                                                                                                                                                                                                                                                                 |
+| `oggi`         | The letter of Oggi — written by the day's run, or when the user asks: a reading puts what matters today in the commitments instead — and a meeting's preparation.                                                                                                                                                                                                                                                                                                             |
+| `revisione`    | The outcome of a reread before sending: four warnings at most, each within 280 characters, or it is refused.                                                                                                                                                                                                                                                                                                                                                                  |
+| `mostra`       | Opens a message, a draft, a project, an event or a day on screen, or a search as a list.                                                                                                                                                                                                                                                                                                                                                                                      |
+| `diario`       | What it did in the last days, run by run, with the changes each made: searched in SQL, 40 runs at most.                                                                                                                                                                                                                                                                                                                                                                       |
 
 Making an event or proposing one is idempotent, as making a project or a
 commitment is: they are made one at a time, and one already there at the
@@ -1489,8 +1519,11 @@ is an insertion at a line counted on an older version — at the end of a
 note it always lands. A refusal for a change made meanwhile comes back
 with the note as it is now, numbered, and counts as read (`ToolConflict`
 in `tools/memory.ts`). Every version is kept (the last 40) with who wrote
-it, and can be restored; a note holds 20 000 characters at most. A note is
-read with numbered lines (number, tab, line); a passage copied with the
+it, and can be restored. A note has no size limit: past 20 000 characters
+(`LONG_NOTE_CHARS`) the tool says how long it is — every run that opens it
+reads it all — for the Segretario to decide whether to put it in order or
+split it. A note is read with numbered lines (number, tab, line), whole or
+the lines asked for (`da_riga`, `a_riga`); a passage copied with the
 spaces of that numbering is found all the same, and an edit given without
 its note lands in the one note that holds its text. A search whose words
 are all in a note's name finds the note, not each of its lines. Every run

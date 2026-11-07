@@ -1,6 +1,13 @@
 import { pecLabel } from '@shared/pec'
 import { accountOverview, type OverviewPerson } from '../mail-overview'
-import { folderQueryLabel, searchMail, searchScope } from '../mail-search'
+import {
+  folderQueryLabel,
+  hitsOfRefs,
+  searchMail,
+  searchScope,
+  serverMailboxes,
+  unindexedCount
+} from '../mail-search'
 import { PROMPTS } from '../prompts'
 import {
   booleanArg,
@@ -15,11 +22,8 @@ import {
 import { countOf, formatAddresses, formatDateTime, shortDate } from './format'
 
 const DEFAULT_SEARCH_LIMIT = 20
-const MAX_SEARCH_LIMIT = 50
 const DEFAULT_MONTHS = 12
-const MAX_MONTHS = 60
 const DEFAULT_PEOPLE = 20
-const MAX_PEOPLE = 60
 /** How many hits a search within a project looks through, for the project's to be among them. */
 const PROJECT_OVERFETCH = 6
 
@@ -56,8 +60,8 @@ async function overview(args: Record<string, unknown>, context: ToolContext): Pr
     )
   }
 
-  const months = Math.min(MAX_MONTHS, Math.max(1, numberArg(args, 'mesi') ?? DEFAULT_MONTHS))
-  const people = Math.min(MAX_PEOPLE, Math.max(1, numberArg(args, 'limite') ?? DEFAULT_PEOPLE))
+  const months = Math.max(1, numberArg(args, 'mesi') ?? DEFAULT_MONTHS)
+  const people = Math.max(1, numberArg(args, 'limite') ?? DEFAULT_PEOPLE)
   const since = new Date()
   since.setMonth(since.getMonth() - months)
   const sinceIso = since.toISOString()
@@ -123,6 +127,7 @@ export const searchMailTool: SegretarioTool = {
       con_allegati: { type: 'boolean' },
       progetto: { type: 'string' },
       ovunque: { type: 'boolean' },
+      nel_server: { type: 'boolean' },
       quadro: { type: 'boolean' },
       mesi: { type: 'integer' },
       limite: { type: 'integer' }
@@ -194,30 +199,56 @@ export const searchMailTool: SegretarioTool = {
       : null
 
     const text = stringArg(args, 'testo')
+    const onServer = booleanArg(args, 'nel_server')
+
+    if (onServer && !text) {
+      throw new ToolInputError('`nel_server` cerca nel testo dei messaggi: indica `testo`.')
+    }
+
     const unreadOnly = booleanArg(args, 'non_lette')
-    const limit = Math.min(
-      MAX_SEARCH_LIMIT,
-      Math.max(1, numberArg(args, 'limite') ?? DEFAULT_SEARCH_LIMIT)
-    )
-    const found = await searchMail(await context.mail.searchClient(), scope, {
+    const limit = Math.max(1, numberArg(args, 'limite') ?? DEFAULT_SEARCH_LIMIT)
+    const prisma = await context.mail.searchClient()
+    const query = {
       text,
       from,
       to,
       unreadOnly,
       withAttachments: booleanArg(args, 'con_allegati'),
       limit: projectThreads ? limit * PROJECT_OVERFETCH : limit
-    })
-    const hits = (
-      projectThreads
-        ? found.filter((hit) => projectThreads.has(`${hit.ref.accountId}\u0000${hit.threadId}`))
-        : found
-    ).slice(0, limit)
+    }
+    const found = await searchMail(prisma, scope, query)
+    // The servers, asked: what they find in the whole text of the messages the cache has not
+    // downloaded, after what it found itself.
+    const fromServer =
+      onServer && text
+        ? await hitsOfRefs(
+            prisma,
+            scope,
+            query,
+            await context.mail.searchServer(serverMailboxes(scope), text, {
+              background: context.run.background
+            }),
+            new Set(found.map((hit) => `${hit.ref.accountId}\u0000${hit.messageKey}`))
+          )
+        : []
+    const hits = [...found, ...fromServer]
+      .filter(
+        (hit) => !projectThreads || projectThreads.has(`${hit.ref.accountId}\u0000${hit.threadId}`)
+      )
+      .slice(0, limit)
+    // Not asked of the servers: how many messages here it could find only by their envelope.
+    const unindexed = text && !onServer ? await unindexedCount(prisma, scope, query) : 0
+    const notDownloaded =
+      unindexed > 0
+        ? `\n\n[Il testo di ${countOf(unindexed, 'messaggio', 'messaggi')} di queste cartelle e di questo periodo non è ancora scaricato: qui li trovi solo per oggetto, persone e anteprima. Per cercare anche nel loro testo, rifai la ricerca con nel_server: true.]`
+        : ''
 
     // What was looked for, where and when, as the step's line tells it.
     const looked = [
       'Cercato',
       text ? `«${text}»` : unreadOnly ? 'i non letti' : null,
       project ? `nel progetto ${project.title}` : null,
+      onServer ? 'anche nei server' : null,
       folder
         ? `in ${folderQueryLabel(folder)}${account ? ` di ${account}` : ''}`
         : account
@@ -239,7 +270,10 @@ export const searchMailTool: SegretarioTool = {
       .join(' ')
 
     if (hits.length === 0) {
-      return { content: 'Nessun messaggio trovato.', summary: `${looked} · nessun risultato` }
+      return {
+        content: `Nessun messaggio trovato.${notDownloaded}`,
+        summary: `${looked} · nessun risultato`
+      }
     }
 
     const notes = await context.registry.notes.many(
@@ -275,8 +309,12 @@ export const searchMailTool: SegretarioTool = {
 
     return {
       content: `${countOf(hits.length, 'messaggio', 'messaggi')}${text ? ', i più pertinenti per primi' : ', i più recenti per primi'}${
+        fromServer.length > 0
+          ? `, poi ${countOf(fromServer.length, 'trovato', 'trovati')} dai server`
+          : ''
+      }${
         hits.length === limit ? ' (potrebbero essercene altri: restringi o alza il limite)' : ''
-      }:\n\n${lines.join('\n\n')}`,
+      }:\n\n${lines.join('\n\n')}${notDownloaded}`,
       summary: `${looked} · ${countOf(hits.length, 'messaggio', 'messaggi')}`,
       messages: hits.map((hit) => hit.ref)
     }

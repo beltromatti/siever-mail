@@ -1,4 +1,9 @@
-import { memoryHeadline, normalizeMemoryPath, type MemoryDocument } from '../memory/notebook'
+import {
+  LONG_NOTE_CHARS,
+  memoryHeadline,
+  normalizeMemoryPath,
+  type MemoryDocument
+} from '../memory/notebook'
 import { PROMPTS } from '../prompts'
 import { RegistryRefusal } from '../registry/types'
 import {
@@ -41,12 +46,24 @@ function textArg(args: Record<string, unknown>): string {
   return text
 }
 
-function numbered(document: MemoryDocument): string {
-  return `${document.path} (versione ${document.revision}, aggiornata il ${formatDateTime(new Date(document.updatedAt).toISOString())})\n${document.content
-    .replace(/\n$/, '')
-    .split('\n')
-    .map((line, index) => `${String(index + 1).padStart(4)}\t${line}`)
+/** A note with its lines numbered: all of it, or the lines asked for. */
+function numbered(document: MemoryDocument, lines?: { from?: number; to?: number }): string {
+  const all = document.content.replace(/\n$/, '').split('\n')
+  const from = Math.max(1, lines?.from ?? 1)
+  const to = Math.min(all.length, lines?.to ?? all.length)
+  const part = from > 1 || to < all.length
+
+  return `${document.path} (versione ${document.revision}, aggiornata il ${formatDateTime(new Date(document.updatedAt).toISOString())}${part ? `; righe ${from}–${to} di ${all.length}` : ''})\n${all
+    .slice(from - 1, to)
+    .map((line, index) => `${String(from + index).padStart(4)}\t${line}`)
     .join('\n')}`
+}
+
+/** What a note now is, when it has grown long: said, for the Segretario to decide. */
+function lengthWord(document: MemoryDocument): string {
+  return document.content.length > LONG_NOTE_CHARS
+    ? ` È lunga ${document.content.length.toLocaleString('it-IT')} caratteri: ogni lavoro che la apre la legge tutta. Se mescola argomenti diversi, o tiene cose che si ritrovano cercando, valuta di metterla in ordine o di dividerla.`
+    : ''
 }
 
 function isDocument(value: unknown): value is MemoryDocument {
@@ -81,6 +98,8 @@ export const memoryTool: SegretarioTool = {
         }
       },
       riga: { type: 'integer' },
+      da_riga: { type: 'integer' },
+      a_riga: { type: 'integer' },
       nuovo_percorso: { type: 'string' },
       parole: { type: 'string' },
       versione: { type: 'integer' }
@@ -150,7 +169,13 @@ export const memoryTool: SegretarioTool = {
           }
 
           remember(context, document)
-          return { content: numbered(document), summary: `Riletto ${path}` }
+          return {
+            content: numbered(document, {
+              from: numberArg(args, 'da_riga'),
+              to: numberArg(args, 'a_riga')
+            }),
+            summary: `Riletto ${path}`
+          }
         }
         case 'modifica': {
           const edits = objectListArg(args, 'modifiche').map((edit) => ({
@@ -161,7 +186,7 @@ export const memoryTool: SegretarioTool = {
           const document = await notebook.edit(path, edits, actor)
           remember(context, document)
           return {
-            content: `${path} aggiornata (versione ${document.revision}).`,
+            content: `${path} aggiornata (versione ${document.revision}).${lengthWord(document)}`,
             summary: `Aggiornata la nota ${path}`
           }
         }
@@ -177,7 +202,10 @@ export const memoryTool: SegretarioTool = {
             }
           )
           remember(context, document)
-          return { content: `Testo inserito in ${path}.`, summary: `Aggiornata la nota ${path}` }
+          return {
+            content: `Testo inserito in ${path}.${lengthWord(document)}`,
+            summary: `Aggiornata la nota ${path}`
+          }
         }
         case 'scrivi': {
           const text = textArg(args)
@@ -190,13 +218,13 @@ export const memoryTool: SegretarioTool = {
           if (!created && read === undefined) {
             // Rewritten whole without having been read in this work: said, so it is a choice.
             return {
-              content: `${path} riscritta per intero (non l'avevi letta in questo lavoro: se conteneva altro, ora non c'è più — controlla con \`storia\`).`,
+              content: `${path} riscritta per intero (non l'avevi letta in questo lavoro: se conteneva altro, ora non c'è più — controlla con \`storia\`).${lengthWord(document)}`,
               summary: `Riscritta la nota ${path}`
             }
           }
 
           return {
-            content: created ? `Nota ${path} creata.` : `Nota ${path} riscritta.`,
+            content: `${created ? `Nota ${path} creata.` : `Nota ${path} riscritta.`}${lengthWord(document)}`,
             summary: `${created ? 'Creata' : 'Riscritta'} la nota ${path}`
           }
         }

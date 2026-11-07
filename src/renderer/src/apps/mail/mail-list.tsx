@@ -63,6 +63,7 @@ export function MailMessageList({
     conversationProjectTags,
     askingSegretario,
     askSegretario,
+    stopAskingSegretario,
     saveSearch,
     removeSavedSearch,
     search,
@@ -158,7 +159,9 @@ export function MailMessageList({
   const listViewProps: MessageListViewProps = {
     title: currentViewLabel,
     projectTags: currentProjectId || !aiOn ? null : conversationProjectTags,
-    askSegretario: aiOn ? { busy: askingSegretario, onAsk: askSegretario } : undefined,
+    askSegretario: aiOn
+      ? { busy: askingSegretario, onAsk: askSegretario, onStop: stopAskingSegretario }
+      : undefined,
     banner:
       currentProjectId && aiOn ? (
         <ProjectBanner

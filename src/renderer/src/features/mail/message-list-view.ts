@@ -32,7 +32,7 @@ export interface MessageListViewProps {
    * Hands what is typed in the search to the Segretario, to search as it
    * means (⌘↵); absent without the Segretario. Busy while it searches.
    */
-  askSegretario?: { onAsk: (question: string) => void; busy: boolean }
+  askSegretario?: { onAsk: (question: string) => void; onStop: () => void; busy: boolean }
   /** The active search, trimmed; empty when there is none. */
   searchQuery: string
   onClearSearch: () => void

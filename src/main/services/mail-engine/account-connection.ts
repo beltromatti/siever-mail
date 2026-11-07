@@ -155,7 +155,7 @@ const HEALTH_CHECK_TIMEOUT_MS = 20_000
 // Task scheduling priorities. The sync worker always drains higher priorities
 // first, so a freshly-opened folder (active-sync) jumps ahead of the historical
 // bootstrap (background). The primary queue uses 'user' exclusively.
-type TaskPriority = 'user' | 'active-sync' | 'background'
+export type TaskPriority = 'user' | 'active-sync' | 'background'
 const PRIORITY_ORDER: TaskPriority[] = ['user', 'active-sync', 'background']
 
 interface QueuedTask {
@@ -1075,14 +1075,33 @@ export class AccountConnection extends EventEmitter {
    * `imapSearchGroups`) — over their whole text, which the cache holds only
    * for the messages downloaded — the newest first, at most
    * `SERVER_SEARCH_MATCH_LIMIT`. On the sync connection, so reading mail
-   * never waits behind it. A search still waiting when the next one comes
-   * gives way and resolves null: the user has typed on.
+   * never waits behind it. A search of the list still waiting when the next
+   * one comes gives way and resolves null: the user has typed on. One the
+   * Segretario asked for (`asked`) is its own: it never gives way, and goes
+   * at the priority of its work.
    */
   searchMessages(
     folderPath: string,
-    groups: ReadonlyArray<SearchObject>
+    groups: ReadonlyArray<SearchObject>,
+    asked?: { priority: TaskPriority }
   ): Promise<number[] | null> {
     const { promise, resolve, reject } = Promise.withResolvers<number[] | null>()
+
+    if (asked) {
+      this.syncQueue.push({
+        priority: asked.priority,
+        label: `search:${folderPath}`,
+        run: async () => {
+          try {
+            resolve(await this.runSearch(folderPath, groups))
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)))
+          }
+        }
+      })
+      this.startSyncWorkerIfNeeded()
+      return promise
+    }
 
     if (this.waitingSearch) {
       const index = this.syncQueue.indexOf(this.waitingSearch.task)

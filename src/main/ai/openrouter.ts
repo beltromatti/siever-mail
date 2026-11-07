@@ -88,8 +88,12 @@ export interface ChatRequest {
   tools?: ToolDefinition[]
   /** `none` keeps the tools in the prefix (for the cache) while the model answers in words. */
   toolChoice?: 'auto' | 'none'
-  /** `none` turns the model's thinking off: fast for reading and sorting. */
-  reasoningEffort: 'none' | 'low' | 'high'
+  /**
+   * Left out, the model thinks as long as it decides — the Segretario's runs
+   * always; `none` turns the thinking off, for the small calls of the
+   * infrastructure (an activity's title).
+   */
+  reasoningEffort?: 'none'
   maxTokens?: number
   /** Keeps a conversation on one provider, its prefix in the cache. */
   sessionId?: string
@@ -136,10 +140,8 @@ export type SegretarioErrorCode =
   | 'timeout'
   | 'bad-request'
   | 'cancelled'
-  /** A run stopped without leaving what its task asks for. */
-  | 'incomplete'
-  /** A run took more steps than any task should. */
-  | 'too-long'
+  /** A run turned without getting anywhere: every call failing, or the task's result never left. */
+  | 'stuck'
 
 /** A failure of the Segretario's service, with what to tell the user. */
 export class SegretarioError extends Error {
@@ -154,6 +156,11 @@ export class SegretarioError extends Error {
 
   get retryable(): boolean {
     return this.code === 'rate-limited' || this.code === 'unavailable' || this.code === 'network'
+  }
+
+  /** OpenRouter or the model could not be reached: the run waits and tries the same step again. */
+  get unreachable(): boolean {
+    return this.retryable || this.code === 'timeout'
   }
 }
 
@@ -401,13 +408,24 @@ export class OpenRouterClient {
     }
   }
 
-  /** The concrete model the alias points to, by name ("DeepSeek: DeepSeek V4.1 Flash 1017"). */
-  async modelName(key: string, signal?: AbortSignal): Promise<string | null> {
+  /**
+   * The concrete model the alias points to: its name ("DeepSeek: DeepSeek
+   * V4.1 Flash 1017") and how many tokens it reads at once — where a run's
+   * context is compacted from.
+   */
+  async modelInfo(
+    key: string,
+    signal?: AbortSignal
+  ): Promise<{ name: string | null; contextLength: number | null }> {
     const models = await this.getJson<{
-      data?: Array<{ id: string; alias_target?: { name?: string } }>
+      data?: Array<{ id: string; context_length?: number; alias_target?: { name?: string } }>
     }>('/models', key, signal)
+    const model = models.data?.find((candidate) => candidate.id === SEGRETARIO_MODEL)
 
-    return models.data?.find((model) => model.id === SEGRETARIO_MODEL)?.alias_target?.name ?? null
+    return {
+      name: model?.alias_target?.name ?? null,
+      contextLength: typeof model?.context_length === 'number' ? model.context_length : null
+    }
   }
 
   /**
@@ -523,7 +541,7 @@ export class OpenRouterClient {
       messages: request.messages,
       stream: true,
       provider: PROVIDER_POLICY,
-      reasoning: { effort: request.reasoningEffort },
+      ...(request.reasoningEffort ? { reasoning: { effort: request.reasoningEffort } } : {}),
       ...(request.tools && request.tools.length > 0 ? { tools: request.tools } : {}),
       ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
       ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),

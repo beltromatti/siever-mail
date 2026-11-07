@@ -326,6 +326,8 @@ export interface MailApp
   conversationProjectTags: ReadonlyMap<string, string>
   askingSegretario: boolean
   askSegretario: (question: string) => void
+  /** Stops the search asked in words under way. */
+  stopAskingSegretario: () => void
   saveSearch: (searchId: string) => Promise<void>
   removeSavedSearch: (searchId: string) => Promise<void>
   search: string
@@ -2072,6 +2074,8 @@ export function useMailApp({
     () => new Map()
   )
   const [askingSegretario, setAskingSegretario] = useState(false)
+  // The search asked in words under way, by name: the user may stop it.
+  const askingRequestRef = useRef<string | null>(null)
   // The searches kept as folders: in the sidebar, searched again each time they open.
   const [savedSearches, setSavedSearches] = useState<ReadonlyArray<SavedSearch>>([])
 
@@ -3670,16 +3674,36 @@ export function useMailApp({
 
   /** What is typed in the search, handed to the Segretario to search as it means (⌘↵). */
   const askSegretario = (question: string): void => {
+    const requestId = crypto.randomUUID()
+    askingRequestRef.current = requestId
     setAskingSegretario(true)
     void window.segretarioApi
-      .askMail(question)
+      .askMail(question, requestId)
       .then(openAskedSearch)
-      .catch((error: unknown) =>
-        setViewError(
-          error instanceof Error ? error.message : 'Il Segretario non ha potuto cercare.'
-        )
-      )
-      .finally(() => setAskingSegretario(false))
+      .catch((error: unknown) => {
+        // Stopped by the user: nothing to say.
+        if (askingRequestRef.current === requestId) {
+          setViewError(
+            error instanceof Error ? error.message : 'Il Segretario non ha potuto cercare.'
+          )
+        }
+      })
+      .finally(() => {
+        if (askingRequestRef.current === requestId) {
+          askingRequestRef.current = null
+        }
+
+        setAskingSegretario(false)
+      })
+  }
+
+  const stopAskingSegretario = (): void => {
+    const requestId = askingRequestRef.current
+
+    if (requestId) {
+      askingRequestRef.current = null
+      void window.segretarioApi.stopAsking(requestId)
+    }
   }
 
   /** A search asked in words, kept as a folder in the sidebar. */
@@ -3799,6 +3823,7 @@ export function useMailApp({
     conversationProjectTags,
     askingSegretario,
     askSegretario,
+    stopAskingSegretario,
     saveSearch,
     removeSavedSearch,
     search,

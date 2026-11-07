@@ -62,7 +62,6 @@ import {
   parseRecipients
 } from '@shared/email-address'
 import { MAIL_COMPOSER_DEFAULT_FONT_FAMILY } from '@shared/mail-fonts'
-import { REVIEW_TIMEOUT_MS } from '@shared/segretario'
 import type {
   ComposeMailInput,
   DraftAttachment,
@@ -895,6 +894,9 @@ export function MailComposer({
   // What the Segretario found rereading the message as it went: the send waits on the user.
   const [reviewIssues, setReviewIssues] = useState<string[] | null>(null)
   const [assistUndo, setAssistUndo] = useState<string | null>(null)
+  // The writing and the reread under way, by name: the user may stop them.
+  const assistRequestRef = useRef<string | null>(null)
+  const reviewRequestRef = useRef<string | null>(null)
   const editorHandleRef = useRef<RichTextEditorHandle | null>(null)
   // The passage selected when the Segretario was called: only it is rewritten.
   const [assistSelection, setAssistSelection] = useState<{
@@ -917,7 +919,10 @@ export function MailComposer({
 
     const previous = form.html
     const selection = assistSelection
+    const requestId = crypto.randomUUID()
+    assistRequestRef.current = requestId
     const { text } = await window.segretarioApi.assistWriting({
+      requestId,
       draftId: session.id,
       accountId: account.id,
       instruction,
@@ -972,8 +977,9 @@ export function MailComposer({
 
   /**
    * The Segretario rereads the message as it goes, when the user wants it:
-   * what it finds holds the send until the user decides. A reread that
-   * cannot be done in time — offline, no credit — never holds a message.
+   * what it finds holds the send until the user decides. It never holds a
+   * message by itself: the user may send at once while it rereads ("Invia
+   * subito"), and with OpenRouter not answering it does not start.
    */
   const reviewBeforeSending = async (
     recipients: Pick<ComposerFormState, 'to' | 'cc'>
@@ -985,32 +991,48 @@ export function MailComposer({
     setReviewing(true)
 
     try {
-      // Rereading is one of the AI functions: with them off, the message goes as it is.
-      if (!(await window.segretarioApi.getPreferences()).enabled) {
+      // Rereading is one of the AI functions: with them off, the message goes as it is; and so
+      // it does while OpenRouter is not answering.
+      if (
+        !(await window.segretarioApi.getPreferences()).enabled ||
+        (await window.segretarioApi.getEngineState()).waiting
+      ) {
         return []
       }
 
-      return await Promise.race([
-        window.segretarioApi.reviewDraft({
-          accountId: account.id,
-          to: recipients.to.map(addressLabel),
-          cc: recipients.cc.map(addressLabel),
-          subject: form.subject.trim(),
-          writtenText: writtenText(form.html),
-          attachments: attachments.map((attachment) => attachment.name),
-          replyTo: initialData.original?.ref ?? null
-        }),
-        new Promise<string[]>((resolve) => window.setTimeout(() => resolve([]), REVIEW_TIMEOUT_MS))
-      ])
+      const requestId = crypto.randomUUID()
+      reviewRequestRef.current = requestId
+      return await window.segretarioApi.reviewDraft({
+        requestId,
+        accountId: account.id,
+        to: recipients.to.map(addressLabel),
+        cc: recipients.cc.map(addressLabel),
+        subject: form.subject.trim(),
+        writtenText: writtenText(form.html),
+        attachments: attachments.map((attachment) => attachment.name),
+        replyTo: initialData.original?.ref ?? null
+      })
     } catch {
       return []
     } finally {
+      reviewRequestRef.current = null
       setReviewing(false)
     }
   }
 
   const handleSend = async (options: { reviewed?: boolean } = {}): Promise<boolean> => {
-    if (!account || !canSend || reviewing) {
+    if (!account || !canSend) {
+      return false
+    }
+
+    // Sent again while it rereads: the reread stops, and the send under way goes on at once.
+    if (reviewing) {
+      const requestId = reviewRequestRef.current
+
+      if (requestId) {
+        void window.segretarioApi.stopAsking(requestId)
+      }
+
       return false
     }
 
@@ -1410,6 +1432,13 @@ export function MailComposer({
                   isReply={initialData.original !== undefined}
                   hasText={writtenText(form.html).length > 0}
                   onAsk={askSegretario}
+                  onStop={() => {
+                    const requestId = assistRequestRef.current
+
+                    if (requestId) {
+                      void window.segretarioApi.stopAsking(requestId)
+                    }
+                  }}
                   onUndo={
                     assistUndo === null
                       ? undefined
@@ -1438,11 +1467,19 @@ export function MailComposer({
               >
                 <PopoverAnchor asChild>
                   <span className="inline-flex">
-                    <ActionTooltip label="Invia il messaggio" commandId="send" side="top">
+                    <ActionTooltip
+                      label={
+                        reviewing
+                          ? 'Rileggo il messaggio prima che parta: invia senza aspettare'
+                          : 'Invia il messaggio'
+                      }
+                      commandId="send"
+                      side="top"
+                    >
                       <Button
                         size="sm"
                         onClick={() => void handleSend()}
-                        disabled={!canSend || reviewing}
+                        disabled={!canSend}
                         className="h-8 gap-1.5 text-[12px]"
                       >
                         {reviewing ? (
@@ -1450,7 +1487,7 @@ export function MailComposer({
                         ) : (
                           <Send className="size-3.5" />
                         )}
-                        {reviewing ? 'Rileggo…' : 'Invia'}
+                        {reviewing ? 'Invia subito' : 'Invia'}
                       </Button>
                     </ActionTooltip>
                   </span>
