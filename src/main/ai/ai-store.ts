@@ -870,7 +870,7 @@ export class AiStore {
       await this.sql.run(`DELETE FROM ${table}`)
     }
 
-    // The facts the engine kept go too.
-    await this.sql.run('DELETE FROM ai_meta')
+    // The facts the engine kept go too; the schema's version stays.
+    await this.sql.run("DELETE FROM ai_meta WHERE key <> 'schema_version'")
   }
 }

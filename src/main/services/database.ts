@@ -66,6 +66,7 @@ import {
   isSameSenderName,
   senderSortKey
 } from '@shared/sender'
+import { SIGNATURE_HTML_FORMAT, upgradeLegacySignatureHtml } from '@shared/signature-html'
 import type { MarkedBefore, MessageMark } from '@shared/message-marks'
 import { subjectSortKey } from '@shared/subject'
 
@@ -207,6 +208,7 @@ const CONTACT_LEARN_DELAY_MS = 150
 /** A sent folder's new messages are counted once its sync has settled. */
 const SENT_RECOUNT_DELAY_MS = 3_000
 const CONTACT_WRITE_BATCH_SIZE = 500
+const CONTACT_REBUILD_PAGE_SIZE = 2_000
 /**
  * Past this many matching senders a search is not looking for one of them
  * ("gmail", "com"), and the list keeps its plain order.
@@ -336,6 +338,9 @@ const MESSAGE_SUMMARY_SELECT = {
   pecKind: true,
   pecRef: true
 } as const satisfies Prisma.MessageSelect
+
+/** Rows re-filed for search per transaction (see `refreshSearchText`). */
+const SEARCH_REFRESH_PAGE_SIZE = 1_000
 
 function addressesSearchText(addresses: ReadonlyArray<MailAddress>): string {
   return foldSearchText(
@@ -680,6 +685,15 @@ function headerSenderName(message: FetchedMessageSummary): string | undefined {
 }
 
 /**
+ * How rows are filed for sorting and grouping (`resolveSenderLabels`,
+ * `senderSortKey`, `subjectSortKey`). Bumping it re-files the rows a
+ * database already holds on the next start:
+ *   1 — one sender's spellings of a name share a label;
+ *   2 — subjects sort by their first letter or digit, those without one first.
+ */
+const SORT_FILING_VERSION = 3
+
+/**
  * The shape of the cache (see `resetCacheIfOutdated`). Bump it when what a
  * cached row holds changes in a way the rows already stored cannot follow:
  *   1 — up to 1.10, bodies kept with each row;
@@ -734,6 +748,7 @@ function markOf(row: MarkRow): MessageMark {
 interface StoredSignatureRow {
   accountId: string
   html: string
+  format: bigint | number
   updatedAt: bigint
 }
 
@@ -1052,6 +1067,8 @@ export class AppDatabase {
   private contactFlush: Promise<void> | null = null
   private sentRecountTimer: ReturnType<typeof setTimeout> | null = null
   private sentRecount: Promise<void> = Promise.resolve()
+  /** Set when the contacts table predates what it now counts: `initialize` rebuilds it. */
+  private contactsOutdated = false
   /**
    * Moves on whenever what the full-text index can match changes — a body
    * stored, a row added or gone — so a search's kept matches are made again.
@@ -1149,25 +1166,27 @@ export class AppDatabase {
     await this.ready
 
     const rows = (await this.prisma.$queryRaw`
-      SELECT account_id AS accountId, html AS html, updated_at AS updatedAt
+      SELECT account_id AS accountId, html AS html, html_format AS format, updated_at AS updatedAt
       FROM account_signatures
       ORDER BY updated_at DESC
     `) as StoredSignatureRow[]
 
-    return rows
-      .filter((row) => typeof row.accountId === 'string' && typeof row.html === 'string')
-      .map((row) => ({
-        accountId: row.accountId,
-        html: row.html,
-        updatedAt: toNumber(row.updatedAt)
-      }))
+    return Promise.all(
+      rows
+        .filter((row) => typeof row.accountId === 'string' && typeof row.html === 'string')
+        .map(async (row) => ({
+          accountId: row.accountId,
+          html: await this.withUpgradedSignature(row),
+          updatedAt: toNumber(row.updatedAt)
+        }))
+    )
   }
 
   async getAccountSignature(accountId: string): Promise<MailAccountSignature | null> {
     await this.ready
 
     const rows = (await this.prisma.$queryRaw`
-      SELECT account_id AS accountId, html AS html, updated_at AS updatedAt
+      SELECT account_id AS accountId, html AS html, html_format AS format, updated_at AS updatedAt
       FROM account_signatures
       WHERE account_id = ${accountId}
       LIMIT 1
@@ -1180,9 +1199,46 @@ export class AppDatabase {
 
     return {
       accountId: row.accountId,
-      html: row.html,
+      html: await this.withUpgradedSignature(row),
       updatedAt: toNumber(row.updatedAt)
     }
+  }
+
+  /**
+   * Brings a stored signature up to date on read, and writes the result back
+   * so the Firme editor shows the HTML the recipient will get:
+   *
+   *   • signatures from before the font fallback chains carry a face
+   *     followed by a bare generic, and lose their identity wherever it is
+   *     not installed — they get the full chain;
+   *   • signatures from before format 2 relied on the old editor's page for
+   *     their compact spacing — it is written onto them (see
+   *     `upgradeLegacySignatureHtml`).
+   *
+   * Failing to persist is not worth surfacing: the upgraded HTML is already
+   * being returned, and the next read tries again.
+   */
+  private async withUpgradedSignature(row: StoredSignatureRow): Promise<string> {
+    const format = toNumber(row.format)
+    const fontUpgraded = upgradeMailFontStacksInHtml(row.html)
+    const upgraded =
+      format < SIGNATURE_HTML_FORMAT ? upgradeLegacySignatureHtml(fontUpgraded) : fontUpgraded
+
+    if (upgraded === row.html && format >= SIGNATURE_HTML_FORMAT) {
+      return row.html
+    }
+
+    try {
+      await this.prisma.$executeRaw`
+        UPDATE account_signatures
+        SET html = ${upgraded}, html_format = ${SIGNATURE_HTML_FORMAT}
+        WHERE account_id = ${row.accountId}
+      `
+    } catch (error) {
+      console.warn('[database] could not persist the upgraded signature', error)
+    }
+
+    return upgraded
   }
 
   async setAccountSignature(
@@ -1192,15 +1248,16 @@ export class AppDatabase {
     await this.ready
 
     const now = BigInt(Date.now())
-    // Kept with the whole font chains, so a face pasted from a message keeps its look where it
-    // is not installed.
+    // Upgraded on the way in as well, so a signature pasted from an older
+    // message is stored with the chains rather than waiting for a read.
     const persistedHtml = upgradeMailFontStacksInHtml(html ?? '')
 
     await this.prisma.$executeRaw`
-      INSERT INTO account_signatures(account_id, html, updated_at)
-      VALUES (${accountId}, ${persistedHtml}, ${now})
+      INSERT INTO account_signatures(account_id, html, html_format, updated_at)
+      VALUES (${accountId}, ${persistedHtml}, ${SIGNATURE_HTML_FORMAT}, ${now})
       ON CONFLICT(account_id) DO UPDATE SET
         html = excluded.html,
+        html_format = excluded.html_format,
         updated_at = excluded.updated_at
     `
 
@@ -1943,10 +2000,13 @@ export class AppDatabase {
   }
 
   /**
-   * A new account starts with the first account's signature or, for the
-   * very first account, the extension's default, with its font chains.
+   * A new account starts with the first account's signature — in whatever
+   * format it is stored, so a legacy one still gets upgraded on read — or,
+   * for the very first account, the extension's default.
    */
-  private async getDefaultSignatureForNewAccount(tx: Prisma.TransactionClient): Promise<string> {
+  private async getDefaultSignatureForNewAccount(
+    tx: Prisma.TransactionClient
+  ): Promise<{ html: string; format: number }> {
     const existingAccounts = (await tx.$queryRaw`
       SELECT id AS id
       FROM accounts
@@ -1957,17 +2017,19 @@ export class AppDatabase {
 
     if (typeof firstAccountId === 'string' && firstAccountId) {
       const signatureRows = (await tx.$queryRaw`
-        SELECT html AS html
+        SELECT html AS html, html_format AS format
         FROM account_signatures
         WHERE account_id = ${firstAccountId}
         LIMIT 1
-      `) as Array<Pick<StoredSignatureRow, 'html'>>
+      `) as Array<Pick<StoredSignatureRow, 'html' | 'format'>>
       const row = signatureRows[0]
 
-      return typeof row?.html === 'string' ? row.html : ''
+      return typeof row?.html === 'string'
+        ? { html: row.html, format: toNumber(row.format) }
+        : { html: '', format: SIGNATURE_HTML_FORMAT }
     }
 
-    return upgradeMailFontStacksInHtml(extensionMain.defaultAccountSignatureHtml)
+    return { html: extensionMain.defaultAccountSignatureHtml, format: SIGNATURE_HTML_FORMAT }
   }
 
   async createAccount(input: CreateAccountInput): Promise<MailAccount> {
@@ -1998,8 +2060,8 @@ export class AppDatabase {
       })
 
       await tx.$executeRaw`
-        INSERT INTO account_signatures(account_id, html, updated_at)
-        VALUES (${account.id}, ${defaultSignature}, ${now})
+        INSERT INTO account_signatures(account_id, html, html_format, updated_at)
+        VALUES (${account.id}, ${defaultSignature.html}, ${defaultSignature.format}, ${now})
         ON CONFLICT(account_id) DO NOTHING
       `
 
@@ -2577,6 +2639,76 @@ export class AppDatabase {
     }
   }
 
+  /**
+   * The contacts learned afresh from every stored message, as sync learns
+   * them, and the sent mail counted: once, when the table gains what it
+   * counts now. What it held before counted nothing — every address once —
+   * and kept names with their quotes and addresses no mail can reach.
+   */
+  private async rebuildContacts(): Promise<void> {
+    const folders = await this.prisma.folder.findMany({
+      select: { accountId: true, path: true, specialUse: true }
+    })
+    const roles = new Map(
+      folders.map((folder) => [`${folder.accountId}\n${folder.path}`, folderRole(folder)])
+    )
+    const entries: ContactEntry[] = []
+    let after = ''
+
+    for (;;) {
+      const page = await this.prisma.message.findMany({
+        where: { id: { gt: after } },
+        orderBy: { id: 'asc' },
+        take: CONTACT_REBUILD_PAGE_SIZE,
+        select: {
+          id: true,
+          accountId: true,
+          folderPath: true,
+          fromJson: true,
+          toJson: true,
+          ccJson: true,
+          dateIso: true
+        }
+      })
+
+      for (const message of page) {
+        entries.push(
+          ...contactsOfMessage(
+            {
+              from: parseJsonArray<MailAddress>(message.fromJson),
+              to: parseJsonArray<MailAddress>(message.toJson),
+              cc: parseJsonArray<MailAddress>(message.ccJson),
+              date: message.dateIso
+            },
+            roles.get(`${message.accountId}\n${message.folderPath}`) ?? null
+          )
+        )
+      }
+
+      if (page.length < CONTACT_REBUILD_PAGE_SIZE) {
+        break
+      }
+
+      after = page[page.length - 1].id
+    }
+
+    // The accounts' own addresses, which no message may name yet.
+    const accounts = await this.prisma.account.findMany({
+      select: { email: true, displayName: true }
+    })
+
+    await this.prisma.contact.deleteMany()
+    await this.writeLearnedContacts([
+      ...collapseContactEntries([
+        ...accounts.flatMap(
+          (account) => contactEntry({ address: account.email, name: account.displayName }) ?? []
+        ),
+        ...entries
+      ]).values()
+    ])
+    await this.recountContactsWritten()
+  }
+
   async getUnifiedInboxIncludedAccountIds(): Promise<string[] | null> {
     await this.ready
 
@@ -3138,11 +3270,48 @@ export class AppDatabase {
   }
 
   /**
+   * The copies an extension saved, which the Segretario's registry kept
+   * before marks were the mail's: each becomes a mark of the extension that
+   * saved it, at its place, with its files, worded as the app worded copies
+   * — the extension words its own marks again. The registry drops the table
+   * after (`ensureAiSchema`, version 7).
+   */
+  private async copiesToMarks(): Promise<void> {
+    const [copies] = await this.prisma.$queryRaw<Array<{ found: number }>>`
+      SELECT COUNT(*) AS found FROM sqlite_master WHERE type = 'table' AND name = 'ai_saved_copies'
+    `
+
+    if (Number(copies?.found ?? 0) === 0) {
+      return
+    }
+
+    await this.prisma.$executeRawUnsafe(`
+      INSERT OR IGNORE INTO message_marks (
+        extension, account_id, message_key, thread_id, from_address, label, place, files_json,
+        marked_at
+      )
+      SELECT source, account_id, message_key, thread_id, from_address, 'Salvato', destination,
+        files_json, saved_at
+      FROM ai_saved_copies
+      WHERE account_id IN (SELECT id FROM accounts)
+    `)
+  }
+
+  /**
    * The calendars' tables (see the `Calendar*` models): the calendar
    * connections, each on its own — Google, Microsoft, CalDAV, a link — and a
    * copy of their calendars and events, kept in step.
    */
   private async ensureCalendarTables(): Promise<void> {
+    const columns = async (table: string): Promise<Set<string>> =>
+      new Set(
+        (
+          (await this.prisma.$queryRawUnsafe(`PRAGMA table_info(${table})`)) as Array<{
+            name: string
+          }>
+        ).map((column) => column.name)
+      )
+
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS calendar_connections (
         id TEXT PRIMARY KEY,
@@ -3157,6 +3326,28 @@ export class AppDatabase {
         problem TEXT
       )
     `)
+
+    // Until 2.0 a calendar was a Google mail account's: each becomes a connection of its own,
+    // with the account's id, so its events keep their keys.
+    if ((await columns('calendar_accounts')).size > 0) {
+      await this.prisma.$executeRawUnsafe(`
+        INSERT OR IGNORE INTO calendar_connections (
+          id, provider, label, mail_account_id, encrypted_secret, connected_at, last_sync_at, problem
+        )
+        SELECT c.account_id, 'google', COALESCE(a.email, c.account_id), a.id, c.encrypted_token,
+          c.connected_at, c.last_sync_at, c.problem
+        FROM calendar_accounts c LEFT JOIN accounts a ON a.id = c.account_id
+      `)
+      await this.prisma.$executeRawUnsafe('DROP TABLE calendar_accounts')
+    }
+
+    for (const table of ['calendar_calendars', 'calendar_events', 'calendar_changes']) {
+      if ((await columns(table)).has('account_id')) {
+        await this.prisma.$executeRawUnsafe(
+          `ALTER TABLE ${table} RENAME COLUMN account_id TO connection_id`
+        )
+      }
+    }
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS calendar_calendars (
@@ -3200,6 +3391,7 @@ export class AppDatabase {
       'CREATE INDEX IF NOT EXISTS idx_calendar_events_range ON calendar_events(starts_at, ends_at)'
     )
     // An invitation's event is looked for by its UID in every calendar connected.
+    await this.prisma.$executeRawUnsafe('DROP INDEX IF EXISTS idx_calendar_events_uid')
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_calendar_events_ical_uid ON calendar_events(ical_uid)'
     )
@@ -3234,6 +3426,46 @@ export class AppDatabase {
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_calendar_changes_at ON calendar_changes(at)'
     )
+
+    // Kept before calendars said whether they take events, and events who put them there.
+
+    if (!(await columns('calendar_calendars')).has('writable')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE calendar_calendars ADD COLUMN writable INTEGER NOT NULL DEFAULT 1'
+      )
+    }
+
+    const calendarColumns = await columns('calendar_calendars')
+
+    if (!calendarColumns.has('color')) {
+      await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_calendars ADD COLUMN color TEXT')
+    }
+
+    if (!calendarColumns.has('hidden')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE calendar_calendars ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0'
+      )
+    }
+
+    if (!(await columns('calendar_events')).has('origin_json')) {
+      await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_events ADD COLUMN origin_json TEXT')
+    }
+
+    // Kept before a series was told from its instances: every calendar is read whole again at
+    // its next sync, which says them — a read of a calendar anew, no change for the Segretario —
+    // and is looked at only once it is (`planCalendarLooks`).
+    if (!(await columns('calendar_events')).has('series_id')) {
+      await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_events ADD COLUMN series_id TEXT')
+      await this.prisma.$executeRawUnsafe('UPDATE calendar_calendars SET window_end = NULL')
+      await this.prisma.$executeRawUnsafe('UPDATE calendar_connections SET last_sync_at = NULL')
+    }
+
+    // Kept before the user's own changes in the app were noted for the Segretario.
+    if (!(await columns('calendar_changes')).has('in_app')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE calendar_changes ADD COLUMN in_app INTEGER NOT NULL DEFAULT 0'
+      )
+    }
   }
 
   /**
@@ -3315,6 +3547,152 @@ export class AppDatabase {
         VALUES (new.id, new.subject, new.sender, new.recipients, new.body);
       END
     `)
+  }
+
+  /**
+   * Brings every stored row in line with how rows are filed now: the
+   * spellings one address uses for the same person take that address's most
+   * used label, and every label and subject gets the current key. Runs once
+   * per change of that scheme (`SORT_FILING_VERSION`), on the rows already
+   * stored — an upgrade drops the message cache anyway, but a database kept
+   * across the change must not stay split.
+   */
+  private async refileIfOutdated(): Promise<void> {
+    const [{ user_version: version }] =
+      await this.prisma.$queryRawUnsafe<Array<{ user_version: number | bigint }>>(
+        'PRAGMA user_version'
+      )
+
+    if (Number(version) >= SORT_FILING_VERSION) {
+      return
+    }
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{ key: string; label: string; count: number | bigint; date: string }>
+    >`
+      SELECT sender_key AS key, sender_label AS label, COUNT(*) AS count, MAX(date_iso) AS date
+      FROM messages
+      WHERE sender_label <> sender_key
+      GROUP BY sender_key, sender_label
+    `
+    const usesByKey = new Map<string, SenderLabelUse[]>()
+
+    for (const row of rows) {
+      const uses = usesByKey.get(row.key) ?? []
+      uses.push({ label: row.label, count: Number(row.count), date: row.date })
+      usesByKey.set(row.key, uses)
+    }
+
+    const updates: Prisma.PrismaPromise<number>[] = []
+
+    for (const [key, uses] of usesByKey) {
+      const canonical: SenderLabelUse[] = []
+
+      for (const use of [...uses].sort(compareLabelUses)) {
+        const into = canonical.find((candidate) => isSameSenderName(candidate.label, use.label))
+
+        if (!into) {
+          canonical.push(use)
+        } else if (into.label !== use.label) {
+          updates.push(this.prisma.$executeRaw`
+            UPDATE messages SET sender_label = ${into.label}
+            WHERE sender_key = ${key} AND sender_label = ${use.label}
+          `)
+        }
+      }
+    }
+
+    if (updates.length > 0) {
+      await this.prisma.$transaction(updates)
+    }
+
+    // Keys are worked out here and written by primary key, only where they
+    // changed: a mailbox of tens of thousands of rows re-files in a moment.
+    const keyed = await this.prisma.$queryRaw<
+      Array<{
+        id: string
+        senderLabel: string
+        senderSort: string
+        subject: string
+        subjectSort: string
+      }>
+    >`
+      SELECT id AS id, sender_label AS senderLabel, sender_sort AS senderSort,
+        subject AS subject, subject_sort AS subjectSort
+      FROM messages
+    `
+    const keyUpdates = keyed.flatMap((row) => {
+      const senderSort = senderSortKey(row.senderLabel)
+      const subjectSort = subjectSortKey(row.subject)
+
+      return senderSort === row.senderSort && subjectSort === row.subjectSort
+        ? []
+        : [
+            this.prisma.$executeRaw`
+              UPDATE messages SET sender_sort = ${senderSort}, subject_sort = ${subjectSort}
+              WHERE id = ${row.id}
+            `
+          ]
+    })
+
+    if (keyUpdates.length > 0) {
+      await this.prisma.$transaction(keyUpdates)
+    }
+
+    await this.refreshSearchText()
+    await this.prisma.$executeRawUnsafe(`PRAGMA user_version = ${SORT_FILING_VERSION}`)
+  }
+
+  /**
+   * Works out every stored row's search text again (see
+   * `messageSearchText`), a page at a time: a mailbox of a hundred thousand
+   * rows is never held in memory at once.
+   */
+  private async refreshSearchText(): Promise<void> {
+    let after = ''
+
+    for (;;) {
+      const rows = await this.prisma.message.findMany({
+        where: { id: { gt: after } },
+        orderBy: { id: 'asc' },
+        take: SEARCH_REFRESH_PAGE_SIZE,
+        select: {
+          id: true,
+          subject: true,
+          fromJson: true,
+          toJson: true,
+          ccJson: true,
+          bccJson: true,
+          senderLabel: true,
+          preview: true
+        }
+      })
+
+      if (rows.length === 0) {
+        return
+      }
+
+      await this.prisma.$transaction(
+        rows.map((row) =>
+          this.prisma.message.update({
+            where: { id: row.id },
+            data: {
+              ...messageSearchText({
+                subject: row.subject,
+                from: parseJsonArray<MailAddress>(row.fromJson),
+                to: parseJsonArray<MailAddress>(row.toJson),
+                cc: parseJsonArray<MailAddress>(row.ccJson),
+                bcc: parseJsonArray<MailAddress>(row.bccJson),
+                senderLabel: row.senderLabel,
+                preview: row.preview
+              })
+            }
+          })
+        )
+      )
+
+      after = rows[rows.length - 1].id
+    }
   }
 
   async updateMessagePreviews(
@@ -4945,6 +5323,7 @@ export class AppDatabase {
         updated_at INTEGER NOT NULL
       )
     `)
+    await this.ensureAccountLastViewedAtColumn()
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS app_meta (
@@ -5084,14 +5463,17 @@ export class AppDatabase {
         updated_at INTEGER NOT NULL
       )
     `)
+    await this.ensureContactColumns()
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS account_signatures (
         account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         html TEXT NOT NULL,
+        html_format INTEGER NOT NULL DEFAULT 1,
         updated_at INTEGER NOT NULL
       )
     `)
+    await this.ensureSignatureColumns()
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS recent_files (
@@ -5200,6 +5582,7 @@ export class AppDatabase {
         updated_at INTEGER NOT NULL
       )
     `)
+    await this.ensureAppPreferencesColumns()
 
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_accounts_last_viewed ON accounts(last_viewed_at DESC)'
@@ -5243,12 +5626,67 @@ export class AppDatabase {
     await this.prisma.$executeRawUnsafe(
       'CREATE INDEX IF NOT EXISTS idx_contacts_name_normalized ON contacts(name_normalized)'
     )
+    await this.copiesToMarks()
     await ensureAiSchema(prismaSql(this.prisma))
     await this.ensureCalendarTables()
     await this.prisma.$executeRawUnsafe(`
       INSERT OR IGNORE INTO app_preferences(id, unified_inbox_included_account_ids, updated_at)
       VALUES (${APP_PREFERENCES_SINGLETON_ID}, NULL, ${Date.now()})
     `)
+    await this.refileIfOutdated()
+
+    if (this.contactsOutdated) {
+      await this.rebuildContacts()
+    }
+  }
+
+  /**
+   * Migrates the `app_preferences` singleton to add any new columns
+   * introduced after the initial schema. SQLite doesn't support
+   * `ADD COLUMN IF NOT EXISTS`, so we probe the existing layout with
+   * `PRAGMA table_info` and only ALTER the table when a column is
+   * missing. Default values are baked into the ALTER so existing rows
+   * pick up the new field without a separate UPDATE pass.
+   */
+  private async ensureAppPreferencesColumns(): Promise<void> {
+    const columns = (await this.prisma.$queryRawUnsafe(
+      'PRAGMA table_info(app_preferences)'
+    )) as Array<{ name?: string }>
+    const columnNames = new Set(columns.map((column) => column.name ?? ''))
+
+    const additions: Array<[column: string, definition: string]> = [
+      ['invert_message_list_default_order', 'INTEGER NOT NULL DEFAULT 0'],
+      ['layout_mode', "TEXT NOT NULL DEFAULT 'apple'"],
+      ['message_list_sort_field', "TEXT NOT NULL DEFAULT 'date'"],
+      ['message_list_sort_direction', "TEXT NOT NULL DEFAULT 'desc'"],
+      ['message_grouping', "TEXT NOT NULL DEFAULT 'auto'"],
+      ['reader_zoom', 'INTEGER NOT NULL DEFAULT 100'],
+      ['reader_details_open', 'INTEGER NOT NULL DEFAULT 0'],
+      ['shortcut_overrides', "TEXT NOT NULL DEFAULT '{}'"],
+      ['theme_mode', "TEXT NOT NULL DEFAULT 'system'"],
+      ['notification_preferences', "TEXT NOT NULL DEFAULT '{}'"]
+    ]
+
+    for (const [column, definition] of additions) {
+      if (!columnNames.has(column)) {
+        await this.prisma.$executeRawUnsafe(
+          `ALTER TABLE app_preferences ADD COLUMN ${column} ${definition}`
+        )
+      }
+    }
+
+    // The edition of an extension's signature, counted before 2.0: nothing reads it any more.
+    if (columnNames.has('extension_signature_revision')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE app_preferences DROP COLUMN extension_signature_revision'
+      )
+    }
+
+    // 'date' grouping became 'auto': it still buckets by date under a date
+    // sort, and now also groups by sender under a sender sort.
+    await this.prisma.$executeRawUnsafe(
+      "UPDATE app_preferences SET message_grouping = 'auto' WHERE message_grouping = 'date'"
+    )
   }
 
   /**
@@ -5338,6 +5776,60 @@ export class AppDatabase {
           updated_at = ${Date.now()}
       WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
     `
+  }
+
+  /**
+   * Rows written before signatures had a format get the column with the
+   * value 1, which is exactly what they are: authored against the old page.
+   */
+  private async ensureSignatureColumns(): Promise<void> {
+    const columns = (await this.prisma.$queryRawUnsafe(
+      'PRAGMA table_info(account_signatures)'
+    )) as Array<{ name?: string }>
+
+    if (!columns.some((column) => column.name === 'html_format')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE account_signatures ADD COLUMN html_format INTEGER NOT NULL DEFAULT 1'
+      )
+    }
+
+    // The edition of an extension's signature, counted before 2.0: nothing reads it any more.
+    if (columns.some((column) => column.name === 'extension_revision')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE account_signatures DROP COLUMN extension_revision'
+      )
+    }
+  }
+
+  /**
+   * Contacts stored before they counted the mail written to them get the
+   * columns, and `initialize` learns them all again (`rebuildContacts`).
+   */
+  private async ensureContactColumns(): Promise<void> {
+    const columns = (await this.prisma.$queryRawUnsafe('PRAGMA table_info(contacts)')) as Array<{
+      name?: string
+    }>
+
+    if (columns.some((column) => column.name === 'last_received_at')) {
+      return
+    }
+
+    await this.prisma.$executeRawUnsafe('ALTER TABLE contacts ADD COLUMN last_received_at INTEGER')
+    await this.prisma.$executeRawUnsafe('ALTER TABLE contacts ADD COLUMN hidden_at INTEGER')
+    this.contactsOutdated = true
+  }
+
+  private async ensureAccountLastViewedAtColumn(): Promise<void> {
+    const columns = (await this.prisma.$queryRawUnsafe('PRAGMA table_info(accounts)')) as Array<{
+      name?: string
+    }>
+    const hasLastViewedAt = columns.some((column) => column.name === 'last_viewed_at')
+
+    if (hasLastViewedAt) {
+      return
+    }
+
+    await this.prisma.$executeRawUnsafe('ALTER TABLE accounts ADD COLUMN last_viewed_at INTEGER')
   }
 
   /**

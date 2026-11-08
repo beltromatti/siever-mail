@@ -1017,8 +1017,6 @@ Un'eccezione inattesa, un errore del database: si registra nel log, l'operazione
 | `memory/`               | il quaderno versionato                                                                                                      |
 | `segretario-service.ts` | la facciata per l'IPC                                                                                                       |
 
-**I dati tra una versione e l'altra.** La 2.0 è una versione nuova da capo: si installa da zero, e nel codice non c'è nessuna migrazione dalle versioni precedenti. Le tabelle nascono come sono (`CREATE … IF NOT EXISTS`), quelle del Segretario e di un'estensione allo stesso modo. Restano i meccanismi generali che proteggono un aggiornamento: i dati dell'utente messi da parte prima e rimessi se l'aggiornamento non va a buon fine, e la cache della posta con la sua versione (cambiata, si riscarica). Una migrazione si scrive quando servirà, per un passaggio preciso, e se ne va quando ha fatto il suo lavoro.
-
 **Senza esagerare:**
 
 - niente microservizi;
@@ -1150,4 +1148,3 @@ Gli agganci nell'interfaccia oggi sono della Posta, perché è lì che il primo 
 17. **Una spia per tutte le connessioni (§13.1):** posta e calendari insieme, nei quattro modi del §14 — verde sincronizzato, grigio al lavoro, giallo aspetta ciò che passa da sé, rosso serve l'utente. Al passaggio, una riga per connessione con le parole di Impostazioni › Connessioni; al clic, si apre lì.
 18. **Per tutti, e su misura (§1):** il pubblico è generale — nessuna scritta, esempio o convenzione di un'organizzazione nell'interfaccia; nei prompt solo esempi da lavori diversi, detti come esempi; nel codice nessun nome reale. Un'estensione privata fa l'edizione di un'organizzazione: istruzioni, strumenti, azioni, dati, la forma della casa.
 19. **Le estensioni portano il nome legale dell'ente** e un identificativo che ne deriva (Siever S.r.l. → `siever-srl`), che tiene separati canali, tabelle, comandi e proposte. Una superficie sola — il contratto e il kit —, controllata dal lint; una per build; in Impostazioni › Estensione si vede quale.
-20. **Nessuna migrazione dalle versioni precedenti (§15.1):** la 2.0 si installa da capo; le tabelle nascono come sono; restano la protezione dei dati in un aggiornamento e la versione della cache.
