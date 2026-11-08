@@ -888,6 +888,13 @@ Un solo componente a schermo intero, riusato in tutti i casi:
 - mentre OpenRouter non risponde, Conoscimi e la lettura aspettano e riprendono da soli; se il problema resta, l'utente può continuare senza AI;
 - «Rifai Conoscimi» fermato si chiude tenendo ciò che si sapeva prima (ogni connessione era già conosciuta).
 
+**Sta sopra lo spazio di lavoro, che sotto continua** (§13.1). Blocca ciò che l'utente tocca, non ciò che lavora: la procedura stessa vive della sincronizzazione (la preparazione la aspetta), di Conoscimi e delle letture.
+
+- **Il motore trattiene solo ciò che deve aspettare Conoscimi:** accendendo l'AI, tutto; aggiungendo una connessione, solo quella (le caselle già conosciute continuano a leggersi); rifacendo Conoscimi, niente. Il resto va avanti com'era.
+- **Ciò che l'utente stava facendo resta com'era:** i messaggi che scriveva, dove era, il pannello. «Entra» toglie la procedura e lo ritrova.
+- **Non la chiude niente se non lei stessa.** Ciò che va visto — una notifica cliccata, ciò che il Segretario mostra, un messaggio da riaprire, un invio non riuscito — aspetta la fine e si apre allora. Sopra di lei restano solo gli avvisi che stanno ovunque: l'AI spenta, una connessione ferma (§12.1, §14.1).
+- **Senza nessuna connessione** non c'è uno spazio di lavoro: la procedura è tutta la finestra, e la prima connessione aggiunta lo fa nascere sotto di lei.
+
 **I casi:**
 
 | Caso                                 | Passi                                                                                                                                                                                                                                                 |
@@ -925,7 +932,9 @@ Tre gruppi, separati da una linea sottile:
 
 Contatti e Progetti sono separati dalle fonti perché non hanno connessioni proprie: aggregano quelle delle altre.
 
-In cima alla barra, il marchio. Al passaggio dice quale SIEVER Mail è — la versione e l'estensione, con le stesse parole del piede delle Impostazioni (§13.2) —; un clic riporta alla schermata d'apertura, la stessa dell'avvio. È solo un'immagine sopra lo spazio di lavoro, che sotto resta vivo: le connessioni si sincronizzano, il Segretario lavora, le bozze aperte restano aperte. «Entra» riapre la giornata come all'avvio; ciò che va visto subito — una notifica, ciò che il Segretario mostra, un messaggio da riscrivere — la chiude da sé.
+In cima alla barra, il marchio. Al passaggio dice quale SIEVER Mail è — la versione e l'estensione, con le stesse parole del piede delle Impostazioni (§13.2) —; un clic riporta alla schermata d'apertura, la stessa dell'avvio.
+
+**Le schermate non accendono né spengono niente: decidono solo che cosa l'utente tocca.** La schermata d'apertura e la procedura guidata (§12.2) sono strati sopra lo spazio di lavoro, che sotto resta vivo: le connessioni si sincronizzano, il Segretario lavora, i messaggi che si scrivono restano come sono, e l'app in primo piano resta quella. Lo spazio di lavoro nasce su Oggi — senza AI, sulla prima fonte, che ne tiene il posto — e da lì resta dove l'utente lo lascia: «Entra» toglie lo strato e si ritrova ciò che si stava facendo; all'avvio, la giornata. La schermata d'apertura è solo un'immagine: ciò che va visto subito — una notifica, ciò che il Segretario mostra, un messaggio da riscrivere — la chiude da sé; la procedura no, perché è un lavoro in corso. Senza nessuna connessione non c'è uno spazio di lavoro: la schermata d'apertura porta alla prima.
 
 In fondo alla barra:
 
@@ -1010,7 +1019,7 @@ Un'eccezione inattesa, un errore del database: si registra nel log, l'operazione
 
   Nessuna fonte crea le altre o il Segretario.
 
-- **Nell'interfaccia**, il guscio (`App.tsx`) tiene la barra, il pannello del Segretario, le impostazioni, la procedura guidata, la schermata d'apertura (uno strato sopra lo spazio di lavoro, che resta montato e vivo, §13.1) e la navigazione tra app (aprire un messaggio, un evento, un progetto da qualunque punto). Ogni app è un modulo (`apps/mail`, `apps/calendar`, `apps/today`; poi `apps/files`, `apps/contacts`, `apps/projects`), con la stessa forma.
+- **Nell'interfaccia**, il guscio (`App.tsx`) tiene la barra, il pannello del Segretario, le impostazioni, la schermata d'apertura e la procedura guidata — strati sopra lo spazio di lavoro, che resta montato e vivo (§13.1) — e la navigazione tra app (aprire un messaggio, un evento, un progetto da qualunque punto). Ogni app è un modulo (`apps/mail`, `apps/calendar`, `apps/today`; poi `apps/files`, `apps/contacts`, `apps/projects`), con la stessa forma.
 - **Nel modello condiviso**, le famiglie di connessioni (`mail`, `calendar`, `files`) e le app (fonti, derivate, la scrivania) sono dichiarate una volta (`src/shared/workspace.ts`). La barra, le impostazioni e il Segretario le leggono da lì.
 
 **Moduli del Segretario (`src/main/ai/`):**
@@ -1138,7 +1147,7 @@ Gli agganci nell'interfaccia oggi sono della Posta, perché è lì che il primo 
 4. **Archiviare e lavorare sono indipendenti; ciò che un'estensione fa di un messaggio fuori dalla posta è suo e lascia un segno (§6.3),** tenuto dalla posta, visibile con l'AI spenta, letto dal Segretario. L'app pubblica non ha un «salva su disco». ARCHIVIA SIEVER = il salvataggio dello studio più l'archiviazione del provider, mai il Cestino.
 5. **Progetti** in ogni edizione, trovati per induzione; i nomi li capisce il Segretario, senza forme date. Un'estensione dà le convenzioni della sua organizzazione, non il catalogo.
 6. **Connessioni separate, identità come conoscenza.** Il calendario è alla pari della posta, con eventi, scadenze e proposte.
-7. **Un interruttore per l'AI**, e una procedura guidata unica: blocca, con l'AI non salta niente, e non resta mai bloccata — ciò che non va si riprova, o si continua senza AI.
+7. **Un interruttore per l'AI**, e una procedura guidata unica: blocca, con l'AI non salta niente, e non resta mai bloccata — ciò che non va si riprova, o si continua senza AI. Sta sopra lo spazio di lavoro, che sotto continua: le schermate decidono che cosa l'utente tocca, mai che cosa lavora (§13.1).
 8. **Memoria:** patch, ricerca, storia, conflitti. Il sistema garantisce l'integrità; il prompt dà il criterio (conoscenza, non stato) e i fatti dell'ambiente; la forma la sceglie il Segretario.
 9. **Un sistema operativo personale, non un client di posta:**
    - fonti alla pari, ognuna con connessioni, oggetti, trigger, strumenti e app;

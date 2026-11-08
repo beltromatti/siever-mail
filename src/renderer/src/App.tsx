@@ -297,8 +297,9 @@ function AppFrame({
   /** The workspace: its panes' headers are the title bar the window is dragged by. */
   framed?: boolean
   /**
-   * A screen laid over the workspace — the welcome —: the workspace keeps
-   * working under it, out of reach of the pointer, the focus and the drag.
+   * A screen laid over the workspace — the welcome, the guided setup —: the
+   * workspace keeps working under it, out of reach of the pointer, the focus
+   * and the drag. With no workspace, it is the whole window.
    */
   cover?: ReactNode
   /** A notice about the AI shown, or gone (`AiNotice`). */
@@ -417,8 +418,10 @@ function App(): React.JSX.Element {
   // The source the workspace opens on without Oggi: the mail when there is a mailbox, else the
   // calendar.
   const firstSourceApp: AppId = accounts.length > 0 || !calendarConnected ? 'mail' : 'calendar'
-  // The app in front. The calendar opens where it is asked to.
-  const [activeApp, setActiveApp] = useState<AppId>('mail')
+  // The app in front. The workspace is born on Oggi — with the AI off, the first source stands in
+  // for it —, so the launch's "Entra" finds the day; from then on it stays where the user leaves
+  // it. The calendar opens where it is asked to.
+  const [activeApp, setActiveApp] = useState<AppId>('oggi')
   const [calendarFocus, setCalendarFocus] = useState<{ focus: CalendarFocus; at: number } | null>(
     null
   )
@@ -482,12 +485,22 @@ function App(): React.JSX.Element {
   // The guided setup under way, as the main process keeps it; undefined until read.
   const [onboarding, setOnboarding] = useState<OnboardingState | null | undefined>(undefined)
 
+  // Whether the setup is in front, for what asks to be seen to wait for it (`whenSetupAllows`).
+  const setupOpenRef = useRef(false)
+  // What asked to be seen while the setup was in front — the last of it —, shown when it closes.
+  const afterSetupRef = useRef<(() => void) | null>(null)
+
   // A setup a quit interrupted takes the user back to its step.
   useEffect(() => {
     let current = true
     void window.segretarioApi
       .getOnboarding()
-      .then((stored) => current && setOnboarding(stored))
+      .then((stored) => {
+        if (current) {
+          setupOpenRef.current = stored !== null
+          setOnboarding(stored)
+        }
+      })
       .catch(() => current && setOnboarding(null))
 
     return () => {
@@ -501,15 +514,35 @@ function App(): React.JSX.Element {
   const [refusedOpen, setRefusedOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId | null>(null)
   // The welcome screen, in front: at launch, or asked again from the rail's mark — then it fades in
-  // over the workspace, which keeps working under it.
+  // over the workspace.
   const [welcome, setWelcome] = useState<'launch' | 'rail' | null>('launch')
-  // With no connection there is no workspace: the welcome is all there is.
-  const welcomeInFront = welcome !== null || !hasConnections
-  /** A message to write comes in front — past the welcome screen. */
-  const showComposer = useCallback((id: string): void => {
-    setActiveComposeId(id)
-    setWelcome(null)
+  // The welcome or the setup lies over the workspace, which keeps working under it (vision §13.1);
+  // with no connection there is no workspace, and they are all there is.
+  const workspaceCovered = welcome !== null || Boolean(onboarding) || !hasConnections
+
+  /**
+   * Something to be seen — a message from a notification, what the Segretario
+   * shows, a message to write —: now, past the welcome screen; with the setup
+   * in front, once it closes, as it is left only from itself (vision §12.2).
+   */
+  const whenSetupAllows = useCallback((show: () => void): void => {
+    if (setupOpenRef.current) {
+      afterSetupRef.current = show
+      return
+    }
+
+    show()
   }, [])
+
+  /** A message to write comes in front. */
+  const showComposer = useCallback(
+    (id: string): void =>
+      whenSetupAllows(() => {
+        setActiveComposeId(id)
+        setWelcome(null)
+      }),
+    [whenSetupAllows]
+  )
   const [windowControlsState, setWindowControlsState] = useState<WindowControlsState>({
     enabled: false,
     maximized: false,
@@ -553,18 +586,17 @@ function App(): React.JSX.Element {
     void window.mailApi.closeWindow()
   }, [])
 
-  // The failed send offered back right now, once no composer is open.
-  const failedSend = composerOpen ? null : (failedSends[0] ?? null)
+  // The failed send offered back right now, once no composer is open — and the setup is over.
+  const failedSend = composerOpen || onboarding ? null : (failedSends[0] ?? null)
 
   // What the shell has open in front: the mail's keys and commands rest under it too.
   const shellModalOpen =
-    welcomeInFront ||
+    workspaceCovered ||
     composerOpen ||
     failedSend !== null ||
     confirmOpen ||
     noticeOpen ||
     refusedOpen ||
-    Boolean(onboarding) ||
     settingsOpen
 
   /**
@@ -1066,7 +1098,7 @@ function App(): React.JSX.Element {
     setAccounts,
     aiOn,
     // In sight: in front, with a mailbox, past the welcome screen — its keys act on nothing else.
-    active: shownApp === 'mail' && accounts.length > 0 && !welcomeInFront,
+    active: shownApp === 'mail' && accounts.length > 0 && !workspaceCovered,
     show: showMail,
     uiPreferences,
     uiPreferencesRef,
@@ -1108,11 +1140,12 @@ function App(): React.JSX.Element {
    * welcome screen.
    */
   const openMessageRef = useCallback(
-    (ref: MessageRef): void => {
-      setWelcome(null)
-      openMailMessage(ref)
-    },
-    [openMailMessage]
+    (ref: MessageRef): void =>
+      whenSetupAllows(() => {
+        setWelcome(null)
+        openMailMessage(ref)
+      }),
+    [openMailMessage, whenSetupAllows]
   )
 
   useEffect(() => window.mailApi.onOpenMessageFromNotification(openMessageRef), [openMessageRef])
@@ -1120,35 +1153,37 @@ function App(): React.JSX.Element {
   // The Segretario shows the user something: a message, a search, a draft.
   useEffect(
     () =>
-      window.segretarioApi.onShowRequest((request) => {
-        // What the Segretario shows is seen: it comes past the welcome screen.
-        setWelcome(null)
+      window.segretarioApi.onShowRequest((request) =>
+        whenSetupAllows(() => {
+          // What the Segretario shows is seen: it comes past the welcome screen.
+          setWelcome(null)
 
-        switch (request.kind) {
-          case 'message':
-            openMessageRef(request.ref)
-            return
-          case 'draft':
-            void openDraftById(request.draftId)
-            return
-          case 'search':
-            openAskedSearch(request.search)
-            return
-          case 'project':
-            openProject(request.projectId)
-            return
-          case 'event':
-            void openCalendarEvent(request.eventKey)
-            return
-          case 'day':
-            if (request.day === dayKey(new Date()) && aiOn) {
-              setActiveApp('oggi')
-            } else {
-              openCalendar({ day: dayOfKey(request.day) })
-            }
-            return
-        }
-      }),
+          switch (request.kind) {
+            case 'message':
+              openMessageRef(request.ref)
+              return
+            case 'draft':
+              void openDraftById(request.draftId)
+              return
+            case 'search':
+              openAskedSearch(request.search)
+              return
+            case 'project':
+              openProject(request.projectId)
+              return
+            case 'event':
+              void openCalendarEvent(request.eventKey)
+              return
+            case 'day':
+              if (request.day === dayKey(new Date()) && aiOn) {
+                setActiveApp('oggi')
+              } else {
+                openCalendar({ day: dayOfKey(request.day) })
+              }
+              return
+          }
+        })
+      ),
     [
       aiOn,
       openAskedSearch,
@@ -1156,7 +1191,8 @@ function App(): React.JSX.Element {
       openCalendarEvent,
       openDraftById,
       openMessageRef,
-      openProject
+      openProject,
+      whenSetupAllows
     ]
   )
 
@@ -1391,6 +1427,10 @@ function App(): React.JSX.Element {
     setWelcome(null)
   }
 
+  /**
+   * "Entra": the layer over the workspace goes, and the user finds what they
+   * were doing — at launch, the app the workspace is born on.
+   */
   const enterWorkspace = useCallback((): void => {
     if (!hasConnections) {
       return
@@ -1404,12 +1444,16 @@ function App(): React.JSX.Element {
       return accounts[0]?.id ?? null
     })
     setWelcome(null)
-    // The day opens on what the Segretario saw in it; without it, on the first source.
-    setActiveApp(aiOn ? 'oggi' : firstSourceApp)
-  }, [aiOn, accounts, firstSourceApp, hasConnections, setSelectedAccountId])
+  }, [accounts, hasConnections, setSelectedAccountId])
 
   /** Starts the guided setup of a case, kept as it goes. */
   function startOnboarding(setupCase: OnboardingCase): void {
+    // What the user looks at is kept for when it ends — the first source standing in for Oggi with
+    // the AI off too, so a setup that turns the AI on does not move them.
+    if (hasConnections && segretario.status) {
+      setActiveApp(shownApp)
+    }
+
     saveOnboarding(newOnboarding(setupCase))
   }
 
@@ -1427,6 +1471,7 @@ function App(): React.JSX.Element {
   }
 
   function saveOnboarding(next: OnboardingState | null): void {
+    setupOpenRef.current = next !== null
     setOnboarding(next)
     void window.segretarioApi.setOnboarding(next).catch((error: unknown) =>
       toast.error('La configurazione non è stata salvata', {
@@ -1536,57 +1581,6 @@ function App(): React.JSX.Element {
     )
   }
 
-  if (onboarding) {
-    return (
-      <AppFrame
-        windowControlsState={windowControlsState}
-        onMinimizeWindow={handleMinimizeWindow}
-        onToggleMaximizeWindow={handleToggleMaximizeWindow}
-        onCloseWindow={handleCloseWindow}
-        onNoticeOpenChange={setNoticeOpen}
-        overlay={frameOverlay}
-      >
-        <OnboardingWizard
-          state={onboarding}
-          accounts={accounts}
-          calendarConnections={calendarConnections}
-          connections={mail.accountConnections}
-          removingAccountId={mail.removingAccountId}
-          canUseGoogle={capabilities.googleOAuthReady}
-          canUseMicrosoft={capabilities.microsoftOAuthReady}
-          segretario={segretario}
-          aiOn={aiOn}
-          onAccountCreated={onAccountCreated}
-          onRemoveAccount={(accountId, calendars) => void mail.removeAccount(accountId, calendars)}
-          onChange={saveOnboarding}
-          onFinish={(entered) => {
-            saveOnboarding(null)
-
-            if (entered) {
-              enterWorkspace()
-            }
-          }}
-        />
-      </AppFrame>
-    )
-  }
-
-  // With no connection there is nothing under the welcome: it leads to the first one.
-  if (!hasConnections) {
-    return (
-      <AppFrame
-        windowControlsState={windowControlsState}
-        onMinimizeWindow={handleMinimizeWindow}
-        onToggleMaximizeWindow={handleToggleMaximizeWindow}
-        onCloseWindow={handleCloseWindow}
-        onNoticeOpenChange={setNoticeOpen}
-        overlay={frameOverlay}
-      >
-        <WelcomeScreen hasConnections={false} onEnter={enterWorkspace} onSetup={startOnboarding} />
-      </AppFrame>
-    )
-  }
-
   // Another app than the mail is what the user looks at, not the selection left in the mail.
   const shownPage =
     shownApp === 'mail' ? null : (RAIL_ITEMS.find((item) => item.id === shownApp)?.label ?? null)
@@ -1618,6 +1612,44 @@ function App(): React.JSX.Element {
     calendar: calendarInSight ? { eventOpen: calendarInSight.event !== null } : null
   })
 
+  // Over the workspace — in its place, with no connection —: the setup, or the welcome. One tree
+  // for both, so the setup stays as it is when its first connection brings the workspace under it.
+  const cover = onboarding ? (
+    <OnboardingWizard
+      state={onboarding}
+      accounts={accounts}
+      calendarConnections={calendarConnections}
+      connections={mail.accountConnections}
+      removingAccountId={mail.removingAccountId}
+      canUseGoogle={capabilities.googleOAuthReady}
+      canUseMicrosoft={capabilities.microsoftOAuthReady}
+      segretario={segretario}
+      aiOn={aiOn}
+      onAccountCreated={onAccountCreated}
+      onRemoveAccount={(accountId, calendars) => void mail.removeAccount(accountId, calendars)}
+      onChange={saveOnboarding}
+      onFinish={(entered) => {
+        saveOnboarding(null)
+
+        if (entered) {
+          enterWorkspace()
+        }
+
+        // What asked to be seen meanwhile is shown now.
+        const show = afterSetupRef.current
+        afterSetupRef.current = null
+        show?.()
+      }}
+    />
+  ) : welcome !== null || !hasConnections ? (
+    <WelcomeScreen
+      hasConnections={hasConnections}
+      fadeIn={welcome === 'rail'}
+      onEnter={enterWorkspace}
+      onSetup={startOnboarding}
+    />
+  ) : undefined
+
   return (
     <CommandShortcutsProvider overrides={uiPreferences.shortcutOverrides}>
       <SegretarioLinkProvider value={openSegretarioHandle}>
@@ -1629,18 +1661,9 @@ function App(): React.JSX.Element {
           onNoticeOpenChange={setNoticeOpen}
           overlay={frameOverlay}
           inert={composerOpen}
-          framed
-          cover={
-            welcome && (
-              <WelcomeScreen
-                hasConnections
-                fadeIn={welcome === 'rail'}
-                onEnter={enterWorkspace}
-                onSetup={startOnboarding}
-              />
-            )
-          }
-          dockVisible={!welcome && !composerOpen && composeSessions.length > 0}
+          framed={hasConnections}
+          cover={cover}
+          dockVisible={!workspaceCovered && !composerOpen && composeSessions.length > 0}
           rightInset={assistantInset}
           dock={
             <ComposeDock
@@ -1651,272 +1674,280 @@ function App(): React.JSX.Element {
                   kind: session.initialData.kind,
                   summary: composeSummaries[session.id] ?? null
                 }))}
-              hidden={composerOpen || welcome !== null}
+              hidden={composerOpen || workspaceCovered}
               rightInset={assistantInset}
               onRestore={showComposer}
               onClose={(id) => void composerHandlesRef.current.get(id)?.close()}
             />
           }
         >
-          <WorkspaceLayout
-            mode={uiPreferences.layoutMode}
-            readerExpanded={mail.isMessageExpanded}
-            readerKey={mail.readingRef ? messageRefKey(mail.readingRef) : null}
-            rail={
-              <AppRail
-                items={railItems}
-                activeItemId={shownApp}
-                onSelectItem={(id) => {
-                  const app = railItems.find((item) => item.id === id)
+          {hasConnections && (
+            <>
+              <WorkspaceLayout
+                mode={uiPreferences.layoutMode}
+                readerExpanded={mail.isMessageExpanded}
+                readerKey={mail.readingRef ? messageRefKey(mail.readingRef) : null}
+                rail={
+                  <AppRail
+                    items={railItems}
+                    activeItemId={shownApp}
+                    onSelectItem={(id) => {
+                      const app = railItems.find((item) => item.id === id)
 
-                  if (app) {
-                    setActiveApp(app.id)
-                  }
-                }}
-                onOpenWelcome={() => setWelcome('rail')}
-                connections={connectionStatus}
-                onOpenConnections={() => {
-                  setSettingsSection('accounts')
-                  setSettingsOpen(true)
-                }}
-                segretario={
-                  segretarioOffered
-                    ? {
-                        open: segretarioOpen,
-                        attention: segretario.attention,
-                        onToggle: () => setSegretarioOpen((current) => !current)
+                      if (app) {
+                        setActiveApp(app.id)
                       }
-                    : null
+                    }}
+                    onOpenWelcome={() => setWelcome('rail')}
+                    connections={connectionStatus}
+                    onOpenConnections={() => {
+                      setSettingsSection('accounts')
+                      setSettingsOpen(true)
+                    }}
+                    segretario={
+                      segretarioOffered
+                        ? {
+                            open: segretarioOpen,
+                            attention: segretario.attention,
+                            onToggle: () => setSegretarioOpen((current) => !current)
+                          }
+                        : null
+                    }
+                    onOpenSettings={() => setSettingsOpen(true)}
+                  />
                 }
-                onOpenSettings={() => setSettingsOpen(true)}
+                sidebar={
+                  <MailSidebar
+                    mail={mail}
+                    showTitle={
+                      !windowControlsState.dragTopRegionEnabled || windowControlsState.enabled
+                    }
+                    onAddAccount={() => startOnboarding('nuova-connessione')}
+                  />
+                }
+                messageList={
+                  <MailMessageList
+                    mail={mail}
+                    segretarioOpen={segretarioOpen}
+                    canWrite={segretario.status?.keyState === 'ready'}
+                    onRemind={remindAbout}
+                  />
+                }
+                notice={<MailNotice mail={mail} />}
+                reader={
+                  <MailReader
+                    mail={mail}
+                    segretarioOpen={segretarioOpen}
+                    onRemind={(commitment) => void remindAbout(commitment)}
+                    onTakeUpReply={takeUpReply}
+                  />
+                }
+                app={
+                  shownApp === 'mail' && accounts.length === 0 ? (
+                    <AppPlaceholder
+                      title="Posta"
+                      icon={Mail}
+                      atWindowTopRight={!segretarioOpen}
+                      lead="Nessuna casella collegata. Le altre app funzionano anche così; con una casella, la posta arriva qui."
+                      points={[
+                        'Ogni casella è una connessione a sé: Gmail, Microsoft, iCloud, o qualunque altra con IMAP.',
+                        ...(aiOn
+                          ? [
+                              'Il Segretario la legge come legge i calendari: le cose aperte, i progetti e la giornata la comprendono.'
+                            ]
+                          : [])
+                      ]}
+                      action={{
+                        label: 'Collega una casella',
+                        onClick: () => startOnboarding('nuova-connessione')
+                      }}
+                    />
+                  ) : shownApp === 'oggi' ? (
+                    <TodayPage
+                      canWrite={segretario.status?.keyState === 'ready'}
+                      atWindowTopRight={!segretarioOpen}
+                      onOpenMessage={openMessageRef}
+                      onRemind={(commitment) => void remindAbout(commitment)}
+                    />
+                  ) : shownApp === 'calendar' ? (
+                    <CalendarApp
+                      key={calendarFocus?.at}
+                      aiOn={aiOn}
+                      focus={calendarFocus?.focus}
+                      onSight={setCalendarSight}
+                      searchInputRef={calendarSearchRef}
+                      keysEnabled={!shellModalOpen}
+                      atWindowTopRight={!segretarioOpen}
+                      onOpenMessage={openMessageRef}
+                      onOpenConnections={() => startOnboarding('nuova-connessione')}
+                    />
+                  ) : shownApp === 'files' ? (
+                    <AppPlaceholder
+                      title="File"
+                      icon={Files}
+                      badge="In arrivo"
+                      atWindowTopRight={!segretarioOpen}
+                      lead="I tuoi documenti, ovunque siano: il computer, i dischi di rete, i drive. Una fonte come la posta e il calendario."
+                      points={[
+                        'Ogni volume del computer o di rete, e ogni drive — Google Drive, OneDrive e SharePoint, Dropbox, iCloud Drive — è una connessione, come una casella o un calendario.',
+                        'Una ricerca sola su tutti, e il documento si apre dov’è: niente copie, niente sincronizzazione.',
+                        'Per ogni file, i progetti, le conversazioni e gli appuntamenti a cui appartiene.',
+                        ...(aiOn
+                          ? [
+                              'Il Segretario legge già i file del computer e dei dischi di rete collegati, solo in lettura.'
+                            ]
+                          : [])
+                      ]}
+                    />
+                  ) : shownApp === 'contacts' ? (
+                    <AppPlaceholder
+                      title="Contatti"
+                      icon={BookUser}
+                      badge="In arrivo"
+                      atWindowTopRight={!segretarioOpen}
+                      lead="Le persone e gli enti con cui lavori, in un posto solo, con quello che il Segretario sa di ciascuno."
+                      points={[
+                        'Da tutte le fonti: chi ti scrive, chi incontri, le rubriche delle connessioni.',
+                        'Per ognuno: le conversazioni, gli appuntamenti, i progetti in comune e le cose aperte.',
+                        'Quello che il Segretario ha capito di loro, scritto da lui e corretto da te.'
+                      ]}
+                    />
+                  ) : shownApp === 'projects' ? (
+                    <AppPlaceholder
+                      title="Progetti"
+                      icon={Briefcase}
+                      badge="In arrivo"
+                      atWindowTopRight={!segretarioOpen}
+                      lead="Ogni progetto con tutto ciò che gli appartiene, da ogni fonte, nello stesso posto."
+                      points={[
+                        'Le conversazioni, gli appuntamenti, le cartelle e i documenti, le persone e le cose aperte del progetto, insieme.',
+                        'Uno spazio di lavoro, non un altro archivio: ogni cosa resta dov’è, e un file usato da tre progetti è un file solo.',
+                        'Un progetto è un contesto che dura — un cliente, un lavoro, un viaggio, la casa, l’università —: il Segretario li riconosce e tu li correggi.',
+                        ...(aiOn && accounts.length > 0
+                          ? [
+                              'Intanto i progetti del Segretario sono nella barra laterale della Posta.'
+                            ]
+                          : [])
+                      ]}
+                    />
+                  ) : undefined
+                }
+                assistant={
+                  segretarioOpen ? (
+                    <SegretarioPanel
+                      state={segretario}
+                      contextChip={segretarioContext}
+                      suggestions={segretarioSuggestionList}
+                      atWindowTopRight
+                      onClose={() => setSegretarioOpen(false)}
+                      onOpenHandle={openSegretarioHandle}
+                      onApprove={(activityId, approval, approved) =>
+                        void answerSegretarioApproval(activityId, approval, approved)
+                      }
+                      onOpenDraft={(draftId) => void openDraftById(draftId)}
+                    />
+                  ) : null
+                }
               />
-            }
-            sidebar={
-              <MailSidebar
-                mail={mail}
-                showTitle={!windowControlsState.dragTopRegionEnabled || windowControlsState.enabled}
-                onAddAccount={() => startOnboarding('nuova-connessione')}
-              />
-            }
-            messageList={
-              <MailMessageList
-                mail={mail}
-                segretarioOpen={segretarioOpen}
-                canWrite={segretario.status?.keyState === 'ready'}
-                onRemind={remindAbout}
-              />
-            }
-            notice={<MailNotice mail={mail} />}
-            reader={
-              <MailReader
-                mail={mail}
-                segretarioOpen={segretarioOpen}
-                onRemind={(commitment) => void remindAbout(commitment)}
-                onTakeUpReply={takeUpReply}
-              />
-            }
-            app={
-              shownApp === 'mail' && accounts.length === 0 ? (
-                <AppPlaceholder
-                  title="Posta"
-                  icon={Mail}
-                  atWindowTopRight={!segretarioOpen}
-                  lead="Nessuna casella collegata. Le altre app funzionano anche così; con una casella, la posta arriva qui."
-                  points={[
-                    'Ogni casella è una connessione a sé: Gmail, Microsoft, iCloud, o qualunque altra con IMAP.',
-                    ...(aiOn
-                      ? [
-                          'Il Segretario la legge come legge i calendari: le cose aperte, i progetti e la giornata la comprendono.'
-                        ]
-                      : [])
-                  ]}
-                  action={{
-                    label: 'Collega una casella',
-                    onClick: () => startOnboarding('nuova-connessione')
+
+              {composeSessions.map((session) => (
+                <MailComposer
+                  key={session.id}
+                  ref={(handle) => {
+                    if (handle) {
+                      composerHandlesRef.current.set(session.id, handle)
+                    } else {
+                      composerHandlesRef.current.delete(session.id)
+                    }
                   }}
-                />
-              ) : shownApp === 'oggi' ? (
-                <TodayPage
-                  canWrite={segretario.status?.keyState === 'ready'}
-                  atWindowTopRight={!segretarioOpen}
-                  onOpenMessage={openMessageRef}
-                  onRemind={(commitment) => void remindAbout(commitment)}
-                />
-              ) : shownApp === 'calendar' ? (
-                <CalendarApp
-                  key={calendarFocus?.at}
-                  aiOn={aiOn}
-                  focus={calendarFocus?.focus}
-                  onSight={setCalendarSight}
-                  searchInputRef={calendarSearchRef}
-                  keysEnabled={!shellModalOpen}
-                  atWindowTopRight={!segretarioOpen}
-                  onOpenMessage={openMessageRef}
-                  onOpenConnections={() => startOnboarding('nuova-connessione')}
-                />
-              ) : shownApp === 'files' ? (
-                <AppPlaceholder
-                  title="File"
-                  icon={Files}
-                  badge="In arrivo"
-                  atWindowTopRight={!segretarioOpen}
-                  lead="I tuoi documenti, ovunque siano: il computer, i dischi di rete, i drive. Una fonte come la posta e il calendario."
-                  points={[
-                    'Ogni volume del computer o di rete, e ogni drive — Google Drive, OneDrive e SharePoint, Dropbox, iCloud Drive — è una connessione, come una casella o un calendario.',
-                    'Una ricerca sola su tutti, e il documento si apre dov’è: niente copie, niente sincronizzazione.',
-                    'Per ogni file, i progetti, le conversazioni e gli appuntamenti a cui appartiene.',
-                    ...(aiOn
-                      ? [
-                          'Il Segretario legge già i file del computer e dei dischi di rete collegati, solo in lettura.'
-                        ]
-                      : [])
-                  ]}
-                />
-              ) : shownApp === 'contacts' ? (
-                <AppPlaceholder
-                  title="Contatti"
-                  icon={BookUser}
-                  badge="In arrivo"
-                  atWindowTopRight={!segretarioOpen}
-                  lead="Le persone e gli enti con cui lavori, in un posto solo, con quello che il Segretario sa di ciascuno."
-                  points={[
-                    'Da tutte le fonti: chi ti scrive, chi incontri, le rubriche delle connessioni.',
-                    'Per ognuno: le conversazioni, gli appuntamenti, i progetti in comune e le cose aperte.',
-                    'Quello che il Segretario ha capito di loro, scritto da lui e corretto da te.'
-                  ]}
-                />
-              ) : shownApp === 'projects' ? (
-                <AppPlaceholder
-                  title="Progetti"
-                  icon={Briefcase}
-                  badge="In arrivo"
-                  atWindowTopRight={!segretarioOpen}
-                  lead="Ogni progetto con tutto ciò che gli appartiene, da ogni fonte, nello stesso posto."
-                  points={[
-                    'Le conversazioni, gli appuntamenti, le cartelle e i documenti, le persone e le cose aperte del progetto, insieme.',
-                    'Uno spazio di lavoro, non un altro archivio: ogni cosa resta dov’è, e un file usato da tre progetti è un file solo.',
-                    'Un progetto è un contesto che dura — un cliente, un lavoro, un viaggio, la casa, l’università —: il Segretario li riconosce e tu li correggi.',
-                    ...(aiOn && accounts.length > 0
-                      ? ['Intanto i progetti del Segretario sono nella barra laterale della Posta.']
-                      : [])
-                  ]}
-                />
-              ) : undefined
-            }
-            assistant={
-              segretarioOpen ? (
-                <SegretarioPanel
-                  state={segretario}
-                  contextChip={segretarioContext}
-                  suggestions={segretarioSuggestionList}
-                  atWindowTopRight
-                  onClose={() => setSegretarioOpen(false)}
-                  onOpenHandle={openSegretarioHandle}
-                  onApprove={(activityId, approval, approved) =>
-                    void answerSegretarioApproval(activityId, approval, approved)
+                  session={session}
+                  open={session.id === activeComposeId}
+                  accounts={accounts}
+                  onMinimize={() =>
+                    setActiveComposeId((current) => (current === session.id ? null : current))
                   }
-                  onOpenDraft={(draftId) => void openDraftById(draftId)}
+                  onClosed={(outcome) => handleComposerClosed(session.id, outcome)}
+                  onSendRequested={handleComposerSendRequested}
+                  onSummaryChange={(summary) => updateComposeSummary(session.id, summary)}
+                  canAskSegretario={
+                    aiOn &&
+                    (segretario.status?.keyState === 'ready' ||
+                      segretario.status?.keyState === 'unchecked')
+                  }
                 />
-              ) : null
-            }
-          />
+              ))}
 
-          {composeSessions.map((session) => (
-            <MailComposer
-              key={session.id}
-              ref={(handle) => {
-                if (handle) {
-                  composerHandlesRef.current.set(session.id, handle)
-                } else {
-                  composerHandlesRef.current.delete(session.id)
+              <ConfirmDialog
+                open={failedSend !== null}
+                title="Invio non riuscito"
+                description={failedSend?.message}
+                details={
+                  failedSend && (
+                    <div className="border-destructive/35 bg-destructive/10 flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px]">
+                      <AlertTriangle className="text-destructive size-3.5 shrink-0" />
+                      <span className="min-w-0 truncate">
+                        {failedSend.draft.subject
+                          ? `Il messaggio non è partito: «${failedSend.draft.subject}»`
+                          : 'Il messaggio non è partito.'}
+                      </span>
+                    </div>
+                  )
                 }
-              }}
-              session={session}
-              open={session.id === activeComposeId}
-              accounts={accounts}
-              onMinimize={() =>
-                setActiveComposeId((current) => (current === session.id ? null : current))
-              }
-              onClosed={(outcome) => handleComposerClosed(session.id, outcome)}
-              onSendRequested={handleComposerSendRequested}
-              onSummaryChange={(summary) => updateComposeSummary(session.id, summary)}
-              canAskSegretario={
-                aiOn &&
-                (segretario.status?.keyState === 'ready' ||
-                  segretario.status?.keyState === 'unchecked')
-              }
-            />
-          ))}
+                confirmLabel="Riapri e riprova"
+                cancelLabel="Lascia in Bozze"
+                initialFocus="confirm"
+                onConfirm={() => settleFailedSend(true)}
+                onCancel={() => settleFailedSend(false)}
+              />
 
-          <ConfirmDialog
-            open={failedSend !== null}
-            title="Invio non riuscito"
-            description={failedSend?.message}
-            details={
-              failedSend && (
-                <div className="border-destructive/35 bg-destructive/10 flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px]">
-                  <AlertTriangle className="text-destructive size-3.5 shrink-0" />
-                  <span className="min-w-0 truncate">
-                    {failedSend.draft.subject
-                      ? `Il messaggio non è partito: «${failedSend.draft.subject}»`
-                      : 'Il messaggio non è partito.'}
-                  </span>
-                </div>
-              )
-            }
-            confirmLabel="Riapri e riprova"
-            cancelLabel="Lascia in Bozze"
-            initialFocus="confirm"
-            onConfirm={() => settleFailedSend(true)}
-            onCancel={() => settleFailedSend(false)}
-          />
+              <MailDialogs mail={mail} />
 
-          <MailDialogs mail={mail} />
+              <SettingsDialog
+                open={settingsOpen}
+                onOpenChange={(open) => {
+                  setSettingsOpen(open)
 
-          <SettingsDialog
-            open={settingsOpen}
-            onOpenChange={(open) => {
-              setSettingsOpen(open)
+                  if (!open) {
+                    setSettingsSection(null)
+                  }
+                }}
+                initialSectionId={settingsSection}
+                accounts={accounts}
+                mailStates={mail.accountConnections}
+                googleReady={capabilities.googleOAuthReady}
+                selectedAccountId={mail.selectedAccountId}
+                removingAccountId={mail.removingAccountId}
+                clearingAccountDataId={mail.clearingAccountDataId}
+                clearingDatabaseData={mail.clearingDatabaseData}
+                uiPreferences={uiPreferences}
+                onUiPreferencesChange={updateUiPreferences}
+                onRemoveAccount={(accountId, calendars) =>
+                  void mail.removeAccount(accountId, calendars)
+                }
+                onClearAccountData={(accountId) => void mail.clearAccountData(accountId)}
+                onClearDatabaseData={() => void mail.clearAllDataKeepAccounts()}
+                onAddAccount={() => {
+                  setSettingsOpen(false)
+                  startOnboarding('nuova-connessione')
+                }}
+                onEnableAi={() => {
+                  setSettingsOpen(false)
+                  void startAiOnboarding()
+                }}
+                onRedoConoscimi={() => {
+                  setSettingsOpen(false)
 
-              if (!open) {
-                setSettingsSection(null)
-              }
-            }}
-            initialSectionId={settingsSection}
-            accounts={accounts}
-            mailStates={mail.accountConnections}
-            googleReady={capabilities.googleOAuthReady}
-            selectedAccountId={mail.selectedAccountId}
-            removingAccountId={mail.removingAccountId}
-            clearingAccountDataId={mail.clearingAccountDataId}
-            clearingDatabaseData={mail.clearingDatabaseData}
-            uiPreferences={uiPreferences}
-            onUiPreferencesChange={updateUiPreferences}
-            onRemoveAccount={(accountId, calendars) =>
-              void mail.removeAccount(accountId, calendars)
-            }
-            onClearAccountData={(accountId) => void mail.clearAccountData(accountId)}
-            onClearDatabaseData={() => void mail.clearAllDataKeepAccounts()}
-            onAddAccount={() => {
-              setSettingsOpen(false)
-              startOnboarding('nuova-connessione')
-            }}
-            onEnableAi={() => {
-              setSettingsOpen(false)
-              void startAiOnboarding()
-            }}
-            onRedoConoscimi={() => {
-              setSettingsOpen(false)
-
-              // Conoscimi is the Segretario at work: with the AI off, the way to it turns it on.
-              if (aiOn) {
-                startOnboarding('conoscimi')
-              } else {
-                void startAiOnboarding()
-              }
-            }}
-            onUnifiedPreferencesChanged={mail.handleUnifiedPreferencesChanged}
-          />
+                  // Conoscimi is the Segretario at work: with the AI off, the way to it turns it on.
+                  if (aiOn) {
+                    startOnboarding('conoscimi')
+                  } else {
+                    void startAiOnboarding()
+                  }
+                }}
+                onUnifiedPreferencesChanged={mail.handleUnifiedPreferencesChanged}
+              />
+            </>
+          )}
         </AppFrame>
       </SegretarioLinkProvider>
     </CommandShortcutsProvider>
