@@ -93,6 +93,11 @@ export class Scheduler {
       concurrency: () => number
       /** Whether anything may start now at all: the AI on, with a key. */
       canStart?: () => Promise<boolean>
+      /**
+       * What may not start yet, asked once a look at the queue: a unit it
+       * names stays queued, whoever queued it, and starts once let through.
+       */
+      holding?: () => Promise<((unit: WorkUnit) => boolean) | null>
       /** Something started, finished or failed. */
       onChange?: () => void
     }
@@ -234,6 +239,7 @@ export class Scheduler {
       return
     }
 
+    const held = (await this.options.holding?.()) ?? null
     // The most urgent first; past those held up by a key in use — a sender's twenty notices
     // read one by one — to the rest, so one lane never holds every other.
     const page = Math.max(free * 6, 12)
@@ -269,8 +275,12 @@ export class Scheduler {
       }
 
       for (const other of looked) {
+        // One held back is not waited for: it would hold its lane until let through.
         const otherOrder =
-          other.id === unit.id || claimed.has(other.id) || other.priority > unit.priority
+          other.id === unit.id ||
+          claimed.has(other.id) ||
+          other.priority > unit.priority ||
+          held?.(other)
             ? null
             : (this.executors[other.task]?.order?.(other) ?? null)
 
@@ -304,6 +314,10 @@ export class Scheduler {
 
         if (!executor) {
           await this.queue.cancel(unit.id)
+          continue
+        }
+
+        if (held?.(unit)) {
           continue
         }
 

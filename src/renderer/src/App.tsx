@@ -516,9 +516,12 @@ function App(): React.JSX.Element {
   // The welcome screen, in front: at launch, or asked again from the rail's mark — then it fades in
   // over the workspace.
   const [welcome, setWelcome] = useState<'launch' | 'rail' | null>('launch')
+  // The workspace: there with a connection, once the first setup — the one that builds it — has
+  // been entered; any later setup lies over it (vision §12.2).
+  const workspaceExists = hasConnections && onboarding?.case !== 'primo-avvio'
   // The welcome or the setup lies over the workspace, which keeps working under it (vision §13.1);
-  // with no connection there is no workspace, and they are all there is.
-  const workspaceCovered = welcome !== null || Boolean(onboarding) || !hasConnections
+  // with no workspace, they are all there is.
+  const workspaceCovered = welcome !== null || Boolean(onboarding) || !workspaceExists
 
   /**
    * Something to be seen — a message from a notification, what the Segretario
@@ -1450,7 +1453,7 @@ function App(): React.JSX.Element {
   function startOnboarding(setupCase: OnboardingCase): void {
     // What the user looks at is kept for when it ends — the first source standing in for Oggi with
     // the AI off too, so a setup that turns the AI on does not move them.
-    if (hasConnections && segretario.status) {
+    if (workspaceExists && segretario.status) {
       setActiveApp(shownApp)
     }
 
@@ -1612,8 +1615,8 @@ function App(): React.JSX.Element {
     calendar: calendarInSight ? { eventOpen: calendarInSight.event !== null } : null
   })
 
-  // Over the workspace — in its place, with no connection —: the setup, or the welcome. One tree
-  // for both, so the setup stays as it is when its first connection brings the workspace under it.
+  // Over the workspace — in its place, while there is none —: the setup, or the welcome. One tree
+  // for all, so nothing of the setup is lost when the workspace comes or goes under it.
   const cover = onboarding ? (
     <OnboardingWizard
       state={onboarding}
@@ -1661,7 +1664,7 @@ function App(): React.JSX.Element {
           onNoticeOpenChange={setNoticeOpen}
           overlay={frameOverlay}
           inert={composerOpen}
-          framed={hasConnections}
+          framed={workspaceExists}
           cover={cover}
           dockVisible={!workspaceCovered && !composerOpen && composeSessions.length > 0}
           rightInset={assistantInset}
@@ -1681,7 +1684,7 @@ function App(): React.JSX.Element {
             />
           }
         >
-          {hasConnections && (
+          {workspaceExists && (
             <>
               <WorkspaceLayout
                 mode={uiPreferences.layoutMode}

@@ -117,16 +117,16 @@ const BEFORE_READING: ReadonlyArray<OnboardingStep> = [
 /**
  * What the guided setup under way holds back until its reading: Conoscimi
  * comes first, so the reading starts informed. The setup that turns the AI
- * on holds every connection; one adding connections, those — its mailboxes
- * by id, its calendars as the ones not known yet. Conoscimi done again by
- * hand holds nothing back. Past Conoscimi — done, or gone on without —
- * nothing is held: a connection left unknown is read as far as the
- * horizon it has, mail and calendars alike.
+ * on without adding connections holds every one; any other, those its
+ * Conoscimi has to know — the ones not known yet, mailboxes and calendars
+ * alike: one added is unknown from its first instant. Conoscimi done again
+ * by hand holds nothing back. Past Conoscimi — done, or gone on without —
+ * nothing is held: a connection left unknown is read as far as the horizon
+ * it has.
  */
 export interface SetupHold {
   holding: boolean
   all: boolean
-  mail: ReadonlySet<string>
 }
 
 export function setupHold(setup: OnboardingState | null): SetupHold {
@@ -134,14 +134,23 @@ export function setupHold(setup: OnboardingState | null): SetupHold {
     setup !== null && setup.case !== 'conoscimi' && BEFORE_READING.includes(setup.step)
   return {
     holding,
-    all: holding && setupTurnsAiOn(setup) && setup.accountIds.length === 0,
-    mail: new Set(holding ? setup.accountIds : [])
+    all: holding && setupTurnsAiOn(setup) && setup.accountIds.length === 0
   }
 }
 
-/** Whether a calendar (by its learning key) waits for the setup: every one, or one not known yet. */
-export function calendarHeld(hold: SetupHold, key: string, known: ReadonlySet<string>): boolean {
+/**
+ * Whether a connection — a mailbox by its id, a calendar by its learning
+ * key — waits for the setup: every one, or one not known yet.
+ */
+export function connectionHeld(hold: SetupHold, key: string, known: ReadonlySet<string>): boolean {
   return hold.all || (hold.holding && !known.has(key))
+}
+
+/** The connections Conoscimi knows: mailboxes by id, calendars by their learning key. */
+function knownConnections(
+  learnt: ReadonlyArray<{ accountId: string; finishedAt: number | null }>
+): ReadonlySet<string> {
+  return new Set(learnt.filter((row) => row.finishedAt !== null).map((row) => row.accountId))
 }
 
 export interface EngineDeps {
@@ -228,6 +237,7 @@ export class SegretarioEngine {
       concurrency: () => (this.preparing ? PREPARING_CONCURRENCY : CONCURRENCY),
       // Work queued before the AI was switched off — or before a restart with it off — waits.
       canStart: () => deps.ready(),
+      holding: () => this.setupHolding(),
       onChange: () => deps.onStateChange()
     })
   }
@@ -594,11 +604,9 @@ export class SegretarioEngine {
       this.deps.calendar.connections().catch(() => []),
       this.deps.store.listLearning()
     ])
-    const known = new Set(
-      learnt.filter((row) => row.finishedAt !== null).map((row) => row.accountId)
-    )
+    const known = knownConnections(learnt)
     return connections.filter(
-      (connection) => !calendarHeld(hold, calendarLearningKey(connection.id), known)
+      (connection) => !connectionHeld(hold, calendarLearningKey(connection.id), known)
     )
   }
 
@@ -714,6 +722,42 @@ export class SegretarioEngine {
   }
 
   /**
+   * What the guided setup under way keeps from starting, whoever queued it —
+   * the planning, Oggi asking for the day again, a project opened, work left
+   * from before: the reading and the first look of a connection its Conoscimi
+   * has still to know; and, while it turns the AI on, all that is not its own
+   * — the day, the projects, the memory, the calendar's changes — until it is
+   * over (§12.2). The planning queues none of it meanwhile; this keeps the
+   * rule whatever else asks.
+   */
+  private async setupHolding(): Promise<((unit: WorkUnit) => boolean) | null> {
+    const setup = await this.deps.onboarding()
+
+    if (!setup) {
+      return null
+    }
+
+    const hold = setupHold(setup)
+    const turnsAiOn = setupTurnsAiOn(setup)
+
+    if (!hold.holding && !turnsAiOn) {
+      return null
+    }
+
+    const known = knownConnections(await this.deps.store.listLearning())
+
+    return (unit) => {
+      if (unit.task === 'lettura') {
+        return connectionHeld(hold, (unit.scope as ReadingScope).accountId, known)
+      }
+
+      const look = unit.task === 'calendario' ? (unit.scope as Partial<LookScope>).look : undefined
+
+      return look !== undefined ? connectionHeld(hold, calendarLearningKey(look), known) : turnsAiOn
+    }
+  }
+
+  /**
    * The questions the state answers, each one idempotent: asked again, it
    * queues nothing twice.
    */
@@ -732,6 +776,8 @@ export class SegretarioEngine {
 
     const setup = await this.deps.onboarding()
     const hold = setupHold(setup)
+    const learnt = await store.listLearning()
+    const known = knownConnections(learnt)
 
     // Messages not read yet, conversation by conversation, each account as far back as it is
     // read; what came now before the backlog.
@@ -739,7 +785,7 @@ export class SegretarioEngine {
     const conversations = hold.all
       ? []
       : (await mail.unreadConversations(sinceOf, READING_PLANNED)).filter(
-          (conversation) => !hold.mail.has(conversation.accountId)
+          (conversation) => !connectionHeld(hold, conversation.accountId, known)
         )
     const failed = await queue.failedAt(
       conversations.map(
@@ -874,7 +920,6 @@ export class SegretarioEngine {
 
     // Keeping the memory in order needs a memory: some connection known through Conoscimi. One
     // left unknown (Conoscimi failed, the user went on without) does not stop it for the rest.
-    const learnt = await store.listLearning()
     const accounts = await mail.listAccounts()
     const someKnown = accounts.some((account) =>
       learnt.some((row) => row.accountId === account.id && row.finishedAt !== null)

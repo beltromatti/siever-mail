@@ -890,10 +890,13 @@ Un solo componente a schermo intero, riusato in tutti i casi:
 
 **Sta sopra lo spazio di lavoro, che sotto continua** (§13.1). Blocca ciò che l'utente tocca, non ciò che lavora: la procedura stessa vive della sincronizzazione (la preparazione la aspetta), di Conoscimi e delle letture.
 
-- **Il motore trattiene solo ciò che deve aspettare Conoscimi:** accendendo l'AI, tutto; aggiungendo una connessione, solo quella (le caselle già conosciute continuano a leggersi); rifacendo Conoscimi, niente. Il resto va avanti com'era.
+- **Il motore trattiene solo ciò che deve aspettare Conoscimi, e lo garantisce lui:**
+  - una connessione che Conoscimi deve ancora conoscere non si legge e non si guarda prima di lui. Accendendo l'AI senza aggiungerne, tutte; aggiungendone, quelle non ancora conosciute — una appena aggiunta lo è dal primo istante, senza aspettare che la procedura la elenchi —; rifacendo Conoscimi, nessuna;
+  - mentre la procedura accende l'AI, tutto ciò che non è suo — la giornata, «Il punto», la memoria, i cambiamenti del calendario — aspetta che finisca; poi la giornata promessa si scrive subito. Con l'AI già accesa il resto va avanti com'era: le caselle conosciute si leggono, la giornata e i progetti seguono;
+  - la regola vale quando un lavoro sta per partire, chiunque l'abbia chiesto: la pianificazione, Oggi che chiede la giornata, un progetto aperto, un lavoro rimasto in coda. Ciò che è montato nella finestra non accende e non spegne niente.
 - **Ciò che l'utente stava facendo resta com'era:** i messaggi che scriveva, dove era, il pannello. «Entra» toglie la procedura e lo ritrova.
 - **Non la chiude niente se non lei stessa.** Ciò che va visto — una notifica cliccata, ciò che il Segretario mostra, un messaggio da riaprire, un invio non riuscito — aspetta la fine e si apre allora. Sopra di lei restano solo gli avvisi che stanno ovunque: l'AI spenta, una connessione ferma (§12.1, §14.1).
-- **Senza nessuna connessione** non c'è uno spazio di lavoro: la procedura è tutta la finestra, e la prima connessione aggiunta lo fa nascere sotto di lei.
+- **Il primo avvio costruisce lo spazio di lavoro**, che prima non c'è: non c'è ancora niente dell'utente da tenere vivo, e tenerlo montato mentre arrivano la prima sincronizzazione, Conoscimi e le letture sarebbe solo peso. Nasce al suo «Entra»; le procedure dopo stanno sopra di lui. Se se ne vanno tutte le connessioni finisce, e il primo avvio seguente lo fa rinascere.
 
 **I casi:**
 
@@ -934,7 +937,7 @@ Contatti e Progetti sono separati dalle fonti perché non hanno connessioni prop
 
 In cima alla barra, il marchio. Al passaggio dice quale SIEVER Mail è — la versione e l'estensione, con le stesse parole del piede delle Impostazioni (§13.2) —; un clic riporta alla schermata d'apertura, la stessa dell'avvio.
 
-**Le schermate non accendono né spengono niente: decidono solo che cosa l'utente tocca.** La schermata d'apertura e la procedura guidata (§12.2) sono strati sopra lo spazio di lavoro, che sotto resta vivo: le connessioni si sincronizzano, il Segretario lavora, i messaggi che si scrivono restano come sono, e l'app in primo piano resta quella. Lo spazio di lavoro nasce su Oggi — senza AI, sulla prima fonte, che ne tiene il posto — e da lì resta dove l'utente lo lascia: «Entra» toglie lo strato e si ritrova ciò che si stava facendo; all'avvio, la giornata. La schermata d'apertura è solo un'immagine: ciò che va visto subito — una notifica, ciò che il Segretario mostra, un messaggio da riscrivere — la chiude da sé; la procedura no, perché è un lavoro in corso. Senza nessuna connessione non c'è uno spazio di lavoro: la schermata d'apertura porta alla prima.
+**Le schermate non accendono né spengono niente: decidono solo che cosa l'utente tocca.** La schermata d'apertura e la procedura guidata (§12.2) sono strati sopra lo spazio di lavoro, che sotto resta vivo: le connessioni si sincronizzano, il Segretario lavora, i messaggi che si scrivono restano come sono, e l'app in primo piano resta quella. Lo spazio di lavoro nasce su Oggi — senza AI, sulla prima fonte, che ne tiene il posto — e da lì resta dove l'utente lo lascia: «Entra» toglie lo strato e si ritrova ciò che si stava facendo; all'avvio, la giornata. La schermata d'apertura è solo un'immagine: ciò che va visto subito — una notifica, ciò che il Segretario mostra, un messaggio da riscrivere — la chiude da sé; la procedura no, perché è un lavoro in corso. Senza nessuna connessione non c'è uno spazio di lavoro: la schermata d'apertura porta al primo avvio, che lo costruisce e lo apre con il suo «Entra» (§12.2).
 
 In fondo alla barra:
 

@@ -14,8 +14,8 @@ import { AiStore } from '../ai-store'
 import { ensureAiSchema } from '../schema'
 import { memorySql } from '../testing/memory-sql'
 import {
-  calendarHeld,
   calendarLookScope,
+  connectionHeld,
   SegretarioEngine,
   setupHold,
   type EngineDeps
@@ -432,6 +432,36 @@ describe('Scheduler', () => {
     await until(() => ran.length === 2)
   })
 
+  it('keeps a unit queued while it is held, whoever queued it, and starts it once let through', async () => {
+    const executor = gatedExecutor((unit) => [unit.scopeKey])
+    let holdingDay = true
+    scheduler = new Scheduler(
+      queue,
+      { lettura: executor, giornata: executor },
+      {
+        reachability,
+        concurrency: () => 4,
+        holding: async () => (unit) => holdingDay && unit.task === 'giornata'
+      }
+    )
+    await queue.enqueue({ task: 'giornata', scopeKey: 'day', scope: {}, priority: 5 })
+    await queue.enqueue({ task: 'lettura', scopeKey: 'read', scope: {}, priority: 10 })
+    await scheduler.start()
+
+    await until(() => executor.started.length === 1)
+    expect(executor.started).toEqual(['read'])
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(executor.started).toEqual(['read'])
+
+    holdingDay = false
+    scheduler.wake()
+    await until(() => executor.started.length === 2)
+    expect(executor.started).toEqual(['read', 'day'])
+    executor.release('read')
+    executor.release('day')
+    await until(async () => (await queue.counts()).length === 0)
+  })
+
   it('leaves a unit that failed failed, without trying it again by itself', async () => {
     let calls = 0
     scheduler = new Scheduler(
@@ -502,41 +532,116 @@ describe('What the guided setup holds back', () => {
   const setup = (
     over: Partial<OnboardingState> & Pick<OnboardingState, 'case' | 'step'>
   ): OnboardingState => ({ accountIds: [], conoscimiId: null, startedAt: 0, ...over })
-  const known = new Set(['calendario:c1'])
+  // What Conoscimi knows: the mailbox a1 and the calendar c1.
+  const known = new Set(['a1', 'calendario:c1'])
 
   it('holds every connection while the setup turning the AI on is before its reading', () => {
     const hold = setupHold(setup({ case: 'ai-prima-volta', step: 'conoscimi', turnsAiOn: true }))
 
     expect(hold.all).toBe(true)
-    expect(calendarHeld(hold, 'calendario:c1', known)).toBe(true)
-    expect(calendarHeld(hold, 'calendario:c2', known)).toBe(true)
+
+    for (const key of ['a1', 'a2', 'calendario:c1', 'calendario:c2']) {
+      expect(connectionHeld(hold, key, known)).toBe(true)
+    }
   })
 
-  it('holds a new connection, mailbox or calendar, while it waits for Conoscimi', () => {
+  it('holds what its Conoscimi has to know, mailbox or calendar, while it waits for it', () => {
+    // a2 just added; a3 left unknown before, and known in this Conoscimi too.
     const hold = setupHold(
       setup({ case: 'nuova-connessione', step: 'conoscimi', accountIds: ['a2'] })
     )
 
     expect(hold.all).toBe(false)
-    expect([...hold.mail]).toEqual(['a2'])
-    expect(calendarHeld(hold, 'calendario:c1', known)).toBe(false)
-    expect(calendarHeld(hold, 'calendario:c2', known)).toBe(true)
+    expect(connectionHeld(hold, 'a1', known)).toBe(false)
+    expect(connectionHeld(hold, 'a2', known)).toBe(true)
+    expect(connectionHeld(hold, 'a3', known)).toBe(true)
+    expect(connectionHeld(hold, 'calendario:c1', known)).toBe(false)
+    expect(connectionHeld(hold, 'calendario:c2', known)).toBe(true)
+  })
+
+  it('holds a mailbox from the instant it is added, before the setup lists it', () => {
+    const hold = setupHold(setup({ case: 'nuova-connessione', step: 'connessioni' }))
+
+    expect(connectionHeld(hold, 'a2', known)).toBe(true)
   })
 
   it('holds nothing past Conoscimi, even when the user went on without it', () => {
     const hold = setupHold(setup({ case: 'ai-prima-volta', step: 'lettura', turnsAiOn: true }))
 
     expect(hold.holding).toBe(false)
-    expect(hold.mail.size).toBe(0)
-    expect(calendarHeld(hold, 'calendario:c2', known)).toBe(false)
-    expect(calendarHeld(setupHold(null), 'calendario:c2', known)).toBe(false)
+    expect(connectionHeld(hold, 'a2', known)).toBe(false)
+    expect(connectionHeld(hold, 'calendario:c2', known)).toBe(false)
+    expect(connectionHeld(setupHold(null), 'calendario:c2', known)).toBe(false)
   })
 
   it('holds nothing back for Conoscimi done again by hand', () => {
     const hold = setupHold(setup({ case: 'conoscimi', step: 'conoscimi' }))
 
     expect(hold.holding).toBe(false)
-    expect(calendarHeld(hold, 'calendario:c2', known)).toBe(false)
+    expect(connectionHeld(hold, 'calendario:c2', known)).toBe(false)
+  })
+})
+
+describe('What the guided setup keeps from starting', () => {
+  const holdingDuring = async (
+    setup: OnboardingState | null
+  ): Promise<((unit: WorkUnit) => boolean) | null> =>
+    (
+      new SegretarioEngine({
+        onboarding: async () => setup,
+        store: {
+          listLearning: async () => [
+            { accountId: 'a1', activityId: null, finishedAt: 1 },
+            { accountId: 'calendario:c1', activityId: null, finishedAt: 1 }
+          ]
+        }
+      } as unknown as EngineDeps) as unknown as {
+        setupHolding(): Promise<((unit: WorkUnit) => boolean) | null>
+      }
+    ).setupHolding()
+  const unit = (task: string, scope: object = {}): WorkUnit => ({ task, scope }) as WorkUnit
+  const setup = (
+    over: Partial<OnboardingState> & Pick<OnboardingState, 'case' | 'step'>
+  ): OnboardingState => ({ accountIds: [], conoscimiId: null, startedAt: 0, ...over })
+
+  it('lets through only its own work while the setup turns the AI on, until it is over', async () => {
+    const held = await holdingDuring(
+      setup({ case: 'ai-prima-volta', step: 'lettura', turnsAiOn: true })
+    )
+
+    expect(held?.(unit('lettura', { accountId: 'a2', threadId: 't' }))).toBe(false)
+    expect(held?.(unit('calendario', { look: 'c2' }))).toBe(false)
+    // Oggi asking for the day again, a project opened, the memory, the calendar's changes: after.
+    expect(held?.(unit('giornata', { refresh: true }))).toBe(true)
+    expect(held?.(unit('punto', { projectId: 'p1' }))).toBe(true)
+    expect(held?.(unit('riflessione'))).toBe(true)
+    expect(held?.(unit('calendario'))).toBe(true)
+  })
+
+  it('holds before Conoscimi even the reading queued before the setup', async () => {
+    const held = await holdingDuring(
+      setup({ case: 'ai-riaccesa', step: 'conoscimi', turnsAiOn: true })
+    )
+
+    expect(held?.(unit('lettura', { accountId: 'a1', threadId: 't' }))).toBe(true)
+    expect(held?.(unit('calendario', { look: 'c1' }))).toBe(true)
+  })
+
+  it('holds only the connections a setup adds while the AI is on, and lets the rest go on', async () => {
+    const held = await holdingDuring(
+      setup({ case: 'nuova-connessione', step: 'conoscimi', accountIds: ['a2'] })
+    )
+
+    expect(held?.(unit('lettura', { accountId: 'a1', threadId: 't' }))).toBe(false)
+    expect(held?.(unit('lettura', { accountId: 'a2', threadId: 't' }))).toBe(true)
+    expect(held?.(unit('calendario', { look: 'c2' }))).toBe(true)
+    expect(held?.(unit('calendario'))).toBe(false)
+    expect(held?.(unit('giornata', { refresh: true }))).toBe(false)
+  })
+
+  it('holds nothing without a setup, or for Conoscimi done again by hand', async () => {
+    expect(await holdingDuring(null)).toBeNull()
+    expect(await holdingDuring(setup({ case: 'conoscimi', step: 'conoscimi' }))).toBeNull()
   })
 })
 
