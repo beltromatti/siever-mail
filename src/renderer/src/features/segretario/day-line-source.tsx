@@ -20,6 +20,20 @@ export function DayLineSourceIcon({
   return <Icon className={className} />
 }
 
+/**
+ * Every place a line can come from, side by side: the mark of the
+ * deadlines as a whole — each of them carries one of these.
+ */
+export function DayLineSourceIcons({ className }: { className?: string }): React.JSX.Element {
+  return (
+    <span className="flex shrink-0 items-center gap-0.5">
+      {Object.entries(SOURCE_ICONS).map(([kind, Icon]) => (
+        <Icon key={kind} className={className} />
+      ))}
+    </span>
+  )
+}
+
 const EVENT_DAY = new Intl.DateTimeFormat('it-IT', {
   weekday: 'short',
   day: 'numeric',

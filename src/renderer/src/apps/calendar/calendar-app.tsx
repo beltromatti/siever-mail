@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type Ref } from 'react'
-import { ChevronLeft, ChevronRight, LoaderCircle, Mail, Plus, RefreshCw } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LoaderCircle, Plus, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
@@ -14,7 +14,7 @@ import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
 import type { HostCommandId } from '@shared/commands'
 import type { MessageRef } from '@shared/models'
 import type { DayLine } from '@shared/segretario'
-import { dayLineLink } from '@renderer/features/segretario/day-line-source'
+import { DayLineSourceIcons, dayLineLink } from '@renderer/features/segretario/day-line-source'
 import { useOpenLink } from '@renderer/features/segretario/segretario-text'
 
 import { AgendaList } from './agenda-list'
@@ -464,7 +464,7 @@ export function CalendarApp({
                   setLayers((current) => ({ ...current, due: event.target.checked }))
                 }
               />
-              <Mail className="text-ai size-3.5" />
+              <DayLineSourceIcons className="text-ai size-3.5" />
               Scadenze
             </label>
             <label className="hover:bg-hover flex cursor-pointer items-center gap-2 rounded-[6px] px-1 py-1 text-[12.5px]">

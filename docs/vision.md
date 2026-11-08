@@ -71,7 +71,7 @@ Nessuna fonte ha privilegi nel modello del lavoro: una cosa aperta, un progetto,
 - **I prompt** danno esempi presi da lavori diversi, detti come esempi; nessuna convenzione. Nemmeno per i nomi dei progetti: il Segretario li capisce da ciò che ha davanti, senza partire da uno schema (non «codice · nome», che è il modo di qualcuno, non di tutti).
 - **Il codice e i suoi documenti** non nominano estensioni, persone o aziende reali: gli esempi sono inventati (`acme-srl`, `brenta.it`).
 
-**Dove l'utente la vede.** In Impostazioni › Estensione: il nome dell'estensione installata, che cosa aggiunge, il suo identificativo e la versione dell'app; oppure che non ce n'è nessuna, e che per averne una si contattano gli sviluppatori. In fondo alla colonna delle Impostazioni, sempre, la versione di SIEVER Mail e, se c'è, il nome dell'estensione.
+**Dove l'utente la vede.** In Impostazioni › Estensione: il nome dell'estensione installata, che cosa aggiunge, il suo identificativo e la versione dell'app; oppure che non ce n'è nessuna, e che per averne una si contattano gli sviluppatori. In fondo alla colonna delle Impostazioni, sempre, e al passaggio sul marchio in cima alla barra (§13.1): la versione di SIEVER Mail e, se c'è, il nome dell'estensione.
 
 ---
 
@@ -203,6 +203,7 @@ L'architettura è già pronta. Si aggiungono strumenti al catalogo e permessi al
   - La lettura vede le cose chiuse di recente, con chi e quando. Se arriva un fatto **nuovo** che la contraddice ("il contratto firmato non è arrivato"), la riapre dicendo perché.
 - **Doppioni.** Prima di aprire, la lettura vede le cose aperte, e quelle chiuse di recente, della conversazione, del progetto e dello stesso interlocutore. Due cose uguali si **uniscono** (`impegni unisci`): lo fa il Segretario al ripasso del mattino, oppure l'utente.
 - **Da dove nasce non ne cambia la natura.** Una cosa aperta da un evento («portare i documenti all'incontro in banca») o detta in chat («ricordami di chiamare il commercialista venerdì») è una cosa aperta come quella di una mail: sta in Oggi, nel calendario con la sua scadenza, nel progetto. Le viste della Posta mostrano messaggi, quindi raccolgono quelle nate da un messaggio; la fonte di ognuna si apre con un clic.
+- **Da dove nasce è sempre vero.** Lavorando da solo, il Segretario apre una cosa solo da ciò che legge — un messaggio o un evento —: lo strumento rifiuta una cosa senza l'uno o l'altro. Dalla parola dell'utente nasce solo con lui presente: detta in chat (anche per un progetto), o scritta a mano in Oggi. Ciò che l'utente dice in chat per un appuntamento nasce da quell'evento: conta a cosa si riferisce, non chi lo dice. Con l'app File nascerà anche da un file (§8).
 
 ### 3.3 Le viste sono proiezioni, calcolate
 
@@ -300,7 +301,7 @@ Per ogni fonte la domanda è la stessa — _quali oggetti, nel campo di attenzio
   - **una serie ricorrente è una cosa sola:** nella prima occhiata si mostra una volta («si ripete 52 volte, ogni lunedì 9:00–9:30, fino al…»); quando la finestra scorre e vi entra un'altra istanza di una serie già conosciuta non è un cambiamento, e non sveglia nessuno. Una serie nuova, creata da chiunque, o un'istanza spostata, sì;
   - **il «quando» lo decide il modello:** ciò che un evento lontano chiede ora è una cosa aperta con la data in cui agire; la preparazione dell'incontro si scrive vicino al giorno, con ciò che si sa allora; il tempo che passa lo porta la giornata.
 - **File: mai uno per uno.** Un volume ha decine o centinaia di migliaia di file: leggerli costerebbe centinaia di dollari e non servirebbe, perché un file non è scritto all'utente, quasi sempre lo ha fatto lui, e il suo senso viene da ciò che lo nomina (una mail, un evento, un progetto). La prima occhiata è di Conoscimi: esplora i volumi per capire come sono fatti e collega ai progetti le loro cartelle. Da lì il campo di attenzione dei file sono quelle cartelle: è il loro orizzonte, nello spazio invece che nel tempo, e lo decide il Segretario come decide quanto indietro leggere la posta. Il resto dei volumi si cerca quando serve.
-- **I file cambiati arrivano a «Il punto».** Se un file cambiato in una cartella di progetto rendesse superato «Il punto» senza dire cosa è cambiato, i file sarebbero l'unica fonte in cui un cambiamento non può far nascere lavoro (una cosa aperta, una proposta). Invece i file nuovi o cambiati nelle cartelle di un progetto — da altri o dall'utente, come per il calendario — si accorpano (i file cambiano a raffiche: si aspetta che smettano) e arrivano, con l'elenco di cosa è cambiato, all'esecuzione «Il punto» di quel progetto. Questa li guarda quanto serve e può aprire, chiudere e collegare come il compito calendario: un'offerta «rev2» salvata in OFFERTE, accanto a «mandare l'offerta entro venerdì», diventa «pronta, manca l'invio». Va alla cadenza di «Il punto»: un file non è urgente da sé, e quando lo è di solito arriva anche un messaggio che lo dice.
+- **I file cambiati arrivano a «Il punto»**, quando ci saranno le connessioni File (§8). Se un file cambiato in una cartella di progetto rendesse superato «Il punto» senza dire cosa è cambiato, i file sarebbero l'unica fonte in cui un cambiamento non può far nascere lavoro (una cosa aperta, una proposta). Invece i file nuovi o cambiati nelle cartelle di un progetto — da altri o dall'utente, come per il calendario — si accorpano (i file cambiano a raffiche: si aspetta che smettano) e arrivano, con l'elenco di cosa è cambiato, all'esecuzione «Il punto» di quel progetto. Questa li guarda quanto serve e può aprire — ciò che apre nasce da quel file (§3.2) —, chiudere e collegare come il compito calendario: un'offerta «rev2» salvata in OFFERTE, accanto a «mandare l'offerta entro venerdì», diventa «pronta, manca l'invio». Va alla cadenza di «Il punto»: un file non è urgente da sé, e quando lo è di solito arriva anche un messaggio che lo dice.
 
 ### 4.3 Unità di lavoro durevoli
 
@@ -444,7 +445,7 @@ Prefissi chiari, nessuna sovrapposizione: per ogni cosa si sa quale strumento us
 | `cerca_file`   | Ricerca di file e cartelle per nome; elenca una cartella. In sola lettura, nelle fonti File: oggi il computer e i volumi di rete collegati, poi le connessioni File (§8).                                                                                                                                                                                                                                                                                                                                 |
 | `leggi`        | Legge qualunque riferimento: un messaggio o la sua conversazione (con nota, cose aperte, progetto, risposta pronta, bozze, i segni di un'estensione), un allegato, un file, un evento, un progetto.                                                                                                                                                                                                                                                                                                       |
 | `nota`         | Scrive o corregge la nota di uno o più messaggi.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `impegni`      | Cose aperte, da qualunque fonte: da un messaggio, da un evento, o dalla parola dell'utente. In un'unica chiamata, più operazioni: elenca, apre, aggiorna, segna fatta o non serve, rinvia, riapre, unisce. Prende ciò che il modello scrive in modo naturale: il messaggio che prova la cosa è anche quello da cui nasce, e il progetto indicato mette nel progetto la sua fonte, o la cosa stessa se l'ha detta l'utente.                                                                                |
+| `impegni`      | Cose aperte, da qualunque fonte: da un messaggio, da un evento, o dalla parola dell'utente (con l'app File, anche da un file). In un'unica chiamata, più operazioni: elenca, apre, aggiorna, segna fatta o non serve, rinvia, riapre, unisce. Prende ciò che il modello scrive in modo naturale: il messaggio che prova la cosa è anche quello da cui nasce, e il progetto indicato mette nel progetto la sua fonte, o la cosa stessa se l'ha detta l'utente.                                             |
 | `progetti`     | Elenca o cerca; legge; crea; rinomina; unisce; collega o scollega conversazioni (anche tutte quelle di una ricerca), eventi e cartelle; scrive "Il punto" e di cosa si tratta; nasconde.                                                                                                                                                                                                                                                                                                                  |
 | `risposta`     | Prepara, aggiorna, conferma o scarta una risposta pronta o un sollecito, sempre locale.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `scrivi_bozza` | Bozza vera, aperta nell'editor e salvata in Bozze: nuova, risposta o inoltro. Riscrive anche la bozza aperta o solo il passaggio selezionato (⌘J).                                                                                                                                                                                                                                                                                                                                                        |
@@ -534,7 +535,7 @@ Ciò che un'estensione fa di un messaggio fuori dalla posta è suo: come, dove, 
 
 **Il calendario non ha un orizzonte:** si guarda tutto ciò che tiene, quando un evento appare e quando cambia (§4.2, §7.2). Quanto indietro guardare ha senso per una casella, dove le cose ancora vive stanno nei messaggi passati; per un calendario no.
 
-**Le fonti non si leggono tutte allo stesso modo, e va bene così.** La posta è comunicazione: ogni messaggio può chiedere qualcosa, e ognuno ha la sua nota. Il calendario è tempo impegnato: ogni evento si guarda una volta, e di nuovo se cambia; non ha una nota (il titolo dice già cos'è), ha una preparazione quando la merita. I file sono materiale: non chiedono niente da sé e non si leggono uno per uno; entrano nel lavoro da ciò che li nomina, e quando cambiano nelle cartelle di un progetto arrivano a chi ne riscrive «Il punto», che li guarda quanto serve. Alla pari vuol dire la stessa domanda sullo stato per ogni fonte, e per ognuna il suo modo di farsi capire, non lo stesso (§4.2).
+**Le fonti non si leggono tutte allo stesso modo, e va bene così.** La posta è comunicazione: ogni messaggio può chiedere qualcosa, e ognuno ha la sua nota. Il calendario è tempo impegnato: ogni evento si guarda una volta, e di nuovo se cambia; non ha una nota (il titolo dice già cos'è), ha una preparazione quando la merita. I file sono materiale: non chiedono niente da sé e non si leggono uno per uno; entrano nel lavoro da ciò che li nomina e, con le connessioni File, quando cambiano nelle cartelle di un progetto arriveranno a chi ne riscrive «Il punto», che li guarderà quanto serve. Alla pari vuol dire la stessa domanda sullo stato per ogni fonte, e per ognuna il suo modo di farsi capire, non lo stesso (§4.2).
 
 ---
 
@@ -597,7 +598,10 @@ Un evento non ha una nota come un messaggio: il titolo dice già cos'è. Che il 
   - il mese piccolo;
   - le connessioni con i loro calendari (colori, visibilità);
   - i livelli del Segretario, da accendere e spegnere: Scadenze e Proposte.
-- **Come si riconoscono:** una scadenza porta l'icona della sua fonte — la busta della mail da cui nasce, il calendario di un evento, la persona per ciò che ha detto l'utente —; una proposta porta la stella del Segretario, la stessa del suo pulsante nella barra.
+- **Come si riconoscono:**
+  - ogni scadenza porta l'icona di ciò da cui nasce (§3.2): la busta della mail e il calendario dell'evento, le stesse delle loro app nella barra; la persona per ciò che ha detto l'utente;
+  - nella legenda, accanto a «Scadenze», le tre stanno in fila: sono tutte scadenze, nate in posti diversi. Una fonte nuova porta la sua, e la legenda la prende da sé (il file, con l'app File, §8);
+  - una proposta porta la stella del Segretario, la stessa del suo pulsante nella barra.
 - **Pannello dell'evento**, come il lettore della posta:
   - dettagli e invitati con le risposte;
   - la preparazione del Segretario, le cose aperte nate dall'evento, i progetti, la mail da cui viene;
@@ -645,14 +649,15 @@ Niente sincronizzazione, upload o condivisione, almeno all'inizio.
 
 - i luoghi in cui cerca saranno quelle connessioni;
 - un drive si leggerà come un disco;
-- un file avrà un'identità stabile, connessione più percorso o id del fornitore.
+- un file avrà un'identità stabile, connessione più percorso o id del fornitore;
+- un file sarà un oggetto alla pari di un messaggio e di un evento, con ciò che ne deriva in ogni funzione: una cosa aperta potrà nascere da lui (§3.2), con la sua icona tra le scadenze (§7.3); un progetto lo raccoglierà (§9.3); `leggi` lo mostrerà con ciò che ne è nato.
 
 Un file non ha un'esecuzione sua: nuovo o cambiato nelle cartelle di un progetto, arriva a chi riscrive «Il punto» di quel progetto (§4.2).
 
 **Percorsi che cambiano posto.** Le cose salvate con un percorso — i posti dei segni di un'estensione, le cartelle collegate ai progetti, i file recenti, la radice dell'archivio di un'estensione — restano scritte come l'utente le conosce. Raggiungerle passa da un punto solo (`reachablePath`), che sa dov'è ora la condivisione:
 
 - **La stessa condivisione montata altrove** — macOS la rimonta come «Archivio-1» se «Archivio» è occupato da una cartella rimasta; su Windows l'unità di rete prende un'altra lettera — si raggiunge sotto il punto nuovo, **senza chiedere niente e senza riscrivere niente**. Le condivisioni e le unità viste montate si ricordano con l'indirizzo del server (come fa il Mac per rimontarle dopo un riavvio).
-- **Spostata davvero** — un altro server, un'altra cartella — nessuno può indovinarlo. Chi la usa lo dice dove serve («L'archivio non è più in …: dov'è ora?»); l'utente indica la radice nuova una volta, e tutto si adegua: ciò che sta sotto la radice (relativo a lei), le copie e le cartelle dei progetti (l'app sposta i percorsi sotto la radice vecchia, `relocate`), il Segretario (una lezione: la riflessione corregge la memoria).
+- **Spostata davvero** — un altro server, un'altra cartella — nessuno può indovinarlo. Chi la usa lo dice dove serve («L'archivio non è più in …: dov'è ora?»); l'utente indica la radice nuova una volta, e tutto si adegua: ciò che sta sotto la radice (relativo a lei), i posti dei segni, le cartelle dei progetti e i file recenti (l'app sposta i percorsi sotto la radice vecchia, `relocate`), il Segretario (una lezione: la riflessione corregge la memoria).
 - È il primo pezzo dell'identità dei file: quando ci saranno le connessioni File, un volume avrà un'identità (l'indirizzo della condivisione, il disco), e `reachablePath` sarà il loro modo di raggiungerlo; `relocate` serve anche lì, quando un volume cambia.
 
 **Oggi:** icona nella barra con "In arrivo" e una pagina che spiega cosa sarà. In Impostazioni › Connessioni la famiglia File è annunciata e mostra i volumi che il Segretario già legge. Nel codice il modello delle connessioni ha già la famiglia File (§15.1).
@@ -944,7 +949,7 @@ Il giallo c'è perché «la rete è caduta» e «la password è cambiata» non s
 Le sezioni, nella colonna a sinistra: **Connessioni** (§11.3), **Preferenze**, **Segretario**, **Cosa so di te** (la memoria, §10), **Notifiche**, **Scorciatoie**, **Dati**, **Firme**, **Estensione**; poi le schede di un'estensione installata, se ne porta.
 
 - **Estensione** dice quale estensione è installata — il suo nome, che cosa aggiunge, il suo identificativo, la versione dell'app — e che cos'è un'estensione; senza, che questa è l'edizione per tutti e che per averne una si contattano gli sviluppatori (§1).
-- **In fondo alla colonna**, sempre: «SIEVER Mail» e la versione (in sviluppo 0.0.0: la versione vera la scrive la build), e sotto il nome dell'estensione, se c'è.
+- **In fondo alla colonna**, sempre: «SIEVER Mail» e la versione (in sviluppo 0.0.0: la versione vera la scrive la build), e sotto il nome dell'estensione, se c'è; le stesse parole del marchio nella barra (§13.1).
 
 ### 13.3 Ciò che verrà
 
@@ -1005,7 +1010,7 @@ Un'eccezione inattesa, un errore del database: si registra nel log, l'operazione
 
   Nessuna fonte crea le altre o il Segretario.
 
-- **Nell'interfaccia**, il guscio (`App.tsx`) tiene la barra, il pannello del Segretario, le impostazioni, la procedura guidata e la navigazione tra app (aprire un messaggio, un evento, un progetto da qualunque punto). Ogni app è un modulo (`apps/mail`, `apps/calendar`, `apps/today`; poi `apps/files`, `apps/contacts`, `apps/projects`), con la stessa forma.
+- **Nell'interfaccia**, il guscio (`App.tsx`) tiene la barra, il pannello del Segretario, le impostazioni, la procedura guidata, la schermata d'apertura (uno strato sopra lo spazio di lavoro, che resta montato e vivo, §13.1) e la navigazione tra app (aprire un messaggio, un evento, un progetto da qualunque punto). Ogni app è un modulo (`apps/mail`, `apps/calendar`, `apps/today`; poi `apps/files`, `apps/contacts`, `apps/projects`), con la stessa forma.
 - **Nel modello condiviso**, le famiglie di connessioni (`mail`, `calendar`, `files`) e le app (fonti, derivate, la scrivania) sono dichiarate una volta (`src/shared/workspace.ts`). La barra, le impostazioni e il Segretario le leggono da lì.
 
 **Moduli del Segretario (`src/main/ai/`):**
@@ -1141,7 +1146,7 @@ Gli agganci nell'interfaccia oggi sono della Posta, perché è lì che il primo 
    - Oggi come scrivania del Segretario;
    - il lavoro nasce da qualunque fonte;
    - una fonte nuova si aggiunge senza rompere la coerenza.
-10. **File come terza fonte**, per volume intero o per drive. L'app viene prima di quella Progetti, che resta il contesto semantico trasversale.
+10. **File come terza fonte**, per volume intero o per drive. Con la sua app, un file diventa un oggetto alla pari di messaggi ed eventi in ogni funzione, anche come origine di una cosa aperta. L'app viene prima di quella Progetti, che resta il contesto semantico trasversale.
 11. **L'orizzonte di lettura di una casella lo decide il Segretario:** Conoscimi, o la chat su richiesta, con `connessioni`; di base 30 giorni, almeno 14, senza massimo. Posta messaggio per messaggio; calendario senza orizzonte da decidere: tutto ciò che tiene, la prima volta a blocchi in parallelo, poi ciò che vi appare o cambia, da chiunque tranne lui, con le serie ricorrenti come cose sole; file mai uno per uno: il loro campo di attenzione sono le cartelle collegate ai progetti, e ciò che vi cambia arriva a «Il punto» (§4.2).
 12. **I percorsi seguono la condivisione:** la stessa condivisione montata altrove si raggiunge da sola; una radice spostata davvero si indica una volta e tutto la segue.
 13. **Tre ambienti separati:** app installata, sviluppo (account veri, profilo suo), studio di prova (vita simulata, server suoi).
