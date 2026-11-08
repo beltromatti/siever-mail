@@ -30,6 +30,7 @@ model Account {
   drafts          Draft[]
   messageIdKeys   MessageIdKey[]
   leftOutMessages LeftOutMessage[]
+  messageMarks    MessageMark[]
 
   @@map("accounts")
 }
@@ -253,6 +254,30 @@ model RecentFile {
 
   @@index([usedAt], map: "idx_recent_files_used_at")
   @@map("recent_files")
+}
+
+/// What an extension did with a message outside the mail (`MessageMark`):
+/// its words, where, the files, when. Kept with the mail, gone with its
+/// account.
+model MessageMark {
+  extension   String
+  accountId   String  @map("account_id")
+  messageKey  String  @map("message_key")
+  threadId    String  @map("thread_id")
+  /// Who wrote it, lower case: where their next message goes is learnt from it.
+  fromAddress String? @map("from_address")
+  label       String
+  /// A folder, or '' without one.
+  place       String  @default("")
+  filesJson   String  @default("[]") @map("files_json")
+  markedAt    BigInt  @map("marked_at")
+  account     Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@id([extension, accountId, messageKey, place])
+  @@index([accountId, messageKey], map: "idx_message_marks_message")
+  @@index([accountId, threadId], map: "idx_message_marks_thread")
+  @@index([fromAddress], map: "idx_message_marks_from")
+  @@map("message_marks")
 }
 
 model AppPreference {
@@ -635,7 +660,7 @@ model AiProjectResource {
 }
 
 /// Something the Segretario advises and the user decides: an event with
-/// guests, an extension's action (ARCHIVIA SIEVER).
+/// guests, an extension's action.
 model AiProposal {
   id          String  @id
   kind        String
@@ -656,24 +681,6 @@ model AiProposal {
   @@index([status, kind], map: "idx_ai_proposals_status")
   @@index([accountId, messageKey], map: "idx_ai_proposals_message")
   @@map("ai_proposals")
-}
-
-/// A message an extension saved a copy of outside the mail, and where.
-model AiSavedCopy {
-  accountId   String  @map("account_id")
-  messageKey  String  @map("message_key")
-  threadId    String  @map("thread_id")
-  /// The extension that saved it.
-  source      String
-  destination String
-  filesJson   String  @map("files_json")
-  /// Who wrote it, lower case: where their next message goes is learnt from it.
-  fromAddress String? @map("from_address")
-  savedAt     BigInt  @map("saved_at")
-
-  @@id([accountId, messageKey, destination])
-  @@index([accountId, threadId], map: "idx_ai_saved_copies_thread")
-  @@map("ai_saved_copies")
 }
 
 /// A message last seen gone from the cache: past a while with every folder
