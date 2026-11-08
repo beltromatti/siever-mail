@@ -44,9 +44,10 @@ import {
   recipientsLabel,
   ProjectTag,
   PecTag,
-  SavedTag,
+  MarkTag,
   UnreadDot
 } from './message-list-shared'
+import { markKey } from './message-marks'
 import { MessageListHeader } from './message-list-header'
 
 /**
@@ -76,6 +77,7 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
   const {
     messages,
     rowWork,
+    marks,
     sections,
     emptyState,
     selection,
@@ -206,6 +208,7 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
             const isSelected = selectedKeys.has(key)
             const isCursor = key === cursorKey
             const work = rowWork.get(rowWorkKey(message))
+            const mark = marks.get(markKey(message))?.[0]
 
             return (
               <div
@@ -292,7 +295,7 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
                     <ProjectTag label={projectTags.get(threadKey(message)) ?? ''} />
                   )}
                   {message.pec && <PecTag pec={message.pec} />}
-                  {work?.saved && <SavedTag label={work.saved} />}
+                  {mark && <MarkTag label={mark.label} />}
                   {/* The Segretario's word, after the subject, where the table has room. */}
                   {work && hasWorkLine(work) && (
                     <WorkLine work={work} className="flex-1 basis-0 text-[11.5px]" />

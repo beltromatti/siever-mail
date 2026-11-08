@@ -278,83 +278,67 @@ export class Workspace {
       },
       getMainWindow: getAppWindow,
       recordRecentFiles: (paths, activity) => this.mail.recordRecentFiles(paths, activity),
-      // A copy is only saved once it is recorded: the record is what keeps it from being saved
-      // twice and the message from being archived without it, so a record that fails is a save
-      // that failed.
-      copiesSaved: async (entries) => {
-        const refKey = (ref: MessageRef): string =>
-          `${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`
+      marks: {
+        // A mark is what keeps what it stands for from being done twice, and from looking undone:
+        // one that cannot be kept fails what it marks. The proposals are the Segretario's, answered
+        // after: a Segretario that cannot open leaves them open, and the marks stand.
+        record: async (entries, options) => {
+          let marked: Array<{ ref: MessageRef; messageKey: string }>
 
-        try {
-          await this.segretario.whenReady()
-          const messages = new Map(
-            (await this.database.messageIdentities(entries.map((entry) => entry.ref))).map(
-              (message) => [refKey(message.ref), message]
+          try {
+            marked = await this.mail.recordMarks(identity.id, entries)
+          } catch (error) {
+            logMainError("An extension's marks could not be kept", error)
+            throw new Error(
+              `Il segno sul messaggio non si è potuto registrare. ${error instanceof Error ? error.message : String(error)}`,
+              { cause: error }
             )
-          )
+          }
 
-          await this.segretario.copiesSaved(
-            identity.id,
-            entries.map((entry) => {
-              const message = messages.get(refKey(entry.ref))
-
-              if (!message) {
-                throw new Error(
-                  'Il messaggio non è più nella sua cartella: si è spostato mentre veniva salvato.'
-                )
-              }
-
-              return {
-                ref: entry.ref,
-                messageKey: message.messageKey,
-                threadId: message.threadId,
-                fromAddress: message.fromAddress,
-                destination: entry.destination,
-                files: entry.files,
-                proposals: entry.proposals ?? []
-              }
-            })
-          )
-        } catch (error) {
-          logMainError('Copies saved outside the mail could not be recorded', error)
-          throw new Error(
-            `SIEVER Mail non è riuscito a registrare la copia, che è stata tolta: il messaggio non viene archiviato. ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error }
-          )
+          await this.segretario
+            .whenReady()
+            .then(() =>
+              this.segretario.marksLeft(
+                marked.map((mark, index) => ({
+                  accountId: mark.ref.accountId,
+                  messageKey: mark.messageKey,
+                  proposals: entries[index].proposals ?? []
+                })),
+                options?.answers ?? null
+              )
+            )
+            .catch((error: unknown) =>
+              logMainError('The proposals answered by marks could not be settled', error)
+            )
+        },
+        // Not knowing is no answer: what is marked already would be done again.
+        of: async (refs) => {
+          try {
+            return await this.mail.marksOfRefs(identity.id, refs)
+          } catch (error) {
+            logMainError("An extension's marks could not be read", error)
+            throw new Error(
+              `I segni già lasciati sui messaggi non si possono leggere ora. ${error instanceof Error ? error.message : String(error)}`,
+              { cause: error }
+            )
+          }
         }
       },
-      // A folder the extension keeps things under moved: what the app kept under it follows.
+      // A folder the extension keeps things under moved: what the app kept under it follows — the
+      // marks' places, the recent files, the projects' folders (the Segretario's, when it opens).
       relocatePaths: async (from, to) => {
         const [was, now] = await Promise.all([canonicalPath(from), canonicalPath(to)])
-        const moved = await this.segretario.relocatePaths(was, now)
-        await this.database.relocateRecentFiles(movedUnder(was, now))
-        return moved
-      },
-      // What is known of earlier copies. Not knowing it is no answer: a copy saved before would
-      // be saved again, so the save does not start.
-      savedCopies: async (refs) => {
-        const copies: Array<{ ref: MessageRef; destination: string; files: string[] }> = []
-
-        try {
-          await this.segretario.whenReady()
-
-          for (const message of await this.database.messageIdentities(refs)) {
-            for (const copy of await this.segretario.copiesOf(
-              message.ref.accountId,
-              message.messageKey
-            )) {
-              copies.push({ ref: message.ref, destination: copy.destination, files: copy.files })
-            }
-          }
-        } catch (error) {
-          logMainError('Copies saved outside the mail could not be read', error)
-          throw new Error(
-            `SIEVER Mail non riesce a leggere le copie già salvate, e salvandole ancora le farebbe doppie: nessun messaggio è stato salvato. ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error }
-          )
-        }
-
-        return copies
+        const moved = movedUnder(was, now)
+        const marks = await this.mail.relocateMarks(moved)
+        await this.database.relocateRecentFiles(moved)
+        const folders = await this.segretario
+          .whenReady()
+          .then(() => this.segretario.relocatePaths(was, now))
+          .catch((error: unknown) => {
+            logMainError("The projects' folders did not follow a moved folder", error)
+            return 0
+          })
+        return marks + folders
       },
       proposalDecided: async (id, accepted, result) => {
         try {

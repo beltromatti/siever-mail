@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Briefcase, CalendarPlus, ChevronDown, FolderArchive, PenLine } from 'lucide-react'
+import { Briefcase, CalendarPlus, ChevronDown, PenLine } from 'lucide-react'
 import { toast } from 'sonner'
 
 import extensionRenderer from '@app/extension/renderer'
@@ -23,13 +23,6 @@ const WHEN = new Intl.DateTimeFormat('it-IT', {
   hour: '2-digit',
   minute: '2-digit'
 })
-
-/** "…/Clienti/Casa al mare/Corrispondenza/261027 Offerta" as it reads: the last few places. */
-function savedPlace(destination: string): string {
-  const parts = destination.split(/[\\/]/).filter(Boolean)
-  const start = parts.findIndex((part) => /^prat/i.test(part))
-  return parts.slice(start >= 0 ? start : Math.max(0, parts.length - 3)).join(' › ')
-}
 
 /** The projects the conversation is in, each opening its list, and the picker that moves it. */
 function ProjectsLine({
@@ -108,26 +101,6 @@ function ProjectsLine({
           </button>
         }
       />
-    </div>
-  )
-}
-
-/** A copy of the message saved outside the mail, with the folder a click away. */
-function CopyLine({ copy }: { copy: MessageWork['copies'][number] }): React.JSX.Element {
-  return (
-    <div className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-[11.5px]">
-      <FolderArchive className="text-faint-foreground size-3.5 shrink-0" />
-      <span className="min-w-0 truncate" title={copy.destination}>
-        <span className="text-foreground font-semibold">{copy.label}</span> in{' '}
-        {savedPlace(copy.destination)} · {SHORT_DAY.format(new Date(copy.savedAt))}
-      </span>
-      <button
-        type="button"
-        onClick={() => void window.mailApi.revealFile(copy.destination)}
-        className="hover:text-foreground focus-visible:ring-ring/60 shrink-0 rounded-sm outline-none focus-visible:ring-2"
-      >
-        Mostra
-      </button>
     </div>
   )
 }
@@ -321,9 +294,6 @@ export function MessageWorkPanel({
         projects={projects}
         onOpenProject={onOpenProject}
       />
-      {work.copies.map((copy) => (
-        <CopyLine key={copy.destination} copy={copy} />
-      ))}
     </div>
   )
 

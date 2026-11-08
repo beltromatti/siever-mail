@@ -93,6 +93,7 @@ import { getAppWindow } from '@main/app-window'
 import type { SegretarioService } from '@main/ai/segretario-service'
 import { invitationReply } from '@main/calendar/icalendar'
 import { isIcsAttachment, type CalendarResponse } from '@shared/calendar'
+import type { MarkedBefore, MessageMark, MessageMarksChange } from '@shared/message-marks'
 import type { MessageNote } from '@shared/segretario'
 import type { MessageLocation, SegretarioMailPort } from '@main/ai/agent/tool-types'
 import { AppBadge } from './app-badge'
@@ -668,6 +669,8 @@ export class MailService {
           : []
       },
       messageSummaries: (accountId, messageKeys) => this.bestRowsByKey(accountId, messageKeys),
+      marksOf: (accountId, messageKeys) => this.database.marksOf(accountId, messageKeys),
+      recentMarks: (extension, limit) => this.database.recentMarks(extension, limit),
       locate: (accountId, messageKeys) => this.locateMessages(accountId, messageKeys),
       threadKeys: async (accountId, threadId) =>
         this.database.threadMessageKeys(
@@ -2487,6 +2490,149 @@ export class MailService {
       ),
       activity
     )
+  }
+
+  /* ──────────────────────────────── marks ──────────────────────────────── */
+
+  /**
+   * An extension marks messages still where `ref` says (`MessageMark`): kept
+   * by their identity, with places and files as the app keeps paths — under
+   * the mount point their share first had. The rows and the reader showing
+   * them are told. Resolves with each message's key, for what follows.
+   */
+  async recordMarks(
+    extension: string,
+    entries: ReadonlyArray<{ ref: MessageRef; label: string; place?: string; files?: string[] }>
+  ): Promise<Array<{ ref: MessageRef; messageKey: string }>> {
+    const refKey = (ref: MessageRef): string =>
+      `${ref.accountId}\u0000${ref.folderPath}\u0000${ref.uid}`
+    const identities = new Map(
+      (await this.database.messageIdentities(entries.map((entry) => entry.ref))).map((identity) => [
+        refKey(identity.ref),
+        identity
+      ])
+    )
+    const marks = await Promise.all(
+      entries.map(async (entry) => {
+        const identity = identities.get(refKey(entry.ref))
+
+        if (!identity) {
+          throw new Error('Il messaggio non è più nella sua cartella: si è spostato nel frattempo.')
+        }
+
+        return {
+          extension,
+          accountId: entry.ref.accountId,
+          messageKey: identity.messageKey,
+          threadId: identity.threadId,
+          fromAddress: identity.fromAddress,
+          label: entry.label,
+          place: entry.place ? await canonicalPath(entry.place) : null,
+          files: await Promise.all((entry.files ?? []).map((file) => canonicalPath(file)))
+        }
+      })
+    )
+
+    await this.database.recordMarks(marks)
+    this.marksChanged(marks)
+    return marks.map((mark, index) => ({ ref: entries[index].ref, messageKey: mark.messageKey }))
+  }
+
+  /** The marks an extension left on these messages, each by its `ref` as given. */
+  async marksOfRefs(
+    extension: string,
+    refs: ReadonlyArray<MessageRef>
+  ): Promise<
+    Array<{
+      ref: MessageRef
+      label: string
+      place: string | null
+      files: string[]
+      markedAt: number
+    }>
+  > {
+    const marks: Array<{
+      ref: MessageRef
+      label: string
+      place: string | null
+      files: string[]
+      markedAt: number
+    }> = []
+
+    for (const identity of await this.database.messageIdentities(refs)) {
+      for (const mark of await this.database.marksOf(identity.ref.accountId, [
+        identity.messageKey
+      ])) {
+        if (mark.extension === extension) {
+          marks.push({
+            ref: identity.ref,
+            label: mark.label,
+            place: mark.place,
+            files: mark.files,
+            markedAt: mark.markedAt
+          })
+        }
+      }
+    }
+
+    return marks
+  }
+
+  /** The marks on these messages, every extension's, the newest first. */
+  async messageMarks(
+    messages: ReadonlyArray<{ accountId: string; messageKey: string }>
+  ): Promise<MessageMark[]> {
+    const marks: MessageMark[] = []
+
+    for (const accountId of new Set(messages.map((message) => message.accountId))) {
+      marks.push(
+        ...(await this.database.marksOf(
+          accountId,
+          messages
+            .filter((message) => message.accountId === accountId)
+            .map((message) => message.messageKey)
+        ))
+      )
+    }
+
+    return marks.sort((left, right) => right.markedAt - left.markedAt)
+  }
+
+  /** Where earlier mail of these messages' conversations, or else of their senders, was marked with a place. */
+  markedBefore(
+    messages: ReadonlyArray<{ accountId: string; threadId: string; from: string | null }>
+  ): Promise<MarkedBefore | null> {
+    return this.database.markedBefore(
+      [
+        ...new Map(
+          messages.map((message) => [`${message.accountId}\u0000${message.threadId}`, message])
+        ).values()
+      ].map(({ accountId, threadId }) => ({ accountId, threadId })),
+      [...new Set(messages.flatMap((message) => (message.from ? [message.from] : [])))]
+    )
+  }
+
+  /** The marks under a folder that moved, kept where it is now (`moved`); how many. The rows are told. */
+  async relocateMarks(moved: (path: string) => string | null): Promise<number> {
+    const count = await this.database.relocateMarks(moved)
+
+    if (count > 0) {
+      getAppWindow()?.webContents.send(IPC_CHANNELS.marksChanged, null)
+    }
+
+    return count
+  }
+
+  private marksChanged(marks: ReadonlyArray<{ accountId: string; messageKey: string }>): void {
+    for (const accountId of new Set(marks.map((mark) => mark.accountId))) {
+      const change: MessageMarksChange = {
+        accountId,
+        messageKeys: marks
+          .filter((mark) => mark.accountId === accountId)
+          .map((mark) => mark.messageKey)
+      }
+      getAppWindow()?.webContents.send(IPC_CHANNELS.marksChanged, change)
+    }
   }
 
   async listRecentFiles(): Promise<RecentFile[]> {

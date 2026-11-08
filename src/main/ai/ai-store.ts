@@ -786,7 +786,6 @@ export class AiStore {
       'ai_notes',
       'ai_ready_drafts',
       'ai_project_threads',
-      'ai_saved_copies',
       'ai_gone'
     ]) {
       await this.sql.run(`DELETE FROM ${table} WHERE account_id = ?`, accountId)
@@ -842,11 +841,8 @@ export class AiStore {
     return projects.map((row) => row.project_id)
   }
 
-  /**
-   * The Segretario's data gone. `keepSavedCopies`: the copies an extension
-   * saved stay, facts of the files on disk, not knowledge.
-   */
-  async clearData(options: { keepSavedCopies?: boolean } = {}): Promise<void> {
+  /** The Segretario's data gone. */
+  async clearData(): Promise<void> {
     for (const table of [
       'ai_events',
       'ai_activities',
@@ -867,7 +863,6 @@ export class AiStore {
       'ai_project_threads',
       'ai_project_resources',
       'ai_proposals',
-      ...(options.keepSavedCopies ? [] : ['ai_saved_copies']),
       'ai_saved_searches',
       'ai_work',
       'ai_gone'
@@ -875,7 +870,7 @@ export class AiStore {
       await this.sql.run(`DELETE FROM ${table}`)
     }
 
-    // The facts the engine kept go too; the schema's version stays.
-    await this.sql.run("DELETE FROM ai_meta WHERE key <> 'schema_version'")
+    // The facts the engine kept go too.
+    await this.sql.run('DELETE FROM ai_meta')
   }
 }

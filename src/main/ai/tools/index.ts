@@ -1,4 +1,5 @@
 import extensionMain from '@app/extension/main'
+import extensionShared from '@app/extension/shared'
 import type { ExtensionAssistantTool, ExtensionMessage } from '@app/extension/types'
 
 import { RegistryRefusal } from '../registry/types'
@@ -50,7 +51,7 @@ async function extensionMessage(
  * given resolved to messages, its confirmation asked on the card when the
  * user is there, its proposals left for them when not.
  */
-function extensionTool(tool: ExtensionAssistantTool): SegretarioTool {
+function extensionTool(tool: ExtensionAssistantTool, extensionId: string): SegretarioTool {
   return {
     name: tool.name,
     description: tool.description,
@@ -85,27 +86,34 @@ function extensionTool(tool: ExtensionAssistantTool): SegretarioTool {
             throw error
           }
         },
-        recentCopies: async (limit) => {
-          const copies = await context.registry.copies.recent(limit)
-          const subjects = new Map<string, string>()
+        recentMarks: async (limit) => {
+          const marks = await context.mail.recentMarks(extensionId, limit)
+          const messages = new Map<string, { subject: string; from: string | null }>()
 
-          for (const accountId of new Set(copies.map((copy) => copy.accountId))) {
+          for (const accountId of new Set(marks.map((mark) => mark.accountId))) {
             const summaries = await context.mail.messageSummaries(
               accountId,
-              copies.filter((copy) => copy.accountId === accountId).map((copy) => copy.messageKey)
+              marks.filter((mark) => mark.accountId === accountId).map((mark) => mark.messageKey)
             )
 
             for (const [key, summary] of summaries) {
-              subjects.set(`${accountId}\u0000${key}`, summary.subject)
+              messages.set(`${accountId}\u0000${key}`, {
+                subject: summary.subject,
+                from: summary.from[0]?.address.toLowerCase() ?? null
+              })
             }
           }
 
-          return copies.map((copy) => ({
-            destination: copy.destination,
-            subject: subjects.get(`${copy.accountId}\u0000${copy.messageKey}`) ?? '',
-            fromAddress: copy.fromAddress,
-            savedAt: copy.savedAt
-          }))
+          return marks.map((mark) => {
+            const message = messages.get(`${mark.accountId}\u0000${mark.messageKey}`)
+            return {
+              label: mark.label,
+              place: mark.place,
+              subject: message?.subject ?? '',
+              fromAddress: message?.from ?? null,
+              markedAt: mark.markedAt
+            }
+          })
         },
         signal: context.signal
       })
@@ -113,6 +121,14 @@ function extensionTool(tool: ExtensionAssistantTool): SegretarioTool {
       return { content: result.content, summary: result.summary, failed: result.failed }
     }
   }
+}
+
+/** The extension's tools, as the Segretario runs them; none in the public build. */
+function extensionTools(): SegretarioTool[] {
+  const identity = extensionShared.identity
+  return identity
+    ? (extensionMain.assistant?.tools ?? []).map((tool) => extensionTool(tool, identity.id))
+    : []
 }
 
 /**
@@ -140,7 +156,7 @@ export const SEGRETARIO_TOOLS: ReadonlyArray<SegretarioTool> = [
   showTool,
   journalTool,
   connectionsTool,
-  ...(extensionMain.assistant?.tools ?? []).map(extensionTool)
+  ...extensionTools()
 ]
 
 export function toolDefinitions(tools: ReadonlyArray<SegretarioTool>): ToolDefinition[] {

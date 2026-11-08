@@ -2,6 +2,7 @@ import { Fragment } from 'react'
 
 import extensionRenderer from '@app/extension/renderer'
 import { InvitationCard } from '@renderer/features/calendar/invitation-card'
+import { MessageMarksLine } from '@renderer/features/mail/message-marks'
 import { MessageViewer } from '@renderer/features/mail/message-viewer'
 import { PecPanel } from '@renderer/features/mail/pec-panel'
 import { MessageWorkPanel } from '@renderer/features/segretario/message-work'
@@ -76,7 +77,8 @@ export function MailReader({
     extensionSelection,
     extensionHostHooks,
     setExtensionPrimaryDialogOpen,
-    openMessage
+    openMessage,
+    viewerMarks
   } = mail
 
   return (
@@ -93,6 +95,7 @@ export function MailReader({
                 messageRef={summaryToMessageRef(messageForViewer)}
               />
             )}
+            <MessageMarksLine marks={viewerMarks} />
             {aiOn && (
               <MessageWorkPanel
                 key={`${messageForViewer.accountId}:${messageForViewer.messageKey}`}

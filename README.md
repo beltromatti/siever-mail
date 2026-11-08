@@ -41,7 +41,7 @@ Without AI, SIEVER Mail is a set of fast, honest apps for mail and calendars. Wi
 
 SIEVER Mail is for everyone, and works on its own: it learns how you work from what it sees, whatever your job.
 
-When an organisation wants it shaped around the way it works — its conventions, its archive, its own actions — SIEVER Mail takes a **private extension**, written for that organisation and named after it. The Segretario starts already knowing how things are done there; the app gains the buttons and tools that work needs. Nothing of what SIEVER Mail is changes: it is completed. To have one for your organisation, get in touch with the developers.
+When an organisation wants it shaped around the way it works — its conventions, its archive, its own actions — SIEVER Mail takes a **private extension**, written for that organisation and named after it. The Segretario starts already knowing how things are done there; the app gains the buttons and tools that work needs, and what they do to a message — filed, registered, sent on — shows on it as a mark, wherever it goes. Nothing of what SIEVER Mail is changes: it is completed. To have one for your organisation, get in touch with the developers.
 
 ## The vision
 

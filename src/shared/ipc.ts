@@ -44,6 +44,7 @@ import type {
   UiPreferences
 } from './models'
 import type { DiscoveredMailSettings } from './connections'
+import type { MarkedBefore, MessageMark, MessageMarksChange } from './message-marks'
 
 export const IPC_CHANNELS = {
   bootstrap: 'app:bootstrap',
@@ -107,6 +108,9 @@ export const IPC_CHANNELS = {
   revealFile: 'file:reveal',
   openFile: 'file:open',
   listRecentFiles: 'file:list-recent',
+  messageMarks: 'marks:of',
+  markedBefore: 'marks:before',
+  marksChanged: 'marks:changed',
   describeFiles: 'file:describe',
   openExternalUrl: 'app:open-external-url',
   openLogsFolder: 'app:open-logs-folder',
@@ -266,6 +270,16 @@ export interface DesktopMailApi {
   /** Opens a file the composer attaches with the application the system uses for its type. */
   openFile: (filePath: string) => Promise<OpenAttachmentResult>
   listRecentFiles: () => Promise<RecentFile[]>
+  /** The marks an extension left on these messages (see `MessageMark`), the newest first. */
+  messageMarks: (
+    messages: ReadonlyArray<{ accountId: string; messageKey: string }>
+  ) => Promise<MessageMark[]>
+  /** Where earlier mail of these messages' conversations, or else of their senders, was marked with a place. */
+  markedBefore: (
+    messages: ReadonlyArray<{ accountId: string; threadId: string; from: string | null }>
+  ) => Promise<MarkedBefore | null>
+  /** Marks changed on some messages; null: on any (their places moved). */
+  onMarksChanged: (listener: (change: MessageMarksChange | null) => void) => () => void
   /** Files dropped on or picked for the composer, checked and sized. */
   describeFiles: (paths: string[]) => Promise<PickedAttachment[]>
   /** The path of a file dropped from the desktop (Electron `webUtils`). */

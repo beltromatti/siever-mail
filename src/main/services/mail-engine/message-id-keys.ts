@@ -10,9 +10,10 @@ import type { StoredIdentity } from './message-identity'
  * moved by another program, or whose folder is read anew, is stored again
  * as who it was — not as whichever message sharing its Message-ID came
  * first. It is forgotten once every folder of its account has been read
- * since it left, unless the Segretario names it: a different message
- * reusing the Message-ID of one deleted is then not taken for it — for
- * its note, its open items, the copies of it saved.
+ * since it left, unless something names it — the Segretario, or an
+ * extension's mark: a different message reusing the Message-ID of one
+ * deleted is then not taken for it — for its note, its open items, its
+ * marks.
  *
  * Kept apart from the cache, it outlives a cache dropped and downloaded
  * again (see `AppDatabase.resetCacheIfOutdated`).
@@ -31,16 +32,17 @@ export const MESSAGE_ID_KEYS_SCHEMA = [
 ] as const
 
 /**
- * The Segretario's tables that name a message by its key (see
- * `src/main/ai/schema.ts`): a key one of them names stays remembered.
+ * The tables that name a message by its key — the Segretario's (see
+ * `src/main/ai/schema.ts`) and extensions' marks: a key one of them names
+ * stays remembered.
  */
 const NAMING_TABLES = [
   'ai_notes',
   'ai_items',
   'ai_ready_drafts',
   'ai_proposals',
-  'ai_saved_copies',
-  'ai_gone'
+  'ai_gone',
+  'message_marks'
 ] as const
 
 interface Statement {

@@ -36,9 +36,11 @@ import {
   type MessageHighlightTerms,
   type PrimaryAddressMode
 } from '@renderer/features/mail/message-list-shared'
-import { rowWorkKey, savedOnly, useRowWork } from '@renderer/features/segretario/row-work'
+import { rowWorkKey, useRowWork } from '@renderer/features/segretario/row-work'
+import { markKey, useMessageMarks } from '@renderer/features/mail/message-marks'
 import { useConversationProjectTags } from '@renderer/features/segretario/conversation-projects'
 import type { CalendarConnection } from '@shared/calendar'
+import type { MessageMark } from '@shared/message-marks'
 import type { AskedMail, MessageRowWork, Project, SavedSearch } from '@shared/segretario'
 import extensionRenderer from '@app/extension/renderer'
 import type { ExtensionSelectionContext, ExtensionHostHooks } from '@app/extension/types'
@@ -117,6 +119,9 @@ import type {
 import { buildForwardQuoteHtml, buildReplyQuoteHtml } from './reply-quote'
 
 const ALL_ACCOUNTS_LABEL = 'tutti gli account'
+/** The rows' work with the AI off: none. */
+const NO_ROW_WORK: ReadonlyMap<string, MessageRowWork> = new Map()
+const NO_MARKS: MessageMark[] = []
 /** A draft that takes longer than this to open says it is opening. */
 const DRAFT_OPEN_FEEDBACK_DELAY_MS = 300
 /** The rows around the one being read whose bodies are fetched ahead. */
@@ -341,6 +346,10 @@ export interface MailApp
   setMessageFilter: Dispatch<SetStateAction<MessageListFilter>>
   messages: MailMessageSummary[]
   rowWork: ReadonlyMap<string, MessageRowWork>
+  /** What extensions marked on the messages listed (see `markKey`), with the AI off too. */
+  marks: ReadonlyMap<string, MessageMark[]>
+  /** What extensions marked on the message in the reader. */
+  viewerMarks: MessageMark[]
   messageSections: MessageSection[]
   totalMessagesInFolder: number
   listCounts: { cachedCount: number; serverCount: number }
@@ -479,11 +488,9 @@ export function useMailApp({
   const searchInputRef = useRef<HTMLInputElement | null>(null)
 
   const fetchedRowWork = useRowWork(messages)
-  // With the AI off the rows keep only what an extension saved: nothing of the Segretario shows.
-  const rowWork = useMemo(
-    () => (aiOn ? fetchedRowWork : savedOnly(fetchedRowWork)),
-    [aiOn, fetchedRowWork]
-  )
+  // With the AI off nothing of the Segretario shows on the rows; what extensions marked does.
+  const rowWork = aiOn ? fetchedRowWork : NO_ROW_WORK
+  const marks = useMessageMarks(messages)
 
   // "Attivi" is the Segretario's: with it off, the list shows everything again.
   useEffect(() => {
@@ -2095,36 +2102,56 @@ export function useMailApp({
     }
   }, [aiOn])
 
-  // Where the selected messages are likely to be saved outside the mail, and what the Segretario proposes.
-  const [selectionFiling, setSelectionFiling] = useState<{
+  // For the extension's action on the selection: where earlier mail of it was marked — the mail's,
+  // with the AI off too — and, with the AI on, its projects' folders and the proposals on it.
+  const [selectionMarkedBefore, setSelectionMarkedBefore] = useState<{
     selection: ReadonlyArray<MailMessageSummary>
-    savedBefore: ExtensionSelectionContext['savedBefore']
+    markedBefore: ExtensionSelectionContext['markedBefore']
+  } | null>(null)
+  const [selectionWork, setSelectionWork] = useState<{
+    selection: ReadonlyArray<MailMessageSummary>
     projectFolders: ExtensionSelectionContext['projectFolders']
     proposals: ExtensionSelectionContext['proposals']
   } | null>(null)
 
   useEffect(() => {
-    if (selectedSummaries.length === 0 || !aiOn) {
+    if (selectedSummaries.length === 0) {
       return
     }
 
     let current = true
 
-    void window.segretarioApi
-      .filingContext(
+    void window.mailApi
+      .markedBefore(
         selectedSummaries.map((summary) => ({
           accountId: summary.accountId,
-          messageKey: summary.messageKey,
           threadId: summary.threadId,
           from: summary.from[0]?.address ?? null
         }))
       )
-      .then((filing) => {
+      .then((markedBefore) => {
         if (current) {
-          setSelectionFiling({ selection: selectedSummaries, ...filing })
+          setSelectionMarkedBefore({ selection: selectedSummaries, markedBefore })
         }
       })
       .catch(() => undefined)
+
+    if (aiOn) {
+      void window.segretarioApi
+        .selectionWork(
+          selectedSummaries.map((summary) => ({
+            accountId: summary.accountId,
+            messageKey: summary.messageKey,
+            threadId: summary.threadId
+          }))
+        )
+        .then((work) => {
+          if (current) {
+            setSelectionWork({ selection: selectedSummaries, ...work })
+          }
+        })
+        .catch(() => undefined)
+    }
 
     return () => {
       current = false
@@ -2132,17 +2159,19 @@ export function useMailApp({
   }, [selectedSummaries, aiOn])
 
   const extensionSelection = useMemo<ExtensionSelectionContext>(() => {
-    const filing = aiOn && selectionFiling?.selection === selectedSummaries ? selectionFiling : null
+    const marked =
+      selectionMarkedBefore?.selection === selectedSummaries ? selectionMarkedBefore : null
+    const work = aiOn && selectionWork?.selection === selectedSummaries ? selectionWork : null
 
     return {
       refs: selection.selectedRefs,
       summaries: selectedSummaries,
       multiSelectActive: selection.selectedRefs.length > 1,
-      savedBefore: filing?.savedBefore ?? null,
-      projectFolders: filing?.projectFolders ?? [],
-      proposals: filing?.proposals ?? []
+      markedBefore: marked?.markedBefore ?? null,
+      projectFolders: work?.projectFolders ?? [],
+      proposals: work?.proposals ?? []
     }
-  }, [aiOn, selectedSummaries, selection.selectedRefs, selectionFiling])
+  }, [aiOn, selectedSummaries, selection.selectedRefs, selectionMarkedBefore, selectionWork])
 
   const extensionHostHooks = useMemo<ExtensionHostHooks>(
     () => ({
@@ -3750,6 +3779,18 @@ export function useMailApp({
           : currentFolder
             ? folderDisplayName(currentFolder)
             : 'Conversazioni'
+  // The message in the reader may not be in the list (opened from Oggi, from a notification).
+  const viewerMarkMessages = useMemo(
+    () =>
+      messageForViewer
+        ? [{ accountId: messageForViewer.accountId, messageKey: messageForViewer.messageKey }]
+        : [],
+    [messageForViewer]
+  )
+  const viewerMarksByKey = useMessageMarks(viewerMarkMessages)
+  const viewerMarks = messageForViewer
+    ? (viewerMarksByKey.get(markKey(messageForViewer)) ?? NO_MARKS)
+    : NO_MARKS
   // What the user is looking at in the mail goes along with what they ask the Segretario.
   const viewerWork = messageForViewer ? (rowWork.get(rowWorkKey(messageForViewer)) ?? null) : null
   const sight: MailSight = {
@@ -3836,6 +3877,8 @@ export function useMailApp({
     setMessageFilter,
     messages,
     rowWork,
+    marks,
+    viewerMarks,
     messageSections,
     totalMessagesInFolder,
     listCounts,

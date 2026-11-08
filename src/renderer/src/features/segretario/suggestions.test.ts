@@ -11,7 +11,6 @@ const work = (change: Partial<MessageRowWork>): MessageRowWork => ({
   owed: null,
   awaited: false,
   reply: null,
-  saved: null,
   ...change
 })
 

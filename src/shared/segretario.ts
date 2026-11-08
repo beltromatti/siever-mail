@@ -240,25 +240,16 @@ export interface Proposal {
   source?: { ref: MessageRef; from: string; subject: string }
 }
 
-/** A copy of a message saved outside the mail by an extension, as the message shows it. */
-export interface SavedCopyInfo {
-  /** What it is called, as the extension says: "Archiviato in Acme". */
-  label: string
-  destination: string
-  savedAt: number
-}
-
 /**
  * What the reader shows of a message: its note, what is open (and settled
- * lately) in its conversation, its projects, the reply prepared, the copies
- * saved, the proposals waiting.
+ * lately) in its conversation, its projects, the reply prepared, the
+ * proposals waiting.
  */
 export interface MessageWork {
   note: MessageNote | null
   commitments: Commitment[]
   projects: ProjectLabel[]
   reply: PreparedReply | null
-  copies: SavedCopyInfo[]
   proposals: Proposal[]
 }
 
@@ -276,21 +267,10 @@ export interface MessageRowWork {
   awaited: boolean
   /** A reply prepared for it: ready, or to look at again. */
   reply: 'pronta' | 'da_rivedere' | null
-  /** A copy of it saved outside the mail by an extension, by its label ("Archiviato in Acme"); null when none. */
-  saved: string | null
 }
 
-/** Where an earlier copy went, and how near the messages it was: their conversation, or only their sender. */
-export interface SavedBefore {
-  destination: string
-  /** `mittente`: no message of these conversations was saved, one from the same sender was — a hint, not the place. */
-  from: 'conversazione' | 'mittente'
-}
-
-/** Where messages about to be saved outside the mail are likely to go, and what is proposed for them. */
-export interface FilingContext {
-  /** The latest copy of an earlier message of their conversations, or else of their senders. */
-  savedBefore: SavedBefore | null
+/** What the Segretario has on the messages selected, for an extension's action on them. */
+export interface SelectionWork {
   /** The folders linked to the projects their conversations are in: where their work is kept. */
   projectFolders: string[]
   /** The proposals open on these messages, every kind: an extension takes its own. */
@@ -797,7 +777,7 @@ export const SEGRETARIO_IPC = {
   setPreparing: 'segretario:set-preparing',
   draftSent: 'segretario:draft-sent',
   getRowWork: 'segretario:get-row-work',
-  filingContext: 'segretario:filing-context',
+  selectionWork: 'segretario:selection-work',
   getMessageWork: 'segretario:get-message-work',
   setCommitmentStatus: 'segretario:set-commitment-status',
   editCommitment: 'segretario:edit-commitment',
@@ -857,7 +837,7 @@ export interface SegretarioApi {
   /** Checks a key with OpenRouter and, if it answers, keeps it encrypted. */
   saveKey: (key: string) => Promise<SegretarioStatus>
   removeKey: () => Promise<SegretarioStatus>
-  /** Everything the Segretario knows and did, gone; the key and the archived copies stay, the AI turns off. */
+  /** Everything the Segretario knows and did, gone; the key stays, the AI turns off. */
   forgetAll: () => Promise<void>
   checkKey: () => Promise<SegretarioStatus>
   /** What SIEVER Mail has to tell the user about the AI and they have not seen, or null. */
@@ -901,19 +881,10 @@ export interface SegretarioApi {
     messages: ReadonlyArray<{ accountId: string; messageKey: string }>
   ) => Promise<MessageRowWork[]>
   getMessageWork: (accountId: string, messageKey: string) => Promise<MessageWork>
-  /**
-   * For messages about to be saved outside the mail (an extension's
-   * archive): where earlier messages of their conversations — or else of
-   * their senders — were saved, and what the Segretario proposes for them.
-   */
-  filingContext: (
-    messages: ReadonlyArray<{
-      accountId: string
-      messageKey: string
-      threadId: string
-      from: string | null
-    }>
-  ) => Promise<FilingContext>
+  /** For an extension's action on the messages selected: their projects' folders, the proposals on them. */
+  selectionWork: (
+    messages: ReadonlyArray<{ accountId: string; messageKey: string; threadId: string }>
+  ) => Promise<SelectionWork>
   /** Done, not needed, put off until a day, or open again. */
   setCommitmentStatus: (
     id: number,

@@ -194,8 +194,8 @@ export function ProjectTag({
   )
 }
 
-/** A copy of the message saved outside the mail by an extension, on its row, by its label. */
-export function SavedTag({ label }: { label: string }): React.JSX.Element {
+/** What an extension did with the message outside the mail, on its row: its mark's words. */
+export function MarkTag({ label }: { label: string }): React.JSX.Element {
   return (
     <span
       className="text-muted-foreground bg-hover inline-block max-w-[40%] shrink-0 truncate rounded-[4px] px-1 align-middle text-[10.5px] leading-4 font-semibold shadow-[inset_0_0_0_1px_hsl(var(--border))]"

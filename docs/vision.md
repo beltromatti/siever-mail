@@ -56,14 +56,14 @@ Nessuna fonte ha privilegi nel modello del lavoro: una cosa aperta, un progetto,
 - **istruzioni morbide per il Segretario**: come lavora quella realtà, come chiama le cose, dove le tiene. Sono le sue convenzioni vere, e valgono dove gli esempi generali dei prompt dicono altro;
 - **strumenti propri** per il Segretario, dopo quelli dell'app;
 - **azioni nell'interfaccia**: un pulsante nel lettore, la sua finestra, un comando con la sua scorciatoia, una scheda nelle Impostazioni, le proposte che sa eseguire;
-- **i suoi dati**, nelle sue tabelle;
+- **i suoi dati**, nelle sue tabelle, e i **segni** che lascia sui messaggi: ciò che ha fatto di loro fuori dalla posta (§6.3);
 - **la forma della casa**: il carattere, i colori, la firma predefinita.
 
 **Non rinomina le sezioni e non impone procedure.** Il pubblico funziona da solo e il privato parte solo più informato, su ogni fonte allo stesso modo: posta, calendario, file. Il Segretario resta lo stesso, con la stessa libertà: l'estensione gli dice di più, non gli dice come lavorare.
 
 **Le estensioni portano il nome legale dell'ente per cui sono**, e un identificativo che è quel nome in minuscolo con i trattini: «Siever S.r.l.» è `siever-srl`. L'identificativo tiene le cose dell'estensione separate da quelle dell'app e da quelle di ogni altra estensione (§15.4).
 
-**Siever S.r.l. è la prima.** È uno studio di impiantistica, e la sua estensione aggiunge ARCHIVIA SIEVER — un pulsante che salva la posta nella pratica giusta dell'archivio condiviso e poi la archivia nel senso del provider (§6.3) —, un Segretario che sa come lo studio chiama le pratiche e dove le tiene, con uno strumento per guardare l'archivio, proporre dove archiviare e archiviare, e il carattere, il colore e la firma dello studio. I suoi dettagli stanno nel README del suo repository, privato.
+**Siever S.r.l. è la prima.** È uno studio di impiantistica, e la sua estensione aggiunge ARCHIVIA SIEVER — un pulsante che salva la posta nella pratica giusta dell'archivio condiviso e poi la archivia nel senso del provider, lasciandole il segno «Archiviato Siever» (§6.3) —, un Segretario che sa come lo studio chiama le pratiche e dove le tiene, con uno strumento per guardare l'archivio, proporre dove archiviare e archiviare, e il carattere, il colore e la firma dello studio. I suoi dettagli stanno nel README del suo repository, privato.
 
 **Che cosa vuol dire, in pratica, «pubblico generale».**
 
@@ -168,8 +168,7 @@ L'architettura è già pronta. Si aggiungono strumenti al catalogo e permessi al
 - quale messaggio ha quale nota, quale incontro ha quale preparazione;
 - quali cose sono aperte, da dove nascono e chi le ha chiuse;
 - quali conversazioni, eventi e cartelle stanno in quale progetto;
-- quale risposta è pronta;
-- cosa un'estensione ha salvato fuori dalla posta.
+- quale risposta è pronta.
 
 ### 3.1 Gli oggetti
 
@@ -181,8 +180,7 @@ L'architettura è già pronta. Si aggiungono strumenti al catalogo e permessi al
 | **Cosa aperta**         | il lavoro vivo: testo, tipo (ti chiedono / hai promesso / aspetti / da fare), scadenza, e **da dove nasce**: un messaggio (con la conversazione), un evento, oppure la parola dell'utente (detta al Segretario o scritta da lui); in futuro un file | **viva**, con storia                                                                               |
 | **Progetto**            | il contesto che dura: nome, di cosa si tratta, "Il punto" (stato corrente), e ciò che raccoglie da ogni fonte — conversazioni, eventi, cartelle (in futuro file e drive)                                                                            | **vivo**                                                                                           |
 | **Risposta pronta**     | una risposta o un sollecito preparato in anticipo, con i suoi dubbi                                                                                                                                                                                 | **viva**: pronta / da rivedere / usata / scartata                                                  |
-| **Proposta**            | un'azione che il Segretario consiglia ma non può fare da solo: un evento con invitati, la risposta a un invito, ciò che un'estensione sa eseguire (salvare una copia nell'archivio dell'organizzazione)                                             | **viva**: in attesa / accettata / scartata                                                         |
-| **Copia salvata**       | un messaggio salvato da un'estensione in un archivio esterno, con dove, quando, i file                                                                                                                                                              | fatto verificato                                                                                   |
+| **Proposta**            | un'azione che il Segretario consiglia ma non può fare da solo: un evento con invitati, la risposta a un invito, ciò che un'estensione sa eseguire (per Siever S.r.l., archiviare una mail nella sua pratica)                                        | **viva**: in attesa / accettata / scartata                                                         |
 | **Diario**              | ogni esecuzione con i suoi passi e le modifiche fatte (`ai_activities` + `ai_events`), per vedere, capire e annullare                                                                                                                               | storico                                                                                            |
 
 ### 3.2 La vita di una cosa aperta
@@ -403,7 +401,7 @@ Possono:
 Al posto delle azioni verso l'esterno lasciano **proposte**:
 
 - un evento con invitati, la risposta a un invito;
-- ciò che un'estensione sa eseguire (salvare una copia nel suo archivio).
+- ciò che un'estensione sa eseguire (per Siever S.r.l., archiviare una mail nella sua pratica).
 
 Non possono:
 
@@ -444,7 +442,7 @@ Prefissi chiari, nessuna sovrapposizione: per ogni cosa si sa quale strumento us
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cerca_posta`  | Ricerca su tutta la posta, con la grammatica dell'app e i filtri (account, cartella, date, persone, allegati, non letti, progetto). Cestino e Spam solo se chiesti. Con `quadro` dà lo sguardo d'insieme di un account, per persona e per mese. Un numero si trova anche dentro un codice («2463» trova «ORD2463»), come nella ricerca dell'app.                                                                                                                                                          |
 | `cerca_file`   | Ricerca di file e cartelle per nome; elenca una cartella. In sola lettura, nelle fonti File: oggi il computer e i volumi di rete collegati, poi le connessioni File (§8).                                                                                                                                                                                                                                                                                                                                 |
-| `leggi`        | Legge qualunque riferimento: un messaggio o la sua conversazione (con nota, cose aperte, progetto, risposta pronta, bozze, copia salvata), un allegato, un file, un evento, un progetto.                                                                                                                                                                                                                                                                                                                  |
+| `leggi`        | Legge qualunque riferimento: un messaggio o la sua conversazione (con nota, cose aperte, progetto, risposta pronta, bozze, i segni di un'estensione), un allegato, un file, un evento, un progetto.                                                                                                                                                                                                                                                                                                       |
 | `nota`         | Scrive o corregge la nota di uno o più messaggi.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `impegni`      | Cose aperte, da qualunque fonte: da un messaggio, da un evento, o dalla parola dell'utente. In un'unica chiamata, più operazioni: elenca, apre, aggiorna, segna fatta o non serve, rinvia, riapre, unisce. Prende ciò che il modello scrive in modo naturale: il messaggio che prova la cosa è anche quello da cui nasce, e il progetto indicato mette nel progetto la sua fonte, o la cosa stessa se l'ha detta l'utente.                                                                                |
 | `progetti`     | Elenca o cerca; legge; crea; rinomina; unisce; collega o scollega conversazioni (anche tutte quelle di una ricerca), eventi e cartelle; scrive "Il punto" e di cosa si tratta; nasconde.                                                                                                                                                                                                                                                                                                                  |
@@ -476,20 +474,20 @@ Sono 17 strumenti, più quelli di un'estensione, tutti distinti: conta la sovrap
   - l'id che il server dà al messaggio in tutte le cartelle (X-GM-MSGID su Gmail, OBJECTID dove c'è);
   - altrimenti il Message-ID;
   - altrimenti un'impronta del contenuto.
-- **Le righe per cartella** sono le occorrenze del messaggio. Uno spostamento cambia UID e cartella, non la chiave. Note, cose aperte, progetti e copie si appoggiano alla chiave.
+- **Le righe per cartella** sono le occorrenze del messaggio. Uno spostamento cambia UID e cartella, non la chiave. Note, cose aperte, progetti e segni si appoggiano alla chiave.
 - **Lo stesso messaggio su due account** sono due occorrenze con chiavi distinte. Il Segretario lo legge una volta (gemelli). Archiviarlo su un account non lo tocca sull'altro.
 - **Due messaggi diversi con lo stesso Message-ID** (ticket, scanner) si distinguono da ciò che ogni copia dice uguale — data, mittente, oggetto — mai da dimensione o ora d'arrivo, che cambiano tra la copia inviata e quella ricevuta: le copie di una mail hanno una chiave sola. Chi ha quale chiave si ricorda anche dopo che le sue righe se ne vanno, così un messaggio spostato da un altro client o riscaricato ritrova la sua.
 - **Un messaggio che il server non riesce a dare** non blocca la cartella: dopo tre tentativi resta fuori e si riprova una volta al giorno.
 
 Da provare su ogni server IMAP che non sia Gmail: spostamento con UID nuovo, conversazioni, Message-ID mancante.
 
-### 6.2 Tre operazioni indipendenti
+### 6.2 Archiviare e lavorare sono indipendenti
 
 Un principio di tutto il prodotto:
 
 1. **Archiviare** decide dove sta il messaggio nella casella. Non tocca il lavoro.
-2. **Conservare una copia** in un archivio esterno: lo fa un'estensione, a modo dell'organizzazione (§6.3). Non tocca la casella né il lavoro.
-3. **Lo stato del lavoro** cambia solo quando cambia il lavoro.
+2. **Lo stato del lavoro** cambia solo quando cambia il lavoro.
+3. **Ciò che un'estensione fa di un messaggio fuori dalla posta** — per Siever S.r.l., salvarlo nella pratica dell'archivio dello studio — è una cosa sua, indipendente da entrambe, e lascia un segno (§6.3).
 
 - **Nessun avviso "chiudo le cose aperte?" quando si archivia.**
 - **Archiviare è l'operazione del provider**, astratta:
@@ -498,18 +496,20 @@ Un principio di tutto il prodotto:
   - Microsoft: la cartella Archivio.
   - Un messaggio già archiviato non si sposta.
   - "Tutti gli account" archivia ogni messaggio nel suo account.
+- **L'app pubblica non ha un «salva su disco».** Un salvataggio come quello di Siever è il modo di lavorare di un'organizzazione — le sue cartelle, i suoi nomi, gli allegati spacchettati, la PEC aperta — e non un «salva con nome» che servirebbe a tutti: non sono nemmeno la stessa cosa. Se un giorno un salvataggio servirà a tutti, sarà un'altra funzione, pensata con l'app File.
 
-### 6.3 Le copie salvate da un'estensione
+### 6.3 I segni di un'estensione
 
-Conservare una copia è dell'estensione, perché il come è dell'organizzazione (dove, con che nomi, in che forma); che una copia esista è dell'app, perché è un fatto del messaggio.
+Ciò che un'estensione fa di un messaggio fuori dalla posta è suo: come, dove, in che forma. Che sia stato fatto è un fatto del messaggio, e lo tiene l'app: un **segno**.
 
-- **Una copia è salvata quando è registrata.** L'estensione scrive i file, l'app registra la copia — dove, quali file, quando — come fatto sul messaggio, che lo segue ovunque vada. Una registrazione che non riesce è un salvataggio che non è riuscito: i file appena scritti si tolgono, e il messaggio non si archivia.
-- **Niente copie doppie.** Prima di salvare l'estensione chiede le copie già registrate di quei messaggi: ciò che è salvato non si salva di nuovo. Due salvataggi dello stesso messaggio insieme si danno il turno.
-- **Il segno sul messaggio.** L'app mostra la copia ovunque sia il messaggio, con l'etichetta che dà l'estensione («Archiviato Siever»), anche con l'AI spenta; il Segretario la vede quando legge il messaggio.
-- **Salvare e archiviare insieme** — il caso più comune — è un pulsante solo, due operazioni in fila: se il salvataggio fallisce, non si archivia; se riesce ma l'archiviazione fallisce, la copia resta registrata e si riprova solo l'archiviazione. Dopo, il messaggio resta sul server: nelle viste, nei progetti e nella ricerca del Segretario, con le sue cose aperte. ARCHIVIA SIEVER, nell'estensione Siever S.r.l., è così; non c'è un «salva soltanto» a parte, perché nel lavoro di tutti i giorni le due cose vanno insieme.
-- **Il Segretario propone dove.** Un'estensione può dargli uno strumento per proporre il salvataggio, che qualunque esecuzione chiama quando lo ritiene utile — la lettura di un messaggio, la giornata (che vede cosa l'utente lascia lì e di solito archivia), la chat. Per decidere dove guarda il progetto, le cartelle sul disco, dove sono finite le mail simili, come l'utente nomina le cartelle, le correzioni passate. La proposta compare sul messaggio; un clic apre la finestra dell'estensione già compilata, un altro conferma, e l'utente può correggere. La correzione (proposta X, scelta Y) diventa una lezione per la riflessione. In chat lo strumento esegue, con la conferma dell'utente.
-- **La radice si sposta.** Se l'archivio cambia posto, l'estensione lo dice all'app (`relocatePaths`), e ciò che l'app teneva sotto la radice vecchia — le copie, le cartelle dei progetti, i file recenti — la segue (§8).
-- **Ciò che le versioni 1.x mandavano nel Cestino** resta nel Cestino. Le copie restano sul disco come risorse dell'archivio.
+- **Che cos'è.** Le parole dell'estensione («Archiviato Siever», «Protocollato», «Inviato al gestionale»), se serve un posto — la cartella dove sta ciò che ha fatto — e i file scritti, e quando. Uno per messaggio e posto: rifarlo è lo stesso segno, con le parole di adesso.
+- **Dove vive.** Con la posta, non con il Segretario. Segue il messaggio ovunque vada, per la sua identità (§6.1); si vede sulla riga e nel lettore, con la cartella a un clic, anche con l'AI spenta; va via con la sua casella e con «Elimina tutti i dati», resta con «Dimentica tutto». Il Segretario lo legge con il messaggio (`leggi`), e che cosa vuol dire lo sa dalle istruzioni dell'estensione.
+- **Che cosa garantisce.** Un'azione dell'estensione è fatta quando il suo segno è registrato: un segno che non si registra fa fallire ciò che segna. Prima di rifare, l'estensione chiede i segni che ha già lasciato: ciò che è fatto non si rifà. Due azioni sullo stesso messaggio insieme si danno il turno.
+- **Le proposte.** Un'estensione può dare al Segretario uno strumento per proporre la sua azione, che qualunque esecuzione chiama quando lo ritiene utile — la lettura di un messaggio, la giornata (che vede cosa l'utente lascia lì e di solito sistema), la chat. La proposta compare sul messaggio; un clic apre la finestra dell'estensione già compilata, un altro conferma, e l'utente può correggere: la correzione (proposta X, scelta Y) diventa una lezione per la riflessione. Il segno risponde alle proposte del suo tipo ancora aperte sul messaggio, comunque l'azione sia stata fatta. In chat lo strumento esegue, con la conferma dell'utente.
+- **Il segno di prima.** Sui messaggi selezionati l'estensione sa dove aveva lasciato l'ultimo segno con un posto su una mail della stessa conversazione, o dello stesso mittente: la sua finestra parte da lì.
+- **La radice si sposta.** Se l'archivio cambia posto, l'estensione lo dice all'app (`relocatePaths`), e i posti dei segni, le cartelle dei progetti e i file recenti la seguono (§8).
+- **Il primo caso: ARCHIVIA SIEVER.** Un pulsante, due operazioni in fila: il salvataggio nella pratica, tutto dell'estensione (le cartelle del giorno, il `.eml` con gli allegati veri accanto, la PEC aperta: il README dell'estensione), poi l'archiviazione del provider, la stessa dell'app (§6.2), mai il Cestino. Se il salvataggio fallisce non si archivia; se riesce e l'archiviazione no, il segno resta e si rifà solo l'archiviazione. Dopo, il messaggio resta sul server — nelle viste, nei progetti, nella ricerca del Segretario — con le sue cose aperte. Ciò che le versioni 1.x mandavano nel Cestino resta nel Cestino; i suoi file stanno sul disco come storia dell'archivio.
+- **Sugli oggetti delle altre fonti.** Oggi i segni stanno sui messaggi, perché è lì che il primo caso ne aveva bisogno. Lo stesso concetto vale per un evento o un file — un incontro «Verbalizzato», un documento «Protocollato» — ma l'identità di un evento e di un file è un'altra (§7, §8), e un segno senza chi lo lascia sarebbe codice senza uso: si aggiunge lì, con la stessa forma, quando un'estensione ne avrà bisogno (§15.4).
 
 ### 6.4 Cestino, Spam, eliminazione
 
@@ -648,7 +648,7 @@ Niente sincronizzazione, upload o condivisione, almeno all'inizio.
 
 Un file non ha un'esecuzione sua: nuovo o cambiato nelle cartelle di un progetto, arriva a chi riscrive «Il punto» di quel progetto (§4.2).
 
-**Percorsi che cambiano posto.** Le cose salvate con un percorso — le copie salvate da un'estensione, le cartelle collegate ai progetti, i file recenti, la radice dell'archivio di un'estensione — restano scritte come l'utente le conosce. Raggiungerle passa da un punto solo (`reachablePath`), che sa dov'è ora la condivisione:
+**Percorsi che cambiano posto.** Le cose salvate con un percorso — i posti dei segni di un'estensione, le cartelle collegate ai progetti, i file recenti, la radice dell'archivio di un'estensione — restano scritte come l'utente le conosce. Raggiungerle passa da un punto solo (`reachablePath`), che sa dov'è ora la condivisione:
 
 - **La stessa condivisione montata altrove** — macOS la rimonta come «Archivio-1» se «Archivio» è occupato da una cartella rimasta; su Windows l'unità di rete prende un'altra lettera — si raggiunge sotto il punto nuovo, **senza chiedere niente e senza riscrivere niente**. Le condivisioni e le unità viste montate si ricordano con l'indirizzo del server (come fa il Mac per rimontarle dopo un riavvio).
 - **Spostata davvero** — un altro server, un'altra cartella — nessuno può indovinarlo. Chi la usa lo dice dove serve («L'archivio non è più in …: dov'è ora?»); l'utente indica la radice nuova una volta, e tutto si adegua: ciò che sta sotto la radice (relativo a lei), le copie e le cartelle dei progetti (l'app sposta i percorsi sotto la radice vecchia, `relocate`), il Segretario (una lezione: la riflessione corregge la memoria).
@@ -832,7 +832,7 @@ Quando il Segretario crea un evento da una conversazione, sceglie il calendario 
 - **Le ricevute sono lo stato del messaggio inviato**: stanno nella sua conversazione (agganciate per `X-Riferimento-Message-ID`, la chiave della copia in Inviata), la riga dice «Consegnata», «Non consegnata» (in rosso); il messaggio inviato mostra «Inviata con la PEC» con ogni ricevuta, a chi e quando; la ricevuta porta al messaggio. Restano messaggi della casella (sono la prova legale: non si nascondono né si segnano lette da sole), ma si leggono per ciò che dicono.
 - **Niente Ccn** da una casella PEC — riconosciuta dal server di un gestore noto o dalle buste che riceve —: il compositore non lo offre, e l'invio lo rifiuta con il perché (il gestore rifiuterebbe tutto il messaggio).
 - **Il Segretario** lo sa: nel contesto la casella è segnata PEC; `leggi` dice la certificazione, ciò che una ricevuta dice, le ricevute di un messaggio inviato; la ricerca segna le righe PEC; `segretario.md` ricorda il valore legale, che la consegna prova l'arrivo, che una mancata consegna è da sistemare. Le ricevute si leggono come gli altri messaggi (brevi, poco costose): la loro nota è proprio lo stato che serve, e chiudono le attese di consegna.
-- **Un'estensione che salva copie** riceve la sorgente intera, busta compresa, e ne fa ciò che vuole l'organizzazione (ARCHIVIA SIEVER spacchetta la busta e salva il messaggio che porta, con i suoi allegati).
+- **Un'estensione che lavora con i messaggi fuori dalla posta** riceve la sorgente intera, busta compresa, e ne fa ciò che vuole l'organizzazione (ARCHIVIA SIEVER apre la busta e salva il messaggio che porta, con i suoi allegati).
 - **La REM europea** non è ancora arrivata nelle caselle: c'è la PEC classica. Quando arriverà, è un'altra famiglia di intestazioni (`REM-*`) da leggere nello stesso modo.
 
 ### 11.3 Impostazioni › Connessioni
@@ -1012,10 +1012,12 @@ Un'eccezione inattesa, un errore del database: si registra nel log, l'operazione
 | `agent/`                | il ciclo, la conversazione, i riferimenti brevi, la concorrenza delle letture                                               |
 | `engine/`               | il pianificatore (domande sullo stato), la coda `ai_work`, lo scheduler (priorità, corsie, concorrenza, tentativi, ripresa) |
 | `tasks/`                | ogni compito: prompt, dati di partenza, permessi, esito richiesto                                                           |
-| `registry/`             | note, cose aperte, progetti, risposte, proposte, copie salvate. Le tabelle con le loro invarianti e revisioni               |
+| `registry/`             | note, cose aperte, progetti, risposte, proposte. Le tabelle con le loro invarianti e revisioni                              |
 | `tools/`                | gli strumenti, sottili sopra il registro e i servizi                                                                        |
 | `memory/`               | il quaderno versionato                                                                                                      |
 | `segretario-service.ts` | la facciata per l'IPC                                                                                                       |
+
+**I dati tra una versione e l'altra.** La 2.0 è una versione nuova da capo: si installa da zero, e nel codice non c'è nessuna migrazione dalle versioni precedenti. Le tabelle nascono come sono (`CREATE … IF NOT EXISTS`), quelle del Segretario e di un'estensione allo stesso modo. Restano i meccanismi generali che proteggono un aggiornamento: i dati dell'utente messi da parte prima e rimessi se l'aggiornamento non va a buon fine, e la cache della posta con la sua versione (cambiata, si riscarica). Una migrazione si scrive quando servirà, per un passaggio preciso, e se ne va quando ha fatto il suo lavoro.
 
 **Senza esagerare:**
 
@@ -1077,9 +1079,9 @@ Sullo stesso computer convivono tre SIEVER Mail, anche di versioni diverse, e no
 
 **Dove si monta.**
 
-- Nel Segretario: le istruzioni dell'organizzazione dopo `segretario.md`; i suoi strumenti dopo quelli dell'app, con le loro icone nel diario; le proposte che sa eseguire; l'etichetta delle copie salvate.
+- Nel Segretario: le istruzioni dell'organizzazione dopo `segretario.md`; i suoi strumenti dopo quelli dell'app, con le loro icone nel diario; le proposte che sa eseguire.
 - Nell'interfaccia: i pulsanti nel lettore, la sua finestra nella Posta, i comandi con le loro scorciatoie, le sue schede nelle Impostazioni, il carattere e i colori del compositore.
-- Nei dati: le sue tabelle, le copie salvate (§6.3), la firma predefinita del primo account, ciò che toglie con «Elimina tutti i dati».
+- Nei dati: le sue tabelle, i segni sui messaggi (§6.3), la firma predefinita del primo account, ciò che toglie con «Elimina tutti i dati».
 
 Gli agganci nell'interfaccia oggi sono della Posta, perché è lì che il primo caso ne aveva bisogno; istruzioni e strumenti valgono già per ogni fonte. Quando un'estensione avrà bisogno di un'azione su un evento, un file o un progetto, il contratto si allarga lì, con nomi generici.
 
@@ -1127,7 +1129,7 @@ Gli agganci nell'interfaccia oggi sono della Posta, perché è lì che il primo 
    - le viste sono proiezioni calcolate;
    - le revisioni sono gestite in modo trasparente;
    - la parola dell'utente vince.
-4. **Archiviare, conservare e lavorare sono indipendenti.** Conservare una copia è di un'estensione; un suo pulsante può salvare e poi archiviare nel senso del provider, mai nel Cestino.
+4. **Archiviare e lavorare sono indipendenti; ciò che un'estensione fa di un messaggio fuori dalla posta è suo e lascia un segno (§6.3),** tenuto dalla posta, visibile con l'AI spenta, letto dal Segretario. L'app pubblica non ha un «salva su disco». ARCHIVIA SIEVER = il salvataggio dello studio più l'archiviazione del provider, mai il Cestino.
 5. **Progetti** in ogni edizione, trovati per induzione; i nomi li capisce il Segretario, senza forme date. Un'estensione dà le convenzioni della sua organizzazione, non il catalogo.
 6. **Connessioni separate, identità come conoscenza.** Il calendario è alla pari della posta, con eventi, scadenze e proposte.
 7. **Un interruttore per l'AI**, e una procedura guidata unica: blocca, con l'AI non salta niente, e non resta mai bloccata — ciò che non va si riprova, o si continua senza AI.
@@ -1148,3 +1150,4 @@ Gli agganci nell'interfaccia oggi sono della Posta, perché è lì che il primo 
 17. **Una spia per tutte le connessioni (§13.1):** posta e calendari insieme, nei quattro modi del §14 — verde sincronizzato, grigio al lavoro, giallo aspetta ciò che passa da sé, rosso serve l'utente. Al passaggio, una riga per connessione con le parole di Impostazioni › Connessioni; al clic, si apre lì.
 18. **Per tutti, e su misura (§1):** il pubblico è generale — nessuna scritta, esempio o convenzione di un'organizzazione nell'interfaccia; nei prompt solo esempi da lavori diversi, detti come esempi; nel codice nessun nome reale. Un'estensione privata fa l'edizione di un'organizzazione: istruzioni, strumenti, azioni, dati, la forma della casa.
 19. **Le estensioni portano il nome legale dell'ente** e un identificativo che ne deriva (Siever S.r.l. → `siever-srl`), che tiene separati canali, tabelle, comandi e proposte. Una superficie sola — il contratto e il kit —, controllata dal lint; una per build; in Impostazioni › Estensione si vede quale.
+20. **Nessuna migrazione dalle versioni precedenti (§15.1):** la 2.0 si installa da capo; le tabelle nascono come sono; restano la protezione dei dati in un aggiornamento e la versione della cache.

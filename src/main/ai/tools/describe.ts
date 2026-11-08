@@ -91,7 +91,7 @@ export function rememberCommitments(
  * What the Segretario already made of a message and its conversation: its
  * note, what is open (and what was settled lately, so it is not opened
  * again), the projects, the reply prepared, the drafts written in answer,
- * the copies saved, the proposals — so the work builds on it, not beside it.
+ * the marks an extension left, the proposals — so the work builds on it, not beside it.
  */
 export async function messageWork(
   context: ToolContext,
@@ -101,7 +101,7 @@ export async function messageWork(
   options: { withConversation: boolean } = { withConversation: true }
 ): Promise<string[]> {
   const thread = { accountId: ref.accountId, threadId }
-  const [note, items, links, reply, drafts, copies, proposals] = await Promise.all([
+  const [note, items, links, reply, drafts, marks, proposals] = await Promise.all([
     context.registry.notes.get(ref.accountId, messageKey),
     options.withConversation
       ? context.registry.commitments.ofThreads([thread])
@@ -109,7 +109,7 @@ export async function messageWork(
     context.registry.projects.linksOf([thread]),
     context.registry.replies.get(ref.accountId, messageKey),
     context.mail.draftsReplyingTo(ref),
-    context.registry.copies.ofMessages(ref.accountId, [messageKey]),
+    context.mail.marksOf(ref.accountId, [messageKey]),
     context.registry.proposals.open({ messages: [{ accountId: ref.accountId, messageKey }] })
   ])
   const projects = (
@@ -169,9 +169,9 @@ export async function messageWork(
     )
   }
 
-  for (const copy of copies) {
+  for (const mark of marks) {
     lines.push(
-      `Salvato fuori dalla posta (${copy.source}): ${copy.destination}, il ${shortDate(new Date(copy.savedAt).toISOString())}.`
+      `Segnato da un'estensione (${shortDate(new Date(mark.markedAt).toISOString())}): «${mark.label}»${mark.place ? `, in ${mark.place}` : ''}.`
     )
   }
 

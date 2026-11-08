@@ -19,6 +19,7 @@ import type {
   MessageRef,
   MessagesActionResult
 } from '@shared/models'
+import type { MessageMark } from '@shared/message-marks'
 import type {
   ApprovalRequest,
   ComposeSpec,
@@ -105,6 +106,10 @@ export interface SegretarioMailPort {
   ): Promise<
     Map<string, { ref: MessageRef; subject: string; from: MailAddress[]; dateIso: string }>
   >
+  /** The marks extensions left on these messages of an account (`MessageMark`), the newest first. */
+  marksOf(accountId: string, messageKeys: ReadonlyArray<string>): Promise<MessageMark[]>
+  /** The latest marks an extension left: what the user has been doing with it. */
+  recentMarks(extension: string, limit: number): Promise<MessageMark[]>
   /** Where messages are, the Trash and Spam included: those not anywhere are gone. */
   locate(
     accountId: string,

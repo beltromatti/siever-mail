@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 
 import type { PrismaClient } from '@prisma/client'
 
-import extensionMain from '@app/extension/main'
 import type { CalendarResponse, EventChange } from '@shared/calendar'
 import type { MessageRef } from '@shared/models'
 import {
@@ -23,9 +22,9 @@ import {
   type ConnectionLearning,
   type ConnectionReadiness,
   type DayLine,
-  type FilingContext,
   type EngineState,
   type EventWork,
+  type SelectionWork,
   type MemoryNote,
   type MemoryVersion,
   type MessageNote,
@@ -68,7 +67,6 @@ import {
 } from './agent/tool-types'
 import { AiStore } from './ai-store'
 import { periodWords, searchPeriod, type AskedSearch } from './ask-mail'
-import { canonicalPath } from '../services/network-volumes'
 import { calendarLookScope, SegretarioEngine } from './engine/engine'
 import { Reachability } from './engine/reachability'
 import { WorkQueue } from './engine/work-queue'
@@ -1343,14 +1341,14 @@ export class SegretarioService {
 
   /**
    * "Dimentica tutto": what the Segretario knows and did goes — memory,
-   * notes, open things, projects, replies, diary, spending — the key and
-   * the copies archived stay. The AI turns off: on again, it starts from
-   * the guided setup, knowing nothing.
+   * notes, open things, projects, replies, diary, spending — the key stays.
+   * The AI turns off: on again, it starts from the guided setup, knowing
+   * nothing. What extensions marked on messages is the mail's, and stays.
    */
   async forgetAll(): Promise<void> {
     this.runner?.cancelAll()
     this.engine?.cancelRunning()
-    await this.db.store.clearData({ keepSavedCopies: true })
+    await this.db.store.clearData()
     this.searches.clear()
     await this.setPreferences({ enabled: false })
   }
@@ -1387,8 +1385,7 @@ export class SegretarioService {
             note: note ? noteOf(note) : null,
             owed: open?.owed ?? null,
             awaited: open?.awaited ?? false,
-            reply: open?.reply ?? null,
-            saved: open?.saved ? (extensionMain.assistant?.savedCopyLabel ?? 'Salvato') : null
+            reply: open?.reply ?? null
           })
         }
       }
@@ -1397,7 +1394,7 @@ export class SegretarioService {
     return rows
   }
 
-  /** What the reader shows of a message: its note, its conversation's commitments and projects, the reply, copies, proposals. */
+  /** What the reader shows of a message: its note, its conversation's commitments and projects, the reply, proposals. */
   async getMessageWork(accountId: string, messageKey: string): Promise<MessageWork> {
     const { registry } = this.db
     const note = await registry.notes.get(accountId, messageKey)
@@ -1406,11 +1403,10 @@ export class SegretarioService {
     const thread = threadId ? { accountId, threadId } : null
     // The reply and the events proposed are the conversation's: whichever of its messages is
     // open shows them. What a proposal does to one message (archiving it) shows on that one.
-    const [commitments, links, replies, copies, proposals] = await Promise.all([
+    const [commitments, links, replies, proposals] = await Promise.all([
       thread ? registry.commitments.ofThreads([thread]) : Promise.resolve([]),
       thread ? registry.projects.linksOf([thread]) : Promise.resolve([]),
       thread ? registry.replies.liveOfThreads([thread]) : Promise.resolve([]),
-      registry.copies.ofMessages(accountId, [messageKey]),
       registry.proposals.open(
         thread ? { threads: [thread] } : { messages: [{ accountId, messageKey }] }
       )
@@ -1421,7 +1417,6 @@ export class SegretarioService {
         links.filter((link) => !link.rejected).map((link) => registry.projects.get(link.projectId))
       )
     ).filter((project) => project !== null)
-    const label = extensionMain.assistant?.savedCopyLabel ?? 'Salvato'
 
     return {
       note: note ? noteOf(note) : null,
@@ -1439,11 +1434,6 @@ export class SegretarioService {
               staleReason: reply.staleReason
             }
           : null,
-      copies: copies.map((copy) => ({
-        label,
-        destination: copy.destination,
-        savedAt: copy.savedAt
-      })),
       proposals: proposals
         .filter(
           (proposal) =>
@@ -1891,102 +1881,56 @@ export class SegretarioService {
     await registry.decideProposal(id, accepted ? 'accettata' : 'scartata', result ?? null)
   }
 
-  /* ─────────────────────────────── copies saved outside ─────────────────────────────── */
+  /* ─────────────────────────────── an extension's marks ─────────────────────────────── */
 
   /**
-   * Copies the extension `source` (its id) saved outside the mail: facts on each message, and
-   * where the user files. The record is what makes a copy saved, so only it
-   * can fail the save; the proposals are answered after it — those the user
-   * followed accepted with their choice, the rest set aside — and a proposal
-   * left open by a failure there is answered by the next copy or the user.
+   * An extension marked messages (`MessageMark`): the proposals the user
+   * followed for them are accepted with what they chose, for the Segretario
+   * to learn from; the others of the kind the marks answer (`answers`),
+   * still open on those messages, are set aside — however they were marked,
+   * by the user or by the Segretario. The marks themselves are the mail's.
    */
-  async copiesSaved(
-    source: string,
+  async marksLeft(
     entries: ReadonlyArray<{
-      ref: MessageRef
+      accountId: string
       messageKey: string
-      threadId: string
-      fromAddress: string | null
-      destination: string
-      files: string[]
       proposals: ReadonlyArray<{ id: string; result: Record<string, unknown> }>
-    }>
+    }>,
+    answers: string | null
   ): Promise<void> {
-    // Kept as the app keeps paths: under the mount point their share first had.
-    await this.db.registry.saveCopies(
-      await Promise.all(
-        entries.map(async (entry) => ({
-          accountId: entry.ref.accountId,
-          messageKey: entry.messageKey,
-          threadId: entry.threadId,
-          source,
-          destination: await canonicalPath(entry.destination),
-          files: await Promise.all(entry.files.map((file) => canonicalPath(file))),
-          fromAddress: entry.fromAddress
-        }))
-      ),
-      USER
-    )
-
     for (const proposal of entries.flatMap((entry) => entry.proposals)) {
       await this.decideProposal(proposal.id, true, proposal.result).catch((error: unknown) =>
-        logMainError('A proposal followed by a saved copy could not be accepted', error)
+        logMainError('A proposal followed by a mark could not be accepted', error)
       )
     }
 
-    // Saved, the proposals to save them still open are answered: set aside.
-    const answered = extensionMain.assistant?.savedCopyProposalKind
+    if (answers === null) {
+      return
+    }
 
-    if (answered) {
-      for (const accountId of new Set(entries.map((entry) => entry.ref.accountId))) {
-        await this.db.registry.proposals
-          .supersedeFor(
-            accountId,
-            entries
-              .filter((entry) => entry.ref.accountId === accountId)
-              .map((entry) => entry.messageKey),
-            answered
-          )
-          .catch((error: unknown) =>
-            logMainError('Proposals answered by a saved copy could not be set aside', error)
-          )
-      }
+    for (const accountId of new Set(entries.map((entry) => entry.accountId))) {
+      await this.db.registry.proposals
+        .supersedeFor(
+          accountId,
+          entries.filter((entry) => entry.accountId === accountId).map((entry) => entry.messageKey),
+          answers
+        )
+        .catch((error: unknown) =>
+          logMainError('Proposals answered by a mark could not be set aside', error)
+        )
     }
   }
 
-  /**
-   * Where messages about to be saved outside the mail are likely to go —
-   * as earlier ones of their conversations, or else of their senders — and
-   * what the Segretario proposes for them.
-   */
-  async filingContext(
-    messages: ReadonlyArray<{
-      accountId: string
-      messageKey: string
-      threadId: string
-      from: string | null
-    }>
-  ): Promise<FilingContext> {
+  /** For an extension's action on the messages selected: the folders of their projects, the proposals on them. */
+  async selectionWork(
+    messages: ReadonlyArray<{ accountId: string; messageKey: string; threadId: string }>
+  ): Promise<SelectionWork> {
     const { registry } = this.db
     const threads = [
       ...new Map(
         messages.map((message) => [`${message.accountId}\u0000${message.threadId}`, message])
       ).values()
     ].map(({ accountId, threadId }) => ({ accountId, threadId }))
-    const latest = (
-      copies: ReadonlyArray<{ destination: string; savedAt: number }>
-    ): string | null => [...copies].sort((a, b) => b.savedAt - a.savedAt)[0]?.destination ?? null
-    const senders = [
-      ...new Set(
-        messages.flatMap((message) => (message.from ? [message.from.trim().toLowerCase()] : []))
-      )
-    ]
-    const ofConversations = latest(await registry.copies.ofThreads(threads))
-    const ofSenders =
-      ofConversations === null && senders.length > 0
-        ? latest(await registry.copies.fromSenders(senders, ''))
-        : null
-
     const projectIds = [
       ...new Set(
         (await registry.projects.linksOf(threads))
@@ -1997,11 +1941,6 @@ export class SegretarioService {
     const resources = await Promise.all(projectIds.map((id) => registry.projects.resources(id)))
 
     return {
-      savedBefore: ofConversations
-        ? { destination: ofConversations, from: 'conversazione' }
-        : ofSenders
-          ? { destination: ofSenders, from: 'mittente' }
-          : null,
       projectFolders: [
         ...new Set(
           resources
@@ -2019,8 +1958,8 @@ export class SegretarioService {
   }
 
   /**
-   * A folder moved to where it is now (both as the app keeps paths): what
-   * the registry kept under it follows, and the Segretario learns of it —
+   * A folder moved to where it is now (both as the app keeps paths): the
+   * projects' folders under it follow, and the Segretario learns of it —
    * its memory may name the old place. How many were kept anew.
    */
   async relocatePaths(from: string, to: string): Promise<number> {
@@ -2028,31 +1967,6 @@ export class SegretarioService {
     const moved = await this.db.registry.relocatePaths(from, to)
     await this.db.store.addLesson('percorso-spostato', { da: from, a: to })
     return moved
-  }
-
-  /** The copies of a message saved outside the mail. */
-  async copiesOf(
-    accountId: string,
-    messageKey: string
-  ): Promise<Array<{ destination: string; files: string[] }>> {
-    return (await this.db.registry.copies.ofMessages(accountId, [messageKey])).map((copy) => ({
-      destination: copy.destination,
-      files: copy.files
-    }))
-  }
-
-  /** Which of these messages of an account were saved outside the mail, with what label. */
-  async savedCopies(
-    accountId: string,
-    messageKeys: ReadonlyArray<string>
-  ): Promise<Map<string, string>> {
-    const label = extensionMain.assistant?.savedCopyLabel ?? 'Salvato'
-    return new Map(
-      (await this.db.registry.copies.ofMessages(accountId, messageKeys)).map((copy) => [
-        copy.messageKey,
-        label
-      ])
-    )
   }
 
   /* ───────────────────────────────── views ───────────────────────────────── */

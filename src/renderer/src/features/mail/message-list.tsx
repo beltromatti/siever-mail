@@ -28,9 +28,10 @@ import {
   primaryAddressLabel,
   ProjectTag,
   PecTag,
-  SavedTag,
+  MarkTag,
   UnreadDot
 } from './message-list-shared'
+import { markKey } from './message-marks'
 import { MessageListHeader } from './message-list-header'
 import { MessageListEmpty } from './message-list-empty'
 import { VirtualMessageRows } from './virtual-message-rows'
@@ -43,6 +44,7 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
   const {
     messages,
     rowWork,
+    marks,
     sections,
     emptyState,
     selection,
@@ -115,6 +117,7 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
             const primaryLabel = primaryAddressLabel(message, primaryAddressMode)
             const accountLabel = accountLabels?.get(message.accountId)
             const work = rowWork.get(rowWorkKey(message))
+            const mark = marks.get(markKey(message))?.[0]
             const projectTag = projectTags?.get(threadKey(message))
 
             return (
@@ -184,7 +187,7 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
                     </p>
                     {projectTag && <ProjectTag label={projectTag} />}
                     {message.pec && <PecTag pec={message.pec} />}
-                    {work?.saved && <SavedTag label={work.saved} />}
+                    {mark && <MarkTag label={mark.label} />}
                     <AttachmentMark present={message.hasAttachments} />
                     <FlagToggle
                       flagged={message.isFlagged}

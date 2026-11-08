@@ -1,7 +1,7 @@
 /**
  * The registry: the state of the user's work as the Segretario keeps it —
  * what each message said, what is open, the projects, the replies
- * prepared, the proposals, the copies saved outside the mail. Not memory:
+ * prepared, the proposals. Not memory:
  * these are facts the interface shows and other runs rely on, so they live
  * in tables with invariants, and change only through the registry.
  */
@@ -240,17 +240,6 @@ export interface ProposalRecord {
   createdAt: number
   decidedAt: number | null
   result: Record<string, unknown> | null
-}
-
-/* ───────────────────────────── copies saved ───────────────────────────── */
-
-/** A message saved outside the mail — into a company archive — by an extension. */
-export interface SavedCopy extends MessageAnchor {
-  source: string
-  destination: string
-  files: string[]
-  fromAddress: string | null
-  savedAt: number
 }
 
 /* ─────────────────────────────── changes ─────────────────────────────── */

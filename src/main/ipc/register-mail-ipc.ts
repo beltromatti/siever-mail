@@ -340,6 +340,35 @@ export function registerMailIpc(
 
   registerDataHandler(IPC_CHANNELS.listRecentFiles, async () => mailService.listRecentFiles())
 
+  registerDataHandler(IPC_CHANNELS.messageMarks, async (messages: unknown) =>
+    mailService.messageMarks(
+      z
+        .array(
+          z.object({
+            accountId: z.string().min(1).max(200),
+            messageKey: z.string().min(1).max(2000)
+          })
+        )
+        .max(1000)
+        .parse(messages)
+    )
+  )
+
+  registerDataHandler(IPC_CHANNELS.markedBefore, async (messages: unknown) =>
+    mailService.markedBefore(
+      z
+        .array(
+          z.object({
+            accountId: z.string().min(1).max(200),
+            threadId: z.string().min(1).max(1000),
+            from: z.string().max(500).nullable()
+          })
+        )
+        .max(1000)
+        .parse(messages)
+    )
+  )
+
   registerDataHandler(IPC_CHANNELS.describeFiles, async (paths: string[]) => {
     return mailService.describeFiles(paths)
   })

@@ -7,6 +7,7 @@ import type {
   MessageListFilter,
   MessageRef
 } from '@shared/models'
+import type { MessageMark } from '@shared/message-marks'
 
 import type { MessageRowWork } from '@shared/segretario'
 
@@ -54,6 +55,8 @@ export interface MessageListViewProps {
   messages: MailMessageSummary[]
   /** What the Segretario has on these messages, by account and message key (see `rowWorkKey`). */
   rowWork: ReadonlyMap<string, MessageRowWork>
+  /** What extensions marked on these messages, the newest first, by account and message key (see `markKey`). */
+  marks: ReadonlyMap<string, MessageMark[]>
   sections: MessageSection[]
   /** What the list holds, said under its title: "9.796 messaggi", "12 risultati". */
   countLabel: string

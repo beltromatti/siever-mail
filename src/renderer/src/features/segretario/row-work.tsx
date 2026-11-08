@@ -58,19 +58,6 @@ export function hasWorkLine(work: MessageRowWork): boolean {
   return work.note !== null || expected(work) !== null
 }
 
-/** What a row shows with the AI off: what an extension saved of the message, nothing of the Segretario. */
-export function savedOnly(
-  work: ReadonlyMap<string, MessageRowWork>
-): ReadonlyMap<string, MessageRowWork> {
-  return new Map(
-    [...work].flatMap(([key, row]) =>
-      row.saved
-        ? [[key, { ...row, note: null, owed: null, awaited: false, reply: null }] as const]
-        : []
-    )
-  )
-}
-
 /**
  * The Segretario's word on a message, in a row: what is expected now and
  * by when, in the star's colour — red when it matters or is late — then

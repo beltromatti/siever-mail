@@ -27,8 +27,8 @@ import type { ParsedMail } from 'mailparser'
 import type { ComponentType, ReactNode } from 'react'
 
 import type { MailFontOption } from '@shared/mail-fonts'
+import type { MarkedBefore } from '@shared/message-marks'
 import type { MailMessageSummary, MessageRef, MessagesActionResult } from '@shared/models'
-import type { SavedBefore } from '@shared/segretario'
 
 /* ────────────────────────── both processes ────────────────────────── */
 
@@ -144,17 +144,6 @@ export interface ExtensionAssistant {
    * says, in its description, in Italian, what it does and how it is called.
    */
   readonly tools?: ReadonlyArray<ExtensionAssistantTool>
-  /**
-   * What a copy the extension saves outside the mail is called on the
-   * message it came from, a word or two: "Archiviato in Acme".
-   */
-  readonly savedCopyLabel?: string
-  /**
-   * The kind of proposal a saved copy answers (`acme-srl.archive`): once a
-   * message is saved, the ones still waiting on it are settled — however it
-   * was saved, by the user or by the Segretario.
-   */
-  readonly savedCopyProposalKind?: string
 }
 
 export interface ExtensionAssistantTool {
@@ -210,13 +199,14 @@ export interface ExtensionToolContext {
     payload: Record<string, unknown>
     message: ExtensionMessage
   }): Promise<void>
-  /** Where the user saved mail lately with this extension, the newest first: their habits. */
-  recentCopies(limit: number): Promise<
+  /** The marks this extension left lately, the newest first, with their messages: the user's habits. */
+  recentMarks(limit: number): Promise<
     ReadonlyArray<{
-      destination: string
+      label: string
+      place: string | null
       subject: string
       fromAddress: string | null
-      savedAt: number
+      markedAt: number
     }>
   >
   signal: AbortSignal
@@ -256,38 +246,12 @@ export interface ExtensionMainContext {
    * menu opens are left out.
    */
   recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void>
-  /**
-   * Copies of messages the extension saved outside the mail — into the
-   * organisation's archive, say — once they are written: the host keeps
-   * them as facts on each message (the label, wherever the message goes)
-   * and the Segretario learns where the user files. Called while the
-   * messages are still where `ref` says. Rejects when a copy could not be
-   * recorded: it is not saved then. `proposals` are the extension's
-   * proposals the user followed for that message, with what they chose:
-   * once the copy is recorded they are accepted with it, and the others
-   * open on the message set aside.
-   */
-  copiesSaved(
-    entries: ReadonlyArray<{
-      ref: MessageRef
-      destination: string
-      files: string[]
-      proposals?: ReadonlyArray<{ id: string; result: Record<string, unknown> }>
-    }>
-  ): Promise<void>
-  /**
-   * The copies of these messages the extension saved before, each by the
-   * message's `ref` as given: where, and the files. What is saved already
-   * is not saved again.
-   */
-  savedCopies(
-    refs: ReadonlyArray<MessageRef>
-  ): Promise<Array<{ ref: MessageRef; destination: string; files: string[] }>>
+  marks: ExtensionMarks
   /**
    * A folder the extension keeps things under moved — its root, to where
-   * the user says it is now: what the app keeps under the old place (the
-   * copies saved there, projects' folders, recent files) is kept under the
-   * new one, and the Segretario learns of it, to put its memory right.
+   * the user says it is now: what the app keeps under the old place (its
+   * marks' places, projects' folders, recent files) is kept under the new
+   * one, and the Segretario learns of it, to put its memory right.
    * Resolves with how many were kept anew.
    */
   relocatePaths(from: string, to: string): Promise<number>
@@ -300,6 +264,50 @@ export interface ExtensionMainContext {
     accepted: boolean,
     result: Record<string, unknown> | null
   ): Promise<void>
+}
+
+/**
+ * The marks the extension leaves on messages (`MessageMark`): facts of
+ * what it did with them outside the mail — "Archiviato in Acme",
+ * "Protocollato" —, kept by the app with the mail. They follow each message
+ * wherever it goes, show on its row and in the reader, with the AI off too,
+ * and the Segretario reads them with the message.
+ */
+export interface ExtensionMarks {
+  /**
+   * Marks messages still where `ref` says: what the mark says (`label`),
+   * where what it stands for is (`place`, a folder) and the files written
+   * there. One per message and place: marking again is the same mark, as it
+   * says now. Rejects when the marks could not be kept — what they stand for
+   * is then not done. `proposals`: the extension's proposals the user
+   * followed for that message, with what they chose, accepted once it is
+   * marked; `answers`: the kind of proposal the marks answer — those still
+   * open on the messages are set aside.
+   */
+  record(
+    entries: ReadonlyArray<{
+      ref: MessageRef
+      label: string
+      place?: string
+      files?: string[]
+      proposals?: ReadonlyArray<{ id: string; result: Record<string, unknown> }>
+    }>,
+    options?: { answers?: string }
+  ): Promise<void>
+  /**
+   * The marks the extension left on these messages, each by its `ref` as
+   * given. Rejects rather than know none: a mark not known would be left
+   * again.
+   */
+  of(refs: ReadonlyArray<MessageRef>): Promise<
+    Array<{
+      ref: MessageRef
+      label: string
+      place: string | null
+      files: string[]
+      markedAt: number
+    }>
+  >
 }
 
 /**
@@ -316,8 +324,8 @@ export interface ExtensionDatabaseHandle {
 
 /**
  * Minimal mail-engine surface offered to extensions: the raw messages, for
- * saving a copy elsewhere, and archiving them after, as the provider means
- * it. The extension depends on this contract only, never on the engine itself.
+ * what an extension does with them outside the mail, and archiving them
+ * after, as the provider means it. The extension depends on this contract only, never on the engine itself.
  */
 export interface ExtensionMailEngineHandle {
   /**
@@ -429,12 +437,11 @@ export interface ExtensionSelectionContext {
   /** Whether multi-select mode is currently active. */
   multiSelectActive: boolean
   /**
-   * Where a copy of an earlier message of the selected conversations was
-   * saved by the extension — or, for a new conversation, of one from the
-   * same sender, which `from` says — the latest: the destination it
-   * reported. Null without one, and with the AI off.
+   * Where the extension last marked, with a place, an earlier message of
+   * the selected conversations — or, for a new conversation, one from the
+   * same sender, which `from` says. Null without one.
    */
-  savedBefore: SavedBefore | null
+  markedBefore: MarkedBefore | null
   /**
    * The folders linked to the projects the selected conversations are in —
    * where their work is kept, as the Segretario or the user linked them.

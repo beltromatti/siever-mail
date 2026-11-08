@@ -23,8 +23,8 @@ const SCHEMA = `
   CREATE TABLE ai_items (account_id TEXT NOT NULL, message_key TEXT NOT NULL);
   CREATE TABLE ai_ready_drafts (account_id TEXT NOT NULL, message_key TEXT NOT NULL);
   CREATE TABLE ai_proposals (account_id TEXT, message_key TEXT);
-  CREATE TABLE ai_saved_copies (account_id TEXT NOT NULL, message_key TEXT NOT NULL);
   CREATE TABLE ai_gone (account_id TEXT NOT NULL, message_key TEXT NOT NULL);
+  CREATE TABLE message_marks (account_id TEXT NOT NULL, message_key TEXT NOT NULL);
   INSERT INTO accounts VALUES ('a'), ('b');
 `
 
@@ -110,7 +110,7 @@ describe('message_id_keys', () => {
     ])
   })
 
-  it('forgets a key left once every folder was read since, unless the Segretario names it', () => {
+  it('forgets a key left once every folder was read since, unless something names it — the Segretario, a mark', () => {
     run(keysHeldStatement('a', ['m:x', 'm:x#bbbb']))
     run(keysLeftStatement('a', 300, null))
 
@@ -120,11 +120,11 @@ describe('message_id_keys', () => {
     expect(keys()).toHaveLength(2)
 
     db.prepare("UPDATE folders SET last_synced_at = 600 WHERE path = 'F1'").run()
-    db.prepare("INSERT INTO ai_saved_copies VALUES ('a', 'm:x#bbbb')").run()
+    db.prepare("INSERT INTO message_marks VALUES ('a', 'm:x#bbbb')").run()
     run(forgetLeftKeysStatement('a'))
     expect(keys()).toEqual([{ key: 'm:x#bbbb', leftAt: 300 }])
 
-    db.prepare('DELETE FROM ai_saved_copies').run()
+    db.prepare('DELETE FROM message_marks').run()
     db.prepare("INSERT INTO ai_notes VALUES ('b', 'm:x#bbbb')").run()
     run(forgetLeftKeysStatement('a'))
     expect(keys()).toEqual([])

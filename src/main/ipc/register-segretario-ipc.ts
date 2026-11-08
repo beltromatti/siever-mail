@@ -212,15 +212,14 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.getRowWork, (messages: unknown) =>
     segretario.getRowWork(messageKeysSchema.parse(messages))
   )
-  handle(SEGRETARIO_IPC.filingContext, (messages: unknown) =>
-    segretario.filingContext(
+  handle(SEGRETARIO_IPC.selectionWork, (messages: unknown) =>
+    segretario.selectionWork(
       z
         .array(
           z.object({
             accountId: idSchema,
             messageKey: messageKeySchema,
-            threadId: z.string().min(1).max(1000),
-            from: z.string().max(500).nullable()
+            threadId: z.string().min(1).max(1000)
           })
         )
         .max(1000)

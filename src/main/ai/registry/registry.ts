@@ -6,7 +6,7 @@ import { CommitmentStore } from './commitments'
 import { DayStore } from './day'
 import { NoteStore, type NoteInput } from './notes'
 import { ProjectStore } from './projects'
-import { CopyStore, ProposalStore } from './proposals'
+import { ProposalStore } from './proposals'
 import { ReplyStore } from './replies'
 import {
   OWED_KINDS,
@@ -26,7 +26,6 @@ import {
   type ReplyKind,
   type ReplyRecord,
   type ReplyStatus,
-  type SavedCopy,
   type ThreadRef,
   type UndoSpec,
   SYSTEM,
@@ -83,7 +82,6 @@ export class Registry {
   readonly projects: ProjectStore
   readonly replies: ReplyStore
   readonly proposals: ProposalStore
-  readonly copies: CopyStore
   readonly day: DayStore
 
   constructor(
@@ -95,7 +93,6 @@ export class Registry {
     this.projects = new ProjectStore(sql)
     this.replies = new ReplyStore(sql)
     this.proposals = new ProposalStore(sql)
-    this.copies = new CopyStore(sql)
     this.day = new DayStore(sql)
   }
 
@@ -860,35 +857,9 @@ export class Registry {
     return record
   }
 
-  /**
-   * A folder moved — the archive's root, to where it is now: what is kept
-   * under it — copies saved there, projects' folders — kept under the new
-   * place. How many were.
-   */
+  /** A folder moved to where it is now: the projects' folders under it kept under the new place. How many were. */
   async relocatePaths(from: string, to: string): Promise<number> {
-    const moved = movedUnder(from, to)
-    return (await this.copies.relocate(moved)) + (await this.projects.relocateFolders(moved))
-  }
-
-  async saveCopies(copies: ReadonlyArray<Omit<SavedCopy, 'savedAt'>>, actor: Actor): Promise<void> {
-    await this.copies.save(copies)
-
-    for (const accountId of new Set(copies.map((copy) => copy.accountId))) {
-      const mine = copies.filter((copy) => copy.accountId === accountId)
-      this.emit(
-        {
-          object: 'copia',
-          action: 'salvata',
-          label: `Salvat${mine.length === 1 ? 'o' : 'i'} in ${mine[0].destination}`,
-          accountId,
-          threadIds: [...new Set(mine.map((copy) => copy.threadId))],
-          messageKeys: mine.map((copy) => copy.messageKey),
-          projectIds: [],
-          id: mine[0].messageKey
-        },
-        actor
-      )
-    }
+    return this.projects.relocateFolders(movedUnder(from, to))
   }
 
   /* ──────────────────────────────── views ──────────────────────────────── */
@@ -933,9 +904,8 @@ export class Registry {
   }
 
   /**
-   * What is open from each of these messages of an account, the reply
-   * prepared for it, whether a copy of it was saved outside: what their
-   * rows show.
+   * What is open from each of these messages of an account, and the reply
+   * prepared for it: what their rows show.
    */
   async rowWork(
     accountId: string,
@@ -947,7 +917,6 @@ export class Registry {
         owed: { kind: CommitmentKind; due: string | null } | null
         awaited: boolean
         reply: 'pronta' | 'da_rivedere' | null
-        saved: boolean
       }
     >
   > {
@@ -957,7 +926,6 @@ export class Registry {
         owed: { kind: CommitmentKind; due: string | null } | null
         awaited: boolean
         reply: 'pronta' | 'da_rivedere' | null
-        saved: boolean
       }
     >()
 
@@ -966,7 +934,7 @@ export class Registry {
     }
 
     const entry = (key: string): NonNullable<ReturnType<typeof work.get>> => {
-      const known = work.get(key) ?? { owed: null, awaited: false, reply: null, saved: false }
+      const known = work.get(key) ?? { owed: null, awaited: false, reply: null }
       work.set(key, known)
       return known
     }
@@ -1002,17 +970,6 @@ export class Registry {
 
     for (const reply of replies) {
       entry(reply.message_key).reply = reply.status
-    }
-
-    const copies = await this.sql.all<{ message_key: string }>(
-      `SELECT DISTINCT message_key FROM ai_saved_copies
-       WHERE account_id = ? AND message_key IN (${placeholders(messageKeys)})`,
-      accountId,
-      ...messageKeys
-    )
-
-    for (const copy of copies) {
-      entry(copy.message_key).saved = true
     }
 
     return work
