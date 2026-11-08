@@ -36,7 +36,6 @@ import {
   type MessageHighlightTerms,
   type PrimaryAddressMode
 } from '@renderer/features/mail/message-list-shared'
-import { summarizeSyncStatus, type SyncSummary } from '@renderer/features/workspace/sync-status'
 import { rowWorkKey, savedOnly, useRowWork } from '@renderer/features/segretario/row-work'
 import { useConversationProjectTags } from '@renderer/features/segretario/conversation-projects'
 import type { CalendarConnection } from '@shared/calendar'
@@ -262,8 +261,6 @@ export interface MailForShell {
   setSelectedAccountId: Dispatch<SetStateAction<string | null>>
   /** Each account's connection, as the engine reports it. */
   accountConnections: Record<string, AccountConnectionState>
-  /** The sync state of the accounts on screen, for the rail. */
-  syncSummary: SyncSummary | null
   removingAccountId: string | null
   clearingAccountDataId: string | null
   clearingDatabaseData: boolean
@@ -521,14 +518,6 @@ export function useMailApp({
     },
     [updateUiPreferences]
   )
-
-  const syncSummary = useMemo(() => {
-    const accountsOnScreen = isAcrossAccounts(selectedFolderPath)
-      ? accounts
-      : accounts.filter((account) => account.id === selectedAccountId)
-
-    return summarizeSyncStatus(accountsOnScreen, accountConnections)
-  }, [accountConnections, accounts, selectedAccountId, selectedFolderPath])
 
   const refreshUnifiedSummaries = useCallback(async (): Promise<void> => {
     if (accounts.length === 0) {
@@ -3786,7 +3775,6 @@ export function useMailApp({
     selectedAccountId,
     setSelectedAccountId,
     accountConnections,
-    syncSummary,
     removingAccountId,
     clearingAccountDataId,
     clearingDatabaseData,

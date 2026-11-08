@@ -88,6 +88,8 @@
   --brand-primary-foreground: 0 0% 100%;
   --brand-accent: 52 100% 54%;
   --status-online: 152 52% 50%;
+  /* Waiting on what passes by itself — the network, a server: nothing for the user to do. */
+  --status-waiting: 40 92% 56%;
   --status-offline: 4 78% 58%;
   --scrollbar-thumb: 220 11% 24%;
   --scrollbar-thumb-hover: 218 10% 36%;
@@ -148,6 +150,7 @@
     --brand-primary-foreground: 0 0% 100%;
     --brand-accent: 47 100% 47%;
     --status-online: 152 58% 34%;
+    --status-waiting: 38 92% 42%;
     --status-offline: 3 70% 45%;
     --scrollbar-thumb: 214 16% 78%;
     --scrollbar-thumb-hover: 216 12% 62%;
@@ -217,6 +220,7 @@
   --color-brand-primary-foreground: hsl(var(--brand-primary-foreground));
   --color-brand-accent: hsl(var(--brand-accent));
   --color-status-online: hsl(var(--status-online));
+  --color-status-waiting: hsl(var(--status-waiting));
   --color-status-offline: hsl(var(--status-offline));
   --color-scrollbar-thumb: hsl(var(--scrollbar-thumb));
   --color-scrollbar-thumb-hover: hsl(var(--scrollbar-thumb-hover));

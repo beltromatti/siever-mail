@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Settings } from 'lucide-react'
+import { CalendarDays, Mail, Settings } from 'lucide-react'
 import { Fragment } from 'react'
 
 import appMark from '@renderer/assets/logo-128.png'
@@ -8,7 +8,8 @@ import { CompassStar } from '@renderer/components/ui/compass-star'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { cn } from '@renderer/lib/utils'
 
-import type { SyncSummary } from './sync-status'
+import type { ConnectionsStatus } from '@renderer/features/connections/connection-health'
+import { HealthDot } from '@renderer/features/connections/health-dot'
 
 export interface RailItem {
   id: string
@@ -32,17 +33,21 @@ export function AppRail({
   items,
   activeItemId,
   onSelectItem,
-  syncSummary,
+  connections,
   segretario,
-  onOpenSettings
+  onOpenSettings,
+  onOpenConnections
 }: {
   items: ReadonlyArray<RailItem>
   activeItemId: string
   onSelectItem: (id: string) => void
-  syncSummary: SyncSummary | null
+  /** How every connection stands — mail and calendars — null with none. */
+  connections: ConnectionsStatus | null
   /** The Segretario's panel, open or not and whether something waits in it; null with the AI off. */
   segretario: { open: boolean; attention: boolean; onToggle: () => void } | null
   onOpenSettings: () => void
+  /** Settings › Connessioni, where a connection is put right. */
+  onOpenConnections: () => void
 }): React.JSX.Element {
   return (
     <nav
@@ -121,44 +126,55 @@ export function AppRail({
             </button>
           </ActionTooltip>
         )}
-        {syncSummary && (
+        {connections && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <span
-                role="status"
-                aria-label={syncSummary.label}
-                className="grid size-9 cursor-default place-items-center"
+              <button
+                type="button"
+                aria-label={connections.title}
+                onClick={onOpenConnections}
+                className="hover:bg-hover focus-visible:ring-ring/60 grid size-9 place-items-center rounded-[9px] outline-none focus-visible:ring-2"
               >
-                <span
-                  className={cn(
-                    'size-[7px] rounded-full',
-                    syncSummary.tone === 'ok' && 'bg-status-online',
-                    syncSummary.tone === 'busy' && 'bg-faint-foreground animate-pulse',
-                    syncSummary.tone === 'problem' && 'bg-status-offline'
-                  )}
-                />
-              </span>
+                <HealthDot health={connections.health} className="size-[7px]" />
+              </button>
             </TooltipTrigger>
-            <TooltipContent side="right" className="max-w-72">
-              <span className="block font-semibold">{syncSummary.label}</span>
-              <span className="text-muted-foreground block font-normal">{syncSummary.detail}</span>
-              {syncSummary.indexing && (
+            <TooltipContent side="right" className="max-w-80">
+              <span className="block font-semibold">{connections.title}</span>
+              <span className="mt-1.5 flex flex-col gap-1 font-normal">
+                {connections.standings.map((standing) => {
+                  const Icon = standing.family === 'posta' ? Mail : CalendarDays
+                  return (
+                    <span key={standing.key} className="flex min-w-0 items-start gap-1.5">
+                      <HealthDot health={standing.health} className="mt-[5px] size-[6px]" />
+                      <Icon className="text-muted-foreground mt-px size-3 shrink-0" />
+                      <span className="min-w-0">
+                        <span className="block truncate">{standing.label}</span>
+                        <span className="text-muted-foreground block">{standing.text}</span>
+                      </span>
+                    </span>
+                  )
+                })}
+              </span>
+              {connections.indexing && (
                 <span className="mt-2 block font-normal">
                   <span className="text-muted-foreground block">
                     Lettura della posta per la ricerca:{' '}
-                    {syncSummary.indexing.indexed.toLocaleString('it-IT')} di{' '}
-                    {syncSummary.indexing.total.toLocaleString('it-IT')}
+                    {connections.indexing.indexed.toLocaleString('it-IT')} di{' '}
+                    {connections.indexing.total.toLocaleString('it-IT')}
                   </span>
                   <span className="bg-hover mt-1 block h-1 overflow-hidden rounded-full">
                     <span
                       className="bg-foreground/60 block h-full rounded-full"
                       style={{
-                        width: `${Math.round((syncSummary.indexing.indexed / syncSummary.indexing.total) * 100)}%`
+                        width: `${Math.round((connections.indexing.indexed / connections.indexing.total) * 100)}%`
                       }}
                     />
                   </span>
                 </span>
               )}
+              <span className="text-faint-foreground mt-2 block font-normal">
+                Clic: Impostazioni › Connessioni
+              </span>
             </TooltipContent>
           </Tooltip>
         )}

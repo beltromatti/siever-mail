@@ -294,8 +294,26 @@ mail, its calendar or both, how each stands, the calendar an account can
 still give (a Google account's), "Ricollega" for a connection stopped for
 good (see [Errors](#errors)) and for a Microsoft calendar whose consent lacks
 the mailbox's time zone (`renewConsent`), and what can be taken away — one
-service or the whole access. Adding one
-(`add-connection.tsx`) is the same there and in the guided setup:
+service or the whole access.
+
+How each stands is one line (`connection-health.ts`: `mailStanding`,
+`calendarStanding`) said the same in Settings and under the dot at the foot
+of the rail, which stands for every connection, mail and calendars
+(`connectionsStatus`). Four ways, those of [Errors](#errors), each a token
+of the theme (`HealthDot`): green (`--status-online`), in step; grey and
+pulsing, at work — connecting, downloading, a calendar read the first
+time; amber (`--status-waiting`), waiting on what passes by itself — no
+network, a server that does not answer, a calendar that cannot be read
+now; red (`--status-offline`), wanting the user — a connection stopped, a
+consent to renew. The dot takes the most pressing; its tooltip says what
+the whole comes to, then one line per connection, the most pressing first,
+and while the search reads the mail how far it has come; a click opens
+Settings → Connessioni. File is not in it: its volumes have no access nor
+sync, and a network volume not mounted only means one is away from the
+office.
+
+Adding one (`add-connection.tsx`) is the same there and in the guided
+setup:
 
 | Choice                  | Mail                                                                    | Calendar                                                                     |
 | ----------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -400,7 +418,7 @@ with three IMAP clients, so what the user does never waits behind a sync:
   "Tutti i messaggi" and Bozze, where every message is once; elsewhere every
   folder but Spam and the Trash. It rests while the account is offline, and
   with nothing to read closes its connection; it starts again when new mail
-  arrives. Its progress shows on the rail's sync dot.
+  arrives. Its progress shows under the rail's connections dot.
 
 **What changed** is found with one `LIST` that asks every folder's
 `STATUS` (`reviewFolders`), every 45 s — ahead of the backlog a start or a
@@ -502,8 +520,8 @@ the server too — `IMAP SEARCH`, one per group of the query, intersected
 replaces one still waiting.
 
 The connection has a state machine (`connecting`, `connected`,
-`reconnecting`, `offline`, `error`) that drives the sync badge in the
-header. It reconnects with a backoff (2 s up to 60 s), notices the network
+`reconnecting`, `offline`, `error`) that drives the mailbox's line in the
+rail's connections dot and in Settings (see [Connections](#connections)). It reconnects with a backoff (2 s up to 60 s), notices the network
 coming back (`net.isOnline`) and the machine waking or unlocking
 (`powerMonitor`) and checks the link with a NOOP rather than trusting a
 socket that may be dead. When the computer goes to sleep every account
@@ -681,7 +699,7 @@ selected is left selects the message that came after it
 
 The window is a row of panes laid edge to edge, a hairline between each:
 the rail (`features/workspace/app-rail.tsx` — the apps, the Segretario's
-panel, the connection, Settings), then the app. The rail's apps (`App.tsx`,
+panel, how the connections stand, Settings), then the app. The rail's apps (`App.tsx`,
 `apps/`, from `WORKSPACE_APPS`) come in three groups, a thin line between
 them: the desk, Oggi (`apps/today/`, there only with the AI on); the
 sources, Posta (`apps/mail/`), the Calendario (`apps/calendar/`, see
@@ -1801,7 +1819,7 @@ are passing or permanent.
   not answer, is slow, busy or briefly unavailable (an IMAP
   `[UNAVAILABLE]`, `[INUSE]`, `[LIMIT]`; HTTP 408, 429, 5xx; a 402 with a
   time to retry). They are tried again by themselves and said calmly, never
-  in a popup: a mailbox reconnects with its backoff, a calendar at its next
+  in a popup (the rail's dot amber): a mailbox reconnects with its backoff, a calendar at its next
   sync, a call to the model waits for OpenRouter (`Reachability`) and is
   made again from the same step — the run is not lost.
 - **Permanent errors of a service** are said once, in a window, and stop
@@ -1835,7 +1853,7 @@ are passing or permanent.
   (`listConnectionRefusals`: at launch they come before the page), and lets
   go of a connection put right or taken away meanwhile. The refusal is kept
   in memory: at the next launch the connection is tried once more. Settings
-  and the status bar show it stopped, with "Ricollega".
+  shows it stopped, with "Ricollega", and the rail's dot stays red.
 - **Permanent errors of one request** fail that request alone, said where
   it was asked: a send refused, a message the server will not give, a
   request OpenRouter moderates.

@@ -17,17 +17,14 @@ import {
 import { Button } from '@renderer/components/ui/button'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
+import { calendarStanding, mailStanding } from '@renderer/features/connections/connection-health'
 import { showConnectionRefused } from '@renderer/features/connections/connection-refused'
+import { HealthDot } from '@renderer/features/connections/health-dot'
 import { cn } from '@renderer/lib/utils'
 import { calendarRefusedNotice, type CalendarConnection } from '@shared/calendar'
 import type { FileSource } from '@shared/files'
 import { CONNECTION_FAMILIES } from '@shared/workspace'
-import {
-  mailRefusedNotice,
-  REFUSAL_LINES,
-  type AccountConnectionState,
-  type MailAccount
-} from '@shared/models'
+import { mailRefusedNotice, type AccountConnectionState, type MailAccount } from '@shared/models'
 
 import {
   ACCESS_LABELS,
@@ -38,13 +35,6 @@ import {
   type ConnectionGroup
 } from './connection-groups'
 
-const SYNCED_AT = new Intl.DateTimeFormat('it-IT', {
-  day: 'numeric',
-  month: 'short',
-  hour: '2-digit',
-  minute: '2-digit'
-})
-
 const ACCESS_ICONS: Readonly<Record<AccessKind, LucideIcon>> = {
   google: Mail,
   microsoft: Mail,
@@ -53,37 +43,6 @@ const ACCESS_ICONS: Readonly<Record<AccessKind, LucideIcon>> = {
   pec: ShieldCheck,
   caldav: Server,
   ics: Link2
-}
-
-/**
- * How a mail connection stands, in a few words. A server that does not
- * answer is not a problem of the user's: it retries by itself (§13ter).
- */
-function mailStatus(state: AccountConnectionState | undefined): { text: string; problem: boolean } {
-  switch (state?.status) {
-    case 'connected':
-      return { text: state.syncing ? 'Connessa · scarica la posta' : 'Connessa', problem: false }
-    case 'connecting':
-    case 'reconnecting':
-      return { text: 'Si connette…', problem: false }
-    case 'offline':
-      return { text: 'Senza rete: riprova da sola', problem: false }
-    case 'error':
-      return state.refused
-        ? { text: `Ferma · ${REFUSAL_LINES[state.refused]}`, problem: true }
-        : { text: 'Il server non risponde: riprova da sola', problem: false }
-    default:
-      return { text: 'In attesa', problem: false }
-  }
-}
-
-function calendarStatus(connection: CalendarConnection): string {
-  const count = connection.calendars.length
-  const calendars =
-    count === 0 ? 'nessun calendario' : count === 1 ? '1 calendario' : `${count} calendari`
-  return connection.lastSyncAt
-    ? `${calendars} · letti ${SYNCED_AT.format(new Date(connection.lastSyncAt))}`
-    : `${calendars} · li legge ora`
 }
 
 /**
@@ -162,7 +121,7 @@ export function ConnectionsList({
         const mail = group.mail
         const mailState = mail ? mailStates[mail.id] : undefined
         const refused = mailState?.refused
-        const status = mail ? mailStatus(mailState) : null
+        const status = mail ? mailStanding(mail, mailState) : null
         const problem = problems[group.key]
 
         return (
@@ -206,11 +165,15 @@ export function ConnectionsList({
                 <li className="flex min-w-0 items-center gap-2">
                   <Mail className="text-faint-foreground size-3.5 shrink-0" />
                   <span className="font-medium">Posta</span>
+                  <HealthDot health={status.health} className="size-[6px]" />
                   <span
                     className={cn(
                       'min-w-0 flex-1 truncate',
-                      status.problem ? 'text-destructive-soft-foreground' : 'text-muted-foreground'
+                      status.health === 'attention'
+                        ? 'text-destructive-soft-foreground'
+                        : 'text-muted-foreground'
                     )}
+                    title={status.text}
                   >
                     {status.text}
                   </span>
@@ -232,53 +195,57 @@ export function ConnectionsList({
                   )}
                 </li>
               )}
-              {group.calendars.map((calendar) => (
-                <li key={calendar.id} className="flex min-w-0 items-center gap-2">
-                  <CalendarDays className="text-faint-foreground size-3.5 shrink-0" />
-                  <span className="font-medium">Calendario</span>
-                  <span
-                    className={cn(
-                      'min-w-0 flex-1 truncate',
-                      calendar.refused || calendar.renewConsent
-                        ? 'text-destructive-soft-foreground'
-                        : 'text-muted-foreground'
+              {group.calendars.map((calendar) => {
+                const standing = calendarStanding(calendar)
+                return (
+                  <li key={calendar.id} className="flex min-w-0 items-center gap-2">
+                    <CalendarDays className="text-faint-foreground size-3.5 shrink-0" />
+                    <span className="font-medium">Calendario</span>
+                    <HealthDot health={standing.health} className="size-[6px]" />
+                    <span
+                      className={cn(
+                        'min-w-0 flex-1 truncate',
+                        standing.health === 'attention'
+                          ? 'text-destructive-soft-foreground'
+                          : 'text-muted-foreground'
+                      )}
+                      title={standing.text}
+                    >
+                      {standing.text}
+                    </span>
+                    {(calendar.refused || canRenewConsent(calendar)) && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2 text-[11px]"
+                        disabled={busy || (calendar.provider === 'google' && !googleReady)}
+                        onClick={() =>
+                          calendar.refused
+                            ? showConnectionRefused(
+                                calendarRefusedNotice(calendar, calendar.refused)
+                              )
+                            : void run(group.key, () => window.calendarApi.reconnect(calendar.id))
+                        }
+                      >
+                        Ricollega
+                      </Button>
                     )}
-                    title={calendar.problem ?? undefined}
-                  >
-                    {calendar.refused
-                      ? `Fermo · ${REFUSAL_LINES[calendar.refused]}`
-                      : (calendar.problem ?? calendarStatus(calendar))}
-                  </span>
-                  {(calendar.refused || canRenewConsent(calendar)) && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-6 px-2 text-[11px]"
-                      disabled={busy || (calendar.provider === 'google' && !googleReady)}
-                      onClick={() =>
-                        calendar.refused
-                          ? showConnectionRefused(calendarRefusedNotice(calendar, calendar.refused))
-                          : void run(group.key, () => window.calendarApi.reconnect(calendar.id))
-                      }
-                    >
-                      Ricollega
-                    </Button>
-                  )}
-                  {group.mail && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="text-muted-foreground h-6 px-2 text-[11px]"
-                      disabled={busy}
-                      onClick={() => void disconnectCalendar(group, calendar)}
-                    >
-                      Togli
-                    </Button>
-                  )}
-                </li>
-              ))}
+                    {group.mail && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="text-muted-foreground h-6 px-2 text-[11px]"
+                        disabled={busy}
+                        onClick={() => void disconnectCalendar(group, calendar)}
+                      >
+                        Togli
+                      </Button>
+                    )}
+                  </li>
+                )
+              })}
               {canAddCalendar(group) && (
                 <li className="flex min-w-0 items-center gap-2">
                   <CalendarDays className="text-faint-foreground size-3.5 shrink-0" />

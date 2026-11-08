@@ -81,6 +81,7 @@ import { SettingsDialog, type SettingsSectionId } from '@renderer/features/setti
 import { Button } from '@renderer/components/ui/button'
 import type { RailItem } from '@renderer/features/workspace/app-rail'
 import { ConfirmDialog, useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
+import { connectionsStatus } from '@renderer/features/connections/connection-health'
 import { ConnectionRefusedDialog } from '@renderer/features/connections/connection-refused'
 import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
@@ -1056,6 +1057,12 @@ function App(): React.JSX.Element {
     shellModalOpen,
     runAppCommandRef
   })
+
+  // How every connection stands — mail and calendars — for the rail's dot.
+  const connectionStatus = useMemo(
+    () => connectionsStatus(accounts, mail.accountConnections, calendarConnections ?? []),
+    [accounts, calendarConnections, mail.accountConnections]
+  )
   const { openMessage: openMailMessage, selectFolder, openAskedSearch, setSelectedAccountId } = mail
 
   /**
@@ -1741,7 +1748,11 @@ function App(): React.JSX.Element {
                     setActiveApp(app.id)
                   }
                 }}
-                syncSummary={mail.syncSummary}
+                connections={connectionStatus}
+                onOpenConnections={() => {
+                  setSettingsSection('accounts')
+                  setSettingsOpen(true)
+                }}
                 segretario={
                   segretarioOffered
                     ? {
