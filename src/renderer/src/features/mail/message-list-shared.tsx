@@ -194,7 +194,7 @@ export function ProjectTag({
   )
 }
 
-/** A copy of the message saved outside the mail by an extension, on its row: "Archiviato Siever". */
+/** A copy of the message saved outside the mail by an extension, on its row, by its label. */
 export function SavedTag({ label }: { label: string }): React.JSX.Element {
   return (
     <span

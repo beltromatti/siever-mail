@@ -1,32 +1,46 @@
 /**
- * SIEVER Mail extension contract.
+ * The extension contract.
  *
- * The application reserves a single optional extension slot resolved at
- * build time by the Vite aliases `@app/extension/{main,renderer,preload,shared}`.
- * The default resolution points at the no-op stubs shipped with the
- * public source tree under `src/extension/`. A custom build can supply
- * its own implementation through those aliases (see
- * `electron.vite.config.ts` for the resolution policy gated by
- * `LOAD_EXTENSION=1`).
+ * SIEVER Mail is for everyone, and works on its own. An extension makes it
+ * the edition of one organisation — a company, a practice, a professional —
+ * without changing what the app is: it tells the Segretario how that
+ * organisation works, gives it tools of its own, adds actions to the
+ * interface, and keeps its own data. One extension per build, chosen at
+ * build time: the Vite aliases `@app/extension/{main,renderer,preload,shared}`
+ * point at the checkout in `extension/` when `LOAD_EXTENSION=1`, and at the
+ * no-op stubs in this folder otherwise (`electron.vite.config.ts`).
  *
- * The contract is intentionally generic: any extension can add toolbar
- * actions, settings tabs and an app-level primary dialog on the
- * renderer side, plus IPC handlers and custom DDL on the main side.
- * Its scope is therefore not limited to "archive" or any specific
- * business domain — it is a canonical extension surface that any future
- * customisation can plug into without ever touching the public source
- * tree.
+ * An extension is named after the legal name of the entity it is for, and
+ * its id is that name in lower case with dashes ("Acme S.r.l." is
+ * `acme-srl`). The id keeps its things apart from the host's and from any
+ * other extension's: its IPC channels carry it, and its tables start with it
+ * (`acme_srl_…`).
+ *
+ * The surface is this file and the kit (`kit/main.ts`, `kit/renderer.ts`,
+ * plus the interface's components in `@renderer/components/ui/*`, and the
+ * shared model in `@shared/*`): nothing else of the host is for extensions,
+ * and the lint says so. A need the surface does not meet is met by widening
+ * it here, generically, never by reaching into the host.
  */
-import type { App, BrowserWindow, IpcMain, IpcRenderer } from 'electron'
+import type { BrowserWindow } from 'electron'
 import type { ParsedMail } from 'mailparser'
 import type { ComponentType, ReactNode } from 'react'
 
-import type { DesktopMailApi } from '@shared/ipc'
 import type { MailFontOption } from '@shared/mail-fonts'
 import type { MailMessageSummary, MessageRef, MessagesActionResult } from '@shared/models'
 import type { SavedBefore } from '@shared/segretario'
 
 /* ────────────────────────── both processes ────────────────────────── */
+
+/** Who the build is for: shown in Settings › Estensione, and the key of what it keeps. */
+export interface ExtensionIdentity {
+  /** The legal name in lower case with dashes: `acme-srl`. */
+  id: string
+  /** The legal name of the entity: "Acme S.r.l.". */
+  name: string
+  /** What it adds to SIEVER Mail, in a sentence or two, in Italian, for the user. */
+  description: string
+}
 
 export interface TextColorOption {
   value: string
@@ -61,7 +75,7 @@ export interface ExtensionComposition {
  * in the menu bar. The renderer side runs it (`ExtensionRenderer.runCommand`).
  */
 export interface ExtensionCommandDefinition {
-  /** Namespaced, e.g. `acme.publish`, so it never collides with the host's. */
+  /** Namespaced by the extension's id, e.g. `acme-srl.publish`, so it never collides with the host's. */
   id: string
   label: string
   description: string
@@ -71,6 +85,8 @@ export interface ExtensionCommandDefinition {
 
 /** What both processes load from `@app/extension/shared`. */
 export interface ExtensionShared {
+  /** Who the build is for; null in the public build, which has no extension. */
+  identity: ExtensionIdentity | null
   composition: ExtensionComposition
   commands: ReadonlyArray<ExtensionCommandDefinition>
 }
@@ -78,10 +94,6 @@ export interface ExtensionShared {
 /* ────────────────────────── main process ────────────────────────── */
 
 export interface ExtensionMain {
-  /** Stable identifier exposed for diagnostics (build-variant correlation). */
-  readonly id: string
-  /** Human-readable name shown in diagnostics. */
-  readonly displayName: string
   /**
    * HTML used as the default signature for the very first account a
    * user adds. Empty in public builds; an extension can override this
@@ -89,25 +101,9 @@ export interface ExtensionMain {
    */
   readonly defaultAccountSignatureHtml: string
   /**
-   * The edition of the content the extension puts in signatures, raised
-   * whenever `defaultAccountSignatureHtml` gains something the signatures
-   * already stored should have too. Zero in public builds.
-   */
-  readonly accountSignatureRevision: number
-  /**
-   * Brings a stored signature from `fromRevision` up to
-   * `accountSignatureRevision`: adds what the editions since brought, or
-   * puts the whole default in its place — the extension decides, edition
-   * by edition. The host calls it once per signature, the first time it
-   * reads one stored on an older edition, never on a signature saved since;
-   * an account without a signature takes part as an empty one. Returns the
-   * HTML as it was when there is nothing to do.
-   */
-  upgradeAccountSignatureHtml(html: string, fromRevision: number): string
-  /**
-   * Wire IPC handlers, run DDL, kick off any startup logic. Called once
-   * after the host's mail, calendars and Segretario have started.
-   * Idempotent across hot re-installs.
+   * Its tables, its channels, its startup work. Called once at startup, as
+   * soon as the database is open and before the sources connect, so they
+   * are there before anything asks for them.
    */
   install(context: ExtensionMainContext): Promise<void> | void
   /**
@@ -124,7 +120,7 @@ export interface ExtensionMain {
   uninstall?(): Promise<void> | void
   /**
    * What the extension adds to the Segretario, SIEVER Mail's agent: what
-   * it must know of the company the build is for, in the words of the
+   * it must know of the organisation the build is for, in the words of the
    * host's own prompts (Italian, written as text). Absent in public builds.
    */
   readonly assistant?: ExtensionAssistant
@@ -132,27 +128,29 @@ export interface ExtensionMain {
 
 export interface ExtensionAssistant {
   /**
-   * What the Segretario must know of the company the build is for — how
-   * its work and its projects are organised and named, where its archive
-   * is — in Italian, in the words of the host's prompts. Joined to the
-   * Segretario's identity in every run, so it is read when a run starts:
-   * it may say what the user configured (a folder). Never the projects
-   * themselves: the Segretario finds those, as in the public build.
+   * What the Segretario must know of the organisation the build is for —
+   * how its work and its projects are organised and named, where it keeps
+   * its documents — in Italian, in the words of the host's prompts. Joined
+   * to the Segretario's identity in every run, so it is read when a run
+   * starts: it may say what the user configured (a folder). These are the
+   * organisation's real conventions, where the host's prompts only give
+   * examples. Never the projects themselves: the Segretario finds those, as
+   * in the public build.
    */
   instructions?(): Promise<string>
   /**
    * Tools the extension gives the Segretario, after the host's: what only
-   * it can do — ARCHIVIA SIEVER files messages into a pratica. Each says,
-   * in its description, in Italian, what it does and how it is called.
+   * it can do — file a message into the organisation's archive, say. Each
+   * says, in its description, in Italian, what it does and how it is called.
    */
   readonly tools?: ReadonlyArray<ExtensionAssistantTool>
   /**
    * What a copy the extension saves outside the mail is called on the
-   * message it came from, a word or two: "Archiviato Siever".
+   * message it came from, a word or two: "Archiviato in Acme".
    */
   readonly savedCopyLabel?: string
   /**
-   * The kind of proposal a saved copy answers ("archivia_siever"): once a
+   * The kind of proposal a saved copy answers (`acme-srl.archive`): once a
    * message is saved, the ones still waiting on it are settled — however it
    * was saved, by the user or by the Segretario.
    */
@@ -227,18 +225,29 @@ export interface ExtensionToolContext {
 export interface ExtensionToolResult {
   /** What the model reads. */
   content: string
-  /** The line the user sees: "Archiviati 3 messaggi in Prat2451". */
+  /** The line the user sees: "Archiviati 3 messaggi". */
   summary: string
   /** It did not do what was asked: the content says why, the line shows it. */
   failed?: boolean
 }
 
+/**
+ * The extension's own channels between its main and renderer sides. Names
+ * are its own: the host keeps them apart, under the extension's id, from
+ * its channels and from any other's.
+ */
+export interface ExtensionMainIpc {
+  /** Answers `invoke(name, …args)` from the renderer side; a throw rejects it with the message. */
+  handle(name: string, listener: (...args: never[]) => unknown): void
+  /** Tells the main window's renderer side, which listens with `on(name, …)`. */
+  send(name: string, payload: unknown): void
+}
+
 export interface ExtensionMainContext {
-  app: App
-  ipcMain: IpcMain
-  userDataDirectoryPath: string
   database: ExtensionDatabaseHandle
   mailEngine: ExtensionMailEngineHandle
+  ipc: ExtensionMainIpc
+  /** The window dialogs belong to; null while there is none. */
   getMainWindow(): BrowserWindow | null
   /**
    * Offers files the extension wrote back to the user as the newest
@@ -248,15 +257,15 @@ export interface ExtensionMainContext {
    */
   recordRecentFiles(paths: ReadonlyArray<string>, activity: string): Promise<void>
   /**
-   * Copies of messages the extension saved outside the mail — ARCHIVIA
-   * SIEVER's, into a pratica — once they are written: the host keeps them
-   * as facts on each message (the label, wherever the message goes) and
-   * the Segretario learns where the user files. Called while the messages
-   * are still where `ref` says. Rejects when a copy could not be recorded:
-   * it is not saved then. `proposals` are the extension's proposals the
-   * user followed for that message, with what they chose: once the copy is
-   * recorded they are accepted with it, and the others open on the message
-   * set aside.
+   * Copies of messages the extension saved outside the mail — into the
+   * organisation's archive, say — once they are written: the host keeps
+   * them as facts on each message (the label, wherever the message goes)
+   * and the Segretario learns where the user files. Called while the
+   * messages are still where `ref` says. Rejects when a copy could not be
+   * recorded: it is not saved then. `proposals` are the extension's
+   * proposals the user followed for that message, with what they chose:
+   * once the copy is recorded they are accepted with it, and the others
+   * open on the message set aside.
    */
   copiesSaved(
     entries: ReadonlyArray<{
@@ -291,20 +300,13 @@ export interface ExtensionMainContext {
     accepted: boolean,
     result: Record<string, unknown> | null
   ): Promise<void>
-  /**
-   * Gives one of the extension's commands a chord the user chose before the
-   * host managed shortcuts, unless they have since chosen one in Settings ›
-   * Scorciatoie. For carrying a chord an extension used to store itself.
-   */
-  adoptShortcutOverride(commandId: string, chord: string): Promise<void>
 }
 
 /**
- * Minimal database surface offered to extensions. The host owns the
- * SQLite connection; extensions get a thin promise-based wrapper that
- * lets them apply DDL idempotently and run typed queries against tables
- * they manage. The host guarantees the same SQLite connection is shared,
- * so transactions are safe to mix with the rest of the application.
+ * The database, shared with the host: the extension creates and reads its
+ * own tables, named after its id (`acme_srl_…`), idempotently — `CREATE …
+ * IF NOT EXISTS`, columns added as they come. The host keeps them across
+ * updates and failed updates like its own.
  */
 export interface ExtensionDatabaseHandle {
   applyDdl(sql: string): Promise<void>
@@ -329,8 +331,8 @@ export interface ExtensionMailEngineHandle {
    *
    * The parse leaves `cid:` references in the HTML alone rather than
    * rewriting them into `data:` URIs, so the sender's attachments can be
-   * told apart from the images the body renders (see
-   * `partitionMessageAttachments` in `@main/services/mail-engine/message-parts`).
+   * told apart from the images the body renders (`partitionMessageAttachments`,
+   * in the kit).
    */
   fetchMessageRawSources(
     refs: ReadonlyArray<MessageRef>,
@@ -356,8 +358,6 @@ export interface ExtensionMailEngineHandle {
 /* ────────────────────────── renderer ────────────────────────── */
 
 export interface ExtensionRenderer {
-  readonly id: string
-  readonly displayName: string
   /**
    * Buttons rendered in the reading pane's header, before the host's own
    * reply actions. Each receives the current selection and a host-managed
@@ -369,9 +369,9 @@ export interface ExtensionRenderer {
    */
   readonly settingsTabs: ReadonlyArray<SettingsTabDescriptor>
   /**
-   * Optional dialog component mounted at the renderer root and driven
-   * by host-managed open/close state. Toolbar actions request it via
-   * `openPrimaryActionDialog()`.
+   * Optional dialog the mail app mounts, driven by host-managed open/close
+   * state: toolbar actions and commands open it on the mail's selection
+   * (`openPrimaryActionDialog()`).
    */
   readonly PrimaryActionDialog: ComponentType<PrimaryActionDialogProps> | null
   /**
@@ -401,6 +401,8 @@ export interface ExtensionRenderer {
    * in from `selection.proposals`.
    */
   readonly proposalActions?: Readonly<Record<string, { label: string; commandId: string }>>
+  /** The icon of each of its tools (`ExtensionAssistant.tools`) where the Segretario's work is shown, by name. */
+  readonly toolIcons?: Readonly<Record<string, ComponentType<{ className?: string }>>>
 }
 
 /** What an extension command acts on: the same as a toolbar action. */
@@ -499,22 +501,17 @@ export interface ExtensionHostHooks {
 
 /* ────────────────────────── preload ────────────────────────── */
 
-/**
- * What an extension adds to `window.mailApi`: methods of its own, never one
- * named like the host's — it would replace the host's for the whole app, as
- * a bridge `archiveMessages` once replaced the host's Archivia. A name the
- * host uses fails the extension's type check; at run time the host's wins.
- *
- * `object` rather than `Record<string, unknown>` on purpose: an extension
- * naturally declares its bridge as a named interface, and TypeScript refuses
- * to assign an interface to an index-signature type.
- */
-export type ExtensionBridge = object & { [Name in keyof DesktopMailApi]?: never }
+/** The renderer side of the extension's own channels (`ExtensionMainIpc`). */
+export interface ExtensionRendererIpc {
+  /** Asks the main side's `handle(name, …)`; rejects with its message when it throws. */
+  invoke<T>(name: string, ...args: unknown[]): Promise<T>
+  /** Listens to the main side's `send(name, …)`; returns how to stop. */
+  on<T>(name: string, listener: (payload: T) => void): () => void
+}
 
 /**
- * Preload-side hook. Called by the host preload script with the local
- * `ipcRenderer`; the returned bridge is added to `window.mailApi`. Public
- * builds return an empty object, so `window.mailApi` carries only the
- * host's own API in the public bundle.
+ * Builds the extension's bridge in the preload, over its own channels: the
+ * object the renderer reads as `window.extensionApi`, apart from the host's
+ * APIs. The public build has none.
  */
-export type ExtensionPreloadInstaller = (ipcRenderer: IpcRenderer) => ExtensionBridge
+export type ExtensionPreloadInstaller = (ipc: ExtensionRendererIpc) => object

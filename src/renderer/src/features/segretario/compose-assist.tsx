@@ -52,7 +52,7 @@ export function ComposeAssist({
 }): React.JSX.Element {
   const [instruction, setInstruction] = useState('')
   const [writing, setWriting] = useState(false)
-  // What did not get written, with what was asked: "Riprova" asks it again (§13ter.2).
+  // What did not get written, with what was asked: "Riprova" asks it again (§14.2).
   const [problem, setProblem] = useState<{ message: string; asked: string } | null>(null)
   const waiting = useAiWaiting()
   // Stopped by the user: what it says on the way out is not a problem to show.

@@ -25,10 +25,10 @@ electron-starter-003/
 # --- Test outputs ---
 scripts/.e2e-out/
 
-# --- Custom extension drop-in (do NOT publish) ---
-# Optional folder for a private extension repo checked out alongside the host.
-# Loaded by the Vite aliases when LOAD_EXTENSION=1 is set; without the
-# directory the aliases fall back to the public stubs in src/extension/.
+# --- A private extension (never published) ---
+# An organisation's extension, its own private repository checked out here.
+# Loaded by the Vite aliases with LOAD_EXTENSION=1; otherwise the public
+# stubs in src/extension/ are.
 /extension/
 
 # --- Local crash reports / scratch ---
@@ -37,5 +37,5 @@ PROMPT.md
 
 # --- Local test environment (this machine only) ---
 # The studio di prova's launcher: a simulated working life on servers of its
-# own, apart from the real profile. See docs/DOCUMENTATION.md, "Environments".
+# own, apart from the real profile. See docs/vision.md, «Gli ambienti».
 /studio.mjs

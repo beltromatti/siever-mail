@@ -134,7 +134,7 @@ export function WorkspaceLayout({
   readerExpanded
 }: WorkspaceLayoutProps): React.JSX.Element {
   const assistantTrack = assistant ? ` ${ASSISTANT_WIDTH}` : ''
-  // Each pane breaks on its own: the others stay, and the user goes on (§13ter.3).
+  // Each pane breaks on its own: the others stay, and the user goes on (§14.3).
   const sidebarPane = <ErrorBoundary>{sidebar}</ErrorBoundary>
   const listPane = <ErrorBoundary>{messageList}</ErrorBoundary>
   const readerPane = <ErrorBoundary resetKey={readerKey}>{reader}</ErrorBoundary>

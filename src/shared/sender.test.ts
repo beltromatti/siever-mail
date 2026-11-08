@@ -53,7 +53,7 @@ describe('senderSortKey', () => {
 
 describe('senderSortKey — spellings of one name', () => {
   it('ignores punctuation and spacing', () => {
-    expect(senderSortKey('A. Beltrami - SIEVER')).toBe(senderSortKey('A.beltrami-SIEVER'))
+    expect(senderSortKey('A. Galli - BRENTA')).toBe(senderSortKey('A.galli-BRENTA'))
   })
 
   it('reads "Surname, Name" the way it is said', () => {
@@ -64,43 +64,43 @@ describe('senderSortKey — spellings of one name', () => {
   })
 
   it('leaves out a qualifier in brackets', () => {
-    expect(senderSortKey('Cristian Sangiorgi (ART-ER)')).toBe('cristian sangiorgi')
-    expect(senderSortKey('[SIEVER] Ufficio tecnico')).toBe('ufficio tecnico')
+    expect(senderSortKey('Cristian Valenti (ENTE-X)')).toBe('cristian valenti')
+    expect(senderSortKey('[BRENTA] Ufficio tecnico')).toBe('ufficio tecnico')
     expect(senderSortKey('(Nessun nome)')).toBe('nessun nome')
   })
 
   it('keeps an address readable when it is all there is', () => {
-    expect(senderSortKey('cristian.sangiorgi@art-er.it')).toBe('cristian sangiorgi art er it')
+    expect(senderSortKey('cristian.valenti@ente-x.it')).toBe('cristian valenti ente x it')
   })
 })
 
 describe('isSameSenderName', () => {
   it('matches the same words in any order or dress', () => {
-    expect(isSameSenderName('Cristian Sangiorgi', 'Sangiorgi Cristian')).toBe(true)
-    expect(isSameSenderName('A. Beltrami - SIEVER', 'A.beltrami-SIEVER')).toBe(true)
+    expect(isSameSenderName('Cristian Valenti', 'Valenti Cristian')).toBe(true)
+    expect(isSameSenderName('A. Galli - BRENTA', 'A.galli-BRENTA')).toBe(true)
     expect(isSameSenderName('Lucci, Vincenzo', 'Vincenzo Lucci')).toBe(true)
   })
 
   it('matches a title, a company or a department added to the name', () => {
-    expect(isSameSenderName('Ing. Cristian Sangiorgi', 'Cristian Sangiorgi')).toBe(true)
-    expect(isSameSenderName('Cristian Sangiorgi ART-ER', 'Cristian Sangiorgi')).toBe(true)
+    expect(isSameSenderName('Ing. Cristian Valenti', 'Cristian Valenti')).toBe(true)
+    expect(isSameSenderName('Cristian Valenti ENTE-X', 'Cristian Valenti')).toBe(true)
   })
 
   it('matches an initial', () => {
     expect(isSameSenderName('M. Rossi', 'Mario Rossi')).toBe(true)
-    expect(isSameSenderName('A. Beltrami', 'Alessandro Beltrami')).toBe(true)
+    expect(isSameSenderName('A. Galli', 'Alessandro Galli')).toBe(true)
   })
 
   it('keeps different people apart', () => {
     expect(isSameSenderName('Celeste Moro', 'Saba Asim')).toBe(false)
-    expect(isSameSenderName('Mattia Beltrami', 'Alessandro Beltrami')).toBe(false)
+    expect(isSameSenderName('Mattia Galli', 'Alessandro Galli')).toBe(false)
     expect(isSameSenderName('M. Rossi', 'Marco Bianchi')).toBe(false)
     expect(isSameSenderName('M. R.', 'Mario Rossi')).toBe(false)
   })
 
   it('does not stretch a single word to a full name', () => {
     expect(isSameSenderName('Mario', 'Mario Rossi')).toBe(false)
-    expect(isSameSenderName('SIEVER', 'Mario Rossi - SIEVER')).toBe(false)
+    expect(isSameSenderName('BRENTA', 'Mario Rossi - BRENTA')).toBe(false)
     expect(isSameSenderName('Amazon', 'AMAZON')).toBe(true)
   })
 

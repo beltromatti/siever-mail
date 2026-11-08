@@ -3,13 +3,17 @@ import { join } from 'node:path'
 
 import { app, ipcMain, net, type BrowserWindow } from 'electron'
 
+import extensionShared from '@app/extension/shared'
+
 import type {
   ExtensionDatabaseHandle,
+  ExtensionIdentity,
   ExtensionMain,
   ExtensionMailEngineHandle,
   ExtensionMainContext
 } from '@app/extension/types'
 import { calendarRefusedNotice, type MessageInvitation } from '@shared/calendar'
+import { extensionChannel } from '@shared/extension-ipc'
 import { IPC_CHANNELS, type AddedAccount } from '@shared/ipc'
 import {
   mailRefusedNotice,
@@ -141,19 +145,21 @@ export class Workspace {
    * to yet; the interface's requests wait for it too. The extension's
    * tables and handlers are there before anything asks for them — the
    * Segretario's first run reads its instructions — and neither keeps the
-   * other out: a mailbox that cannot connect, an extension that fails.
+   * other out: a mailbox that cannot connect, an extension that fails. The
+   * public build has no extension (`identity` null) and installs nothing.
    */
   async start(extension: ExtensionMain): Promise<void> {
     try {
       await this.openStorage()
-      await this.installExtension(extension).then(
-        () => {
-          if (extension.id !== 'noop') {
-            console.info(`[extension] installed "${extension.displayName}" (id="${extension.id}")`)
-          }
-        },
-        (error: unknown) => logMainError('The extension did not install', error)
-      )
+      const identity = extensionShared.identity
+
+      if (identity) {
+        await this.installExtension(extension, identity).then(
+          () => console.info(`[extension] installed ${identity.name} (${identity.id})`),
+          (error: unknown) => logMainError(`The extension ${identity.name} did not install`, error)
+        )
+      }
+
       await this.openSources()
     } catch (error) {
       console.error('[startup] initialization failed', error)
@@ -238,10 +244,13 @@ export class Workspace {
   /**
    * Builds the host-provided context surface and hands it to the
    * extension's `install()` hook. Called once, as soon as storage is open,
-   * so the extension can run its own DDL and register IPC handlers backed
+   * so the extension can run its own DDL and answer on its channels, backed
    * by the same SQLite connection; what it asks of the mail it asks later.
    */
-  private async installExtension(extension: ExtensionMain): Promise<void> {
+  private async installExtension(
+    extension: ExtensionMain,
+    identity: ExtensionIdentity
+  ): Promise<void> {
     const databaseHandle: ExtensionDatabaseHandle = {
       applyDdl: (sql) => this.database.runRawSql(sql),
       query: (sql, params) => this.database.runRawSqlQuery(sql, params),
@@ -257,11 +266,16 @@ export class Workspace {
     }
 
     const context: ExtensionMainContext = {
-      app,
-      ipcMain,
-      userDataDirectoryPath: app.getPath('userData'),
       database: databaseHandle,
       mailEngine: mailEngineHandle,
+      ipc: {
+        handle: (name, listener) =>
+          ipcMain.handle(extensionChannel(identity.id, name), (_event, ...args: unknown[]) =>
+            listener(...(args as never[]))
+          ),
+        send: (name, payload) =>
+          getAppWindow()?.webContents.send(extensionChannel(identity.id, name), payload)
+      },
       getMainWindow: getAppWindow,
       recordRecentFiles: (paths, activity) => this.mail.recordRecentFiles(paths, activity),
       // A copy is only saved once it is recorded: the record is what keeps it from being saved
@@ -273,17 +287,18 @@ export class Workspace {
 
         try {
           await this.segretario.whenReady()
-          const identities = new Map(
+          const messages = new Map(
             (await this.database.messageIdentities(entries.map((entry) => entry.ref))).map(
-              (identity) => [refKey(identity.ref), identity]
+              (message) => [refKey(message.ref), message]
             )
           )
 
           await this.segretario.copiesSaved(
+            identity.id,
             entries.map((entry) => {
-              const identity = identities.get(refKey(entry.ref))
+              const message = messages.get(refKey(entry.ref))
 
-              if (!identity) {
+              if (!message) {
                 throw new Error(
                   'Il messaggio non è più nella sua cartella: si è spostato mentre veniva salvato.'
                 )
@@ -291,9 +306,9 @@ export class Workspace {
 
               return {
                 ref: entry.ref,
-                messageKey: identity.messageKey,
-                threadId: identity.threadId,
-                fromAddress: identity.fromAddress,
+                messageKey: message.messageKey,
+                threadId: message.threadId,
+                fromAddress: message.fromAddress,
                 destination: entry.destination,
                 files: entry.files,
                 proposals: entry.proposals ?? []
@@ -323,12 +338,12 @@ export class Workspace {
         try {
           await this.segretario.whenReady()
 
-          for (const identity of await this.database.messageIdentities(refs)) {
+          for (const message of await this.database.messageIdentities(refs)) {
             for (const copy of await this.segretario.copiesOf(
-              identity.ref.accountId,
-              identity.messageKey
+              message.ref.accountId,
+              message.messageKey
             )) {
-              copies.push({ ref: identity.ref, destination: copy.destination, files: copy.files })
+              copies.push({ ref: message.ref, destination: copy.destination, files: copy.files })
             }
           }
         } catch (error) {
@@ -347,16 +362,6 @@ export class Workspace {
           await this.segretario.decideProposal(id, accepted, result ?? undefined)
         } catch (error) {
           logMainError('A proposal decided could not be recorded', error)
-        }
-      },
-      adoptShortcutOverride: async (commandId, chord) => {
-        const preferences = await this.database.getUiPreferences()
-
-        if (preferences.shortcutOverrides[commandId] === undefined) {
-          await this.database.setUiPreferences({
-            ...preferences,
-            shortcutOverrides: { ...preferences.shortcutOverrides, [commandId]: chord }
-          })
         }
       }
     }
@@ -475,7 +480,7 @@ export class Workspace {
 
   /**
    * A connection turned down for good: the user is told now — the window
-   * says it, and the system too while the window is behind (§13ter).
+   * says it, and the system too while the window is behind (§14).
    */
   private connectionRefused(notice: ConnectionRefusedNotice): void {
     getAppWindow()?.webContents.send(IPC_CHANNELS.connectionRefused, notice)

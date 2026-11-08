@@ -10,7 +10,7 @@ import {
 describe('isValidEmailAddress', () => {
   it('takes the addresses people write to', () => {
     for (const address of [
-      'f.fuschini@siever.it',
+      'f.ferri@brenta.it',
       'mario.rossi+fatture@studio-rossi.co.uk',
       "o'brien@example.ie",
       'info@xn--caff-dma.it',
@@ -24,25 +24,25 @@ describe('isValidEmailAddress', () => {
 
   it('catches what cannot be delivered', () => {
     for (const address of [
-      'f.fuschini@siever.i',
-      'f.fuschini@siever',
-      'f.fuschini@siever.it.',
-      'f.fuschini@.siever.it',
-      'f.fuschini@siever..it',
-      'f..fuschini@siever.it',
-      '.fuschini@siever.it',
-      'fuschini.@siever.it',
-      'f.fuschini@-siever.it',
-      'f.fuschini@siever-.it',
-      'f.fuschini@siever.123',
-      'f fuschini@siever.it',
-      'f.fuschini@@siever.it',
-      'fuschini@siever@it.it',
-      '@siever.it',
-      'f.fuschini@',
-      'Franco Fuschini',
-      'f.fuschini@[10.0.0.1]',
-      `${'a'.repeat(65)}@siever.it`,
+      'f.ferri@brenta.i',
+      'f.ferri@brenta',
+      'f.ferri@brenta.it.',
+      'f.ferri@.brenta.it',
+      'f.ferri@brenta..it',
+      'f..ferri@brenta.it',
+      '.ferri@brenta.it',
+      'ferri.@brenta.it',
+      'f.ferri@-brenta.it',
+      'f.ferri@brenta-.it',
+      'f.ferri@brenta.123',
+      'f ferri@brenta.it',
+      'f.ferri@@brenta.it',
+      'ferri@brenta@it.it',
+      '@brenta.it',
+      'f.ferri@',
+      'Franco Ferri',
+      'f.ferri@[10.0.0.1]',
+      `${'a'.repeat(65)}@brenta.it`,
       ''
     ]) {
       expect(isValidEmailAddress(address), address).toBe(false)
@@ -78,8 +78,8 @@ describe('parseRecipients', () => {
   })
 
   it('strips the dress around names and addresses', () => {
-    expect(parseRecipients("'Franco Fuschini' <f.fuschini@siever.it>")).toEqual([
-      { name: 'Franco Fuschini', address: 'f.fuschini@siever.it' }
+    expect(parseRecipients("'Franco Ferri' <f.ferri@brenta.it>")).toEqual([
+      { name: 'Franco Ferri', address: 'f.ferri@brenta.it' }
     ])
     expect(parseRecipients('mailto:a@b.it?subject=Ciao')).toEqual([{ address: 'a@b.it' }])
     expect(parseRecipients('<a@b.it>')).toEqual([{ address: 'a@b.it' }])
@@ -94,7 +94,7 @@ describe('parseRecipients', () => {
 
   it('keeps what is not an address as it was written', () => {
     expect(parseRecipients('Mario Rossi')).toEqual([{ address: 'Mario Rossi' }])
-    expect(parseRecipients('f.fuschini@siever.i, ,;')).toEqual([{ address: 'f.fuschini@siever.i' }])
+    expect(parseRecipients('f.ferri@brenta.i, ,;')).toEqual([{ address: 'f.ferri@brenta.i' }])
     expect(parseRecipients('   ')).toEqual([])
   })
 

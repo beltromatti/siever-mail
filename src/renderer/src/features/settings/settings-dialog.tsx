@@ -11,6 +11,7 @@ import {
   Moon,
   NotebookPen,
   Plus,
+  Puzzle,
   Save,
   Signature,
   SlidersHorizontal,
@@ -20,6 +21,7 @@ import {
 } from 'lucide-react'
 
 import extensionRenderer from '@app/extension/renderer'
+import extensionShared from '@app/extension/shared'
 import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { ConnectionsList } from '@renderer/features/connections/connections-list'
@@ -42,11 +44,12 @@ import { Switch } from '@renderer/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { GROUPING_OPTIONS } from '@renderer/features/mail/message-list-shared'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
+import { ExtensionSection } from '@renderer/features/settings/extension-section'
 import { NotificationsSection } from '@renderer/features/settings/notifications-section'
 import { MemorySection } from '@renderer/features/settings/memory-section'
 import { SegretarioSection } from '@renderer/features/settings/segretario-section'
 import { ShortcutsSection } from '@renderer/features/settings/shortcuts-section'
-import { cn } from '@renderer/lib/utils'
+import { cn, formatAppVersion } from '@renderer/lib/utils'
 import type { CalendarConnection } from '@shared/calendar'
 import type {
   AccountConnectionState,
@@ -66,6 +69,7 @@ export type SettingsSectionId =
   | 'shortcuts'
   | 'data'
   | 'signatures'
+  | 'extension'
   | (string & {})
 
 interface SettingsSection {
@@ -163,12 +167,21 @@ const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
     title: 'Firme',
     description: 'Configura firme per gli account e per la composizione messaggi.',
     icon: Signature
+  },
+  {
+    id: 'extension',
+    label: 'Estensione',
+    title: 'Estensione',
+    // A legal name may end with its own full stop ("S.r.l."): the sentence does not add another.
+    description: extensionShared.identity
+      ? `L’edizione di SIEVER Mail per ${extensionShared.identity.name}`.replace(/\.?$/, '.')
+      : 'SIEVER Mail su misura per un’organizzazione.',
+    icon: Puzzle
   }
 ]
 
-// The active extension contributes additional tabs after the core ones. In
-// the public build `extensionRenderer.settingsTabs` is an empty array, so
-// the dialog renders exactly the core tabs without any extension residue.
+// The extension's own tabs follow the host's, under "Estensione"; the public
+// build has none.
 const SETTINGS_SECTIONS: SettingsSection[] = [
   ...CORE_SETTINGS_SECTIONS,
   ...extensionRenderer.settingsTabs.map((tab) => ({
@@ -684,6 +697,12 @@ export function SettingsDialog({
                 )
               })}
             </ul>
+            <p className="text-faint-foreground mt-auto px-2 pt-3 text-[11px] leading-snug">
+              SIEVER Mail {formatAppVersion(__APP_VERSION__)}
+              {extensionShared.identity && (
+                <span className="block truncate">{extensionShared.identity.name}</span>
+              )}
+            </p>
           </nav>
 
           <section className="page flex h-full min-h-0 flex-col px-7 pt-6 pb-5">
@@ -1231,6 +1250,8 @@ export function SettingsDialog({
                   </>
                 )}
               </div>
+            ) : activeSectionId === 'extension' ? (
+              <ExtensionSection />
             ) : (
               (extensionRenderer.settingsTabs
                 .find((tab) => tab.id === activeSectionId)

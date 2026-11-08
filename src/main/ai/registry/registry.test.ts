@@ -118,7 +118,7 @@ describe('Registry', () => {
     })
 
     it('counts in a project what is open from its events too', async () => {
-      const { record: project } = await registry.createProject('Prat2470 · Hotel Lido', USER)
+      const { record: project } = await registry.createProject('Casa al mare', USER)
       await registry.projects.addResource(
         project.id,
         { kind: 'evento', location: 'g:cal:sopralluogo', label: 'Sopralluogo' },
@@ -339,8 +339,8 @@ describe('Registry', () => {
 
   describe('projects', () => {
     it('keeps what the user said about a project in it: listed, counted, carried by a merge, let go by a removal', async () => {
-      const lido = await registry.createProject('Prat2470 · Hotel Lido', BACKGROUND)
-      const other = await registry.createProject('Prat2471 · Hotel Lido bis', BACKGROUND)
+      const lido = await registry.createProject('Casa al mare', BACKGROUND)
+      const other = await registry.createProject('Casa al mare bis', BACKGROUND)
       const { record } = await registry.openCommitment(
         { kind: 'utente', projectId: other.record.id },
         { kind: 'da_fare', text: 'Chiamare il geometra' },
@@ -373,7 +373,7 @@ describe('Registry', () => {
     })
 
     it('refuses a write over a newer one, saying the project as it is now', async () => {
-      const { record } = await registry.createProject('Prat2451 · Hotel Lido', BACKGROUND)
+      const { record } = await registry.createProject('Casa al mare', BACKGROUND)
       await registry.setProjectState(
         record.id,
         'Si aspetta il collaudo.',
@@ -396,15 +396,15 @@ describe('Registry', () => {
     })
 
     it('makes a project once, by name, and keeps the user’s name', async () => {
-      const made = await registry.createProject('Prat2451 · Hotel Lido', BACKGROUND)
-      const again = await registry.createProject('prat2451 – hotel lido', BACKGROUND)
+      const made = await registry.createProject('Matrimonio · Giulia e Luca', BACKGROUND)
+      const again = await registry.createProject('matrimonio – giulia e luca', BACKGROUND)
 
       expect(again.created).toBe(false)
       expect(again.record.id).toBe(made.record.id)
 
-      await registry.renameProject(made.record.id, 'Hotel Lido – ristrutturazione', USER)
+      await registry.renameProject(made.record.id, 'Matrimonio di Giulia e Luca', USER)
       await expect(
-        registry.renameProject(made.record.id, 'Hotel Lido', BACKGROUND)
+        registry.renameProject(made.record.id, 'Matrimonio', BACKGROUND)
       ).rejects.toBeInstanceOf(RegistryRefusal)
       expect(lessons.map((lesson) => lesson.kind)).toContain('progetto_rinominato')
     })
@@ -460,20 +460,20 @@ describe('Registry', () => {
 
     it('makes a project once when two readings make it together, and keeps names apart', async () => {
       const [first, second] = await Promise.all([
-        registry.createProject('Prat2490 · Condominio Bologna', BACKGROUND),
-        registry.createProject('prat2490 · condominio bologna', CHAT)
+        registry.createProject('Condominio via Roma · Bologna', BACKGROUND),
+        registry.createProject('condominio via roma · bologna', CHAT)
       ])
       expect(second.record.id).toBe(first.record.id)
       expect([first.created, second.created].sort()).toEqual([false, true])
 
-      const other = await registry.createProject('Prat2491', BACKGROUND)
+      const other = await registry.createProject('Condominio via Po', BACKGROUND)
       await expect(
-        registry.renameProject(other.record.id, 'PRAT2490 · Condominio Bologna', USER)
+        registry.renameProject(other.record.id, 'CONDOMINIO VIA ROMA · Bologna', USER)
       ).rejects.toBeInstanceOf(RegistryRefusal)
     })
 
     it('says "Il punto" is behind once something moves in the project', async () => {
-      const { record } = await registry.createProject('Prat2470', BACKGROUND)
+      const { record } = await registry.createProject('Casa al mare', BACKGROUND)
       await registry.linkThread(record.id, ANNA, BACKGROUND)
       await registry.setProjectState(record.id, 'Si aspetta il Comune.', [], Date.now(), BACKGROUND)
       expect((await registry.projects.get(record.id))?.staleSince).toBeNull()
@@ -488,7 +488,7 @@ describe('Registry', () => {
     })
 
     it('keeps "Il punto" behind when the project moved after its writer began looking', async () => {
-      const { record } = await registry.createProject('Prat2470', BACKGROUND)
+      const { record } = await registry.createProject('Casa al mare', BACKGROUND)
       await registry.linkThread(record.id, ANNA, BACKGROUND)
       const begun = Date.now() - 1000
       await registry.openCommitment(
@@ -692,18 +692,12 @@ describe('ensureAiSchema', () => {
       account_id TEXT NOT NULL, thread_id TEXT NOT NULL, topic_id TEXT NOT NULL, linked_by TEXT NOT NULL,
       created_at INTEGER NOT NULL, PRIMARY KEY (account_id, thread_id))`)
     await sql.run(
-      "INSERT INTO ai_topics VALUES ('p1', 'pratica:2451', 'Prat2451 · Lido', NULL, '/archivio/Prat2451-LIDO', NULL, 1, 1, 'Ristrutturazione', NULL, 'extension', NULL, NULL, NULL, 1, 1)"
+      "INSERT INTO ai_topics VALUES ('p1', 'cliente:1', 'Casa al mare', NULL, '/archivio/Casa al mare', NULL, 1, 1, 'Ristrutturazione', NULL, 'extension', NULL, NULL, NULL, 1, 1)"
     )
     await sql.run(
-      "INSERT INTO ai_topics VALUES ('p2', 'pratica:2452', 'Prat2452 · Mai vista', NULL, NULL, NULL, 2, NULL, NULL, NULL, 'extension', NULL, NULL, NULL, 1, 1)"
+      "INSERT INTO ai_topics VALUES ('p2', 'cliente:2', 'Mai vista', NULL, NULL, NULL, 2, NULL, NULL, NULL, 'extension', NULL, NULL, NULL, 1, 1)"
     )
     await sql.run("INSERT INTO ai_topic_threads VALUES ('a', 't', 'p1', 'utente', 1)")
-    await sql.run(`CREATE TABLE ai_archived (
-      account_id TEXT NOT NULL, message_key TEXT NOT NULL, thread_id TEXT NOT NULL, folder TEXT NOT NULL,
-      from_address TEXT, archived_at INTEGER NOT NULL, PRIMARY KEY (account_id, message_key))`)
-    await sql.run(
-      "INSERT INTO ai_archived VALUES ('a', 'k', 't', '/archivio/Prat2451-LIDO/261102x', 'x@y.it', 5)"
-    )
 
     await ensureAiSchema(sql)
     await ensureAiSchema(sql)
@@ -713,20 +707,17 @@ describe('ensureAiSchema', () => {
       { status: 'fatta' }
     ])
     expect(await sql.all('SELECT id, title, description, origin FROM ai_projects')).toEqual([
-      { id: 'p1', title: 'Prat2451 · Lido', description: 'Ristrutturazione', origin: 'segretario' }
+      { id: 'p1', title: 'Casa al mare', description: 'Ristrutturazione', origin: 'segretario' }
     ])
     expect(await sql.all('SELECT project_id, linked_by, rejected FROM ai_project_threads')).toEqual(
       [{ project_id: 'p1', linked_by: 'utente', rejected: 0 }]
     )
     expect(await sql.all('SELECT location FROM ai_project_resources')).toEqual([
-      { location: '/archivio/Prat2451-LIDO' }
-    ])
-    expect(await sql.all('SELECT source, destination FROM ai_saved_copies')).toEqual([
-      { source: 'siever', destination: '/archivio/Prat2451-LIDO/261102x' }
+      { location: '/archivio/Casa al mare' }
     ])
     expect(
       await sql.all(
-        "SELECT name FROM sqlite_master WHERE name IN ('ai_topics', 'ai_topic_threads', 'ai_archived')"
+        "SELECT name FROM sqlite_master WHERE name IN ('ai_topics', 'ai_topic_threads')"
       )
     ).toEqual([])
     sql.close()

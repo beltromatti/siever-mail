@@ -1012,7 +1012,7 @@ export class SegretarioService {
     return this.db.engine.state()
   }
 
-  /** The setup's "Riprova": the reading's failures, and only those (§13ter.2). */
+  /** The setup's "Riprova": the reading's failures, and only those (§14.2). */
   async retryReading(accountIds?: string[]): Promise<void> {
     await this.requireKey()
     await this.db.engine.retryReading(accountIds)
@@ -1894,13 +1894,14 @@ export class SegretarioService {
   /* ─────────────────────────────── copies saved outside ─────────────────────────────── */
 
   /**
-   * Copies an extension saved outside the mail: facts on each message, and
+   * Copies the extension `source` (its id) saved outside the mail: facts on each message, and
    * where the user files. The record is what makes a copy saved, so only it
    * can fail the save; the proposals are answered after it — those the user
    * followed accepted with their choice, the rest set aside — and a proposal
    * left open by a failure there is answered by the next copy or the user.
    */
   async copiesSaved(
+    source: string,
     entries: ReadonlyArray<{
       ref: MessageRef
       messageKey: string
@@ -1918,7 +1919,7 @@ export class SegretarioService {
           accountId: entry.ref.accountId,
           messageKey: entry.messageKey,
           threadId: entry.threadId,
-          source: extensionMain.id,
+          source,
           destination: await canonicalPath(entry.destination),
           files: await Promise.all(entry.files.map((file) => canonicalPath(file))),
           fromAddress: entry.fromAddress
@@ -2229,7 +2230,7 @@ export class SegretarioService {
   async getToday(): Promise<TodayPage> {
     const { registry, engine } = this.db
 
-    // Looked at, and behind by more than an hour: the letter is written again (vision §2.4).
+    // Looked at, and behind by more than an hour: the letter is written again (vision §3.4).
     if ((await this.ready()) && (await engine.letterBehind(LETTER_LOOKED_AT_STALE_MS))) {
       if (!(await engine.dayBusy())) {
         await engine.refreshDay()
@@ -2814,7 +2815,7 @@ export class SegretarioService {
 
   /**
    * A request of the user's that stopped short — it went nowhere for too
-   * long, or a call of it was refused (§13ter.2) — taken up again from where
+   * long, or a call of it was refused (§14.2) — taken up again from where
    * it was: what it did stays done, and it sees it.
    */
   async retryActivity(id: string): Promise<void> {

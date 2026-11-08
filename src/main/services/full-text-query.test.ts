@@ -36,11 +36,11 @@ describe('fullTextMatchExpression', () => {
 
 describe('a number inside a code', () => {
   it('is looked for on its own and in the words that write it', () => {
-    const words = new Map([['2463', ['prat2463', 'prat24630']]])
+    const words = new Map([['2463', ['ord2463', 'ord24630']]])
 
-    expect(fullTextMatchExpression('2463', words)).toBe('("2463"* OR "prat2463" OR "prat24630")')
+    expect(fullTextMatchExpression('2463', words)).toBe('("2463"* OR "ord2463" OR "ord24630")')
     expect(fullTextMatchExpression('oggetto:2463 offerta', words)).toBe(
-      '(subject : "2463"* OR subject : "prat2463" OR subject : "prat24630") AND "offerta"*'
+      '(subject : "2463"* OR subject : "ord2463" OR subject : "ord24630") AND "offerta"*'
     )
     expect(fullTextMatchExpression('"prat 2463"', words)).toBe('"prat 2463"*')
   })
@@ -55,13 +55,13 @@ describe('a number inside a code', () => {
       CREATE VIRTUAL TABLE message_fts USING fts5(subject, body, tokenize='unicode61 remove_diacritics 2');
       CREATE VIRTUAL TABLE message_fts_vocab USING fts5vocab(message_fts, 'row');
       INSERT INTO message_fts VALUES
-        ('Prat2463 – offerta', 'Prat2463'), ('Re: Prat2463', ''), ('Prat24630', ''),
+        ('Ord2463 – offerta', 'Ord2463'), ('Re: Ord2463', ''), ('Ord24630', ''),
         ('Allegato', 'id f2463be8 e 2463 da solo'), ('n2463a', '');
     `)
     const prisma = {
       $queryRawUnsafe: async (sql: string, ...params: string[]) => db.prepare(sql).all(...params)
     } as unknown as PrismaClient
 
-    expect(await numberWords(prisma, '2463')).toEqual(['prat2463', 'n2463a', 'prat24630'])
+    expect(await numberWords(prisma, '2463')).toEqual(['ord2463', 'n2463a', 'ord24630'])
   })
 })

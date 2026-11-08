@@ -656,6 +656,10 @@ export function runBuild({
       }
     }
     writeRuntimeEnv()
+    // `build` type-checks the public variant only; an extension's code is checked on its own.
+    if (loadExtension) {
+      run(npmCommand, ['run', 'typecheck:ext'], 'type-check the extension')
+    }
     run(npmCommand, ['run', 'build'], 'build application bundles')
 
     buildLocalTargetsForVersion(localTargets, releaseRoot)

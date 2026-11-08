@@ -60,9 +60,9 @@ describe('isUserFile', () => {
   it('offers the documents people work on, in the cloud folders too', () => {
     for (const path of [
       '/Users/anna/Documents/Offerta 619.pdf',
-      '/Volumes/Pratiche/619 IKEA/Verbale.docx',
+      '/Volumes/Clienti/Rossi/Verbale.docx',
       '/Users/anna/Library/Mobile Documents/com~apple~CloudDocs/Preventivo.xlsx',
-      '/Users/anna/Library/CloudStorage/OneDrive-SIEVER/Tavola.dwg'
+      '/Users/anna/Library/CloudStorage/OneDrive-Brenta/Tavola.dwg'
     ]) {
       expect(isUserFile(path, folders, true), path).toBe(true)
     }
@@ -87,6 +87,6 @@ describe('isUserFile', () => {
       false
     )
     expect(isUserFile('C:\\Users\\Anna\\AppDataBackup\\Fattura.pdf', windows, false)).toBe(true)
-    expect(isUserFile('\\\\server\\pratiche\\619\\Verbale.pdf', windows, false)).toBe(true)
+    expect(isUserFile('\\\\server\\clienti\\rossi\\Verbale.pdf', windows, false)).toBe(true)
   })
 })

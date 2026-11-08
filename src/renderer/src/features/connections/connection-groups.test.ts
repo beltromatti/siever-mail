@@ -42,7 +42,7 @@ describe('connectionGroups', () => {
   it('puts a calendar with the mail it came with, by consent or by address, and says a PEC is one', () => {
     const groups = connectionGroups(
       [
-        mail('a', 'beltromatti@gmail.com'),
+        mail('a', 'mattia.galli@gmail.com'),
         mail('b', 'mattia@me.com', {
           type: 'imap',
           authType: 'password',
@@ -56,7 +56,7 @@ describe('connectionGroups', () => {
         })
       ],
       [
-        calendar('a', { label: 'beltromatti@gmail.com', mailAccountId: 'a' }),
+        calendar('a', { label: 'mattia.galli@gmail.com', mailAccountId: 'a' }),
         calendar('c', {
           provider: 'caldav',
           label: 'Mattia@me.com',
@@ -68,7 +68,7 @@ describe('connectionGroups', () => {
     expect(
       groups.map((group) => [group.title, group.kind, group.calendars.map((c) => c.id)])
     ).toEqual([
-      ['beltromatti@gmail.com', 'google', ['a']],
+      ['mattia.galli@gmail.com', 'google', ['a']],
       ['mattia@me.com', 'icloud', ['c']],
       ['mattia@pec.studio.it', 'pec', []]
     ])
@@ -76,12 +76,12 @@ describe('connectionGroups', () => {
 
   it('keeps a calendar alone when no mail is of it, and a link always apart', () => {
     const groups = connectionGroups(
-      [mail('a', 'beltromatti@gmail.com')],
+      [mail('a', 'mattia.galli@gmail.com')],
       [
         calendar('w', { label: 'lavoro@studio.it' }),
         calendar('f', {
           provider: 'ics',
-          label: 'beltromatti@gmail.com',
+          label: 'mattia.galli@gmail.com',
           serverUrl: 'https://x/feed.ics'
         })
       ]

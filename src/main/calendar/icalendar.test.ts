@@ -435,23 +435,23 @@ DTSTART:20261112T083000Z
 DTEND:20261112T100000Z
 SUMMARY:Collaudo sprinkler
 ORGANIZER;CN=Giorgio Sala:mailto:giorgio.sala@padana.it
-ATTENDEE;CN=Mattia;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:Mattia@Siever.it
-ATTENDEE;PARTSTAT=ACCEPTED:mailto:davide@siever.it
+ATTENDEE;CN=Mattia;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:Mattia@Brenta.it
+ATTENDEE;PARTSTAT=ACCEPTED:mailto:davide@brenta.it
 END:VEVENT
 END:VCALENDAR`
 
   it('says who invites, and answers as the address invited, with the event’s UID and SEQUENCE', () => {
     expect(invitationParties(INVITATION)).toEqual({
       organizer: 'giorgio.sala@padana.it',
-      attendees: ['mattia@siever.it', 'davide@siever.it']
+      attendees: ['mattia@brenta.it', 'davide@brenta.it']
     })
 
     const reply = invitationReply(
       INVITATION,
       {
-        addresses: ['mattia@siever.it', 'beltromatti@gmail.com'],
-        address: 'beltromatti@gmail.com',
-        name: 'Mattia Beltrami'
+        addresses: ['mattia@brenta.it', 'mattia.galli@gmail.com'],
+        address: 'mattia.galli@gmail.com',
+        name: 'Mattia Galli'
       },
       'accepted'
     )
@@ -461,9 +461,7 @@ END:VCALENDAR`
     expect(reply.ics).toContain('METHOD:REPLY')
     expect(reply.ics).toContain('UID:collaudo@padana.it')
     expect(reply.ics).toContain('SEQUENCE:2')
-    expect(reply.ics).toMatch(
-      /ATTENDEE;PARTSTAT=ACCEPTED;CN=Mattia Beltrami:mailto:mattia@siever.it/
-    )
-    expect(reply.ics).not.toContain('davide@siever.it')
+    expect(reply.ics).toMatch(/ATTENDEE;PARTSTAT=ACCEPTED;CN=Mattia Galli:mailto:mattia@brenta.it/)
+    expect(reply.ics).not.toContain('davide@brenta.it')
   })
 })

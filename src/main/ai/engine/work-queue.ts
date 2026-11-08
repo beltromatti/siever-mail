@@ -337,7 +337,7 @@ export class WorkQueue {
 
   /**
    * Whether work for a scope waits, runs, or failed: then it is not queued
-   * again — a failure is not tried again by itself (§13ter.2): where the
+   * again — a failure is not tried again by itself (§14.2): where the
    * user waited for it, they say "Riprova"; in the background it ended.
    */
   async busy(scopeKey: string): Promise<boolean> {
@@ -379,7 +379,7 @@ export class WorkQueue {
 
   /**
    * Tries these failed units again, now: the user asked, where they waited
-   * for the result (§13ter.2). One unit waits per scope: the latest failure
+   * for the result (§14.2). One unit waits per scope: the latest failure
    * of each is tried, unless work for it waits already; the others are let go.
    */
   async retryFailed(ids: ReadonlyArray<string>): Promise<number> {

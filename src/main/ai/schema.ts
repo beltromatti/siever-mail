@@ -362,10 +362,10 @@ async function addColumn(
 }
 
 /**
- * Topics become projects. The extension's pratiche were a catalogue read
- * from its disk, most never seen in the mail: those with conversations
- * become the Segretario's projects, named as they were; the empty ones go
- * — the Segretario finds them again when the mail speaks of them.
+ * Topics become projects. An extension's topics were a catalogue read from
+ * its disk, most never seen in the mail: those with conversations become
+ * the Segretario's projects, named as they were; the empty ones go — the
+ * Segretario finds them again when the mail speaks of them.
  */
 async function topicsToProjects(sql: Sql): Promise<void> {
   if (!(await hasTable(sql, 'ai_topics'))) {
@@ -413,22 +413,6 @@ async function topicsToProjects(sql: Sql): Promise<void> {
   await sql.run('DROP TABLE ai_topics')
 }
 
-/** What the extension filed outside the mail becomes a copy saved, by the extension that saved it. */
-async function archivedToCopies(sql: Sql): Promise<void> {
-  if (!(await hasTable(sql, 'ai_archived'))) {
-    return
-  }
-
-  await sql.run(`
-    INSERT OR IGNORE INTO ai_saved_copies (
-      account_id, message_key, thread_id, source, destination, files_json, from_address, saved_at
-    )
-    SELECT account_id, message_key, thread_id, 'siever', folder, '[]', from_address, archived_at
-    FROM ai_archived
-  `)
-  await sql.run('DROP TABLE ai_archived')
-}
-
 async function registryStep(sql: Sql): Promise<void> {
   for (const statement of REGISTRY) {
     await sql.run(statement)
@@ -454,7 +438,6 @@ async function registryStep(sql: Sql): Promise<void> {
     "UPDATE ai_activities SET visibility = 'diario' WHERE task IN ('al_passo', 'riflessione')"
   )
   await topicsToProjects(sql)
-  await archivedToCopies(sql)
 }
 
 /**

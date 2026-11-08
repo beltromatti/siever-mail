@@ -1,10 +1,10 @@
 /**
- * No-op preload-side hook. Resolved by `@app/extension/preload` in
- * public builds; a customised build can swap this for an installer that
- * exposes additional methods on `window.mailApi`.
+ * The public build's preload side: no extension, so no `window.extensionApi`
+ * bridge of its own. Resolved by `@app/extension/preload` unless an
+ * extension is loaded.
  */
 import type { ExtensionPreloadInstaller } from './types'
 
-const noopExtensionPreloadInstaller: ExtensionPreloadInstaller = () => ({})
+const noExtensionPreload: ExtensionPreloadInstaller = () => ({})
 
-export default noopExtensionPreloadInstaller
+export default noExtensionPreload

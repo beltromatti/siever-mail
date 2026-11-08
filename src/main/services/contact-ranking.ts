@@ -17,7 +17,7 @@ export interface ContactCandidate {
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-/** Where in a name or an address its words start: "f.fuschini@siever.it" has five. */
+/** Where in a name or an address its words start: "f.ferri@brenta.it" has five. */
 const ADDRESS_WORD_BOUNDARY = /[.@_+-]+/
 const NAME_WORD_BOUNDARY = /[\s'’.,()"-]+/
 
@@ -29,8 +29,8 @@ function words(value: string, boundary: RegExp): string[] {
  * How well `candidate` answers the query, as Outlook's and Gmail's
  * suggestions match: 2 when its address or its whole name starts with what
  * was typed, 1 when every typed word starts one of its words — "rossi" and
- * "rossi ma" find "Mario Rossi", "fuschini" and "siever" find
- * f.fuschini@siever.it — and 0 when it does not match. Letters inside a
+ * "rossi ma" find "Mario Rossi", "ferri" and "brenta" find
+ * f.ferri@brenta.it — and 0 when it does not match. Letters inside a
  * word are not a match: they found everyone.
  */
 function matchTier(query: string, queryWords: string[], candidate: ContactCandidate): number {
@@ -100,8 +100,8 @@ function splitAddress(key: string): [string, string] {
 
 /**
  * Whether `candidate` reads as a slip of the keyboard for `other`: the same
- * mailbox at a domain one letter off — "f.fuschini@sievr.it" against
- * "f.fuschini@siever.it" — where `other` has written to the user and
+ * mailbox at a domain one letter off — "f.ferri@brnta.it" against
+ * "f.ferri@brenta.it" — where `other` has written to the user and
  * `candidate` never has. Two real mailboxes a letter apart both write, and
  * both stay.
  */

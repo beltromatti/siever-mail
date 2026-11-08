@@ -1,8 +1,10 @@
+/**
+ * The public build's renderer side: no extension. Resolved by
+ * `@app/extension/renderer` unless an extension is loaded.
+ */
 import type { ExtensionRenderer } from './types'
 
-const noopExtensionRenderer: ExtensionRenderer = {
-  id: 'noop',
-  displayName: 'No extension',
+const noExtensionRenderer: ExtensionRenderer = {
   toolbarActions: [],
   settingsTabs: [],
   PrimaryActionDialog: null,
@@ -10,4 +12,4 @@ const noopExtensionRenderer: ExtensionRenderer = {
   localDataLabel: ''
 }
 
-export default noopExtensionRenderer
+export default noExtensionRenderer

@@ -80,8 +80,8 @@ export interface MailMessageSummary {
    * The name the message is filed under when the list is sorted or grouped
    * by sender, and the one its row shows: the header's display name, or —
    * when the header carries only an address — the latest name that address
-   * used in any other message, so a bare "cristian.sangiorgi@…" files with
-   * "Cristian Sangiorgi". The address itself only when no name is known.
+   * used in any other message, so a bare "cristian.valenti@…" files with
+   * "Cristian Valenti". The address itself only when no name is known.
    */
   senderLabel: string
   /**

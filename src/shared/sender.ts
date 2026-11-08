@@ -128,7 +128,7 @@ function reorderSurnameFirst(name: string): string {
  * SQLite compares bytes — so every capitalised name sorted ahead of every
  * lower-case address and "Élite" landed after "Zeta". The key folds that
  * away, and with it everything that only dresses a name: punctuation and
- * spacing ("A. Beltrami - SIEVER" and "A.beltrami-SIEVER" are one key), a
+ * spacing ("A. Galli - BRENTA" and "A.galli-BRENTA" are one key), a
  * qualifier in brackets ("Mario Rossi (Ufficio tecnico)"), the quotes some
  * clients add, and the "Surname, Name" order.
  */
@@ -237,15 +237,15 @@ const DESK_WORDS = new Set([
  * — in any order and however they are spaced. Every word of the shorter
  * name needs a partner in the longer one, either the same word or an
  * initial of it ("M." for "Mario"), and at least one full word is shared.
- * So "Cristian Sangiorgi" matches "Sangiorgi Cristian", "Ing. Cristian
- * Sangiorgi" and "C. Sangiorgi"; "HYPE" matches "Team HYPE" and
+ * So "Cristian Valenti" matches "Valenti Cristian", "Ing. Cristian
+ * Valenti" and "C. Valenti"; "HYPE" matches "Team HYPE" and
  * "internationalweek" "International Week"; while the different people a
  * shared address speaks for — LinkedIn's "Celeste Moro" and "Saba Asim",
  * GitHub's contributors — stay apart.
  *
  * A single word only ever matches itself: "Mario" says too little to be
  * "Mario Rossi" rather than the "Mario Bianchi" the same relay address
- * also carries, and "SIEVER" is not "Mario Rossi - SIEVER". A name that is
+ * also carries, and "BRENTA" is not "Mario Rossi - BRENTA". A name that is
  * only a desk ("Amministrazione") is that desk of whoever the other name
  * says ("Amministrazione In-Domus").
  */

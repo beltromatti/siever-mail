@@ -227,7 +227,7 @@ export interface PreparedReply {
 /** Something the Segretario recommends and leaves the user to decide. */
 export interface Proposal {
   id: string
-  /** `evento`, or an extension's own (`archivia_siever`). */
+  /** `evento`, or an extension's own (`acme-srl.archive`). */
   kind: string
   title: string
   payload: Record<string, unknown>
@@ -242,7 +242,7 @@ export interface Proposal {
 
 /** A copy of a message saved outside the mail by an extension, as the message shows it. */
 export interface SavedCopyInfo {
-  /** What it is called: "Archiviato Siever". */
+  /** What it is called, as the extension says: "Archiviato in Acme". */
   label: string
   destination: string
   savedAt: number
@@ -276,7 +276,7 @@ export interface MessageRowWork {
   awaited: boolean
   /** A reply prepared for it: ready, or to look at again. */
   reply: 'pronta' | 'da_rivedere' | null
-  /** A copy of it saved outside the mail by an extension, by its label ("Archiviato Siever"); null when none. */
+  /** A copy of it saved outside the mail by an extension, by its label ("Archiviato in Acme"); null when none. */
   saved: string | null
 }
 
@@ -640,7 +640,7 @@ export interface ActivitySummary {
 export interface SegretarioContext {
   messages: MessageRef[]
   accountId: string | null
-  /** The folder, view, project or page in sight: "Posta in arrivo", "Progetto Hotel Lido", "Oggi". */
+  /** The folder, view, project or page in sight: "Posta in arrivo", "Progetto Casa al mare", "Oggi". */
   folderLabel: string | null
   /** The calendar's event open in front of the user, by its key. */
   eventKey?: string | null
@@ -1016,7 +1016,7 @@ export interface SegretarioApi {
   getActivity: (id: string) => Promise<ActivityDetail | null>
   startActivity: (text: string, context: SegretarioContext) => Promise<ActivitySummary>
   sendMessage: (id: string, text: string, context: SegretarioContext) => Promise<void>
-  /** A request in the panel that stopped short (§13ter.2), taken up again from where it was. */
+  /** A request in the panel that stopped short (§14.2), taken up again from where it was. */
   retryActivity: (id: string) => Promise<void>
   cancelActivity: (id: string) => Promise<void>
   removeActivity: (id: string) => Promise<void>

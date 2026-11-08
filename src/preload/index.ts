@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 
 import installExtensionPreload from '@app/extension/preload'
+import extensionShared from '@app/extension/shared'
+import { extensionChannel } from '@shared/extension-ipc'
 import { IPC_CHANNELS, type DesktopMailApi } from '@shared/ipc'
 import { CALENDAR_IPC, type CalendarApi } from '@shared/calendar'
 import { FILES_IPC, type FilesApi } from '@shared/files'
@@ -268,26 +270,34 @@ const filesApi: FilesApi = {
   sources: async () => invoke(FILES_IPC.sources)
 }
 
-// Add any extension-provided bridge methods (the IPC channels an extension
-// registers) to the host's API surface. The host's own methods always win:
-// an extension may add, never replace (`ExtensionBridge`). The public build's
-// installer returns an empty object, so window.mailApi remains the host's
-// own API there.
-const extensionBridge = installExtensionPreload(ipcRenderer)
-const mergedMailApi = { ...extensionBridge, ...desktopMailApi }
+// The extension's bridge, over its own channels (under its id), apart from the host's APIs:
+// `window.extensionApi`. The public build has no extension, and no such bridge.
+const extensionIdentity = extensionShared.identity
+const extensionApi = extensionIdentity
+  ? installExtensionPreload({
+      invoke: (name, ...args) => invoke(extensionChannel(extensionIdentity.id, name), ...args),
+      on: (name, listener) => subscribe(extensionChannel(extensionIdentity.id, name), listener)
+    })
+  : undefined
 
 if (process.contextIsolated) {
-  contextBridge.exposeInMainWorld('mailApi', mergedMailApi)
+  contextBridge.exposeInMainWorld('mailApi', desktopMailApi)
   contextBridge.exposeInMainWorld('segretarioApi', segretarioApi)
   contextBridge.exposeInMainWorld('calendarApi', calendarApi)
   contextBridge.exposeInMainWorld('filesApi', filesApi)
+
+  if (extensionApi) {
+    contextBridge.exposeInMainWorld('extensionApi', extensionApi)
+  }
 } else {
   // @ts-expect-error context isolation disabled by external override
-  window.mailApi = mergedMailApi
+  window.mailApi = desktopMailApi
   // @ts-expect-error context isolation disabled by external override
   window.segretarioApi = segretarioApi
   // @ts-expect-error context isolation disabled by external override
   window.calendarApi = calendarApi
   // @ts-expect-error context isolation disabled by external override
   window.filesApi = filesApi
+  // @ts-expect-error context isolation disabled by external override
+  window.extensionApi = extensionApi
 }

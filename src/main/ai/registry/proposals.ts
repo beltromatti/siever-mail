@@ -249,7 +249,7 @@ function copyOf(row: CopyRow): SavedCopy {
 }
 
 /**
- * Copies saved outside the mail — ARCHIVIA SIEVER's into a pratica — by
+ * Copies saved outside the mail — into an organisation's archive, say — by
  * the extension that saved them: facts the app checked happened, shown on
  * the message wherever it is. Saving the same message to the same place
  * again is the same copy.

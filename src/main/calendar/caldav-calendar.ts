@@ -95,7 +95,7 @@ function orderOf(calendar: DAVCalendar): number {
   return Number.isFinite(order) ? order : Number.MAX_SAFE_INTEGER
 }
 
-/** The features a server says it has, in the DAV header of its answer to OPTIONS (RFC 4918 §10.1). */
+/** The features a server says it has, in the DAV header of its answer to OPTIONS (RFC 4918 §12.1). */
 export function davFeatures(header: string | null): Set<string> {
   return new Set(
     (header ?? '')

@@ -10,7 +10,7 @@ import {
   type InvitationCandidate
 } from './event-roles'
 
-const user = 'mattia@siever.it'
+const user = 'mattia@brenta.it'
 const own = new Set([user])
 /** The invitation came to the user's account, by its address. */
 const addresses = { own, invited: own }
@@ -118,7 +118,7 @@ describe('invitationEvent', () => {
       sameAccount: true,
       event: {
         ...series[1].event,
-        attendees: [person('rossi@cliente.it', { organizer: true }), person('tecnici@siever.it')]
+        attendees: [person('rossi@cliente.it', { organizer: true }), person('tecnici@brenta.it')]
       }
     })
 
@@ -146,7 +146,7 @@ describe('invitationEvent', () => {
       myResponse: null,
       event: {
         ...series[1].event,
-        attendees: [person('rossi@cliente.it', { organizer: true }), person('tecnici@siever.it')],
+        attendees: [person('rossi@cliente.it', { organizer: true }), person('tecnici@brenta.it')],
         myResponse: null
       }
     })
@@ -165,7 +165,7 @@ describe('organizedByUser', () => {
       )
     ).toBe(true)
     expect(
-      organizedByUser({ organizer: 'luca@siever.it', attendees: [], myResponse: null }, own)
+      organizedByUser({ organizer: 'luca@brenta.it', attendees: [], myResponse: null }, own)
     ).toBe(true)
     expect(
       organizedByUser(
@@ -181,7 +181,7 @@ describe('organizedByUser', () => {
       organizedByUser(
         {
           organizer: 'rossi@cliente.it',
-          attendees: [person('rossi@cliente.it', { organizer: true }), person('tecnici@siever.it')],
+          attendees: [person('rossi@cliente.it', { organizer: true }), person('tecnici@brenta.it')],
           myResponse: null
         },
         own
@@ -195,22 +195,22 @@ describe('ownAddresses', () => {
     expect(
       [
         ...ownAddresses(
-          ['Mattia@Siever.it'],
+          ['Mattia@Brenta.it'],
           [
             { provider: 'google', label: 'mattia.rossi@gmail.com', username: null },
             { provider: 'microsoft', label: 'mrossi@studio.onmicrosoft.com', username: null },
-            { provider: 'caldav', label: 'luca@siever.it', username: 'mattia@icloud.com' },
+            { provider: 'caldav', label: 'luca@brenta.it', username: 'mattia@icloud.com' },
             { provider: 'caldav', label: 'Nextcloud', username: 'mattia' },
-            { provider: 'ics', label: 'luca@siever.it', username: null }
+            { provider: 'ics', label: 'luca@brenta.it', username: null }
           ],
           [['mattia@me.com', 'mattia@icloud.com']]
         )
       ].sort()
     ).toEqual([
       'mattia.rossi@gmail.com',
+      'mattia@brenta.it',
       'mattia@icloud.com',
       'mattia@me.com',
-      'mattia@siever.it',
       'mrossi@studio.onmicrosoft.com'
     ])
   })
@@ -220,12 +220,12 @@ describe('invitedAddresses', () => {
   it('is the account’s address, and the others a server knows the same person by', () => {
     const servers = [
       ['mattia@icloud.com', 'mattia@me.com'],
-      ['mattia@siever.it', 'm.rossi@siever.it']
+      ['mattia@brenta.it', 'm.rossi@brenta.it']
     ]
 
-    expect([...invitedAddresses('Mattia@Siever.it', servers)]).toEqual([
-      'mattia@siever.it',
-      'm.rossi@siever.it'
+    expect([...invitedAddresses('Mattia@Brenta.it', servers)]).toEqual([
+      'mattia@brenta.it',
+      'm.rossi@brenta.it'
     ])
     expect([...invitedAddresses('mattia@gmail.com', servers)]).toEqual(['mattia@gmail.com'])
     expect([...invitedAddresses(null, servers)]).toEqual([])

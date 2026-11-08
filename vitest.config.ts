@@ -16,6 +16,8 @@ const alias = {
   '@shared': resolve('src/shared'),
   '@main': resolve('src/main'),
   '@app/extension/types': resolve('src/extension/types.ts'),
+  '@app/extension/kit/main': resolve('src/extension/kit/main.ts'),
+  '@app/extension/kit/renderer': resolve('src/extension/kit/renderer.ts'),
   '@app/extension/main': extensionAvailable
     ? resolve('extension/main/index.ts')
     : resolve('src/extension/main.public.ts'),

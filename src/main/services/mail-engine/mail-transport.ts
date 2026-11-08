@@ -292,7 +292,7 @@ function smtpConnection(
 type ImapServer = Pick<AddImapAccountInput, 'username' | 'imapHost' | 'imapPort' | 'imapSecure'>
 type SmtpServer = Pick<AddImapAccountInput, 'username' | 'smtpHost' | 'smtpPort' | 'smtpSecure'>
 
-/** A mailbox signed in with its password, tried on both servers before it is kept (§13ter.1). */
+/** A mailbox signed in with its password, tried on both servers before it is kept (§14.1). */
 export async function verifyImapAccount(input: AddImapAccountInput): Promise<void> {
   const auth = { user: input.username, pass: input.password }
   await verifyImapLogin(input, auth)
@@ -302,7 +302,7 @@ export async function verifyImapAccount(input: AddImapAccountInput): Promise<voi
 /**
  * Signs in to a mailbox's IMAP server, and leaves: how a mailbox is tried
  * before it is kept — with its password, or with the token its provider
- * gave, since a consent is not yet a mailbox that answers (§13ter.1).
+ * gave, since a consent is not yet a mailbox that answers (§14.1).
  */
 export async function verifyImapLogin(
   server: ImapServer,

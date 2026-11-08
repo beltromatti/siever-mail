@@ -49,11 +49,11 @@ describe('segretarioSuggestions', () => {
   it('asks where a project stands from its list, and keeps to four', () => {
     const suggestions = segretarioSuggestions({
       ...base,
-      project: 'Prat2451 · CASEIFICIO VALLI',
+      project: 'Casa al mare',
       calendarConnected: true
     })
 
-    expect(suggestions[0]).toBe('A che punto è Prat2451 · CASEIFICIO VALLI?')
+    expect(suggestions[0]).toBe('A che punto è Casa al mare?')
     expect(suggestions).toHaveLength(4)
   })
 })

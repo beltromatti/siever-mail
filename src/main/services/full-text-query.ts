@@ -56,7 +56,7 @@ function termExpression(
 
 /**
  * The numbers a query looks for on their own — "2463" — which the index
- * holds whole only where they stand apart: in a code ("Prat2463") the word
+ * holds whole only where they stand apart: in a code ("Ord2463") the word
  * is the code. Their words are looked up with `numberWords`.
  */
 export function queryNumbers(query: string | null | undefined): string[] {
@@ -73,8 +73,8 @@ export function queryNumbers(query: string | null | undefined): string[] {
 }
 
 /**
- * The words of the index a number is written in after letters — "prat2463"
- * and "prat24630" for 2463, as a word is looked up from its start — the most
+ * The words of the index a number is written in after letters — "ord2463"
+ * and "ord24630" for 2463, as a word is looked up from its start — the most
  * used first: a code is found by its number. Read from the index's
  * vocabulary (`message_fts_vocab`); a hash with the number somewhere in its
  * middle is not a word that writes it.

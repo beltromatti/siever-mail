@@ -19,7 +19,7 @@ const FIRST_LETTER_PATTERN = /\p{L}/u
  * The letters an avatar shows for a person: the first letter of their
  * first two words — "Giudici & Polidori" is GP, "'marco conti'" is MC — or,
  * for a bare address, of the first two parts of its name, so
- * "a.angelini@siever.it" is AA. Words without a letter ("&", "+1") are
+ * "a.angeli@brenta.it" is AA. Words without a letter ("&", "+1") are
  * passed over.
  */
 export function initialsFromName(value: string): string {

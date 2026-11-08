@@ -25,17 +25,17 @@ const emails = (suggestions: ReturnType<typeof rankContactSuggestions>): string[
 
 describe('isOneEditApart', () => {
   it('tells a slip of the keyboard', () => {
-    expect(isOneEditApart('siever.it', 'siever.i')).toBe(true)
-    expect(isOneEditApart('siever.it', 'sievr.it')).toBe(true)
-    expect(isOneEditApart('siever.it', 'seiver.it')).toBe(true)
-    expect(isOneEditApart('siever.it', 'siever.lt')).toBe(true)
+    expect(isOneEditApart('brenta.it', 'brenta.i')).toBe(true)
+    expect(isOneEditApart('brenta.it', 'brnta.it')).toBe(true)
+    expect(isOneEditApart('brenta.it', 'bernta.it')).toBe(true)
+    expect(isOneEditApart('brenta.it', 'brenta.lt')).toBe(true)
     expect(isOneEditApart('aa', 'aaa')).toBe(true)
   })
 
   it('tells apart what differs more, or not at all', () => {
-    expect(isOneEditApart('siever.it', 'siever.it')).toBe(false)
-    expect(isOneEditApart('siever.it', 'sever.com')).toBe(false)
-    expect(isOneEditApart('siever.it', 'evers.it')).toBe(false)
+    expect(isOneEditApart('brenta.it', 'brenta.it')).toBe(false)
+    expect(isOneEditApart('brenta.it', 'benta.com')).toBe(false)
+    expect(isOneEditApart('brenta.it', 'renat.it')).toBe(false)
     expect(isOneEditApart('abcd', 'badc')).toBe(false)
   })
 })
@@ -43,19 +43,19 @@ describe('isOneEditApart', () => {
 describe('rankContactSuggestions', () => {
   it('matches the start of the address, the name or any of their words', () => {
     const candidates = [
-      contact('f.fuschini@siever.it', { name: 'Franco Fuschini' }),
+      contact('f.ferri@brenta.it', { name: 'Franco Ferri' }),
       contact('mario.rossi@studio.it', { name: 'Mario Rossi' }),
       contact('newsletter@shop.it')
     ]
 
-    expect(emails(rankContactSuggestions('fus', candidates, 10, NOW))).toEqual([
-      'f.fuschini@siever.it'
+    expect(emails(rankContactSuggestions('fer', candidates, 10, NOW))).toEqual([
+      'f.ferri@brenta.it'
     ])
     expect(emails(rankContactSuggestions('rossi ma', candidates, 10, NOW))).toEqual([
       'mario.rossi@studio.it'
     ])
-    expect(emails(rankContactSuggestions('siever', candidates, 10, NOW))).toEqual([
-      'f.fuschini@siever.it'
+    expect(emails(rankContactSuggestions('brenta', candidates, 10, NOW))).toEqual([
+      'f.ferri@brenta.it'
     ])
     // Letters inside a word are not a match.
     expect(emails(rankContactSuggestions('ssi', candidates, 10, NOW))).toEqual([])
@@ -84,12 +84,12 @@ describe('rankContactSuggestions', () => {
 
   it('leaves out a mistyped copy of an address that writes', () => {
     const candidates = [
-      contact('f.fuschini@sievr.it', { name: 'Franco Fuschini', usageCount: 4 }),
-      contact('f.fuschini@siever.it', { name: 'Franco Fuschini', lastReceivedAt: NOW - DAY })
+      contact('f.ferri@brnta.it', { name: 'Franco Ferri', usageCount: 4 }),
+      contact('f.ferri@brenta.it', { name: 'Franco Ferri', lastReceivedAt: NOW - DAY })
     ]
 
     expect(emails(rankContactSuggestions('franco', candidates, 10, NOW))).toEqual([
-      'f.fuschini@siever.it'
+      'f.ferri@brenta.it'
     ])
   })
 

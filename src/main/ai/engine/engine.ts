@@ -336,7 +336,7 @@ export class SegretarioEngine {
    * The AI switched on again: while it was off nobody followed the
    * calendars. Each is looked at whole again, as the first time — in the
    * setup's reading, once Conoscimi is done — and that look covers what
-   * changed meanwhile: the changes start again from now (§9.2, §10.2). The
+   * changed meanwhile: the changes start again from now (§7.2, §12.2). The
    * mail needs nothing of the kind: what came meanwhile has no note yet.
    */
   async switchedOn(): Promise<void> {
@@ -355,7 +355,7 @@ export class SegretarioEngine {
     const queued: Partial<Record<TaskKind, number>> = {}
     const running: Partial<Record<TaskKind, number>> = {}
 
-    // A failure is not shown: in the background it ends there (§13ter.2).
+    // A failure is not shown: in the background it ends there (§14.2).
     for (const count of counts) {
       const task = count.task as TaskKind
 
@@ -435,7 +435,7 @@ export class SegretarioEngine {
     ).some(Boolean)
     const horizons: ConnectionReading[] = [
       ...accounts.map((account) => this.horizonOf(account.id, 'posta', account.email, readings)),
-      // A calendar has no horizon of its own: what it holds is looked at (§9.2).
+      // A calendar has no horizon of its own: what it holds is looked at (§7.2).
       ...calendars.map((connection): ConnectionReading => ({
         key: calendarLearningKey(connection.id),
         kind: 'calendario',
@@ -532,7 +532,7 @@ export class SegretarioEngine {
    * The setup's "Riprova", at the end of its reading: what failed of it —
    * the conversations of these accounts, or of all, and the looks at their
    * calendars — tried again now, and only that: what failed in the
-   * background ended there (§13ter.2).
+   * background ended there (§14.2).
    */
   async retryReading(accountIds?: ReadonlyArray<string>): Promise<void> {
     const { queue } = this.deps
@@ -585,7 +585,7 @@ export class SegretarioEngine {
 
   /**
    * The calendar connections whose events are looked at one by one: all of
-   * them, but those the setup under way holds back for Conoscimi (§3.1).
+   * them, but those the setup under way holds back for Conoscimi (§4.1).
    */
   private async lookedCalendars(
     hold: SetupHold

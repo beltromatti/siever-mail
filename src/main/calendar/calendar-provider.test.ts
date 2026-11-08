@@ -12,7 +12,7 @@ describe('differingFields', () => {
     allDay: false,
     location: 'Cantiere',
     description: 'Portare il **verbale**.',
-    attendees: ['luca@siever.it', 'rossi@cliente.it']
+    attendees: ['luca@brenta.it', 'rossi@cliente.it']
   }
 
   it('keeps of the fields given only those that really change', () => {
@@ -24,7 +24,7 @@ describe('differingFields', () => {
           title: 'Sopralluogo al cantiere',
           start: '2026-11-10T09:00:00+01:00',
           end: '2026-11-10T10:00:00+01:00',
-          attendees: ['Rossi@Cliente.it', 'luca@siever.it']
+          attendees: ['Rossi@Cliente.it', 'luca@brenta.it']
         },
         new Set(['title', 'time', 'location', 'description', 'attendees'])
       )

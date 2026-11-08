@@ -19,8 +19,8 @@ describe('extractContent', () => {
       'END:VTIMEZONE',
       'BEGIN:VEVENT',
       'DTSTART;TZID=Europe/Rome:20261110T150000',
-      'SUMMARY:Sopralluogo Prat2470 – centrale termica dell’Hotel Lido Est',
-      ' ense',
+      'SUMMARY:Riunione di condominio – rifacimento della facciata di via Gari',
+      ' baldi',
       'END:VEVENT',
       'END:VCALENDAR',
       ''
@@ -35,7 +35,7 @@ describe('extractContent', () => {
         'METHOD:REQUEST',
         'BEGIN:VEVENT',
         'DTSTART;TZID=Europe/Rome:20261110T150000',
-        'SUMMARY:Sopralluogo Prat2470 – centrale termica dell’Hotel Lido Estense',
+        'SUMMARY:Riunione di condominio – rifacimento della facciata di via Garibaldi',
         'END:VEVENT',
         'END:VCALENDAR'
       ].join('\n'),

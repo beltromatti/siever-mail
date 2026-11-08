@@ -9,7 +9,7 @@ Capire, connessione per connessione e nel loro insieme:
 - **chi è l'utente** e cosa fa: lavoro, ruolo, azienda, colleghi, chi decide; la vita personale che passa dalle sue fonti, se c'è;
 - **le sue connessioni**, di ogni famiglia: a cosa serve ogni account di posta e chi scrive da lì (lui per lavoro o per sé, un ufficio, qualcuno per cui gestisce la posta); a cosa serve ogni calendario; che cosa tiene sui volumi del computer e di rete — l'archivio dello studio, i documenti personali; quali vanno insieme — la posta di lavoro con il calendario di lavoro e l'archivio dei progetti, un calendario per lo sport legato alla posta personale;
 - **le persone che contano**: con chi scrive e a chi risponde, che rapporto hanno, che tono usa con ciascuno;
-- **le questioni che durano**: i suoi progetti — come li chiama, come li organizza, dove tiene i loro file sul computer o sui dischi, quali appuntamenti hanno — e quali sono ancora aperti;
+- **le questioni che durano**: i suoi progetti — come li chiama (ognuno a modo suo: il nome di un cliente, un luogo, una persona, un codice), come li organizza, dove tiene i loro file sul computer o sui dischi, quali appuntamenti hanno — e quali sono ancora aperti;
 - **come scrive**: lunghezza, saluti e congedi, registro, lingua, formule tipiche, firma. Con qualche esempio vero.
 
 ## Come

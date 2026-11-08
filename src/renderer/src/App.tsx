@@ -420,7 +420,7 @@ function App(): React.JSX.Element {
     segretario.status && segretario.status.keyState !== 'missing' && segretario.preferences?.enabled
   )
   // The panel is there with the AI on — and, before a key is given, to ask for one.
-  // With the AI off there is no trace of the Segretario (vision §10.1): it is turned on from
+  // With the AI off there is no trace of the Segretario (vision §12.1): it is turned on from
   // Settings › Segretario, which leads to the guided setup.
   const segretarioOffered = aiOn
   // Oggi is the Segretario's: with the AI off the rail goes without it, and the first source
@@ -1869,7 +1869,7 @@ function App(): React.JSX.Element {
                   points={[
                     'Le conversazioni, gli appuntamenti, le cartelle e i documenti, le persone e le cose aperte del progetto, insieme.',
                     'Uno spazio di lavoro, non un altro archivio: ogni cosa resta dov’è, e un file usato da tre progetti è un file solo.',
-                    'Un progetto è un contesto che dura — una pratica, un cliente, un viaggio, l’università —: il Segretario li riconosce e tu li correggi.',
+                    'Un progetto è un contesto che dura — un cliente, un lavoro, un viaggio, la casa, l’università —: il Segretario li riconosce e tu li correggi.',
                     ...(aiOn && accounts.length > 0
                       ? ['Intanto i progetti del Segretario sono nella barra laterale della Posta.']
                       : [])

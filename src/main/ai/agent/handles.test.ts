@@ -7,7 +7,7 @@ describe('handles', () => {
   const project = registry.name({
     kind: 'project',
     projectId: 'abc',
-    title: 'Prat2451 · Caseificio Valli'
+    title: 'Casa al mare'
   })
   const event = registry.name({ kind: 'event', eventKey: 'k', title: 'Sopralluogo' })
 

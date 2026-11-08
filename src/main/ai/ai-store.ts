@@ -844,7 +844,7 @@ export class AiStore {
 
   /**
    * The Segretario's data gone. `keepSavedCopies`: the copies an extension
-   * saved (ARCHIVIA SIEVER) stay, facts of the files on disk, not knowledge.
+   * saved stay, facts of the files on disk, not knowledge.
    */
   async clearData(options: { keepSavedCopies?: boolean } = {}): Promise<void> {
     for (const table of [

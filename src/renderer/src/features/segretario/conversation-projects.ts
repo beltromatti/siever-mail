@@ -9,14 +9,8 @@ export function threadKey(message: { accountId: string; threadId: string }): str
   return `${message.accountId}\u0000${message.threadId}`
 }
 
-/** A project as a row's tag: a name with a code ("Prat2451 · Hotel Lido") by its code, another short. */
+/** A project as a row's tag: its name as the Segretario or the user gave it, short. */
 export function projectTag(project: ProjectLabel): string {
-  const code = project.title.split(' · ')[0]
-
-  if (code !== project.title) {
-    return code
-  }
-
   return project.title.length > 24 ? `${project.title.slice(0, 23).trimEnd()}…` : project.title
 }
 

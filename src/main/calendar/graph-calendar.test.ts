@@ -37,7 +37,7 @@ const meeting: GraphEvent = {
   organizer: { emailAddress: { address: 'Giorgio.Sala@Padana.it', name: 'Giorgio Sala' } },
   attendees: [
     {
-      emailAddress: { address: 'mattia@siever.it', name: 'Mattia' },
+      emailAddress: { address: 'mattia@brenta.it', name: 'Mattia' },
       status: { response: 'tentativelyAccepted' }
     },
     {
@@ -73,7 +73,7 @@ function graph(
       calendar: async () => 'calendars',
       mailboxSettings: async () => (consent.mailboxSettings ? 'mailbox-settings' : null)
     },
-    'mattia@siever.it',
+    'mattia@brenta.it',
     async (input, init) => {
       const headers = init?.headers as Record<string, string>
       const request = {
@@ -105,7 +105,7 @@ const notFound = (): Response =>
 
 describe('eventOfGraph', () => {
   it('reads an invitation: UTC times, the user’s answer, the call, the body as text, the UID it was sent with', () => {
-    expect(eventOfGraph(meeting, 'cal-1', 'mattia@siever.it', true)).toMatchObject({
+    expect(eventOfGraph(meeting, 'cal-1', 'mattia@brenta.it', true)).toMatchObject({
       calendarId: 'cal-1',
       eventId: 'AAMk-1',
       iCalUid: '6ca67e6b-fab4-4bbb-b2b5-6fb84dfd2ab7',
@@ -121,17 +121,17 @@ describe('eventOfGraph', () => {
 
   it('gives an instance the UID its invitations carry: the wrapped one, or Exchange’s without the date', () => {
     expect(
-      eventOfGraph({ ...meeting, iCalUId: FROM_GOOGLE_16_NOV }, 'cal-1', 'mattia@siever.it', true)
+      eventOfGraph({ ...meeting, iCalUId: FROM_GOOGLE_16_NOV }, 'cal-1', 'mattia@brenta.it', true)
         .iCalUid
     ).toBe('6ca67e6b-fab4-4bbb-b2b5-6fb84dfd2ab7')
     expect(
-      eventOfGraph({ ...meeting, iCalUId: EXCHANGE_23_NOV }, 'cal-1', 'mattia@siever.it', true)
+      eventOfGraph({ ...meeting, iCalUId: EXCHANGE_23_NOV }, 'cal-1', 'mattia@brenta.it', true)
         .iCalUid
     ).toBe(EXCHANGE_UID)
   })
 
   it('has no answer of the user’s in a calendar someone shares: its owner’s is not theirs', () => {
-    expect(eventOfGraph(meeting, 'cal-shared', 'mattia@siever.it', false).myResponse).toBeNull()
+    expect(eventOfGraph(meeting, 'cal-shared', 'mattia@brenta.it', false).myResponse).toBeNull()
   })
 
   it('reads an all-day event by its days, and the user’s own event without an answer', () => {
@@ -145,7 +145,7 @@ describe('eventOfGraph', () => {
         end: { dateTime: '2026-12-27T00:00:00.0000000', timeZone: 'UTC' }
       },
       'cal-1',
-      'mattia@siever.it',
+      'mattia@brenta.it',
       true
     )
 
@@ -166,7 +166,7 @@ describe('GraphCalendarProvider', () => {
         id: 'cal-luca',
         name: 'Luca',
         canEdit: true,
-        owner: { address: 'luca@siever.it' }
+        owner: { address: 'luca@brenta.it' }
       }
     ],
     '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/calendars?$skiptoken=2'
@@ -393,15 +393,15 @@ describe('GraphCalendarProvider', () => {
         () => ({
           attendees: [
             {
-              emailAddress: { address: 'Luca@Siever.it', name: 'Luca Bianchi' },
+              emailAddress: { address: 'Luca@Brenta.it', name: 'Luca Bianchi' },
               type: 'optional',
               status: { response: 'accepted' }
             },
             {
-              emailAddress: { address: 'sala-riunioni@siever.it', name: 'Sala riunioni' },
+              emailAddress: { address: 'sala-riunioni@brenta.it', name: 'Sala riunioni' },
               type: 'resource'
             },
-            { emailAddress: { address: 'tolto@siever.it' }, type: 'required' }
+            { emailAddress: { address: 'tolto@brenta.it' }, type: 'required' }
           ]
         })
       ],
@@ -423,7 +423,7 @@ describe('GraphCalendarProvider', () => {
         location: null,
         description:
           'Portare il **verbale**.\n[Partecipa](https://teams.microsoft.com/l/meetup-join/abc)\n\n<div style="display:none"><img src="https://x.example/p.png" onerror="alert(1)"></div>',
-        attendees: ['luca@siever.it', 'sala-riunioni@siever.it', 'nuovo@siever.it']
+        attendees: ['luca@brenta.it', 'sala-riunioni@brenta.it', 'nuovo@brenta.it']
       },
       true,
       new Set(['description', 'attendees'])
@@ -443,12 +443,12 @@ describe('GraphCalendarProvider', () => {
     )
     expect(patch.body.content).not.toMatch(/<(div|img)\b/)
     expect(patch.attendees).toEqual([
-      { emailAddress: { address: 'Luca@Siever.it', name: 'Luca Bianchi' }, type: 'optional' },
+      { emailAddress: { address: 'Luca@Brenta.it', name: 'Luca Bianchi' }, type: 'optional' },
       {
-        emailAddress: { address: 'sala-riunioni@siever.it', name: 'Sala riunioni' },
+        emailAddress: { address: 'sala-riunioni@brenta.it', name: 'Sala riunioni' },
         type: 'resource'
       },
-      { emailAddress: { address: 'nuovo@siever.it' }, type: 'required' }
+      { emailAddress: { address: 'nuovo@brenta.it' }, type: 'required' }
     ])
   })
 

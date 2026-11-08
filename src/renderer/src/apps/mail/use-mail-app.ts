@@ -3681,7 +3681,7 @@ export function useMailApp({
       .askMail(question, requestId)
       .then(openAskedSearch)
       .catch((error: unknown) => {
-        // Stopped by the user: nothing to say. Else the user waits for it: "Riprova" (§13ter.2).
+        // Stopped by the user: nothing to say. Else the user waits for it: "Riprova" (§14.2).
         if (askingRequestRef.current === requestId) {
           toast.error('Il Segretario non ha cercato', {
             description: error instanceof Error ? error.message : undefined,

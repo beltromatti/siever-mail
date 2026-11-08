@@ -14,7 +14,7 @@
  *     once in about twenty tool calls (others once in three hundred), and
  *     the model puts it right on the next turn; OpenRouter's own routing
  *     without those endpoints costs twice as much. Kept as it is: the
- *     quality of the work is the same (vision §1.3).
+ *     quality of the work is the same (vision §2.3).
  * Every request of a conversation carries its `session_id`, which keeps it
  * on one provider and its cache warm: a long activity costs a tenth.
  */

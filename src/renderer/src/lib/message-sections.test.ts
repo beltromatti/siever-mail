@@ -155,9 +155,9 @@ describe('buildMessageSections', () => {
   it('keeps spellings of one name in one section, titled as most messages spell it', () => {
     const sections = buildMessageSections(
       [
-        message({ uid: 1, senderKey: 'a.beltrami@siever.it', senderLabel: 'A.beltrami-SIEVER' }),
-        message({ uid: 2, senderKey: 'a.beltrami@siever.it', senderLabel: 'A. Beltrami - SIEVER' }),
-        message({ uid: 3, senderKey: 'a.beltrami@siever.it', senderLabel: 'A. Beltrami - SIEVER' })
+        message({ uid: 1, senderKey: 'a.galli@brenta.it', senderLabel: 'A.galli-BRENTA' }),
+        message({ uid: 2, senderKey: 'a.galli@brenta.it', senderLabel: 'A. Galli - BRENTA' }),
+        message({ uid: 3, senderKey: 'a.galli@brenta.it', senderLabel: 'A. Galli - BRENTA' })
       ],
       'auto',
       'sender',
@@ -165,7 +165,7 @@ describe('buildMessageSections', () => {
     )
 
     expect(sections.map((section) => [section.label, section.messages.length])).toEqual([
-      ['A. Beltrami - SIEVER', 3]
+      ['A. Galli - BRENTA', 3]
     ])
   })
 

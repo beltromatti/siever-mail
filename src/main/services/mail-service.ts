@@ -1045,7 +1045,7 @@ export class MailService {
   /**
    * A mailbox signed in with its provider, tried before it is kept: the
    * consent is not yet a mailbox that answers — Gmail with IMAP turned off,
-   * a company that turned it off for Microsoft 365 (§13ter.1). Its IMAP
+   * a company that turned it off for Microsoft 365 (§14.1). Its IMAP
    * server only: a Microsoft account whose SMTP is off sends through Graph.
    * Gives back the secret to keep — Microsoft's, renewed on the way.
    */

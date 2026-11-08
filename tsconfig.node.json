@@ -5,7 +5,8 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/shared/**/*",
-    "src/extension/**/*"
+    "src/extension/*.ts",
+    "src/extension/kit/main.ts"
   ],
   "compilerOptions": {
     "composite": true,
@@ -15,6 +16,7 @@
       "@main/*": ["src/main/*"],
       "@shared/*": ["src/shared/*"],
       "@app/extension/main": ["src/extension/main.public.ts"],
+      "@app/extension/kit/main": ["src/extension/kit/main.ts"],
       "@app/extension/preload": ["src/extension/preload.public.ts"],
       "@app/extension/types": ["src/extension/types.ts"],
       "@app/extension/shared": ["src/extension/shared.public.ts"]

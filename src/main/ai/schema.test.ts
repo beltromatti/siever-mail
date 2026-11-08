@@ -14,11 +14,6 @@ const V1_TABLES = [
   `CREATE TABLE ai_topic_threads (
     account_id TEXT NOT NULL, thread_id TEXT NOT NULL, topic_id TEXT NOT NULL,
     linked_by TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (account_id, thread_id)
-  )`,
-  `CREATE TABLE ai_archived (
-    account_id TEXT NOT NULL, message_key TEXT NOT NULL, thread_id TEXT NOT NULL,
-    folder TEXT NOT NULL, from_address TEXT, archived_at INTEGER NOT NULL,
-    PRIMARY KEY (account_id, message_key)
   )`
 ]
 
@@ -65,15 +60,12 @@ describe('ensureAiSchema', () => {
 
     await sql.run(
       `INSERT INTO ai_topics VALUES
-        ('t1', 'pratica:2451', 'Prat2451 · Valli', NULL, '/archivio/Prat2451-VALLI', NULL, 1, 5, 'Il caseificio', 1, 'extension', 'A buon punto', 9, NULL, 1, 2),
-        ('t2', 'pratica:2999', 'Prat2999 · Mai vista', NULL, '/archivio/Prat2999', NULL, 2, NULL, NULL, NULL, 'extension', NULL, NULL, NULL, 1, 1),
+        ('t1', 'cliente:1', 'Casa al mare', NULL, '/archivio/Casa al mare', NULL, 1, 5, 'La ristrutturazione', 1, 'extension', 'A buon punto', 9, NULL, 1, 2),
+        ('t2', 'cliente:2', 'Mai vista', NULL, '/archivio/Mai vista', NULL, 2, NULL, NULL, NULL, 'extension', NULL, NULL, NULL, 1, 1),
         ('t3', NULL, 'Partita del giovedì', NULL, NULL, NULL, NULL, 5, NULL, NULL, 'utente', NULL, NULL, NULL, 1, 1)`
     )
     await sql.run(
       `INSERT INTO ai_topic_threads VALUES ('a', 'th1', 't1', 'segretario', 1), ('a', 'th2', 't3', 'utente', 1)`
-    )
-    await sql.run(
-      `INSERT INTO ai_archived VALUES ('a', 'k1', 'th1', '/archivio/Prat2451-VALLI/CORRISPONDENZA', 'rossi@x.it', 7)`
     )
     await sql.run(
       `INSERT INTO ai_items (id, account_id, thread_id, message_key, kind, text, due, status, created_at, closed_at, closed_by)
@@ -91,9 +83,9 @@ describe('ensureAiSchema', () => {
     ).toEqual([
       {
         id: 't1',
-        title: 'Prat2451 · Valli',
+        title: 'Casa al mare',
         title_by: 'segretario',
-        description: 'Il caseificio',
+        description: 'La ristrutturazione',
         state: 'A buon punto'
       },
       { id: 't3', title: 'Partita del giovedì', title_by: 'utente', description: null, state: null }
@@ -107,14 +99,7 @@ describe('ensureAiSchema', () => {
       { project_id: 't3', thread_id: 'th2', linked_by: 'utente' }
     ])
     expect(await sql.all('SELECT project_id, kind, location FROM ai_project_resources')).toEqual([
-      { project_id: 't1', kind: 'cartella', location: '/archivio/Prat2451-VALLI' }
-    ])
-    expect(await sql.all('SELECT message_key, source, destination FROM ai_saved_copies')).toEqual([
-      {
-        message_key: 'k1',
-        source: 'siever',
-        destination: '/archivio/Prat2451-VALLI/CORRISPONDENZA'
-      }
+      { project_id: 't1', kind: 'cartella', location: '/archivio/Casa al mare' }
     ])
     expect(await sql.all('SELECT id, status FROM ai_items ORDER BY id')).toEqual([
       { id: 1, status: 'aperta' },
@@ -126,7 +111,7 @@ describe('ensureAiSchema', () => {
     ])
     expect(
       await sql.get(
-        "SELECT name FROM sqlite_master WHERE name IN ('ai_topics', 'ai_topic_threads', 'ai_archived')"
+        "SELECT name FROM sqlite_master WHERE name IN ('ai_topics', 'ai_topic_threads')"
       )
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
@@ -219,13 +204,13 @@ describe('ensureAiSchema', () => {
     await sql.run(V1_TABLES[0])
     await sql.run(
       `INSERT INTO ai_topics VALUES
-        ('t1', 'pratica:2451', 'Prat2451 · Valli', NULL, NULL, NULL, 1, 5, 'Il caseificio', 1, 'extension', NULL, NULL, NULL, 1, 2),
-        ('t2', 'pratica:2999', 'Prat2999 · Mai vista', NULL, NULL, NULL, 2, NULL, NULL, NULL, 'extension', NULL, NULL, NULL, 1, 1)`
+        ('t1', 'cliente:1', 'Casa al mare', NULL, NULL, NULL, 1, 5, 'La ristrutturazione', 1, 'extension', NULL, NULL, NULL, 1, 2),
+        ('t2', 'cliente:2', 'Mai vista', NULL, NULL, NULL, 2, NULL, NULL, NULL, 'extension', NULL, NULL, NULL, 1, 1)`
     )
     // Cut short after the links were copied and their table dropped, before the topics were.
     await sql.run(
       `INSERT INTO ai_projects (id, title, title_by, origin, revision, created_at, updated_at)
-       VALUES ('t1', 'Prat2451 · Valli', 'segretario', 'segretario', 1, 1, 2)`
+       VALUES ('t1', 'Casa al mare', 'segretario', 'segretario', 1, 1, 2)`
     )
     await sql.run(
       `INSERT INTO ai_project_threads (project_id, account_id, thread_id, linked_by, rejected, created_at)
@@ -278,7 +263,7 @@ describe('ensureAiSchema', () => {
       { id: 3, project_id: null }
     ])
     await sql.run(
-      `INSERT INTO ai_reading (connection_key, days, reason, set_by, set_at) VALUES ('a', 90, 'pratiche lunghe', 'segretario', 1)`
+      `INSERT INTO ai_reading (connection_key, days, reason, set_by, set_at) VALUES ('a', 90, 'questioni lunghe', 'segretario', 1)`
     )
     expect(
       await sql.all("SELECT name FROM sqlite_master WHERE name = 'idx_ai_items_project'")

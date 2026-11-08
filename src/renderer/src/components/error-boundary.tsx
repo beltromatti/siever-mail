@@ -6,7 +6,7 @@ import { cn } from '@renderer/lib/utils'
 
 /**
  * A part of the window that broke while drawing says so in its place, and
- * the rest of the window goes on (§13ter.3): "Riprova" draws it again. The
+ * the rest of the window goes on (§14.3): "Riprova" draws it again. The
  * error reaches the log as React reports it, through the console.
  */
 export class ErrorBoundary extends Component<

@@ -12,4 +12,4 @@ Il tuo quaderno, che dura tra un lavoro e l'altro ed è lo stesso in ogni moment
 - `storia` — con `percorso`: le versioni passate, con chi le ha scritte.
 - `ripristina` — con `percorso` e `versione`: riporta una versione passata.
 
-`percorso` è per esempio `tu.md`, `stile.md`, `connessioni.md`, `contatti/luca-rossi.md`, `progetti/hotel-lido.md`. Ogni nota inizia con una riga che dice di cosa parla: è quella che compare nella mappa. Quando una nota diventa lunga lo strumento te lo dice: ogni lavoro che la apre la legge tutta.
+`percorso` è per esempio `tu.md`, `stile.md`, `connessioni.md`, `contatti/luca-rossi.md`, `progetti/casa-al-mare.md`. Ogni nota inizia con una riga che dice di cosa parla: è quella che compare nella mappa. Quando una nota diventa lunga lo strumento te lo dice: ogni lavoro che la apre la legge tutta.

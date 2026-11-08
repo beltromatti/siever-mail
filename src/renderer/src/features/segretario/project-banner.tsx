@@ -44,7 +44,7 @@ const WRITTEN_AT = new Intl.DateTimeFormat('it-IT', {
   minute: '2-digit'
 })
 
-/** "…/Prat2451-HOTEL LIDO" as it reads: its last place. */
+/** "…/Clienti/Casa al mare" as it reads: its last place. */
 function folderName(location: string): string {
   return location.split(/[\\/]/).filter(Boolean).pop() ?? location
 }

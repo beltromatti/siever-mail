@@ -5,13 +5,12 @@ import react from '@vitejs/plugin-react'
 
 const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as { version: string }
 const appVersion = process.env.SIEVER_APP_VERSION?.trim() || packageJson.version
-const extensionRequested = process.env.LOAD_EXTENSION === '1'
-const extensionDirectoryAvailable = existsSync(resolve('extension'))
-const extensionEnabled = extensionRequested && extensionDirectoryAvailable
+const extensionEnabled = process.env.LOAD_EXTENSION === '1'
 
-if (extensionRequested && !extensionDirectoryAvailable) {
-  console.warn(
-    '[electron.vite.config] LOAD_EXTENSION=1 was set but extension/ is missing — falling back to public build.'
+// Asked for an extension, a build without one would be the public app under its name.
+if (extensionEnabled && !existsSync(resolve('extension'))) {
+  throw new Error(
+    'LOAD_EXTENSION=1, but there is no extension/ to load: check the extension out there first.'
   )
 }
 
@@ -49,11 +48,13 @@ const sharedAliases = {
 
 const mainAliases = {
   ...sharedAliases,
+  '@app/extension/kit/main': resolve('src/extension/kit/main.ts'),
   '@app/extension/main': extensionMainAliasTarget()
 }
 
 const rendererAliases = {
   ...sharedAliases,
+  '@app/extension/kit/renderer': resolve('src/extension/kit/renderer.ts'),
   '@app/extension/renderer': extensionRendererAliasTarget()
 }
 

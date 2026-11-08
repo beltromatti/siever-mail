@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
 import {
   AlertCircle,
   ArrowUp,
@@ -9,7 +9,6 @@ import {
   ChevronRight,
   Eye,
   FileSearch,
-  FolderArchive,
   FolderInput,
   History,
   ListTodo,
@@ -31,6 +30,7 @@ import {
   X
 } from 'lucide-react'
 
+import extensionRenderer from '@app/extension/renderer'
 import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
@@ -56,7 +56,8 @@ export interface SegretarioContextChip {
   label: string
 }
 
-const TOOL_ICONS: Readonly<Record<string, typeof Search>> = {
+/** Each tool's icon in the Segretario's work: the host's, then the extension's own. */
+const TOOL_ICONS: Readonly<Record<string, ComponentType<{ className?: string }>>> = {
   cerca_posta: Search,
   cerca_file: FileSearch,
   leggi: MailOpen,
@@ -73,7 +74,7 @@ const TOOL_ICONS: Readonly<Record<string, typeof Search>> = {
   revisione: SpellCheck,
   mostra: Eye,
   diario: History,
-  archivio_pratiche: FolderArchive
+  ...extensionRenderer.toolIcons
 }
 
 /** A draft's text holds no short names: its links are the message's own. */

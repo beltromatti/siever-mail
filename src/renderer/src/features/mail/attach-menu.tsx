@@ -57,7 +57,7 @@ export interface AttachMenuProps {
   onBrowse: () => void
 }
 
-/** The last folder of a path: "619 IKEA" for ".../Pratiche/619 IKEA". */
+/** The last folder of a path: "Casa al mare" for ".../Clienti/Casa al mare". */
 function folderName(folder: string): string {
   return folder.split(/[\\/]/).filter(Boolean).at(-1) ?? folder
 }

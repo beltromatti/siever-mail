@@ -27,12 +27,12 @@ describe('Notebook', () => {
       await notebook.write(`contatti/p${index}.md`, `# Persona ${index}\n`, RUN_A)
     }
 
-    await notebook.write('progetti/hotel.md', '# Hotel Lido\n', RUN_A)
+    await notebook.write('progetti/casa.md', '# Casa al mare\n', RUN_A)
 
     const map = await notebook.index()
 
     expect(map).toContain('- tu.md — Chi sei')
-    expect(map).toContain('- progetti/hotel.md — Hotel Lido')
+    expect(map).toContain('- progetti/casa.md — Casa al mare')
     expect(map).toMatch(/- contatti\/ — 13 note \(le ultime toccate: /)
     expect(map).not.toContain('contatti/p1.md')
     expect(await notebook.folder('contatti/')).toContain('- contatti/p1.md — Persona 1')
@@ -70,21 +70,21 @@ describe('Notebook', () => {
   })
 
   it('names the notes most like one that is not there', async () => {
-    await notebook.write('progetti/prat2492-malagoli.md', '# Prat2492 · Acetaia Malagoli\n', RUN_A)
+    await notebook.write('progetti/ord2492-rossi.md', '# Ord2492 · Cantina Rossi\n', RUN_A)
     await notebook.write('stile.md', '# Come scrive\n', RUN_A)
 
-    const said = await notebook.missing('progetti/prat2492-acetaia-malagoli.md')
+    const said = await notebook.missing('progetti/ord2492-cantina-rossi.md')
 
-    expect(said).toContain('progetti/prat2492-malagoli.md (Prat2492 · Acetaia Malagoli)')
+    expect(said).toContain('progetti/ord2492-rossi.md (Ord2492 · Cantina Rossi)')
     expect(said).not.toContain('stile.md')
   })
 
   it('lets two runs edit different lines of the same note, both landing', async () => {
-    await notebook.write('tu.md', '# Chi sei\n- Lavori in SIEVER\n- Abiti a Milano\n', RUN_A)
+    await notebook.write('tu.md', '# Chi sei\n- Lavori in Brenta\n- Abiti a Milano\n', RUN_A)
 
     await notebook.edit(
       'tu.md',
-      [{ old: 'Lavori in SIEVER', new: 'Lavori in SIEVER, ufficio tecnico' }],
+      [{ old: 'Lavori in Brenta', new: 'Lavori in Brenta, ufficio tecnico' }],
       RUN_A
     )
     await notebook.edit(
@@ -94,7 +94,7 @@ describe('Notebook', () => {
     )
 
     expect((await notebook.read('tu.md'))?.content).toBe(
-      '# Chi sei\n- Lavori in SIEVER, ufficio tecnico\n- Abiti a Milano (studentato)\n'
+      '# Chi sei\n- Lavori in Brenta, ufficio tecnico\n- Abiti a Milano (studentato)\n'
     )
     expect((await notebook.read('tu.md'))?.revision).toBe(3)
   })
@@ -137,11 +137,11 @@ describe('Notebook', () => {
   })
 
   it('inserts after a line, and finds lines by their words', async () => {
-    await notebook.write('progetti/lido.md', '# Hotel Lido\nCliente: Rossi\n', RUN_A)
-    await notebook.insert('progetti/lido.md', 1, 'Pratica 2470', RUN_A)
+    await notebook.write('progetti/lido.md', '# Casa al mare\nCliente: Rossi\n', RUN_A)
+    await notebook.insert('progetti/lido.md', 1, 'Ordine 2470', RUN_A)
 
     expect((await notebook.read('progetti/lido.md'))?.content).toBe(
-      '# Hotel Lido\nPratica 2470\nCliente: Rossi\n'
+      '# Casa al mare\nOrdine 2470\nCliente: Rossi\n'
     )
     expect(await notebook.search('rossi')).toEqual([
       { path: 'progetti/lido.md', line: 3, text: 'Cliente: Rossi' }
@@ -149,9 +149,10 @@ describe('Notebook', () => {
   })
 
   it('refuses a line counted on a version since changed, and finds a note by its name once', async () => {
-    const read = (await notebook.write('progetti/lido.md', '# Hotel Lido\nCliente: Rossi\n', RUN_A))
-      .document
-    await notebook.insert('progetti/lido.md', 0, '> Pratica 2470', RUN_B)
+    const read = (
+      await notebook.write('progetti/lido.md', '# Casa al mare\nCliente: Rossi\n', RUN_A)
+    ).document
+    await notebook.insert('progetti/lido.md', 0, '> Ordine 2470', RUN_B)
 
     await expect(
       notebook.insert('progetti/lido.md', 1, 'Collaudo il 12', RUN_A, {
@@ -163,7 +164,7 @@ describe('Notebook', () => {
       seenRevision: read.revision
     })
     expect((await notebook.read('progetti/lido.md'))?.content).toBe(
-      '> Pratica 2470\n# Hotel Lido\nCliente: Rossi\nCollaudo il 12\n'
+      '> Ordine 2470\n# Casa al mare\nCliente: Rossi\nCollaudo il 12\n'
     )
 
     await notebook.write('contatti/neri.md', '# Paolo Neri\nFarmaDelta\nDirettore lavori\n', RUN_A)

@@ -2,7 +2,7 @@ import type { CalendarConnection } from '@shared/calendar'
 import { REFUSAL_LINES, type AccountConnectionState, type MailAccount } from '@shared/models'
 
 /**
- * How a connection stands, in the four ways the user tells apart (§13ter):
+ * How a connection stands, in the four ways the user tells apart (§14):
  * all well; at work — connecting, downloading, reading for the first
  * time; waiting on something that passes by itself — the network, a server
  * that does not answer —, nothing to do; or wanting the user — stopped

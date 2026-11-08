@@ -24,7 +24,7 @@ const WHEN = new Intl.DateTimeFormat('it-IT', {
   minute: '2-digit'
 })
 
-/** "…/Prat2451-CASEIFICIO VALLI/CORRISPONDENZA/261027Celle" as it reads: the last few places. */
+/** "…/Clienti/Casa al mare/Corrispondenza/261027 Offerta" as it reads: the last few places. */
 function savedPlace(destination: string): string {
   const parts = destination.split(/[\\/]/).filter(Boolean)
   const start = parts.findIndex((part) => /^prat/i.test(part))
@@ -147,7 +147,7 @@ function eventWhen(payload: Record<string, unknown>): string {
 /**
  * Something the Segretario recommends: the user accepts it, as it is, or
  * sets it aside. An event is put in the calendar from here; what an
- * extension proposes (ARCHIVIA SIEVER) opens its own dialog, filled in.
+ * extension proposes opens its own dialog, filled in.
  */
 export function ProposalCard({
   proposal,

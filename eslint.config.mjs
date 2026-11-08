@@ -44,6 +44,29 @@ export default defineConfig(
     }
   },
   {
+    // An extension reaches the host only through its contract and kit (`src/extension/`),
+    // the interface's components and the shared model: the rest of the host may change under it.
+    files: ['extension/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^@(main|preload)/|^@renderer/(?!components/ui/)',
+              message:
+                'An extension uses the host through @app/extension/types and @app/extension/kit/*, the components in @renderer/components/ui and @shared.'
+            },
+            {
+              group: ['**/src/*'],
+              message: 'An extension never imports the host by path.'
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
     // Plain-JS tooling: audit helpers and Playwright e2e drivers. They are
     // scripts, not application modules, so the TypeScript-oriented rules the
     // app holds itself to do not apply.

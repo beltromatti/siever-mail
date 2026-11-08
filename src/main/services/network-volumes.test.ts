@@ -17,7 +17,7 @@ describe('parseNetworkMounts', () => {
       '/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)',
       'devfs on /dev (devfs, local, nobrowse)',
       '//anna@nas.local/Lavori on /Volumes/Lavori (smbfs, nodev, nosuid, mounted by anna)',
-      '//SIEVER;anna@192.168.1.10/Ufficio%20Tecnico on /Volumes/Ufficio Tecnico (smbfs, nodev, nosuid, mounted by anna)',
+      '//BRENTA;anna@192.168.1.10/Ufficio%20Tecnico on /Volumes/Ufficio Tecnico (smbfs, nodev, nosuid, mounted by anna)',
       'nas.local:/export/archivio on /Volumes/archivio (nfs, nodev, nosuid, mounted by anna)',
       'https://dav.example.it/files on /Volumes/files (webdav, nodev, noexec, nosuid, mounted by anna)',
       '/dev/disk4s1 on /Volumes/SIEVER Mail 1.9.0-arm64 (hfs, local, nodev, nosuid, read-only)',
@@ -28,7 +28,7 @@ describe('parseNetworkMounts', () => {
       { mountPoint: '/Volumes/Lavori', url: 'smb://anna@nas.local/Lavori' },
       {
         mountPoint: '/Volumes/Ufficio Tecnico',
-        url: 'smb://SIEVER;anna@192.168.1.10/Ufficio%20Tecnico'
+        url: 'smb://BRENTA;anna@192.168.1.10/Ufficio%20Tecnico'
       },
       { mountPoint: '/Volumes/archivio', url: 'nfs://nas.local/export/archivio' },
       { mountPoint: '/Volumes/files', url: 'https://dav.example.it/files' }
@@ -38,7 +38,7 @@ describe('parseNetworkMounts', () => {
 
 describe('volumeMountPointOf', () => {
   it('finds the volume a path is on', () => {
-    expect(volumeMountPointOf('/Volumes/Lavori/Prat619-IKEA/Verbali')).toBe('/Volumes/Lavori')
+    expect(volumeMountPointOf('/Volumes/Lavori/Rossi/Verbali')).toBe('/Volumes/Lavori')
     expect(volumeMountPointOf('/Volumes/Ufficio Tecnico')).toBe('/Volumes/Ufficio Tecnico')
     expect(volumeMountPointOf('/Volumes/Lavori/../Archivio/x')).toBe('/Volumes/Archivio')
   })
@@ -53,10 +53,10 @@ describe('volumeMountPointOf', () => {
 describe('a share mounted elsewhere', () => {
   it('reaches a kept path under the mount point the share has now', () => {
     expect(
-      movedPath('/Volumes/Archivio/Pratiche/Prat2451', '/Volumes/Archivio', '/Volumes/Archivio-1')
-    ).toBe('/Volumes/Archivio-1/Pratiche/Prat2451')
-    expect(movedPath('Z:\\Pratiche\\Prat2451', 'Z:', 'Y:')).toBe('Y:\\Pratiche\\Prat2451')
-    expect(movedPath('Z:\\Pratiche', 'Z:', '\\\\nas\\archivio')).toBe('\\\\nas\\archivio\\Pratiche')
+      movedPath('/Volumes/Archivio/Clienti/Rossi', '/Volumes/Archivio', '/Volumes/Archivio-1')
+    ).toBe('/Volumes/Archivio-1/Clienti/Rossi')
+    expect(movedPath('Z:\\Clienti\\Rossi', 'Z:', 'Y:')).toBe('Y:\\Clienti\\Rossi')
+    expect(movedPath('Z:\\Clienti', 'Z:', '\\\\nas\\archivio')).toBe('\\\\nas\\archivio\\Clienti')
   })
 
   it('keeps paths under the mount point the share usually has', () => {

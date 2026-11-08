@@ -9,8 +9,8 @@ ready to take in pull requests from outside collaborators. **Please do not
 open PRs against `main`.** Any PR opened during this phase will be closed
 without review to keep the queue tidy.
 
-This policy will be revisited once the 1.x baseline ships; this file will be
-updated when the project opens to external contributions.
+This policy will be revisited once 2.0 ships; this file will be updated when
+the project opens to external contributions.
 
 ## How you can help today
 
@@ -29,8 +29,8 @@ suggestion, **open an issue** on the GitHub tracker:
 ### 2. Direct contact
 
 For everything that does not fit a public issue (security reports,
-private feedback, deployment questions, partnership inquiries) write to
-the maintainer at:
+private feedback, deployment questions, an extension made for your
+organisation) write to the maintainer at:
 
 📧 **[beltromatti@gmail.com](mailto:beltromatti@gmail.com)**
 

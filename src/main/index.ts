@@ -42,7 +42,7 @@ if (existsSync(dotenvPath)) {
 z.config(z.locales.it())
 
 // An error no part caught is written down and the rest goes on: one part failing neither takes
-// the app down nor goes unsaid (§13ter.3).
+// the app down nor goes unsaid (§14.3).
 process.on('uncaughtException', (error) =>
   logMainError('Uncaught exception in the main process', error)
 )
@@ -247,7 +247,7 @@ function createMainWindow(): BrowserWindow {
 
   installContextMenus(window)
 
-  // What goes wrong in the page is written in the same log as the rest (§13ter.3).
+  // What goes wrong in the page is written in the same log as the rest (§14.3).
   window.webContents.on('console-message', ({ level, message, sourceId, lineNumber }) => {
     if (level === 'error') {
       console.error(`[renderer] ${message} (${sourceId}:${lineNumber})`)

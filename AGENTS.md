@@ -1,25 +1,35 @@
-REGOLE GENERALI DA SEGUIRE PER PROGRAMMARE SU QUESTA REPO:
+REGOLE GENERALI PER PROGRAMMARE SU QUESTA REPO
 
-- questa è la repo di un app desktop cross platform (macOS e windows) per un client email con funzione di archiviazione email su filesystem aziendale custom per le esigenze specifiche della azienda committente.
+## Che cos'è
 
-- lo stack usato è: electron + vite per build e development, react + typescript + tailwindcss per la UI, SQlite per database locale per persistenza login e preferenze e dati, l'app non possiede backend server.
+- SIEVER Mail è un sistema operativo personale per il lavoro (e per la vita), per chi ha molto da seguire: app alla pari — Posta, Calendario, File, poi Contatti e Progetti — ognuna con le sue connessioni, tenute insieme da un solo agente, il Segretario. Funziona benissimo senza AI; con l'AI accesa diventa intelligente. Non è più un client di posta, e non è fatto per un'azienda sola.
+- Il documento guida è **`docs/vision.md`**: leggilo prima di lavorare su una parte dell'app, e tienilo vero. Ciò che si decide di nuovo si scrive lì, nel suo posto, con il perché; le sezioni si citano come §N, anche nei commenti.
+- App desktop cross platform: macOS (Apple silicon e Intel) e Windows prima di tutto, Linux con interfaccia grafica dopo. Nessun backend server: tutto sta in un database SQLite locale (connessioni, preferenze, dati, il lavoro del Segretario).
+- Lo stack: Electron + electron-vite per build e sviluppo; React + TypeScript + Tailwind CSS per l'interfaccia; SQLite (Prisma e SQL) per i dati; il modello passa da OpenRouter con la chiave dell'utente.
+- L'interfaccia e i prompt sono in italiano.
 
-- scrivi codice sempre coerente con il resto dell'app, pensa a tutti gli edge cases possibili e a possibili regressioni da altre parti dell'app, fixa tutto proattivamente, rendi sempre tutto coerente e intelligente, trova soluzioni smart, scrivi codice production grade seguendo sempre la best practice in ogni ambito, ma non aggiungere boilerplate inutile, tieni il codice snello ma che vada dritto al punto e gestisca tutti i casi, non trovare scorciatoie, non aggiungere fallback, fai sempre le cose fatte per bene e coerenti e complete anche se significa spendere piu tempo in fare ricerche online, leggere codice in altre parti della repo etc
+## Il pubblico e le estensioni
 
-- tutti i colori usati devono essere resi dinamici e collegati al tema centralizzato di tailwindcss per poterli controllare centralmente e cambiare l'intero look dell'app da lì, evita colori hardcodati a meno che non siano componenti custom con colore indipendente dal tema e usato una volta sola.
+- Questa repo è la versione **pubblica**: generale, per tutti, per qualunque lavoro. Nessuna scritta, esempio o comportamento di un'organizzazione nell'interfaccia; nessun nome reale di persone o aziende nel codice, nei test, nei commenti (usa esempi inventati: `acme-srl`, `brenta.it`, «Casa al mare»).
+- Un'**estensione privata** fa l'edizione di un'organizzazione: istruzioni per il Segretario, strumenti, azioni nell'interfaccia, dati, la forma della casa. Porta il nome legale dell'ente e un identificativo che ne deriva («Siever S.r.l.» → `siever-srl`). Vive in un repository privato, clonato in `extension/` (fuori da git), e si monta con `LOAD_EXTENSION=1`.
+- L'estensione usa l'app **solo** attraverso il contratto (`src/extension/types.ts`), il kit (`src/extension/kit/`), i componenti di `@renderer/components/ui/*` e il modello condiviso `@shared/*`: il lint vieta il resto. Se le serve altro, allarga il contratto o il kit con nomi generici, in un commit dell'app che non parla dell'estensione. Mai codice di un'organizzazione dentro l'app.
+- Nella cartella `extension/` prettier non entra (è fuori da git): formattala con `eslint --fix`.
 
-- per la UI cerca di riutilizzare i componenti presenti e se necessario scaricane di nuovi da shadcn/ui oppure creane di custom compatibili che seguano lo stile dell'app, tutto questo se pensi che possa essere utile in futuro riutilizzarli più volte, se necessario crea nuove varianti in quelli già presenti, se invece ti serve un componente custom UI che usi solo in un punto dell'app allora puoi hardcodarlo per non aggiungere boilerplate inutile, ma le regole dei colori scritte sopra valgono comunque.
+## Il Segretario
 
-- l'app non ha backend server, è un client mail con funzione di archiviazione custom che usa solo un database SQlite locale per la persistenza dei login, delle preferenze e dei dati.
+- Obiettivi e criteri, non procedure: i prompt dicono cosa deve esserci alla fine e perché, il modello sceglie come arrivarci, quanto lavorare, cosa leggere. Il contesto lo sceglie lui con gli strumenti: niente dossier iniettati, suggerimenti morbidi nei prompt, mai controlli con espressioni regolari sul testo che scrive.
+- Nessun limite fisso deciso da noi su passi, tempo, token o tentativi del modello; il sistema garantisce gli invarianti sotto (identità, revisioni, coda durevole, permessi, idempotenza).
+- Nei prompt pubblici gli esempi vengono da lavori diversi e sono detti come esempi, non convenzioni: le convenzioni vere arrivano solo dalle istruzioni di un'estensione.
 
-- il frontend usa react + typescript con tailwindcss per lo styling, l'obiettivo è creare codice che vada bene sia per app desktop mac (sia intel che apple silicon) che per app desktop windows e eventualmente app desktop per distribuzioni di linux con grafica (ma secondario).
+## Come si scrive il codice
 
-- quando implementi codice nuovo pensa sempre alla scalabilità dell'app, scrivi codice modulare riutilizzabile dove necessario e mantieni coerenza con la struttura dei file dell'app, creandone di nuovi e anche nuove cartelle se ritieni necessario per fare un lavoro più pulito e scalabile seguendo la best practice senza aggiungere boilerplate inutile.
+- Scrivi codice sempre coerente con il resto dell'app; pensa a tutti i casi limite e alle regressioni in altre parti, e sistemale. Soluzioni intelligenti e complete, qualità da produzione, le buone pratiche di ogni ambito, ma niente boilerplate inutile: codice snello, che vada dritto al punto e gestisca tutti i casi. Niente scorciatoie, niente ripieghi: fai le cose per bene e complete, anche se costa più tempo in ricerche e letture di altre parti della repo.
+- Tutti i colori sono token del tema centralizzato di Tailwind (`src/renderer/src/styles/globals.css`), così l'aspetto dell'app si cambia da lì. Niente colori scritti a mano, salvo un componente con un colore suo, indipendente dal tema e usato una volta sola.
+- Riusa i componenti che ci sono; se servono, prendine di nuovi da shadcn/ui o creane di compatibili con lo stile dell'app, o aggiungi varianti a quelli presenti, quando torneranno utili più volte. Un componente usato in un punto solo può restare lì, con le stesse regole sui colori.
+- Pensa alla crescita dell'app: codice modulare e riusabile dove serve, coerente con la struttura dei file; nuovi file e cartelle quando rendono il lavoro più pulito.
+- Prima di agire cerca online le soluzioni più aggiornate, il codice open source da riusare invece di reinventare, e soprattutto la documentazione ufficiale; nei bug o nei casi ambigui anche forum e issue. Usa sempre la versione più recente di librerie e API, come dice la loro documentazione; leggi il codice in `node_modules` quando aiuta.
 
-- sei invitato a usare codice gia scritto da altri opensource per implementare funzioni in maniera più potente e completa senza reinventare la ruota, prima di agire DEVI eseguire ricerce su internet in autonomia per cercare le soluzioni più aggiornate, repo da clonare e codice da implmentare, e soprattutto la relativa documentazione online, con possibilità ben accettata e promossa di eseguire ricerce complete anche su forum in caso di bug o di implementazioni ambigue per cercare la soluzione sempre più aggiornata e definitiva.
+## Prima di dire finito
 
-- esegui ricerche su internet per implementare sempre la versione piu recente di librerie e api, allineandoti con la documentazione aggiornata e usandole perfettamente, vatti anche a leggere il codice direttamente dentro node_modules se ti aiuta a implementare correttamente le librerie.
-
-- `npm run typecheck` copre SOLO la variante pubblica: gli alias `@app/extension/*` puntano agli stub in `src/extension/` e la cartella `extension/` non entra nel programma TypeScript. Quando tocchi la extension privata usa anche `npm run typecheck:ext`, altrimenti gli errori di tipo del codice privato non li vede nessuno (`electron-vite build` non typecheck: esbuild scarta i tipi e basta).
-
-- prima di considerare finito un lavoro sull'app: `npm run typecheck`, `npm run typecheck:ext` (se hai la extension), `npm test`, `npm run lint` e le build di entrambe le varianti (`npx electron-vite build` e `LOAD_EXTENSION=1 npx electron-vite build`). Il lint deve restare a zero errori.
+- `npm run typecheck` (la variante pubblica: gli alias `@app/extension/*` puntano agli stub di `src/extension/`), `npm run typecheck:ext` (se hai l'estensione: senza, i tipi del codice privato non li controlla nessuno — `electron-vite build` scarta i tipi e basta), `npm test`, `npm run lint` (zero errori), e le build delle due varianti: `npx electron-vite build` e `LOAD_EXTENSION=1 npx electron-vite build`.
+- Prova dal vivo ciò che cambia, nello studio di prova o nel profilo di sviluppo (`docs/vision.md` §15.3), mai nel profilo dell'app installata.

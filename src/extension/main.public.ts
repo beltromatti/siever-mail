@@ -1,17 +1,12 @@
 /**
- * No-op host-side implementation of the extension contract. Vite resolves
- * `@app/extension/main` to this file in standard public builds; a
- * customised build (e.g. LOAD_EXTENSION=1) swaps the alias to the real
- * extension's main entry.
+ * The public build's main side: no extension. Vite resolves
+ * `@app/extension/main` here unless an extension is loaded
+ * (`LOAD_EXTENSION=1`, see `electron.vite.config.ts`).
  */
 import type { ExtensionMain } from './types'
 
-const noopExtensionMain: ExtensionMain = {
-  id: 'noop',
-  displayName: 'No extension',
+const noExtensionMain: ExtensionMain = {
   defaultAccountSignatureHtml: '',
-  accountSignatureRevision: 0,
-  upgradeAccountSignatureHtml: (html) => html,
   install(): void {
     /* nothing to install in the public build */
   },
@@ -20,4 +15,4 @@ const noopExtensionMain: ExtensionMain = {
   }
 }
 
-export default noopExtensionMain
+export default noExtensionMain

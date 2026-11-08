@@ -18,7 +18,7 @@ describe('initialsFromName', () => {
   it('reads past quotes and symbols, and takes an address by its name', () => {
     expect(initialsFromName("'marco conti'")).toBe('MC')
     expect(initialsFromName('Giudici & Polidori')).toBe('GP')
-    expect(initialsFromName('a.angelini@siever.it')).toBe('AA')
+    expect(initialsFromName('a.angeli@brenta.it')).toBe('AA')
     expect(initialsFromName('Àlvaro Muñoz')).toBe('ÀM')
   })
 

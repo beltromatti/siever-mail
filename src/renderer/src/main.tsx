@@ -37,7 +37,7 @@ for (const type of ['dragover', 'drop'] as const) {
 }
 
 // A promise nobody waited on that failed: written in the log, and said — an action the user
-// asked for never fails in silence (§13ter.3). A request stopped on purpose is not a failure.
+// asked for never fails in silence (§14.3). A request stopped on purpose is not a failure.
 window.addEventListener('unhandledrejection', (event) => {
   const reason: unknown = event.reason
 

@@ -1,7 +1,7 @@
 import { refusalOf } from '../connection-refusal'
 
 /**
- * What a failed send means for the message (§13ter):
+ * What a failed send means for the message (§14):
  *   • 'passing'   — it never reached the server's hands (no network, the
  *                   server unreachable, a temporary refusal): it waits in
  *                   the outbox and goes by itself when the server answers;

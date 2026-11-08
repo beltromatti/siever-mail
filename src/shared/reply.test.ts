@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { replyRecipients, replyReferences, type RepliedMessage } from './reply'
 
-const ME = new Set(['a.beltrami@siever.it', 'alessandro.beltrami@ingpec.eu'])
+const ME = new Set(['a.galli@brenta.it', 'alessandro.galli@ingpec.eu'])
 
 function message(fields: Partial<RepliedMessage>): RepliedMessage {
   return { from: [], to: [], cc: [], replyTo: [], references: [], ...fields }
@@ -10,7 +10,7 @@ function message(fields: Partial<RepliedMessage>): RepliedMessage {
 
 const carbonetta = { name: 'Giuseppe Carbonetta', address: 'giuseppe.carbonetta@engie.com' }
 const romagnoli = { address: 'stefano.romagnoli@ingka.ikea.com' }
-const me = { name: 'A. Beltrami - SIEVER', address: 'A.Beltrami@siever.it' }
+const me = { name: 'A. Galli - BRENTA', address: 'A.Galli@brenta.it' }
 const conti = { name: 'marco conti', address: 'marco.conti.pdr@gmail.com' }
 const rossi = { address: 'renzo.rossi@ingka.ikea.com' }
 
@@ -31,7 +31,7 @@ describe('replyRecipients', () => {
     const replied = message({
       from: [carbonetta],
       to: [romagnoli, me, conti],
-      cc: [rossi, { address: 'alessandro.beltrami@ingpec.eu' }, carbonetta]
+      cc: [rossi, { address: 'alessandro.galli@ingpec.eu' }, carbonetta]
     })
 
     expect(replyRecipients(replied, ME, 'all')).toEqual({

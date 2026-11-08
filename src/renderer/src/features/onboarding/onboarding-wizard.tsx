@@ -406,7 +406,7 @@ function SegretarioStep({
 }
 
 /**
- * Where a connection stands in the preparation (§13ter): ready; at work —
+ * Where a connection stands in the preparation (§14): ready; at work —
  * downloading, reading; waiting for a server that does not answer, or for
  * the network, which it retries by itself; or turned down, which only the
  * user puts right: "Ricollega", or "Togli".
@@ -481,7 +481,7 @@ function calendarPreparationOf(connection: CalendarConnection): Preparation {
 /**
  * Step 3: every connection synced — each mailbox, with the AI its recent
  * mail read by the index, and each calendar. A connection that does not
- * work does not go on (§13ter), with or without the AI: the user puts it
+ * work does not go on (§14), with or without the AI: the user puts it
  * right, waits for its server, or takes it away and adds it again later.
  */
 function PreparationStep({
@@ -1187,7 +1187,7 @@ export function OnboardingWizard({
   // Where the Segretario's work does not go — Conoscimi, a reading — the user may end the setup
   // without the AI: it goes off, as in a setup that never turned it on, and nothing is left half
   // known; on again, it starts from what it does not know yet. A connection is not its work: one
-  // that does not work is put right or taken away, with or without the AI (§13ter).
+  // that does not work is put right or taken away, with or without the AI (§14).
   const continueWithoutAi = async (): Promise<void> => {
     onChange({ ...state, step: 'entra', conoscimiId: null, turnsAiOn: false })
     await window.segretarioApi.setPreferences({ enabled: false })

@@ -11,8 +11,8 @@ describe('parseInvitation', () => {
       'METHOD:REQUEST',
       'BEGIN:VEVENT',
       'UID:abc123@google.com',
-      'SUMMARY;LANGUAGE=it:Sopralluogo Caseificio Valli\\, celle 1-3 e verifica ',
-      ' gruppi frigo',
+      'SUMMARY;LANGUAGE=it:Riunione di condominio\\, punti 1-3 e verifica ',
+      ' del bilancio',
       'DTSTART:20261104T090000Z',
       'END:VEVENT',
       'END:VCALENDAR'
@@ -21,7 +21,7 @@ describe('parseInvitation', () => {
     expect(parseInvitation(ics)).toEqual({
       method: 'REQUEST',
       uid: 'abc123@google.com',
-      summary: 'Sopralluogo Caseificio Valli, celle 1-3 e verifica gruppi frigo',
+      summary: 'Riunione di condominio, punti 1-3 e verifica del bilancio',
       series: false,
       instance: null
     })

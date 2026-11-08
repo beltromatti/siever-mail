@@ -59,12 +59,12 @@ mac:
   # by the system instead of getting an app that does not start.
   minimumSystemVersion: '13.0'
   # What the system says when SIEVER Mail first reaches each place: the
-  # folders attachments are saved to and attached from, the company's shares.
+  # folders its files are read from, attached from and saved to.
   extendInfo:
-    - NSDesktopFolderUsageDescription: SIEVER Mail salva gli allegati e allega i file che tieni sulla Scrivania.
-    - NSDocumentsFolderUsageDescription: SIEVER Mail salva gli allegati e allega i file della cartella Documenti.
-    - NSDownloadsFolderUsageDescription: SIEVER Mail salva gli allegati e allega i file della cartella Download.
-    - NSNetworkVolumesUsageDescription: SIEVER Mail archivia i messaggi e allega i file dalle cartelle di rete dell'azienda.
+    - NSDesktopFolderUsageDescription: SIEVER Mail legge e allega i file che tieni sulla Scrivania, e vi salva gli allegati.
+    - NSDocumentsFolderUsageDescription: SIEVER Mail legge e allega i file della cartella Documenti, e vi salva gli allegati.
+    - NSDownloadsFolderUsageDescription: SIEVER Mail legge e allega i file della cartella Download, e vi salva gli allegati.
+    - NSNetworkVolumesUsageDescription: SIEVER Mail legge e allega i file delle cartelle di rete, e vi salva ciò che gli chiedi.
   notarize: false
 dmg:
   artifactName: ${name}-${version}.${ext}

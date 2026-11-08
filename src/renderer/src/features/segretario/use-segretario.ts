@@ -24,12 +24,12 @@ export interface SegretarioState {
   handles: ReadonlyMap<string, HandleLink>
   /** An activity is waiting for the user, or finished unseen: the rail says so. */
   attention: boolean
-  /** OpenRouter does not answer: what runs waits for it, and says until when (§13ter.1). */
+  /** OpenRouter does not answer: what runs waits for it, and says until when (§14.1). */
   waiting: string | null
   select(id: string | null): void
   start(text: string, context: SegretarioContext): Promise<void>
   send(text: string, context: SegretarioContext): Promise<void>
-  /** A request that stopped short, taken up again from where it was (§13ter.2). */
+  /** A request that stopped short, taken up again from where it was (§14.2). */
   retry(id: string): Promise<void>
   cancel(id: string): void
   remove(id: string): Promise<void>
@@ -63,7 +63,7 @@ function upsertEntry(entries: ActivityEntry[], entry: ActivityEntry): ActivityEn
 
 /**
  * Whether OpenRouter answers: while it does not, what the Segretario does
- * waits for it — a request, a rewrite — and this says until when (§13ter.1).
+ * waits for it — a request, a rewrite — and this says until when (§14.1).
  */
 export function useAiWaiting(): string | null {
   const [waiting, setWaiting] = useState<string | null>(null)

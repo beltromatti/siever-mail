@@ -4,7 +4,7 @@ import type { ConnectionHealth } from './connection-health'
 
 /**
  * How a connection stands, as a dot: green in step, grey at work, amber
- * waiting on what passes by itself, red when the user is wanted (§13ter).
+ * waiting on what passes by itself, red when the user is wanted (§14).
  * The rail's and Settings' alike.
  */
 const DOT: Readonly<Record<ConnectionHealth, string>> = {

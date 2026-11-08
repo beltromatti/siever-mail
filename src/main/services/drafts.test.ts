@@ -15,12 +15,12 @@ const PIXEL = Buffer.from(
 describe('draftFromParsedMail', () => {
   it('reads back a draft as it was filed: recipients with Bcc, thread, files, inline pictures', async () => {
     const raw = await buildRawOutgoingMessage({
-      from: { name: 'Anna', address: 'anna@siever.it' },
+      from: { name: 'Anna', address: 'anna@brenta.it' },
       to: [{ name: 'Mario Rossi', address: 'mario@cliente.it' }],
-      cc: [{ address: 'ufficio@siever.it' }],
-      bcc: [{ address: 'archivio@siever.it' }],
+      cc: [{ address: 'ufficio@brenta.it' }],
+      bcc: [{ address: 'archivio@brenta.it' }],
       subject: 'Re: Offerta 619',
-      html: '<p>Buongiorno,</p><img src="cid:logo@siever">',
+      html: '<p>Buongiorno,</p><img src="cid:logo@brenta">',
       text: 'Buongiorno,',
       inReplyTo: '<originale@cliente.it>',
       references: ['<primo@cliente.it>', '<originale@cliente.it>'],
@@ -33,12 +33,12 @@ describe('draftFromParsedMail', () => {
         {
           filename: 'logo.png',
           content: PIXEL,
-          cid: 'logo@siever',
+          cid: 'logo@brenta',
           contentType: 'image/png',
           contentDisposition: 'inline'
         }
       ],
-      messageId: `<draft.${DRAFT_ID}.3@siever.it>`,
+      messageId: `<draft.${DRAFT_ID}.3@brenta.it>`,
       headers: { [DRAFT_ID_HEADER]: DRAFT_ID },
       keepBcc: true
     })
@@ -50,8 +50,8 @@ describe('draftFromParsedMail', () => {
       kind: 'reply',
       accountId: 'account-1',
       to: [{ name: 'Mario Rossi', address: 'mario@cliente.it' }],
-      cc: [{ address: 'ufficio@siever.it' }],
-      bcc: [{ address: 'archivio@siever.it' }],
+      cc: [{ address: 'ufficio@brenta.it' }],
+      bcc: [{ address: 'archivio@brenta.it' }],
       subject: 'Re: Offerta 619',
       inReplyTo: '<originale@cliente.it>',
       references: ['<primo@cliente.it>', '<originale@cliente.it>']
@@ -63,7 +63,7 @@ describe('draftFromParsedMail', () => {
 
   it('takes a draft another client wrote as a new one, its text as the body', async () => {
     const raw = await buildRawOutgoingMessage({
-      from: { address: 'anna@siever.it' },
+      from: { address: 'anna@brenta.it' },
       to: [],
       cc: [],
       bcc: [],
@@ -163,7 +163,7 @@ describe('DraftService.hold', () => {
       database: database as never,
       engine: engine as never,
       getAccount: async () =>
-        ({ id: ACCOUNT, email: 'anna@siever.it', displayName: 'Anna' }) as never,
+        ({ id: ACCOUNT, email: 'anna@brenta.it', displayName: 'Anna' }) as never,
       onStatus: (status) => statuses.push(status)
     })
 

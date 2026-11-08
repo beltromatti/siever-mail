@@ -63,7 +63,7 @@ interface MessageViewerProps {
   }
   /** What the selection can be given to: archive, move, mark, flag, delete. */
   selectionActions: SelectionActionsProps
-  /** The active extension's buttons for the selection (ARCHIVIA SIEVER). */
+  /** The extension's buttons for the selection. */
   extensionActions: ReactNode
   /**
    * The pane is in the window's top right corner: on Windows its header

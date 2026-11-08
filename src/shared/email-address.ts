@@ -16,7 +16,7 @@ const TOP_LEVEL_DOMAIN = /^(?:\p{L}{2,63}|xn--[a-z0-9-]{1,59})$/iu
  * Whether mail can be addressed to `value`, as the mail clients people use
  * judge it: a local part of the characters addresses are made of, an "@",
  * and a domain whose last label is a real top-level one — so
- * "f.fuschini@siever.i", one letter short, is caught before it is sent,
+ * "f.ferri@brenta.i", one letter short, is caught before it is sent,
  * while addresses in any script go through. Quoted local parts and IP
  * literals, which no one types, are not taken.
  */

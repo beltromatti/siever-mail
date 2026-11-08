@@ -68,7 +68,7 @@ export function showConnectionRefused(notice: ConnectionRefusedNotice): void {
 
 /**
  * A connection turned down for good — a mailbox, a calendar — said once,
- * when it happens (§13ter), on whatever screen the window is: what the
+ * when it happens (§14), on whatever screen the window is: what the
  * server said, and the user's remedies. "Ricollega" signs in again on the
  * same connection — the password asked here, or the provider's sign-in —
  * or, for a certificate or a source gone, tries again; "Togli" takes the

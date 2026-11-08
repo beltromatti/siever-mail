@@ -16,8 +16,8 @@ describe('unlinked', () => {
   it('reads words that stay without the links of the run that wrote them', () => {
     expect(
       unlinked(
-        "[L'offerta di Rossi](mail:m4) va confermata, poi [l'IBAN a Chiara](impegno:5) e [Prat2451](progetto:p1)."
+        "[L'offerta di Rossi](mail:m4) va confermata, poi [l'IBAN a Chiara](impegno:5) e [Casa al mare](progetto:p1)."
       )
-    ).toBe("L'offerta di Rossi va confermata, poi l'IBAN a Chiara (#5) e Prat2451.")
+    ).toBe("L'offerta di Rossi va confermata, poi l'IBAN a Chiara (#5) e Casa al mare.")
   })
 })
