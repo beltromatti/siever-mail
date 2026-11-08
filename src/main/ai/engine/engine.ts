@@ -10,11 +10,7 @@ import {
   type ReadingStatus,
   type TaskKind
 } from '@shared/segretario'
-import {
-  CALENDAR_CHANGES_KEPT_DAYS,
-  CALENDAR_HELD_DAYS,
-  type CalendarEvent
-} from '@shared/calendar'
+import { CALENDAR_HELD_DAYS, type CalendarEvent } from '@shared/calendar'
 
 import type { AgentRunner, RunResult } from '../agent/runner'
 import type { SegretarioCalendarPort, SegretarioMailPort } from '../agent/tool-types'
@@ -92,8 +88,6 @@ const CALENDAR_SETTLE_MS = 2 * 60_000
 const CALENDAR_CHANGES_READ = 100
 /** In `ai_meta`: how far the changes to the calendar have been handed to the Segretario. */
 const CALENDAR_SEEN = 'calendar_seen'
-/** In `ai_meta`: when the Segretario last had every change to the calendar handed to it. */
-const CALENDAR_SEEN_AT = 'calendar_seen_at'
 /** The units of a calendar's first look, a block each. */
 const LOOK_SCOPE = 'calendario-vista:'
 
@@ -336,6 +330,24 @@ export class SegretarioEngine {
     this.cancelRunning()
     await this.deps.queue.cancelWaiting()
     this.deps.onStateChange()
+  }
+
+  /**
+   * The AI switched on again: while it was off nobody followed the
+   * calendars. Each is looked at whole again, as the first time — in the
+   * setup's reading, once Conoscimi is done — and that look covers what
+   * changed meanwhile: the changes start again from now (§9.2, §10.2). The
+   * mail needs nothing of the kind: what came meanwhile has no note yet.
+   */
+  async switchedOn(): Promise<void> {
+    const { store, calendar, queue } = this.deps
+
+    for (const connection of await calendar.connections().catch(() => [])) {
+      await store.forgetLooked(calendarLearningKey(connection.id))
+      await queue.forgetWithin(calendarLookScope(connection.id))
+    }
+
+    await store.setMeta(CALENDAR_SEEN, String(await calendar.latestChangeId()))
   }
 
   async state(): Promise<EngineState> {
@@ -900,8 +912,6 @@ export class SegretarioEngine {
    * that failed did not see is seen by the next; a look that failed waits
    * for "Riprova", or for the calendar to change after it. Changes outside
    * what the calendar holds are passed over; the first time, the past is.
-   * Changes let go before they were seen — the AI off for longer than they
-   * are kept — leave the calendars to be looked at whole again.
    */
   private async planCalendar(): Promise<void> {
     const { store, calendar, queue } = this.deps
@@ -909,28 +919,12 @@ export class SegretarioEngine {
 
     if (seen === null) {
       await store.setMeta(CALENDAR_SEEN, String(await calendar.latestChangeId()))
-      await store.setMeta(CALENDAR_SEEN_AT, String(Date.now()))
-      return
-    }
-
-    const seenAt = Number((await store.meta(CALENDAR_SEEN_AT)) ?? Date.now())
-
-    // Away for longer than changes are kept: some may be gone unseen. Every calendar is looked at
-    // whole again, from where it stands now.
-    if (Date.now() - seenAt > CALENDAR_CHANGES_KEPT_DAYS * DAY_MS) {
-      for (const connection of await calendar.connections().catch(() => [])) {
-        await store.forgetLooked(calendarLearningKey(connection.id))
-      }
-
-      await store.setMeta(CALENDAR_SEEN, String(await calendar.latestChangeId()))
-      await store.setMeta(CALENDAR_SEEN_AT, String(Date.now()))
       return
     }
 
     const changes = await calendar.changesSince(Number(seen), CALENDAR_CHANGES_READ)
 
     if (changes.length === 0) {
-      await store.setMeta(CALENDAR_SEEN_AT, String(Date.now()))
       return
     }
 
@@ -938,7 +932,6 @@ export class SegretarioEngine {
     // mark moves when that look is done — one that fails leaves them to the next.
     if (!changes.some((change) => changeHeld(change))) {
       await store.setMeta(CALENDAR_SEEN, String(changes[changes.length - 1].id))
-      await store.setMeta(CALENDAR_SEEN_AT, String(Date.now()))
       return
     }
 
@@ -1224,7 +1217,6 @@ export class SegretarioEngine {
           }
 
           await deps.store.setMeta(CALENDAR_SEEN, String(through))
-          await deps.store.setMeta(CALENDAR_SEEN_AT, String(Date.now()))
         }
       },
       riflessione: {

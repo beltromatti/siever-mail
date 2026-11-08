@@ -597,7 +597,8 @@ describe("A calendar's first look", () => {
       calendar: {
         connections: async () => [{ id: 'c1', label: 'Lavoro', calendars: [], lastSyncAt }],
         calendars: async () => [],
-        events: async () => events
+        events: async () => events,
+        latestChangeId: async () => 41
       }
     } as unknown as EngineDeps)
 
@@ -644,5 +645,25 @@ describe("A calendar's first look", () => {
     expect(
       (await queue.within(calendarLookScope('c1'))).every((unit) => unit.status === 'fatto')
     ).toBe(true)
+  })
+
+  it('looks at a calendar whole again when the AI is switched on again', async () => {
+    const looking = engine()
+    await plan(looking)
+
+    for (const block of await queue.within(calendarLookScope('c1'))) {
+      await queue.claim(block.id)
+      await queue.complete(block.id)
+    }
+
+    await plan(looking)
+    await looking.switchedOn()
+
+    expect((await store.readings())[0]).toMatchObject({ lookedFrom: null, lookedUntil: null })
+    expect(await queue.within(calendarLookScope('c1'))).toEqual([])
+    expect(await store.meta('calendar_seen')).toBe('41')
+
+    await plan(looking)
+    expect(await queue.within(calendarLookScope('c1'))).toHaveLength(5)
   })
 })

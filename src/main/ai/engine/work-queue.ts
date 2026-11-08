@@ -432,6 +432,19 @@ export class WorkQueue {
     return rows.map((row) => unitOf(row))
   }
 
+  /**
+   * Forgets a piece of work made of many — a calendar's first look, done
+   * again — its units waiting, done or failed: what was done of it is no
+   * longer how things stand.
+   */
+  async forgetWithin(scopePrefix: string): Promise<void> {
+    await this.sql.run(
+      `DELETE FROM ai_work WHERE substr(scope_key, 1, ?) = ? AND status <> 'al_lavoro'`,
+      scopePrefix.length,
+      scopePrefix
+    )
+  }
+
   /** A task's units waiting or running. */
   async units(task: string): Promise<WorkUnit[]> {
     const rows = await this.sql.all<WorkRow>(

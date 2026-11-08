@@ -923,15 +923,25 @@ export class SegretarioService {
       throw new Error('OpenRouter non accetta la chiave: inseriscine una valida, poi riaccendi.')
     }
 
+    const wasOn = (await this.db.store.getPreferences()).enabled
     const stored = await this.db.store.setPreferences(preferences)
 
     // Turned on, what said why it had gone off is over.
     if (stored.enabled) {
       const notice = await this.getNotice()
 
-      if (notice?.kind === 'credito-finito' || notice?.kind === 'chiave-rifiutata') {
+      if (
+        notice?.kind === 'credito-finito' ||
+        notice?.kind === 'chiave-rifiutata' ||
+        notice?.kind === 'modello-non-disponibile'
+      ) {
         await this.dismissNotice()
       }
+    }
+
+    // On again after being off: the calendars, not followed meanwhile, are looked at whole again.
+    if (stored.enabled && !wasOn) {
+      await this.engine?.switchedOn()
     }
 
     this.options.send(SEGRETARIO_IPC.preferencesChanged, stored)

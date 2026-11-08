@@ -18,7 +18,6 @@ import {
 import { decryptSecret, encryptSecret } from '@main/services/secure-storage'
 import { logMainError } from '@main/utils/error-utils'
 import {
-  CALENDAR_CHANGES_KEPT_DAYS,
   CALENDAR_HELD_DAYS,
   CALENDAR_IPC,
   calendarKey,
@@ -84,7 +83,7 @@ const WINDOW_AHEAD_MS = CALENDAR_HELD_DAYS.ahead * 24 * 60 * 60 * 1000
  */
 const WINDOW_SLIDES_EVERY_MS = 24 * 60 * 60 * 1000
 /** How long what changed in the calendars is kept for the Segretario to look at. */
-const CHANGES_KEPT_MS = CALENDAR_CHANGES_KEPT_DAYS * 24 * 60 * 60 * 1000
+const CHANGES_KEPT_MS = 30 * 24 * 60 * 60 * 1000
 
 export interface CalendarServiceOptions {
   database: {

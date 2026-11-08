@@ -185,9 +185,6 @@ export interface NewCalendarEvent {
  */
 export const CALENDAR_HELD_DAYS = { back: 60, ahead: 365 } as const
 
-/** How long what changed in the calendars is kept for the Segretario to look at. */
-export const CALENDAR_CHANGES_KEPT_DAYS = 30
-
 /**
  * Something that changed in a calendar not by the Segretario's hand: found
  * by the sync — done elsewhere, by the user on another device or by whoever

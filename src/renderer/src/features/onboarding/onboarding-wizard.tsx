@@ -679,8 +679,9 @@ function ConoscimiStep({
   const { select } = segretario
   const run = segretario.activities.find((activity) => activity.id === state.conoscimiId) ?? null
   const unknown = (learning ?? []).filter((connection) => connection.state !== 'done')
-  // Doing it again is the user's choice when every connection is known: it updates, it does not start over.
-  const optional = state.case !== 'conoscimi' && learning !== null && unknown.length === 0
+  // Every connection known already — the AI on again: it is done all the same, on all of them; it
+  // updates what it knows, and where nothing changed it has little to do.
+  const again = state.case !== 'conoscimi' && learning !== null && unknown.length === 0
   // Known already, with connections it does not know yet — added, or whose reading failed.
   const adding =
     state.case !== 'conoscimi' &&
@@ -720,8 +721,8 @@ function ConoscimiStep({
       <StepFrame
         title="Fatti conoscere"
         lead={
-          optional
-            ? 'Il Segretario ti conosce già. Rifarlo è consigliato: rilegge le tue connessioni e aggiorna quello che sa, senza cancellarlo.'
+          again
+            ? 'Il Segretario ti conosce già: rilegge le tue connessioni e aggiorna quello che sa, senza cancellarlo. Se nel frattempo non è cambiato molto, ci mette poco.'
             : adding
               ? `Il Segretario ti conosce già: ora legge ${unknown.length === 1 ? 'la connessione che non conosce ancora' : 'le connessioni che non conosce ancora'} — ${unknown.map((connection) => connection.label).join(', ')} — e ${unknown.length === 1 ? 'la lega' : 'le lega'} a quello che sa di te, del tuo lavoro e delle persone. Prende appunti che potrai leggere e correggere. Puoi guardarlo mentre lavora.`
               : 'Prima di cominciare, il Segretario legge la tua posta, i calendari e le tue cartelle per capire chi sei, come lavori, con chi e su cosa. Prende appunti che potrai leggere e correggere. Puoi guardarlo mentre lavora.'
@@ -731,11 +732,6 @@ function ConoscimiStep({
             {onCancel && (
               <Button variant="ghost" size="lg" disabled={starting} onClick={onCancel}>
                 Annulla
-              </Button>
-            )}
-            {optional && (
-              <Button variant="ghost" size="lg" disabled={starting} onClick={onNext}>
-                Salta
               </Button>
             )}
             <Button
@@ -749,7 +745,7 @@ function ConoscimiStep({
               ) : (
                 <CompassStar className="size-4" />
               )}
-              {optional ? 'Rifallo' : 'Fatti conoscere'}
+              Fatti conoscere
             </Button>
           </>
         }

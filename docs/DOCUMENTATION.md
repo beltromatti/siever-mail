@@ -1062,7 +1062,9 @@ last thirty days indexed; every calendar through its first sync),
 (`CASE_STEPS`, `applies`): the key only while the AI is off, Conoscimi only
 with it on, the reading with it on and mail to read. The state is kept in `ai_meta` (`onboarding`),
 so a quit brings the user back to the same step. Conoscimi is started by
-the user and watched as it works; the reading step shows each mailbox's
+the user and watched as it works, never skipped: with every connection
+known already — the AI on again — it reads them all again and updates what
+it knows, doing little where little changed. The reading step shows each mailbox's
 horizon with Conoscimi's reason and each calendar's window, and the
 messages and the calendars' blocks are read eight at a time, with the
 progress and an estimate. Nothing is
@@ -1243,9 +1245,10 @@ idempotent: asked again, it queues nothing twice. In order:
   app by the user (`in_app` in `calendar_changes`) or elsewhere, the same
   change to a series said once; the mark (`calendar_seen`) moves only once
   a look is done, so one that fails leaves them to the next, and one that
-  failed for good waits for the calendar to change after it. Away for
-  longer than changes are kept (`CALENDAR_CHANGES_KEPT_DAYS`, the AI off a
-  month — `calendar_seen_at`), every calendar is looked at whole again;
+  failed for good waits for the calendar to change after it. The AI
+  switched on again (`switchedOn`): nobody followed the calendars while it
+  was off, so each has its first look again, whole, in the setup's reading,
+  and the changes start again from then — however long it was off;
 - "Il punto" of the projects behind on it: at once for one that has none,
   else once a day from the morning, the latest moved first, ten at most —
   a project the user opens behind has it written then;
