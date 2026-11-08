@@ -1,12 +1,17 @@
-import { Flag, MapPin } from 'lucide-react'
+import { MapPin } from 'lucide-react'
 
+import { CompassStar } from '@renderer/components/ui/compass-star'
 import { eventTimeLabel, RESPONSE_LABELS } from '@renderer/features/calendar/event-line'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
 import type { DayLine } from '@shared/segretario'
 
 import { COMMITMENT_LABELS } from '@renderer/features/segretario/row-work'
-import { dayLineKey, dayLineSourceWords } from '@renderer/features/segretario/day-line-source'
+import {
+  DayLineSourceIcon,
+  dayLineKey,
+  dayLineSourceWords
+} from '@renderer/features/segretario/day-line-source'
 
 import { dayKey, isOnDay, sameDay } from '@renderer/features/calendar/calendar-dates'
 import { dotStyle } from './event-style'
@@ -148,7 +153,10 @@ export function AgendaList({
                           proposed.proposal.id === selectedId && 'bg-selected'
                         )}
                       >
-                        <span className="text-ai text-[11.5px] font-semibold">Proposto</span>
+                        <span className="text-ai flex items-center gap-1.5 text-[11.5px] font-semibold">
+                          <CompassStar className="text-ai-star size-3" />
+                          Proposto
+                        </span>
                         <span className="text-muted-foreground truncate text-[14px] italic">
                           {proposed.title}
                         </span>
@@ -163,7 +171,7 @@ export function AgendaList({
                         className="hover:bg-hover focus-visible:ring-ring/60 grid w-full grid-cols-[92px_minmax(0,1fr)] items-baseline gap-x-3 rounded-[7px] px-2 py-1.5 text-left outline-none focus-visible:ring-2"
                       >
                         <span className="text-ai flex items-center gap-1.5 text-[11.5px] font-semibold whitespace-nowrap">
-                          <Flag className="size-3" />
+                          <DayLineSourceIcon line={line} className="size-3 shrink-0" />
                           {line.commitment ? COMMITMENT_LABELS[line.commitment.kind] : 'Scadenza'}
                         </span>
                         <span className="flex min-w-0 flex-col gap-0.5">

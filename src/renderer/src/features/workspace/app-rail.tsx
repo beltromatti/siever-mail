@@ -10,6 +10,7 @@ import { cn } from '@renderer/lib/utils'
 
 import type { ConnectionsStatus } from '@renderer/features/connections/connection-health'
 import { HealthDot } from '@renderer/features/connections/health-dot'
+import { AppEdition } from '@renderer/features/workspace/app-edition'
 
 export interface RailItem {
   id: string
@@ -24,7 +25,8 @@ export interface RailItem {
 }
 
 /**
- * The column on the far left: the app's mark, the apps in their groups — the
+ * The column on the far left: the app's mark — which SIEVER Mail this is, and
+ * the way back to the welcome screen —, the apps in their groups — the
  * Segretario's desk, the sources, the views derived from them — and, at the
  * bottom, how the connections are and the way to Settings. It is the
  * window's edge, so its top is the title bar the window is dragged by.
@@ -33,6 +35,7 @@ export function AppRail({
   items,
   activeItemId,
   onSelectItem,
+  onOpenWelcome,
   connections,
   segretario,
   onOpenSettings,
@@ -41,6 +44,8 @@ export function AppRail({
   items: ReadonlyArray<RailItem>
   activeItemId: string
   onSelectItem: (id: string) => void
+  /** The welcome screen again, over the workspace that keeps working under it. */
+  onOpenWelcome: () => void
   /** How every connection stands — mail and calendars — null with none. */
   connections: ConnectionsStatus | null
   /** The Segretario's panel, open or not and whether something waits in it; null with the AI off. */
@@ -54,12 +59,36 @@ export function AppRail({
       aria-label="Sezioni"
       className="window-drag-region flex h-full w-[52px] flex-col items-center border-r pt-[var(--titlebar-band)] pb-3"
     >
-      <img
-        src={appMark}
-        alt=""
-        draggable={false}
-        className="mt-1 mb-4 size-[30px] shrink-0 drop-shadow-[0_1px_2px_hsl(var(--shadow)/0.35)] select-none"
-      />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label="Schermata iniziale"
+            onClick={onOpenWelcome}
+            className="window-no-drag group focus-visible:ring-ring/60 relative mt-0.5 mb-3 grid size-9 shrink-0 place-items-center rounded-full outline-none focus-visible:ring-2"
+          >
+            <span
+              aria-hidden
+              className="logo-glow absolute -inset-3 rounded-full opacity-0 transition-opacity duration-300 [--glow:3] group-hover:opacity-100"
+            />
+            <img
+              src={appMark}
+              alt=""
+              draggable={false}
+              className="relative size-[30px] drop-shadow-[0_1px_2px_hsl(var(--shadow)/0.35)] transition-[transform,filter] duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] select-none group-hover:scale-110 group-hover:drop-shadow-[0_3px_6px_hsl(var(--shadow)/0.35)] group-active:scale-95 group-active:duration-100 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+            />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right">
+          <AppEdition
+            className="font-semibold"
+            extensionClassName="text-muted-foreground font-normal"
+          />
+          <span className="text-faint-foreground mt-1.5 block font-normal">
+            Clic: schermata iniziale
+          </span>
+        </TooltipContent>
+      </Tooltip>
 
       <div className="window-no-drag flex flex-col items-center gap-1">
         {items.map((item, index) => {

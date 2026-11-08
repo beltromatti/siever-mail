@@ -1,10 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronUp, Flag } from 'lucide-react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 
+import { CompassStar } from '@renderer/components/ui/compass-star'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
 import type { DayLine } from '@shared/segretario'
-import { dayLineKey, dayLineSourceWords } from '@renderer/features/segretario/day-line-source'
+import {
+  DayLineSourceIcon,
+  dayLineKey,
+  dayLineSourceWords
+} from '@renderer/features/segretario/day-line-source'
 
 import {
   addDays,
@@ -63,7 +68,7 @@ interface Placed {
   declined: boolean
 }
 
-/** A deadline the Segretario found in the mail, on its day. */
+/** A deadline the Segretario found — in the mail, an event, the user's word — on its day. */
 function DueChip({
   line,
   onOpen
@@ -78,7 +83,7 @@ function DueChip({
       title={`${line.text} — ${dayLineSourceWords(line)}`}
       className="text-ai bg-ai-soft/60 hover:bg-ai-soft focus-visible:ring-ring/60 flex w-full min-w-0 shrink-0 items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-left text-[11px] font-medium outline-none focus-visible:ring-2"
     >
-      <Flag className="size-3 shrink-0" />
+      <DayLineSourceIcon line={line} className="size-3 shrink-0" />
       <span className="truncate">{line.text}</span>
     </button>
   )
@@ -313,11 +318,12 @@ export function TimeGrid({
             onClick={() => onSelect({ kind: 'proposal', id: proposed.proposal.id })}
             style={eventTint(null, true)}
             className={cn(
-              'text-muted-foreground focus-visible:ring-ring/60 w-full min-w-0 shrink-0 truncate rounded-[4px] border-l-[3px] px-1.5 py-0.5 text-left text-[11px] italic outline-none focus-visible:ring-2',
+              'text-muted-foreground focus-visible:ring-ring/60 flex w-full min-w-0 shrink-0 items-center gap-1 rounded-[4px] border-l-[3px] px-1.5 py-0.5 text-left text-[11px] italic outline-none focus-visible:ring-2',
               proposed.proposal.id === selectedId && 'ring-ring ring-2'
             )}
           >
-            {proposed.title}
+            <CompassStar className="text-ai-star size-3" />
+            <span className="truncate">{proposed.title}</span>
           </button>
         )),
       ...due
@@ -512,7 +518,14 @@ export function TimeGrid({
                         move?.moving && move.item.id === item.id && 'opacity-40'
                       )}
                     >
-                      <span className="truncate font-semibold">{item.title}</span>
+                      {item.proposed ? (
+                        <span className="flex min-w-0 items-center gap-1">
+                          <CompassStar className="text-ai-star size-3" />
+                          <span className="truncate font-semibold">{item.title}</span>
+                        </span>
+                      ) : (
+                        <span className="truncate font-semibold">{item.title}</span>
+                      )}
                       {height > 30 && (
                         <span className="text-muted-foreground truncate text-[10.5px] tabular-nums">
                           {TIME.format(item.start)}–{TIME.format(item.end)}

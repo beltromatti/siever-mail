@@ -3,11 +3,12 @@ import type { CalendarEvent } from '@shared/calendar'
 /** How the Calendario app shows time. */
 export type CalendarView = 'giorno' | 'settimana' | 'mese' | 'agenda'
 
+/** The views, in the switch's order: the agenda first, the one the calendar opens on. */
 export const CALENDAR_VIEWS: ReadonlyArray<{ value: CalendarView; label: string }> = [
+  { value: 'agenda', label: 'Agenda' },
   { value: 'giorno', label: 'Giorno' },
   { value: 'settimana', label: 'Settimana' },
-  { value: 'mese', label: 'Mese' },
-  { value: 'agenda', label: 'Agenda' }
+  { value: 'mese', label: 'Mese' }
 ]
 
 /** Days the agenda lists from the day it starts on. */

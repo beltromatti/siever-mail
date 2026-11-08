@@ -1,9 +1,8 @@
-import { Flag } from 'lucide-react'
-
+import { CompassStar } from '@renderer/components/ui/compass-star'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
 import type { DayLine } from '@shared/segretario'
-import { dayLineKey } from '@renderer/features/segretario/day-line-source'
+import { DayLineSourceIcon, dayLineKey } from '@renderer/features/segretario/day-line-source'
 
 import {
   addDays,
@@ -144,7 +143,7 @@ export function MonthGrid({
                     title={entry.line.text}
                     className="text-ai focus-visible:ring-ring/60 flex min-w-0 items-center gap-1 rounded-[4px] px-1 text-left text-[11px] outline-none hover:underline focus-visible:ring-2"
                   >
-                    <Flag className="size-3 shrink-0" />
+                    <DayLineSourceIcon line={entry.line} className="size-3 shrink-0" />
                     <span className="truncate">{entry.line.text}</span>
                   </button>
                 ) : entry.kind === 'proposal' ? (
@@ -154,11 +153,12 @@ export function MonthGrid({
                     onClick={() => onSelect({ kind: 'proposal', id: entry.key })}
                     style={eventTint(null, true)}
                     className={cn(
-                      'text-muted-foreground focus-visible:ring-ring/60 min-w-0 truncate rounded-[4px] border-l-[3px] px-1 text-left text-[11px] italic outline-none focus-visible:ring-2',
+                      'text-muted-foreground focus-visible:ring-ring/60 flex min-w-0 items-center gap-1 rounded-[4px] border-l-[3px] px-1 text-left text-[11px] italic outline-none focus-visible:ring-2',
                       entry.key === selectedId && 'ring-ring ring-2'
                     )}
                   >
-                    {entry.proposed.title}
+                    <CompassStar className="text-ai-star size-3" />
+                    <span className="truncate">{entry.proposed.title}</span>
                   </button>
                 ) : (
                   <button

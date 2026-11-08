@@ -271,6 +271,15 @@ const HOST_COMMANDS = [
     editable: true
   },
   {
+    id: 'calendar-view-agenda',
+    label: 'Vista Agenda',
+    description: 'Mostra i giorni che vengono in elenco, con le scadenze.',
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'KeyA',
+    editable: true
+  },
+  {
     id: 'calendar-view-day',
     label: 'Vista Giorno',
     description: 'Mostra un giorno, ora per ora.',
@@ -295,15 +304,6 @@ const HOST_COMMANDS = [
     group: 'calendar',
     scope: 'calendar',
     defaultChord: 'KeyM',
-    editable: true
-  },
-  {
-    id: 'calendar-view-agenda',
-    label: 'Vista Agenda',
-    description: 'Mostra i giorni che vengono in elenco, con le scadenze.',
-    group: 'calendar',
-    scope: 'calendar',
-    defaultChord: 'KeyA',
     editable: true
   },
   {

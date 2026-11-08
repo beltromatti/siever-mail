@@ -588,15 +588,16 @@ Un evento non ha una nota come un messaggio: il titolo dice già cos'è. Che il 
 ### 7.3 L'app Calendario
 
 - **Nella barra:** con Posta e File, alla pari.
-- **Viste:**
-  - **Settimana** (predefinita);
+- **Viste**, in quest'ordine nel selettore; l'ultima scelta si ricorda:
+  - **Agenda** (predefinita): è l'Agenda di oggi, con le scadenze;
   - **Giorno**;
-  - **Mese**;
-  - **Agenda**: è l'Agenda di oggi, con le scadenze.
+  - **Settimana**;
+  - **Mese**.
 - **Barra laterale:**
   - il mese piccolo;
   - le connessioni con i loro calendari (colori, visibilità);
   - i livelli del Segretario, da accendere e spegnere: Scadenze e Proposte.
+- **Come si riconoscono:** una scadenza porta l'icona della sua fonte — la busta della mail da cui nasce, il calendario di un evento, la persona per ciò che ha detto l'utente —; una proposta porta la stella del Segretario, la stessa del suo pulsante nella barra.
 - **Pannello dell'evento**, come il lettore della posta:
   - dettagli e invitati con le risposte;
   - la preparazione del Segretario, le cose aperte nate dall'evento, i progetti, la mail da cui viene;
@@ -918,6 +919,8 @@ Tre gruppi, separati da una linea sottile:
 |                   | **Progetti** (in arrivo)                                         | pagina "In arrivo"               | idem          |
 
 Contatti e Progetti sono separati dalle fonti perché non hanno connessioni proprie: aggregano quelle delle altre.
+
+In cima alla barra, il marchio. Al passaggio dice quale SIEVER Mail è — la versione e l'estensione, con le stesse parole del piede delle Impostazioni (§13.2) —; un clic riporta alla schermata d'apertura, la stessa dell'avvio. È solo un'immagine sopra lo spazio di lavoro, che sotto resta vivo: le connessioni si sincronizzano, il Segretario lavora, le bozze aperte restano aperte. «Entra» riapre la giornata come all'avvio; ciò che va visto subito — una notifica, ciò che il Segretario mostra, un messaggio da riscrivere — la chiude da sé.
 
 In fondo alla barra:
 

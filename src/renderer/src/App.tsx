@@ -16,10 +16,8 @@ import {
   CalendarDays,
   Files,
   LoaderCircle,
-  LogIn,
   Mail,
   Minus,
-  Plus,
   Square,
   Sun,
   X,
@@ -27,7 +25,6 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 
-import appLogo from '@renderer/assets/logo.png'
 import { newOnboarding, OnboardingWizard } from '@renderer/features/onboarding/onboarding-wizard'
 import {
   MailComposer,
@@ -40,6 +37,7 @@ import {
 } from '@renderer/features/mail/mail-composer'
 import { COMPOSE_DOCK_HEIGHT, ComposeDock } from '@renderer/features/mail/compose-dock'
 import { AppRail } from '@renderer/features/workspace/app-rail'
+import { WelcomeScreen } from '@renderer/features/workspace/welcome-screen'
 import {
   SegretarioPanel,
   type SegretarioContextChip
@@ -86,7 +84,6 @@ import { ConnectionRefusedDialog } from '@renderer/features/connections/connecti
 import { Toaster } from '@renderer/components/ui/sonner'
 import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { useTaskbarBadge } from '@renderer/lib/taskbar-badge'
-import { cn, formatAppVersion } from '@renderer/lib/utils'
 import { segretarioProjectPath } from '@shared/folders'
 import { CommandShortcutsProvider, isOverlaySurfaceOpen } from '@renderer/lib/command-shortcuts'
 import { buildOutgoingMailHtml } from '@renderer/lib/outgoing-mail-html'
@@ -280,6 +277,7 @@ function AppFrame({
   dockVisible = false,
   rightInset = 0,
   framed = false,
+  cover,
   onNoticeOpenChange,
   overlay
 }: {
@@ -298,6 +296,11 @@ function AppFrame({
   rightInset?: number
   /** The workspace: its panes' headers are the title bar the window is dragged by. */
   framed?: boolean
+  /**
+   * A screen laid over the workspace — the welcome —: the workspace keeps
+   * working under it, out of reach of the pointer, the focus and the drag.
+   */
+  cover?: ReactNode
   /** A notice about the AI shown, or gone (`AiNotice`). */
   onNoticeOpenChange: (open: boolean) => void
   /** What asks the user wherever the window stands: a refusal, a confirmation. */
@@ -349,13 +352,22 @@ function AppFrame({
             </button>
           </div>
         )}
-        <div className="h-full min-h-0" inert={inert}>
+        <div className="h-full min-h-0" inert={inert || Boolean(cover)}>
           {/* Screens without panes are dragged by their top edge. */}
           {!framed && windowControlsState.dragTopRegionEnabled && (
             <div className="window-drag-edge" aria-hidden />
           )}
           {children}
         </div>
+        {cover && (
+          // After the workspace, so its no-drag takes back the panes' title bars beneath.
+          <div className="window-no-drag fixed inset-0 z-40">
+            {windowControlsState.dragTopRegionEnabled && (
+              <div className="window-drag-edge" aria-hidden />
+            )}
+            {cover}
+          </div>
+        )}
       </div>
       {dock}
       <AiNotice onOpenChange={onNoticeOpenChange} />
@@ -488,8 +500,16 @@ function App(): React.JSX.Element {
   // A connection turned down for good waits for an answer (`ConnectionRefusedDialog`).
   const [refusedOpen, setRefusedOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId | null>(null)
-  const [showWelcomeGate, setShowWelcomeGate] = useState(true)
-  const [emptyStateIntroStep, setEmptyStateIntroStep] = useState<'logo' | 'text' | 'button'>('logo')
+  // The welcome screen, in front: at launch, or asked again from the rail's mark — then it fades in
+  // over the workspace, which keeps working under it.
+  const [welcome, setWelcome] = useState<'launch' | 'rail' | null>('launch')
+  // With no connection there is no workspace: the welcome is all there is.
+  const welcomeInFront = welcome !== null || !hasConnections
+  /** A message to write comes in front — past the welcome screen. */
+  const showComposer = useCallback((id: string): void => {
+    setActiveComposeId(id)
+    setWelcome(null)
+  }, [])
   const [windowControlsState, setWindowControlsState] = useState<WindowControlsState>({
     enabled: false,
     maximized: false,
@@ -538,6 +558,7 @@ function App(): React.JSX.Element {
 
   // What the shell has open in front: the mail's keys and commands rest under it too.
   const shellModalOpen =
+    welcomeInFront ||
     composerOpen ||
     failedSend !== null ||
     confirmOpen ||
@@ -568,7 +589,7 @@ function App(): React.JSX.Element {
               }
             ]
       )
-      setActiveComposeId(id)
+      showComposer(id)
 
       // A draft whose message waits in the outbox is the user's again, opened to change.
       if (data.draftId) {
@@ -588,7 +609,7 @@ function App(): React.JSX.Element {
           )
       }
     },
-    []
+    [showComposer]
   )
 
   const removeComposeSession = useCallback((id: string): void => {
@@ -746,7 +767,7 @@ function App(): React.JSX.Element {
   const openDraftById = useCallback(
     async (draftId: string): Promise<void> => {
       if (composeSessions.some((session) => session.id === draftId)) {
-        setActiveComposeId(draftId)
+        showComposer(draftId)
         return
       }
 
@@ -760,7 +781,7 @@ function App(): React.JSX.Element {
         })
       }
     },
-    [composeSessions, openComposer]
+    [composeSessions, openComposer, showComposer]
   )
 
   /**
@@ -920,7 +941,7 @@ function App(): React.JSX.Element {
           ...current,
           { id, initialData: { ...data, draftId: id }, existing: false }
         ])
-        setActiveComposeId(id)
+        showComposer(id)
         await window.segretarioApi.takeUpReply(accountId, messageKey, id)
       } catch (error) {
         toast.error('La risposta non si è aperta', {
@@ -928,7 +949,7 @@ function App(): React.JSX.Element {
         })
       }
     },
-    [composerDataFor]
+    [composerDataFor, showComposer]
   )
 
   /**
@@ -1029,14 +1050,14 @@ function App(): React.JSX.Element {
 
       if (!(await handle.send())) {
         segretarioSendWaitersRef.current.delete(draftId)
-        setActiveComposeId(draftId)
+        showComposer(draftId)
         await resolve({
           sent: false,
           error: 'L’invio si è fermato per un controllo: la bozza è aperta per correggerla.'
         })
       }
     },
-    [composerHandleFor, segretario]
+    [composerHandleFor, segretario, showComposer]
   )
 
   const showMail = useCallback((): void => setActiveApp('mail'), [])
@@ -1045,7 +1066,7 @@ function App(): React.JSX.Element {
     setAccounts,
     aiOn,
     // In sight: in front, with a mailbox, past the welcome screen — its keys act on nothing else.
-    active: shownApp === 'mail' && accounts.length > 0 && !showWelcomeGate,
+    active: shownApp === 'mail' && accounts.length > 0 && !welcomeInFront,
     show: showMail,
     uiPreferences,
     uiPreferencesRef,
@@ -1088,7 +1109,7 @@ function App(): React.JSX.Element {
    */
   const openMessageRef = useCallback(
     (ref: MessageRef): void => {
-      setShowWelcomeGate(false)
+      setWelcome(null)
       openMailMessage(ref)
     },
     [openMailMessage]
@@ -1096,30 +1117,13 @@ function App(): React.JSX.Element {
 
   useEffect(() => window.mailApi.onOpenMessageFromNotification(openMessageRef), [openMessageRef])
 
-  useEffect(() => {
-    const shouldAnimateWelcome = !hasConnections || showWelcomeGate
-
-    if (!shouldAnimateWelcome) {
-      // Back to the logo, for the intro to play again whenever the welcome screen returns.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setEmptyStateIntroStep('logo')
-      return
-    }
-
-    setEmptyStateIntroStep('logo')
-    const textRevealTimer = window.setTimeout(() => setEmptyStateIntroStep('text'), 1400)
-    const buttonRevealTimer = window.setTimeout(() => setEmptyStateIntroStep('button'), 2300)
-
-    return () => {
-      window.clearTimeout(textRevealTimer)
-      window.clearTimeout(buttonRevealTimer)
-    }
-  }, [hasConnections, showWelcomeGate])
-
   // The Segretario shows the user something: a message, a search, a draft.
   useEffect(
     () =>
       window.segretarioApi.onShowRequest((request) => {
+        // What the Segretario shows is seen: it comes past the welcome screen.
+        setWelcome(null)
+
         switch (request.kind) {
           case 'message':
             openMessageRef(request.ref)
@@ -1384,7 +1388,7 @@ function App(): React.JSX.Element {
     // Signing in again to an account already here (to add its calendar) gives that account back.
     setAccounts((current) => [...current.filter((existing) => existing.id !== account.id), account])
     setSelectedAccountId(account.id)
-    setShowWelcomeGate(false)
+    setWelcome(null)
   }
 
   const enterWorkspace = useCallback((): void => {
@@ -1399,7 +1403,7 @@ function App(): React.JSX.Element {
 
       return accounts[0]?.id ?? null
     })
-    setShowWelcomeGate(false)
+    setWelcome(null)
     // The day opens on what the Segretario saw in it; without it, on the first source.
     setActiveApp(aiOn ? 'oggi' : firstSourceApp)
   }, [aiOn, accounts, firstSourceApp, hasConnections, setSelectedAccountId])
@@ -1567,7 +1571,8 @@ function App(): React.JSX.Element {
     )
   }
 
-  if (!hasConnections || showWelcomeGate) {
+  // With no connection there is nothing under the welcome: it leads to the first one.
+  if (!hasConnections) {
     return (
       <AppFrame
         windowControlsState={windowControlsState}
@@ -1577,97 +1582,7 @@ function App(): React.JSX.Element {
         onNoticeOpenChange={setNoticeOpen}
         overlay={frameOverlay}
       >
-        <div className="relative mx-auto h-full w-full max-w-5xl px-6 py-12">
-          <div className="flex h-full items-center justify-center">
-            <div
-              className={cn(
-                'flex items-center justify-center transition-[gap] duration-[1800ms] ease-out',
-                emptyStateIntroStep === 'logo' ? 'gap-0' : 'gap-4 lg:gap-5'
-              )}
-            >
-              <span className="relative grid shrink-0 place-items-center">
-                {/* The logo's two colours, as a glow behind it. */}
-                <span
-                  aria-hidden
-                  className="absolute -inset-16 rounded-full"
-                  style={{
-                    backgroundImage:
-                      'radial-gradient(closest-side, hsl(var(--ai-star) / 0.16), hsl(var(--primary) / 0.1) 55%, transparent)'
-                  }}
-                />
-                <img
-                  src={appLogo}
-                  alt="Logo SIEVER Mail"
-                  className="relative size-[5.5rem] select-none lg:size-[6.5rem]"
-                  draggable={false}
-                />
-              </span>
-              <div
-                className={cn(
-                  'overflow-hidden transition-all duration-[1800ms] ease-out',
-                  emptyStateIntroStep === 'logo' ? 'max-w-0 opacity-0' : 'max-w-[760px] opacity-100'
-                )}
-              >
-                <h1
-                  className={cn(
-                    'display-title text-6xl leading-none font-black tracking-tight whitespace-nowrap transition-transform duration-[1800ms] ease-out lg:text-7xl',
-                    emptyStateIntroStep === 'logo' ? 'translate-x-6' : 'translate-x-0'
-                  )}
-                >
-                  SIEVER Mail
-                  <span className="text-muted-foreground mt-2 block font-serif text-2xl leading-tight font-normal tracking-normal whitespace-nowrap italic">
-                    Il tuo lavoro, con un segretario.
-                  </span>
-                </h1>
-              </div>
-            </div>
-          </div>
-
-          <div
-            className={cn(
-              'absolute inset-x-0 bottom-8 flex justify-center transition-all duration-[900ms]',
-              emptyStateIntroStep === 'button'
-                ? 'translate-y-0 opacity-100'
-                : 'pointer-events-none translate-y-2 opacity-0'
-            )}
-          >
-            <div className="flex flex-col items-center gap-3">
-              {hasConnections ? (
-                <>
-                  <Button
-                    className="w-56 gap-2 rounded-lg text-sm"
-                    size="lg"
-                    onClick={enterWorkspace}
-                  >
-                    <LogIn className="size-4" />
-                    Entra
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    className="w-56 gap-2 rounded-lg text-sm"
-                    size="lg"
-                    onClick={() => startOnboarding('nuova-connessione')}
-                  >
-                    <Plus className="size-4" />
-                    Aggiungi una connessione
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  className="w-56 gap-2 rounded-lg text-sm"
-                  size="lg"
-                  onClick={() => startOnboarding('primo-avvio')}
-                >
-                  <LogIn className="size-4" />
-                  Inizia
-                </Button>
-              )}
-              <p className="text-muted-foreground pt-1 text-xs tracking-[0.14em] uppercase">
-                Versione {formatAppVersion(__APP_VERSION__)}
-              </p>
-            </div>
-          </div>
-        </div>
+        <WelcomeScreen hasConnections={false} onEnter={enterWorkspace} onSetup={startOnboarding} />
       </AppFrame>
     )
   }
@@ -1715,7 +1630,17 @@ function App(): React.JSX.Element {
           overlay={frameOverlay}
           inert={composerOpen}
           framed
-          dockVisible={!composerOpen && composeSessions.length > 0}
+          cover={
+            welcome && (
+              <WelcomeScreen
+                hasConnections
+                fadeIn={welcome === 'rail'}
+                onEnter={enterWorkspace}
+                onSetup={startOnboarding}
+              />
+            )
+          }
+          dockVisible={!welcome && !composerOpen && composeSessions.length > 0}
           rightInset={assistantInset}
           dock={
             <ComposeDock
@@ -1726,9 +1651,9 @@ function App(): React.JSX.Element {
                   kind: session.initialData.kind,
                   summary: composeSummaries[session.id] ?? null
                 }))}
-              hidden={composerOpen}
+              hidden={composerOpen || welcome !== null}
               rightInset={assistantInset}
-              onRestore={setActiveComposeId}
+              onRestore={showComposer}
               onClose={(id) => void composerHandlesRef.current.get(id)?.close()}
             />
           }
@@ -1748,6 +1673,7 @@ function App(): React.JSX.Element {
                     setActiveApp(app.id)
                   }
                 }}
+                onOpenWelcome={() => setWelcome('rail')}
                 connections={connectionStatus}
                 onOpenConnections={() => {
                   setSettingsSection('accounts')

@@ -1,4 +1,24 @@
-import type { DayLine, HandleLink } from '@shared/segretario'
+import { CalendarDays, Mail, UserRound, type LucideIcon } from 'lucide-react'
+
+import type { DayLine, DayLineSource, HandleLink } from '@shared/segretario'
+
+const SOURCE_ICONS: Readonly<Record<DayLineSource['kind'], LucideIcon>> = {
+  message: Mail,
+  event: CalendarDays,
+  user: UserRound
+}
+
+/** Where a line comes from, as an icon beside it: a message, an event, the user's own word. */
+export function DayLineSourceIcon({
+  line,
+  className
+}: {
+  line: DayLine
+  className?: string
+}): React.JSX.Element {
+  const Icon = SOURCE_ICONS[line.source.kind]
+  return <Icon className={className} />
+}
 
 const EVENT_DAY = new Intl.DateTimeFormat('it-IT', {
   weekday: 'short',

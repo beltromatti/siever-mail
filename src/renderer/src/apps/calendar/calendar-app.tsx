@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type Ref } from 'react'
-import { ChevronLeft, ChevronRight, Flag, LoaderCircle, Plus, RefreshCw } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LoaderCircle, Mail, Plus, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
@@ -273,7 +273,7 @@ export function CalendarApp({
   /** Whether its keys answer: not while something of the shell is over it, a message being written. */
   keysEnabled: boolean
 }): React.JSX.Element {
-  const [view, setView] = useState<CalendarView>(() => stored(VIEW_KEY, 'settimana', isView))
+  const [view, setView] = useState<CalendarView>(() => stored(VIEW_KEY, 'agenda', isView))
   const [layers, setLayers] = useState(() =>
     stored(LAYERS_KEY, { due: true, proposals: true }, isLayers)
   )
@@ -464,7 +464,7 @@ export function CalendarApp({
                   setLayers((current) => ({ ...current, due: event.target.checked }))
                 }
               />
-              <Flag className="text-ai size-3.5" />
+              <Mail className="text-ai size-3.5" />
               Scadenze
             </label>
             <label className="hover:bg-hover flex cursor-pointer items-center gap-2 rounded-[6px] px-1 py-1 text-[12.5px]">

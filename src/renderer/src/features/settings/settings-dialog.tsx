@@ -49,7 +49,8 @@ import { NotificationsSection } from '@renderer/features/settings/notifications-
 import { MemorySection } from '@renderer/features/settings/memory-section'
 import { SegretarioSection } from '@renderer/features/settings/segretario-section'
 import { ShortcutsSection } from '@renderer/features/settings/shortcuts-section'
-import { cn, formatAppVersion } from '@renderer/lib/utils'
+import { AppEdition } from '@renderer/features/workspace/app-edition'
+import { cn } from '@renderer/lib/utils'
 import type { CalendarConnection } from '@shared/calendar'
 import type {
   AccountConnectionState,
@@ -697,12 +698,7 @@ export function SettingsDialog({
                 )
               })}
             </ul>
-            <p className="text-faint-foreground mt-auto px-2 pt-3 text-[11px] leading-snug">
-              SIEVER Mail {formatAppVersion(__APP_VERSION__)}
-              {extensionShared.identity && (
-                <span className="block truncate">{extensionShared.identity.name}</span>
-              )}
-            </p>
+            <AppEdition className="text-faint-foreground mt-auto px-2 pt-3 text-[11px] leading-snug" />
           </nav>
 
           <section className="page flex h-full min-h-0 flex-col px-7 pt-6 pb-5">
