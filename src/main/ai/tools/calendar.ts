@@ -152,7 +152,8 @@ export function eventLine(
   const others = event.attendees.filter((attendee) => !attendee.self)
 
   return [
-    `${handle} · ${when} · ${event.title} · ${event.calendarName}`,
+    // Whose it is (§7.4): one of someone else's is not prepared, nor is it a conflict of the user's.
+    `${handle} · ${when} · ${event.title} · ${event.calendarName}${event.yours === false ? " · non è dell'utente" : ''}`,
     event.location ? `   luogo: ${event.location}` : null,
     others.length > 0
       ? `   con: ${others

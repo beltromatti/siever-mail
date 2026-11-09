@@ -112,6 +112,7 @@ export class Workspace {
       events: (from, to) => this.calendar.remindable(from, to),
       preparation: (eventKey) => this.segretario.preparationLine(eventKey),
       segretarioLooking: () => this.segretarioReading,
+      segretarioSeen: () => this.segretario.calendarSeen(),
       openExternal: (url) => {
         const safe = normalizeExternalHttpUrl(url)
 
@@ -178,8 +179,10 @@ export class Workspace {
       parentWindow: () => getAppWindow(),
       onRefused: (notice) => this.connectionRefused(notice),
       onEventsChanged: () => this.calendarNotifications.eventsChanged(),
-      onChangedByOthers: (calendar, changes) =>
-        this.calendarNotifications.changedByOthers(calendar, changes),
+      onChangedByOthers: (calendar, changes, through) =>
+        this.calendarNotifications.changedByOthers(calendar, changes, through),
+      // Whose things are, as the Segretario found them: with the AI on (§7.4).
+      ownership: () => this.segretario.ownership(),
       // A calendar connection going (§11.4), as a mailbox.
       onDisconnecting: (connectionId) =>
         this.segretario
@@ -204,6 +207,8 @@ export class Workspace {
       onReadingChange: (reading) => {
         this.segretarioReading = reading
         this.mail.setSegretarioReading(reading)
+        // What the Segretario found of whose things are counts with the AI on, and only then.
+        this.calendar.ownershipChanged()
       },
       onEnabledChange: (on) => {
         updateAppMenuAi(on)
@@ -212,10 +217,12 @@ export class Workspace {
       onNoteWritten: (note) => this.mail.noteWritten(note),
       notifications: this.notifications,
       onWorkChanged: () => this.countBadge(),
+      onOwnershipChanged: () => this.calendar.ownershipChanged(),
       onSetupEnded: (setup) => this.setupEnded(setup),
       calendar: {
         alert: (eventKey, text) => this.calendarAlert(eventKey, text),
         calendars: () => this.calendar.calendars(),
+        setRole: (calendarKey, role) => this.calendar.setCalendarRole(calendarKey, role),
         connections: () => this.calendar.listConnections(),
         events: (fromIso, toIso) => this.calendar.events(fromIso, toIso),
         search: (query) => this.calendar.search(query),

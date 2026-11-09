@@ -2,7 +2,12 @@ import { z } from 'zod'
 
 import type { CalendarService } from '@main/calendar/calendar-service'
 import { handleIpc, type HandleOptions } from '@main/ipc/handle'
-import { CALENDAR_IPC, type CalendarResponse, type MessageInvitation } from '@shared/calendar'
+import {
+  CALENDAR_IPC,
+  CALENDAR_ROLES,
+  type CalendarResponse,
+  type MessageInvitation
+} from '@shared/calendar'
 import type { MessageRef } from '@shared/models'
 
 const idSchema = z.string().min(1).max(200)
@@ -147,6 +152,9 @@ export function registerCalendarIpc(
   handle(CALENDAR_IPC.calendars, () => calendar.calendars())
   handle(CALENDAR_IPC.setCalendarHidden, (key: unknown, hidden: unknown) =>
     calendar.setCalendarHidden(keySchema.parse(key), z.boolean().parse(hidden))
+  )
+  handle(CALENDAR_IPC.setCalendarRole, (key: unknown, role: unknown) =>
+    calendar.setCalendarRole(keySchema.parse(key), z.enum(CALENDAR_ROLES).nullable().parse(role))
   )
   handle(CALENDAR_IPC.create, (event: unknown) =>
     calendar.create(newEventSchema.parse(event), { byUser: true })

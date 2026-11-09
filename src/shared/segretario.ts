@@ -688,7 +688,15 @@ export type HandleLink =
 /** A change a run made to the user's work, as its page of the diary shows it. */
 export interface WorkChangeLine {
   object:
-    'nota' | 'impegno' | 'progetto' | 'risposta' | 'proposta' | 'copia' | 'evento' | 'giornata'
+    | 'nota'
+    | 'impegno'
+    | 'progetto'
+    | 'risposta'
+    | 'proposta'
+    | 'copia'
+    | 'evento'
+    | 'giornata'
+    | 'calendario'
   label: string
   undoable: boolean
   /** The user undid it. */

@@ -5,6 +5,7 @@ import type {
   CalendarConnection,
   CalendarEvent,
   CalendarResponse,
+  CalendarRole,
   CalendarSearchQuery,
   CalendarSearchResult,
   EventChange,
@@ -175,7 +176,11 @@ export interface SegretarioCalendarPort {
    * notifications of the calendar off, `unknown` for an event never kept.
    */
   alert(eventKey: string, text: string): Promise<'told' | 'off' | 'unknown'>
-  /** The calendars, each with what it is called, whose it is, whether it takes events and whether the user keeps it shown. */
+  /**
+   * The calendars, each with what it is called, whose connection, whether it
+   * takes events, whether the user keeps it shown, and whose its events are
+   * (§7.4) — chosen by whom, and why.
+   */
   calendars(): Promise<
     Array<{
       key: string
@@ -185,8 +190,13 @@ export interface SegretarioCalendarPort {
       primary: boolean
       writable: boolean
       hidden: boolean
+      role: CalendarRole
+      roleBy: 'utente' | 'segretario' | null
+      roleReason: string | null
     }>
   >
+  /** Whose a calendar's events are, as the user says it in chat (§7.4): their choice, as in Settings. */
+  setRole(calendarKey: string, role: CalendarRole | null): Promise<unknown>
   /** The calendar connections: who they are with, and their calendars. */
   connections(): Promise<CalendarConnection[]>
   events(fromIso: string, toIso: string): Promise<CalendarEvent[]>

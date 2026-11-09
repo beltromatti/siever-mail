@@ -1,4 +1,4 @@
-import { CALENDAR_HELD_DAYS } from '@shared/calendar'
+import { CALENDAR_HELD_DAYS, type CalendarRole } from '@shared/calendar'
 import { calendarLearningKey, READING_DAYS, type TaskKind } from '@shared/segretario'
 
 import { fileSources } from '../../files/file-sources'
@@ -15,11 +15,22 @@ import {
 import { firstLookDone, heldWindow, lookItems } from '../tasks/calendar'
 import { countOf } from './format'
 
-const ACTIONS = ['elenco', 'lettura'] as const
+const ACTIONS = ['elenco', 'lettura', 'di_chi'] as const
 /** The periods the list counts a mailbox's messages over, in days. */
 const PERIODS = [14, 30, 60, 90, 180, 365, 730] as const
 /** Who decides how far a connection is read: Conoscimi, which has just got to know it, and the user in chat. */
 const DECIDING: ReadonlyArray<TaskKind> = ['conoscimi', 'richiesta']
+/** Who decides whose a calendar's events are: Conoscimi, a look at a calendar that came after it, the user in chat. */
+const DECIDING_ROLES: ReadonlyArray<TaskKind> = ['conoscimi', 'calendario', 'richiesta']
+const ROLES: ReadonlyArray<CalendarRole> = ['tutti', 'propri', 'nessuno']
+
+/** A calendar's role, as the Segretario reads it (§7.4). */
+const ROLE_WORDS: Record<CalendarRole, string> = {
+  tutti: "tutti i suoi eventi sono dell'utente",
+  propri:
+    "solo quelli dell'utente (invitato, li organizza o li ha creati lui, o li hai riconosciuti tu)",
+  nessuno: "nessuno dei suoi eventi è dell'utente"
+}
 const DAY_MS = 24 * 60 * 60 * 1000
 /** The readings whose spending tells what reading a message costs. */
 const COST_LOOKBACK_MS = 30 * DAY_MS
@@ -102,7 +113,8 @@ async function mailLine(
 async function calendarLine(
   context: ToolContext,
   connection: Connection,
-  reading: StoredReading | undefined
+  reading: StoredReading | undefined,
+  calendars: Awaited<ReturnType<ToolContext['calendar']['calendars']>>
 ): Promise<string> {
   const connectionId = connection.names[0]
   const window = heldWindow()
@@ -117,19 +129,42 @@ async function calendarLine(
   )
   const past = items.filter((item) => item.at < window.today).length
 
-  return `- Calendario ${connection.label} — si guarda tutto ciò che tiene, da ${CALENDAR_HELD_DAYS.back} giorni fa a un anno avanti: ${countOf(items.length, 'evento', 'eventi')} (una serie ricorrente conta per uno), ${past} passati e ${items.length - past} in arrivo; ${
-    firstLookDone(reading)
-      ? 'li hai guardati tutti, e da qui guardi ciò che vi appare o cambia'
-      : 'la prima occhiata non è ancora finita'
-  }.`
+  return [
+    `- Calendario ${connection.label} — si guarda tutto ciò che tiene, da ${CALENDAR_HELD_DAYS.back} giorni fa a un anno avanti: ${countOf(items.length, 'evento', 'eventi')} (una serie ricorrente conta per uno), ${past} passati e ${items.length - past} in arrivo; ${
+      firstLookDone(reading)
+        ? 'li hai guardati tutti, e da qui guardi ciò che vi appare o cambia'
+        : 'la prima occhiata non è ancora finita'
+    }.`,
+    ...calendars
+      .filter((calendar) => calendar.connectionId === connectionId)
+      .map(
+        (calendar) =>
+          `  «${calendar.name}»${calendar.primary ? ' (il principale)' : ''}${calendar.writable ? '' : ', in sola lettura'}: ${ROLE_WORDS[calendar.role]} — ${roleDecided(calendar)}.`
+      )
+  ].join('\n')
+}
+
+/** Who decided a calendar's role, and why. */
+function roleDecided(calendar: {
+  roleBy: 'utente' | 'segretario' | null
+  roleReason: string | null
+}): string {
+  if (calendar.roleBy === 'utente') {
+    return "l'ha scelto l'utente"
+  }
+
+  return calendar.roleBy === 'segretario'
+    ? `deciso da te${calendar.roleReason ? `: «${calendar.roleReason}»` : ''}`
+    : 'di base'
 }
 
 async function list(context: ToolContext): Promise<string> {
-  const [connections, readings, files, cost] = await Promise.all([
+  const [connections, readings, files, cost, calendarList] = await Promise.all([
     connectionsOf(context),
     context.store.readings(),
     fileSources(),
-    context.store.readingCostPerMessage(Date.now() - COST_LOOKBACK_MS)
+    context.store.readingCostPerMessage(Date.now() - COST_LOOKBACK_MS),
+    context.calendar.calendars().catch(() => [])
   ])
   const byKey = new Map(readings.map((reading) => [reading.key, reading]))
   const mail = await Promise.all(
@@ -140,7 +175,9 @@ async function list(context: ToolContext): Promise<string> {
   const calendars = await Promise.all(
     connections
       .filter((connection) => connection.kind === 'calendario')
-      .map((connection) => calendarLine(context, connection, byKey.get(connection.key)))
+      .map((connection) =>
+        calendarLine(context, connection, byKey.get(connection.key), calendarList)
+      )
   )
 
   return [
@@ -239,6 +276,90 @@ async function setReading(
   }
 }
 
+/** The calendar a call names: by its name, with its connection when two have it, or by its key. */
+async function calendarNamed(
+  context: ToolContext,
+  written: string
+): Promise<Awaited<ReturnType<ToolContext['calendar']['calendars']>>[number]> {
+  const calendars = await context.calendar.calendars()
+  const wanted = written.trim().toLowerCase()
+  const named = (calendar: (typeof calendars)[number]): string[] => [
+    calendar.key.toLowerCase(),
+    calendar.name.toLowerCase(),
+    `${calendar.name} ${calendar.connection}`.toLowerCase(),
+    `${calendar.connection} ${calendar.name}`.toLowerCase()
+  ]
+  const found = calendars.filter((calendar) => named(calendar).includes(wanted))
+
+  if (found.length === 1) {
+    return found[0]
+  }
+
+  throw new ToolInputError(
+    `${found.length > 1 ? `Più calendari si chiamano «${written}»: aggiungi la connessione` : `Nessun calendario «${written}»`} — ${calendars
+      .map((calendar) => `«${calendar.name}» di ${calendar.connection}`)
+      .join(', ')}.`
+  )
+}
+
+/**
+ * Whose a calendar's events are (§7.4): Conoscimi decides it once it knows
+ * the calendars, the look at a calendar for one that came after; what the
+ * user says in chat is their choice, as in Settings, and stands.
+ */
+async function setRole(
+  context: ToolContext,
+  args: Record<string, unknown>
+): Promise<{ content: string; summary: string }> {
+  if (!DECIDING_ROLES.includes(context.run.task)) {
+    throw new ToolInputError(
+      "Di chi sono gli eventi di un calendario si decide in Conoscimi, guardando un calendario nuovo, o in chat quando l'utente te lo dice."
+    )
+  }
+
+  const calendar = await calendarNamed(context, requireString(args, 'calendario'))
+  const role = stringArg(args, 'eventi')
+
+  if (!ROLES.includes(role as CalendarRole)) {
+    throw new ToolInputError(
+      `Indica \`eventi\`: \`tutti\` (è il calendario dell'utente), \`propri\` (condiviso, o di altri: solo i suoi eventi) o \`nessuno\` (un abbonamento, un calendario che guarda soltanto).`
+    )
+  }
+
+  const chosen = role as CalendarRole
+  const words = `«${calendar.name}» di ${calendar.connection}: ${ROLE_WORDS[chosen]}`
+
+  if (context.run.task === 'richiesta') {
+    await context.calendar.setRole(calendar.key, chosen)
+    return {
+      content: `Da ora ${words}, come ha detto l'utente: lo vede anche in Impostazioni › Notifiche.`,
+      summary: `${calendar.name}: ${ROLE_WORDS[chosen]}`
+    }
+  }
+
+  // What the user chose stands: the Segretario does not decide it again.
+  if (calendar.roleBy === 'utente') {
+    throw new ToolInputError(
+      `Per «${calendar.name}» l'utente ha scelto lui: ${ROLE_WORDS[calendar.role]}. Resta così.`
+    )
+  }
+
+  if (calendar.role === chosen && calendar.roleBy === 'segretario') {
+    return { content: `Già così: ${words}.`, summary: 'Già così' }
+  }
+
+  const change = await context.registry.decideCalendarRole(
+    calendar,
+    chosen,
+    stringArg(args, 'motivo')?.trim() || null,
+    context.run.actor
+  )
+  return {
+    content: `Da ora ${words}: i promemoria, le novità e la giornata di Oggi seguono questo.`,
+    summary: change.label
+  }
+}
+
 export const connectionsTool: SegretarioTool = {
   name: 'connessioni',
   description: PROMPTS.tools.connessioni,
@@ -248,12 +369,18 @@ export const connectionsTool: SegretarioTool = {
       azione: { type: 'string', enum: [...ACTIONS] },
       connessione: { type: 'string' },
       giorni: { type: 'integer' },
+      calendario: { type: 'string' },
+      eventi: { type: 'string', enum: [...ROLES] },
       motivo: { type: 'string' }
     },
     required: ['azione']
   },
   running: (args) =>
-    args.azione === 'lettura' ? 'Decido fin dove leggere…' : 'Guardo le connessioni…',
+    args.azione === 'lettura'
+      ? 'Decido fin dove leggere…'
+      : args.azione === 'di_chi'
+        ? 'Decido di chi sono gli eventi…'
+        : 'Guardo le connessioni…',
   async execute(args, context) {
     const action = requireString(args, 'azione')
 
@@ -263,6 +390,10 @@ export const connectionsTool: SegretarioTool = {
 
     if (action === 'lettura') {
       return setReading(context, args)
+    }
+
+    if (action === 'di_chi') {
+      return setRole(context, args)
     }
 
     throw new ToolInputError(`Azione sconosciuta «${action}»: ${ACTIONS.join(', ')}.`)

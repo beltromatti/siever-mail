@@ -47,6 +47,12 @@ export interface CalendarEvent {
   description: string | null
   attendees: CalendarAttendee[]
   organizer: string | null
+  /**
+   * Who put it in the calendar, by address, where the calendar says it
+   * (Google): in a calendar shared, someone other than whoever organises
+   * it. Absent where it does not.
+   */
+  creator?: string | null
   /** The user's answer, when invited; null for an event of their own without guests. */
   myResponse: CalendarResponse | null
   /** A video call's address, when it has one. */
@@ -68,6 +74,14 @@ export interface CalendarEvent {
    * on the events the calendars give; absent from what was kept before.
    */
   organizedByUser?: boolean
+  /**
+   * The user's (vision §7.4): in a calendar of theirs, or theirs in one
+   * shared — invited, organised or put there by them, or found theirs by
+   * the Segretario —, once among its copies in every calendar. What
+   * reminds them, and Oggi shows. Set on the events the calendars give;
+   * absent from what was kept before.
+   */
+  yours?: boolean
 }
 
 /** Who put an event in the calendar, when it was the Segretario, and from which message. */
@@ -75,6 +89,31 @@ export interface EventOrigin {
   by: 'segretario'
   accountId: string | null
   messageKey: string | null
+}
+
+/**
+ * Whose a calendar's events are (vision §7.4): every one — the user's
+ * calendar —; only those that are the user's — a calendar shared, or
+ * someone else's —; none — a subscription, one only looked at.
+ */
+export type CalendarRole = 'tutti' | 'propri' | 'nessuno'
+
+export const CALENDAR_ROLES: ReadonlyArray<CalendarRole> = ['tutti', 'propri', 'nessuno']
+
+/**
+ * A calendar's role when nobody chose it (§7.4): the main one of a
+ * connection is the user's; where events do not say who made them (a
+ * CalDAV server), so is every one the user writes in — there «only the
+ * user's» would know only the invitations.
+ */
+export function defaultCalendarRole(calendar: {
+  primary: boolean
+  writable: boolean
+  provider: CalendarProviderKind
+}): CalendarRole {
+  return calendar.primary || (calendar.provider === 'caldav' && calendar.writable)
+    ? 'tutti'
+    : 'propri'
 }
 
 /** A calendar of a connection. */
@@ -99,6 +138,11 @@ export interface CalendarListEntry {
   color: string | null
   /** The user hid it in the Calendario app: its events are not shown. */
   hidden: boolean
+  /** Whose its events are (§7.4). */
+  role: CalendarRole
+  /** Who chose it: the user, the Segretario — with why —, or nobody (the default). */
+  roleBy: 'utente' | 'segretario' | null
+  roleReason: string | null
 }
 
 /** Who a calendar connection is with: Google, Microsoft, a CalDAV server (iCloud too), a link. */
@@ -167,6 +211,11 @@ export function calendarRefusedNotice(
 /** The key a calendar goes by, for `NewCalendarEvent.calendarKey`: its connection's and its own id. */
 export function calendarKey(connectionId: string, calendarId: string): string {
   return `${connectionId}\u0000${calendarId}`
+}
+
+/** The key a recurring event's series goes by, in its calendar: every instance's the same. */
+export function seriesKey(connectionId: string, calendarId: string, seriesId: string): string {
+  return `${calendarKey(connectionId, calendarId)}\u0000${seriesId}`
 }
 
 /** A new event: in which calendar (`calendarKey`), when, where, with whom. */
@@ -291,6 +340,7 @@ export const CALENDAR_IPC = {
   respondByMail: 'calendar:respond-by-mail',
   calendars: 'calendar:calendars',
   setCalendarHidden: 'calendar:set-calendar-hidden',
+  setCalendarRole: 'calendar:set-calendar-role',
   create: 'calendar:create',
   update: 'calendar:update',
   remove: 'calendar:remove',
@@ -360,6 +410,8 @@ export interface CalendarApi {
   calendars: () => Promise<CalendarListEntry[]>
   /** Shows or hides a calendar's events in the Calendario app. */
   setCalendarHidden: (calendarKey: string, hidden: boolean) => Promise<CalendarListEntry[]>
+  /** Whose a calendar's events are, as the user says (§7.4); null gives it back to the default — or to the Segretario. */
+  setCalendarRole: (calendarKey: string, role: CalendarRole | null) => Promise<CalendarListEntry[]>
   /** A new event; whoever is invited gets the provider's invitation. */
   create: (event: NewCalendarEvent) => Promise<CalendarEvent>
   /** Changes an event; whoever is invited is told. */

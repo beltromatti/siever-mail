@@ -115,7 +115,7 @@ describe('ensureAiSchema', () => {
       )
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '8'
+      value: '9'
     })
   })
 
@@ -243,7 +243,7 @@ describe('ensureAiSchema', () => {
       { id: 'p1', revision: 1 }
     ])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '8'
+      value: '9'
     })
   })
 
@@ -269,7 +269,7 @@ describe('ensureAiSchema', () => {
       await sql.all("SELECT name FROM sqlite_master WHERE name = 'idx_ai_items_project'")
     ).toEqual([{ name: 'idx_ai_items_project' }])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '8'
+      value: '9'
     })
   })
 
@@ -291,7 +291,7 @@ describe('ensureAiSchema', () => {
       await sql.get("SELECT name FROM sqlite_master WHERE name = 'ai_saved_copies'")
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '8'
+      value: '9'
     })
   })
 
@@ -305,7 +305,24 @@ describe('ensureAiSchema', () => {
     const columns = await sql.all<{ name: string }>('PRAGMA table_info(ai_notes)')
     expect(columns.map((column) => column.name)).toContain('notify')
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '8'
+      value: '9'
+    })
+  })
+
+  it('gives a version 8 database whose things are: the calendars’ roles and the events found the user’s', async () => {
+    await ensureAiSchema(sql)
+    await sql.run("UPDATE ai_meta SET value = '8' WHERE key = 'schema_version'")
+    await sql.run('DROP TABLE ai_calendar_roles')
+    await sql.run('DROP TABLE ai_own_events')
+
+    await ensureAiSchema(sql)
+
+    const tables = await sql.all<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('ai_calendar_roles', 'ai_own_events') ORDER BY name"
+    )
+    expect(tables.map((table) => table.name)).toEqual(['ai_calendar_roles', 'ai_own_events'])
+    expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
+      value: '9'
     })
   })
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 
-import type { CalendarConnection, CalendarEvent } from '@shared/calendar'
+import type { CalendarConnection, CalendarEvent, CalendarListEntry } from '@shared/calendar'
 
 /**
  * The accounts' calendars and how each stands, kept as they change. Calendars
@@ -37,6 +37,37 @@ export function useCalendarConnections(): {
   }, [])
 
   return { connections, reload, setConnections }
+}
+
+/**
+ * Every calendar — its colour, whether it is shown, whose its events are
+ * (§7.4) —, read again whenever the calendars change. None while unread,
+ * or when they could not be read.
+ */
+export function useCalendarList(): {
+  calendars: CalendarListEntry[] | null
+  setCalendars: (calendars: CalendarListEntry[]) => void
+} {
+  const [calendars, setCalendars] = useState<CalendarListEntry[] | null>(null)
+
+  useEffect(() => {
+    let current = true
+    const load = (): void =>
+      void window.calendarApi.calendars().then(
+        (loaded) => current && setCalendars(loaded),
+        () => current && setCalendars((known) => known ?? [])
+      )
+
+    load()
+    const unsubscribe = window.calendarApi.onChanged(load)
+
+    return () => {
+      current = false
+      unsubscribe()
+    }
+  }, [])
+
+  return { calendars, setCalendars }
 }
 
 /** The events between two instants, read again whenever the calendars change. */

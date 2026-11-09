@@ -860,6 +860,75 @@ describe("A calendar's first look", () => {
     ).toBe(true)
   })
 
+  it('gives a calendar come after the connection was looked at its own first look', async () => {
+    const calendars = [{ calendarId: 'lavoro', name: 'Lavoro', connectionId: 'c1', primary: true }]
+    const shared = [0, 1, 2].map((index) => ({
+      ...events[index],
+      key: `p${index}`,
+      eventId: `p${index}`,
+      calendarId: 'paola',
+      calendarName: 'Paola'
+    }))
+    const looking = new SegretarioEngine({
+      queue,
+      store,
+      calendar: {
+        connections: async () => [{ id: 'c1', label: 'Lavoro', calendars, lastSyncAt: Date.now() }],
+        calendars: async () => [],
+        events: async () => [...events, ...shared],
+        latestChangeId: async () => 41
+      }
+    } as unknown as EngineDeps)
+    await plan(looking)
+
+    for (const block of await queue.within(calendarLookScope('c1'))) {
+      await queue.claim(block.id)
+      await queue.complete(block.id)
+    }
+
+    await plan(looking)
+    expect(JSON.parse((await store.meta('calendar_looked:c1'))!)).toEqual(['lavoro'])
+
+    // A colleague shares her calendar: only it is looked at, in a block of its own.
+    calendars.push({ calendarId: 'paola', name: 'Paola', connectionId: 'c1', primary: false })
+    await plan(looking)
+    const own = (await queue.within(calendarLookScope('c1'))).filter(
+      (unit) => unit.status !== 'fatto'
+    )
+    expect(own).toHaveLength(1)
+    expect(own[0].scope).toMatchObject({ look: 'c1', calendarId: 'paola' })
+
+    await queue.claim(own[0].id)
+    await queue.complete(own[0].id)
+    await plan(looking)
+    expect(JSON.parse((await store.meta('calendar_looked:c1'))!)).toEqual(['lavoro', 'paola'])
+  })
+
+  it('takes the calendars of a connection looked at before as looked at', async () => {
+    await store.setLooked('calendario:c1', Date.now() - 61 * DAY, Date.now() + 366 * DAY)
+    const looking = new SegretarioEngine({
+      queue,
+      store,
+      calendar: {
+        connections: async () => [
+          {
+            id: 'c1',
+            label: 'Lavoro',
+            calendars: [{ calendarId: 'lavoro' }, { calendarId: 'casa' }],
+            lastSyncAt: Date.now()
+          }
+        ],
+        calendars: async () => [],
+        events: async () => events,
+        latestChangeId: async () => 41
+      }
+    } as unknown as EngineDeps)
+    await plan(looking)
+
+    expect(await queue.within(calendarLookScope('c1'))).toEqual([])
+    expect(JSON.parse((await store.meta('calendar_looked:c1'))!)).toEqual(['lavoro', 'casa'])
+  })
+
   it('looks at a calendar whole again when the AI is switched on again', async () => {
     const looking = engine()
     await plan(looking)

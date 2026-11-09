@@ -23,24 +23,30 @@ const STARTED_GRACE_MS = 2 * 60_000
 const RETRY_MS = 5 * 60_000
 /** Changes by others told one by one; more at once are told together. */
 const CHANGES_ONE_BY_ONE = 2
+/** A novelty waits for the Segretario's look at the calendar so long at most, then is told as it is. */
+const LOOK_WAIT_MS = 10 * 60_000
 
 const REMINDER_PREFIX = 'calendar:reminder:'
 
-/** A change to an event made by others, as the sync found it (`CalendarService`). */
+/** A novelty of an event of the user's that someone else has in hand, as the sync found it (`CalendarService`). */
 export interface ChangeByOthers {
   kind: 'nuovo' | 'cambiato' | 'annullato'
   /** The event now — as it was, when it is gone. */
   event: CalendarEvent & { startsAt: number; endsAt: number }
   before: (CalendarEvent & { startsAt: number; endsAt: number }) | null
+  /** Who has it in hand, by address: whoever invites the user, or whoever put it there. */
+  by: string | null
   /** The times of a series it stands for — its own the first —; 1 for an event alone. */
   instances: number
 }
 
 /**
  * The calendar's notifications (vision §13.3): the reminders before the
- * events, the invitations and the events moved or cancelled by others that
- * do not come by mail, and what the Segretario says of an event that cannot
- * wait — all through the app's notification centre.
+ * user's events (§7.4); the novelties of those that someone else has in
+ * hand and that do not come by mail — with the Segretario looking at the
+ * calendar, what it says to tell, and what it has not looked at in ten
+ * minutes as it is —; and what the Segretario says of an event that cannot
+ * wait. All through the app's notification centre.
  */
 export class CalendarNotifications {
   private timer: NodeJS.Timeout | null = null
@@ -51,6 +57,8 @@ export class CalendarNotifications {
   private readonly snoozed = new Map<string, number>()
   /** The reminders on screen, by notification key: their event as it was reminded of. */
   private readonly shown = new Map<string, { eventKey: string; startsAt: number; endsAt: number }>()
+  /** Novelties waiting for the Segretario's look at the calendar. */
+  private readonly waiting = new Set<NodeJS.Timeout>()
   private unsubscribe: (() => void) | null = null
   private stopped = false
 
@@ -63,6 +71,8 @@ export class CalendarNotifications {
       preparation: (eventKey: string) => Promise<string | null>
       /** Whether the Segretario looks at the calendar as it changes: then it says what to tell. */
       segretarioLooking: () => boolean
+      /** The last change of the calendar the Segretario's looks have seen; null when none is known. */
+      segretarioSeen: () => Promise<number | null>
       openExternal: (url: string) => void
     }
   ) {}
@@ -78,12 +88,13 @@ export class CalendarNotifications {
     this.unsubscribe?.()
     this.unsubscribe = null
 
-    for (const timer of [this.timer, this.settleTimer]) {
+    for (const timer of [this.timer, this.settleTimer, ...this.waiting]) {
       if (timer) {
         clearTimeout(timer)
       }
     }
 
+    this.waiting.clear()
     this.timer = null
     this.settleTimer = null
   }
@@ -110,14 +121,47 @@ export class CalendarNotifications {
   }
 
   /**
-   * Changes made by others that do not come by mail: with the Segretario
-   * looking at the calendar, it says what is worth telling; without, each
-   * is told — several at once, together.
+   * Novelties of the user's events that someone else has in hand: each
+   * told — several at once, together. With the Segretario looking at the
+   * calendar, and the user asking only for what it says, it looks first:
+   * what it says to tell, it tells (`segretarioAlert`); what its looks have
+   * not reached in ten minutes — `through`, the change noted last — is told
+   * as it is.
    */
-  changedByOthers(calendar: string, changes: ReadonlyArray<ChangeByOthers>): void {
+  changedByOthers(calendar: string, changes: ReadonlyArray<ChangeByOthers>, through: number): void {
     const { enabled, calendar: preferences } = this.deps.center.preferences
 
-    if (!enabled || !preferences.changes || this.deps.segretarioLooking() || changes.length === 0) {
+    if (!enabled || !preferences.changes || changes.length === 0) {
+      return
+    }
+
+    if (!preferences.onlyFlagged || !this.deps.segretarioLooking()) {
+      this.tellChanges(calendar, changes)
+      return
+    }
+
+    const timer = setTimeout(() => {
+      this.waiting.delete(timer)
+      void this.deps
+        .segretarioSeen()
+        .catch(() => null)
+        .then((seen) => {
+          if (!this.stopped && (seen === null || seen < through)) {
+            log.info('changes.unlooked', { changes: changes.length })
+            this.tellChanges(
+              calendar,
+              changes.filter((change) => change.event.endsAt > Date.now())
+            )
+          }
+        })
+    }, LOOK_WAIT_MS)
+    this.waiting.add(timer)
+  }
+
+  private tellChanges(calendar: string, changes: ReadonlyArray<ChangeByOthers>): void {
+    const { enabled, calendar: preferences } = this.deps.center.preferences
+
+    if (!enabled || !preferences.changes || changes.length === 0) {
       return
     }
 
@@ -163,9 +207,7 @@ export class CalendarNotifications {
           ? moved
             ? `Era ${whenWords(before, now)}`
             : `Era ${before.location ?? 'senza luogo'}, ora ${event.location ?? 'senza luogo'}`
-          : [event.organizer ? `Da ${event.organizer}` : null, event.location]
-              .filter(Boolean)
-              .join(' · '),
+          : [change.by ? `Da ${change.by}` : null, event.location].filter(Boolean).join(' · '),
         change.instances > 1 ? `e altre ${change.instances - 1} volte della serie` : null
       ]
         .filter(Boolean)
@@ -188,7 +230,7 @@ export class CalendarNotifications {
   /**
    * What the Segretario said of an event cannot wait for the user's next
    * look — a meeting moved to this morning, one cancelled today —, with its
-   * words.
+   * words: in place of the novelty told as it is, if that came first.
    */
   segretarioAlert(
     event: CalendarEvent & { startsAt: number; endsAt: number },
@@ -204,7 +246,7 @@ export class CalendarNotifications {
     return this.deps.center.notify({
       family: 'calendar',
       kind: 'calendar.alert',
-      key: `calendar:alert:${event.key}`,
+      key: `calendar:change:${event.key}`,
       title: event.title,
       subtitle: whenWords(event, Date.now()),
       body: text,

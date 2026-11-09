@@ -1,7 +1,10 @@
 import type { PrismaClient } from '@prisma/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { CalendarEvent } from '@shared/calendar'
 import type { ConnectionRefusedNotice } from '@shared/models'
+
+import type { SegretarioOwnership } from './ownership'
 
 vi.mock('electron', () => ({
   // Kept as it is: what is tested is what the service does with it.
@@ -15,6 +18,7 @@ vi.mock('electron', () => ({
 }))
 
 const { CalendarService } = await import('./calendar-service')
+type CalendarServiceOptions = ConstructorParameters<typeof CalendarService>[0]
 
 type Row = Record<string, unknown>
 
@@ -147,7 +151,8 @@ const opened: Array<InstanceType<typeof CalendarService>> = []
 
 /** The calendars open on the store and the network given, the user told of each refusal. */
 async function calendars(
-  fetch: (url: string, init?: RequestInit) => Promise<Response>
+  fetch: (url: string, init?: RequestInit) => Promise<Response>,
+  more: Partial<CalendarServiceOptions> = {}
 ): Promise<{ calendar: InstanceType<typeof CalendarService>; told: ConnectionRefusedNotice[] }> {
   const told: ConnectionRefusedNotice[] = []
   const prisma = store()
@@ -158,7 +163,8 @@ async function calendars(
     fetch,
     send: () => undefined,
     parentWindow: () => null,
-    onRefused: (notice) => told.push(notice)
+    onRefused: (notice) => told.push(notice),
+    ...more
   })
 
   opened.push(calendar)
@@ -466,5 +472,58 @@ END:VEVENT`
       event: { title: 'Sopralluogo in cantiere', start: kept.start }
     })
     expect(await calendar.eventAsKept('mai-esistito')).toBeNull()
+  })
+})
+
+describe('CalendarService, whose the events are (§7.4)', () => {
+  it('a subscription reminds of nothing and is not the user’s day, until the Segretario or the user says so', async () => {
+    const DAY = 86_400_000
+    const stamp = (at: number): string => new Date(at).toISOString().replace(/[-:]|\.\d{3}/g, '')
+    const feed = `BEGIN:VCALENDAR
+VERSION:2.0
+X-WR-CALNAME:Partite
+BEGIN:VEVENT
+UID:partita@calcio
+DTSTAMP:20261101T000000Z
+DTSTART:${stamp(Date.now() + DAY)}
+DURATION:PT2H
+SUMMARY:Partita
+END:VEVENT
+END:VCALENDAR`
+    let found: SegretarioOwnership | null = null
+    const { calendar } = await calendars(async () => new Response(feed), {
+      ownership: async () => found
+    })
+    await calendar.addIcs('https://studio.example/partite.ics', null)
+    const from = Date.now()
+    const to = from + 7 * DAY
+    const week = (): Promise<CalendarEvent[]> =>
+      calendar.events(new Date(from).toISOString(), new Date(to).toISOString())
+    const [entry] = await calendar.calendars()
+
+    expect(entry).toMatchObject({ role: 'propri', roleBy: null })
+    expect(await calendar.remindable(from, to)).toEqual([])
+    const [match] = await week()
+    expect(match.yours).toBe(false)
+
+    // Found the user's by the Segretario: it reminds, at the user's lead — the calendar's are not theirs.
+    found = { roles: new Map(), events: new Set([match.key]), series: new Set() }
+    expect(
+      (await calendar.remindable(from, to)).map((event) => [event.title, event.reminders])
+    ).toEqual([['Partita', null]])
+
+    // The Segretario says none is; the user says every one is: their word stands.
+    found = {
+      roles: new Map([[entry.key, { role: 'nessuno', reason: 'Un abbonamento' }]]),
+      events: new Set(),
+      series: new Set()
+    }
+    expect(await calendar.remindable(from, to)).toEqual([])
+    expect(await calendar.calendars()).toMatchObject([{ role: 'nessuno', roleBy: 'segretario' }])
+    expect(await calendar.setCalendarRole(entry.key, 'tutti')).toMatchObject([
+      { role: 'tutti', roleBy: 'utente' }
+    ])
+    expect((await week())[0].yours).toBe(true)
+    expect(await calendar.remindable(from, to)).toHaveLength(1)
   })
 })

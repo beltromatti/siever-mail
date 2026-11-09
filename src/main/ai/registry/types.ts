@@ -6,7 +6,7 @@
  * in tables with invariants, and change only through the registry.
  */
 
-import type { EventChange, NewCalendarEvent } from '@shared/calendar'
+import type { CalendarRole, EventChange, NewCalendarEvent } from '@shared/calendar'
 import type { HandleLink } from '@shared/segretario'
 
 /** Who changed something: the user, the Segretario (in a run), or the app itself. */
@@ -252,7 +252,15 @@ export interface ProposalRecord {
  */
 export interface RegistryChange {
   object:
-    'nota' | 'impegno' | 'progetto' | 'risposta' | 'proposta' | 'copia' | 'evento' | 'giornata'
+    | 'nota'
+    | 'impegno'
+    | 'progetto'
+    | 'risposta'
+    | 'proposta'
+    | 'copia'
+    | 'evento'
+    | 'giornata'
+    | 'calendario'
   action: string
   /** One line for the diary: "Aperta: mandare il computo a Giulia". */
   label: string
@@ -287,6 +295,16 @@ export type UndoSpec =
   | { kind: 'evento-modificato'; eventKey: string; before: EventChange }
   /** An event it took away: undone, it is put back as it was. */
   | { kind: 'evento-eliminato'; event: NewCalendarEvent }
+  /** An event it found the user's, or not (§7.4): undone, the user's word says the other. */
+  | {
+      kind: 'evento-tuo'
+      eventKey: string
+      seriesKey: string | null
+      title: string
+      yours: boolean
+    }
+  /** A calendar's role it decided: undone, the user's word keeps the one before. */
+  | { kind: 'calendario-ruolo'; calendarKey: string; before: CalendarRole }
 
 /** A change was refused: the conflict or the rule, said so the model can act on it. */
 export class RegistryRefusal extends Error {

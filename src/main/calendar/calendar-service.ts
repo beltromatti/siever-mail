@@ -31,6 +31,7 @@ import {
   type CalendarEvent,
   type CalendarProviderKind,
   type CalendarResponse,
+  type CalendarRole,
   type CalendarSearchQuery,
   type CalendarSearchResult,
   type EventChange,
@@ -71,7 +72,17 @@ import { GOOGLE_CALENDAR_SCOPE, GoogleCalendarProvider } from './google-calendar
 import { GraphCalendarProvider, MAILBOX_ZONE_NOT_GRANTED } from './graph-calendar'
 import type { ChangeByOthers } from './calendar-notifications'
 import { calendarNameOf, canonicalUid, type InvitationInstance } from './icalendar'
-import type { RemindedEvent } from './reminders'
+import {
+  handledBy,
+  inOthersHands,
+  invited,
+  roleOf,
+  yoursAmong,
+  type Ownership,
+  type SegretarioOwnership,
+  type Whose
+} from './ownership'
+import { instantsOf, type RemindedEvent } from './reminders'
 import { calendarText, feedUrl, IcsCalendarProvider, type Fetch } from './ics-calendar'
 
 const log = diagnostics('calendar')
@@ -125,14 +136,17 @@ export interface CalendarServiceOptions {
    * did it is told by the answer.
    */
   onRefused?(notice: ConnectionRefusedNotice): void
-  /** The events changed — a sync, a write —: what reminds of them looks again (§13.3). */
+  /** The events changed — a sync, a write, whose they are —: what reminds of them looks again (§13.3). */
   onEventsChanged?(): void
   /**
-   * Invitations, and events moved or cancelled, by others, as a sync found
-   * them — not those that come by mail too, in the mailbox of the same
-   * access: the mail tells them (§13.3).
+   * The novelties of the user's events that someone else has in hand, as a
+   * sync found them — not those the mail tells too (§13.3). `through`: the
+   * change noted last, which a look of the Segretario's at the calendar
+   * reaching it has seen them.
    */
-  onChangedByOthers?(calendar: string, changes: ChangeByOthers[]): void
+  onChangedByOthers?(calendar: string, changes: ChangeByOthers[], through: number): void
+  /** What the Segretario found of whose things are (§7.4); null with the AI off. */
+  ownership?(): Promise<SegretarioOwnership | null>
 }
 
 /** A change a sync found, as it is kept: what it was, what it is, in which calendar. */
@@ -206,6 +220,7 @@ function eventOfRow(
     description: row.description,
     attendees: JSON.parse(row.attendeesJson) as CalendarAttendee[],
     organizer: row.organizer,
+    creator: row.creator,
     myResponse: (row.myResponse as CalendarResponse | null) ?? null,
     meetLink: row.meetLink,
     htmlLink: row.htmlLink,
@@ -214,6 +229,27 @@ function eventOfRow(
   }
 
   return addresses ? { ...event, organizedByUser: organizedByUser(event, addresses) } : event
+}
+
+/** A kept calendar, as whose its events are is reckoned (`roleOf`): with its connection's provider. */
+function calendarFacts(
+  row: {
+    connectionId: string
+    calendarId: string
+    isPrimary: number
+    writable: number
+    role: string | null
+  },
+  providers: ReadonlyMap<string, string>
+): Parameters<typeof roleOf>[0] {
+  return {
+    connectionId: row.connectionId,
+    calendarId: row.calendarId,
+    primary: row.isPrimary === 1,
+    writable: row.writable === 1,
+    provider: (providers.get(row.connectionId) ?? 'ics') as CalendarProviderKind,
+    role: row.role
+  }
 }
 
 /**
@@ -337,11 +373,12 @@ export class CalendarService {
     }
 
     const prisma = this.prisma
-    const [connections, calendars, events, changes] = await Promise.all([
+    const [connections, calendars, events, changes, segretario] = await Promise.all([
       prisma.calendarConnection.findMany({ orderBy: { connectedAt: 'asc' } }),
       prisma.calendarCalendar.findMany(),
       prisma.calendarEvent.groupBy({ by: ['connectionId'], _count: { _all: true } }),
-      prisma.calendarChange.count()
+      prisma.calendarChange.count(),
+      this.segretarioOwnership()
     ])
 
     return {
@@ -361,7 +398,22 @@ export class CalendarService {
         refused: this.refused.get(connection.id) ?? null,
         calendars: calendars
           .filter((calendar) => calendar.connectionId === connection.id)
-          .map((calendar) => ({ name: calendar.name, hidden: calendar.hidden === 1 })),
+          .map((calendar) => {
+            // Whose its events are (§7.4), and who said so: what reminds and what Oggi shows.
+            const role = roleOf(
+              calendarFacts(calendar, new Map([[connection.id, connection.provider]])),
+              segretario
+            )
+
+            return {
+              name: calendar.name,
+              primary: calendar.isPrimary === 1,
+              writable: calendar.writable === 1,
+              hidden: calendar.hidden === 1,
+              role: role.role,
+              roleBy: role.by
+            }
+          }),
         events: events.find((group) => group.connectionId === connection.id)?._count._all ?? 0
       }))
     }
@@ -1076,7 +1128,26 @@ export class CalendarService {
         this.consentShort.delete(connectionId)
       }
 
-      for (const calendar of calendars) {
+      // A CalDAV server does not say which calendar is the main one: the first it lists is taken,
+      // and kept while it is there — a server listing them in another order does not move it.
+      const keptMain =
+        provider instanceof CalDavCalendarProvider
+          ? known.find(
+              (stored) =>
+                stored.isPrimary === 1 &&
+                calendars.some(
+                  (listed) => listed.calendarId === stored.calendarId && listed.writable
+                )
+            )
+          : undefined
+      const ours = keptMain
+        ? calendars.map((calendar) => ({
+            ...calendar,
+            primary: calendar.calendarId === keptMain.calendarId
+          }))
+        : calendars
+
+      for (const calendar of ours) {
         if (this.leaving.has(connectionId)) {
           return
         }
@@ -1401,6 +1472,7 @@ export class CalendarService {
         description: event.description,
         attendeesJson: JSON.stringify(event.attendees),
         organizer: event.organizer,
+        creator: event.creator ?? null,
         myResponse: event.myResponse,
         meetLink: event.meetLink,
         htmlLink: event.htmlLink,
@@ -1437,15 +1509,17 @@ export class CalendarService {
     }
   }
 
-  /** What changed in the calendars elsewhere after a point, the oldest first. */
+  /**
+   * What changed in the calendars elsewhere after a point, the oldest first;
+   * each event saying whether it is the user's (§7.4), as things are now.
+   */
   async changesSince(afterId: number, limit: number): Promise<CalendarChange[]> {
     const rows = await this.requirePrisma().calendarChange.findMany({
       where: { id: { gt: afterId } },
       orderBy: { id: 'asc' },
       take: limit
     })
-
-    return rows.flatMap((row) => {
+    const changes = rows.flatMap((row): CalendarChange[] => {
       const before = row.beforeJson ? (JSON.parse(row.beforeJson) as CalendarEvent) : null
       const after = row.afterJson ? (JSON.parse(row.afterJson) as CalendarEvent) : null
       const event = after ?? before
@@ -1462,6 +1536,16 @@ export class CalendarService {
           ]
         : []
     })
+    const yours = await this.yoursKeys(
+      changes.map((change) => ({ ...change.event, ...instantsOf(change.event) })),
+      await this.ownership(),
+      false
+    )
+
+    return changes.map((change) => ({
+      ...change,
+      event: { ...change.event, yours: yours.has(change.event.key) }
+    }))
   }
 
   /** The point the changes noted so far reach. */
@@ -1573,6 +1657,104 @@ export class CalendarService {
     }
   }
 
+  /** What the Segretario found of whose things are (§7.4): null with the AI off, or not to be read. */
+  private async segretarioOwnership(): Promise<SegretarioOwnership | null> {
+    return this.options.ownership
+      ? this.options.ownership().catch((error: unknown) => {
+          log.failed('ownership.unknown', error)
+          return null
+        })
+      : null
+  }
+
+  /**
+   * Whose things are, now (§7.4): every calendar with its role, the user's
+   * own addresses, and what the Segretario found.
+   */
+  private async ownership(): Promise<Ownership> {
+    const prisma = this.requirePrisma()
+    const [calendars, connections, { own }, segretario] = await Promise.all([
+      prisma.calendarCalendar.findMany(),
+      prisma.calendarConnection.findMany({ select: { id: true, provider: true } }),
+      this.userAddresses(),
+      this.segretarioOwnership()
+    ])
+    const providers = new Map(connections.map((connection) => [connection.id, connection.provider]))
+
+    return {
+      calendars: new Map(
+        calendars.map((calendar) => [
+          calendarKey(calendar.connectionId, calendar.calendarId),
+          {
+            role: roleOf(calendarFacts(calendar, providers), segretario).role,
+            primary: calendar.isPrimary === 1,
+            writable: calendar.writable === 1
+          }
+        ])
+      ),
+      own,
+      segretario
+    }
+  }
+
+  /**
+   * The keys of the events that are the user's (§7.4), each once among its
+   * copies: the copies kept in other calendars are looked for too, unless
+   * `whole` — a span read whole brings them all.
+   */
+  private async yoursKeys(
+    events: ReadonlyArray<Whose>,
+    ownership: Ownership,
+    whole: boolean
+  ): Promise<Set<string>> {
+    const uids = [...new Set(events.flatMap((event) => (event.iCalUid ? [event.iCalUid] : [])))]
+
+    if (whole || uids.length === 0) {
+      return yoursAmong(events, ownership)
+    }
+
+    const keys = new Set(events.map((event) => event.key))
+    const copies = await this.requirePrisma().calendarEvent.findMany({
+      where: { iCalUid: { in: uids } }
+    })
+
+    return yoursAmong(
+      events,
+      ownership,
+      copies
+        .filter((row) => !keys.has(row.key))
+        .map((row) => ({ ...eventOfRow(row, ''), startsAt: Number(row.startsAt) }))
+    )
+  }
+
+  /** The events, each saying whether it is the user's (§7.4) — see `yoursKeys`. */
+  private async withYours(
+    events: ReadonlyArray<CalendarEvent>,
+    whole: boolean
+  ): Promise<CalendarEvent[]> {
+    if (events.length === 0) {
+      return []
+    }
+
+    const yours = await this.yoursKeys(
+      events.map((event) => ({ ...event, ...instantsOf(event) })),
+      await this.ownership(),
+      whole
+    )
+
+    return events.map((event) => ({ ...event, yours: yours.has(event.key) }))
+  }
+
+  /**
+   * Whose things are changed — the user chose a calendar's role, the
+   * Segretario found something theirs, the AI went on or off —: what
+   * reminds and what shows them looks again.
+   */
+  ownershipChanged(): void {
+    this.eventsChanged()
+    this.options.send(CALENDAR_IPC.changed, null)
+  }
+
   /**
    * Whether a connection's calendars tell the organizer of an answer, and
    * the guests of a change: Google and Microsoft do; a CalDAV server when
@@ -1611,12 +1793,15 @@ export class CalendarService {
       ])
     )
 
-    return rows.map((row) =>
-      eventOfRow(
-        row,
-        names.get(calendarKey(row.connectionId, row.calendarId)) ?? '',
-        addresses.writing
-      )
+    return this.withYours(
+      rows.map((row) =>
+        eventOfRow(
+          row,
+          names.get(calendarKey(row.connectionId, row.calendarId)) ?? '',
+          addresses.writing
+        )
+      ),
+      true
     )
   }
 
@@ -1670,7 +1855,14 @@ export class CalendarService {
         return row ? [eventOfRow(row, names.get(event.calendarKey) ?? '', addresses.writing)] : []
       })
 
-    return { upcoming: kept(found.upcoming), past: kept(found.past), more: found.more }
+    const upcoming = kept(found.upcoming)
+    const marked = await this.withYours([...upcoming, ...kept(found.past)], false)
+
+    return {
+      upcoming: marked.slice(0, upcoming.length),
+      past: marked.slice(upcoming.length),
+      more: found.more
+    }
   }
 
   /** Every event kept, as searches read it: made once, until the events change. */
@@ -1747,76 +1939,87 @@ export class CalendarService {
   }
 
   /**
-   * The events that may remind (§13.3): from `from` to `to`, in a calendar
-   * the user shows, not declined — with their own reminders, and their
-   * calendar's name.
+   * The events that remind (§13.3): the user's (§7.4), from `from` to `to`,
+   * in a calendar they show — each once among its copies —, with their own
+   * reminders and their calendar's name. In a calendar that is not theirs
+   * the alarms are whoever keeps it's: one of the user's there with none
+   * of its own takes the user's lead.
    */
   async remindable(from: number, to: number): Promise<RemindedEvent[]> {
     const prisma = this.requirePrisma()
-    const [rows, calendars] = await Promise.all([
+    const [rows, calendars, ownership] = await Promise.all([
       prisma.calendarEvent.findMany({
-        where: {
-          endsAt: { gt: BigInt(from) },
-          startsAt: { lt: BigInt(to) },
-          OR: [{ myResponse: null }, { myResponse: { not: 'declined' } }]
-        }
+        where: { endsAt: { gt: BigInt(from) }, startsAt: { lt: BigInt(to) } }
       }),
-      prisma.calendarCalendar.findMany()
+      prisma.calendarCalendar.findMany(),
+      this.ownership()
     ])
     const shown = new Map(
       calendars
         .filter((calendar) => calendar.hidden !== 1)
         .map((calendar) => [calendarKey(calendar.connectionId, calendar.calendarId), calendar.name])
     )
-
-    return rows.flatMap((row) => {
+    const events = rows.flatMap((row) => {
       const calendarName = shown.get(calendarKey(row.connectionId, row.calendarId))
-
       return calendarName === undefined
         ? []
-        : [
-            {
-              key: row.key,
-              title: row.title,
-              calendarName,
-              allDay: row.allDay === 1,
-              startsAt: Number(row.startsAt),
-              endsAt: Number(row.endsAt),
-              location: row.location,
-              meetLink: row.meetLink,
-              reminders: row.remindersJson ? (JSON.parse(row.remindersJson) as number[]) : null
-            }
-          ]
+        : [{ ...eventOfRow(row, calendarName), startsAt: Number(row.startsAt), row }]
+    })
+    const yours = yoursAmong(events, ownership)
+
+    return events.flatMap(({ row, ...event }): RemindedEvent[] => {
+      if (!yours.has(event.key)) {
+        return []
+      }
+
+      const theirs =
+        ownership.calendars.get(calendarKey(event.connectionId, event.calendarId))?.role === 'tutti'
+      const own = event.reminders ?? null
+
+      return [
+        {
+          key: event.key,
+          title: event.title,
+          calendarName: event.calendarName,
+          allDay: event.allDay,
+          startsAt: event.startsAt,
+          endsAt: Number(row.endsAt),
+          location: event.location,
+          meetLink: event.meetLink,
+          reminders: theirs || (own !== null && own.length > 0) ? own : null
+        }
+      ]
     })
   }
 
   /**
-   * What a sync found changed by others, worth telling the user (§13.3):
-   * an invitation, an event moved or put elsewhere, one cancelled — still to
-   * come, and one the user is invited to and has not declined: their own
-   * they changed themselves, elsewhere, and what others keep in a calendar
-   * the user only sees are no news to them. A series changed whole is one
-   * change. None of a connection whose mailbox, of the same access, is
-   * connected: there the organiser's mail tells it.
+   * What a sync found changed, worth telling the user (§13.3): a novelty of
+   * an event of theirs (§7.4) that someone else has in hand — an invitation,
+   * an event moved, put elsewhere or cancelled by whoever organises it, one
+   * someone else put in their calendar —, still to come. Not one of their
+   * own that changed: they changed it themselves, elsewhere. Only where and
+   * when it is; a series changed whole is one change; an invitation of a
+   * calendar that came with a mailbox connected, the organiser's mail tells.
    */
   private async tellChangesByOthers(
     connectionId: string,
     found: ReadonlyArray<FoundChange>
   ): Promise<void> {
     const prisma = this.requirePrisma()
-    const [connection, accounts] = await Promise.all([
+    const [connection, accounts, ownership, through] = await Promise.all([
       prisma.calendarConnection.findUnique({ where: { id: connectionId } }),
-      this.options.database.getAccounts()
+      this.options.database.getAccounts(),
+      this.ownership(),
+      this.latestChangeId()
     ])
 
-    if (
-      !connection ||
-      (connection.mailAccountId !== null &&
-        accounts.some((account) => account.id === connection.mailAccountId))
-    ) {
+    if (!connection) {
       return
     }
 
+    const mailTells =
+      connection.mailAccountId !== null &&
+      accounts.some((account) => account.id === connection.mailAccountId)
     const now = Date.now()
     const timed = (
       event: CalendarEvent,
@@ -1849,12 +2052,7 @@ export class CalendarService {
               change.event.endsAt
             )
 
-      if (
-        !after ||
-        after.endsAt <= now ||
-        after.myResponse === null ||
-        after.myResponse === 'declined'
-      ) {
+      if (!after || after.endsAt <= now) {
         return []
       }
 
@@ -1869,12 +2067,25 @@ export class CalendarService {
         return []
       }
 
-      return [{ kind: change.kind, event: after, before, instances: 1 }]
+      return [{ kind: change.kind, event: after, before, by: null, instances: 1 }]
     })
+    // The user's, once among its copies — those this sync brings, and those kept elsewhere.
+    const yours = await this.yoursKeys(
+      changes.map((change) => change.event),
+      ownership,
+      false
+    )
+    const told = changes.flatMap((change): ChangeByOthers[] =>
+      yours.has(change.event.key) &&
+      inOthersHands(change.event, ownership.own) &&
+      !(mailTells && invited(change.event, ownership.own))
+        ? [{ ...change, by: handledBy(change.event, ownership.own) }]
+        : []
+    )
     // A series moved or cancelled whole: one change, its next time standing for the rest.
     const bySeries = new Map<string, ChangeByOthers>()
 
-    for (const change of changes.sort((a, b) => a.event.startsAt - b.event.startsAt)) {
+    for (const change of told.sort((a, b) => a.event.startsAt - b.event.startsAt)) {
       const { seriesId, calendarId } = change.event
       const key = seriesId
         ? `${change.kind}\u0000${calendarId}\u0000${seriesId}`
@@ -1889,7 +2100,7 @@ export class CalendarService {
     }
 
     if (bySeries.size > 0) {
-      this.options.onChangedByOthers?.(connection.label, [...bySeries.values()])
+      this.options.onChangedByOthers?.(connection.label, [...bySeries.values()], through)
     }
   }
 
@@ -2017,22 +2228,31 @@ export class CalendarService {
   /** Every connected calendar, the main ones first: for the Calendario app and the Segretario. */
   async calendars(): Promise<CalendarListEntry[]> {
     const prisma = this.requirePrisma()
-    const [rows, connections] = await Promise.all([
+    const [rows, connections, segretario] = await Promise.all([
       prisma.calendarCalendar.findMany({ orderBy: [{ isPrimary: 'desc' }, { name: 'asc' }] }),
-      prisma.calendarConnection.findMany({ select: { id: true, label: true } })
+      prisma.calendarConnection.findMany({ select: { id: true, label: true, provider: true } }),
+      this.segretarioOwnership()
     ])
     const labels = new Map(connections.map((connection) => [connection.id, connection.label]))
+    const providers = new Map(connections.map((connection) => [connection.id, connection.provider]))
 
-    return rows.map((row) => ({
-      key: calendarKey(row.connectionId, row.calendarId),
-      connectionId: row.connectionId,
-      connection: labels.get(row.connectionId) ?? '',
-      name: row.name,
-      primary: row.isPrimary === 1,
-      writable: row.writable === 1,
-      color: row.color,
-      hidden: row.hidden === 1
-    }))
+    return rows.map((row) => {
+      const role = roleOf(calendarFacts(row, providers), segretario)
+
+      return {
+        key: calendarKey(row.connectionId, row.calendarId),
+        connectionId: row.connectionId,
+        connection: labels.get(row.connectionId) ?? '',
+        name: row.name,
+        primary: row.isPrimary === 1,
+        writable: row.writable === 1,
+        color: row.color,
+        hidden: row.hidden === 1,
+        role: role.role,
+        roleBy: role.by,
+        roleReason: role.reason
+      }
+    })
   }
 
   /** Shows or hides a calendar's events in the Calendario app: a choice of this computer's. */
@@ -2059,9 +2279,39 @@ export class CalendarService {
     return this.calendars()
   }
 
-  /** An event by its key, as it is now; null when it is no longer in the calendar. */
+  /**
+   * Whose a calendar's events are, as the user says (§7.4) — from Settings,
+   * or to the Segretario in chat —: their word stands over the
+   * Segretario's. Null gives it back to the Segretario, or to the default.
+   */
+  async setCalendarRole(key: string, role: CalendarRole | null): Promise<CalendarListEntry[]> {
+    const prisma = this.requirePrisma()
+    const calendar = (await prisma.calendarCalendar.findMany()).find(
+      (candidate) => calendarKey(candidate.connectionId, candidate.calendarId) === key
+    )
+
+    if (!calendar) {
+      throw new Error('Questo calendario non è più collegato.')
+    }
+
+    await prisma.calendarCalendar.update({
+      where: {
+        connectionId_calendarId: {
+          connectionId: calendar.connectionId,
+          calendarId: calendar.calendarId
+        }
+      },
+      data: { role }
+    })
+    log.info('calendar.role', { conn: calendar.connectionId, role: role ?? 'default', by: 'user' })
+    this.ownershipChanged()
+    return this.calendars()
+  }
+
+  /** An event by its key, as it is now — saying whether it is the user's —; null when it is gone. */
   async event(key: string): Promise<CalendarEvent | null> {
-    return this.eventOrThrow(key).catch(() => null)
+    const event = await this.eventOrThrow(key).catch(() => null)
+    return event ? ((await this.withYours([event], false))[0] ?? null) : null
   }
 
   /**

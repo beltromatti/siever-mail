@@ -9,7 +9,7 @@ import type { Sql } from './sql'
  * order, as an old one runs the steps it has not had: one path, so what a
  * fresh database looks like is what an upgraded one looks like.
  */
-const SCHEMA_VERSION = 8
+const SCHEMA_VERSION = 9
 
 /** The tables of the first 2.0 builds, as they stood (version 1). */
 /** The open things' indexes: by conversation, by state, and — from version 5 — by event. */
@@ -339,6 +339,31 @@ const STEP_6: ReadonlyArray<string> = [
   'CREATE INDEX IF NOT EXISTS idx_ai_items_project ON ai_items(project_id) WHERE project_id IS NOT NULL'
 ]
 
+/**
+ * Version 9: whose things are (§7.4) — the calendars whose role the
+ * Segretario decided, and the events it found the user's that their
+ * calendar does not say, with the user's word against it.
+ */
+const STEP_9: ReadonlyArray<string> = [
+  `CREATE TABLE IF NOT EXISTS ai_calendar_roles (
+    calendar_key TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    reason TEXT,
+    run_id TEXT,
+    set_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS ai_own_events (
+    event_key TEXT PRIMARY KEY,
+    series_key TEXT,
+    yours INTEGER NOT NULL,
+    set_by TEXT NOT NULL,
+    reason TEXT,
+    run_id TEXT,
+    set_at INTEGER NOT NULL
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_ai_own_events_series ON ai_own_events(series_key) WHERE series_key IS NOT NULL'
+]
+
 async function hasTable(sql: Sql, table: string): Promise<boolean> {
   return (
     (await sql.get<{ name: string }>(
@@ -541,6 +566,12 @@ export async function ensureAiSchema(sql: Sql): Promise<void> {
   // Version 8: a note says whether the user is to be told of its message now (§13.3).
   if (version < 8) {
     await addColumn(sql, 'ai_notes', 'notify', 'INTEGER NOT NULL DEFAULT 0')
+  }
+
+  if (version < 9) {
+    for (const statement of STEP_9) {
+      await sql.run(statement)
+    }
   }
 
   if (version !== SCHEMA_VERSION) {

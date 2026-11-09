@@ -1,3 +1,4 @@
+import type { CalendarRole } from '@shared/calendar'
 import type { HandleLink } from '@shared/segretario'
 
 import { movedUnder } from '../../files/paths'
@@ -5,6 +6,7 @@ import { placeholders, type Sql } from '../sql'
 import { CommitmentStore } from './commitments'
 import { DayStore } from './day'
 import { NoteStore, type NoteInput } from './notes'
+import { OwnershipStore, type EventMark } from './ownership'
 import { ProjectStore } from './projects'
 import { ProposalStore } from './proposals'
 import { ReplyStore } from './replies'
@@ -28,6 +30,7 @@ import {
   type ReplyStatus,
   type ThreadRef,
   type UndoSpec,
+  RegistryRefusal,
   SYSTEM,
   USER
 } from './types'
@@ -64,6 +67,13 @@ const KIND_WORDS: Record<CommitmentKind, string> = {
   da_fare: 'da fare'
 }
 
+/** A calendar's role, as the diary says it (§7.4). */
+const ROLE_WORDS: Record<CalendarRole, string> = {
+  tutti: 'tutti gli eventi sono tuoi',
+  propri: 'solo i tuoi eventi',
+  nessuno: 'nessun evento è tuo'
+}
+
 const STATUS_LABELS: Record<CommitmentStatus, string> = {
   aperta: 'Riaperta',
   fatta: 'Fatta',
@@ -83,6 +93,7 @@ export class Registry {
   readonly replies: ReplyStore
   readonly proposals: ProposalStore
   readonly day: DayStore
+  readonly ownership: OwnershipStore
 
   constructor(
     private readonly sql: Sql,
@@ -94,6 +105,7 @@ export class Registry {
     this.replies = new ReplyStore(sql)
     this.proposals = new ProposalStore(sql)
     this.day = new DayStore(sql)
+    this.ownership = new OwnershipStore(sql)
   }
 
   /* ─────────────────────────────── notes ─────────────────────────────── */
@@ -1139,6 +1151,85 @@ export class Registry {
         messageKeys: [],
         projectIds: [],
         id: eventKey
+      },
+      actor
+    )
+  }
+
+  /* ─────────────────────────────── whose things are (§7.4) ─────────────────────────────── */
+
+  /**
+   * A calendar's role, as the Segretario decides it — Conoscimi, or the
+   * look at a calendar that came after —; the user's choice is the
+   * calendar's own, and stands over this (`CalendarService.setCalendarRole`).
+   */
+  async decideCalendarRole(
+    calendar: { key: string; name: string; role: CalendarRole },
+    role: CalendarRole,
+    reason: string | null,
+    actor: Actor
+  ): Promise<RegistryChange> {
+    await this.ownership.setRole(calendar.key, role, reason, actor.runId ?? null)
+    return this.emit(
+      {
+        object: 'calendario',
+        action: 'ruolo',
+        label: `${calendar.name}: ${ROLE_WORDS[role]}`,
+        accountId: null,
+        threadIds: [],
+        messageKeys: [],
+        projectIds: [],
+        id: calendar.key,
+        undo: { kind: 'calendario-ruolo', calendarKey: calendar.key, before: calendar.role }
+      },
+      actor
+    )
+  }
+
+  /**
+   * An event — and its series — the user's, or not, though its calendar
+   * does not say so (§7.4). The user's word stands: a run in the background
+   * does not overturn it.
+   */
+  async markEvent(
+    event: { key: string; title: string; seriesKey: string | null },
+    yours: boolean,
+    reason: string | null,
+    actor: Actor
+  ): Promise<RegistryChange> {
+    const previous = await this.ownership.markOf(event.key, event.seriesKey)
+
+    if (actor.background && previous?.setBy === 'utente' && previous.yours !== yours) {
+      throw new RegistryRefusal(
+        `L'utente ha detto lui che «${event.title}» ${previous.yours ? 'è' : 'non è'} suo: resta così.`
+      )
+    }
+
+    const mark: Omit<EventMark, 'setAt'> = {
+      eventKey: event.key,
+      seriesKey: event.seriesKey,
+      yours,
+      setBy: actor.by === 'utente' ? 'utente' : 'segretario',
+      reason
+    }
+    await this.ownership.mark({ ...mark, runId: actor.runId ?? null }, previous)
+    return this.emit(
+      {
+        object: 'evento',
+        action: 'tuo',
+        label: `${yours ? 'Tuo' : 'Non tuo'}: ${event.title}`,
+        accountId: null,
+        threadIds: [],
+        messageKeys: [],
+        projectIds: [],
+        id: event.key,
+        undo: {
+          kind: 'evento-tuo',
+          eventKey: event.key,
+          seriesKey: event.seriesKey,
+          title: event.title,
+          yours
+        }
       },
       actor
     )

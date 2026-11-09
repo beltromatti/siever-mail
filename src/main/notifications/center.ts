@@ -40,7 +40,8 @@ export const notificationPreferencesSchema = z
           .int()
           .nullable()
           .refine((lead) => REMINDER_LEADS.includes(lead)),
-        changes: z.boolean()
+        changes: z.boolean(),
+        onlyFlagged: z.boolean()
       })
       .strict(),
     segretario: z.object({ needsYou: z.boolean(), day: z.boolean() }).strict()

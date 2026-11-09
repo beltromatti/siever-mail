@@ -11,7 +11,8 @@ import {
   SelectValue
 } from '@renderer/components/ui/select'
 import { Switch } from '@renderer/components/ui/switch'
-import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
+import { useCalendarList } from '@renderer/features/calendar/use-calendar'
+import { CALENDAR_ROLES, type CalendarListEntry, type CalendarRole } from '@shared/calendar'
 import type { MailAccount } from '@shared/models'
 import {
   REMINDER_LEADS,
@@ -46,6 +47,13 @@ function leadWords(lead: number | null): string {
   }
 
   return lead === 60 ? '1 ora prima' : `${lead} minuti prima`
+}
+
+/** Whose a calendar's events are (§7.4), as the user chooses it. */
+const ROLE_WORDS: Record<CalendarRole, string> = {
+  tutti: 'Tutti gli eventi',
+  propri: 'Solo i tuoi',
+  nessuno: 'Nessuno'
 }
 
 const BADGE_WORDS: Record<BadgeCount, string> = {
@@ -89,6 +97,94 @@ function SettingRow({
   )
 }
 
+/** A setting chosen among a few: what it is on the left, the choice on the right. */
+function ChoiceRow<T extends string>({
+  title,
+  description,
+  value,
+  options,
+  words,
+  label,
+  width = 'w-45',
+  disabled,
+  onChange
+}: {
+  title: ReactNode
+  description?: ReactNode
+  value: T
+  options: ReadonlyArray<T>
+  words: (option: T) => string
+  label: string
+  width?: string
+  disabled?: boolean
+  onChange: (value: T) => void
+}): React.JSX.Element {
+  return (
+    <div className="bg-hover flex items-center justify-between gap-3 rounded-md px-3 py-2">
+      <span className="min-w-0">
+        <span className="block truncate text-[12px] font-medium">{title}</span>
+        {description && (
+          <span className="text-muted-foreground block text-[11px]">{description}</span>
+        )}
+      </span>
+      <Select value={value} onValueChange={(next) => onChange(next as T)} disabled={disabled}>
+        <SelectTrigger className={`${width} shrink-0`} aria-label={label}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option} value={option}>
+              {words(option)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}
+
+/** Who chose a calendar's role, in words: the user (with the way back), the Segretario, or nobody. */
+function RoleChosen({
+  calendar,
+  aiOn,
+  disabled,
+  onRestore
+}: {
+  calendar: CalendarListEntry
+  aiOn: boolean
+  disabled: boolean
+  onRestore: () => void
+}): React.JSX.Element {
+  const where = `${calendar.connection}${calendar.primary ? ' · il principale' : ''}${calendar.hidden ? ' · nascosto nel Calendario' : ''}`
+
+  if (calendar.roleBy === 'utente') {
+    return (
+      <>
+        {where} · scelto da te ·{' '}
+        <button
+          type="button"
+          className="hover:text-foreground underline underline-offset-2 disabled:no-underline"
+          disabled={disabled}
+          onClick={onRestore}
+        >
+          {aiOn ? 'lascia decidere al Segretario' : 'torna a com’era'}
+        </button>
+      </>
+    )
+  }
+
+  if (calendar.roleBy === 'segretario') {
+    return (
+      <>
+        {where} · deciso dal Segretario
+        {calendar.roleReason ? `: ${calendar.roleReason}` : ''}
+      </>
+    )
+  }
+
+  return <>{where}</>
+}
+
 function Group({
   title,
   description,
@@ -130,7 +226,7 @@ export function NotificationsSection({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
-  const { connections: calendars } = useCalendarConnections()
+  const { calendars, setCalendars } = useCalendarList()
 
   useEffect(() => {
     let current = true
@@ -187,6 +283,18 @@ export function NotificationsSection({
       toast.error('Notifica di prova non inviata', { description: errorText(error) })
     } finally {
       setTesting(false)
+    }
+  }
+
+  const setRole = async (key: string, role: CalendarRole | null): Promise<void> => {
+    setSaving(true)
+
+    try {
+      setCalendars(await window.calendarApi.setCalendarRole(key, role))
+    } catch (error) {
+      toast.error('Impostazione non salvata', { description: errorText(error) })
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -346,65 +454,116 @@ export function NotificationsSection({
         </Group>
       )}
 
-      {status.supported && Boolean(calendars?.length) && (
+      {calendars && calendars.length > 0 && (
         <Group title="Calendario">
-          <SettingRow
-            id="notifications-reminders"
-            title="Promemoria degli eventi"
-            description="Ai promemoria che ogni evento ha nel suo calendario. Il tuo rifiuto a un invito li toglie."
-            checked={preferences.calendar.reminders}
-            disabled={off}
-            onCheckedChange={(reminders) =>
-              void update((current) => ({
-                ...current,
-                calendar: { ...current.calendar, reminders }
-              }))
-            }
-          />
-          <div className="bg-hover flex items-center justify-between gap-3 rounded-md px-3 py-2">
-            <span className="min-w-0">
-              <span className="block text-[12px] font-medium">
-                Agli eventi senza un promemoria loro
-              </span>
-              <span className="text-muted-foreground block text-[11px]">
-                Non a quelli di tutto il giorno, come i compleanni.
-              </span>
-            </span>
-            <Select
-              value={String(preferences.calendar.defaultLead)}
-              onValueChange={(value) =>
-                void update((current) => ({
-                  ...current,
-                  calendar: {
-                    ...current.calendar,
-                    defaultLead: value === 'null' ? null : Number(value)
+          {status.supported && (
+            <>
+              <SettingRow
+                id="notifications-reminders"
+                title="Promemoria"
+                description="Prima dei tuoi eventi, ai tempi che ognuno ha nel suo calendario. Mai per un invito che hai rifiutato."
+                checked={preferences.calendar.reminders}
+                disabled={off}
+                onCheckedChange={(reminders) =>
+                  void update((current) => ({
+                    ...current,
+                    calendar: { ...current.calendar, reminders }
+                  }))
+                }
+              />
+              <ChoiceRow
+                title="Agli eventi senza un promemoria loro"
+                description="Non a quelli di tutto il giorno, come i compleanni."
+                value={String(preferences.calendar.defaultLead)}
+                options={REMINDER_LEADS.map(String)}
+                words={(lead) => leadWords(lead === 'null' ? null : Number(lead))}
+                label="Promemoria predefinito"
+                disabled={off || !preferences.calendar.reminders}
+                onChange={(lead) =>
+                  void update((current) => ({
+                    ...current,
+                    calendar: {
+                      ...current.calendar,
+                      defaultLead: lead === 'null' ? null : Number(lead)
+                    }
+                  }))
+                }
+              />
+              <SettingRow
+                id="notifications-calendar-changes"
+                title="Inviti e cambiamenti"
+                description="Un evento tuo che ha in mano qualcun altro: un invito, uno spostato o annullato da chi lo organizza, uno messo nel tuo calendario da un altro. Ciò che arriva anche per posta te lo dice la posta."
+                checked={preferences.calendar.changes}
+                disabled={off}
+                onCheckedChange={(changes) =>
+                  void update((current) => ({
+                    ...current,
+                    calendar: { ...current.calendar, changes }
+                  }))
+                }
+              />
+              {aiOn && (
+                <SettingRow
+                  id="notifications-calendar-flagged"
+                  title="Solo ciò che il Segretario ti segnala"
+                  description="Mentre guarda il calendario, ti avvisa solo dei cambiamenti che devi sapere adesso, dicendoti perché. Se non li ha guardati entro dieci minuti, arrivano come sono."
+                  checked={preferences.calendar.onlyFlagged}
+                  disabled={off || !preferences.calendar.changes}
+                  onCheckedChange={(onlyFlagged) =>
+                    void update((current) => ({
+                      ...current,
+                      calendar: { ...current.calendar, onlyFlagged }
+                    }))
                   }
-                }))
-              }
-              disabled={off || !preferences.calendar.reminders}
-            >
-              <SelectTrigger className="w-45 shrink-0" aria-label="Promemoria predefinito">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {REMINDER_LEADS.map((lead) => (
-                  <SelectItem key={String(lead)} value={String(lead)}>
-                    {leadWords(lead)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <SettingRow
-            id="notifications-calendar-changes"
-            title="Inviti e cambiamenti decisi da altri"
-            description={`Un invito, un evento spostato o annullato che non ti arriva anche per posta${aiOn ? ': con il Segretario, solo quelli che devi sapere adesso' : ''}.`}
-            checked={preferences.calendar.changes}
-            disabled={off}
-            onCheckedChange={(changes) =>
-              void update((current) => ({ ...current, calendar: { ...current.calendar, changes } }))
-            }
-          />
+                />
+              )}
+            </>
+          )}
+
+          {(calendars.length > 1 || calendars.some((calendar) => !calendar.primary)) && (
+            <div className="flex flex-col gap-2">
+              <p className="text-muted-foreground mt-1 text-[11px]">
+                Quali eventi sono tuoi: ti ricordano, te ne arrivano le novità
+                {aiOn ? ' e Oggi li mostra nella tua giornata' : ''}. In un calendario condiviso o
+                di altri, «solo i tuoi» sono quelli a cui sei invitato, che organizzi o che hai
+                creato tu
+                {aiOn ? ', e quelli che il Segretario riconosce tuoi' : ''}.
+              </p>
+              {calendars.map((calendar) => (
+                <ChoiceRow
+                  key={calendar.key}
+                  title={
+                    <span className="flex min-w-0 items-center gap-2">
+                      {calendar.color && (
+                        <span
+                          aria-hidden
+                          className="size-2 shrink-0 rounded-full"
+                          // The calendar's own colour, as its provider gives it.
+                          style={{ backgroundColor: calendar.color }}
+                        />
+                      )}
+                      <span className="truncate">{calendar.name}</span>
+                    </span>
+                  }
+                  description={
+                    <RoleChosen
+                      calendar={calendar}
+                      aiOn={aiOn}
+                      disabled={saving}
+                      onRestore={() => void setRole(calendar.key, null)}
+                    />
+                  }
+                  value={calendar.role}
+                  options={CALENDAR_ROLES}
+                  words={(role) => ROLE_WORDS[role]}
+                  label={`Quali eventi di ${calendar.name} sono tuoi`}
+                  width="w-40"
+                  disabled={saving}
+                  onChange={(role) => void setRole(calendar.key, role)}
+                />
+              ))}
+            </div>
+          )}
         </Group>
       )}
 
@@ -467,33 +626,17 @@ export function NotificationsSection({
         description={`Il numero ${iconPlace()}${/mac/i.test(navigator.platform) ? ': su macOS compare solo se le notifiche di SIEVER Mail sono consentite' : ''}.`}
       >
         {aiOn ? (
-          <div className="bg-hover flex items-center justify-between gap-3 rounded-md px-3 py-2">
-            <span className="min-w-0">
-              <span className="block text-[12px] font-medium">Che cosa conta</span>
-              <span className="text-muted-foreground block text-[11px]">
-                Ciò che ti aspetta oggi: le cose aperte che toccano a te, in scadenza oggi o già
-                scadute.
-              </span>
-            </span>
-            <Select
-              value={preferences.badge}
-              onValueChange={(badge) =>
-                void update((current) => ({ ...current, badge: badge as BadgeCount }))
-              }
-              disabled={saving}
-            >
-              <SelectTrigger className="w-60 shrink-0" aria-label="Il numero sull'icona">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.keys(BADGE_WORDS) as BadgeCount[]).map((badge) => (
-                  <SelectItem key={badge} value={badge}>
-                    {BADGE_WORDS[badge]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <ChoiceRow
+            title="Che cosa conta"
+            description="Ciò che ti aspetta oggi: le cose aperte che toccano a te, in scadenza oggi o già scadute."
+            value={preferences.badge}
+            options={Object.keys(BADGE_WORDS) as BadgeCount[]}
+            words={(badge) => BADGE_WORDS[badge]}
+            label="Il numero sull'icona"
+            width="w-60"
+            disabled={saving}
+            onChange={(badge) => void update((current) => ({ ...current, badge }))}
+          />
         ) : (
           <SettingRow
             id="notifications-badge"

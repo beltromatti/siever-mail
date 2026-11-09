@@ -163,6 +163,8 @@ function eventOf(
     description: event.description?.trim() || null,
     attendees,
     organizer: event.organizer?.email?.toLowerCase() ?? null,
+    // In a calendar shared the organizer is the calendar: who put the event there is the creator.
+    creator: event.creator?.email?.toLowerCase() ?? null,
     // Answering is for the invited, in a calendar of theirs: one's own event has nothing to
     // answer, nor has the copy in a colleague's calendar.
     myResponse: trustSelf && self && !self.organizer ? self.response : null,

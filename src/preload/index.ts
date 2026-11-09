@@ -251,6 +251,8 @@ const calendarApi: CalendarApi = {
   calendars: async () => invoke(CALENDAR_IPC.calendars),
   setCalendarHidden: async (calendarKey, hidden) =>
     invoke(CALENDAR_IPC.setCalendarHidden, calendarKey, hidden),
+  setCalendarRole: async (calendarKey, role) =>
+    invoke(CALENDAR_IPC.setCalendarRole, calendarKey, role),
   create: async (event) => invoke(CALENDAR_IPC.create, event),
   update: async (eventKey, change) => invoke(CALENDAR_IPC.update, eventKey, change),
   remove: async (eventKey) => invoke(CALENDAR_IPC.remove, eventKey),

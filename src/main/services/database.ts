@@ -3431,6 +3431,7 @@ export class AppDatabase {
         writable INTEGER NOT NULL DEFAULT 1,
         color TEXT,
         hidden INTEGER NOT NULL DEFAULT 0,
+        role TEXT,
         sync_token TEXT,
         window_end INTEGER,
         PRIMARY KEY (connection_id, calendar_id)
@@ -3454,6 +3455,7 @@ export class AppDatabase {
         description TEXT,
         attendees_json TEXT NOT NULL,
         organizer TEXT,
+        creator TEXT,
         my_response TEXT,
         meet_link TEXT,
         html_link TEXT,
@@ -3521,6 +3523,10 @@ export class AppDatabase {
       )
     }
 
+    if (!calendarColumns.has('role')) {
+      await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_calendars ADD COLUMN role TEXT')
+    }
+
     if (!(await columns('calendar_events')).has('origin_json')) {
       await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_events ADD COLUMN origin_json TEXT')
     }
@@ -3540,6 +3546,14 @@ export class AppDatabase {
       await this.prisma.$executeRawUnsafe(
         'ALTER TABLE calendar_events ADD COLUMN reminders_json TEXT'
       )
+      await this.prisma.$executeRawUnsafe('UPDATE calendar_calendars SET window_end = NULL')
+      await this.prisma.$executeRawUnsafe('UPDATE calendar_connections SET last_sync_at = NULL')
+    }
+
+    // Kept before events said who put them there: read whole again at the next sync, which says
+    // it — whose an event is (§7.4) —, a read anew, no change for the Segretario.
+    if (!(await columns('calendar_events')).has('creator')) {
+      await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_events ADD COLUMN creator TEXT')
       await this.prisma.$executeRawUnsafe('UPDATE calendar_calendars SET window_end = NULL')
       await this.prisma.$executeRawUnsafe('UPDATE calendar_connections SET last_sync_at = NULL')
     }

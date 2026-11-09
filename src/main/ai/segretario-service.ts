@@ -108,6 +108,7 @@ import { SEGRETARIO_TOOLS } from './tools'
 import { eventLine } from './tools/calendar'
 import { localDay } from './tools/day'
 import { plainLine, SegretarioNotifications } from './segretario-notifications'
+import type { SegretarioOwnership } from '@main/calendar/ownership'
 import type { NotificationCenter } from '@main/notifications/center'
 import { comparableText, formatDateTime, shortDate } from './tools/format'
 
@@ -192,6 +193,8 @@ export interface SegretarioServiceOptions {
   onWorkChanged?(): void
   /** A guided setup came to its end, as it was. */
   onSetupEnded?(setup: OnboardingState): void
+  /** Whose things are changed, as the Segretario found them (§7.4): what reminds and shows them looks again. */
+  onOwnershipChanged?(): void
 }
 
 function noteOf(record: NoteRecord): MessageNote {
@@ -490,6 +493,13 @@ export class SegretarioService {
 
         if (change.object === 'nota' && change.accountId && change.messageKeys[0]) {
           void this.noteWritten(change.accountId, change.messageKeys[0])
+        }
+
+        if (
+          change.object === 'calendario' ||
+          (change.object === 'evento' && change.action === 'tuo')
+        ) {
+          this.options.onOwnershipChanged?.()
         }
       },
       lesson: (kind, payload) => {
@@ -2018,6 +2028,20 @@ export class SegretarioService {
       case 'evento-eliminato':
         await this.options.calendar.create(undo.event, BY_USER)
         break
+      // The user says the other: their word, which the Segretario does not overturn.
+      case 'evento-tuo':
+        await plainly(
+          registry.markEvent(
+            { key: undo.eventKey, title: undo.title, seriesKey: undo.seriesKey },
+            !undo.yours,
+            null,
+            USER
+          )
+        )
+        break
+      case 'calendario-ruolo':
+        await this.options.calendar.setRole(undo.calendarKey, undo.before)
+        break
     }
 
     const updated: ChangesPayload = {
@@ -3213,6 +3237,36 @@ export class SegretarioService {
    * to do — asked, promised, to do — due today or before, those of a
    * message in the Trash or Spam aside. Null with the AI off.
    */
+  /**
+   * Whose things are, as the Segretario found them (§7.4): the calendars
+   * whose role it decided, the events and series it found the user's. Null
+   * with the AI off — then nothing of it counts — or before it opens.
+   */
+  async ownership(): Promise<SegretarioOwnership | null> {
+    if (!this.registry || !(await this.ready())) {
+      return null
+    }
+
+    const [roles, marks] = await Promise.all([
+      this.registry.ownership.roles(),
+      this.registry.ownership.marks()
+    ])
+    const yours = marks.filter((mark) => mark.yours)
+
+    return {
+      roles: new Map(
+        [...roles].map(([key, decided]) => [key, { role: decided.role, reason: decided.reason }])
+      ),
+      events: new Set(yours.map((mark) => mark.eventKey)),
+      series: new Set(yours.flatMap((mark) => (mark.seriesKey ? [mark.seriesKey] : [])))
+    }
+  }
+
+  /** The last change of the calendars the Segretario's looks have seen (§13.3); null when none is known. */
+  async calendarSeen(): Promise<number | null> {
+    return this.engine ? this.engine.calendarSeen() : null
+  }
+
   async dueTodayCount(): Promise<number | null> {
     if (!this.registry || !(await this.ready())) {
       return null

@@ -6,12 +6,13 @@ import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { Input } from '@renderer/components/ui/input'
 import { cn } from '@renderer/lib/utils'
+import { calendarKey } from '@shared/calendar'
 import type { MessageRef } from '@shared/models'
 import type { Commitment, DayLine, TodayPage as Today } from '@shared/segretario'
 
 import { isOnDay, startOfDay } from '@renderer/features/calendar/calendar-dates'
 import { EventLine } from '@renderer/features/calendar/event-line'
-import { useCalendarEvents } from '@renderer/features/calendar/use-calendar'
+import { useCalendarEvents, useCalendarList } from '@renderer/features/calendar/use-calendar'
 
 import {
   CommitmentMenu,
@@ -298,6 +299,7 @@ export function TodayPage({
   )
   const [now] = useState(() => Date.now())
   const today = startOfDay(new Date(now))
+  const { calendars } = useCalendarList()
   const agenda = useCalendarEvents(
     today.toISOString(),
     new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).toISOString()
@@ -381,7 +383,17 @@ export function TodayPage({
         return count > 0 ? [{ ...section, count }] : []
       })
     : []
-  const meetings = agenda?.filter((event) => isOnDay(event, today)) ?? []
+  // The user's day (§7.4): their events, of the calendars they show — the Calendario shows them all.
+  const shown = calendars
+    ? new Set(calendars.filter((calendar) => !calendar.hidden).map((calendar) => calendar.key))
+    : null
+  const meetings =
+    agenda?.filter(
+      (event) =>
+        isOnDay(event, today) &&
+        event.yours !== false &&
+        (shown === null || shown.has(calendarKey(event.connectionId, event.calendarId)))
+    ) ?? []
 
   return (
     <div className="paper flex h-full min-h-0 flex-col">

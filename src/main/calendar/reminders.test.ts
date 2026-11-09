@@ -75,12 +75,16 @@ describe('the calendar’s notifications', () => {
   let given: Set<string>
   let events: RemindedEvent[]
   let notifications: CalendarNotifications
+  let looking: boolean
+  let seen: number | null
 
   beforeEach(() => {
     vi.useFakeTimers({ now: NOW })
     shown = []
     given = new Set()
     events = []
+    looking = false
+    seen = null
     const center = {
       preferences: DEFAULT_NOTIFICATION_PREFERENCES,
       onPreferences: () => () => undefined,
@@ -100,7 +104,8 @@ describe('the calendar’s notifications', () => {
       center,
       events: async () => events,
       preparation: async () => 'Porta il preventivo rev2.',
-      segretarioLooking: () => false,
+      segretarioLooking: () => looking,
+      segretarioSeen: async () => seen,
       openExternal: () => undefined
     })
   })
@@ -194,10 +199,11 @@ describe('the calendar’s notifications', () => {
         myResponse: 'accepted'
       } as never,
       before: null,
+      by: 'luca@brenta.it',
       instances: 1
     })
 
-    notifications.changedByOthers('Ufficio', [changed('a')])
+    notifications.changedByOthers('Ufficio', [changed('a')], 1)
     // Gone: it opens on its day.
     expect(shown[0]).toMatchObject({
       title: 'Annullato: Riunione a',
@@ -205,12 +211,50 @@ describe('the calendar’s notifications', () => {
       target: { kind: 'day' }
     })
 
-    notifications.changedByOthers('Ufficio', [changed('b'), changed('c'), changed('d')])
+    notifications.changedByOthers('Ufficio', [changed('b'), changed('c'), changed('d')], 2)
     expect(shown[1]).toMatchObject({ title: '3 eventi cambiati', subtitle: 'Ufficio' })
 
     // A series cancelled whole: one change, that says so.
-    notifications.changedByOthers('Ufficio', [{ ...changed('e'), instances: 52 }])
+    notifications.changedByOthers('Ufficio', [{ ...changed('e'), instances: 52 }], 3)
     expect(shown[2].body).toContain('e altre 51 volte della serie')
+  })
+
+  it('lets the Segretario look first, and tells as it is what it has not looked at in ten minutes', async () => {
+    looking = true
+    const change = (key: string): ChangeByOthers => ({
+      kind: 'nuovo',
+      event: {
+        key,
+        title: `Sopralluogo ${key}`,
+        startsAt: NOW + 120 * MINUTE,
+        endsAt: NOW + 180 * MINUTE,
+        location: null,
+        myResponse: null
+      } as never,
+      before: null,
+      by: 'segreteria@brenta.it',
+      instances: 1
+    })
+
+    // Looked at in time: what it said stands, here nothing.
+    notifications.changedByOthers('Studio', [change('a')], 7)
+    seen = 7
+    await vi.advanceTimersByTimeAsync(10 * MINUTE)
+    expect(shown).toHaveLength(0)
+
+    // Not looked at — the look failed, or never came —: told as it is, by whom.
+    notifications.changedByOthers('Studio', [change('b')], 9)
+    await vi.advanceTimersByTimeAsync(10 * MINUTE)
+    expect(shown).toHaveLength(1)
+    expect(shown[0]).toMatchObject({ title: 'Nuovo evento: Sopralluogo b' })
+    expect(shown[0].body).toContain('Da segreteria@brenta.it')
+
+    // What the Segretario says takes the place of what was told as it is.
+    notifications.segretarioAlert(
+      { ...change('b').event, title: 'Sopralluogo b' },
+      'Spostato alle 8: parti prima.'
+    )
+    expect(shown[1].key).toBe(shown[0].key)
   })
 })
 

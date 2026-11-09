@@ -765,6 +765,8 @@ model CalendarCalendar {
   color        String?
   /// Hidden by the user in the Calendario app.
   hidden       Int     @default(0)
+  /// Whose its events are, as the user chose (`CalendarRole`, vision §7.4); null: not chosen.
+  role         String?
   syncToken    String? @map("sync_token")
   /// How far ahead its events were read: past it, they are read again.
   windowEnd    BigInt? @map("window_end")
@@ -827,6 +829,8 @@ model CalendarEvent {
   description   String?
   attendeesJson String  @map("attendees_json")
   organizer     String?
+  /// Who put it in the calendar, by address, where the calendar says it (Google).
+  creator       String?
   myResponse    String? @map("my_response")
   meetLink      String? @map("meet_link")
   htmlLink      String? @map("html_link")

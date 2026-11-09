@@ -45,12 +45,14 @@ export interface NotificationPreferences {
     mutedAccountIds: string[]
   }
   calendar: {
-    /** Before the events: at the times each event sets, and for one that sets none, `defaultLead`. */
+    /** Before the user's events (§7.4): at the times each sets, and for one that sets none, `defaultLead`. */
     reminders: boolean
     /** Minutes before an event that sets no reminder of its own; null for none. */
     defaultLead: number | null
-    /** Invitations, and events moved or cancelled by others, that do not come by mail. */
+    /** The novelties of the user's events that someone else has in hand, that do not come by mail. */
     changes: boolean
+    /** While the Segretario looks at the calendar as it changes, only what it says to tell now. */
+    onlyFlagged: boolean
   }
   segretario: {
     /** It waits for the user — a confirmation — or finished what they asked while they were away. */
@@ -69,7 +71,7 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   sound: true,
   badge: 'work',
   mail: { enabled: true, onlyFlagged: true, mutedAccountIds: [] },
-  calendar: { reminders: true, defaultLead: 10, changes: true },
+  calendar: { reminders: true, defaultLead: 10, changes: true, onlyFlagged: true },
   segretario: { needsYou: true, day: true }
 }
 
@@ -125,7 +127,8 @@ export function notificationPreferencesOf(stored: unknown): NotificationPreferen
         lead === null || (typeof lead === 'number' && REMINDER_LEADS.includes(lead))
           ? (lead as number | null)
           : defaults.calendar.defaultLead,
-      changes: flag(calendar, 'changes', defaults.calendar.changes)
+      changes: flag(calendar, 'changes', defaults.calendar.changes),
+      onlyFlagged: flag(calendar, 'onlyFlagged', defaults.calendar.onlyFlagged)
     },
     segretario: {
       needsYou: flag(segretario, 'needsYou', defaults.segretario.needsYou),
