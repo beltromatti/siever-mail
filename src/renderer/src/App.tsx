@@ -1180,7 +1180,60 @@ function App(): React.JSX.Element {
     [openMailMessage, whenSetupAllows]
   )
 
-  useEffect(() => window.mailApi.onOpenMessageFromNotification(openMessageRef), [openMessageRef])
+  // A notification clicked opens where it leads (§13.3), as a link of the Segretario would — past
+  // the welcome, and once the setup allows it.
+  const selectSegretarioActivity = segretario.select
+  useEffect(
+    () =>
+      window.notificationsApi.onOpen((target) => {
+        switch (target.kind) {
+          case 'message':
+            openMessageRef(target.ref)
+            return
+          case 'window':
+            return
+        }
+
+        whenSetupAllows(() => {
+          setWelcome(null)
+
+          switch (target.kind) {
+            case 'event':
+              void openCalendarEvent(target.eventKey)
+              return
+            case 'day':
+              openCalendar({ day: new Date(target.day) })
+              return
+            case 'today':
+              setActiveApp(aiOn ? 'oggi' : firstSourceApp)
+              return
+            case 'activity':
+              if (aiOn) {
+                selectSegretarioActivity(target.activityId)
+                setSegretarioOpen(true)
+              }
+              return
+            case 'draft':
+              void openDraftById(target.draftId)
+              return
+            case 'connections':
+              setSettingsSection('accounts')
+              setSettingsOpen(true)
+              return
+          }
+        })
+      }),
+    [
+      aiOn,
+      firstSourceApp,
+      openCalendar,
+      openCalendarEvent,
+      openDraftById,
+      openMessageRef,
+      selectSegretarioActivity,
+      whenSetupAllows
+    ]
+  )
 
   // The Segretario shows the user something: a message, a search, a draft.
   useEffect(

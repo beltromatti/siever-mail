@@ -116,7 +116,9 @@ export async function prepareReading(
           nature: twin.nature,
           priority: twin.priority,
           reason: twin.reason,
-          due: twin.due
+          due: twin.due,
+          // Told where it is not muted, once: the notifications know a copy (§13.3).
+          notify: twin.notify
         },
         { by: 'sistema' },
         { twinAccountId: twin.accountId }

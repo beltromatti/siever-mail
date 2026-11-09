@@ -43,7 +43,7 @@ function readme(
     '',
     '- manifesto.json: che cosa c’è in questo archivio, con il periodo e le scelte fatte.',
     '- stato.json: com’era SIEVER Mail al momento dell’esportazione: la versione, il sistema, le connessioni (posta, calendari) con i loro indirizzi, il Segretario, l’estensione.',
-    '- riepilogo.json: il registro a colpo d’occhio: gli avvii, quanto tempo la finestra è stata in primo piano ogni giorno, quante volte è successa ogni cosa, gli errori e gli avvisi raggruppati, le esecuzioni del Segretario per compito, come l’utente ha risposto al suo lavoro, ciò che è stato lento.',
+    '- riepilogo.json: il registro a colpo d’occhio: gli avvii, quanto tempo la finestra è stata in primo piano ogni giorno, quante volte è successa ogni cosa, gli errori e gli avvisi raggruppati, le esecuzioni del Segretario per compito, come l’utente ha risposto al suo lavoro, le notifiche per tipo (mostrate, aperte, scartate), ciò che è stato lento.',
     `- registro/: il registro ${options.days === 1 ? 'dell’ultimo giorno' : `degli ultimi ${options.days} giorni`}, un evento per riga (JSON): gli errori, lo stato delle connessioni, ciò che si fa nell’app, il lavoro del Segretario. Ogni riga ha l’ora (t), l’avvio (s), il livello (lvl), la parte dell’app (area) e che cosa è successo (ev); "by" è chi l’ha fatto, "run" l’esecuzione del Segretario, "conn" la connessione, "ms" quanto è durato.`,
     ...(options.segretario
       ? [

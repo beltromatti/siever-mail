@@ -61,6 +61,8 @@ export interface NoteRecord extends MessageAnchor {
   messageDate: string
   /** The same message came to another of the user's accounts, read there: this copies that note. */
   twinAccountId: string | null
+  /** The Segretario said to tell the user of the message now, with a notification (§13.3). */
+  notify: boolean
   revision: number
   runId: string | null
   /** Who wrote it last: a note the user corrected is not rewritten by a run in the background. */

@@ -24,8 +24,6 @@ import type {
   RenameFolderInput,
   UnifiedFolderSummary,
   UnifiedFoldersChangedEvent,
-  NotificationPreferences,
-  NotificationStatus,
   UnifiedPreferences,
   WindowControlsState,
   MailFolder,
@@ -114,7 +112,6 @@ export const IPC_CHANNELS = {
   marksChanged: 'marks:changed',
   describeFiles: 'file:describe',
   openExternalUrl: 'app:open-external-url',
-  openMessageFromNotification: 'app:open-message-from-notification',
   getWindowControlsState: 'window:get-controls-state',
   minimizeWindow: 'window:minimize',
   toggleMaximizeWindow: 'window:toggle-maximize',
@@ -123,14 +120,6 @@ export const IPC_CHANNELS = {
   messagesChanged: 'engine:messages-changed',
   foldersChanged: 'engine:folders-changed',
   unifiedFoldersChanged: 'engine:unified-folders-changed',
-  getNotificationPreferences: 'notifications:get-preferences',
-  setNotificationPreferences: 'notifications:set-preferences',
-  getNotificationStatus: 'notifications:get-status',
-  showTestNotification: 'notifications:show-test',
-  openNotificationSettings: 'notifications:open-system-settings',
-  notificationStatusChanged: 'notifications:status-changed',
-  taskbarBadgeChanged: 'app:taskbar-badge-changed',
-  setTaskbarBadgeImage: 'app:set-taskbar-badge-image',
   accountConnectionChanged: 'engine:account-connection-changed',
   connectionRefused: 'connections:refused',
   listConnectionRefusals: 'connections:list-refusals',
@@ -287,7 +276,6 @@ export interface DesktopMailApi {
   /** The path of a file dropped from the desktop (Electron `webUtils`). */
   getPathForFile: (file: File) => string
   openExternalUrl: (url: string) => Promise<boolean>
-  onOpenMessageFromNotification: (listener: (ref: MessageRef) => void) => () => void
   getWindowControlsState: () => Promise<WindowControlsState>
   minimizeWindow: () => Promise<void>
   toggleMaximizeWindow: () => Promise<WindowControlsState>
@@ -296,23 +284,6 @@ export interface DesktopMailApi {
   onMessagesChanged: (listener: (event: MessagesChangedEvent) => void) => () => void
   onFoldersChanged: (listener: (event: FoldersChangedEvent) => void) => () => void
   onUnifiedFoldersChanged: (listener: (event: UnifiedFoldersChangedEvent) => void) => () => void
-  getNotificationPreferences: () => Promise<NotificationPreferences>
-  /** Stores the whole record and resolves with what was stored. */
-  setNotificationPreferences: (
-    preferences: NotificationPreferences
-  ) => Promise<NotificationPreferences>
-  getNotificationStatus: () => Promise<NotificationStatus>
-  /** Shows a notification, resolving once the system showed it or turned it down. */
-  showTestNotification: () => Promise<NotificationStatus>
-  /** The system's page where the app's notifications are allowed. */
-  openNotificationSettings: () => Promise<void>
-  onNotificationStatusChanged: (listener: (status: NotificationStatus) => void) => () => void
-  /**
-   * Windows draws no count on a taskbar icon: the page draws the badge for
-   * the count it is told, and hands the picture back (null: no badge).
-   */
-  onTaskbarBadgeChanged: (listener: (count: number) => void) => () => void
-  setTaskbarBadgeImage: (dataUrl: string | null, description: string) => Promise<void>
   onAccountConnectionChanged: (listener: (state: AccountConnectionState) => void) => () => void
   /** A message of the outbox went: its server could be reached again. */
   onOutboxSent: (

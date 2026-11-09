@@ -56,6 +56,12 @@ export interface CalendarEvent {
   /** Put there by the Segretario, from a message: it may take it away again, and says where it came from. */
   origin: EventOrigin | null
   /**
+   * Its own reminders, in minutes before it starts (vision §13.3): none
+   * when it has them off; null — or absent — when it says nothing of them,
+   * and the reminder SIEVER Mail gives one that does not is its.
+   */
+  reminders?: number[] | null
+  /**
    * The user organises it — they, or a calendar they write in — or it has
    * no guests: they may change it or take it away, and whoever is invited
    * is told. False for an invitation, which is answered, not changed. Set

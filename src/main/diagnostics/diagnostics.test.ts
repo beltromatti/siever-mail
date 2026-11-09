@@ -285,11 +285,28 @@ describe('the summary', () => {
         by: 'user'
       }),
       line({ t: '2026-11-09T09:08:00.000Z', area: 'segretario', ev: 'reply.taken', by: 'user' }),
+      line({
+        t: '2026-11-09T09:09:00.000Z',
+        area: 'app',
+        ev: 'notification.shown',
+        family: 'calendar',
+        kind: 'calendar.reminder'
+      }),
+      line({
+        t: '2026-11-09T09:10:00.000Z',
+        area: 'app',
+        ev: 'notification.clicked',
+        family: 'calendar',
+        kind: 'calendar.reminder'
+      }),
       'not json',
       ''
     ])
 
-    expect(summary.lines).toBe(14)
+    expect(summary.lines).toBe(16)
+    expect(summary.notifications).toEqual({
+      'calendar.reminder': { shown: 1, clicked: 1, actions: 0, dismissed: 0, failed: 0 }
+    })
     expect(summary.answers).toEqual({
       proposals: { accepted: 1, declined: 1 },
       replies: { taken: 1, discarded: 0 },

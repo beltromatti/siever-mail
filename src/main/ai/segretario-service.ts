@@ -107,6 +107,8 @@ import { startRun, type RunStarter } from './tasks/start-run'
 import { SEGRETARIO_TOOLS } from './tools'
 import { eventLine } from './tools/calendar'
 import { localDay } from './tools/day'
+import { plainLine, SegretarioNotifications } from './segretario-notifications'
+import type { NotificationCenter } from '@main/notifications/center'
 import { comparableText, formatDateTime, shortDate } from './tools/format'
 
 const log = diagnostics('segretario')
@@ -184,8 +186,12 @@ export interface SegretarioServiceOptions {
   onEnabledChange(on: boolean): void
   /** A message's note, written as it was read: an alert waiting for it is let go. */
   onNoteWritten(note: MessageNote): void
-  /** Says something to the user in the system's alerts, when the window is not in front. */
-  notify(title: string, body: string): void
+  /** The app's notifications (§13.3): the AI's notices, and what the Segretario tells the user. */
+  notifications: NotificationCenter
+  /** The user's work changed — something opened, closed, put off —: what counts it counts again. */
+  onWorkChanged?(): void
+  /** A guided setup came to its end, as it was. */
+  onSetupEnded?(setup: OnboardingState): void
 }
 
 function noteOf(record: NoteRecord): MessageNote {
@@ -201,6 +207,7 @@ function noteOf(record: NoteRecord): MessageNote {
     due: record.due,
     messageDate: record.messageDate,
     twinAccountId: record.twinAccountId,
+    notify: record.notify,
     writtenBy: record.writtenBy
   }
 }
@@ -432,8 +439,18 @@ export class SegretarioService {
   /** The computer is asleep: the engine, made or yet to be made, waits for it to wake. */
   private asleep = false
 
+  /** What the Segretario tells the user on the desktop (§13.3). */
+  private readonly notices: SegretarioNotifications
+
   constructor(private readonly options: SegretarioServiceOptions) {
     this.client = new OpenRouterClient(options.fetch, (error) => this.refused(error))
+    this.notices = new SegretarioNotifications({
+      center: options.notifications,
+      letter: async (day) => (await this.registry?.day.letter(day))?.text ?? null,
+      lastAnswer: (activityId) => this.lastAnswer(activityId),
+      setup: () => this.getOnboarding(),
+      readingDone: async (accountIds) => (await this.getReadingStatus(accountIds)).done
+    })
   }
 
   whenReady(): Promise<void> {
@@ -672,7 +689,9 @@ export class SegretarioService {
 
   private async sayWhetherReading(): Promise<void> {
     const { enabled } = await this.db.store.getPreferences()
-    const reading = this.status.keyState === 'ready' && enabled
+    // A key that could not be checked still works: the Segretario reads, as `ready()` says.
+    const reading =
+      (this.status.keyState === 'ready' || this.status.keyState === 'unchecked') && enabled
 
     if (reading !== this.reading) {
       this.reading = reading
@@ -821,7 +840,16 @@ export class SegretarioService {
     await this.db.store.setMeta('notice', JSON.stringify(notice))
     this.options.send(SEGRETARIO_IPC.notice, notice)
     const { title, body } = noticeWords(notice)
-    this.options.notify(title, body)
+    // In the window a notice of its own says it; away from it, the system does too (§12.1).
+    this.options.notifications.notify({
+      family: 'app',
+      kind: `app.${notice.kind}`,
+      key: `app:notice:${notice.kind}`,
+      title,
+      body,
+      target: { kind: 'window' },
+      when: 'away'
+    })
   }
 
   /** Checks a key and keeps it, encrypted, if OpenRouter knows it. */
@@ -1162,6 +1190,7 @@ export class SegretarioService {
       })
     } else if (!state && before) {
       log.info('setup.end', { case: before.case, ms: Date.now() - before.startedAt, by: 'user' })
+      this.options.onSetupEnded?.(before)
     }
 
     if (state) {
@@ -1220,6 +1249,7 @@ export class SegretarioService {
 
   private workChanged(change: WorkChange): void {
     this.options.send(SEGRETARIO_IPC.workChanged, change)
+    this.options.onWorkChanged?.()
   }
 
   private async noteWritten(accountId: string, messageKey: string): Promise<void> {
@@ -3110,6 +3140,7 @@ export class SegretarioService {
   }
 
   async markActivitySeen(id: string): Promise<void> {
+    this.notices.seen(id)
     const summary = await this.db.store.updateActivity(id, { unseen: false })
 
     if (summary) {
@@ -3145,6 +3176,54 @@ export class SegretarioService {
 
   private emit(event: ActivityEvent): void {
     this.options.send(SEGRETARIO_IPC.activityEvent, event)
+
+    if (event.type === 'summary') {
+      this.notices.activity(event.activity)
+    }
+  }
+
+  /** The last words the Segretario wrote in a run: what a notification of its end says. */
+  private async lastAnswer(activityId: string): Promise<string | null> {
+    const events = (await this.store?.listEvents(activityId)) ?? []
+    const last = events
+      .filter((event) => event.type === 'assistant')
+      .map((event) => (event.payload as { content?: unknown }).content)
+      .findLast(
+        (content): content is string => typeof content === 'string' && content.trim() !== ''
+      )
+
+    return last ?? null
+  }
+
+  /**
+   * The preparation of an event, in a line — what a reminder of it says
+   * (§13.3); null with none, or with the AI off.
+   */
+  async preparationLine(eventKey: string): Promise<string | null> {
+    if (!this.registry || !(await this.ready())) {
+      return null
+    }
+
+    const prep = await this.registry.day.prep(eventKey)
+    return prep ? plainLine(prep.text) : null
+  }
+
+  /**
+   * What waits for the user today (§13.3): the open things that are theirs
+   * to do — asked, promised, to do — due today or before, those of a
+   * message in the Trash or Spam aside. Null with the AI off.
+   */
+  async dueTodayCount(): Promise<number | null> {
+    if (!this.registry || !(await this.ready())) {
+      return null
+    }
+
+    const due = await this.registry.commitments.open({
+      kinds: ['ti_chiedono', 'hai_promesso', 'da_fare'],
+      dueBy: localDay()
+    })
+    const aside = await this.setAsideOf(due)
+    return due.filter((record) => !aside.has(record.id)).length
   }
 
   /** The user's words, with the moment and what they are looking at, as the model reads them. */

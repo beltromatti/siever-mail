@@ -1,7 +1,8 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { app, net, type BrowserWindow } from 'electron'
+import { app, net, shell, type BrowserWindow } from 'electron'
+import { z } from 'zod'
 
 import extensionShared from '@app/extension/shared'
 
@@ -17,6 +18,14 @@ import { handleIpc } from '@main/ipc/handle'
 import { extensionChannel } from '@shared/extension-ipc'
 import { IPC_CHANNELS, type AddedAccount } from '@shared/ipc'
 import {
+  NOTIFICATIONS_IPC,
+  type BadgeShown,
+  type NotificationPreferences,
+  type NotificationStatus
+} from '@shared/notifications'
+import { setupTurnsAiOn, type OnboardingState } from '@shared/segretario'
+import { normalizeExternalHttpUrl } from '@main/utils/external-url'
+import {
   mailRefusedNotice,
   refusalWords,
   type ConnectionRefusedNotice,
@@ -27,7 +36,11 @@ import {
 import { SegretarioService } from './ai/segretario-service'
 import { updateAppMenuAi } from './app-menu'
 import { getAppWindow } from './app-window'
+import { CalendarNotifications } from './calendar/calendar-notifications'
 import { CalendarService } from './calendar/calendar-service'
+import { AppBadge } from './notifications/badge'
+import { instantsOf } from './calendar/reminders'
+import { NotificationCenter, notificationPreferencesSchema } from './notifications/center'
 import { GOOGLE_CALENDAR_SCOPE } from './calendar/google-calendar'
 import { invitationParties, occurrenceIn } from './calendar/icalendar'
 import { parseInvitation } from './calendar/ics'
@@ -46,6 +59,10 @@ import { diagnostics } from '@main/diagnostics/log'
 import { diagnosticState, provideDiagnosticState } from '@main/diagnostics/state'
 
 const log = diagnostics('app')
+/** The icon's count is counted again at least this often: the day turns, things fall due. */
+const BADGE_RECOUNT_MS = 60 * 60_000
+/** Changes come in bursts — a reading, a sync —: the icon is counted again once they stop. */
+const BADGE_SETTLE_MS = 800
 
 /**
  * The root of the main process. It owns what every app shares — the
@@ -66,12 +83,43 @@ export class Workspace {
   private readonly databasePath: string
   private unwatchSleep: (() => void) | null = null
   private storageReady: Promise<void> | null = null
+  /** The notifications of every app, the Segretario and the app itself (§13.3). */
+  readonly notifications: NotificationCenter
+  private readonly calendarNotifications: CalendarNotifications
+  /** The number on the app's icon, and what it counts: the unread mail, or the day's work. */
+  private readonly badge = new AppBadge(getAppWindow)
+  private inboxUnread = 0
+  private badgeTimer: NodeJS.Timeout | null = null
+  private badgeRecount: NodeJS.Timeout | null = null
+  /** Whether the Segretario reads the sources as they change: then it says what to tell. */
+  private segretarioReading = false
+  /** Stopping: nothing is counted or drawn on the icon any more. */
+  private stopped = false
 
   constructor(config: RuntimeConfig) {
     const userDataPath = app.getPath('userData')
     mkdirSync(userDataPath, { recursive: true })
     this.databasePath = join(userDataPath, 'siever-mail.sqlite')
     this.database = new AppDatabase(this.databasePath)
+    this.notifications = new NotificationCenter({
+      window: getAppWindow,
+      giveOnce: (key) => this.database.giveNotificationOnce(key),
+      onStatusChange: (status) =>
+        getAppWindow()?.webContents.send(NOTIFICATIONS_IPC.statusChanged, status)
+    })
+    this.calendarNotifications = new CalendarNotifications({
+      center: this.notifications,
+      events: (from, to) => this.calendar.remindable(from, to),
+      preparation: (eventKey) => this.segretario.preparationLine(eventKey),
+      segretarioLooking: () => this.segretarioReading,
+      openExternal: (url) => {
+        const safe = normalizeExternalHttpUrl(url)
+
+        if (safe) {
+          void shell.openExternal(safe)
+        }
+      }
+    })
     this.googleOAuthService = new GoogleOAuthService(config)
     this.microsoftOAuthService = new MicrosoftOAuthService(config)
     this.mail = new MailService({
@@ -86,6 +134,11 @@ export class Workspace {
       },
       onMailChanged: () => this.segretario.mailChanged(),
       onConnectionRefused: (notice) => this.connectionRefused(notice),
+      notifications: this.notifications,
+      onInboxUnreadChange: (count) => {
+        this.inboxUnread = count
+        this.countBadge()
+      },
       // A mailbox going (§11.4): the Segretario's work that could write about it stops and
       // waits; a calendar that came with the same access stays, on its own. Once it is gone,
       // what the Segretario kept of it goes. Each waits to be open; one that could not open does
@@ -124,6 +177,9 @@ export class Workspace {
       send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload),
       parentWindow: () => getAppWindow(),
       onRefused: (notice) => this.connectionRefused(notice),
+      onEventsChanged: () => this.calendarNotifications.eventsChanged(),
+      onChangedByOthers: (calendar, changes) =>
+        this.calendarNotifications.changedByOthers(calendar, changes),
       // A calendar connection going (§11.4), as a mailbox.
       onDisconnecting: (connectionId) =>
         this.segretario
@@ -145,15 +201,20 @@ export class Workspace {
       mail: this.mail.segretarioPort(),
       fetch: (input, init) => net.fetch(input, init),
       send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload),
-      onReadingChange: (reading) => this.mail.setSegretarioReading(reading),
-      onEnabledChange: (on) => updateAppMenuAi(on),
-      onNoteWritten: (note) => this.mail.noteWritten(note),
-      notify: (title, body) => {
-        if (!getAppWindow()?.isFocused()) {
-          this.mail.showNotice(title, body)
-        }
+      onReadingChange: (reading) => {
+        this.segretarioReading = reading
+        this.mail.setSegretarioReading(reading)
       },
+      onEnabledChange: (on) => {
+        updateAppMenuAi(on)
+        this.countBadge()
+      },
+      onNoteWritten: (note) => this.mail.noteWritten(note),
+      notifications: this.notifications,
+      onWorkChanged: () => this.countBadge(),
+      onSetupEnded: (setup) => this.setupEnded(setup),
       calendar: {
+        alert: (eventKey, text) => this.calendarAlert(eventKey, text),
         calendars: () => this.calendar.calendars(),
         connections: () => this.calendar.listConnections(),
         events: (fromIso, toIso) => this.calendar.events(fromIso, toIso),
@@ -247,6 +308,8 @@ export class Workspace {
   async start(extension: ExtensionMain): Promise<void> {
     try {
       await this.openStorage()
+      this.notifications.setPreferences(await this.database.getNotificationPreferences())
+      this.notifications.onPreferences(() => this.countBadge())
       const identity = extensionShared.identity
 
       if (identity) {
@@ -298,15 +361,24 @@ export class Workspace {
       log.error('Reading the mounted network shares failed', error)
     )
     try {
+      // The icon counts what the last session left, before the mail connects and changes it.
+      this.inboxUnread = await this.mail.inboxUnreadCount().catch(() => 0)
       await this.mail.start()
     } finally {
       // The calendar and the Segretario open whatever the mail did, so what waits for them
       // never hangs; one failing to open leaves the others working.
       await this.calendar
         .open()
+        .then(() => this.calendarNotifications.start())
         .catch((error: unknown) => log.error('The calendar did not open', error))
       this.unwatchSleep = watchSystemSleep((asleep) => {
         log.info(asleep ? 'system.sleep' : 'system.wake')
+
+        if (!asleep) {
+          // What came due while asleep, and a day that turned meanwhile.
+          this.calendarNotifications.woke()
+          this.countBadge()
+        }
 
         // Awake with the window still in front: its time in front starts again (§14.4).
         if (!asleep && getAppWindow()?.isFocused()) {
@@ -322,6 +394,11 @@ export class Workspace {
       await this.segretario
         .open()
         .catch((error: unknown) => log.error('The Segretario did not open', error))
+      // Whether it reads the mail as it comes, said even if it did not open: what the launch found waits for this.
+      this.mail.setSegretarioReading(this.segretarioReading)
+      // What waits for the user today changes with the day too: counted again every hour.
+      this.countBadge()
+      this.badgeTimer = setInterval(() => this.countBadge(), BADGE_RECOUNT_MS)
     }
   }
 
@@ -335,13 +412,160 @@ export class Workspace {
       }
     }
 
+    this.stopped = true
     await step('The extension', () => this.extension?.uninstall?.())
+    this.calendarNotifications.stop()
+
+    for (const timer of [this.badgeTimer, this.badgeRecount]) {
+      if (timer) {
+        clearTimeout(timer)
+      }
+    }
+
     await step('The calendar', () => this.calendar.stop())
     this.unwatchSleep?.()
     this.unwatchSleep = null
     await step('The Segretario', () => this.segretario.stop())
     await step('The mail', () => this.mail.stop())
+    this.notifications.dispose()
     await step('The database', () => this.database.close())
+  }
+
+  /* ─────────────────────────────── notifications (§13.3) ─────────────────────────────── */
+
+  async getNotificationPreferences(): Promise<NotificationPreferences> {
+    await this.openStorage()
+    return this.database.getNotificationPreferences()
+  }
+
+  /** Stores the whole record, of mailboxes still there, and puts it into effect. */
+  async setNotificationPreferences(input: unknown): Promise<NotificationPreferences> {
+    const payload = notificationPreferencesSchema.parse(input)
+    await this.openStorage()
+    const accounts = new Set((await this.database.getAccounts()).map((account) => account.id))
+    const preferences: NotificationPreferences = {
+      ...payload,
+      mail: {
+        ...payload.mail,
+        mutedAccountIds: [...new Set(payload.mail.mutedAccountIds)].filter((id) => accounts.has(id))
+      }
+    }
+
+    await this.database.setNotificationPreferences(preferences)
+    this.notifications.setPreferences(preferences)
+    return preferences
+  }
+
+  notificationStatus(): NotificationStatus {
+    return this.notifications.status()
+  }
+
+  showTestNotification(): Promise<NotificationStatus> {
+    return this.notifications.showTest()
+  }
+
+  openNotificationSettings(): Promise<void> {
+    return this.notifications.openSystemSettings()
+  }
+
+  /** The page drew the icon's badge (Windows): it goes on the taskbar button. */
+  setTaskbarBadgeImage(dataUrl: unknown, description: unknown): void {
+    this.badge.setOverlayImage(
+      z.string().startsWith('data:image/png;base64,').max(200_000).nullable().parse(dataUrl),
+      z.string().max(200).parse(description)
+    )
+  }
+
+  /** The window loaded anew: what only its page can draw is drawn again. */
+  windowLoaded(): void {
+    this.badge.redraw()
+  }
+
+  /**
+   * The number on the app's icon (§13.3), counted again once things settle:
+   * none; the unread mail of Posta in arrivo; or — with the AI — what waits
+   * for the user today, the open things theirs to do, due today or before.
+   */
+  private countBadge(): void {
+    if (this.stopped) {
+      return
+    }
+
+    if (this.badgeRecount) {
+      clearTimeout(this.badgeRecount)
+    }
+
+    this.badgeRecount = setTimeout(() => {
+      this.badgeRecount = null
+      void this.badgeCount()
+        .then((badge) => !this.stopped && this.badge.set(badge))
+        .catch((error: unknown) => log.failed('badge.not-counted', error))
+    }, BADGE_SETTLE_MS)
+  }
+
+  private async badgeCount(): Promise<BadgeShown> {
+    const unread = (count: number): BadgeShown => ({
+      count,
+      description: count === 1 ? '1 messaggio non letto' : `${count} messaggi non letti`
+    })
+
+    switch (this.notifications.preferences.badge) {
+      case 'none':
+        return { count: 0, description: '' }
+      case 'unread':
+        return unread(this.inboxUnread)
+      case 'work': {
+        // With the AI off, there is no work kept: the unread mail stands in for it.
+        const due = await this.segretario.dueTodayCount().catch(() => null)
+        return due === null
+          ? unread(this.inboxUnread)
+          : {
+              count: due,
+              description: due === 1 ? '1 cosa ti aspetta oggi' : `${due} cose ti aspettano oggi`
+            }
+      }
+    }
+  }
+
+  /** The Segretario tells the user now what cannot wait about an event (§13.3). */
+  private async calendarAlert(eventKey: string, text: string): Promise<'told' | 'off' | 'unknown'> {
+    const kept = await this.calendar.eventAsKept(eventKey)
+
+    if (!kept) {
+      return 'unknown'
+    }
+
+    return this.calendarNotifications.segretarioAlert(
+      { ...kept.event, ...instantsOf(kept.event) },
+      text,
+      kept.gone
+    )
+      ? 'told'
+      : 'off'
+  }
+
+  /**
+   * The first setup over: the first notification says, in context, what
+   * SIEVER Mail will tell — and it is when macOS asks the user to allow
+   * them, rather than hours later on the first one that counts.
+   */
+  private setupEnded(setup: OnboardingState): void {
+    if (setup.case !== 'primo-avvio') {
+      return
+    }
+
+    const aiOn = setupTurnsAiOn(setup) && this.segretarioReading
+    this.notifications.notify({
+      family: 'app',
+      kind: 'app.introduction',
+      key: 'app:introduction',
+      title: 'SIEVER Mail è pronta',
+      body: aiOn
+        ? 'Ti avviserà qui solo di ciò che non può aspettare: la posta che conta, i tuoi appuntamenti, il Segretario quando ti serve.'
+        : 'Ti avviserà qui della posta nuova e dei tuoi appuntamenti.',
+      target: { kind: 'window' },
+      when: 'always'
+    })
   }
 
   /**
@@ -582,11 +806,17 @@ export class Workspace {
       detail: notice.detail
     })
     getAppWindow()?.webContents.send(IPC_CHANNELS.connectionRefused, notice)
-
-    if (!getAppWindow()?.isFocused()) {
-      const { title, body } = refusalWords(notice)
-      this.mail.showNotice(title, body)
-    }
+    // In the window its notice says it; away from it, the system does too (§14.1).
+    const { title, body } = refusalWords(notice)
+    this.notifications.notify({
+      family: 'app',
+      kind: 'app.connection-refused',
+      key: `app:refused:${notice.id}`,
+      title,
+      body,
+      target: { kind: 'connections' },
+      when: 'away'
+    })
   }
 
   /**

@@ -34,7 +34,6 @@ import type {
   MessageListSortDirection,
   MessageListSortField,
   MessageRef,
-  NotificationPreferences,
   PecDetail,
   PecKind,
   PecReceipt,
@@ -47,12 +46,12 @@ import {
   DEFAULT_MESSAGE_GROUPING_MODE,
   DEFAULT_MESSAGE_LIST_SORT_DIRECTION,
   DEFAULT_MESSAGE_LIST_SORT_FIELD,
-  DEFAULT_NOTIFICATION_PREFERENCES,
   DEFAULT_THEME_MODE,
   DEFAULT_UI_PREFERENCES,
   READER_ZOOM_DEFAULT
 } from '@shared/models'
 import { addressKey, isValidEmailAddress } from '@shared/email-address'
+import { notificationPreferencesOf, type NotificationPreferences } from '@shared/notifications'
 import { folderForRole, folderRole, type FolderRole } from '@shared/folders'
 import {
   foldSearchText,
@@ -828,25 +827,11 @@ function normalizeStorageSectionSizesToTotal(
 
 /** The stored notification preferences; what is missing or unreadable takes its default. */
 function parseNotificationPreferences(value: string | null | undefined): NotificationPreferences {
-  let stored: Partial<Record<keyof NotificationPreferences, unknown>> = {}
-
   try {
-    const parsed = JSON.parse(value ?? '{}') as unknown
-    stored = parsed && typeof parsed === 'object' ? parsed : {}
+    return notificationPreferencesOf(JSON.parse(value ?? '{}'))
   } catch {
     // A value no release wrote: the defaults stand in for it.
-  }
-
-  const flag = (key: 'enabled' | 'showPreview' | 'onlyImportant' | 'sound' | 'badge'): boolean =>
-    typeof stored[key] === 'boolean' ? stored[key] : DEFAULT_NOTIFICATION_PREFERENCES[key]
-
-  return {
-    enabled: flag('enabled'),
-    mutedAccountIds: normalizeAccountIdList(stored.mutedAccountIds),
-    showPreview: flag('showPreview'),
-    onlyImportant: flag('onlyImportant'),
-    sound: flag('sound'),
-    badge: flag('badge')
+    return notificationPreferencesOf({})
   }
 }
 
@@ -2834,6 +2819,19 @@ export class AppDatabase {
     return parseNotificationPreferences(rows[0]?.value)
   }
 
+  /**
+   * Whether a notification given once was given already; it is marked as
+   * given if not. True the first time only.
+   */
+  async giveNotificationOnce(key: string): Promise<boolean> {
+    await this.ready
+    const inserted = await this.prisma.$executeRaw`
+      INSERT INTO notifications_given (key, at) VALUES (${key}, ${Date.now()})
+      ON CONFLICT(key) DO NOTHING
+    `
+    return inserted === 1
+  }
+
   async setNotificationPreferences(preferences: NotificationPreferences): Promise<void> {
     await this.ready
 
@@ -3459,7 +3457,8 @@ export class AppDatabase {
         my_response TEXT,
         meet_link TEXT,
         html_link TEXT,
-        origin_json TEXT
+        origin_json TEXT,
+        reminders_json TEXT
       )
     `)
     await this.prisma.$executeRawUnsafe(
@@ -3531,6 +3530,16 @@ export class AppDatabase {
     // and is looked at only once it is (`planCalendarLooks`).
     if (!(await columns('calendar_events')).has('series_id')) {
       await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_events ADD COLUMN series_id TEXT')
+      await this.prisma.$executeRawUnsafe('UPDATE calendar_calendars SET window_end = NULL')
+      await this.prisma.$executeRawUnsafe('UPDATE calendar_connections SET last_sync_at = NULL')
+    }
+
+    // Kept before events said their own reminders: every calendar is read whole again at its next
+    // sync, which says them — a read anew, no change for the Segretario (§13.3).
+    if (!(await columns('calendar_events')).has('reminders_json')) {
+      await this.prisma.$executeRawUnsafe(
+        'ALTER TABLE calendar_events ADD COLUMN reminders_json TEXT'
+      )
       await this.prisma.$executeRawUnsafe('UPDATE calendar_calendars SET window_end = NULL')
       await this.prisma.$executeRawUnsafe('UPDATE calendar_connections SET last_sync_at = NULL')
     }
@@ -5639,6 +5648,18 @@ export class AppDatabase {
         queued_at INTEGER NOT NULL
       )
     `)
+
+    // The notifications given only once — a reminder, the day's letter —, with when: a launch,
+    // a wake, does not give them again (§13.3). Kept two days.
+    await this.prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS notifications_given (
+        key TEXT PRIMARY KEY,
+        at INTEGER NOT NULL
+      )
+    `)
+    await this.prisma.$executeRawUnsafe(
+      `DELETE FROM notifications_given WHERE at < ${Date.now() - 2 * 24 * 60 * 60 * 1000}`
+    )
 
     await this.prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS app_preferences (

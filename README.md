@@ -25,6 +25,8 @@ Without AI, SIEVER Mail is a set of fast, honest apps for mail and calendars. Wi
 
 **Work done before you ask.** Replies to what matters, written in your style and waiting in the reader. Reminders for what is late. A briefing before each meeting. A last look at every message as you send it: the attachment you mention, the question left unanswered, the weekday that does not match the date.
 
+**Interrupted only when it can't wait.** A message someone needs answered today, a meeting about to start with what to bring, a change of plan by others: those reach your desktop, in a line that says enough. The rest waits for you where you'll look. Every event reminds you when its calendar says, or when you choose.
+
 **It learns you, and you can read what it knows.** In _Conoscimi_ it gets to know your connections while you watch; then it learns from how you correct it. Everything it remembers is a note you can read, correct, restore or forget.
 
 **On its own, it only proposes.** Nothing reaches anyone without you: it does not send, invite or move your mail by itself — it leaves you a proposal, one click away. A diary shows everything it did, each change with its undo.

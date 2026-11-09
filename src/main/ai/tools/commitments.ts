@@ -74,7 +74,8 @@ export const noteTool: SegretarioTool = {
       natura: { type: 'string', enum: [...NATURES] },
       importanza: { type: 'string', enum: [...PRIORITIES] },
       motivo: { type: 'string' },
-      scadenza: { type: ['string', 'null'] }
+      scadenza: { type: ['string', 'null'] },
+      avvisa: { type: 'boolean' }
     },
     required: ['messaggio', 'sintesi', 'natura', 'importanza', 'motivo']
   },
@@ -93,7 +94,9 @@ export const noteTool: SegretarioTool = {
           nature,
           priority,
           reason: stringArg(args, 'motivo') ?? '',
-          due: dayArg(args, 'scadenza')
+          due: dayArg(args, 'scadenza'),
+          // Only a message that came: what the user sent is told to no one.
+          notify: args.avvisa === true && message.direction === 'in'
         },
         context.run.actor,
         {

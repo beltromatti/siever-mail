@@ -1,38 +1,25 @@
-import { app, Notification } from 'electron'
+import { Notification } from 'electron'
 
-import { getAppWindow } from '@main/app-window'
-import { diagnostics } from '@main/diagnostics/log'
+import type { NotificationCenter, NotificationInput } from '@main/notifications/center'
 import { folderRole } from '@shared/folders'
-import { IPC_CHANNELS } from '@shared/ipc'
 import type { MessageNote } from '@shared/segretario'
-import {
-  DEFAULT_NOTIFICATION_PREFERENCES,
-  type MailFolder,
-  type MailMessageSummary,
-  type MessageRef,
-  type NotificationDelivery,
-  type NotificationPreferences,
-  type NotificationStatus
-} from '@shared/models'
+import type { MailFolder, MailMessageSummary, MessageRef } from '@shared/models'
 
-const log = diagnostics('mail')
-
-/** The longest a new message waits for the Segretario's note before it is announced as it is. */
+/** The longest a new message waits for the Segretario's note before it is told as it is. */
 const NOTE_WAIT_MS = 10 * 60 * 1000
-
-const NOTIFICATION_PREVIEW_MAX_LENGTH = 180
-const NOTIFICATION_SUBJECT_MAX_LENGTH = 80
-const NOTIFICATION_COALESCE_WINDOW_MS = 1500
-const NOTIFICATION_DEDUPE_TTL_MS = 10 * 60 * 1000
+/** Messages arriving together are told together. */
+const COALESCE_MS = 1_500
+/** The mail come while the app was closed arrives in bursts: told together once it stops. */
+const CATCH_UP_SETTLE_MS = 20_000
+const PREVIEW_MAX_LENGTH = 180
+const SUBJECT_MAX_LENGTH = 80
+const DEDUPE_TTL_MS = 10 * 60 * 1000
+/** A copy of a message told is not told again so long after: past any wait for its note. */
+const COPY_TTL_MS = 60 * 60 * 1000
 /** Senders a notification of several messages names before "e altri N". */
 const NAMED_SENDERS = 2
-/** How long a test notification is given to be shown or turned down. */
-const TEST_SETTLE_MS = 4_000
 
-/** The buttons of a single message's notification, in their order. */
-const MESSAGE_ACTIONS = ['Segna come letta', 'Archivia'] as const
-
-/** What a notification's buttons do, on the message it announces. */
+/** What a notification's buttons do, on the message it tells. */
 export interface NotificationMessageActions {
   markRead: (ref: MessageRef) => Promise<unknown>
   archive: (ref: MessageRef) => Promise<unknown>
@@ -43,29 +30,21 @@ export interface NotificationAccount {
   email: string
 }
 
-/**
- * Why the system turned a notification down, in the user's words where it
- * is one of the known reasons: macOS's UNErrorCodeNotificationsNotAllowed,
- * the settings Windows reports.
- */
-function failureReason(error: string): string {
-  if (/UNErrorDomain error 1\b/.test(error)) {
-    return 'Le notifiche di SIEVER Mail non sono consentite in Impostazioni di Sistema › Notifiche.'
-  }
-
-  if (/Settings prevent the notification/i.test(error)) {
-    return 'Le impostazioni di Windows non consentono le notifiche di SIEVER Mail.'
-  }
-
-  return error
-}
-
-function heldKey(accountId: string, key: string): string {
-  return `${accountId}\u0000${key}`
+function refOf(message: Pick<MailMessageSummary, 'accountId' | 'folderPath' | 'uid'>): MessageRef {
+  return { accountId: message.accountId, folderPath: message.folderPath, uid: message.uid }
 }
 
 function messageKey(ref: MessageRef): string {
   return `${ref.accountId}:${ref.folderPath}:${ref.uid}`
+}
+
+/**
+ * What a message's copies in other mailboxes say the same — its
+ * Message-ID, who sent it, what about, when (§6.1: two messages may share a
+ * Message-ID) —: told in one, it is not told again.
+ */
+function copyKey(message: MailMessageSummary): string {
+  return [message.messageId ?? '', message.senderKey, message.subject, message.date].join('\u0000')
 }
 
 function trimText(value: string, maxLength: number): string {
@@ -86,93 +65,91 @@ function senderList(messages: ReadonlyArray<MailMessageSummary>): string {
   return others <= 0 ? named : `${named} e ${others === 1 ? 'un altro' : `altri ${others}`}`
 }
 
-/** What deserves an alert of its own: it asks something of the user and matters. */
-function noteMatters(note: Pick<MessageNote, 'nature' | 'priority'>): boolean {
-  return (
-    (note.nature === 'da_rispondere' || note.nature === 'da_fare') &&
-    (note.priority === 'alta' || (note.nature === 'da_rispondere' && note.priority === 'media'))
-  )
+/** A message told, with what the Segretario wrote of it when it said to tell it. */
+interface Told {
+  message: MailMessageSummary
+  summary?: string
 }
 
-interface HeldMessage {
+interface Batch {
+  timer: NodeJS.Timeout
+  account: NotificationAccount
+  told: Told[]
+}
+
+interface Held {
   timer: NodeJS.Timeout
   account: NotificationAccount
   message: MailMessageSummary
-}
-
-interface PendingBatch {
-  timer: NodeJS.Timeout
-  account: NotificationAccount
-  messages: MailMessageSummary[]
-}
-
-interface ShownNotification {
-  notification: Notification
-  /** The messages it announces that are still unread where they arrived. */
-  keys: Set<string>
+  /** Come while the app was closed: told with the others of its mailbox, once all are settled. */
+  catchUp: boolean
 }
 
 /**
- * The desktop alerts for new mail, as Apple Mail and Outlook give them.
+ * The notifications of new mail (vision §13.3), given through the app's
+ * notification centre.
  *
- *   • Only Posta in arrivo, only unread messages, only accounts not muted —
- *     archived, sent, spam and the folders the user files into never alert,
- *     nor does a message read elsewhere before it arrived here.
- *   • One message: its sender, subject and first lines (or, with the
- *     preview off, only that mail arrived), and two buttons — "Segna come
- *     letta" and "Archivia". Several arriving together: one alert naming
- *     who they are from. A click opens the message.
- *   • An alert goes away by itself once its messages are read, moved or
- *     deleted — here or on another device.
- *
- * What became of the last one shown is kept (`status`): no system says
- * beforehand whether it will show the app's notifications, but macOS and
- * Windows report the one they turned down.
+ *   • Only Posta in arrivo, only unread messages, only mailboxes not
+ *     muted — archived, sent, spam and the folders the user files into
+ *     never alert, nor does a message read elsewhere before it arrived.
+ *   • While the Segretario reads the mail as it comes, and the user asked
+ *     for it, a new message waits for its note and is told only if the
+ *     Segretario said to tell it now (`avvisa`), with its words. Without
+ *     the Segretario, every message is told.
+ *   • One message: its sender, subject and first lines, and two buttons —
+ *     "Segna come letta" and "Archivia". Several together: one
+ *     notification naming who they are from. What came while the app was
+ *     closed: one notification per mailbox, once it has all arrived.
+ *   • A notification goes away by itself once its messages are read, moved
+ *     or deleted — here or on another device.
  */
-export class NotificationManager {
-  private preferences: NotificationPreferences = DEFAULT_NOTIFICATION_PREFERENCES
-  private delivery: NotificationDelivery = { state: 'unknown' }
+export class MailNotifications {
+  private readonly launchedAt = Date.now()
   private readonly emittedKeys = new Map<string, number>()
-  private readonly pendingByAccount = new Map<string, PendingBatch>()
-  /** Notifications on screen or in the notification centre, by id. */
-  private readonly shown = new Map<string, ShownNotification>()
-  /** The notification announcing each message, by message key. */
-  private readonly shownIdByMessage = new Map<string, string>()
-  /** Every notification still to be clicked or dismissed: held, or its handlers go with it. */
-  private readonly live = new Set<Notification>()
-  /** Whether the Segretario reads new mail as it comes (see `setSegretarioReading`). */
-  private segretarioReading = false
+  /** The messages told lately, by what their copies share (`copyKey`): when. */
+  private readonly toldCopies = new Map<string, number>()
+  private readonly batches = new Map<string, Batch>()
+  /** The notification telling each message, by message key. */
+  private readonly keyByMessage = new Map<string, string>()
+  /** The messages each notification tells that are still unread, by notification key. */
+  private readonly messagesByKey = new Map<string, Set<string>>()
+  /**
+   * Whether the Segretario reads new mail as it comes (see
+   * `setSegretarioReading`); null until it says, at launch: what a launch
+   * finds waits to know, rather than be told unsifted.
+   */
+  private segretarioReading: boolean | null = null
   /** New messages waiting for their note, by account and message key. */
-  private readonly held = new Map<string, HeldMessage>()
+  private readonly held = new Map<string, Held>()
+  /** What came while the app was closed and is settled, waiting for the rest of its mailbox. */
+  private readonly caughtUp = new Map<string, { account: NotificationAccount; told: Told[] }>()
+  private readonly unsubscribe: () => void
 
   constructor(
     private readonly deps: {
+      center: NotificationCenter
       actions: NotificationMessageActions
-      onStatusChange: (status: NotificationStatus) => void
     }
-  ) {}
-
-  setPreferences(preferences: NotificationPreferences): void {
-    this.preferences = preferences
-
-    // Turned off, or an account muted: what it announced goes too.
-    for (const [accountId, batch] of this.pendingByAccount) {
-      if (!this.announces(accountId)) {
-        clearTimeout(batch.timer)
-        this.pendingByAccount.delete(accountId)
+  ) {
+    // Turned off, or a mailbox muted: what waits for it goes too.
+    this.unsubscribe = deps.center.onPreferences(() => {
+      for (const [accountId, batch] of this.batches) {
+        if (!this.tells(accountId)) {
+          clearTimeout(batch.timer)
+          this.batches.delete(accountId)
+        }
       }
-    }
 
-    if (!this.waitsForNotes()) {
-      this.releaseHeld()
-    }
+      if (!this.waitsForNotes()) {
+        this.releaseHeld()
+      }
+    })
   }
 
   /**
-   * Whether the Segretario reads new mail as it comes: while it does, and
-   * the user asked for it, a new message waits for its note and is
-   * announced only if it matters, with the note. When it stops — the key
-   * fails, triage is turned off — what was waiting is announced as it is.
+   * Whether the Segretario reads new mail as it comes: while it does, a new
+   * message waits for its note. When it stops — the key fails, the AI goes
+   * off — what was waiting is told as it is.
    */
   setSegretarioReading(reading: boolean): void {
     this.segretarioReading = reading
@@ -182,9 +159,9 @@ export class NotificationManager {
     }
   }
 
-  /** A message's note is written: a new message waiting for it is announced if it matters. */
+  /** A message's note is written: a new message waiting for it is told if the Segretario said so. */
   noteWritten(note: MessageNote): void {
-    const key = heldKey(note.accountId, note.messageKey)
+    const key = `${note.accountId}\u0000${note.messageKey}`
     const held = this.held.get(key)
 
     if (!held) {
@@ -193,58 +170,13 @@ export class NotificationManager {
 
     clearTimeout(held.timer)
     this.held.delete(key)
-
-    // A copy of a message come to another account too was announced there.
-    if (
-      !note.twinAccountId &&
-      noteMatters(note) &&
-      !held.message.isRead &&
-      this.announces(held.account.id)
-    ) {
-      this.announce(held.account, [held.message], note)
-    }
-  }
-
-  private waitsForNotes(): boolean {
-    return this.preferences.onlyImportant && this.segretarioReading
-  }
-
-  /** What waited for a note is announced as it is, one alert per account. */
-  private releaseHeld(): void {
-    const byAccount = new Map<
-      string,
-      { account: NotificationAccount; messages: MailMessageSummary[] }
-    >()
-
-    for (const held of this.held.values()) {
-      clearTimeout(held.timer)
-      const group = byAccount.get(held.account.id) ?? { account: held.account, messages: [] }
-      group.messages.push(held.message)
-      byAccount.set(held.account.id, group)
-    }
-
-    this.held.clear()
-
-    for (const { account, messages } of byAccount.values()) {
-      this.announce(account, messages)
-    }
-  }
-
-  status(): NotificationStatus {
-    return {
-      supported: Notification.isSupported(),
-      delivery: this.delivery,
-      canOpenSystemSettings: process.platform === 'darwin' || process.platform === 'win32'
-    }
-  }
-
-  private announces(accountId: string): boolean {
-    return this.preferences.enabled && !this.preferences.mutedAccountIds.includes(accountId)
+    const tell = note.notify && !held.message.isRead
+    this.settle(held, tell ? { message: held.message, summary: note.summary } : null)
   }
 
   /**
    * Messages that came into a folder. `bootstrap` is true for a folder's
-   * first sync — the account just connected, or its cache cleared — whose
+   * first sync — the mailbox just connected, or its cache cleared — whose
    * messages were already there, and are only remembered as seen.
    */
   enqueue(
@@ -258,356 +190,295 @@ export class NotificationManager {
     }
 
     const now = Date.now()
-    const existing = this.pendingByAccount.get(account.id)
-    const batch = existing?.messages ?? []
 
     for (const message of messages) {
       const key = messageKey(message)
       const emittedAt = this.emittedKeys.get(key)
 
-      if (emittedAt !== undefined && now - emittedAt < NOTIFICATION_DEDUPE_TTL_MS) {
+      if (emittedAt !== undefined && now - emittedAt < DEDUPE_TTL_MS) {
         continue
       }
 
       this.emittedKeys.set(key, now)
 
-      if (bootstrap || message.isRead || !this.announces(account.id)) {
+      if (bootstrap || message.isRead || !this.tells(account.id)) {
         continue
       }
 
+      // Come while the app was closed: what a launch finds, told with the rest of its mailbox.
+      const catchUp = Date.parse(message.date) < this.launchedAt
+
       if (this.waitsForNotes()) {
-        this.hold(account, message)
+        this.hold(account, message, catchUp)
       } else {
-        batch.push(message)
+        this.addToBatch(account, { message }, catchUp ? CATCH_UP_SETTLE_MS : COALESCE_MS)
       }
     }
 
     this.pruneEmittedKeys(now)
-
-    if (batch.length === 0) {
-      return
-    }
-
-    if (existing) {
-      clearTimeout(existing.timer)
-    }
-
-    const timer = setTimeout(() => {
-      this.pendingByAccount.delete(account.id)
-      this.announce(account, batch)
-    }, NOTIFICATION_COALESCE_WINDOW_MS)
-
-    this.pendingByAccount.set(account.id, { timer, account, messages: batch })
-  }
-
-  /** A new message waits for its note — at most `NOTE_WAIT_MS`, then it is announced as it is. */
-  private hold(account: NotificationAccount, message: MailMessageSummary): void {
-    const key = heldKey(account.id, message.messageKey)
-
-    if (this.held.has(key)) {
-      return
-    }
-
-    const timer = setTimeout(() => {
-      this.held.delete(key)
-
-      if (!message.isRead && this.announces(account.id)) {
-        this.announce(account, [message])
-      }
-    }, NOTE_WAIT_MS)
-
-    this.held.set(key, { timer, account, message })
   }
 
   /**
-   * Messages read, moved or deleted, here or elsewhere: an alert that
-   * announced only such messages is taken away, and one waiting for its
-   * note is not given.
+   * Messages read, moved or deleted, here or elsewhere: a notification that
+   * told only such messages is taken away, and one waiting is not given.
    */
   withdraw(refs: ReadonlyArray<MessageRef>): void {
+    const gone = new Set(refs.map(messageKey))
+
+    // Out of what waits first: settling the last held message of a mailbox tells the rest.
+    for (const batch of this.batches.values()) {
+      batch.told = batch.told.filter((told) => !gone.has(messageKey(told.message)))
+    }
+
+    for (const waiting of this.caughtUp.values()) {
+      waiting.told = waiting.told.filter((told) => !gone.has(messageKey(told.message)))
+    }
+
     for (const [key, held] of this.held) {
-      if (refs.some((ref) => messageKey(ref) === messageKey(held.message))) {
+      if (gone.has(messageKey(held.message))) {
         clearTimeout(held.timer)
         this.held.delete(key)
+        this.settle(held, null)
       }
     }
 
-    for (const ref of refs) {
-      const key = messageKey(ref)
-      const pending = this.pendingByAccount.get(ref.accountId)
+    for (const key of gone) {
+      const notificationKey = this.keyByMessage.get(key)
+      this.keyByMessage.delete(key)
 
-      if (pending) {
-        pending.messages = pending.messages.filter((message) => messageKey(message) !== key)
+      if (notificationKey === undefined) {
+        continue
       }
 
-      const id = this.shownIdByMessage.get(key)
-      const shown = id === undefined ? undefined : this.shown.get(id)
-      this.shownIdByMessage.delete(key)
+      const remaining = this.messagesByKey.get(notificationKey)
+      remaining?.delete(key)
 
-      if (shown && id !== undefined) {
-        shown.keys.delete(key)
-
-        if (shown.keys.size === 0) {
-          this.shown.delete(id)
-          shown.notification.close()
-        }
+      if (!remaining || remaining.size === 0) {
+        this.messagesByKey.delete(notificationKey)
+        this.deps.center.withdraw(notificationKey)
       }
     }
-  }
-
-  /** A notification that says notifications work — or lets the system say they do not. */
-  async showTest(): Promise<NotificationStatus> {
-    if (!Notification.isSupported()) {
-      return this.status()
-    }
-
-    await this.present(
-      new Notification({
-        title: 'Le notifiche funzionano',
-        body: 'I nuovi messaggi in Posta in arrivo compariranno così.',
-        silent: !this.preferences.sound
-      }),
-      { onClick: () => this.restoreWindow() },
-      TEST_SETTLE_MS
-    )
-
-    return this.status()
-  }
-
-  /** A word from the app — the first account connected — asked for in its own right. */
-  showNotice(title: string, body: string): void {
-    if (Notification.isSupported() && this.preferences.enabled) {
-      void this.present(new Notification({ title, body, silent: true }), {
-        onClick: () => this.restoreWindow()
-      })
-    }
-  }
-
-  /**
-   * One alert for what came: a single message by its sender and subject,
-   * with its first lines — or, when the Segretario read it, its note.
-   */
-  private announce(
-    account: NotificationAccount,
-    batch: MailMessageSummary[],
-    note?: Pick<MessageNote, 'summary'>
-  ): void {
-    const messages = batch.filter((message) => !message.isRead)
-    const latest = messages.at(-1)
-
-    if (!latest || !this.announces(account.id)) {
-      return
-    }
-
-    const single = messages.length === 1
-    const { showPreview, sound } = this.preferences
-    const subject = trimText(latest.subject || '(nessun oggetto)', NOTIFICATION_SUBJECT_MAX_LENGTH)
-    const preview = trimText(
-      single && note ? note.summary : latest.preview,
-      NOTIFICATION_PREVIEW_MAX_LENGTH
-    )
-    // Only macOS shows a subtitle: elsewhere the subject opens the body.
-    const hasSubtitle = process.platform === 'darwin'
-    const id = single ? messageKey(latest) : `${account.id}:batch:${Date.now()}`
-
-    const content = showPreview
-      ? single
-        ? {
-            title: senderLabel(latest),
-            subtitle: hasSubtitle ? subject : undefined,
-            body: hasSubtitle ? preview : [subject, preview].filter(Boolean).join('\n')
-          }
-        : {
-            title: `${messages.length} nuove email`,
-            subtitle: hasSubtitle ? account.email : undefined,
-            body: hasSubtitle
-              ? `Da ${senderList(messages)}`
-              : `${account.email}\nDa ${senderList(messages)}`
-          }
-      : {
-          title: single ? 'Nuova email' : `${messages.length} nuove email`,
-          body: account.email
-        }
-
-    const notification = new Notification({
-      id,
-      groupId: account.id,
-      groupTitle: account.email,
-      ...content,
-      silent: !sound,
-      actions: single
-        ? MESSAGE_ACTIONS.map((text) => ({ type: 'button' as const, text }))
-        : undefined
-    })
-
-    const keys = new Set(messages.map(messageKey))
-    this.shown.set(id, { notification, keys })
-
-    for (const key of keys) {
-      this.shownIdByMessage.set(key, id)
-    }
-
-    void this.present(notification, {
-      onClick: () => this.restoreWindow(latest),
-      onAction: (index) => void this.runAction(index, latest),
-      onGone: () => {
-        if (this.shown.get(id)?.notification === notification) {
-          this.shown.delete(id)
-
-          for (const key of keys) {
-            if (this.shownIdByMessage.get(key) === id) {
-              this.shownIdByMessage.delete(key)
-            }
-          }
-        }
-      }
-    })
-  }
-
-  /**
-   * Shows `notification` and wires it: a click, a button, its going away.
-   * Resolves once the system has shown it or turned it down — or after
-   * `settleMs`, when it says neither.
-   */
-  private present(
-    notification: Notification,
-    handlers: {
-      onClick: () => void
-      onAction?: (index: number) => void
-      onGone?: () => void
-    },
-    settleMs = 0
-  ): Promise<void> {
-    return new Promise((resolve) => {
-      const settle = setTimeout(resolve, settleMs)
-      const done = (): void => {
-        clearTimeout(settle)
-        resolve()
-      }
-      const gone = (): void => {
-        this.live.delete(notification)
-        handlers.onGone?.()
-      }
-      const failed = (error: string): void => {
-        this.setDelivery({ state: 'failed', at: Date.now(), reason: failureReason(error) })
-        log.warn('notification.failed', { err: error })
-        gone()
-        done()
-      }
-
-      this.live.add(notification)
-      notification.once('show', () => {
-        this.setDelivery({ state: 'shown', at: Date.now() })
-        done()
-      })
-      notification.once('failed', (_event, error) => failed(error))
-      notification.once('click', () => {
-        gone()
-        handlers.onClick()
-      })
-      notification.once('action', (details) => {
-        gone()
-        handlers.onAction?.(details.actionIndex)
-      })
-      notification.once('close', gone)
-
-      try {
-        notification.show()
-      } catch (error) {
-        failed(error instanceof Error ? error.message : String(error))
-      }
-    })
-  }
-
-  private async runAction(index: number, message: MailMessageSummary): Promise<void> {
-    const ref: MessageRef = {
-      accountId: message.accountId,
-      folderPath: message.folderPath,
-      uid: message.uid
-    }
-
-    try {
-      await (index === 0 ? this.deps.actions.markRead(ref) : this.deps.actions.archive(ref))
-    } catch (error) {
-      log.error('Notification action failed', error, { action: MESSAGE_ACTIONS[index] })
-    }
-  }
-
-  private setDelivery(delivery: NotificationDelivery): void {
-    this.delivery = delivery
-    this.deps.onStatusChange(this.status())
-  }
-
-  private pruneEmittedKeys(now: number): void {
-    if (this.emittedKeys.size < 4096) {
-      return
-    }
-
-    const cutoff = now - NOTIFICATION_DEDUPE_TTL_MS
-
-    for (const [key, at] of this.emittedKeys) {
-      if (at < cutoff) {
-        this.emittedKeys.delete(key)
-      }
-    }
-  }
-
-  /** Brings the window forward — on `message`, when the alert announced one. */
-  private restoreWindow(message?: MailMessageSummary): void {
-    const window = getAppWindow()
-
-    if (!window) {
-      return
-    }
-
-    if (process.platform === 'darwin') {
-      app.focus({ steal: true })
-    } else {
-      app.focus()
-    }
-
-    if (window.isMinimized()) {
-      window.restore()
-    }
-
-    if (!window.isVisible()) {
-      window.show()
-    }
-
-    window.focus()
-
-    if (!message) {
-      return
-    }
-
-    const ref: MessageRef = {
-      accountId: message.accountId,
-      folderPath: message.folderPath,
-      uid: message.uid
-    }
-    const dispatch = (): void => {
-      window.webContents.send(IPC_CHANNELS.openMessageFromNotification, ref)
-    }
-
-    if (window.webContents.isLoadingMainFrame()) {
-      window.webContents.once('did-finish-load', dispatch)
-      return
-    }
-
-    dispatch()
   }
 
   dispose(): void {
-    for (const batch of this.pendingByAccount.values()) {
+    this.unsubscribe()
+
+    for (const batch of this.batches.values()) {
       clearTimeout(batch.timer)
     }
 
-    this.pendingByAccount.clear()
+    this.batches.clear()
 
     for (const held of this.held.values()) {
       clearTimeout(held.timer)
     }
 
     this.held.clear()
+    this.caughtUp.clear()
+  }
+
+  private tells(accountId: string): boolean {
+    const { enabled, mail } = this.deps.center.preferences
+    return enabled && mail.enabled && !mail.mutedAccountIds.includes(accountId)
+  }
+
+  private waitsForNotes(): boolean {
+    return this.deps.center.preferences.mail.onlyFlagged && this.segretarioReading !== false
+  }
+
+  /** A new message waits for its note — at most `NOTE_WAIT_MS`, then it is told as it is. */
+  private hold(account: NotificationAccount, message: MailMessageSummary, catchUp: boolean): void {
+    const key = `${account.id}\u0000${message.messageKey}`
+
+    if (this.held.has(key)) {
+      return
+    }
+
+    const timer = setTimeout(() => {
+      const held = this.held.get(key)
+      this.held.delete(key)
+
+      if (held) {
+        this.settle(held, held.message.isRead ? null : { message: held.message })
+      }
+    }, NOTE_WAIT_MS)
+
+    this.held.set(key, { timer, account, message, catchUp })
+  }
+
+  /**
+   * A held message is settled — to be told, or not —: told now, or, come
+   * while the app was closed, once every other of its mailbox is settled.
+   */
+  private settle(held: Held, told: Told | null): void {
+    if (!held.catchUp) {
+      if (told && this.tells(held.account.id)) {
+        this.tell(held.account, [told])
+      }
+
+      return
+    }
+
+    const waiting = this.caughtUp.get(held.account.id) ?? { account: held.account, told: [] }
+
+    if (told) {
+      waiting.told.push(told)
+    }
+
+    this.caughtUp.set(held.account.id, waiting)
+    const stillHeld = [...this.held.values()].some(
+      (other) => other.catchUp && other.account.id === held.account.id
+    )
+
+    if (!stillHeld) {
+      this.caughtUp.delete(held.account.id)
+
+      if (waiting.told.length > 0 && this.tells(held.account.id)) {
+        this.tell(held.account, waiting.told)
+      }
+    }
+  }
+
+  /**
+   * What waited for a note is told as it is, as if no note had been waited
+   * for: together by mailbox, what came while the app was closed once the
+   * rest of it has come too.
+   */
+  private releaseHeld(): void {
+    const held = [...this.held.values()]
+    const caughtUp = [...this.caughtUp.values()]
+    this.held.clear()
+    this.caughtUp.clear()
+
+    for (const { timer, account, message, catchUp } of held) {
+      clearTimeout(timer)
+
+      if (this.tells(account.id)) {
+        this.addToBatch(account, { message }, catchUp ? CATCH_UP_SETTLE_MS : COALESCE_MS)
+      }
+    }
+
+    for (const { account, told } of caughtUp) {
+      if (this.tells(account.id)) {
+        for (const each of told) {
+          this.addToBatch(account, each, CATCH_UP_SETTLE_MS)
+        }
+      }
+    }
+  }
+
+  private addToBatch(account: NotificationAccount, told: Told, settleMs: number): void {
+    const existing = this.batches.get(account.id)
+
+    if (existing) {
+      clearTimeout(existing.timer)
+    }
+
+    const batch: Batch = {
+      account,
+      told: [...(existing?.told ?? []), told],
+      timer: setTimeout(() => {
+        this.batches.delete(account.id)
+        this.tell(account, batch.told)
+      }, settleMs)
+    }
+    this.batches.set(account.id, batch)
+  }
+
+  /**
+   * One notification for what came: a single message by its sender and
+   * subject, with its first lines — or, when the Segretario said to tell
+   * it, its words.
+   */
+  private tell(account: NotificationAccount, all: ReadonlyArray<Told>): void {
+    const now = Date.now()
+    // A copy of a message come to another mailbox too was told there.
+    const told = all.filter(({ message }) => {
+      const at = this.toldCopies.get(copyKey(message))
+      return !message.isRead && (at === undefined || now - at >= COPY_TTL_MS)
+    })
+    const latest = told.at(-1)
+
+    if (!latest) {
+      return
+    }
+
+    const messages = told.map(({ message }) => message)
+    const single = told.length === 1
+    const flagged = told.some(({ summary }) => summary !== undefined)
+    const key = single ? `mail:${messageKey(latest.message)}` : `mail:${account.id}:batch:${now}`
+    const subject = trimText(latest.message.subject || '(nessun oggetto)', SUBJECT_MAX_LENGTH)
+    const input: NotificationInput = single
+      ? {
+          family: 'mail',
+          kind: flagged ? 'mail.flagged' : 'mail.new',
+          key,
+          title: senderLabel(latest.message),
+          subtitle: subject,
+          body: trimText(latest.summary ?? latest.message.preview, PREVIEW_MAX_LENGTH),
+          concealed: { title: 'Nuova email', body: account.email },
+          target: { kind: 'message', ref: refOf(latest.message) },
+          actions: [
+            {
+              label: 'Segna come letta',
+              run: () => this.deps.actions.markRead(refOf(latest.message))
+            },
+            { label: 'Archivia', run: () => this.deps.actions.archive(refOf(latest.message)) }
+          ],
+          when: 'always',
+          group: { id: account.id, title: account.email }
+        }
+      : {
+          family: 'mail',
+          kind: flagged ? 'mail.flagged-batch' : 'mail.batch',
+          key,
+          title: flagged ? `${told.length} email da guardare` : `${told.length} nuove email`,
+          subtitle: account.email,
+          body: flagged
+            ? trimText(
+                told
+                  .flatMap(({ summary }) => (summary ? [summary] : []))
+                  .slice(0, 2)
+                  .join(' · '),
+                PREVIEW_MAX_LENGTH
+              )
+            : `Da ${senderList(messages)}`,
+          concealed: { title: `${told.length} nuove email`, body: account.email },
+          target: { kind: 'message', ref: refOf(latest.message) },
+          when: 'always',
+          group: { id: account.id, title: account.email }
+        }
+
+    if (!this.deps.center.notify(input)) {
+      return
+    }
+
+    for (const message of messages) {
+      this.toldCopies.set(copyKey(message), now)
+    }
+
+    const keys = new Set(messages.map(messageKey))
+    this.messagesByKey.set(key, keys)
+
+    for (const message of keys) {
+      this.keyByMessage.set(message, key)
+    }
+  }
+
+  private pruneEmittedKeys(now: number): void {
+    for (const [seen, ttl] of [
+      [this.emittedKeys, DEDUPE_TTL_MS],
+      [this.toldCopies, COPY_TTL_MS]
+    ] as const) {
+      if (seen.size < 4096) {
+        continue
+      }
+
+      for (const [key, at] of seen) {
+        if (at < now - ttl) {
+          seen.delete(key)
+        }
+      }
+    }
   }
 }

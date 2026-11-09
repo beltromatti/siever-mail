@@ -83,6 +83,8 @@ async function meetingOf(
 
 /** Who writes the letter: the day's own work, and the user who asks for it. */
 const LETTER_WRITERS: ReadonlyArray<TaskKind> = ['giornata', 'richiesta']
+/** Who interrupts the user about an event: the look at the calendar's changes, which nobody watches. */
+const ALERT_WRITERS: ReadonlyArray<TaskKind> = ['calendario']
 
 /** The letter at the top of Oggi, and what to know before a meeting. */
 export const todayTool: SegretarioTool = {
@@ -93,17 +95,23 @@ export const todayTool: SegretarioTool = {
     properties: {
       lettera: { type: 'string' },
       evento: { type: 'string' },
-      preparazione: { type: 'string' }
+      preparazione: { type: 'string' },
+      avviso: { type: 'string' }
     }
   },
-  running: (args) => (stringArg(args, 'evento') ? 'Preparo la riunione…' : 'Scrivo la giornata…'),
+  running: (args) =>
+    stringArg(args, 'avviso')
+      ? 'Avviso l’utente…'
+      : stringArg(args, 'evento')
+        ? 'Preparo la riunione…'
+        : 'Scrivo la giornata…',
   async execute(args, context) {
     const letter = stringArg(args, 'lettera')
     const meeting = stringArg(args, 'evento')
     const lines: string[] = []
 
     if (!letter && !meeting) {
-      throw new ToolInputError('Indica `lettera`, oppure `evento` con `preparazione`.')
+      throw new ToolInputError('Indica `lettera`, oppure `evento` con `preparazione` o `avviso`.')
     }
 
     if (letter) {
@@ -124,7 +132,36 @@ export const todayTool: SegretarioTool = {
       lines.push('La lettera di oggi è in cima a Oggi.')
     }
 
-    if (meeting) {
+    const alert = stringArg(args, 'avviso')?.replace(/\s+/g, ' ').trim()
+
+    if (alert) {
+      if (!ALERT_WRITERS.includes(context.run.task)) {
+        throw new ToolInputError(
+          'Avvisare l’utente con una notifica si fa qui solo guardando i cambiamenti del calendario: di un messaggio lo dice la sua nota (`avvisa`); con l’utente davanti, diglielo e basta.'
+        )
+      }
+
+      if (!meeting) {
+        throw new ToolInputError('Indica l’`evento` (e…) di cui avvisare.')
+      }
+
+      const event = await meetingOf(context, meeting)
+      const told = await context.calendar.alert(event.eventKey, alert)
+
+      if (told === 'unknown') {
+        throw new ToolInputError(
+          `«${event.title}» non è più nel calendario e non ne resta traccia: non posso avvisarne.`
+        )
+      }
+
+      lines.push(
+        told === 'told'
+          ? `Avvisato l'utente di «${event.title}».`
+          : `L'utente ha spento le notifiche del calendario: «${event.title}» lo vedrà da sé.`
+      )
+    }
+
+    if (meeting && (!alert || stringArg(args, 'preparazione'))) {
       const event = await meetingOf(context, meeting)
 
       const preparation = requireString(args, 'preparazione')
@@ -138,14 +175,17 @@ export const todayTool: SegretarioTool = {
       lines.push(`Preparazione di «${event.title}» salvata: la trova sotto l'evento.`)
     }
 
+    const prepared = Boolean(meeting && stringArg(args, 'preparazione'))
+
     return {
       content: lines.join(' '),
-      summary:
-        letter && meeting
-          ? 'Scritta la giornata e preparata una riunione'
-          : letter
-            ? 'Scritta la giornata'
-            : 'Preparata una riunione'
+      summary: [
+        letter ? 'Scritta la giornata' : null,
+        prepared ? 'Preparata una riunione' : null,
+        alert ? 'Avvisato l’utente' : null
+      ]
+        .filter(Boolean)
+        .join(' · ')
     }
   }
 }

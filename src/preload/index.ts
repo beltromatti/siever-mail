@@ -6,6 +6,7 @@ import { extensionChannel } from '@shared/extension-ipc'
 import { IPC_CHANNELS, type DesktopMailApi } from '@shared/ipc'
 import { CALENDAR_IPC, type CalendarApi } from '@shared/calendar'
 import { DIAGNOSTICS_IPC, type DiagnosticsApi } from '@shared/diagnostics'
+import { NOTIFICATIONS_IPC, type NotificationsApi } from '@shared/notifications'
 import { FILES_IPC, type FilesApi } from '@shared/files'
 import { SEGRETARIO_IPC, type SegretarioApi } from '@shared/segretario'
 
@@ -115,24 +116,11 @@ const desktopMailApi: DesktopMailApi = {
   minimizeWindow: async () => invoke(IPC_CHANNELS.minimizeWindow),
   toggleMaximizeWindow: async () => invoke(IPC_CHANNELS.toggleMaximizeWindow),
   closeWindow: async () => invoke(IPC_CHANNELS.closeWindow),
-  onOpenMessageFromNotification: (listener) =>
-    subscribe(IPC_CHANNELS.openMessageFromNotification, listener),
   onWindowControlsStateChanged: (listener) =>
     subscribe(IPC_CHANNELS.windowControlsStateChanged, listener),
   onMessagesChanged: (listener) => subscribe(IPC_CHANNELS.messagesChanged, listener),
   onFoldersChanged: (listener) => subscribe(IPC_CHANNELS.foldersChanged, listener),
   onUnifiedFoldersChanged: (listener) => subscribe(IPC_CHANNELS.unifiedFoldersChanged, listener),
-  getNotificationPreferences: async () => invoke(IPC_CHANNELS.getNotificationPreferences),
-  setNotificationPreferences: async (preferences) =>
-    invoke(IPC_CHANNELS.setNotificationPreferences, preferences),
-  getNotificationStatus: async () => invoke(IPC_CHANNELS.getNotificationStatus),
-  showTestNotification: async () => invoke(IPC_CHANNELS.showTestNotification),
-  openNotificationSettings: async () => invoke(IPC_CHANNELS.openNotificationSettings),
-  onNotificationStatusChanged: (listener) =>
-    subscribe(IPC_CHANNELS.notificationStatusChanged, listener),
-  onTaskbarBadgeChanged: (listener) => subscribe(IPC_CHANNELS.taskbarBadgeChanged, listener),
-  setTaskbarBadgeImage: async (dataUrl, description) =>
-    invoke(IPC_CHANNELS.setTaskbarBadgeImage, dataUrl, description),
   onAccountConnectionChanged: (listener) =>
     subscribe(IPC_CHANNELS.accountConnectionChanged, listener),
   onConnectionRefused: (listener) => subscribe(IPC_CHANNELS.connectionRefused, listener),
@@ -274,6 +262,19 @@ const filesApi: FilesApi = {
   sources: async () => invoke(FILES_IPC.sources)
 }
 
+const notificationsApi: NotificationsApi = {
+  getPreferences: async () => invoke(NOTIFICATIONS_IPC.getPreferences),
+  setPreferences: async (preferences) => invoke(NOTIFICATIONS_IPC.setPreferences, preferences),
+  getStatus: async () => invoke(NOTIFICATIONS_IPC.getStatus),
+  onStatusChanged: (listener) => subscribe(NOTIFICATIONS_IPC.statusChanged, listener),
+  showTest: async () => invoke(NOTIFICATIONS_IPC.showTest),
+  openSystemSettings: async () => invoke(NOTIFICATIONS_IPC.openSystemSettings),
+  onOpen: (listener) => subscribe(NOTIFICATIONS_IPC.open, listener),
+  onBadgeChanged: (listener) => subscribe(NOTIFICATIONS_IPC.badgeChanged, listener),
+  setBadgeImage: async (dataUrl, description) =>
+    invoke(NOTIFICATIONS_IPC.setBadgeImage, dataUrl, description)
+}
+
 const diagnosticsApi: DiagnosticsApi = {
   record: (event) => ipcRenderer.send(DIAGNOSTICS_IPC.record, event),
   info: async () => invoke(DIAGNOSTICS_IPC.info),
@@ -297,6 +298,7 @@ if (process.contextIsolated) {
   contextBridge.exposeInMainWorld('calendarApi', calendarApi)
   contextBridge.exposeInMainWorld('filesApi', filesApi)
   contextBridge.exposeInMainWorld('diagnosticsApi', diagnosticsApi)
+  contextBridge.exposeInMainWorld('notificationsApi', notificationsApi)
 
   if (extensionApi) {
     contextBridge.exposeInMainWorld('extensionApi', extensionApi)
@@ -312,6 +314,8 @@ if (process.contextIsolated) {
   window.filesApi = filesApi
   // @ts-expect-error context isolation disabled by external override
   window.diagnosticsApi = diagnosticsApi
+  // @ts-expect-error context isolation disabled by external override
+  window.notificationsApi = notificationsApi
   // @ts-expect-error context isolation disabled by external override
   window.extensionApi = extensionApi
 }

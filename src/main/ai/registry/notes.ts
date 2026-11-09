@@ -22,6 +22,7 @@ interface NoteRow {
   due: string | null
   message_date: string
   twin_account_id: string | null
+  notify: number
   revision: number
   run_id: string | null
   written_by: string
@@ -30,7 +31,7 @@ interface NoteRow {
 }
 
 const COLUMNS = `account_id, message_key, thread_id, direction, summary, state, priority, reason, due,
-  message_date, twin_account_id, revision, run_id, written_by, created_at, updated_at`
+  message_date, twin_account_id, notify, revision, run_id, written_by, created_at, updated_at`
 
 const NATURES: ReadonlyArray<NoteNature> = [
   'da_rispondere',
@@ -55,6 +56,7 @@ function recordOf(row: NoteRow): NoteRecord {
     due: row.due,
     messageDate: row.message_date,
     twinAccountId: row.twin_account_id,
+    notify: Number(row.notify) === 1,
     revision: Number(row.revision),
     runId: row.run_id,
     writtenBy:
@@ -70,6 +72,8 @@ export interface NoteInput {
   priority: NotePriority
   reason: string
   due: string | null
+  /** Tell the user of the message now (`avvisa`); a note says no when it does not say. */
+  notify?: boolean
 }
 
 /**
@@ -204,9 +208,9 @@ export class NoteStore {
         const row = await this.sql.get<NoteRow>(
           `INSERT INTO ai_notes (
             account_id, message_key, thread_id, direction, summary, state, priority, reason, due,
-            message_date, created_at, dismissed_at, twin_account_id, revision, run_id, written_by,
-            updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 1, ?, ?, ?)
+            message_date, created_at, dismissed_at, twin_account_id, notify, revision, run_id,
+            written_by, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 1, ?, ?, ?)
           ON CONFLICT(account_id, message_key) DO NOTHING
           RETURNING ${COLUMNS}`,
           anchor.accountId,
@@ -221,6 +225,7 @@ export class NoteStore {
           anchor.messageDate,
           now,
           twin,
+          input.notify ? 1 : 0,
           runId,
           actor.by,
           now
@@ -235,7 +240,8 @@ export class NoteStore {
 
       const changed = await this.sql.run(
         `UPDATE ai_notes SET summary = ?, state = ?, priority = ?, reason = ?, due = ?,
-           twin_account_id = ?, run_id = ?, written_by = ?, revision = revision + 1, updated_at = ?
+           twin_account_id = ?, notify = ?, run_id = ?, written_by = ?, revision = revision + 1,
+           updated_at = ?
          WHERE account_id = ? AND message_key = ? AND revision = ?`,
         summary,
         input.nature,
@@ -243,6 +249,7 @@ export class NoteStore {
         input.reason.trim(),
         input.due,
         twin,
+        input.notify ? 1 : 0,
         runId,
         actor.by,
         now,

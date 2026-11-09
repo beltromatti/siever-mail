@@ -12,12 +12,11 @@ import type {
   MailFolder,
   MailMessageSummary,
   MessageRef,
-  NotificationPreferences,
-  NotificationStatus,
   UnifiedFolderSummary
 } from '@shared/models'
 import { folderForRole, UNIFIED_FOLDER_ROLES, type FolderRole } from '@shared/folders'
 import type { MessageNote } from '@shared/segretario'
+import type { NotificationCenter } from '@main/notifications/center'
 
 import type { AppDatabase } from '../database'
 import type { MailTokens } from '../mail-tokens'
@@ -32,7 +31,7 @@ import {
   type TaskPriority
 } from './account-connection'
 import type { AccountWithSecret } from './mail-transport'
-import { NotificationManager } from './notifications'
+import { MailNotifications } from './notifications'
 
 const log = diagnostics('mail')
 
@@ -46,6 +45,8 @@ export interface MailEngineDependencies {
   onMailChanged: () => void
   /** An account's server turned it down for good: it stopped, and the user is to be told. */
   onRefused: (accountId: string, refusal: ConnectionRefusal, detail: string) => void
+  /** The app's notifications: new mail is told through them (§13.3). */
+  notifications: NotificationCenter
 }
 
 // How often to compare the network state with the last one seen. Reading it
@@ -54,20 +55,22 @@ const NETWORK_WATCH_INTERVAL_MS = 3_000
 
 export class MailEngine {
   private readonly connections = new Map<string, AccountConnection>()
-  private readonly notifications = new NotificationManager({
-    actions: {
-      markRead: (ref) => this.setMessagesSeen([ref], true),
-      archive: (ref) => this.archiveMessages([ref])
-    },
-    onStatusChange: (status) => this.broadcast(IPC_CHANNELS.notificationStatusChanged, status)
-  })
+  private readonly notifications: MailNotifications
   private activeContext: ActiveMailboxContext | null = null
   private networkWatch: NodeJS.Timeout | null = null
   private unwatchSleep: (() => void) | null = null
   /** The computer is asleep: every account's links are closed until it wakes. */
   private asleep = false
 
-  constructor(private readonly deps: MailEngineDependencies) {}
+  constructor(private readonly deps: MailEngineDependencies) {
+    this.notifications = new MailNotifications({
+      center: deps.notifications,
+      actions: {
+        markRead: (ref) => this.setMessagesSeen([ref], true),
+        archive: (ref) => this.archiveMessages([ref])
+      }
+    })
+  }
 
   async start(): Promise<void> {
     const accounts = await this.deps.database.getAccounts()
@@ -140,22 +143,6 @@ export class MailEngine {
   /** A note the Segretario wrote, for the alert of a new message waiting for it. */
   noteWritten(note: MessageNote): void {
     this.notifications.noteWritten(note)
-  }
-
-  setNotificationPreferences(preferences: NotificationPreferences): void {
-    this.notifications.setPreferences(preferences)
-  }
-
-  notificationStatus(): NotificationStatus {
-    return this.notifications.status()
-  }
-
-  showTestNotification(): Promise<NotificationStatus> {
-    return this.notifications.showTest()
-  }
-
-  showNotice(title: string, body: string): void {
-    this.notifications.showNotice(title, body)
   }
 
   /** "Controlla nuova posta": every account looks at once instead of on its next poll. */

@@ -69,6 +69,9 @@ export interface GraphEvent {
   onlineMeeting?: { joinUrl?: string | null } | null
   onlineMeetingUrl?: string | null
   webLink?: string | null
+  /** Whether the event reminds its owner, and how long before it starts. */
+  isReminderOn?: boolean
+  reminderMinutesBeforeStart?: number
 }
 
 interface GraphCalendar {
@@ -172,6 +175,13 @@ export function eventOfGraph(
       null,
     htmlLink: item.webLink ?? null,
     origin: null,
+    // Its reminder, as Outlook keeps it: off, or one, so long before (§13.3).
+    reminders:
+      item.isReminderOn === false
+        ? []
+        : item.isReminderOn === true && typeof item.reminderMinutesBeforeStart === 'number'
+          ? [item.reminderMinutesBeforeStart]
+          : undefined,
     cancelled: item.isCancelled === true
   }
 }

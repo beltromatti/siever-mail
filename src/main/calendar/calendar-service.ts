@@ -69,7 +69,9 @@ import {
 } from './event-roles'
 import { GOOGLE_CALENDAR_SCOPE, GoogleCalendarProvider } from './google-calendar'
 import { GraphCalendarProvider, MAILBOX_ZONE_NOT_GRANTED } from './graph-calendar'
+import type { ChangeByOthers } from './calendar-notifications'
 import { calendarNameOf, canonicalUid, type InvitationInstance } from './icalendar'
+import type { RemindedEvent } from './reminders'
 import { calendarText, feedUrl, IcsCalendarProvider, type Fetch } from './ics-calendar'
 
 const log = diagnostics('calendar')
@@ -123,6 +125,22 @@ export interface CalendarServiceOptions {
    * did it is told by the answer.
    */
   onRefused?(notice: ConnectionRefusedNotice): void
+  /** The events changed — a sync, a write —: what reminds of them looks again (§13.3). */
+  onEventsChanged?(): void
+  /**
+   * Invitations, and events moved or cancelled, by others, as a sync found
+   * them — not those that come by mail too, in the mailbox of the same
+   * access: the mail tells them (§13.3).
+   */
+  onChangedByOthers?(calendar: string, changes: ChangeByOthers[]): void
+}
+
+/** A change a sync found, as it is kept: what it was, what it is, in which calendar. */
+interface FoundChange {
+  kind: 'nuovo' | 'cambiato' | 'annullato'
+  before: CalendarEventRow | null
+  event: ProviderEvent
+  calendarName: string
 }
 
 /** Why a connection turned down stopped, as a write refused for it says. */
@@ -191,7 +209,8 @@ function eventOfRow(
     myResponse: (row.myResponse as CalendarResponse | null) ?? null,
     meetLink: row.meetLink,
     htmlLink: row.htmlLink,
-    origin: row.originJson ? (JSON.parse(row.originJson) as EventOrigin) : null
+    origin: row.originJson ? (JSON.parse(row.originJson) as EventOrigin) : null,
+    reminders: row.remindersJson ? (JSON.parse(row.remindersJson) as number[]) : null
   }
 
   return addresses ? { ...event, organizedByUser: organizedByUser(event, addresses) } : event
@@ -1313,6 +1332,9 @@ export class CalendarService {
       event.seriesId !== null &&
       heldSeries.has(`${event.calendarId}\u0000${event.seriesId}`)
 
+    // What others changed, found by the sync: told once kept (§13.3).
+    const byOthers: FoundChange[] = []
+
     for (const event of events) {
       const key = keyOf(event)
       const before = kept.get(key)
@@ -1329,6 +1351,15 @@ export class CalendarService {
             : differs(before, event)
               ? 'cambiato'
               : null
+
+        if (kind && !options.inApp) {
+          byOthers.push({
+            kind,
+            before: before ?? null,
+            event,
+            calendarName: names.get(event.calendarId) ?? ''
+          })
+        }
 
         if (kind) {
           writes.push(
@@ -1373,13 +1404,20 @@ export class CalendarService {
         myResponse: event.myResponse,
         meetLink: event.meetLink,
         htmlLink: event.htmlLink,
-        originJson: event.origin ? JSON.stringify(event.origin) : null
+        originJson: event.origin ? JSON.stringify(event.origin) : null,
+        // Absent: the provider could not tell them now — what was kept of them stays.
+        remindersJson:
+          event.reminders === undefined
+            ? undefined
+            : event.reminders === null
+              ? null
+              : JSON.stringify(event.reminders)
       }
 
       writes.push(
         prisma.calendarEvent.upsert({
           where: { key },
-          create: { key, ...data },
+          create: { key, ...data, remindersJson: data.remindersJson ?? null },
           // A provider that does not give the origin back (Graph, as it syncs) leaves it as kept.
           update: { ...data, originJson: data.originJson ?? undefined }
         })
@@ -1390,6 +1428,12 @@ export class CalendarService {
 
     if (events.length > 0) {
       this.eventsChanged()
+    }
+
+    if (byOthers.length > 0) {
+      void this.tellChangesByOthers(connectionId, byOthers).catch((error: unknown) =>
+        log.failed('changes.not-told', error, { conn: connectionId })
+      )
     }
   }
 
@@ -1680,6 +1724,173 @@ export class CalendarService {
    */
   private eventsChanged(): void {
     this.searchIndex = null
+    this.options.onEventsChanged?.()
+  }
+
+  /**
+   * An event as it is — or, gone, as its last change kept it: what the
+   * Segretario tells the user of an event cancelled (§13.3).
+   */
+  async eventAsKept(key: string): Promise<{ event: CalendarEvent; gone: boolean } | null> {
+    const current = await this.event(key)
+
+    if (current) {
+      return { event: current, gone: false }
+    }
+
+    const change = await this.requirePrisma().calendarChange.findFirst({
+      where: { eventKey: key },
+      orderBy: { id: 'desc' }
+    })
+    const kept = change?.afterJson ?? change?.beforeJson
+    return kept ? { event: JSON.parse(kept) as CalendarEvent, gone: true } : null
+  }
+
+  /**
+   * The events that may remind (§13.3): from `from` to `to`, in a calendar
+   * the user shows, not declined — with their own reminders, and their
+   * calendar's name.
+   */
+  async remindable(from: number, to: number): Promise<RemindedEvent[]> {
+    const prisma = this.requirePrisma()
+    const [rows, calendars] = await Promise.all([
+      prisma.calendarEvent.findMany({
+        where: {
+          endsAt: { gt: BigInt(from) },
+          startsAt: { lt: BigInt(to) },
+          OR: [{ myResponse: null }, { myResponse: { not: 'declined' } }]
+        }
+      }),
+      prisma.calendarCalendar.findMany()
+    ])
+    const shown = new Map(
+      calendars
+        .filter((calendar) => calendar.hidden !== 1)
+        .map((calendar) => [calendarKey(calendar.connectionId, calendar.calendarId), calendar.name])
+    )
+
+    return rows.flatMap((row) => {
+      const calendarName = shown.get(calendarKey(row.connectionId, row.calendarId))
+
+      return calendarName === undefined
+        ? []
+        : [
+            {
+              key: row.key,
+              title: row.title,
+              calendarName,
+              allDay: row.allDay === 1,
+              startsAt: Number(row.startsAt),
+              endsAt: Number(row.endsAt),
+              location: row.location,
+              meetLink: row.meetLink,
+              reminders: row.remindersJson ? (JSON.parse(row.remindersJson) as number[]) : null
+            }
+          ]
+    })
+  }
+
+  /**
+   * What a sync found changed by others, worth telling the user (§13.3):
+   * an invitation, an event moved or put elsewhere, one cancelled — still to
+   * come, and one the user is invited to and has not declined: their own
+   * they changed themselves, elsewhere, and what others keep in a calendar
+   * the user only sees are no news to them. A series changed whole is one
+   * change. None of a connection whose mailbox, of the same access, is
+   * connected: there the organiser's mail tells it.
+   */
+  private async tellChangesByOthers(
+    connectionId: string,
+    found: ReadonlyArray<FoundChange>
+  ): Promise<void> {
+    const prisma = this.requirePrisma()
+    const [connection, accounts] = await Promise.all([
+      prisma.calendarConnection.findUnique({ where: { id: connectionId } }),
+      this.options.database.getAccounts()
+    ])
+
+    if (
+      !connection ||
+      (connection.mailAccountId !== null &&
+        accounts.some((account) => account.id === connection.mailAccountId))
+    ) {
+      return
+    }
+
+    const now = Date.now()
+    const timed = (
+      event: CalendarEvent,
+      startsAt: number,
+      endsAt: number
+    ): ChangeByOthers['event'] => ({
+      ...event,
+      startsAt,
+      endsAt
+    })
+    const changes = found.flatMap((change): ChangeByOthers[] => {
+      const before = change.before
+        ? timed(
+            eventOfRow(change.before, change.calendarName),
+            Number(change.before.startsAt),
+            Number(change.before.endsAt)
+          )
+        : null
+      const after =
+        change.kind === 'annullato'
+          ? before
+          : timed(
+              {
+                ...change.event,
+                key: eventKey(connectionId, change.event.calendarId, change.event.eventId),
+                connectionId,
+                calendarName: change.calendarName
+              },
+              change.event.startsAt,
+              change.event.endsAt
+            )
+
+      if (
+        !after ||
+        after.endsAt <= now ||
+        after.myResponse === null ||
+        after.myResponse === 'declined'
+      ) {
+        return []
+      }
+
+      // Only where and when it is: who answered, or a word of its description, is no news.
+      if (
+        change.kind === 'cambiato' &&
+        before &&
+        before.startsAt === after.startsAt &&
+        before.endsAt === after.endsAt &&
+        before.location === after.location
+      ) {
+        return []
+      }
+
+      return [{ kind: change.kind, event: after, before, instances: 1 }]
+    })
+    // A series moved or cancelled whole: one change, its next time standing for the rest.
+    const bySeries = new Map<string, ChangeByOthers>()
+
+    for (const change of changes.sort((a, b) => a.event.startsAt - b.event.startsAt)) {
+      const { seriesId, calendarId } = change.event
+      const key = seriesId
+        ? `${change.kind}\u0000${calendarId}\u0000${seriesId}`
+        : `\u0001${change.event.key}`
+      const first = bySeries.get(key)
+
+      if (first) {
+        first.instances += 1
+      } else {
+        bySeries.set(key, change)
+      }
+    }
+
+    if (bySeries.size > 0) {
+      this.options.onChangedByOthers?.(connection.label, [...bySeries.values()])
+    }
   }
 
   /**

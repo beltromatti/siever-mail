@@ -85,10 +85,43 @@ function selfIsUser(calendarId: string, selfEmail: string): boolean {
   return id === 'primary' || id === selfEmail || id.endsWith('@group.calendar.google.com')
 }
 
+/** The minutes of the reminders shown on the screen — Google's `popup` — out of a list of them. */
+function popupMinutes(
+  reminders: ReadonlyArray<calendar_v3.Schema$EventReminder> | null | undefined
+): number[] {
+  return (reminders ?? []).flatMap((reminder) =>
+    reminder.method === 'popup' && typeof reminder.minutes === 'number' ? [reminder.minutes] : []
+  )
+}
+
+/**
+ * An event's own reminders (vision §13.3): those it sets, or its calendar's
+ * when it keeps the calendar's — undefined when those are not known here,
+ * null for an all-day one that keeps them.
+ * The ones Google sends by email are its own, not the desktop's.
+ */
+export function googleRemindersOf(
+  event: calendar_v3.Schema$Event,
+  calendarDefaults: ReadonlyArray<number> | undefined
+): number[] | null | undefined {
+  if (event.reminders?.useDefault === false) {
+    return popupMinutes(event.reminders.overrides)
+  }
+
+  // A calendar's defaults are for the events with an hour: those of an all-day one Google keeps
+  // apart, and does not tell — it says nothing of them.
+  if (event.start?.date) {
+    return null
+  }
+
+  return calendarDefaults ? [...calendarDefaults] : undefined
+}
+
 function eventOf(
   event: calendar_v3.Schema$Event,
   calendarId: string,
-  selfEmail: string
+  selfEmail: string,
+  calendarDefaults?: ReadonlyArray<number>
 ): ProviderEvent | null {
   if (!event.id) {
     return null
@@ -139,6 +172,7 @@ function eventOf(
       null,
     htmlLink: event.htmlLink ?? null,
     origin: originOf(event),
+    reminders: googleRemindersOf(event, calendarDefaults),
     cancelled: event.status === 'cancelled'
   }
 }
@@ -176,6 +210,8 @@ function bodyOf(event: ProviderEventInput): calendar_v3.Schema$Event {
 export class GoogleCalendarProvider implements CalendarProvider {
   private readonly api: calendar_v3.Calendar
   private readonly selfEmail: string
+  /** The reminders each calendar gives the events that keep its own, as its list says them. */
+  private readonly defaultReminders = new Map<string, number[]>()
 
   constructor(auth: calendar_v3.Options['auth'], selfEmail: string) {
     this.api = google.calendar({ version: 'v3', auth })
@@ -207,6 +243,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
         for (const item of data.items ?? []) {
           // The ones the user has ticked in Google Calendar: those are the ones they look at.
           if (item.id && item.selected !== false) {
+            this.defaultReminders.set(item.id, popupMinutes(item.defaultReminders))
             calendars.push({
               calendarId: item.id,
               name: item.summaryOverride ?? item.summary ?? item.id,
@@ -251,7 +288,12 @@ export class GoogleCalendarProvider implements CalendarProvider {
         })
 
         for (const item of data.items ?? []) {
-          const event = eventOf(item, calendarId, this.selfEmail)
+          const event = eventOf(
+            item,
+            calendarId,
+            this.selfEmail,
+            this.defaultReminders.get(calendarId)
+          )
 
           if (event) {
             events.push(event)
@@ -365,7 +407,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
     data: calendar_v3.Schema$Event,
     missing: string
   ): ProviderEvent {
-    const event = eventOf(data, calendarId, this.selfEmail)
+    const event = eventOf(data, calendarId, this.selfEmail, this.defaultReminders.get(calendarId))
 
     if (!event) {
       throw new Error(missing)

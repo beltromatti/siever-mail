@@ -9,7 +9,7 @@ import type { Sql } from './sql'
  * order, as an old one runs the steps it has not had: one path, so what a
  * fresh database looks like is what an upgraded one looks like.
  */
-const SCHEMA_VERSION = 7
+const SCHEMA_VERSION = 8
 
 /** The tables of the first 2.0 builds, as they stood (version 1). */
 /** The open things' indexes: by conversation, by state, and — from version 5 — by event. */
@@ -536,6 +536,11 @@ export async function ensureAiSchema(sql: Sql): Promise<void> {
   // no longer a copy in the registry; the mail has taken the copies as marks (`AppDatabase`).
   if (version < 7) {
     await sql.run('DROP TABLE IF EXISTS ai_saved_copies')
+  }
+
+  // Version 8: a note says whether the user is to be told of its message now (§13.3).
+  if (version < 8) {
+    await addColumn(sql, 'ai_notes', 'notify', 'INTEGER NOT NULL DEFAULT 0')
   }
 
   if (version !== SCHEMA_VERSION) {

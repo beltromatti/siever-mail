@@ -33,6 +33,7 @@ import {
 import {
   OPENROUTER_CREDITS_URL,
   OPENROUTER_KEYS_URL,
+  setupReadingAccountIds,
   setupTurnsAiOn,
   type ConnectionLearning,
   type EngineState,
@@ -1309,14 +1310,7 @@ export function OnboardingWizard({
           )}
           {state.step === 'lettura' && (
             <ReadingStep
-              accountIds={
-                // A connection added with the AI already on: its reading, not the others'.
-                state.case === 'nuova-connessione' &&
-                !setupTurnsAiOn(state) &&
-                state.accountIds.length > 0
-                  ? state.accountIds
-                  : undefined
-              }
+              accountIds={setupReadingAccountIds(state)}
               onNext={() => next()}
               onContinueWithoutAi={() => void continueWithoutAi()}
             />

@@ -88,7 +88,26 @@ export interface DiagnosticSummary {
     changesUndone: number
     memoryCorrected: number
   }
+  /**
+   * The notifications by kind (§13.3): how many were shown, opened, answered
+   * with a button, dismissed — whether interrupting was worth it.
+   */
+  notifications: Record<
+    string,
+    { shown: number; clicked: number; actions: number; dismissed: number; failed: number }
+  >
   slow: Array<{ channel: string; count: number; msMedian: number; msMax: number }>
+}
+
+/** The notifications' events, and what each counts. */
+const NOTIFICATION_EVENTS: Readonly<
+  Record<string, 'shown' | 'clicked' | 'actions' | 'dismissed' | 'failed'>
+> = {
+  'notification.shown': 'shown',
+  'notification.clicked': 'clicked',
+  'notification.action': 'actions',
+  'notification.dismissed': 'dismissed',
+  'notification.failed': 'failed'
 }
 
 const KEPT_EVENTS = 150
@@ -129,6 +148,7 @@ export class SummaryCounter {
     memoryCorrected: 0
   }
   private focused: { at: number; session: string } | null = null
+  private readonly notifications: DiagnosticSummary['notifications'] = {}
 
   /** One line of the log, as written (JSON). */
   add(text: string): void {
@@ -195,6 +215,19 @@ export class SummaryCounter {
       answer(this.answers, line)
     }
 
+    const notified = NOTIFICATION_EVENTS[line.ev ?? '']
+
+    if (line.area === 'app' && notified && typeof line.kind === 'string') {
+      const counts = (this.notifications[line.kind] ??= {
+        shown: 0,
+        clicked: 0,
+        actions: 0,
+        dismissed: 0,
+        failed: 0
+      })
+      counts[notified] += times
+    }
+
     if (line.ev === 'ipc.slow' && typeof line.channel === 'string') {
       const times = this.slow.get(line.channel) ?? []
       times.push(numberOf(line.ms))
@@ -241,6 +274,7 @@ export class SummaryCounter {
         ])
       ),
       answers: this.answers,
+      notifications: this.notifications,
       slow: [...this.slow]
         .map(([channel, times]) => ({
           channel,

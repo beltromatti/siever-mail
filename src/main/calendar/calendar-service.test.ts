@@ -429,3 +429,42 @@ END:VEVENT`
     ).toEqual([['nuovo', 'Fiera MCE']])
   })
 })
+
+describe('CalendarService, an event as it was kept', () => {
+  it('is the event while it is there, and as its last change kept it once gone', async () => {
+    const stamp = (at: number): string => new Date(at).toISOString().replace(/[-:]|\.\d{3}/g, '')
+    const visit = `BEGIN:VEVENT
+UID:sopralluogo@studio
+DTSTAMP:20261101T000000Z
+DTSTART:${stamp(Date.now() + 86_400_000)}
+DURATION:PT1H
+SUMMARY:Sopralluogo in cantiere
+END:VEVENT`
+    let events = [visit]
+    const { calendar } = await calendars(
+      async () =>
+        new Response(
+          `BEGIN:VCALENDAR\nVERSION:2.0\nX-WR-CALNAME:Lavoro\n${events.join('\n')}\nEND:VCALENDAR`
+        )
+    )
+    await calendar.addIcs('https://studio.example/lavoro.ics', null)
+    const [kept] = await calendar.events(
+      new Date().toISOString(),
+      new Date(Date.now() + 7 * 86_400_000).toISOString()
+    )
+
+    expect(await calendar.eventAsKept(kept.key)).toMatchObject({
+      gone: false,
+      event: { title: 'Sopralluogo in cantiere' }
+    })
+
+    // Cancelled: what the Segretario tells of it, it tells of the event as it was.
+    events = []
+    await calendar.syncAll()
+    expect(await calendar.eventAsKept(kept.key)).toMatchObject({
+      gone: true,
+      event: { title: 'Sopralluogo in cantiere', start: kept.start }
+    })
+    expect(await calendar.eventAsKept('mai-esistito')).toBeNull()
+  })
+})

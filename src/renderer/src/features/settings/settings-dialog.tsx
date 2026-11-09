@@ -148,7 +148,7 @@ const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
     id: 'notifications',
     label: 'Notifiche',
     title: 'Notifiche',
-    description: "Gli avvisi per la nuova posta e il numero di non lette sull'icona.",
+    description: "Ciò che ti interrompe, app per app, e il numero sull'icona.",
     icon: Bell
   },
   {
@@ -947,7 +947,7 @@ export function SettingsDialog({
             ) : activeSectionId === 'memoria' ? (
               <MemorySection onRedoConoscimi={onRedoConoscimi} />
             ) : activeSectionId === 'notifications' ? (
-              <NotificationsSection accounts={accounts} />
+              <NotificationsSection accounts={accounts} aiOn={aiOn} />
             ) : activeSectionId === 'shortcuts' ? (
               <ShortcutsSection
                 overrides={uiPreferences.shortcutOverrides}

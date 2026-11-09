@@ -832,6 +832,8 @@ model CalendarEvent {
   htmlLink      String? @map("html_link")
   /// Put there by the Segretario (`EventOrigin`), as the provider's private properties say.
   originJson    String? @map("origin_json")
+  /// Its own reminders, minutes before it starts, as JSON; null where it says nothing of them.
+  remindersJson String? @map("reminders_json")
 
   @@index([startsAt, endsAt], map: "idx_calendar_events_range")
   @@index([iCalUid], map: "idx_calendar_events_ical_uid")

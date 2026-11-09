@@ -210,6 +210,49 @@ function meetLinkOf(event: ICAL.Event): string | null {
 }
 
 /**
+ * The reminders an event sets (VALARM, vision §13.3), in minutes before it
+ * starts: those that show or sound — one that sends an email is the
+ * server's to send —, set from its start, its end, or a moment of their
+ * own. An event with none says nothing of them: null.
+ */
+export function remindersOf(
+  component: ICAL.Component,
+  startsAt: number,
+  endsAt: number
+): number[] | null {
+  const alarms = component.getAllSubcomponents('valarm')
+
+  if (alarms.length === 0) {
+    return null
+  }
+
+  const minutes = alarms.flatMap((alarm) => {
+    const action = String(alarm.getFirstPropertyValue('action') ?? 'DISPLAY').toUpperCase()
+    const trigger = alarm.getFirstProperty('trigger')
+    const value = trigger?.getFirstValue()
+
+    if ((action !== 'DISPLAY' && action !== 'AUDIO') || !trigger) {
+      return []
+    }
+
+    const at =
+      value instanceof ICAL.Duration
+        ? (String(trigger.getParameter('related') ?? 'START').toUpperCase() === 'END'
+            ? endsAt
+            : startsAt) +
+          value.toSeconds() * 1000
+        : value instanceof ICAL.Time
+          ? value.toJSDate().getTime()
+          : null
+
+    // One after the event has begun reminds of nothing to come.
+    return at === null || at > startsAt ? [] : [Math.round((startsAt - at) / 60_000)]
+  })
+
+  return [...new Set(minutes)].sort((a, b) => a - b)
+}
+
+/**
  * What an occurrence says, from the event that holds it — the series, or
  * the exception for that instance — the user's own answer among the
  * attendees found by their addresses.
@@ -262,6 +305,7 @@ function occurrenceOf(
     meetLink: meetLinkOf(event),
     htmlLink: null,
     origin: originOf(event.component),
+    reminders: remindersOf(event.component, startsAt, endsAt),
     cancelled: status === 'CANCELLED'
   }
 }

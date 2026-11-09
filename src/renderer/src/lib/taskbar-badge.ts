@@ -35,18 +35,16 @@ function drawBadge(count: number): string | null {
 }
 
 /**
- * Draws the unread count Windows cannot draw on the taskbar button, each
- * time the main process says it changed (see `AppBadge`).
+ * Draws the number Windows cannot draw on the taskbar button, each time
+ * the main process says it changed (see `AppBadge`), with what it counts
+ * in words for who cannot see it.
  */
 export function useTaskbarBadge(): void {
   useEffect(
     () =>
-      window.mailApi.onTaskbarBadgeChanged((count) => {
+      window.notificationsApi.onBadgeChanged(({ count, description }) => {
         const image = count > 0 ? drawBadge(count) : null
-        void window.mailApi.setTaskbarBadgeImage(
-          image,
-          image ? (count === 1 ? '1 messaggio non letto' : `${count} messaggi non letti`) : ''
-        )
+        void window.notificationsApi.setBadgeImage(image, image ? description : '')
       }),
     []
   )

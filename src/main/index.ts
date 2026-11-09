@@ -22,6 +22,7 @@ import { registerCalendarIpc } from './ipc/register-calendar-ipc'
 import { registerFilesIpc } from './ipc/register-files-ipc'
 import { registerSegretarioIpc } from './ipc/register-segretario-ipc'
 import { registerDiagnosticsIpc } from './ipc/register-diagnostics-ipc'
+import { registerNotificationsIpc } from './ipc/register-notifications-ipc'
 import { prepareUpgradeMigration } from './services/data-migration'
 import { normalizeExternalHttpUrl } from './utils/external-url'
 import { profileKind, systemLine } from '@main/diagnostics/app-state'
@@ -331,7 +332,7 @@ function createMainWindow(): BrowserWindow {
 
   // What only the page can draw — the Windows taskbar badge — is drawn anew
   // each time it loads.
-  window.webContents.on('did-finish-load', () => appWorkspace?.mail.windowLoaded())
+  window.webContents.on('did-finish-load', () => appWorkspace?.windowLoaded())
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     void window.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -395,6 +396,7 @@ if (hasSingleInstanceLock) {
       () => workspace.diagnosticsSource(),
       () => mainWindow
     )
+    registerNotificationsIpc(workspace)
     registerCalendarIpc(
       workspace.calendar,
       {

@@ -161,6 +161,8 @@ export interface MessageNote {
   messageDate: string
   /** The same message came to another of the user's accounts: this copies that note. */
   twinAccountId: string | null
+  /** The Segretario said to tell the user of it now, with a notification (§13.3). */
+  notify: boolean
   writtenBy: WorkActor
 }
 
@@ -496,6 +498,16 @@ export function setupTurnsAiOn(state: OnboardingState): boolean {
     state.case === 'ai-riaccesa'
     ? true
     : state.turnsAiOn === true
+}
+
+/**
+ * The mailboxes a setup's reading is of: a connection added with the AI
+ * already on, its own; any other, every one (undefined).
+ */
+export function setupReadingAccountIds(state: OnboardingState): string[] | undefined {
+  return state.case === 'nuova-connessione' && !setupTurnsAiOn(state) && state.accountIds.length > 0
+    ? state.accountIds
+    : undefined
 }
 
 /**

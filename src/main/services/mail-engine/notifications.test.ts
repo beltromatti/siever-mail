@@ -23,11 +23,17 @@ class FakeNotification extends EventEmitter {
 
 vi.mock('electron', () => ({
   app: { focus: () => undefined },
+  shell: { openExternal: async () => undefined },
   Notification: FakeNotification
 }))
 
-const { NotificationManager } = await import('./notifications')
+const { MailNotifications } = await import('./notifications')
+const { NotificationCenter } = await import('@main/notifications/center')
 import type { MailFolder, MailMessageSummary } from '@shared/models'
+import {
+  DEFAULT_NOTIFICATION_PREFERENCES,
+  type NotificationPreferences
+} from '@shared/notifications'
 import type { MessageNote } from '@shared/segretario'
 
 const INBOX: MailFolder = {
@@ -40,6 +46,7 @@ const INBOX: MailFolder = {
   unseenCount: 0
 } as MailFolder
 const ACCOUNT = { id: 'a1', email: 'anna@example.it' }
+const OTHER = { id: 'a2', email: 'anna@brenta.it' }
 
 function message(uid: number, overrides: Partial<MailMessageSummary> = {}): MailMessageSummary {
   return {
@@ -50,29 +57,62 @@ function message(uid: number, overrides: Partial<MailMessageSummary> = {}): Mail
     preview: `Anteprima ${uid}`,
     messageKey: `k${uid}`,
     senderLabel: `Mittente ${uid}`,
+    date: new Date(Date.now() + 60_000).toISOString(),
     isRead: false,
     ...overrides
   } as MailMessageSummary
 }
 
-describe('NotificationManager', () => {
-  let manager: InstanceType<typeof NotificationManager>
+function note(uid: number, notify: boolean, overrides: Partial<MessageNote> = {}): MessageNote {
+  return {
+    accountId: 'a1',
+    messageKey: `k${uid}`,
+    threadId: `t${uid}`,
+    direction: 'in',
+    summary: `Nota ${uid}`,
+    nature: 'da_rispondere',
+    priority: 'alta',
+    reason: '',
+    due: null,
+    messageDate: '2026-10-28T08:00:00.000Z',
+    twinAccountId: null,
+    notify,
+    writtenBy: 'segretario',
+    ...overrides
+  }
+}
+
+describe('the notifications of new mail', () => {
+  let center: InstanceType<typeof NotificationCenter>
+  let mail: InstanceType<typeof MailNotifications>
   const actions = { markRead: vi.fn(async () => undefined), archive: vi.fn(async () => undefined) }
+  const prefer = (change: (current: NotificationPreferences) => NotificationPreferences): void =>
+    center.setPreferences(change(center.preferences))
 
   beforeEach(() => {
     vi.useFakeTimers()
     shown.length = 0
-    manager = new NotificationManager({ actions, onStatusChange: () => undefined })
+    center = new NotificationCenter({
+      // No window: the user is away from it.
+      window: () => null,
+      giveOnce: async () => true,
+      onStatusChange: () => undefined
+    })
+    center.setPreferences(DEFAULT_NOTIFICATION_PREFERENCES)
+    mail = new MailNotifications({ center, actions })
+    // Without the Segretario, unless a test says otherwise.
+    mail.setSegretarioReading(false)
   })
 
   afterEach(() => {
-    manager.dispose()
+    mail.dispose()
+    center.dispose()
     vi.useRealTimers()
   })
 
-  it('announces unread mail in the inbox, one alert for what arrives together', () => {
-    manager.enqueue(ACCOUNT, [message(1), message(2, { isRead: true })], INBOX, false)
-    manager.enqueue(ACCOUNT, [message(3)], INBOX, false)
+  it('tells unread mail in the inbox, one notification for what arrives together', () => {
+    mail.enqueue(ACCOUNT, [message(1), message(2, { isRead: true })], INBOX, false)
+    mail.enqueue(ACCOUNT, [message(3)], INBOX, false)
     vi.runAllTimers()
 
     expect(shown).toHaveLength(1)
@@ -80,12 +120,11 @@ describe('NotificationManager', () => {
   })
 
   it('gives a single message its sender, subject and buttons', () => {
-    manager.enqueue(ACCOUNT, [message(7)], INBOX, false)
+    mail.enqueue(ACCOUNT, [message(7)], INBOX, false)
     vi.runAllTimers()
 
     expect(shown[0].options).toMatchObject({
       title: 'Mittente 7',
-      id: 'a1:INBOX:7',
       groupId: 'a1',
       actions: [
         { type: 'button', text: 'Segna come letta' },
@@ -95,51 +134,29 @@ describe('NotificationManager', () => {
     expect(`${shown[0].options.subtitle ?? ''}${shown[0].options.body}`).toContain('Oggetto 7')
   })
 
-  it('stays quiet for a first sync, other folders, muted accounts and when off', () => {
-    manager.enqueue(ACCOUNT, [message(1)], INBOX, true)
-    manager.enqueue(
+  it('stays quiet for a first sync, other folders, muted mailboxes and when off', () => {
+    mail.enqueue(ACCOUNT, [message(1)], INBOX, true)
+    mail.enqueue(
       ACCOUNT,
       [message(2, { folderPath: 'Archivio' })],
-      {
-        ...INBOX,
-        path: 'Archivio',
-        specialUse: '\\Archive'
-      },
+      { ...INBOX, path: 'Archivio', specialUse: '\\Archive' },
       false
     )
-    manager.setPreferences({
-      enabled: true,
-      mutedAccountIds: ['a1'],
-      showPreview: true,
-      onlyImportant: true,
-      sound: true,
-      badge: true
-    })
-    manager.enqueue(ACCOUNT, [message(3)], INBOX, false)
-    manager.setPreferences({
-      enabled: false,
-      mutedAccountIds: [],
-      showPreview: true,
-      onlyImportant: true,
-      sound: true,
-      badge: true
-    })
-    manager.enqueue(ACCOUNT, [message(4)], INBOX, false)
+    prefer((current) => ({ ...current, mail: { ...current.mail, mutedAccountIds: ['a1'] } }))
+    mail.enqueue(ACCOUNT, [message(3)], INBOX, false)
+    prefer((current) => ({ ...current, mail: { ...current.mail, mutedAccountIds: [] } }))
+    prefer((current) => ({ ...current, mail: { ...current.mail, enabled: false } }))
+    mail.enqueue(ACCOUNT, [message(4)], INBOX, false)
+    prefer((current) => ({ ...current, mail: { ...current.mail, enabled: true }, enabled: false }))
+    mail.enqueue(ACCOUNT, [message(5)], INBOX, false)
     vi.runAllTimers()
 
     expect(shown).toHaveLength(0)
   })
 
-  it('says only that mail arrived when the preview is off', () => {
-    manager.setPreferences({
-      enabled: true,
-      mutedAccountIds: [],
-      showPreview: false,
-      onlyImportant: true,
-      sound: false,
-      badge: true
-    })
-    manager.enqueue(ACCOUNT, [message(5)], INBOX, false)
+  it('says only that mail arrived when the content is not to be shown', () => {
+    prefer((current) => ({ ...current, showPreview: false, sound: false }))
+    mail.enqueue(ACCOUNT, [message(5)], INBOX, false)
     vi.runAllTimers()
 
     expect(shown[0].options).toMatchObject({
@@ -149,19 +166,19 @@ describe('NotificationManager', () => {
     })
   })
 
-  it('takes an alert away once all its messages are read or gone', () => {
-    manager.enqueue(ACCOUNT, [message(1), message(2)], INBOX, false)
+  it('takes a notification away once all its messages are read or gone', () => {
+    mail.enqueue(ACCOUNT, [message(1), message(2)], INBOX, false)
     vi.runAllTimers()
 
-    manager.withdraw([{ accountId: 'a1', folderPath: 'INBOX', uid: 1 }])
+    mail.withdraw([{ accountId: 'a1', folderPath: 'INBOX', uid: 1 }])
     expect(shown[0].closed).toBe(false)
 
-    manager.withdraw([{ accountId: 'a1', folderPath: 'INBOX', uid: 2 }])
+    mail.withdraw([{ accountId: 'a1', folderPath: 'INBOX', uid: 2 }])
     expect(shown[0].closed).toBe(true)
   })
 
   it('runs the buttons on the message', async () => {
-    manager.enqueue(ACCOUNT, [message(9)], INBOX, false)
+    mail.enqueue(ACCOUNT, [message(9)], INBOX, false)
     vi.runAllTimers()
 
     shown[0].emit('action', { actionIndex: 1 })
@@ -170,44 +187,99 @@ describe('NotificationManager', () => {
     expect(actions.archive).toHaveBeenCalledWith({ accountId: 'a1', folderPath: 'INBOX', uid: 9 })
   })
 
+  it('tells what came while the app was closed once it has all arrived, one per mailbox', () => {
+    const before = new Date(Date.now() - 3_600_000).toISOString()
+    mail.enqueue(ACCOUNT, [message(1, { date: before })], INBOX, false)
+    vi.advanceTimersByTime(10_000)
+    mail.enqueue(
+      ACCOUNT,
+      [message(2, { date: before }), message(3, { date: before })],
+      INBOX,
+      false
+    )
+    vi.advanceTimersByTime(10_000)
+    expect(shown).toHaveLength(0)
+
+    vi.advanceTimersByTime(20_000)
+    expect(shown).toHaveLength(1)
+    expect(shown[0].options.title).toBe('3 nuove email')
+  })
+
+  it('tells a message once, whatever mailboxes it came to', () => {
+    const copy = { messageId: '<m1@brenta.it>' }
+    mail.enqueue(ACCOUNT, [message(1, copy)], INBOX, false)
+    mail.enqueue(
+      OTHER,
+      [message(1, { ...copy, accountId: 'a2', messageKey: 'other' })],
+      { ...INBOX, accountId: 'a2' },
+      false
+    )
+    vi.runAllTimers()
+
+    expect(shown).toHaveLength(1)
+  })
+
+  it('at launch, waits to know whether the Segretario reads before telling what it found', () => {
+    const launched = new MailNotifications({ center, actions })
+    const before = new Date(Date.now() - 3_600_000).toISOString()
+    launched.enqueue(ACCOUNT, [message(11, { date: before })], INBOX, false)
+    vi.advanceTimersByTime(60_000)
+    expect(shown).toHaveLength(0)
+
+    // It does not: what was found is told as it is, together, once it has all come.
+    launched.setSegretarioReading(false)
+    launched.enqueue(ACCOUNT, [message(12, { date: before })], INBOX, false)
+    vi.advanceTimersByTime(20_000)
+    expect(shown).toHaveLength(1)
+    expect(shown[0].options.title).toBe('2 nuove email')
+    launched.dispose()
+  })
+
   describe('while the Segretario reads the mail', () => {
-    const note = (
-      uid: number,
-      nature: MessageNote['nature'],
-      priority: MessageNote['priority']
-    ): MessageNote => ({
-      accountId: 'a1',
-      messageKey: `k${uid}`,
-      threadId: `t${uid}`,
-      direction: 'in',
-      summary: `Nota ${uid}`,
-      nature,
-      priority,
-      reason: '',
-      due: null,
-      messageDate: '2026-10-28T08:00:00.000Z',
-      twinAccountId: null,
-      writtenBy: 'segretario'
-    })
+    beforeEach(() => mail.setSegretarioReading(true))
 
-    beforeEach(() => manager.setSegretarioReading(true))
-
-    it('announces only what matters, with its note', () => {
-      manager.enqueue(ACCOUNT, [message(1), message(2), message(3)], INBOX, false)
+    it('tells only what it said to tell now, with its words', () => {
+      mail.enqueue(ACCOUNT, [message(1), message(2), message(3)], INBOX, false)
       vi.advanceTimersByTime(5_000)
       expect(shown).toHaveLength(0)
 
-      manager.noteWritten(note(1, 'da_rispondere', 'alta'))
-      manager.noteWritten(note(2, 'informativo', 'alta'))
-      manager.noteWritten(note(3, 'da_fare', 'media'))
+      mail.noteWritten(note(1, true))
+      mail.noteWritten(note(2, false))
 
       expect(shown).toHaveLength(1)
       expect(shown[0].options.title).toBe('Mittente 1')
       expect(`${shown[0].options.body}`).toContain('Nota 1')
     })
 
-    it('announces as it is a message whose note does not come in time', () => {
-      manager.enqueue(ACCOUNT, [message(4)], INBOX, false)
+    it('tells a copy in another mailbox only where it was not told', () => {
+      const copy = { messageId: '<m3@brenta.it>' }
+      mail.enqueue(ACCOUNT, [message(3, copy)], INBOX, false)
+      mail.noteWritten(note(3, true))
+      mail.enqueue(
+        OTHER,
+        [message(3, { ...copy, accountId: 'a2', messageKey: 'twin' })],
+        { ...INBOX, accountId: 'a2' },
+        false
+      )
+      mail.noteWritten(note(3, true, { accountId: 'a2', messageKey: 'twin', twinAccountId: 'a1' }))
+      expect(shown).toHaveLength(1)
+
+      // Its first mailbox muted: the copy is told.
+      prefer((current) => ({ ...current, mail: { ...current.mail, mutedAccountIds: ['a1'] } }))
+      const muted = { messageId: '<m4@brenta.it>' }
+      mail.enqueue(ACCOUNT, [message(4, muted)], INBOX, false)
+      mail.enqueue(
+        OTHER,
+        [message(4, { ...muted, accountId: 'a2', messageKey: 'twin4' })],
+        { ...INBOX, accountId: 'a2' },
+        false
+      )
+      mail.noteWritten(note(4, true, { accountId: 'a2', messageKey: 'twin4', twinAccountId: 'a1' }))
+      expect(shown).toHaveLength(2)
+    })
+
+    it('tells as it is a message whose note does not come in time', () => {
+      mail.enqueue(ACCOUNT, [message(4)], INBOX, false)
       vi.advanceTimersByTime(10 * 60 * 1000)
 
       expect(shown).toHaveLength(1)
@@ -215,27 +287,100 @@ describe('NotificationManager', () => {
     })
 
     it('lets go of what waited when it stops reading, and forgets what was read', () => {
-      manager.enqueue(ACCOUNT, [message(5), message(6)], INBOX, false)
-      manager.withdraw([{ accountId: 'a1', folderPath: 'INBOX', uid: 6 }])
-      manager.setSegretarioReading(false)
+      mail.enqueue(ACCOUNT, [message(5), message(6)], INBOX, false)
+      mail.withdraw([{ accountId: 'a1', folderPath: 'INBOX', uid: 6 }])
+      mail.setSegretarioReading(false)
+      vi.advanceTimersByTime(2_000)
 
       expect(shown).toHaveLength(1)
       expect(shown[0].options.title).toBe('Mittente 5')
     })
 
-    it('announces everything when the user wants every message', () => {
-      manager.setPreferences({
-        enabled: true,
-        mutedAccountIds: [],
-        showPreview: true,
-        onlyImportant: false,
-        sound: true,
-        badge: true
-      })
-      manager.enqueue(ACCOUNT, [message(7)], INBOX, false)
+    it('tells everything when the user wants every message', () => {
+      prefer((current) => ({ ...current, mail: { ...current.mail, onlyFlagged: false } }))
+      mail.enqueue(ACCOUNT, [message(7)], INBOX, false)
       vi.runAllTimers()
 
       expect(shown).toHaveLength(1)
     })
+
+    it('tells what came while closed, and is worth it, once every note is in', () => {
+      const before = new Date(Date.now() - 3_600_000).toISOString()
+      mail.enqueue(
+        ACCOUNT,
+        [message(1, { date: before }), message(2, { date: before }), message(3, { date: before })],
+        INBOX,
+        false
+      )
+
+      mail.noteWritten(note(1, true))
+      mail.noteWritten(note(2, false))
+      expect(shown).toHaveLength(0)
+
+      mail.noteWritten(note(3, true))
+      expect(shown).toHaveLength(1)
+      expect(shown[0].options).toMatchObject({ title: '2 email da guardare' })
+      expect(`${shown[0].options.body}`).toContain('Nota 1')
+    })
+
+    it('tells nothing of what came while closed and went before it was told', () => {
+      const before = new Date(Date.now() - 3_600_000).toISOString()
+      mail.enqueue(
+        ACCOUNT,
+        [message(1, { date: before }), message(2, { date: before })],
+        INBOX,
+        false
+      )
+      mail.noteWritten(note(1, true))
+      // Both read elsewhere at once: the last held settles the mailbox, with nothing left.
+      mail.withdraw([
+        { accountId: 'a1', folderPath: 'INBOX', uid: 1 },
+        { accountId: 'a1', folderPath: 'INBOX', uid: 2 }
+      ])
+      vi.runAllTimers()
+
+      expect(shown).toHaveLength(0)
+    })
+  })
+})
+
+describe('the notification centre', () => {
+  it('keeps what answers the user for when they are away from the window', () => {
+    shown.length = 0
+    let focused = true
+    const window = {
+      isVisible: () => true,
+      isMinimized: () => false,
+      isFocused: () => focused
+    }
+    const center = new NotificationCenter({
+      window: () => window as never,
+      giveOnce: async () => true,
+      onStatusChange: () => undefined
+    })
+    center.setPreferences(DEFAULT_NOTIFICATION_PREFERENCES)
+    const input = {
+      family: 'segretario' as const,
+      kind: 'segretario.finished',
+      key: 'segretario:done:1',
+      title: 'Il Segretario ha finito',
+      body: 'Ho trovato tre offerte.',
+      target: { kind: 'activity' as const, activityId: '1' },
+      when: 'away' as const
+    }
+
+    expect(center.notify(input)).toBe(false)
+    expect(center.notify({ ...input, key: 'calendar:reminder:e1', when: 'always' })).toBe(true)
+
+    focused = false
+    expect(center.notify(input)).toBe(true)
+    expect(shown).toHaveLength(2)
+
+    // Another with the same key takes its place; withdrawn, it goes.
+    center.notify({ ...input, body: 'Ne ho trovate quattro.' })
+    expect(shown[1].closed).toBe(true)
+    center.withdraw(input.key)
+    expect(shown[2].closed).toBe(true)
+    center.dispose()
   })
 })

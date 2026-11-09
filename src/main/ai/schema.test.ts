@@ -115,7 +115,7 @@ describe('ensureAiSchema', () => {
       )
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '7'
+      value: '8'
     })
   })
 
@@ -243,7 +243,7 @@ describe('ensureAiSchema', () => {
       { id: 'p1', revision: 1 }
     ])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '7'
+      value: '8'
     })
   })
 
@@ -269,7 +269,7 @@ describe('ensureAiSchema', () => {
       await sql.all("SELECT name FROM sqlite_master WHERE name = 'idx_ai_items_project'")
     ).toEqual([{ name: 'idx_ai_items_project' }])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '7'
+      value: '8'
     })
   })
 
@@ -291,7 +291,21 @@ describe('ensureAiSchema', () => {
       await sql.get("SELECT name FROM sqlite_master WHERE name = 'ai_saved_copies'")
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '7'
+      value: '8'
+    })
+  })
+
+  it('gives a version 7 database the notes that say whether to tell the user now', async () => {
+    await ensureAiSchema(sql)
+    await sql.run("UPDATE ai_meta SET value = '7' WHERE key = 'schema_version'")
+    await sql.run('ALTER TABLE ai_notes DROP COLUMN notify')
+
+    await ensureAiSchema(sql)
+
+    const columns = await sql.all<{ name: string }>('PRAGMA table_info(ai_notes)')
+    expect(columns.map((column) => column.name)).toContain('notify')
+    expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
+      value: '8'
     })
   })
 

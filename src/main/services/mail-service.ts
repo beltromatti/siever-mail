@@ -45,8 +45,6 @@ import type {
   SetMessagesKeywordInput,
   DraftContent,
   DraftStatus,
-  NotificationPreferences,
-  NotificationStatus,
   StoredDraft,
   UiPreferences,
   UnifiedFolderSummary,
@@ -88,7 +86,6 @@ import {
   markFromInternet,
   sha256
 } from './attachment-files'
-import { APP_ID } from '@main/app-identity'
 import { getAppWindow } from '@main/app-window'
 import type { SegretarioService } from '@main/ai/segretario-service'
 import { invitationReply } from '@main/calendar/icalendar'
@@ -96,7 +93,7 @@ import { isIcsAttachment, type CalendarResponse } from '@shared/calendar'
 import type { MarkedBefore, MessageMark, MessageMarksChange } from '@shared/message-marks'
 import type { MessageNote } from '@shared/segretario'
 import type { MessageLocation, SegretarioMailPort } from '@main/ai/agent/tool-types'
-import { AppBadge } from './app-badge'
+import type { NotificationCenter } from '@main/notifications/center'
 import { DraftService, draftRefKey } from './drafts'
 import type { AppDatabase, MessageListView } from './database'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
@@ -233,14 +230,6 @@ const accountSignatureInputSchema = z.object({
   accountId: z.string().trim().min(1),
   html: z.string().max(MAX_ACCOUNT_SIGNATURE_HTML_LENGTH)
 })
-const notificationPreferencesSchema = z.object({
-  enabled: z.boolean(),
-  mutedAccountIds: z.array(z.string().trim().min(1)).max(200),
-  showPreview: z.boolean(),
-  onlyImportant: z.boolean(),
-  sound: z.boolean(),
-  badge: z.boolean()
-})
 
 /** Recipients a draft keeps, as typed — valid addresses or not. */
 const MAX_DRAFT_RECIPIENTS = 2_000
@@ -286,12 +275,6 @@ const draftContentSchema = z.object({
     })
   )
 })
-
-/** The system pages where the user allows an app's notifications. */
-const SYSTEM_NOTIFICATION_SETTINGS: Partial<Record<NodeJS.Platform, string>> = {
-  darwin: `x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=${APP_ID}`,
-  win32: 'ms-settings:notifications'
-}
 
 const uiPreferencesSchema = z.object({
   themeMode: z.enum(['system', 'light', 'dark']),
@@ -509,6 +492,10 @@ export interface MailServiceOptions {
   onAccountRemoved: (account: MailAccount) => Promise<void>
   /** A mailbox turned down for good, and stopped: the user is told, once. */
   onConnectionRefused: (notice: ConnectionRefusedNotice) => void
+  /** The app's notifications: new mail, and a message of the outbox that did not go (§13.3). */
+  notifications: NotificationCenter
+  /** The unread messages of every mailbox's Posta in arrivo, whenever the count may have changed. */
+  onInboxUnreadChange: (count: number) => void
 }
 
 export class MailService {
@@ -518,7 +505,7 @@ export class MailService {
   /** The tokens of the mailboxes signed in with Google or Microsoft. */
   private readonly tokens: MailTokenBroker
   private readonly engine: MailEngine
-  private readonly badge: AppBadge
+  private readonly notifications: NotificationCenter
   private readonly drafts: DraftService
   private readonly segretario: MailServiceOptions['segretario']
   private readonly onAccountRemoving: MailServiceOptions['onAccountRemoving']
@@ -546,12 +533,13 @@ export class MailService {
       this.microsoftOAuthService,
       (accountId, secret) => this.database.setAccountSecret(accountId, encryptSecret(secret))
     )
-    this.badge = new AppBadge(getAppWindow)
+    this.notifications = options.notifications
     this.engine = new MailEngine({
       database: this.database,
       tokens: this.tokens,
       getMainWindow: getAppWindow,
-      onInboxUnreadChange: (count) => this.badge.setCount(count),
+      notifications: options.notifications,
+      onInboxUnreadChange: options.onInboxUnreadChange,
       onMailChanged: options.onMailChanged,
       onRefused: (accountId, refusal, detail) =>
         void this.database
@@ -804,8 +792,6 @@ export class MailService {
   }
 
   async start(): Promise<void> {
-    this.applyNotificationPreferences(await this.database.getNotificationPreferences())
-    this.badge.setCount(await this.engine.inboxUnreadCount())
     await this.engine.start()
     await this.drafts.resume()
     // First at the next round, not at once: the mailboxes have connected, or said they are refused.
@@ -822,61 +808,9 @@ export class MailService {
     this.engine.noteWritten(note)
   }
 
-  /** The window loaded anew: what only its page can draw is drawn again. */
-  windowLoaded(): void {
-    this.badge.redraw()
-  }
-
-  private applyNotificationPreferences(preferences: NotificationPreferences): void {
-    this.engine.setNotificationPreferences(preferences)
-    this.badge.setEnabled(preferences.badge)
-  }
-
-  async getNotificationPreferences(): Promise<NotificationPreferences> {
-    return this.database.getNotificationPreferences()
-  }
-
-  async setNotificationPreferences(
-    input: NotificationPreferences
-  ): Promise<NotificationPreferences> {
-    const payload = notificationPreferencesSchema.parse(input)
-    const accountIds = new Set((await this.database.getAccounts()).map((account) => account.id))
-    const preferences: NotificationPreferences = {
-      ...payload,
-      mutedAccountIds: [...new Set(payload.mutedAccountIds)].filter((id) => accountIds.has(id))
-    }
-
-    await this.database.setNotificationPreferences(preferences)
-    this.applyNotificationPreferences(preferences)
-    return preferences
-  }
-
-  getNotificationStatus(): NotificationStatus {
-    return this.engine.notificationStatus()
-  }
-
-  showTestNotification(): Promise<NotificationStatus> {
-    return this.engine.showTestNotification()
-  }
-
-  async openNotificationSettings(): Promise<void> {
-    const page = SYSTEM_NOTIFICATION_SETTINGS[process.platform]
-
-    if (!page) {
-      throw new Error('Su questo sistema le notifiche si regolano dalle impostazioni del desktop.')
-    }
-
-    await shell.openExternal(page)
-  }
-
-  setTaskbarBadgeImage(dataUrl: string | null, description: string): void {
-    const image = z
-      .string()
-      .startsWith('data:image/png;base64,')
-      .max(200_000)
-      .nullable()
-      .parse(dataUrl)
-    this.badge.setOverlayImage(image, z.string().max(200).parse(description))
+  /** The unread messages of every mailbox's Posta in arrivo, as the app's icon may count them. */
+  inboxUnreadCount(): Promise<number> {
+    return this.engine.inboxUnreadCount()
   }
 
   async stop(): Promise<void> {
@@ -1115,7 +1049,6 @@ export class MailService {
     await this.includeAccountInUnifiedInbox(account.id)
     this.database.learnContacts([{ address: account.email, name: account.displayName }])
     await this.engine.addAccount(account.id)
-    await this.introduceNotifications(account)
     return account
   }
 
@@ -1135,25 +1068,6 @@ export class MailService {
       })
     } finally {
       resolver.cancel()
-    }
-  }
-
-  /** Says something to the user in the system's alerts. */
-  showNotice(title: string, body: string): void {
-    this.engine.showNotice(title, body)
-  }
-
-  /**
-   * The first account connected says, in a notification, that new mail
-   * will be announced so — which is when macOS asks the user to allow the
-   * app's notifications: in context, not hours later on the first message.
-   */
-  private async introduceNotifications(account: MailAccount): Promise<void> {
-    if ((await this.database.getAccounts()).length === 1) {
-      this.engine.showNotice(
-        'SIEVER Mail è pronta',
-        `Ti avviserà qui quando arriva nuova posta per ${account.email}.`
-      )
     }
   }
 
@@ -1984,6 +1898,20 @@ export class MailService {
         const account = { ...stored, secret: decryptSecret(stored.encryptedSecret) }
         const failed = (message: string, why: string): void => {
           log.warn('outbox.failed', { conn: entry.accountId, why })
+          // The user thinks it went: away from the window, the system tells them (§13.3).
+          this.notifications.notify({
+            family: 'app',
+            kind: 'app.outbox-failed',
+            key: `app:outbox:${entry.id}`,
+            title: 'Messaggio non partito',
+            body: message,
+            concealed: {
+              title: 'Messaggio non partito',
+              body: 'Un messaggio in uscita non è partito: è in Bozze.'
+            },
+            target: entry.draftId ? { kind: 'draft', draftId: entry.draftId } : { kind: 'window' },
+            when: 'away'
+          })
           getAppWindow()?.webContents.send(IPC_CHANNELS.outboxFailed, {
             draftId: entry.draftId,
             subject: payload.subject,
