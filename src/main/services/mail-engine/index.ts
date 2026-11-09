@@ -1,7 +1,7 @@
 import { BrowserWindow, net, powerMonitor } from 'electron'
 import type { SearchObject } from 'imapflow'
 
-import { logMainError } from '@main/utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
 import { IPC_CHANNELS } from '@shared/ipc'
 import type {
   AccountConnectionState,
@@ -33,6 +33,8 @@ import {
 } from './account-connection'
 import type { AccountWithSecret } from './mail-transport'
 import { NotificationManager } from './notifications'
+
+const log = diagnostics('mail')
 
 export interface MailEngineDependencies {
   database: AppDatabase
@@ -746,7 +748,7 @@ export class MailEngine {
       this.broadcast(IPC_CHANNELS.unifiedFoldersChanged, { summaries })
       this.deps.onInboxUnreadChange(await this.inboxUnreadCount())
     } catch (error) {
-      logMainError('Unified folder summaries broadcast failed', error)
+      log.error('Unified folder summaries broadcast failed', error)
     }
   }
 

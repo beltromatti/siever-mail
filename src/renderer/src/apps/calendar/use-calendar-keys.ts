@@ -5,6 +5,7 @@ import {
   isOverlaySurfaceOpen,
   useShortcutOverrides
 } from '@renderer/lib/command-shortcuts'
+import { uiLog } from '@renderer/lib/diagnostics'
 import type { HostCommandId } from '@shared/commands'
 
 /** The fields the keyboard writes in — not a checkbox, nor a button. */
@@ -53,6 +54,7 @@ export function useCalendarKeys(
 
       if (command && runRef.current(command.id as HostCommandId)) {
         event.preventDefault()
+        uiLog.info('command', { id: command.id, via: 'keyboard' })
       }
     }
 

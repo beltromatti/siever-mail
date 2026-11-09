@@ -114,7 +114,6 @@ export const IPC_CHANNELS = {
   marksChanged: 'marks:changed',
   describeFiles: 'file:describe',
   openExternalUrl: 'app:open-external-url',
-  openLogsFolder: 'app:open-logs-folder',
   openMessageFromNotification: 'app:open-message-from-notification',
   getWindowControlsState: 'window:get-controls-state',
   minimizeWindow: 'window:minimize',
@@ -288,8 +287,6 @@ export interface DesktopMailApi {
   /** The path of a file dropped from the desktop (Electron `webUtils`). */
   getPathForFile: (file: File) => string
   openExternalUrl: (url: string) => Promise<boolean>
-  /** Reveals the folder the main process writes its log to. */
-  openLogsFolder: () => Promise<void>
   onOpenMessageFromNotification: (listener: (ref: MessageRef) => void) => () => void
   getWindowControlsState: () => Promise<WindowControlsState>
   minimizeWindow: () => Promise<void>

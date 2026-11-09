@@ -1,3 +1,7 @@
+import { diagnostics } from '@main/diagnostics/log'
+
+const log = diagnostics('segretario')
+
 /** While OpenRouter does not answer, the waits between tries, growing. */
 const WAITS_MS = [30_000, 60_000, 120_000, 300_000]
 
@@ -27,11 +31,16 @@ export class Reachability {
 
   /**
    * A call did not reach the model: the wait grows — once for the calls that
-   * fail together, those made before the wait began failing with it.
+   * fail together, those made before the wait began failing with it. The
+   * wait's start is written down, with why (§14.4).
    */
-  failed(startedAt: number): void {
+  failed(startedAt: number, reason?: unknown): void {
     if (this.state && startedAt < this.state.since) {
       return
+    }
+
+    if (!this.state) {
+      log.warn('openrouter.unreachable', { err: reason })
     }
 
     const tries = (this.state?.tries ?? 0) + 1
@@ -46,6 +55,7 @@ export class Reachability {
   /** A call got through: nobody waits any more. */
   answered(): void {
     if (this.state) {
+      log.info('openrouter.back', { ms: Date.now() - this.state.since, tries: this.state.tries })
       this.state = null
       this.wakeAll()
       this.onChange()

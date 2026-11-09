@@ -73,6 +73,7 @@ import { startMessageDrag } from '@renderer/lib/message-drag'
 import { foldSearchText } from '@shared/search'
 import { buildMessageSections, type MessageSection } from '@renderer/lib/message-sections'
 import { commandForKeyEvent, IS_MAC } from '@renderer/lib/command-shortcuts'
+import { uiLog } from '@renderer/lib/diagnostics'
 import { buildFolderTree, folderNodeLabel, type FolderTreeNode } from '@renderer/lib/folder-tree'
 import { READER_ZOOM_RESET, steppedReaderZoom } from '@renderer/lib/reader-zoom'
 import {
@@ -133,6 +134,8 @@ const LIST_REFRESH_COALESCE_MS = 300
 const VIEW_COUNTS_AFTER_MAIL_MS = 1_500
 /** How long a search rests before the servers are asked too: not at every keystroke. */
 const SERVER_SEARCH_DELAY_MS = 450
+/** A search left as it is this long is the one the user settled on (§14.4). */
+const SEARCH_SETTLED_MS = 1_500
 /** How long a message stays in the pane before its neighbours are fetched: skimming past fetches nothing. */
 const PREFETCH_DWELL_MS = 300
 
@@ -513,6 +516,28 @@ export function useMailApp({
     activeSearchQueryRef.current = search.trim()
   }, [search])
 
+  // A search the user settled on (§14.4): how it was asked — the words, the fields named
+  // (`da:`, `allegati:`) —, never what.
+  useEffect(() => {
+    const query = search.trim()
+
+    if (!query) {
+      return
+    }
+
+    const timer = window.setTimeout(
+      () =>
+        uiLog.info('search', {
+          app: 'mail',
+          words: query.split(/\s+/).length,
+          fields: (query.match(/(^|\s)[a-zà-ù]+:/gi) ?? []).length
+        }),
+      SEARCH_SETTLED_MS
+    )
+
+    return () => window.clearTimeout(timer)
+  }, [search])
+
   const handleMessageListSortChange = useCallback(
     (next: MailMessageListSort): void => {
       updateUiPreferences({ messageListSort: next })
@@ -791,10 +816,14 @@ export function useMailApp({
     void refreshUnifiedSummaries()
   }, [refreshUnifiedSummaries])
 
+  // The last message written down as read (§14.4).
+  const lastReadKeyRef = useRef<string | null>(null)
   const loadMessageDetail = useCallback(async (ref: MessageRef) => {
     const requestId = ++messageDetailRequestIdRef.current
     setFailedMessageDetailKey(null)
     setSelectedMessage(null)
+
+    const startedAt = Date.now()
 
     try {
       const detail = await window.mailApi.readMessage(ref)
@@ -802,11 +831,20 @@ export function useMailApp({
       // Null: the pane moved on before this message's turn came.
       if (detail && requestId === messageDetailRequestIdRef.current) {
         setSelectedMessage(detail)
+
+        // A message read, and how long it took to open: where the mail is felt fast or not. The
+        // same one shown again — the list refreshed under it — is not read again.
+        if (lastReadKeyRef.current !== messageRefKey(ref)) {
+          lastReadKeyRef.current = messageRefKey(ref)
+          uiLog.info('message.read', { conn: ref.accountId, ms: Date.now() - startedAt })
+        }
       }
     } catch (caughtError) {
       if (requestId !== messageDetailRequestIdRef.current) {
         return
       }
+
+      uiLog.warn('message.read.failed', { conn: ref.accountId, ms: Date.now() - startedAt })
 
       setViewError(
         caughtError instanceof Error ? caughtError.message : 'Errore nel caricamento messaggio.'
@@ -3020,6 +3058,7 @@ export function useMailApp({
       if (command) {
         if (!event.repeat && runAppCommandRef.current(command.id)) {
           event.preventDefault()
+          uiLog.info('command', { id: command.id, via: 'keyboard' })
         }
 
         return

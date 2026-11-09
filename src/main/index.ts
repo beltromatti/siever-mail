@@ -1,14 +1,16 @@
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
+import { rm, rmdir } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 
-import { app, BrowserWindow, Menu, Tray, nativeImage, session, shell } from 'electron'
+import { app, BrowserWindow, Menu, Tray, nativeImage, powerMonitor, session, shell } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { config as loadDotenv } from 'dotenv'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '@shared/ipc'
 
 import extensionMain from '@app/extension/main'
+import extensionShared from '@app/extension/shared'
 
 import { APP_ID } from './app-identity'
 import { setAppWindow } from './app-window'
@@ -19,10 +21,11 @@ import { registerMailIpc } from './ipc/register-mail-ipc'
 import { registerCalendarIpc } from './ipc/register-calendar-ipc'
 import { registerFilesIpc } from './ipc/register-files-ipc'
 import { registerSegretarioIpc } from './ipc/register-segretario-ipc'
+import { registerDiagnosticsIpc } from './ipc/register-diagnostics-ipc'
 import { prepareUpgradeMigration } from './services/data-migration'
 import { normalizeExternalHttpUrl } from './utils/external-url'
-import { logMainError } from './utils/error-utils'
-import { startFileLogging } from './utils/log-file'
+import { profileKind, systemLine } from '@main/diagnostics/app-state'
+import { diagnostics, flushDiagnostics, startDiagnostics } from '@main/diagnostics/log'
 import { Workspace } from './workspace'
 import {
   applyStoredThemeMode,
@@ -31,6 +34,9 @@ import {
 } from './theme'
 
 import icon from '../../resources/icon.png?asset'
+
+const log = diagnostics('app')
+const pageLog = diagnostics('ui')
 
 const dotenvPath = is.dev ? join(process.cwd(), '.env') : join(process.resourcesPath, '.env')
 
@@ -44,10 +50,10 @@ z.config(z.locales.it())
 // An error no part caught is written down and the rest goes on: one part failing neither takes
 // the app down nor goes unsaid (§14.3).
 process.on('uncaughtException', (error) =>
-  logMainError('Uncaught exception in the main process', error)
+  log.error('Uncaught exception in the main process', error)
 )
 process.on('unhandledRejection', (reason) =>
-  logMainError('Unhandled rejection in the main process', reason)
+  log.error('Unhandled rejection in the main process', reason)
 )
 
 /** The page comes back by itself once a minute at most: one that keeps dying is not reloaded in a loop. */
@@ -69,6 +75,40 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
   app.quit()
+} else {
+  // The diagnostics start before anything else, in this profile's folder (§14.4, §15.3): what
+  // happened before — an error at load — is written first.
+  startDiagnostics({ folder: join(app.getPath('userData'), 'diagnostica'), echo: is.dev })
+  log.info('app.start', {
+    version: app.getVersion(),
+    edition: extensionShared.identity?.id ?? 'public',
+    profile: profileKind(),
+    os: systemLine(),
+    electron: process.versions.electron
+  })
+
+  // The system's log folder goes by the app's name, not its profile: development and the studio
+  // share it with the installed app, whose file is the installed app's alone to let go.
+  if (profileKind() === 'installed') {
+    void forgetOldLog()
+  }
+}
+
+/**
+ * The log the versions before 2.0 kept in the system's log folder: the
+ * diagnostics took its place, and it would only stay there, old.
+ */
+async function forgetOldLog(): Promise<void> {
+  const folder = app.getPath('logs')
+
+  try {
+    await Promise.all(
+      ['main.log', 'main.previous.log'].map((name) => rm(join(folder, name), { force: true }))
+    )
+    await rmdir(folder)
+  } catch {
+    // Not there, or not empty: nothing of the app's is left to take.
+  }
 }
 
 function showMainWindow(): void {
@@ -247,19 +287,30 @@ function createMainWindow(): BrowserWindow {
 
   installContextMenus(window)
 
-  // What goes wrong in the page is written in the same log as the rest (§14.3).
-  window.webContents.on('console-message', ({ level, message, sourceId, lineNumber }) => {
-    if (level === 'error') {
-      console.error(`[renderer] ${message} (${sourceId}:${lineNumber})`)
+  // What goes wrong in the page is written in the same log as the rest (§14.3): what it records
+  // itself, and what it only prints.
+  // Only the app's own page: a message shown in its frame prints what it could not load — the
+  // addresses of its pictures, its trackers —, which is the message's, not the app's.
+  window.webContents.on('console-message', ({ level, message, sourceId, lineNumber, frame }) => {
+    if (level === 'error' && frame === window.webContents.mainFrame) {
+      pageLog.error('console', undefined, { text: message, source: `${sourceId}:${lineNumber}` })
     }
   })
+  // When the window is in front: the time spent before the app, which it exists to cut (§0).
+  window.on('focus', () => pageLog.info('window.focus'))
+  window.on('blur', () => pageLog.info('window.blur'))
+  window.on('show', () => pageLog.info('window.show'))
+  window.on('hide', () => pageLog.info('window.hide'))
 
   // The page died — a crash, out of memory: written down, and loaded again rather than left white;
   // one that keeps dying, a minute after the last time.
   let reloadedAt = 0
   let reloadTimer: NodeJS.Timeout | null = null
   window.webContents.on('render-process-gone', (_event, details) => {
-    logMainError('The window page went away', details.reason, details)
+    log.error('The window page went away', details.reason, {
+      reason: details.reason,
+      exitCode: details.exitCode
+    })
 
     if (details.reason === 'clean-exit' || reloadTimer) {
       return
@@ -307,7 +358,6 @@ app.on('second-instance', () => {
 
 if (hasSingleInstanceLock) {
   void app.whenReady().then(() => {
-    startFileLogging()
     restrictWebPermissions()
     applyStoredThemeMode()
     followThemeWithWindowBackgrounds()
@@ -321,6 +371,16 @@ if (hasSingleInstanceLock) {
       optimizer.watchWindowShortcuts(window)
     })
 
+    // The screen locked: nobody is at the window; unlocked with it in front, someone is (§14.4).
+    powerMonitor.on('lock-screen', () => log.info('system.lock'))
+    powerMonitor.on('unlock-screen', () => {
+      log.info('system.unlock')
+
+      if (mainWindow?.isFocused()) {
+        pageLog.info('window.focus')
+      }
+    })
+
     prepareUpgradeMigration()
 
     const workspace = new Workspace(loadRuntimeConfig())
@@ -331,6 +391,10 @@ if (hasSingleInstanceLock) {
     registerMailIpc(workspace, () => mainWindow)
     registerSegretarioIpc(workspace.segretario)
     registerFilesIpc()
+    registerDiagnosticsIpc(
+      () => workspace.diagnosticsSource(),
+      () => mainWindow
+    )
     registerCalendarIpc(
       workspace.calendar,
       {
@@ -369,6 +433,7 @@ app.on('before-quit', (event) => {
   // quits again — with nothing left to wait for.
   appWorkspace = null
   event.preventDefault()
+  log.info('app.quit', { uptimeMs: Math.round(process.uptime() * 1000) })
   void Promise.race([
     shuttingDown.stop(),
     new Promise<void>((resolve) => setTimeout(resolve, QUIT_WAIT_MS))
@@ -378,3 +443,6 @@ app.on('before-quit', (event) => {
 app.on('window-all-closed', () => {
   return
 })
+
+// The last lines written before the process goes: what the stop said included.
+app.on('will-quit', () => flushDiagnostics())

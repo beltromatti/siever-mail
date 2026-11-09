@@ -1,11 +1,13 @@
 import ICAL from 'ical.js'
 import { tzlib_get_ical_block } from 'timezones-ical-library'
 
-import { logMainError } from '@main/utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
 
 import type { CalendarAttendee, CalendarResponse, EventOrigin } from '@shared/calendar'
 
 import type { EventField, ProviderEvent, ProviderEventInput } from './calendar-provider'
+
+const log = diagnostics('calendar')
 
 /** The longest a series is walked looking for its occurrences in a window: a guard, not a limit anyone meets. */
 const MAX_STEPS = 20_000
@@ -372,7 +374,7 @@ export function occurrencesOf(
         }
       } catch (error) {
         // A series ical.js cannot walk (an impossible rule) is left out, not the calendar with it.
-        logMainError('An event of a calendar could not be read', error)
+        log.warn('event.unreadable', { err: error })
       }
     }
   }

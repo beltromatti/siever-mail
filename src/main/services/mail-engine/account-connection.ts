@@ -15,7 +15,7 @@ import {
 } from 'imapflow'
 import type { ParsedMail } from 'mailparser'
 
-import { logMainError } from '@main/utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
 import {
   REFUSAL_LINES,
   type AccountConnectionState,
@@ -86,6 +86,8 @@ import {
   resolveImapAuth,
   type AccountWithSecret
 } from './mail-transport'
+
+const log = diagnostics('mail')
 
 // Bootstrap batches: envelope-only (no body). 1000 UIDs fit comfortably in a
 // single IMAP FETCH because each envelope is tiny — used only for the initial
@@ -493,7 +495,7 @@ export class AccountConnection extends EventEmitter {
           this.emitState()
         }
       },
-      onError: (message, error) => logMainError(message, error, { accountId: this.account.id })
+      onError: (message, error) => log.failed(message, error, { conn: this.account.id })
     })
   }
 
@@ -634,8 +636,8 @@ export class AccountConnection extends EventEmitter {
     this.running = true
     this.shuttingDown = false
     this.connectionLoopPromise = this.runConnectionLoop().catch((error) => {
-      logMainError('Account connection loop crashed unexpectedly', error, {
-        accountId: this.account.id
+      log.error('Account connection loop crashed unexpectedly', error, {
+        conn: this.account.id
       })
     })
 
@@ -2132,10 +2134,15 @@ export class AccountConnection extends EventEmitter {
       return
     }
 
-    console.info(
-      `[mail-engine] ${this.account.email}: ${this.status} -> ${status}` +
-        (status === 'error' && nextError ? ` (${nextError.message})` : '')
-    )
+    // How the connection stands, as it changes (§14.4): what went wrong as a warning, with why.
+    const change = { conn: this.account.id, from: this.status, to: status }
+
+    if (status === 'error') {
+      log.warn('connection.state', { ...change, err: nextError ?? undefined })
+    } else {
+      log.info('connection.state', change)
+    }
+
     this.status = status
     this.lastError = status === 'connected' ? null : nextError
     this.emitState()
@@ -2253,10 +2260,9 @@ export class AccountConnection extends EventEmitter {
         this.bootstrappingFolders.clear()
         this.setStatus(net.isOnline() ? 'reconnecting' : 'offline')
 
+        // The link went down: it comes back by itself (§14.1).
         if (closeError) {
-          logMainError('IMAP connection closed with error', closeError, {
-            accountId: this.account.id
-          })
+          log.warn('connection.dropped', { conn: this.account.id, err: closeError })
         }
       } catch (error) {
         this.primaryClient = null
@@ -2265,9 +2271,8 @@ export class AccountConnection extends EventEmitter {
         primary = null
         sync = null
         this.bootstrappingFolders.clear()
-        logMainError('IMAP connection error', error, {
-          accountId: this.account.id
-        })
+        // Not connected: passing, retried by itself — a refusal for good says so as such, below.
+        log.warn('connection.failed', { conn: this.account.id, err: error })
         const refusal = net.isOnline() ? refusalOf(error) : null
         // A refusal that may yet pass is tried once more, a while later, before it counts — unless
         // the user is there, having just put it right.
@@ -2445,9 +2450,7 @@ export class AccountConnection extends EventEmitter {
     try {
       await Promise.all(probes.map((client) => this.noopWithin(client, HEALTH_CHECK_TIMEOUT_MS)))
     } catch (error) {
-      logMainError('IMAP link failed its health check; reconnecting', error, {
-        accountId: this.account.id
-      })
+      log.warn('connection.unhealthy', { conn: this.account.id, err: error })
       // Closing one client resolves the loop's close watcher, which drops
       // both and reconnects.
       primary.close()
@@ -3224,11 +3227,12 @@ export class AccountConnection extends EventEmitter {
     const givenUp = failed.filter((record) => record.failures === UNREADABLE_ATTEMPTS)
 
     if (givenUp.length > 0) {
-      logMainError(
-        'Messages the server would not give are left out of their folder',
-        `UID ${formatUidSet(givenUp.map((record) => record.uid))}`,
-        { accountId: this.account.id, folderPath }
-      )
+      // The server's (§6.1): tried again once a day.
+      log.warn('messages.left-out', {
+        conn: this.account.id,
+        folderPath,
+        uids: formatUidSet(givenUp.map((record) => record.uid))
+      })
     }
   }
 
@@ -3918,10 +3922,7 @@ export class AccountConnection extends EventEmitter {
         try {
           await task.run()
         } catch (error) {
-          logMainError('Mail engine primary task failed', error, {
-            accountId: this.account.id,
-            taskLabel: task.label
-          })
+          log.failed('task.failed', error, { conn: this.account.id, task: task.label })
         }
       }
     } finally {
@@ -3962,9 +3963,7 @@ export class AccountConnection extends EventEmitter {
         ) {
           this.enqueuePrimaryCommand(() => this.selectIdleMailbox(), 'idle-return')
         }
-      })().catch((error: unknown) =>
-        logMainError('IDLE could not go back to its folder', error, { accountId: this.account.id })
-      )
+      })().catch((error: unknown) => log.failed('idle.not-back', error, { conn: this.account.id }))
     }, IDLE_RETURN_DELAY_MS)
   }
 
@@ -4033,10 +4032,7 @@ export class AccountConnection extends EventEmitter {
         try {
           await task.run()
         } catch (error) {
-          logMainError('Mail engine sync task failed', error, {
-            accountId: this.account.id,
-            taskLabel: task.label
-          })
+          log.failed('sync.task-failed', error, { conn: this.account.id, task: task.label })
         }
         this.debugLog(
           `sync task done : ${task.label} (${task.priority}) took=${Date.now() - startedAt}ms`

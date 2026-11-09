@@ -1,8 +1,7 @@
-import { ipcMain } from 'electron'
 import { z } from 'zod'
 
 import type { CalendarService } from '@main/calendar/calendar-service'
-import { logMainError } from '@main/utils/error-utils'
+import { handleIpc, type HandleOptions } from '@main/ipc/handle'
 import { CALENDAR_IPC, type CalendarResponse, type MessageInvitation } from '@shared/calendar'
 import type { MessageRef } from '@shared/models'
 
@@ -74,28 +73,23 @@ export function registerCalendarIpc(
 ): void {
   const handle = <Args extends unknown[], Result>(
     channel: string,
-    handler: (...args: Args) => Promise<Result> | Result
-  ): void => {
-    ipcMain.removeHandler(channel)
-    ipcMain.handle(channel, async (_event, ...args: Args) => {
-      try {
-        await whenReady()
-        return await handler(...args)
-      } catch (error) {
-        logMainError(`IPC handler failed: ${channel}`, error, { channel })
-        throw error instanceof z.ZodError
-          ? new Error([...new Set(error.issues.map((issue) => issue.message))].join(' '))
-          : error
-      }
-    })
-  }
+    handler: (...args: Args) => Promise<Result> | Result,
+    options?: Pick<HandleOptions, 'untimed'>
+  ): void => handleIpc('calendar', channel, handler, { ...options, before: whenReady })
+
+  // A sign-in waits for the user: never written down as slow.
+  const forUser = { untimed: true }
 
   handle(CALENDAR_IPC.listConnections, () => calendar.listConnections())
-  handle(CALENDAR_IPC.connectGoogle, (mailAccountId: unknown) =>
-    calendar.connectGoogle(idSchema.nullable().parse(mailAccountId))
+  handle(
+    CALENDAR_IPC.connectGoogle,
+    (mailAccountId: unknown) => calendar.connectGoogle(idSchema.nullable().parse(mailAccountId)),
+    forUser
   )
-  handle(CALENDAR_IPC.connectMicrosoft, (mailAccountId: unknown) =>
-    calendar.connectMicrosoft(idSchema.nullable().parse(mailAccountId))
+  handle(
+    CALENDAR_IPC.connectMicrosoft,
+    (mailAccountId: unknown) => calendar.connectMicrosoft(idSchema.nullable().parse(mailAccountId)),
+    forUser
   )
   handle(CALENDAR_IPC.addIcs, (link: unknown, name: unknown) =>
     calendar.addIcs(
@@ -116,11 +110,14 @@ export function registerCalendarIpc(
         .parse(input)
     )
   )
-  handle(CALENDAR_IPC.reconnect, (connectionId: unknown, password: unknown) =>
-    calendar.reconnect(
-      idSchema.parse(connectionId),
-      z.string().min(1, 'Scrivi la password.').max(1000).optional().parse(password)
-    )
+  handle(
+    CALENDAR_IPC.reconnect,
+    (connectionId: unknown, password: unknown) =>
+      calendar.reconnect(
+        idSchema.parse(connectionId),
+        z.string().min(1, 'Scrivi la password.').max(1000).optional().parse(password)
+      ),
+    forUser
   )
   handle(CALENDAR_IPC.disconnect, (connectionId: unknown) =>
     calendar.disconnect(idSchema.parse(connectionId))

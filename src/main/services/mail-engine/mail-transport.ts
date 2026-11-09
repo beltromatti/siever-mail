@@ -6,7 +6,8 @@ import { ImapFlow } from 'imapflow'
 import nodemailer from 'nodemailer'
 import MailComposer from 'nodemailer/lib/mail-composer'
 
-import { extractErrorDetails, logMainError } from '@main/utils/error-utils'
+import { extractErrorDetails } from '@main/utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
 import type {
   AddImapAccountInput,
   ComposeMailInput,
@@ -15,6 +16,8 @@ import type {
 } from '@shared/models'
 
 import type { MailTokens } from '../mail-tokens'
+
+const log = diagnostics('mail')
 
 export interface AccountWithSecret extends MailAccount {
   secret: string
@@ -323,11 +326,14 @@ export async function verifyImapLogin(
   try {
     await client.connect()
   } catch (error) {
-    logMainError('IMAP account verification failed', error, {
+    // The server's answer to the access tried (§14.1): told where the user tried it, written here
+    // with the server's words.
+    log.warn('verification.failed', {
+      protocol: 'imap',
       host: server.imapHost,
       port: server.imapPort,
       secure: server.imapSecure,
-      username: server.username
+      err: error
     })
     throw composeImapVerificationError(server, error)
   } finally {
@@ -347,11 +353,12 @@ async function verifySmtpLogin(
   try {
     await transport.verify()
   } catch (error) {
-    logMainError('SMTP account verification failed', error, {
+    log.warn('verification.failed', {
+      protocol: 'smtp',
       host: server.smtpHost,
       port: server.smtpPort,
       secure: server.smtpSecure,
-      username: server.username
+      err: error
     })
     throw composeSmtpVerificationError(server, error)
   } finally {

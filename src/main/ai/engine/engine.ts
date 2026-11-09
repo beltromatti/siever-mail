@@ -41,10 +41,12 @@ import {
 } from '../tasks/reading'
 import { startRun, type RunStarter } from '../tasks/start-run'
 import { localDay } from '../tools/day'
-import { logMainError } from '../../utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
 import type { Reachability } from './reachability'
 import { KeyRefused, Scheduler, WorkFailure, type TaskExecutor } from './scheduler'
 import { WorkQueue, type WorkUnit } from './work-queue'
+
+const log = diagnostics('segretario')
 
 /** Mail this recent is new mail, read before the backlog; older is the backlog. */
 const NEW_MAIL_DAYS = 2
@@ -285,7 +287,7 @@ export class SegretarioEngine {
     }
 
     this.planning = this.plan()
-      .catch((error: unknown) => logMainError('Segretario planning failed', error))
+      .catch((error: unknown) => log.error('Segretario planning failed', error))
       .finally(() => {
         this.planning = null
         this.scheduler.wake()

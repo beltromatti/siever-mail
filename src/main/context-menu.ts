@@ -17,10 +17,12 @@ import {
 } from 'electron'
 
 import { normalizeExternalHttpUrl } from '@main/utils/external-url'
-import { logMainError } from '@main/utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
 import type { ContextMenuItem, ContextMenuRequest } from '@shared/context-menu'
 import { IPC_CHANNELS } from '@shared/ipc'
 import { chordToAccelerator } from '@shared/shortcuts'
+
+const log = diagnostics('app')
 
 const SEARCH_LABEL_MAX_LENGTH = 24
 const SPELLING_SUGGESTIONS_SHOWN = 6
@@ -254,7 +256,7 @@ async function saveImage(
       await writeFile(result.filePath, image.content)
     }
   } catch (error) {
-    logMainError('Saving an image from a context menu failed', error)
+    log.error('Saving an image from a context menu failed', error)
     void dialog.showMessageBox(window, {
       type: 'error',
       message: 'Impossibile salvare l’immagine',

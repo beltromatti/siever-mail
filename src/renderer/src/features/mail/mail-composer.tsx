@@ -53,6 +53,7 @@ import { RecipientField, type RecipientFieldKey } from '@renderer/features/mail/
 import { RichTextEditor, type RichTextEditorHandle } from '@renderer/features/mail/rich-text-editor'
 import { ComposeAssist } from '@renderer/features/segretario/compose-assist'
 import { commandForKeyEvent, useShortcutOverrides } from '@renderer/lib/command-shortcuts'
+import { uiLog } from '@renderer/lib/diagnostics'
 import { htmlToPlainText } from '@renderer/lib/email'
 import { cn, revealInFolderLabel } from '@renderer/lib/utils'
 import {
@@ -1204,6 +1205,7 @@ export function MailComposer({
 
             event.preventDefault()
             runComposerCommand(command.id)
+            uiLog.info('command', { id: command.id, via: 'keyboard' })
           }}
           onDragEnter={(event) => {
             if (event.dataTransfer.types.includes('Files')) {

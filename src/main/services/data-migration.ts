@@ -49,6 +49,10 @@ import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { app } from 'electron'
 
+import { diagnostics } from '@main/diagnostics/log'
+
+const log = diagnostics('app')
+
 const DB_FILE_NAME = 'siever-mail.sqlite'
 const DB_SIDECAR_SUFFIXES = ['-wal', '-shm', '-journal'] as const
 const VERSION_MARKER_FILE_NAME = 'install-version.json'
@@ -339,7 +343,7 @@ export function prepareUpgradeMigration(): void {
   try {
     prepare(resolveMigrationPaths(), app.getVersion())
   } catch (error) {
-    console.error('[data-migration] Could not prepare the upgrade; starting without it.', error)
+    log.error('The upgrade could not be prepared: starting without it', error)
   }
 }
 
@@ -372,7 +376,7 @@ function prepare(paths: MigrationPaths, currentVersion: string): void {
     // migration rather than risk the only copy of the user's data; the
     // app still boots and the schema reconciliation gets its chance.
     removeDatabaseFile(backupPath)
-    console.error('[data-migration] Could not back up the user data; skipping migration.', error)
+    log.error('The user data could not be backed up: no upgrade migration', error)
     return
   }
 
@@ -385,10 +389,7 @@ function prepare(paths: MigrationPaths, currentVersion: string): void {
     setAsidePaths: []
   })
 
-  console.info(
-    `[data-migration] Upgrade ${recordedVersion ?? 'unknown'} -> ${currentVersion} detected; ` +
-      'user data backed up, it will be preserved.'
-  )
+  log.info('upgrade.detected', { from: recordedVersion ?? 'unknown', to: currentVersion })
 }
 
 /**
@@ -408,7 +409,7 @@ function prepareRecovery(
   if (!existsSync(backupPath)) {
     // Nothing to recover from — clear the record so a broken pending file
     // can never wedge startup, and continue on whatever the database holds.
-    console.warn(`[data-migration] Upgrade ${upgrade} left no backup; continuing without it.`)
+    log.warn('upgrade.no-backup', { upgrade })
     rmSync(pendingPath, { force: true })
     writeVersionMarker(markerPath, currentVersion)
     return
@@ -422,10 +423,11 @@ function prepareRecovery(
     moveDatabaseFile(backupPath, keptPath)
     rmSync(pendingPath, { force: true })
     writeVersionMarker(markerPath, currentVersion)
-    console.error(
-      `[data-migration] Recovery after the upgrade ${upgrade} did not complete in ` +
-        `${pendingUpgrade.attempts} launches; giving up. The user data is kept at ${keptPath}.`
-    )
+    log.error('The recovery after an upgrade gave up', undefined, {
+      upgrade,
+      attempts: pendingUpgrade.attempts,
+      keptPath
+    })
     return
   }
 
@@ -455,10 +457,7 @@ function prepareRecovery(
   }
 
   if (setAsidePath) {
-    console.warn(
-      `[data-migration] Upgrade ${upgrade} did not complete; database set aside at ` +
-        `${setAsidePath}. Booting on a fresh schema and restoring user data from the backup.`
-    )
+    log.warn('upgrade.set-aside', { upgrade, setAsidePath })
   }
 }
 
@@ -477,10 +476,7 @@ export async function finalizeUpgradeMigration(executor: MigrationSqlExecutor): 
   try {
     await finalize(resolveMigrationPaths(), app.getVersion(), executor)
   } catch (error) {
-    console.error(
-      '[data-migration] Finalize step failed; leaving the pending record so the next launch retries.',
-      error
-    )
+    log.error('The upgrade did not finish: the next launch tries again', error)
   }
 }
 
@@ -498,9 +494,7 @@ async function finalize(
   }
 
   if (!existsSync(dbPath)) {
-    console.warn(
-      '[data-migration] Database missing at finalize; leaving the pending record in place.'
-    )
+    log.warn('upgrade.database-missing')
     return
   }
 
@@ -512,18 +506,15 @@ async function finalize(
       // databases set aside, for whoever looks into it.
       const keptPath = `${dbPath}.user-data-${Date.now()}`
       moveDatabaseFile(backupPath, keptPath)
-      console.error(
-        `[data-migration] Could not restore ${failedTables.join(', ')}; ` +
-          `the user data is kept at ${keptPath}.`
-      )
+      log.error('Tables of the user data could not be restored', undefined, {
+        tables: failedTables,
+        keptPath
+      })
     } else {
       pendingUpgrade.setAsidePaths.forEach(removeDatabaseFile)
     }
   } else {
-    console.info(
-      `[data-migration] Upgrade ${pendingUpgrade.fromVersion} -> ${pendingUpgrade.toVersion} ` +
-        'completed: user data preserved, mail cache kept.'
-    )
+    log.info('upgrade.done', { from: pendingUpgrade.fromVersion, to: pendingUpgrade.toVersion })
   }
 
   purgeAttachmentScratchDirectories(userDataPath)
@@ -613,7 +604,7 @@ async function recoverUserDataFromBackup(
         restoredTables.push(`${table.name}(${rows.length})`)
       } catch (error) {
         failedTables.push(table.name)
-        console.error(`[data-migration] Could not restore table ${table.name}.`, error)
+        log.error('A table of the user data could not be restored', error, { table: table.name })
       }
     }
   } finally {
@@ -621,11 +612,11 @@ async function recoverUserDataFromBackup(
     await executor.run(`PRAGMA foreign_keys = ${foreignKeys?.foreign_keys ? 'ON' : 'OFF'}`)
   }
 
-  console.info(
-    `[data-migration] Restored after the failed upgrade ` +
-      `${pendingUpgrade.fromVersion} -> ${pendingUpgrade.toVersion}: ` +
-      `${restoredTables.join(', ') || 'nothing to restore'}.`
-  )
+  log.info('upgrade.restored', {
+    from: pendingUpgrade.fromVersion,
+    to: pendingUpgrade.toVersion,
+    tables: restoredTables
+  })
 
   return failedTables
 }

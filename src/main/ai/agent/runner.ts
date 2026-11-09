@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto'
 
+import type { DiagnosticFields } from '@shared/diagnostics'
 import type { ActivityEvent, ActivityStatus, SendOutcome } from '@shared/segretario'
 
-import { logMainError } from '../../utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
 import type { AiStore, StoredEvent } from '../ai-store'
 import type { Reachability } from '../engine/reachability'
 import type { Notebook } from '../memory/notebook'
 import {
   SegretarioError,
+  type ChatResult,
   type GenerationBill,
   type OpenRouterClient,
   type ToolCall
@@ -41,6 +43,33 @@ import {
   type TaskKind,
   type ToolContext
 } from './tool-types'
+
+const log = diagnostics('segretario')
+
+/** A turn's answer, counted into how the run went. */
+function countTurn(stats: RunStats, result: ChatResult): void {
+  stats.turns += 1
+  stats.promptTokens += result.usage.promptTokens
+  stats.cachedTokens += result.usage.cachedTokens
+  stats.completionTokens += result.usage.completionTokens
+  stats.reasoningTokens += result.usage.reasoningTokens
+  stats.cost += result.usage.cost
+  stats.model = result.model ?? stats.model
+  stats.provider = result.provider ?? stats.provider
+}
+
+/**
+ * How a run's end is written: done or stopped as information, failed as a
+ * warning with why — the Segretario's own error, not the program's (§14.2).
+ */
+function endedLog(
+  status: ActivityStatus,
+  failure: Error | null
+): (ev: string, fields: DiagnosticFields) => void {
+  return status === 'failed'
+    ? (ev, fields) => log.warn(ev, { ...fields, err: failure ?? undefined })
+    : (ev, fields) => log.info(ev, fields)
+}
 
 /**
  * The share of the model's context past which the older part of a run is
@@ -147,6 +176,24 @@ interface LiveRun {
    * was — with whether the failure was a name the run lacked.
    */
   failedCalls: Map<string, 'name' | 'other'>
+  /** How the run went, for the diagnostics (§14.4): its turns, its calls, what they cost. */
+  stats: RunStats
+}
+
+interface RunStats {
+  turns: number
+  tools: number
+  /** Calls that did not get through: failed, refused, made again as they had failed. */
+  toolErrors: number
+  /** Of those, calls whose arguments came broken or unreadable (§2.3). */
+  argsInvalid: number
+  promptTokens: number
+  cachedTokens: number
+  completionTokens: number
+  reasoningTokens: number
+  cost: number
+  model: string | null
+  provider: string | null
 }
 
 /**
@@ -246,7 +293,20 @@ export class AgentRunner {
       controller,
       ended: Promise.withResolvers<void>(),
       approvals: new Map(),
-      failedCalls: new Map()
+      failedCalls: new Map(),
+      stats: {
+        turns: 0,
+        tools: 0,
+        toolErrors: 0,
+        argsInvalid: 0,
+        promptTokens: 0,
+        cachedTokens: 0,
+        completionTokens: 0,
+        reasoningTokens: 0,
+        cost: 0,
+        model: null,
+        provider: null
+      }
     }
     const { signal } = controller
     let ended: ActivityStatus = 'failed'
@@ -261,6 +321,12 @@ export class AgentRunner {
 
     options.signal?.addEventListener('abort', () => controller.abort(), { once: true })
     this.live.set(id, live)
+    log.info('run.start', {
+      run: id,
+      task: options.task,
+      background: options.background,
+      by: options.background ? 'system' : 'user'
+    })
     await store.updateActivity(id, { status: 'running' })
     await this.emitSummary(id)
 
@@ -314,6 +380,7 @@ export class AgentRunner {
         )
 
         stopStream()
+        countTurn(live.stats, result)
 
         await this.deps.recordUsage(id, options.task, result)
         const assistant = await store.appendEvent<AssistantPayload>(id, 'assistant', {
@@ -372,7 +439,7 @@ export class AgentRunner {
           (raw instanceof Error ? raw.message : 'Qualcosa è andato storto mentre lavoravo.')
 
         if (!error) {
-          logMainError('Segretario run failed', raw, { activityId: id, task: options.task })
+          log.failed('run.failed', raw, { run: id, task: options.task })
         }
 
         const event = await store.appendEvent<ErrorPayload>(id, 'error', {
@@ -400,6 +467,16 @@ export class AgentRunner {
 
       this.live.delete(id)
       live.ended.resolve()
+      endedLog(ended, failure)('run.end', {
+        run: id,
+        task: options.task,
+        background: options.background,
+        status: ended,
+        ms: Date.now() - context.startedAt,
+        changes: context.changes.length,
+        ...live.stats,
+        cost: Math.round(live.stats.cost * 1_000_000) / 1_000_000
+      })
       await this.emitSummary(id)
     }
 
@@ -422,6 +499,7 @@ export class AgentRunner {
     const tool = this.deps.tools.find((candidate) => candidate.name === call.function.name)
     let args: Record<string, unknown> = {}
     let argsProblem: string | null = null
+    live.stats.tools += 1
 
     try {
       const parsed = call.function.arguments.trim() ? JSON.parse(call.function.arguments) : {}
@@ -444,6 +522,10 @@ export class AgentRunner {
     this.emitEntry(activityId, event)
 
     const finish = async (changes: Partial<ToolPayload>): Promise<void> => {
+      if (changes.status === 'error') {
+        live.stats.toolErrors += 1
+      }
+
       Object.assign(payload, changes)
       await store.updateEvent(event.id, payload)
       this.emitEntry(activityId, { ...event, payload })
@@ -461,6 +543,7 @@ export class AgentRunner {
     }`
 
     if (!tool || argsProblem) {
+      live.stats.argsInvalid += argsProblem ? 1 : 0
       const again = live.failedCalls.has(signature)
       live.failedCalls.set(signature, 'other')
       await finish({
@@ -534,8 +617,11 @@ export class AgentRunner {
         live.failedCalls.set(signature, error instanceof UnknownHandle ? 'name' : 'other')
       }
 
-      if (!(error instanceof ToolInputError)) {
-        logMainError(`Segretario tool ${tool.name} failed`, error, { activityId })
+      if (error instanceof ToolInputError) {
+        // Arguments missing or wrong: the model's, and how often a provider breaks them (§2.3).
+        live.stats.argsInvalid += 1
+      } else {
+        log.failed('tool.failed', error, { run: activityId, tool: tool.name })
       }
 
       await finish({
@@ -584,7 +670,7 @@ export class AgentRunner {
           throw error
         }
 
-        reachability.failed(startedAt)
+        reachability.failed(startedAt, error)
         onRetry?.()
       }
     }

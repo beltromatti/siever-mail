@@ -6,6 +6,7 @@ import extensionRenderer from '@app/extension/renderer'
 
 import App from './App'
 import { ErrorBoundary } from './components/error-boundary'
+import { uiLog } from './lib/diagnostics'
 // The app's own faces, bundled: Mona Sans for the interface, every weight
 // and width; Newsreader for what the Segretario writes.
 import '@fontsource-variable/mona-sans/standard.css'
@@ -45,13 +46,33 @@ window.addEventListener('unhandledrejection', (event) => {
     return
   }
 
-  console.error('[renderer] Unhandled rejection', reason)
+  // Written once, here, with where it came from: not printed again to the console.
+  event.preventDefault()
+  uiLog.error('promise.rejected', reason)
   // The same failure again, from every call it breaks, is said once.
   const message = reason instanceof Error ? reason.message : undefined
   toast.error('Qualcosa non è andato', { id: `unhandled:${message ?? ''}`, description: message })
 })
 
-createRoot(document.getElementById('root')!).render(
+// What broke while drawing, as React reports it: written in the log with the component it broke
+// in (§14.3, §14.4), in place of React's printing it.
+const drawingFailed =
+  (ev: string) =>
+  (error: unknown, info: { componentStack?: string }): void =>
+    uiLog.error(ev, error, { componentStack: info.componentStack?.trim() })
+
+createRoot(document.getElementById('root')!, {
+  // A part of the window that broke and shows it (`ErrorBoundary`).
+  onCaughtError: drawingFailed('ui.broken'),
+  // Nothing around it took it: the window is gone.
+  onUncaughtError: drawingFailed('ui.crashed'),
+  // React drew it again by itself, and it went.
+  onRecoverableError: (error, info) =>
+    uiLog.warn('ui.recovered', {
+      message: error instanceof Error ? error.message : String(error),
+      componentStack: info.componentStack?.trim()
+    })
+}).render(
   <StrictMode>
     <ErrorBoundary whole className="paper h-screen">
       <App />

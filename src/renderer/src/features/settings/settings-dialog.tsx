@@ -4,7 +4,6 @@ import {
   Bell,
   Blocks,
   Database,
-  FolderOpen,
   Keyboard,
   LoaderCircle,
   Monitor,
@@ -44,12 +43,14 @@ import { Switch } from '@renderer/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { GROUPING_OPTIONS } from '@renderer/features/mail/message-list-shared'
 import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
+import { DiagnosticsGroup } from '@renderer/features/settings/diagnostics-group'
 import { ExtensionSection } from '@renderer/features/settings/extension-section'
 import { NotificationsSection } from '@renderer/features/settings/notifications-section'
 import { MemorySection } from '@renderer/features/settings/memory-section'
 import { SegretarioSection } from '@renderer/features/settings/segretario-section'
 import { ShortcutsSection } from '@renderer/features/settings/shortcuts-section'
 import { AppEdition } from '@renderer/features/workspace/app-edition'
+import { uiLog } from '@renderer/lib/diagnostics'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarConnection } from '@shared/calendar'
 import type {
@@ -366,6 +367,13 @@ export function SettingsDialog({
 
   const activeSection =
     SETTINGS_SECTIONS.find((section) => section.id === activeSectionId) ?? SETTINGS_SECTIONS[0]
+
+  // Where the user goes in Settings (§14.4).
+  useEffect(() => {
+    if (open) {
+      uiLog.info('settings.open', { section: activeSectionId })
+    }
+  }, [activeSectionId, open])
 
   useEffect(() => {
     if (!open || activeSectionId !== 'preferences') {
@@ -1083,25 +1091,7 @@ export function SettingsDialog({
                   )}
                 </div>
 
-                <div className="settings-group flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="eyebrow">Diagnostica</p>
-                    <p className="text-muted-foreground mt-1 text-[11px]">
-                      SIEVER Mail annota connessioni ed errori in un registro sul computer. Se
-                      qualcosa non va, è il file da allegare alla segnalazione.
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0 gap-1.5"
-                    onClick={() => void window.mailApi.openLogsFolder()}
-                  >
-                    <FolderOpen className="size-3.5" />
-                    Apri cartella log
-                  </Button>
-                </div>
+                <DiagnosticsGroup aiOn={aiOn} />
 
                 <div className="border-destructive/35 bg-destructive/5 rounded-md border p-3">
                   <p className="eyebrow">Azione nucleare</p>

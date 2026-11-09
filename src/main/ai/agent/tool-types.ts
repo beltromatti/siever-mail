@@ -19,6 +19,7 @@ import type {
   MessageRef,
   MessagesActionResult
 } from '@shared/models'
+import type { DiagnosticActor } from '@shared/diagnostics'
 import type { MessageMark } from '@shared/message-marks'
 import type {
   ApprovalRequest,
@@ -162,6 +163,11 @@ export interface SegretarioMailPort {
 }
 
 /** The calendars, as the Segretario reaches them: the same as the page's. */
+/** How the Segretario's calendar writes are told in the diagnostics (§14.4): who decided them. */
+export interface CalendarWriteOptions {
+  actor?: DiagnosticActor
+}
+
 export interface SegretarioCalendarPort {
   /** The calendars, each with what it is called, whose it is, whether it takes events and whether the user keeps it shown. */
   calendars(): Promise<
@@ -181,12 +187,18 @@ export interface SegretarioCalendarPort {
   /** The events kept, past and future, with every word: the ones to come first, then the latest past. */
   search(query: CalendarSearchQuery): Promise<CalendarSearchResult>
   event(eventKey: string): Promise<CalendarEvent | null>
-  create(event: NewCalendarEvent): Promise<CalendarEvent>
-  update(eventKey: string, change: EventChange): Promise<CalendarEvent>
-  remove(eventKey: string): Promise<void>
+  /** `actor`: who decided the write, for the diagnostics — the user, undoing or accepting. */
+  create(event: NewCalendarEvent, options?: CalendarWriteOptions): Promise<CalendarEvent>
+  update(
+    eventKey: string,
+    change: EventChange,
+    options?: CalendarWriteOptions
+  ): Promise<CalendarEvent>
+  remove(eventKey: string, options?: CalendarWriteOptions): Promise<void>
   respond(
     eventKey: string,
-    response: Exclude<CalendarResponse, 'needsAction'>
+    response: Exclude<CalendarResponse, 'needsAction'>,
+    options?: CalendarWriteOptions
   ): Promise<CalendarEvent>
   /** What changed in the calendars not through the app, after a point, the oldest first. */
   changesSince(afterId: number, limit: number): Promise<CalendarChange[]>

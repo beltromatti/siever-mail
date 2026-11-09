@@ -7,6 +7,7 @@ import { eventStartDay } from '@renderer/features/calendar/calendar-dates'
 import { eventTimeLabel } from '@renderer/features/calendar/event-line'
 import { HighlightedText } from '@renderer/features/mail/message-list-shared'
 import { useCommandKeys } from '@renderer/lib/command-shortcuts'
+import { uiLog } from '@renderer/lib/diagnostics'
 import { cn } from '@renderer/lib/utils'
 import {
   calendarSearchWords,
@@ -20,6 +21,8 @@ import { calendarOf } from './use-calendar-data'
 
 /** How long typing pauses before the events are searched. */
 const SEARCH_DELAY_MS = 150
+/** A search left as it is this long is the one the user settled on (§14.4). */
+const SEARCH_SETTLED_MS = 1_500
 /** Events a search lists at most: past them, another word narrows it. */
 const RESULTS_SHOWN = 60
 
@@ -170,6 +173,19 @@ export function CalendarSearch({
       unsubscribe()
     }
   }, [shown, text])
+
+  // A search the user settled on (§14.4): how many words, never which.
+  useEffect(() => {
+    if (!text) {
+      return
+    }
+
+    const timer = window.setTimeout(
+      () => uiLog.info('search', { app: 'calendar', words: text.split(/\s+/).length }),
+      SEARCH_SETTLED_MS
+    )
+    return () => window.clearTimeout(timer)
+  }, [text])
 
   // While the words change, what the last ones found stays until the new search answers.
   const result = text ? found : null

@@ -1,7 +1,7 @@
 import { app, Notification } from 'electron'
 
 import { getAppWindow } from '@main/app-window'
-import { logMainError } from '@main/utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
 import { folderRole } from '@shared/folders'
 import { IPC_CHANNELS } from '@shared/ipc'
 import type { MessageNote } from '@shared/segretario'
@@ -14,6 +14,8 @@ import {
   type NotificationPreferences,
   type NotificationStatus
 } from '@shared/models'
+
+const log = diagnostics('mail')
 
 /** The longest a new message waits for the Segretario's note before it is announced as it is. */
 const NOTE_WAIT_MS = 10 * 60 * 1000
@@ -488,7 +490,7 @@ export class NotificationManager {
       }
       const failed = (error: string): void => {
         this.setDelivery({ state: 'failed', at: Date.now(), reason: failureReason(error) })
-        logMainError('Desktop notification failed', new Error(error))
+        log.warn('notification.failed', { err: error })
         gone()
         done()
       }
@@ -527,7 +529,7 @@ export class NotificationManager {
     try {
       await (index === 0 ? this.deps.actions.markRead(ref) : this.deps.actions.archive(ref))
     } catch (error) {
-      logMainError('Notification action failed', error, { action: MESSAGE_ACTIONS[index] })
+      log.error('Notification action failed', error, { action: MESSAGE_ACTIONS[index] })
     }
   }
 

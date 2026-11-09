@@ -30,7 +30,9 @@ import { join, resolve, win32 } from 'node:path'
 
 import { app } from 'electron'
 
-import { logMainError } from '@main/utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
+
+const log = diagnostics('files')
 
 const VOLUMES_ROOT = '/Volumes'
 const KNOWN_SHARES_FILE = 'network-volumes.json'
@@ -218,7 +220,7 @@ class KnownShares {
     }
 
     await writeFile(this.storePath, JSON.stringify(Object.fromEntries(known), null, 2)).catch(
-      (error: unknown) => logMainError('Remembering network shares failed', error)
+      (error: unknown) => log.error('Remembering network shares failed', error)
     )
   }
 
@@ -419,7 +421,7 @@ class WindowsNetworkDrives {
 
     const drive = `${letter}:`
     const mappings = await this.mappings().catch((error: unknown) => {
-      logMainError('Reading the mapped drives failed', error)
+      log.error('Reading the mapped drives failed', error)
       return []
     })
     const mine = mappings.find((mapping) => mapping.letter === drive)
@@ -510,7 +512,7 @@ export async function canonicalPath(path: string): Promise<string> {
       return await windowsDrives.canonical(path)
     }
   } catch (error) {
-    logMainError('A path could not be put as it is kept', error)
+    log.error('A path could not be put as it is kept', error)
   }
 
   return path

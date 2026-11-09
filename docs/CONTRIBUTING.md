@@ -25,6 +25,10 @@ suggestion, **open an issue** on the GitHub tracker:
 - Describe what you expected vs what actually happened.
 - Attach the application version, OS / architecture and steps to reproduce.
 - For UI issues, a screenshot or short screen recording is gold.
+- For a problem that is hard to reproduce, export the diagnostics
+  (Impostazioni › Dati › Diagnostica › Esporta…) and send the zip by email,
+  not on the public tracker: it names your connections and, if you include
+  the Segretario's work, holds the text it read.
 
 ### 2. Direct contact
 

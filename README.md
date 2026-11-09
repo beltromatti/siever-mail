@@ -35,7 +35,7 @@ Without AI, SIEVER Mail is a set of fast, honest apps for mail and calendars. Wi
 
 **A client that is fast where it is felt.** Messages open at once; the list is endless and smooth; search covers the full text of every message; drafts are never lost and live in your server's Drafts; a message arrives exactly as you wrote it; every command has a shortcut you can change.
 
-**Private by construction.** Your data stays on your computer, in a local database; passwords and tokens in the system keychain. The AI runs on your own [OpenRouter](https://openrouter.ai/) key, only through providers that keep no data, and you always see what it costs. No telemetry, no tracking.
+**Private by construction.** Your data stays on your computer, in a local database; passwords and tokens in the system keychain. The AI runs on your own [OpenRouter](https://openrouter.ai/) key, only through providers that keep no data, and you always see what it costs. No telemetry, no tracking: even the diagnostic log stays on your computer, and leaves it only when you export it to send it.
 
 ## Made to measure
 

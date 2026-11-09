@@ -26,6 +26,7 @@ import type { BrowserWindow } from 'electron'
 import type { ParsedMail } from 'mailparser'
 import type { ComponentType, ReactNode } from 'react'
 
+import type { DiagnosticFields } from '@shared/diagnostics'
 import type { MailFontOption } from '@shared/mail-fonts'
 import type { MarkedBefore } from '@shared/message-marks'
 import type { MailMessageSummary, MessageRef, MessagesActionResult } from '@shared/models'
@@ -124,6 +125,32 @@ export interface ExtensionMain {
    * host's own prompts (Italian, written as text). Absent in public builds.
    */
   readonly assistant?: ExtensionAssistant
+  /**
+   * What the extension adds to an export of the diagnostics (vision
+   * §14.4), beside what it writes through `context.diagnostics`: its state
+   * — under its id in the export's `stato.json` — and files of its own,
+   * under `estensione/`. Never a secret.
+   */
+  readonly diagnostics?: ExtensionDiagnosticsExport
+}
+
+export interface ExtensionDiagnosticsExport {
+  /** How the extension stands now: its settings, what it holds. */
+  state?(): Promise<Record<string, unknown>> | Record<string, unknown>
+  /** Files to add, from a moment on (epoch ms): text as it is, anything else as JSON. */
+  files?(sinceMs: number): Promise<ReadonlyArray<{ name: string; content: unknown }>>
+}
+
+/**
+ * Where the extension writes what happens in it (vision §14.4): the same
+ * log as the app's, under its area (`ext:<id>`), each event a short name
+ * (`archive.saved`) with its fields. `by`, `run`, `conn`, `ms` tie it to
+ * the rest: who did it, the Segretario's run, the connection, how long.
+ */
+export interface ExtensionDiagnostics {
+  info(ev: string, fields?: DiagnosticFields): void
+  warn(ev: string, fields?: DiagnosticFields): void
+  error(ev: string, error?: unknown, fields?: DiagnosticFields): void
 }
 
 export interface ExtensionAssistant {
@@ -227,8 +254,16 @@ export interface ExtensionToolResult {
  * its channels and from any other's.
  */
 export interface ExtensionMainIpc {
-  /** Answers `invoke(name, …args)` from the renderer side; a throw rejects it with the message. */
-  handle(name: string, listener: (...args: never[]) => unknown): void
+  /**
+   * Answers `invoke(name, …args)` from the renderer side; a throw rejects it
+   * with the message. `untimed`: its time is the user's — a dialog it opens
+   * — and is never written down as slow (vision §14.4).
+   */
+  handle(
+    name: string,
+    listener: (...args: never[]) => unknown,
+    options?: { untimed?: boolean }
+  ): void
   /** Tells the main window's renderer side, which listens with `on(name, …)`. */
   send(name: string, payload: unknown): void
 }
@@ -239,6 +274,8 @@ export interface ExtensionMainContext {
   ipc: ExtensionMainIpc
   /** The window dialogs belong to; null while there is none. */
   getMainWindow(): BrowserWindow | null
+  /** Where it writes what happens in it: the app's diagnostics, under its own area. */
+  diagnostics: ExtensionDiagnostics
   /**
    * Offers files the extension wrote back to the user as the newest
    * entries of the composer's "Allega" menu, labelled with what happened

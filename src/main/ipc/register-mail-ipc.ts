@@ -1,9 +1,10 @@
-import { app, ipcMain, shell, type BrowserWindow } from 'electron'
+import { shell, type BrowserWindow } from 'electron'
 import { z } from 'zod'
 
 import { popupPageContextMenu } from '@main/context-menu'
 import { normalizeExternalHttpUrl } from '@main/utils/external-url'
-import { logMainError, sanitizeForLog } from '@main/utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
+import { handleIpc, type HandleOptions } from '@main/ipc/handle'
 import type { Workspace } from '@main/workspace'
 import type { ContextMenuItem } from '@shared/context-menu'
 import { IPC_CHANNELS } from '@shared/ipc'
@@ -25,28 +26,15 @@ import type {
   UiPreferences
 } from '@shared/models'
 
-/** What a rejected input has wrong, each thing once: "«x@y.i» non è un indirizzo email valido." */
-function validationMessage(error: z.ZodError): string {
-  return [...new Set(error.issues.map((issue) => issue.message))].slice(0, 3).join(' ')
-}
+const log = diagnostics('mail')
 
+/** A channel of the shell: the window, the storage, the sign-ins. */
 function registerHandler<Args extends unknown[], ReturnValue>(
   channel: string,
-  handler: (...args: Args) => Promise<ReturnValue>
+  handler: (...args: Args) => Promise<ReturnValue>,
+  options?: HandleOptions
 ): void {
-  ipcMain.removeHandler(channel)
-  ipcMain.handle(channel, async (_event, ...args: Args) => {
-    try {
-      return await handler(...args)
-    } catch (error) {
-      logMainError(`IPC handler failed: ${channel}`, error, {
-        channel,
-        args: sanitizeForLog(args)
-      })
-      // Input turned down says what is wrong with it, not its issues as JSON.
-      throw error instanceof z.ZodError ? new Error(validationMessage(error)) : error
-    }
-  })
+  handleIpc('app', channel, handler, options)
 }
 
 /**
@@ -65,12 +53,19 @@ export function registerMailIpc(
   // wait: the window must stay movable and closable during a long upgrade.
   const registerDataHandler = <Args extends unknown[], ReturnValue>(
     channel: string,
-    handler: (...args: Args) => Promise<ReturnValue>
+    handler: (...args: Args) => Promise<ReturnValue>,
+    options?: Pick<HandleOptions, 'untimed'>
   ): void => {
-    registerHandler(channel, async (...args: Args) => {
-      await workspace.openStorage()
-      return handler(...args)
-    })
+    handleIpc('mail', channel, handler, { ...options, before: () => workspace.openStorage() })
+  }
+  // What waits for the user — a sign-in, a dialog — is never written down as slow.
+  const forUser = { untimed: true }
+  // What the user does to messages, once done (§14.4): how many, never which.
+  const acted = async <T>(ev: string, input: unknown, work: () => Promise<T>): Promise<T> => {
+    const result = await work()
+    const refs = (input as { refs?: unknown } | null)?.refs
+    log.info(ev, { count: Array.isArray(refs) ? refs.length : 0, by: 'user' })
+    return result
   }
 
   registerDataHandler(IPC_CHANNELS.bootstrap, async () => mailService.bootstrap())
@@ -85,18 +80,26 @@ export function registerMailIpc(
     mailService.setUiPreferences(preferences as UiPreferences)
   )
 
-  registerDataHandler(IPC_CHANNELS.addGoogleAccount, async (options) => {
-    return workspace.addGoogleAccount(
-      getMainWindow() ?? undefined,
-      z.object({ calendar: z.boolean() }).strict().parse(options)
-    )
-  })
+  registerDataHandler(
+    IPC_CHANNELS.addGoogleAccount,
+    async (options) => {
+      return workspace.addGoogleAccount(
+        getMainWindow() ?? undefined,
+        z.object({ calendar: z.boolean() }).strict().parse(options)
+      )
+    },
+    forUser
+  )
 
-  registerDataHandler(IPC_CHANNELS.addMicrosoftAccount, async (options) => {
-    return workspace.addMicrosoftAccount(
-      z.object({ calendar: z.boolean() }).strict().parse(options)
-    )
-  })
+  registerDataHandler(
+    IPC_CHANNELS.addMicrosoftAccount,
+    async (options) => {
+      return workspace.addMicrosoftAccount(
+        z.object({ calendar: z.boolean() }).strict().parse(options)
+      )
+    },
+    forUser
+  )
 
   registerHandler(IPC_CHANNELS.cancelSignIn, async () => workspace.cancelSignIn())
 
@@ -132,11 +135,14 @@ export function registerMailIpc(
     workspace.connectionRefusals()
   )
 
-  registerDataHandler(IPC_CHANNELS.reconnectAccount, async (accountId, password) =>
-    workspace.reconnectMailAccount(
-      z.string().min(1).parse(accountId),
-      z.string().min(1, 'Scrivi la password.').max(1000).optional().parse(password)
-    )
+  registerDataHandler(
+    IPC_CHANNELS.reconnectAccount,
+    async (accountId, password) =>
+      workspace.reconnectMailAccount(
+        z.string().min(1).parse(accountId),
+        z.string().min(1, 'Scrivi la password.').max(1000).optional().parse(password)
+      ),
+    forUser
   )
 
   registerDataHandler(IPC_CHANNELS.setActiveMailboxContext, async (context) => {
@@ -232,19 +238,21 @@ export function registerMailIpc(
   )
 
   registerDataHandler(IPC_CHANNELS.moveMessages, async (payload) =>
-    mailService.moveMessages(payload as MoveMessagesInput)
+    acted('messages.moved', payload, () => mailService.moveMessages(payload as MoveMessagesInput))
   )
 
   registerDataHandler(IPC_CHANNELS.moveMessagesToRole, async (input) =>
-    mailService.moveMessagesToRole(input as MoveMessagesToRoleInput)
+    acted('messages.moved', input, () =>
+      mailService.moveMessagesToRole(input as MoveMessagesToRoleInput)
+    )
   )
 
   registerDataHandler(IPC_CHANNELS.deleteMessages, async (refs) =>
-    mailService.deleteMessages(refs as MessageRef[])
+    acted('messages.deleted', { refs }, () => mailService.deleteMessages(refs as MessageRef[]))
   )
 
   registerDataHandler(IPC_CHANNELS.archiveMessages, async (refs) =>
-    mailService.archiveMessages(refs as MessageRef[])
+    acted('messages.archived', { refs }, () => mailService.archiveMessages(refs as MessageRef[]))
   )
 
   registerDataHandler(IPC_CHANNELS.setMessagesSeen, async (payload) =>
@@ -252,7 +260,9 @@ export function registerMailIpc(
   )
 
   registerDataHandler(IPC_CHANNELS.setMessagesFlagged, async (payload) =>
-    mailService.setMessagesFlagged(payload as SetMessagesKeywordInput)
+    acted('messages.flagged', payload, () =>
+      mailService.setMessagesFlagged(payload as SetMessagesKeywordInput)
+    )
   )
 
   registerDataHandler(IPC_CHANNELS.sendMail, async (payload) =>
@@ -310,21 +320,28 @@ export function registerMailIpc(
     await workspace.clearAllDataKeepAccounts()
   })
 
-  registerDataHandler(IPC_CHANNELS.pickAttachments, async () => {
-    return mailService.pickAttachments(getMainWindow() ?? undefined)
-  })
+  registerDataHandler(
+    IPC_CHANNELS.pickAttachments,
+    async () => mailService.pickAttachments(getMainWindow() ?? undefined),
+    forUser
+  )
 
   registerDataHandler(IPC_CHANNELS.openAttachment, async (payload) => {
     return mailService.openAttachment(payload as AttachmentRef)
   })
 
-  registerDataHandler(IPC_CHANNELS.saveAttachment, async (payload) => {
-    return mailService.saveAttachment(payload as AttachmentRef, getMainWindow() ?? undefined)
-  })
+  registerDataHandler(
+    IPC_CHANNELS.saveAttachment,
+    async (payload) =>
+      mailService.saveAttachment(payload as AttachmentRef, getMainWindow() ?? undefined),
+    forUser
+  )
 
-  registerDataHandler(IPC_CHANNELS.saveAllAttachments, async (ref) => {
-    return mailService.saveAllAttachments(ref as MessageRef, getMainWindow() ?? undefined)
-  })
+  registerDataHandler(
+    IPC_CHANNELS.saveAllAttachments,
+    async (ref) => mailService.saveAllAttachments(ref as MessageRef, getMainWindow() ?? undefined),
+    forUser
+  )
 
   registerDataHandler(IPC_CHANNELS.copyMessageAttachments, async (payload) => {
     return mailService.copyMessageAttachments(payload as MessageAttachmentsRef)
@@ -387,14 +404,6 @@ export function registerMailIpc(
     return true
   })
 
-  registerHandler(IPC_CHANNELS.openLogsFolder, async () => {
-    const failure = await shell.openPath(app.getPath('logs'))
-
-    if (failure) {
-      throw new Error(failure)
-    }
-  })
-
   registerHandler(IPC_CHANNELS.getWindowControlsState, async () => {
     const window = getMainWindow()
     const isWindows = process.platform === 'win32'
@@ -406,15 +415,19 @@ export function registerMailIpc(
     }
   })
 
-  registerHandler(IPC_CHANNELS.showContextMenu, async (items: ContextMenuItem[]) => {
-    const window = getMainWindow()
+  registerHandler(
+    IPC_CHANNELS.showContextMenu,
+    async (items: ContextMenuItem[]) => {
+      const window = getMainWindow()
 
-    if (!window || window.isDestroyed() || !Array.isArray(items)) {
-      return null
-    }
+      if (!window || window.isDestroyed() || !Array.isArray(items)) {
+        return null
+      }
 
-    return popupPageContextMenu(window, items)
-  })
+      return popupPageContextMenu(window, items)
+    },
+    forUser
+  )
 
   registerHandler(IPC_CHANNELS.minimizeWindow, async () => {
     const window = getMainWindow()

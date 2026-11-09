@@ -8,7 +8,7 @@ import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3'
 import extensionMain from '@app/extension/main'
 import { ensureAiSchema } from '@main/ai/schema'
 import { prismaSql } from '@main/ai/sql'
-import { logMainError } from '@main/utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
 import { sanitizeShortcutOverrides } from '@shared/commands'
 import { upgradeMailFontStacksInHtml } from '@shared/mail-fonts'
 import type {
@@ -97,6 +97,8 @@ import {
   type ReadFolders,
   type UnnotedMessage
 } from './mail-engine/unnoted-conversations'
+
+const log = diagnostics('app')
 
 /**
  * SQLite hands INTEGER columns back as `bigint` or `number` depending on
@@ -1114,6 +1116,66 @@ export class AppDatabase {
     return this.prisma.$queryRawUnsafe<T[]>(sql, ...params)
   }
 
+  /**
+   * What the storage holds of each mailbox, in numbers, for the diagnostics
+   * (vision §14.4): folders and when they were last synced, messages, those
+   * whose words are indexed, drafts, the outbox, the marks, what the server
+   * would not give.
+   */
+  async mailFigures(): Promise<
+    Map<
+      string,
+      {
+        folders: number
+        foldersNeverSynced: number
+        lastSyncedAt: number | null
+        messages: number
+        indexed: number
+        drafts: number
+        outbox: number
+        marks: number
+        leftOut: number
+      }
+    >
+  > {
+    await this.ready
+
+    const rows = await this.prisma.$queryRaw<
+      Array<Record<string, number | bigint | string | null>>
+    >`
+      SELECT a.id AS accountId,
+        (SELECT COUNT(*) FROM folders f WHERE f.account_id = a.id) AS folders,
+        (SELECT COUNT(*) FROM folders f WHERE f.account_id = a.id AND f.last_synced_at IS NULL)
+          AS foldersNeverSynced,
+        (SELECT MAX(f.last_synced_at) FROM folders f WHERE f.account_id = a.id) AS lastSyncedAt,
+        (SELECT COUNT(*) FROM messages m WHERE m.account_id = a.id) AS messages,
+        (SELECT COUNT(*) FROM message_bodies b WHERE b.account_id = a.id) AS indexed,
+        (SELECT COUNT(*) FROM drafts d WHERE d.account_id = a.id) AS drafts,
+        (SELECT COUNT(*) FROM outbox o WHERE o.account_id = a.id) AS outbox,
+        (SELECT COUNT(*) FROM message_marks k WHERE k.account_id = a.id) AS marks,
+        (SELECT COUNT(*) FROM left_out_messages l WHERE l.account_id = a.id) AS leftOut
+      FROM accounts a
+    `
+    const count = (value: number | bigint | string | null): number => Number(value ?? 0)
+
+    return new Map(
+      rows.map((row) => [
+        String(row.accountId),
+        {
+          folders: count(row.folders),
+          foldersNeverSynced: count(row.foldersNeverSynced),
+          lastSyncedAt: row.lastSyncedAt === null ? null : count(row.lastSyncedAt),
+          messages: count(row.messages),
+          indexed: count(row.indexed),
+          drafts: count(row.drafts),
+          outbox: count(row.outbox),
+          marks: count(row.marks),
+          leftOut: count(row.leftOut)
+        }
+      ])
+    )
+  }
+
   async getAccounts(): Promise<MailAccount[]> {
     await this.ready
 
@@ -1235,7 +1297,7 @@ export class AppDatabase {
         WHERE account_id = ${row.accountId}
       `
     } catch (error) {
-      console.warn('[database] could not persist the upgraded signature', error)
+      log.warn('signature.not-upgraded', { err: error })
     }
 
     return upgraded
@@ -1968,17 +2030,30 @@ export class AppDatabase {
 
   /** The messages waiting to go, the oldest first. */
   async listOutgoing(): Promise<
-    Array<{ id: string; accountId: string; draftId: string | null; payload: unknown }>
+    Array<{
+      id: string
+      accountId: string
+      draftId: string | null
+      payload: unknown
+      queuedAt: number
+    }>
   > {
     await this.ready
     const rows = await this.prisma.$queryRaw<
-      Array<{ id: string; account_id: string; draft_id: string | null; payload_json: string }>
-    >`SELECT id, account_id, draft_id, payload_json FROM outbox ORDER BY queued_at`
+      Array<{
+        id: string
+        account_id: string
+        draft_id: string | null
+        payload_json: string
+        queued_at: number | bigint
+      }>
+    >`SELECT id, account_id, draft_id, payload_json, queued_at FROM outbox ORDER BY queued_at`
     return rows.map((row) => ({
       id: row.id,
       accountId: row.account_id,
       draftId: row.draft_id,
-      payload: JSON.parse(row.payload_json) as unknown
+      payload: JSON.parse(row.payload_json) as unknown,
+      queuedAt: Number(row.queued_at)
     }))
   }
 
@@ -2486,7 +2561,7 @@ export class AppDatabase {
             this.queuedContacts.set(entry.key, queued ? mergeContactEntries(entry, queued) : entry)
           }
 
-          logMainError('Learning contacts failed', error, { pending: batch.length })
+          log.error('Learning contacts failed', error, { pending: batch.length })
           return
         }
       }
@@ -2562,7 +2637,7 @@ export class AppDatabase {
       this.sentRecountTimer = null
       this.sentRecount = this.sentRecount
         .then(() => this.recountContactsWritten())
-        .catch((error: unknown) => logMainError('Counting sent mail failed', error))
+        .catch((error: unknown) => log.error('Counting sent mail failed', error))
     }, SENT_RECOUNT_DELAY_MS)
   }
 

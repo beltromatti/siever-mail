@@ -58,7 +58,8 @@ import {
   setupTurnsAiOn
 } from '@shared/segretario'
 
-import { logMainError } from '../utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
+import type { BundleFile } from '@main/diagnostics/export'
 import type { ContextPayload, ChangesPayload, UserPayload } from './agent/conversation'
 import { handleRecords } from './agent/conversation'
 import { entryOf, firstLine } from './agent/entries'
@@ -107,6 +108,10 @@ import { SEGRETARIO_TOOLS } from './tools'
 import { eventLine } from './tools/calendar'
 import { localDay } from './tools/day'
 import { comparableText, formatDateTime, shortDate } from './tools/format'
+
+const log = diagnostics('segretario')
+/** A calendar write the user decided — undoing the Segretario's, accepting its proposal (§14.4). */
+const BY_USER = { actor: 'user' } as const
 
 const KEY_RECHECK_MS = 20 * 60 * 1000
 
@@ -270,6 +275,38 @@ const LETTER_LOOKED_AT_STALE_MS = 60 * 60 * 1000
  * runner — woken by the engine for the work it does alone and by the user
  * for the rest, over one registry and one notebook.
  */
+/** A moment as a file name can hold it, in the user's time: "2026-11-09 10.12.03". */
+function sessionStamp(at: number): string {
+  const date = new Date(at)
+  const two = (value: number): string => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}.${two(date.getMinutes())}.${two(date.getSeconds())}`
+}
+
+/** A payload with the pictures it carries named instead: what a page showed is not what explains a run. */
+function withoutPictures(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const picture = /^data:([^;,]+)[;,]/.exec(value)
+    return picture && value.length > 1_000
+      ? `[${picture[1]}, ${Math.round((value.length * 3) / 4 / 1024)} KB]`
+      : value
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(withoutPictures)
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+        key,
+        withoutPictures(entry)
+      ])
+    )
+  }
+
+  return value
+}
+
 /** A connection about to go: a mailbox, or a calendar connection. */
 export interface GoingConnection {
   family: 'posta' | 'calendario'
@@ -441,7 +478,7 @@ export class SegretarioService {
       lesson: (kind, payload) => {
         void store
           .addLesson(kind, payload)
-          .catch((error: unknown) => logMainError('A lesson could not be kept', error))
+          .catch((error: unknown) => log.error('A lesson could not be kept', error))
       }
     })
     const page: SegretarioPagePort = {
@@ -538,12 +575,12 @@ export class SegretarioService {
     }, KEY_RECHECK_MS)
     // What a removal cut short left of a connection no longer there goes before any work starts.
     await this.forgetGone().catch((error: unknown) =>
-      logMainError('What was kept of the connections gone could not be let go', error)
+      log.error('What was kept of the connections gone could not be let go', error)
     )
     // An engine that does not start leaves the work done alone stopped, not the Segretario.
     await this.engine
       .start()
-      .catch((error: unknown) => logMainError('The Segretario’s engine did not start', error))
+      .catch((error: unknown) => log.error('The Segretario’s engine did not start', error))
     await this.sayWhetherReading()
   }
 
@@ -743,7 +780,7 @@ export class SegretarioService {
     // otherwise, and nothing would go through.
     if (error.code === 'model-unavailable') {
       void this.turnOff('modello-non-disponibile').catch((failure: unknown) =>
-        logMainError('The AI could not go off for a model unavailable', failure)
+        log.error('The AI could not go off for a model unavailable', failure)
       )
       return
     }
@@ -759,7 +796,7 @@ export class SegretarioService {
       }
     })()
       .catch((failure: unknown) =>
-        logMainError('A refused key or credit could not be followed', failure)
+        log.error('A refused key or credit could not be followed', failure)
       )
       .finally(() => {
         this.refusing = null
@@ -780,6 +817,7 @@ export class SegretarioService {
 
   /** Something the user must know about the AI: kept until seen, and said outside the window too. */
   private async raiseNotice(notice: SegretarioNotice): Promise<void> {
+    log.info('notice', { kind: notice.kind })
     await this.db.store.setMeta('notice', JSON.stringify(notice))
     this.options.send(SEGRETARIO_IPC.notice, notice)
     const { title, body } = noticeWords(notice)
@@ -1003,6 +1041,10 @@ export class SegretarioService {
     const wasOn = (await this.db.store.getPreferences()).enabled
     const stored = await this.db.store.setPreferences(preferences)
 
+    if (stored.enabled !== wasOn) {
+      log.info(stored.enabled ? 'ai.on' : 'ai.off')
+    }
+
     // Turned on, what said why it had gone off is over.
     if (stored.enabled) {
       const notice = await this.getNotice()
@@ -1108,10 +1150,24 @@ export class SegretarioService {
   }
 
   async setOnboarding(state: OnboardingState | null): Promise<void> {
+    const before = await this.getOnboarding()
+
+    // The setup's way, step by step (§12.2, §14.4): which case, which step, for how many.
+    if (state && (state.step !== before?.step || state.case !== before.case)) {
+      log.info('setup.step', {
+        case: state.case,
+        step: state.step,
+        connections: state.accountIds.length,
+        by: 'user'
+      })
+    } else if (!state && before) {
+      log.info('setup.end', { case: before.case, ms: Date.now() - before.startedAt, by: 'user' })
+    }
+
     if (state) {
       await this.db.store.setMeta(ONBOARDING, JSON.stringify(state))
     } else {
-      const finished = await this.getOnboarding()
+      const finished = before
       await this.db.store.deleteMeta(ONBOARDING)
       // The setup is over: the reading goes back to its usual pace.
       this.setPreparing(false)
@@ -1333,7 +1389,7 @@ export class SegretarioService {
     })
       .then((result) => store.endLearning(result.activityId, result.status === 'done'))
       .catch((error: unknown) => {
-        logMainError('Conoscimi failed', error)
+        log.failed('conoscimi.failed', error)
         created.reject(error instanceof Error ? error : new Error(String(error)))
       })
 
@@ -1361,6 +1417,95 @@ export class SegretarioService {
         sent: writtenText
       }
     )
+  }
+
+  /* ─────────────────────────────── the diagnostics (§14.4) ─────────────────────────────── */
+
+  /**
+   * The Segretario as the diagnostics tell it: on or off, its key's state
+   * (never the key), the setup, the engine, the reading, what Conoscimi
+   * knows, what it cost, how much the registry holds.
+   */
+  async diagnosticState(): Promise<Record<string, unknown>> {
+    if (!this.store) {
+      return { open: false }
+    }
+
+    const { store } = this.db
+    const [preferences, setup, engine, reading, learning, spending, registry, schema] =
+      await Promise.all([
+        this.getPreferences(),
+        this.getOnboarding(),
+        this.getEngineState(),
+        this.getReadingStatus(),
+        this.listLearning(),
+        this.getSpending(),
+        store.registryFigures(),
+        store.meta('schema_version')
+      ])
+
+    return {
+      open: true,
+      on: await this.ready(),
+      // The key's state and credit, never the key — not even the part Settings shows of it.
+      status: { ...this.getStatus(), keyLabel: undefined },
+      preferences,
+      setup,
+      engine,
+      // The reading in numbers: what it wrote of the mail — the runs' titles, the horizons' reasons
+      // — stays with its sessions, in the export only when the user includes them.
+      reading: {
+        ...reading,
+        failed: reading.failed.map((failure) => ({ error: failure.error })),
+        horizons: reading.horizons.map(({ reason, ...horizon }) => ({
+          ...horizon,
+          decided: reason !== null
+        }))
+      },
+      learning,
+      spending,
+      registry,
+      schemaVersion: schema
+    }
+  }
+
+  /**
+   * The Segretario's work in full, from a moment on, for an export the user
+   * chose to include it in: each run as it went — what it was given, what it
+   * thought, the tools it used and what came of them —, the memory as it is,
+   * the work in the queue, the lessons still to learn. Pictures in what the
+   * tools gave back are named, not carried.
+   */
+  async *diagnosticFiles(sinceMs: number): AsyncGenerator<BundleFile> {
+    if (!this.store) {
+      return
+    }
+
+    const { store, notebook } = this.db
+
+    for (const activity of await store.activitiesSince(sinceMs)) {
+      const events = await store.listEvents(activity.id)
+      yield {
+        name: `sessioni/${sessionStamp(activity.createdAt)} ${activity.task} ${activity.id.slice(0, 8)}.json`,
+        content: {
+          ...activity,
+          createdAt: new Date(activity.createdAt).toISOString(),
+          updatedAt: new Date(activity.updatedAt).toISOString(),
+          events: events.map((event) => ({
+            at: new Date(event.createdAt).toISOString(),
+            type: event.type,
+            payload: withoutPictures(event.payload)
+          }))
+        }
+      }
+    }
+
+    for (const note of await notebook.list()) {
+      yield { name: `memoria/${note.path}`, content: note.content }
+    }
+
+    yield { name: 'coda.json', content: await store.workSince(sinceMs) }
+    yield { name: 'lezioni.json', content: await store.pendingLessons() }
   }
 
   /* ─────────────────────────── a connection that goes (§11.4) ─────────────────────────── */
@@ -1458,6 +1603,13 @@ export class SegretarioService {
 
     const stale = [...new Set([...projects.values()].flat())]
     await registry.projects.markStale(stale)
+    log.info('connections.forgotten', {
+      mail: goneMail.length,
+      calendars: goneCalendars.length,
+      projectsBehind: stale.length,
+      runsForgotten: activities.length,
+      removal: left ? connectionKey(left) : null
+    })
 
     // The memory is revised only where there is one; a connection found gone after a removal
     // cut short is told too, if Conoscimi had known it — not one that never was in it.
@@ -1828,13 +1980,13 @@ export class SegretarioService {
         await plainly(registry.setProjectHidden(undo.projectId, !undo.hidden, USER))
         break
       case 'evento-creato':
-        await this.options.calendar.remove(undo.eventKey)
+        await this.options.calendar.remove(undo.eventKey, BY_USER)
         break
       case 'evento-modificato':
-        await this.options.calendar.update(undo.eventKey, undo.before)
+        await this.options.calendar.update(undo.eventKey, undo.before, BY_USER)
         break
       case 'evento-eliminato':
-        await this.options.calendar.create(undo.event)
+        await this.options.calendar.create(undo.event, BY_USER)
         break
     }
 
@@ -1993,7 +2145,11 @@ export class SegretarioService {
       }
 
       if (payload.eventKey && payload.response) {
-        const answered = await this.options.calendar.respond(payload.eventKey, payload.response)
+        const answered = await this.options.calendar.respond(
+          payload.eventKey,
+          payload.response,
+          BY_USER
+        )
         await registry.decideProposal(id, 'accettata', { eventKey: answered.key, ...result })
         return
       }
@@ -2010,7 +2166,7 @@ export class SegretarioService {
           ...(payload.description ? { description: payload.description } : {}),
           ...(payload.attendees?.length ? { attendees: payload.attendees } : {})
         }
-        const updated = await this.options.calendar.update(payload.eventKey, change)
+        const updated = await this.options.calendar.update(payload.eventKey, change, BY_USER)
         await registry.decideProposal(id, 'accettata', { eventKey: updated.key, ...result })
         return
       }
@@ -2035,17 +2191,24 @@ export class SegretarioService {
         )
       }
 
-      const created = await this.options.calendar.create({
-        calendarKey: calendar.key,
-        title: payload.title,
-        start: payload.start,
-        end: payload.end,
-        allDay: payload.allDay,
-        location: payload.location,
-        description: payload.description,
-        attendees: payload.attendees,
-        origin: { by: 'segretario', accountId: proposal.accountId, messageKey: proposal.messageKey }
-      })
+      const created = await this.options.calendar.create(
+        {
+          calendarKey: calendar.key,
+          title: payload.title,
+          start: payload.start,
+          end: payload.end,
+          allDay: payload.allDay,
+          location: payload.location,
+          description: payload.description,
+          attendees: payload.attendees,
+          origin: {
+            by: 'segretario',
+            accountId: proposal.accountId,
+            messageKey: proposal.messageKey
+          }
+        },
+        BY_USER
+      )
       await registry.decideProposal(id, 'accettata', { eventKey: created.key, ...result })
       return
     }
@@ -2072,7 +2235,7 @@ export class SegretarioService {
   ): Promise<void> {
     for (const proposal of entries.flatMap((entry) => entry.proposals)) {
       await this.decideProposal(proposal.id, true, proposal.result).catch((error: unknown) =>
-        logMainError('A proposal followed by a mark could not be accepted', error)
+        log.error('A proposal followed by a mark could not be accepted', error)
       )
     }
 
@@ -2088,7 +2251,7 @@ export class SegretarioService {
           answers
         )
         .catch((error: unknown) =>
-          logMainError('Proposals answered by a mark could not be set aside', error)
+          log.error('Proposals answered by a mark could not be set aside', error)
         )
     }
   }
@@ -2931,7 +3094,7 @@ export class SegretarioService {
         conversation: true
       })
     } catch (error) {
-      logMainError('A conversation with the Segretario failed', error, { activityId: id })
+      log.failed('conversation.failed', error, { run: id })
     }
   }
 
@@ -3082,7 +3245,7 @@ export class SegretarioService {
         }
       }
     } catch (error) {
-      logMainError('Naming an activity failed', error)
+      log.failed('naming.failed', error)
     }
   }
 

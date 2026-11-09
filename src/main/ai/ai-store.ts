@@ -387,6 +387,80 @@ export class AiStore {
     )
   }
 
+  /** The runs since a moment, as stored, the oldest first: for the diagnostics' sessions (§14.4). */
+  async activitiesSince(sinceMs: number): Promise<
+    Array<{
+      id: string
+      task: string
+      title: string
+      status: string
+      visibility: string
+      createdAt: number
+      updatedAt: number
+      cost: number
+      workId: string | null
+      scope: unknown
+    }>
+  > {
+    const rows = await this.sql.all<{
+      id: string
+      task: string | null
+      kind: string
+      title: string
+      status: string
+      visibility: string
+      created_at: number
+      updated_at: number
+      cost: number
+      work_id: string | null
+      scope_json: string | null
+    }>(
+      `SELECT id, task, kind, title, status, visibility, created_at, updated_at, cost, work_id, scope_json
+       FROM ai_activities WHERE updated_at >= ? ORDER BY created_at`,
+      sinceMs
+    )
+    return rows.map((row) => ({
+      id: row.id,
+      task: row.task ?? row.kind,
+      title: row.title,
+      status: row.status,
+      visibility: row.visibility,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+      cost: Number(row.cost),
+      workId: row.work_id,
+      scope: row.scope_json ? parseJson<unknown>(row.scope_json, null) : null
+    }))
+  }
+
+  /** The work queued, running or failed, and what ended since a moment: for the diagnostics. */
+  async workSince(sinceMs: number): Promise<Array<Record<string, unknown>>> {
+    return this.sql.all(
+      `SELECT task, scope_key AS scope, status, priority, attempts, activity_id AS activity,
+         last_error AS lastError, created_at AS createdAt, updated_at AS updatedAt
+       FROM ai_work WHERE status <> 'fatto' OR updated_at >= ? ORDER BY updated_at DESC`,
+      sinceMs
+    )
+  }
+
+  /** How much the registry holds: notes, what is open, projects, replies, proposals, lessons. */
+  async registryFigures(): Promise<Record<string, number>> {
+    const row = await this.sql.get<Record<string, number>>(
+      `SELECT
+         (SELECT COUNT(*) FROM ai_notes) AS notes,
+         (SELECT COUNT(*) FROM ai_items WHERE status = 'aperta') AS openThings,
+         (SELECT COUNT(*) FROM ai_items) AS things,
+         (SELECT COUNT(*) FROM ai_projects WHERE closed_at IS NULL) AS projects,
+         (SELECT COUNT(*) FROM ai_projects WHERE stale_since IS NOT NULL) AS projectsBehind,
+         (SELECT COUNT(*) FROM ai_ready_drafts WHERE status = 'pronta') AS readyReplies,
+         (SELECT COUNT(*) FROM ai_proposals WHERE status = 'aperta') AS openProposals,
+         (SELECT COUNT(*) FROM ai_memory) AS memoryNotes,
+         (SELECT COUNT(*) FROM ai_lessons WHERE reflection_id IS NULL) AS pendingLessons,
+         (SELECT COUNT(*) FROM ai_activities) AS runsKept`
+    )
+    return Object.fromEntries(Object.entries(row ?? {}).map(([key, value]) => [key, Number(value)]))
+  }
+
   async listEvents(activityId: string): Promise<StoredEvent[]> {
     const rows = await this.sql.all<{
       id: number

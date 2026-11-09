@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Ref } from 'react'
+import { useEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { ChevronLeft, ChevronRight, LoaderCircle, Plus, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -9,6 +9,7 @@ import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { useCalendarEvents } from '@renderer/features/calendar/use-calendar'
 import { useCommandKeys } from '@renderer/lib/command-shortcuts'
+import { uiLog } from '@renderer/lib/diagnostics'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
 import type { HostCommandId } from '@shared/commands'
@@ -314,7 +315,16 @@ export function CalendarApp({
       ? (proposals.find((proposed) => proposed.proposal.id === selection.id) ?? null)
       : null
 
-  useEffect(() => store(VIEW_KEY, view), [view])
+  // The view the user moves to (§14.4); the one it opens on is kept, not told again.
+  const viewToldRef = useRef(view)
+  useEffect(() => {
+    store(VIEW_KEY, view)
+
+    if (viewToldRef.current !== view) {
+      viewToldRef.current = view
+      uiLog.info('calendar.view', { view })
+    }
+  }, [view])
 
   const sightLabel = `Calendario, ${SIGHT_VIEW[view]}${viewTitle(view, anchor)}`
   const sightKey = selectedEvent?.key ?? null

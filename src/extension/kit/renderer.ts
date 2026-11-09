@@ -5,5 +5,7 @@
  * moves inside the host. `@app/extension/kit/renderer`.
  */
 export { useCommandKeys } from '@renderer/lib/command-shortcuts'
+/** What the extension's page records, in the app's diagnostics under its area (`ext:<id>`, §14.4). */
+export { diagnosticsFor } from '@renderer/lib/diagnostics'
 export { summaryToMessageRef } from '@renderer/lib/message-selection'
 export { cn } from '@renderer/lib/utils'

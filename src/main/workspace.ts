@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { app, ipcMain, net, type BrowserWindow } from 'electron'
+import { app, net, type BrowserWindow } from 'electron'
 
 import extensionShared from '@app/extension/shared'
 
@@ -13,6 +13,7 @@ import type {
   ExtensionMainContext
 } from '@app/extension/types'
 import { calendarRefusedNotice, type MessageInvitation } from '@shared/calendar'
+import { handleIpc } from '@main/ipc/handle'
 import { extensionChannel } from '@shared/extension-ipc'
 import { IPC_CHANNELS, type AddedAccount } from '@shared/ipc'
 import {
@@ -39,7 +40,12 @@ import { MicrosoftOAuthService } from './services/microsoft-oauth'
 import { canonicalPath, rememberMountedShares } from './services/network-volumes'
 import { movedUnder } from './files/paths'
 import { watchSystemSleep } from './services/system-sleep'
-import { logMainError } from './utils/error-utils'
+import { appDiagnosticState } from '@main/diagnostics/app-state'
+import type { BundleFile, DiagnosticsBundleSource } from '@main/diagnostics/export'
+import { diagnostics } from '@main/diagnostics/log'
+import { diagnosticState, provideDiagnosticState } from '@main/diagnostics/state'
+
+const log = diagnostics('app')
 
 /**
  * The root of the main process. It owns what every app shares — the
@@ -57,14 +63,15 @@ export class Workspace {
   /** SIEVER Mail's agent (see `src/main/ai`). */
   readonly segretario: SegretarioService
   private extension: ExtensionMain | null = null
+  private readonly databasePath: string
   private unwatchSleep: (() => void) | null = null
   private storageReady: Promise<void> | null = null
 
   constructor(config: RuntimeConfig) {
     const userDataPath = app.getPath('userData')
     mkdirSync(userDataPath, { recursive: true })
-    const dbPath = join(userDataPath, 'siever-mail.sqlite')
-    this.database = new AppDatabase(dbPath)
+    this.databasePath = join(userDataPath, 'siever-mail.sqlite')
+    this.database = new AppDatabase(this.databasePath)
     this.googleOAuthService = new GoogleOAuthService(config)
     this.microsoftOAuthService = new MicrosoftOAuthService(config)
     this.mail = new MailService({
@@ -87,12 +94,10 @@ export class Workspace {
         await this.segretario
           .whenReady()
           .then(() => this.segretario.connectionLeaving({ family: 'posta', id: account.id }))
-          .catch((error: unknown) =>
-            logMainError('The Segretario did not let go of a mailbox', error)
-          )
+          .catch((error: unknown) => log.error('The Segretario did not let go of a mailbox', error))
         await this.calendar.whenOpen().then(
           () => this.calendar.mailAccountRemoved(account.id),
-          (error: unknown) => logMainError('The calendar did not let go of a mailbox', error)
+          (error: unknown) => log.error('The calendar did not let go of a mailbox', error)
         )
       },
       onAccountRemoved: (account) =>
@@ -108,7 +113,7 @@ export class Workspace {
             })
           )
           .catch((error: unknown) =>
-            logMainError('The Segretario could not let go of a mailbox', error)
+            log.error('The Segretario could not let go of a mailbox', error)
           )
     })
     this.calendar = new CalendarService({
@@ -125,14 +130,14 @@ export class Workspace {
           .whenReady()
           .then(() => this.segretario.connectionLeaving({ family: 'calendario', id: connectionId }))
           .catch((error: unknown) =>
-            logMainError('The Segretario did not let go of a calendar', error)
+            log.error('The Segretario did not let go of a calendar', error)
           ),
       onDisconnected: (connection) =>
         this.segretario
           .whenReady()
           .then(() => this.segretario.connectionLeft({ family: 'calendario', ...connection }))
           .catch((error: unknown) =>
-            logMainError('The Segretario could not let go of a calendar', error)
+            log.error('The Segretario could not let go of a calendar', error)
           )
     })
     this.segretario = new SegretarioService({
@@ -154,14 +159,79 @@ export class Workspace {
         events: (fromIso, toIso) => this.calendar.events(fromIso, toIso),
         search: (query) => this.calendar.search(query),
         event: (eventKey) => this.calendar.event(eventKey),
-        create: (event) => this.calendar.create(event),
-        update: (eventKey, change) => this.calendar.update(eventKey, change),
-        remove: (eventKey) => this.calendar.remove(eventKey),
-        respond: (eventKey, response) => this.calendar.respond(eventKey, response),
+        create: (event, options) => this.calendar.create(event, options),
+        update: (eventKey, change, options) => this.calendar.update(eventKey, change, options),
+        remove: (eventKey, options) => this.calendar.remove(eventKey, options),
+        respond: (eventKey, response, options) =>
+          this.calendar.respond(eventKey, response, options),
         changesSince: (afterId, limit) => this.calendar.changesSince(afterId, limit),
         latestChangeId: () => this.calendar.latestChangeId()
       }
     })
+    this.provideDiagnostics()
+  }
+
+  /**
+   * What each part says of itself when the diagnostics are exported
+   * (§14.4): the shell, every source, the Segretario, the extension — each
+   * on its own, once it can answer.
+   */
+  private provideDiagnostics(): void {
+    provideDiagnosticState('app', async () => ({
+      ...appDiagnosticState({
+        edition: extensionShared.identity?.id ?? 'public',
+        databasePath: this.databasePath
+      }),
+      preferences: await this.openStorage().then(async () => ({
+        ui: await this.database.getUiPreferences(),
+        notifications: await this.database.getNotificationPreferences()
+      }))
+    }))
+    provideDiagnosticState('mail', () => this.openStorage().then(() => this.mail.diagnosticState()))
+    provideDiagnosticState('calendar', () => this.calendar.diagnosticState())
+    provideDiagnosticState('segretario', () => this.segretario.diagnosticState())
+    provideDiagnosticState('extension', async () => {
+      const identity = extensionShared.identity
+
+      if (!identity) {
+        return null
+      }
+
+      return {
+        id: identity.id,
+        name: identity.name,
+        installed: this.extension !== null,
+        ...(await this.extension?.diagnostics?.state?.())
+      }
+    })
+  }
+
+  /** What an export of the diagnostics takes besides the log (§14.4). */
+  diagnosticsSource(): DiagnosticsBundleSource {
+    const identity = extensionShared.identity
+
+    return {
+      about: { version: app.getVersion(), edition: identity?.id ?? 'public' },
+      state: () => diagnosticState(),
+      segretario: (sinceMs) => this.segretario.diagnosticFiles(sinceMs),
+      extension: async (sinceMs) => {
+        const files = this.extension?.diagnostics?.files
+
+        if (!identity || !files) {
+          return []
+        }
+
+        try {
+          return (await files(sinceMs)).map((file): BundleFile => ({
+            name: `${identity.id}/${file.name}`,
+            content: file.content
+          }))
+        } catch (error) {
+          log.error("The extension's diagnostics files could not be taken", error)
+          return []
+        }
+      }
+    }
   }
 
   /**
@@ -181,14 +251,14 @@ export class Workspace {
 
       if (identity) {
         await this.installExtension(extension, identity).then(
-          () => console.info(`[extension] installed ${identity.name} (${identity.id})`),
-          (error: unknown) => logMainError(`The extension ${identity.name} did not install`, error)
+          () => log.info('extension.installed', { id: identity.id, name: identity.name }),
+          (error: unknown) => log.error(`The extension ${identity.name} did not install`, error)
         )
       }
 
       await this.openSources()
     } catch (error) {
-      console.error('[startup] initialization failed', error)
+      log.error('The startup failed', error)
       // What waits for the calendar or the Segretario is told, not left waiting.
       this.calendar.abandon(error)
       this.segretario.abandon(error)
@@ -225,7 +295,7 @@ export class Workspace {
    */
   private async openSources(): Promise<void> {
     void rememberMountedShares().catch((error: unknown) =>
-      logMainError('Reading the mounted network shares failed', error)
+      log.error('Reading the mounted network shares failed', error)
     )
     try {
       await this.mail.start()
@@ -234,8 +304,15 @@ export class Workspace {
       // never hangs; one failing to open leaves the others working.
       await this.calendar
         .open()
-        .catch((error: unknown) => logMainError('The calendar did not open', error))
+        .catch((error: unknown) => log.error('The calendar did not open', error))
       this.unwatchSleep = watchSystemSleep((asleep) => {
+        log.info(asleep ? 'system.sleep' : 'system.wake')
+
+        // Awake with the window still in front: its time in front starts again (§14.4).
+        if (!asleep && getAppWindow()?.isFocused()) {
+          diagnostics('ui').info('window.focus')
+        }
+
         this.segretario.setSystemAsleep(asleep)
 
         if (!asleep) {
@@ -244,7 +321,7 @@ export class Workspace {
       })
       await this.segretario
         .open()
-        .catch((error: unknown) => logMainError('The Segretario did not open', error))
+        .catch((error: unknown) => log.error('The Segretario did not open', error))
     }
   }
 
@@ -254,7 +331,7 @@ export class Workspace {
       try {
         await work()
       } catch (error) {
-        logMainError(`${what} did not stop`, error)
+        log.error(`${what} did not stop`, error)
       }
     }
 
@@ -295,14 +372,18 @@ export class Workspace {
       database: databaseHandle,
       mailEngine: mailEngineHandle,
       ipc: {
-        handle: (name, listener) =>
-          ipcMain.handle(extensionChannel(identity.id, name), (_event, ...args: unknown[]) =>
-            listener(...(args as never[]))
+        handle: (name, listener, options) =>
+          handleIpc(
+            `ext:${identity.id}`,
+            extensionChannel(identity.id, name),
+            (...args: unknown[]) => listener(...(args as never[])),
+            { untimed: options?.untimed }
           ),
         send: (name, payload) =>
           getAppWindow()?.webContents.send(extensionChannel(identity.id, name), payload)
       },
       getMainWindow: getAppWindow,
+      diagnostics: diagnostics(`ext:${identity.id}`),
       recordRecentFiles: (paths, activity) => this.mail.recordRecentFiles(paths, activity),
       marks: {
         // A mark is what keeps what it stands for from being done twice, and from looking undone:
@@ -314,7 +395,7 @@ export class Workspace {
           try {
             marked = await this.mail.recordMarks(identity.id, entries)
           } catch (error) {
-            logMainError("An extension's marks could not be kept", error)
+            log.error("An extension's marks could not be kept", error)
             throw new Error(
               `Il segno sul messaggio non si è potuto registrare. ${error instanceof Error ? error.message : String(error)}`,
               { cause: error }
@@ -334,7 +415,7 @@ export class Workspace {
               )
             )
             .catch((error: unknown) =>
-              logMainError('The proposals answered by marks could not be settled', error)
+              log.error('The proposals answered by marks could not be settled', error)
             )
         },
         // Not knowing is no answer: what is marked already would be done again.
@@ -342,7 +423,7 @@ export class Workspace {
           try {
             return await this.mail.marksOfRefs(identity.id, refs)
           } catch (error) {
-            logMainError("An extension's marks could not be read", error)
+            log.error("An extension's marks could not be read", error)
             throw new Error(
               `I segni già lasciati sui messaggi non si possono leggere ora. ${error instanceof Error ? error.message : String(error)}`,
               { cause: error }
@@ -361,7 +442,7 @@ export class Workspace {
           .whenReady()
           .then(() => this.segretario.relocatePaths(was, now))
           .catch((error: unknown) => {
-            logMainError("The projects' folders did not follow a moved folder", error)
+            log.error("The projects' folders did not follow a moved folder", error)
             return 0
           })
         return marks + folders
@@ -371,7 +452,7 @@ export class Workspace {
           await this.segretario.whenReady()
           await this.segretario.decideProposal(id, accepted, result ?? undefined)
         } catch (error) {
-          logMainError('A proposal decided could not be recorded', error)
+          log.error('A proposal decided could not be recorded', error)
         }
       }
     }
@@ -443,7 +524,7 @@ export class Workspace {
       await add()
       return null
     } catch (error) {
-      logMainError('Calendar not connected with its account', error, { accountId: account.id })
+      log.failed('calendar.not-connected', error, { conn: account.id })
       return error instanceof Error ? error.message : 'Il calendario non si è collegato.'
     }
   }
@@ -493,6 +574,13 @@ export class Workspace {
    * says it, and the system too while the window is behind (§14).
    */
   private connectionRefused(notice: ConnectionRefusedNotice): void {
+    // Turned down for good: it does not pass without the user (§14.1).
+    log.error('connection.refused', undefined, {
+      conn: notice.id,
+      family: notice.family,
+      refusal: notice.refusal,
+      detail: notice.detail
+    })
     getAppWindow()?.webContents.send(IPC_CHANNELS.connectionRefused, notice)
 
     if (!getAppWindow()?.isFocused()) {

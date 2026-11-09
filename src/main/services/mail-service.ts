@@ -10,7 +10,7 @@ import { NodeHtmlMarkdown } from 'node-html-markdown'
 import { z } from 'zod'
 
 import type { DiscoveredMailSettings } from '@shared/connections'
-import { logMainError } from '@main/utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
 import type {
   AccountConnectionState,
   ConnectionRefusal,
@@ -128,6 +128,8 @@ import { applyThemeMode } from '../theme'
 import { canonicalPath, reachablePath } from './network-volumes'
 import { isUserFile, listRecentFiles, privateFolders } from './recent-files'
 import { decryptSecret, encryptSecret } from './secure-storage'
+
+const log = diagnostics('mail')
 
 const imapAccountSchema = z.object({
   email: z.string().trim().email(),
@@ -559,7 +561,7 @@ export class MailService {
               options.onConnectionRefused(mailRefusedNotice(account, refusal, detail))
             }
           })
-          .catch((error: unknown) => logMainError('A refused mailbox could not be told', error))
+          .catch((error: unknown) => log.error('A refused mailbox could not be told', error))
     })
     this.drafts = new DraftService({
       database: this.database,
@@ -886,7 +888,7 @@ export class MailService {
     // What is being written reaches Bozze before the connections close.
     await this.drafts
       .flushAll(DRAFT_FLUSH_ON_QUIT_MS)
-      .catch((error: unknown) => logMainError('Filing drafts on quit failed', error))
+      .catch((error: unknown) => log.error('Filing drafts on quit failed', error))
     await this.engine.stop()
   }
 
@@ -1102,6 +1104,13 @@ export class MailService {
     input: Parameters<AppDatabase['createAccount']>[0]
   ): Promise<MailAccount> {
     const account = await this.database.createAccount(input)
+    log.info('account.added', {
+      conn: account.id,
+      type: account.type,
+      auth: account.authType,
+      pec: account.pec,
+      by: 'user'
+    })
 
     await this.includeAccountInUnifiedInbox(account.id)
     this.database.learnContacts([{ address: account.email, name: account.displayName }])
@@ -1157,7 +1166,9 @@ export class MailService {
    */
   async removeAccount(accountId: string): Promise<void> {
     const account = await this.ensureAccountExists(accountId)
+    const startedAt = Date.now()
     this.leaving.add(accountId)
+    log.info('account.removing', { conn: accountId, type: account.type, by: 'user' })
 
     try {
       await this.engine.removeAccount(accountId)
@@ -1168,6 +1179,7 @@ export class MailService {
         await this.database.clearAccountData(accountId)
         await this.database.deleteAccount(accountId)
         await this.dropAttachmentCopies(accountId)
+        log.info('account.removed', { conn: accountId, ms: Date.now() - startedAt })
       } finally {
         await this.onAccountRemoved(account)
       }
@@ -1220,6 +1232,48 @@ export class MailService {
 
   async getUnifiedFolderSummaries(): Promise<UnifiedFolderSummary[]> {
     return this.engine.computeUnifiedFolderSummaries()
+  }
+
+  /**
+   * The mail as the diagnostics tell it (vision §14.4): each mailbox — its
+   * kind, its servers, how its connection stands, what the storage holds of
+   * it. Never a secret.
+   */
+  async diagnosticState(): Promise<Record<string, unknown>> {
+    const isoOf = (at: number | null): string | null => (at ? new Date(at).toISOString() : null)
+    const [accounts, figures] = await Promise.all([
+      this.database.getAccounts(),
+      this.database.mailFigures()
+    ])
+    const states = new Map(
+      this.getAccountConnectionStates().map((state) => [state.accountId, state])
+    )
+
+    return {
+      accounts: accounts.map((account) => {
+        const state = states.get(account.id)
+
+        return {
+          id: account.id,
+          email: account.email,
+          type: account.type,
+          auth: account.authType,
+          pec: account.pec,
+          imap: `${account.imapHost}:${account.imapPort}${account.imapSecure ? ' tls' : ''}`,
+          smtp: `${account.smtpHost}:${account.smtpPort}${account.smtpSecure ? ' tls' : ''}`,
+          connectedAt: new Date(account.createdAt).toISOString(),
+          status: state?.status ?? null,
+          syncing: state?.syncing ?? false,
+          error: state?.errorMessage ?? null,
+          refused: state?.refused ?? null,
+          lastContactAt: isoOf(state?.lastContactAt ?? null),
+          index: state?.index ?? null,
+          leaving: this.leaving.has(account.id),
+          ...figures.get(account.id),
+          lastSyncedAt: isoOf(figures.get(account.id)?.lastSyncedAt ?? null)
+        }
+      })
+    }
   }
 
   getAccountConnectionStates(): AccountConnectionState[] {
@@ -1841,7 +1895,7 @@ export class MailService {
 
       // It never reached the server: it waits, and goes by itself.
       if (failure === 'passing') {
-        logMainError('Sending waits for the server', error, { accountId: account.id })
+        log.warn('send.queued', { conn: account.id, err: error })
         await this.database.queueOutgoing({
           id: randomUUID(),
           accountId: account.id,
@@ -1880,13 +1934,13 @@ export class MailService {
     if (payload.draftId) {
       void this.drafts
         .sent(payload.draftId)
-        .catch((error: unknown) => logMainError('Deleting the sent draft failed', error))
+        .catch((error: unknown) => log.failed('draft.not-deleted', error))
     }
 
     // The message has gone: counting who it went to must not turn that into a failure.
     void this.database
       .recordContactsWritten([...payload.to, ...payload.cc, ...payload.bcc])
-      .catch((error: unknown) => logMainError('Counting the recipients failed', error))
+      .catch((error: unknown) => log.error('Counting the recipients failed', error))
     await this.recordRecentFiles(
       payload.attachments.map((attachment) => attachment.path),
       SENT_ATTACHMENT_ACTIVITY
@@ -1928,7 +1982,8 @@ export class MailService {
         }
 
         const account = { ...stored, secret: decryptSecret(stored.encryptedSecret) }
-        const failed = (message: string): void => {
+        const failed = (message: string, why: string): void => {
+          log.warn('outbox.failed', { conn: entry.accountId, why })
           getAppWindow()?.webContents.send(IPC_CHANNELS.outboxFailed, {
             draftId: entry.draftId,
             subject: payload.subject,
@@ -1951,7 +2006,10 @@ export class MailService {
 
           if (filesGone) {
             await this.database.removeOutgoing({ id: entry.id })
-            failed(`«${payload.subject || 'Senza oggetto'}» non è partito: ${filesGone}`)
+            failed(
+              `«${payload.subject || 'Senza oggetto'}» non è partito: ${filesGone}`,
+              'files-gone'
+            )
             continue
           }
 
@@ -1968,12 +2026,14 @@ export class MailService {
             failed(
               failure === 'uncertain'
                 ? `L’invio di «${payload.subject || 'senza oggetto'}» si è interrotto mentre partiva: potrebbe essere arrivato. Controlla in Posta inviata prima di rimandarlo; la bozza è in Bozze.`
-                : `«${payload.subject || 'Senza oggetto'}» non è partito: ${error instanceof Error ? error.message : String(error)}`
+                : `«${payload.subject || 'Senza oggetto'}» non è partito: ${error instanceof Error ? error.message : String(error)}`,
+              failure
             )
             continue
           }
 
           await this.database.removeOutgoing({ id: entry.id })
+          log.info('outbox.sent', { conn: entry.accountId, waitedMs: Date.now() - entry.queuedAt })
           await this.afterSent(payload)
           getAppWindow()?.webContents.send(IPC_CHANNELS.outboxSent, {
             draftId: entry.draftId,
@@ -1986,7 +2046,7 @@ export class MailService {
         }
       }
     })()
-      .catch((error: unknown) => logMainError('The outbox could not be sent', error))
+      .catch((error: unknown) => log.error('The outbox could not be sent', error))
       .finally(() => {
         this.sendingOutbox = null
       })
@@ -2031,7 +2091,7 @@ export class MailService {
         // neither hold the result back nor turn it into a failure — which
         // would invite sending it twice.
         void this.engine.appendToSent(account.id, rawOutgoing, messageId).catch((error) => {
-          logMainError('Filing the sent copy failed', error, { accountId: account.id })
+          log.failed('sent-copy.not-filed', error, { conn: account.id })
         })
       }
     } finally {

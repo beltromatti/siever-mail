@@ -86,6 +86,7 @@ import { TooltipProvider } from '@renderer/components/ui/tooltip'
 import { useTaskbarBadge } from '@renderer/lib/taskbar-badge'
 import { segretarioProjectPath } from '@shared/folders'
 import { CommandShortcutsProvider, isOverlaySurfaceOpen } from '@renderer/lib/command-shortcuts'
+import { uiLog } from '@renderer/lib/diagnostics'
 import { buildOutgoingMailHtml } from '@renderer/lib/outgoing-mail-html'
 import { messageRefKey, summaryToMessageRef } from '@renderer/lib/message-selection'
 import { clampReaderZoom, DEFAULT_UI_PREFERENCES } from '@shared/models'
@@ -523,6 +524,26 @@ function App(): React.JSX.Element {
   // with no workspace, they are all there is.
   const workspaceCovered = welcome !== null || Boolean(onboarding) || !workspaceExists
 
+  // The way through the app (vision §14.4): the app in front, the welcome over it, the
+  // Segretario's panel — where the user goes, never what is in it.
+  useEffect(() => {
+    if (!workspaceCovered) {
+      uiLog.info('app.open', { app: shownApp })
+    }
+  }, [shownApp, workspaceCovered])
+  useEffect(() => {
+    if (welcome) {
+      uiLog.info('welcome.show', { from: welcome })
+    }
+  }, [welcome])
+  const panelSeenRef = useRef(segretarioOpen)
+  useEffect(() => {
+    if (panelSeenRef.current !== segretarioOpen) {
+      panelSeenRef.current = segretarioOpen
+      uiLog.info(segretarioOpen ? 'segretario.panel.open' : 'segretario.panel.close')
+    }
+  }, [segretarioOpen])
+
   /**
    * Something to be seen — a message from a notification, what the Segretario
    * shows, a message to write —: now, past the welcome screen; with the setup
@@ -625,6 +646,7 @@ function App(): React.JSX.Element {
             ]
       )
       showComposer(id)
+      uiLog.info('composer.open', { kind: data.kind, draft: data.draftId !== undefined })
 
       // A draft whose message waits in the outbox is the user's again, opened to change.
       if (data.draftId) {
@@ -787,7 +809,12 @@ function App(): React.JSX.Element {
   const runAppCommandRef = useRef<(commandId: string) => boolean>(() => false)
 
   useEffect(
-    () => window.mailApi.onAppMenuCommand((command) => void runAppCommandRef.current(command)),
+    () =>
+      window.mailApi.onAppMenuCommand((command) => {
+        if (runAppCommandRef.current(command)) {
+          uiLog.info('command', { id: command, via: 'menu' })
+        }
+      }),
     []
   )
 
@@ -940,6 +967,7 @@ function App(): React.JSX.Element {
               ...current,
               { id, initialData: { ...data, draftId: id }, existing: false }
             ])
+            uiLog.info('composer.open', { kind: data.kind, by: 'segretario' })
             await saved
             await window.segretarioApi.completeCompose(requestId, { draftId: id })
           } catch (error) {
@@ -977,6 +1005,7 @@ function App(): React.JSX.Element {
           { id, initialData: { ...data, draftId: id }, existing: false }
         ])
         showComposer(id)
+        uiLog.info('composer.open', { kind: 'reply', prepared: true })
         await window.segretarioApi.takeUpReply(accountId, messageKey, id)
       } catch (error) {
         toast.error('La risposta non si è aperta', {
@@ -1327,12 +1356,25 @@ function App(): React.JSX.Element {
 
       void (async () => {
         const sendingToast = toast.loading('Invio in corso…')
+        // Who sent it: the user, or the Segretario that asked and waits to hear (§14.4).
+        const sent = {
+          by:
+            payload.draftId && segretarioSendWaitersRef.current.has(payload.draftId)
+              ? ('segretario' as const)
+              : ('user' as const),
+          conn: payload.accountId,
+          kind: draft.kind,
+          recipients: payload.to.length + payload.cc.length + payload.bcc.length,
+          attachments: payload.attachments.length
+        }
+        const startedAt = Date.now()
 
         try {
           const { queued } = await window.mailApi.sendMail({
             ...payload,
             html: await buildOutgoingMailHtml(payload.html)
           })
+          uiLog.info('composer.send', { ...sent, queued, ms: Date.now() - startedAt })
 
           if (queued) {
             toast.info('In uscita', {
@@ -1354,6 +1396,7 @@ function App(): React.JSX.Element {
           }
         } catch (caughtError) {
           toast.dismiss(sendingToast)
+          uiLog.warn('composer.send.failed', { ...sent, ms: Date.now() - startedAt })
           settleSegretarioSend(payload.draftId, {
             sent: false,
             error:

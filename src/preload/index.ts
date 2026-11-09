@@ -5,6 +5,7 @@ import extensionShared from '@app/extension/shared'
 import { extensionChannel } from '@shared/extension-ipc'
 import { IPC_CHANNELS, type DesktopMailApi } from '@shared/ipc'
 import { CALENDAR_IPC, type CalendarApi } from '@shared/calendar'
+import { DIAGNOSTICS_IPC, type DiagnosticsApi } from '@shared/diagnostics'
 import { FILES_IPC, type FilesApi } from '@shared/files'
 import { SEGRETARIO_IPC, type SegretarioApi } from '@shared/segretario'
 
@@ -110,7 +111,6 @@ const desktopMailApi: DesktopMailApi = {
   describeFiles: async (paths) => invoke(IPC_CHANNELS.describeFiles, paths),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   openExternalUrl: async (url) => invoke(IPC_CHANNELS.openExternalUrl, url),
-  openLogsFolder: async () => invoke(IPC_CHANNELS.openLogsFolder),
   getWindowControlsState: async () => invoke(IPC_CHANNELS.getWindowControlsState),
   minimizeWindow: async () => invoke(IPC_CHANNELS.minimizeWindow),
   toggleMaximizeWindow: async () => invoke(IPC_CHANNELS.toggleMaximizeWindow),
@@ -274,6 +274,13 @@ const filesApi: FilesApi = {
   sources: async () => invoke(FILES_IPC.sources)
 }
 
+const diagnosticsApi: DiagnosticsApi = {
+  record: (event) => ipcRenderer.send(DIAGNOSTICS_IPC.record, event),
+  info: async () => invoke(DIAGNOSTICS_IPC.info),
+  export: async (options) => invoke(DIAGNOSTICS_IPC.export, options),
+  openFolder: async () => invoke(DIAGNOSTICS_IPC.openFolder)
+}
+
 // The extension's bridge, over its own channels (under its id), apart from the host's APIs:
 // `window.extensionApi`. The public build has no extension, and no such bridge.
 const extensionIdentity = extensionShared.identity
@@ -289,6 +296,7 @@ if (process.contextIsolated) {
   contextBridge.exposeInMainWorld('segretarioApi', segretarioApi)
   contextBridge.exposeInMainWorld('calendarApi', calendarApi)
   contextBridge.exposeInMainWorld('filesApi', filesApi)
+  contextBridge.exposeInMainWorld('diagnosticsApi', diagnosticsApi)
 
   if (extensionApi) {
     contextBridge.exposeInMainWorld('extensionApi', extensionApi)
@@ -302,6 +310,8 @@ if (process.contextIsolated) {
   window.calendarApi = calendarApi
   // @ts-expect-error context isolation disabled by external override
   window.filesApi = filesApi
+  // @ts-expect-error context isolation disabled by external override
+  window.diagnosticsApi = diagnosticsApi
   // @ts-expect-error context isolation disabled by external override
   window.extensionApi = extensionApi
 }

@@ -1,6 +1,8 @@
-import { logMainError } from '../../utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
 import type { Reachability } from './reachability'
 import type { WorkQueue, WorkUnit } from './work-queue'
+
+const log = diagnostics('segretario')
 
 /** Work at this priority or later is the backlog: it never takes the last free place. */
 export const BACKLOG_PRIORITY = 50
@@ -226,7 +228,7 @@ export class Scheduler {
           await this.startWhatCan()
         }
       } catch (error) {
-        logMainError('Segretario scheduler failed to look at the queue', error)
+        log.error('Segretario scheduler failed to look at the queue', error)
       }
 
       await this.sleep()
@@ -266,7 +268,7 @@ export class Scheduler {
       try {
         keys = await this.executors[unit.task].lockKeys(unit)
       } catch (error) {
-        logMainError('Segretario work could not say what it holds', error, { task: unit.task })
+        log.error('Segretario work could not say what it holds', error, { task: unit.task })
         keys = [unit.scopeKey]
       }
 
@@ -416,7 +418,7 @@ export class Scheduler {
     }
 
     if (!(error instanceof WorkFailure)) {
-      logMainError('Segretario work failed', error, { task: unit.task, scope: unit.scopeKey })
+      log.failed('work.failed', error, { task: unit.task, scope: unit.scopeKey })
     }
 
     await this.queue.fail(unit.id, error instanceof Error ? error.message : String(error), {

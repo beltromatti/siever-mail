@@ -3,7 +3,10 @@ import { join } from 'node:path'
 
 import { app, BrowserWindow, nativeTheme } from 'electron'
 
+import { diagnostics } from '@main/diagnostics/log'
 import { DEFAULT_THEME_MODE, type ThemeMode } from '@shared/models'
+
+const log = diagnostics('app')
 
 /**
  * Light or dark, for the app and everything native around it.
@@ -49,7 +52,7 @@ export function applyThemeMode(mode: ThemeMode): void {
   try {
     writeFileSync(themeModeFilePath(), mode)
   } catch (error) {
-    console.warn('[theme] could not remember the theme for the next launch', error)
+    log.warn('theme.not-remembered', { err: error })
   }
 }
 

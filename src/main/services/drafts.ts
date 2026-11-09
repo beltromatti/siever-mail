@@ -23,7 +23,7 @@ import { basename, join } from 'node:path'
 import { app } from 'electron'
 import type { ParsedMail } from 'mailparser'
 
-import { logMainError } from '@main/utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
 import type {
   DraftAttachment,
   DraftContent,
@@ -43,6 +43,8 @@ import {
 import { mapParsedAddresses } from './mail-engine/message-mapper'
 import { partitionMessageAttachments } from './mail-engine/message-parts'
 import { plainTextOfHtml } from './mail-engine/preview'
+
+const log = diagnostics('mail')
 
 /** A draft goes to the server this long after the last word typed. */
 const SERVER_SAVE_DELAY_MS = 5_000
@@ -226,9 +228,8 @@ export class DraftService {
       ])
 
       if (purged.failed.length > 0) {
-        logMainError('Deleting a sent draft failed', new Error(purged.error ?? 'refused'), {
-          draftId: id
-        })
+        // The server's answer: the draft stays in Bozze, said there.
+        log.warn('draft.not-deleted', { draftId: id, err: { message: purged.error ?? 'refused' } })
       }
     }
   }
@@ -592,7 +593,8 @@ export class DraftService {
 
       return this.setStatus({ id, state: 'saved', savedAt: Date.now() })
     } catch (error) {
-      logMainError('Filing a draft on the server failed', error, { draftId: id })
+      // Tried again by itself (§14.1).
+      log.warn('draft.not-filed', { draftId: id, err: error })
 
       // Thrown away or sent meanwhile: nothing left to file.
       if (!(await this.deps.database.getDraft(id))) {

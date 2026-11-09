@@ -1,10 +1,47 @@
-import { ipcMain, shell } from 'electron'
+import { shell } from 'electron'
 import { z } from 'zod'
 
 import type { SegretarioService } from '@main/ai/segretario-service'
 import { reachablePath } from '@main/services/network-volumes'
-import { logMainError } from '@main/utils/error-utils'
+import { diagnostics } from '@main/diagnostics/log'
+import { handleIpc, type HandleOptions } from '@main/ipc/handle'
+import type { DiagnosticFields } from '@shared/diagnostics'
 import { SEGRETARIO_IPC, type OnboardingState } from '@shared/segretario'
+
+const log = diagnostics('segretario')
+
+/**
+ * What the user does with the Segretario's work, written once done (§14.4):
+ * how they answer it — the clearest sign of whether it helps —, never what
+ * it says.
+ */
+const USER_ANSWERS: Readonly<
+  Record<string, { ev: string; fields?: (...args: unknown[]) => DiagnosticFields }>
+> = {
+  [SEGRETARIO_IPC.setCommitmentStatus]: {
+    ev: 'commitment.status',
+    fields: (_id, status) => ({ status: String(status) })
+  },
+  [SEGRETARIO_IPC.undoCommitmentStatus]: { ev: 'commitment.status-undone' },
+  [SEGRETARIO_IPC.editCommitment]: { ev: 'commitment.edited' },
+  [SEGRETARIO_IPC.openCommitment]: { ev: 'commitment.opened' },
+  [SEGRETARIO_IPC.markHandled]: {
+    ev: 'messages.handled',
+    fields: (messages) => ({ count: Array.isArray(messages) ? messages.length : 0 })
+  },
+  [SEGRETARIO_IPC.undoChange]: { ev: 'change.undone', fields: (run) => ({ run: String(run) }) },
+  [SEGRETARIO_IPC.takeUpReply]: { ev: 'reply.taken' },
+  [SEGRETARIO_IPC.discardReply]: { ev: 'reply.discarded' },
+  [SEGRETARIO_IPC.decideProposal]: {
+    ev: 'proposal.decided',
+    fields: (_id, accepted) => ({ accepted: accepted === true })
+  },
+  [SEGRETARIO_IPC.writeMemory]: { ev: 'memory.edited' },
+  [SEGRETARIO_IPC.deleteMemory]: { ev: 'memory.deleted' },
+  [SEGRETARIO_IPC.restoreMemory]: { ev: 'memory.restored' },
+  [SEGRETARIO_IPC.forgetEverything]: { ev: 'memory.forgotten' },
+  [SEGRETARIO_IPC.saveSearch]: { ev: 'search.saved' }
+}
 
 const messageRefSchema = z.object({
   accountId: z.string().min(1),
@@ -129,21 +166,24 @@ const onboardingSchema = z
 export function registerSegretarioIpc(segretario: SegretarioService): void {
   const handle = <Args extends unknown[], Result>(
     channel: string,
-    handler: (...args: Args) => Promise<Result> | Result
-  ): void => {
-    ipcMain.removeHandler(channel)
-    ipcMain.handle(channel, async (_event, ...args: Args) => {
-      try {
-        await segretario.whenReady()
-        return await handler(...args)
-      } catch (error) {
-        logMainError(`IPC handler failed: ${channel}`, error, { channel })
-        throw error instanceof z.ZodError
-          ? new Error([...new Set(error.issues.map((issue) => issue.message))].join(' '))
-          : error
-      }
-    })
-  }
+    handler: (...args: Args) => Promise<Result> | Result,
+    options?: Pick<HandleOptions, 'untimed'>
+  ): void =>
+    handleIpc(
+      'segretario',
+      channel,
+      async (...args: Args) => {
+        const result = await handler(...args)
+        const answer = USER_ANSWERS[channel]
+
+        if (answer) {
+          log.info(answer.ev, { ...answer.fields?.(...args), by: 'user' })
+        }
+
+        return result
+      },
+      { ...options, before: () => segretario.whenReady() }
+    )
 
   // The key and the one switch.
   handle(SEGRETARIO_IPC.getStatus, () => segretario.getStatus())
@@ -297,17 +337,26 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   )
 
   // Writing, rereading, searching.
-  handle(SEGRETARIO_IPC.assistWriting, (request: unknown) =>
-    segretario.assistWriting(writingRequestSchema.parse(request))
+  // They wait for the model: how long each took is in its run (§14.4), not a slow channel.
+  const forModel = { untimed: true }
+  handle(
+    SEGRETARIO_IPC.assistWriting,
+    (request: unknown) => segretario.assistWriting(writingRequestSchema.parse(request)),
+    forModel
   )
-  handle(SEGRETARIO_IPC.reviewDraft, (request: unknown) =>
-    segretario.reviewDraft(reviewRequestSchema.parse(request))
+  handle(
+    SEGRETARIO_IPC.reviewDraft,
+    (request: unknown) => segretario.reviewDraft(reviewRequestSchema.parse(request)),
+    forModel
   )
-  handle(SEGRETARIO_IPC.askMail, (question: unknown, requestId: unknown) =>
-    segretario.askMail(
-      z.string().trim().min(2, 'Scrivi cosa cerchi.').max(1000).parse(question),
-      requestIdSchema.parse(requestId)
-    )
+  handle(
+    SEGRETARIO_IPC.askMail,
+    (question: unknown, requestId: unknown) =>
+      segretario.askMail(
+        z.string().trim().min(2, 'Scrivi cosa cerchi.').max(1000).parse(question),
+        requestIdSchema.parse(requestId)
+      ),
+    forModel
   )
   handle(SEGRETARIO_IPC.stopAsking, (requestId: unknown) =>
     segretario.stopAsking(requestIdSchema.parse(requestId))
