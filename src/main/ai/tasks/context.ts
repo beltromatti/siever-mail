@@ -4,6 +4,9 @@ import type { Notebook } from '../memory/notebook'
 import { fillTemplate, PROMPTS } from '../prompts'
 import { clip } from '../tools/format'
 
+/** Where every task takes the moment it starts from: the day is in the context, the hour here. */
+export { nowLine } from '../clock'
+
 export interface ContextSources {
   mail: SegretarioMailPort
   calendar: SegretarioCalendarPort
@@ -54,10 +57,4 @@ export async function contextBlock(sources: ContextSources): Promise<string> {
       [...mailLines, ...calendarLines, ...fileLines].join('\n') || '(nessuna connessione)',
     indice_memoria: index
   })
-}
-
-/** The moment, for the data a run starts from: the day is in the context, the hour is here. */
-export function nowLine(): string {
-  const now = new Date()
-  return `Ora: ${new Intl.DateTimeFormat('it-IT', { dateStyle: 'full', timeStyle: 'short' }).format(now)}.`
 }

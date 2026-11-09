@@ -1,5 +1,7 @@
 import type { ApprovalRequest, SegretarioContext } from '@shared/segretario'
 
+import { nowLine } from '../clock'
+
 import type { StoredEvent } from '../ai-store'
 import type { RegistryChange } from '../registry/types'
 import type { ChatMessage, ContentPart, ToolCall } from '../openrouter'
@@ -71,7 +73,8 @@ export interface ChangesPayload {
  */
 export function buildConversation(
   system: string,
-  events: ReadonlyArray<StoredEvent>
+  events: ReadonlyArray<StoredEvent>,
+  now?: number
 ): ChatMessage[] {
   const context = events.find((event) => event.type === 'context')?.payload as
     ContextPayload | undefined
@@ -158,7 +161,45 @@ export function buildConversation(
     messages.push({ role: 'user', content: preamble })
   }
 
+  if (now !== undefined) {
+    tellTimeAgain(messages, events, compaction?.coveredUntil ?? 0, now)
+  }
+
   return messages
+}
+
+/** The hour is told again once so long has passed since the model was last told it. */
+const TIME_TOLD_AGAIN_MS = 10 * 60_000
+
+/**
+ * A run that goes on long — a long look, a wait for the network — has the
+ * hour of its start: once some time has gone by, the latest message says
+ * the hour now too. Only the latest, so the prefix the provider keeps
+ * stays as it was.
+ */
+function tellTimeAgain(
+  messages: ChatMessage[],
+  events: ReadonlyArray<StoredEvent>,
+  coveredUntil: number,
+  now: number
+): void {
+  // Each of the user's words, as the model reads them, opens with the hour.
+  const told = events
+    .filter((event) => event.type === 'user' && event.id > coveredUntil)
+    .reduce((latest, event) => Math.max(latest, event.createdAt), 0)
+  const last = messages.at(-1)
+
+  if (now - told < TIME_TOLD_AGAIN_MS || !last || (last.role !== 'tool' && last.role !== 'user')) {
+    return
+  }
+
+  const line = `(${nowLine(now)})`
+
+  if (typeof last.content === 'string') {
+    last.content = `${last.content}\n\n${line}`
+  } else if (Array.isArray(last.content)) {
+    last.content = [...last.content, { type: 'text', text: line }]
+  }
 }
 
 /** The names the activity has given so far, to rebuild its registry. */

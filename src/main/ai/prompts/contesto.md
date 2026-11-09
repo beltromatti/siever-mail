@@ -1,6 +1,6 @@
 # Contesto
 
-Oggi è {{data}} ({{fuso}}).
+Oggi è {{data}} ({{fuso}}). L'ora esatta è in testa a ciò che ricevi e a ogni parola dell'utente, e torna se il lavoro va per le lunghe: quando conta — un termine, quanto manca a un incontro — parti da lì.
 
 ## Le connessioni dell'utente
 

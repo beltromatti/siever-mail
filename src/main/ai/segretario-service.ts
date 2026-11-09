@@ -3290,27 +3290,31 @@ export class SegretarioService {
     const { store } = this.db
     const handles = new HandleRegistry(handleRecords(await store.listEvents(id)))
     const added: HandleRecord[] = []
-    const lines = [nowLine()]
+    // Their words first; what is on the screen after, as it is: it may be what they mean, or not.
+    const screen =
+      'Sullo schermo dell’utente mentre ti scrive — può riguardare la richiesta oppure no'
+    const lines = [nowLine(), '', text.trim()]
 
     if (context.messages.length > 0) {
       const described = await this.describeMessages(context.messages, handles, added)
       lines.push(
+        '',
         context.messages.length === 1
-          ? `L'utente sta guardando: ${described[0] ?? 'un messaggio'}`
-          : `L'utente ha selezionato ${context.messages.length} messaggi:\n${described.map((line) => `- ${line}`).join('\n')}`
+          ? `${screen}: ${described[0] ?? 'un messaggio'}`
+          : `${screen}: ${context.messages.length} messaggi selezionati:\n${described.map((line) => `- ${line}`).join('\n')}`
       )
     } else if (context.eventKey) {
       const event = await this.options.calendar.event(context.eventKey)
       lines.push(
+        '',
         event
-          ? `L'utente ${context.folderLabel ? `è in ${context.folderLabel} e ` : ''}sta guardando l'evento:\n${eventLine(event, { handles, newHandles: added })}`
-          : `L'utente è in: ${context.folderLabel ?? 'Calendario'}.`
+          ? `${screen}: ${context.folderLabel ? `${context.folderLabel}, ` : ''}l'evento\n${eventLine(event, { handles, newHandles: added })}`
+          : `${screen}: ${context.folderLabel ?? 'Calendario'}.`
       )
     } else if (context.folderLabel) {
-      lines.push(`L'utente è in: ${context.folderLabel}.`)
+      lines.push('', `${screen}: ${context.folderLabel}.`)
     }
 
-    lines.push('', text.trim())
     const forModel = lines.join('\n')
     const event = await store.appendEvent<UserPayload>(id, 'user', {
       text: text.trim(),
