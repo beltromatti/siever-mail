@@ -211,6 +211,7 @@ function noteOf(record: NoteRecord): MessageNote {
     messageDate: record.messageDate,
     twinAccountId: record.twinAccountId,
     notify: record.notify,
+    alert: record.alert,
     writtenBy: record.writtenBy
   }
 }

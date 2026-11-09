@@ -1,10 +1,4 @@
-import type {
-  CommitmentKind,
-  CommitmentOrigin,
-  CommitmentRecord,
-  NoteNature,
-  NotePriority
-} from '../registry/types'
+import type { CommitmentKind, CommitmentOrigin, CommitmentRecord } from '../registry/types'
 import { RegistryRefusal, RevisionConflict } from '../registry/types'
 import { PROMPTS } from '../prompts'
 import {
@@ -14,7 +8,6 @@ import {
   seenKey,
   stringArg,
   numberArg,
-  ToolConflict,
   ToolInputError,
   type SegretarioTool,
   type ToolContext,
@@ -25,14 +18,6 @@ import { commitmentLine, rememberCommitments } from './describe'
 import { countOf, shortDate } from './format'
 import { projectOf } from './projects'
 
-const NATURES: ReadonlyArray<NoteNature> = [
-  'da_rispondere',
-  'da_fare',
-  'in_attesa',
-  'informativo',
-  'rumore'
-]
-const PRIORITIES: ReadonlyArray<NotePriority> = ['alta', 'media', 'bassa']
 const KINDS: ReadonlyArray<CommitmentKind> = ['ti_chiedono', 'hai_promesso', 'aspetti', 'da_fare']
 /** A note's nature where a commitment's kind is meant: the two words are near, the meaning the same. */
 const KIND_OF_NATURE: Readonly<Record<string, CommitmentKind>> = {
@@ -58,74 +43,9 @@ function kindArg(args: Record<string, unknown>): CommitmentKind | undefined {
 }
 
 /** A nullable day argument: AAAA-MM-GG, or nothing. */
-function dayArg(args: Record<string, unknown>, name: string): string | null {
+export function dayArg(args: Record<string, unknown>, name: string): string | null {
   const value = stringArg(args, name)
   return value && value !== 'null' ? value : null
-}
-
-export const noteTool: SegretarioTool = {
-  name: 'nota',
-  description: PROMPTS.tools.nota,
-  parameters: {
-    type: 'object',
-    properties: {
-      messaggio: { type: 'string' },
-      sintesi: { type: 'string' },
-      natura: { type: 'string', enum: [...NATURES] },
-      importanza: { type: 'string', enum: [...PRIORITIES] },
-      motivo: { type: 'string' },
-      scadenza: { type: ['string', 'null'] },
-      avvisa: { type: 'boolean' }
-    },
-    required: ['messaggio', 'sintesi', 'natura', 'importanza', 'motivo']
-  },
-  running: () => 'Annoto…',
-  async execute(args, context) {
-    const handle = requireString(args, 'messaggio')
-    const message = await resolveSentOrReceived(context, handle)
-    const nature = requireString(args, 'natura') as NoteNature
-    const priority = requireString(args, 'importanza') as NotePriority
-
-    try {
-      const { record, change } = await context.registry.writeNote(
-        { ...message, messageDate: message.dateIso },
-        {
-          summary: requireString(args, 'sintesi'),
-          nature,
-          priority,
-          reason: stringArg(args, 'motivo') ?? '',
-          due: dayArg(args, 'scadenza'),
-          // Only a message that came: what the user sent is told to no one.
-          notify: args.avvisa === true && message.direction === 'in'
-        },
-        context.run.actor,
-        {
-          seenRevision: context.run.seen.get(seenKey('note', message.accountId, message.messageKey))
-        }
-      )
-      context.run.seen.set(seenKey('note', message.accountId, message.messageKey), record.revision)
-
-      return {
-        content: `Nota di ${handle} ${change.action === 'scritta' ? 'scritta' : 'corretta'}.`,
-        summary: change.label,
-        messages: [message.ref]
-      }
-    } catch (error) {
-      if (error instanceof RevisionConflict) {
-        context.run.seen.set(
-          seenKey('note', message.accountId, message.messageKey),
-          error.current.revision
-        )
-        throw new ToolConflict(error.message)
-      }
-
-      if (error instanceof RegistryRefusal) {
-        throw new ToolInputError(error.message)
-      }
-
-      throw error
-    }
-  }
 }
 
 type Operation = Record<string, unknown>

@@ -163,6 +163,8 @@ export interface MessageNote {
   twinAccountId: string | null
   /** The Segretario said to tell the user of it now, with a notification (§13.3). */
   notify: boolean
+  /** What the notification says, why it cannot wait; null: the summary. */
+  alert: string | null
   writtenBy: WorkActor
 }
 

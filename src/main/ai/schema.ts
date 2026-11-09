@@ -9,7 +9,7 @@ import type { Sql } from './sql'
  * order, as an old one runs the steps it has not had: one path, so what a
  * fresh database looks like is what an upgraded one looks like.
  */
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 10
 
 /** The tables of the first 2.0 builds, as they stood (version 1). */
 /** The open things' indexes: by conversation, by state, and — from version 5 — by event. */
@@ -572,6 +572,11 @@ export async function ensureAiSchema(sql: Sql): Promise<void> {
     for (const statement of STEP_9) {
       await sql.run(statement)
     }
+  }
+
+  // Version 10: what a note tells the user now is its own line (`avvisa`), not only a yes.
+  if (version < 10) {
+    await addColumn(sql, 'ai_notes', 'alert', 'TEXT')
   }
 
   if (version !== SCHEMA_VERSION) {

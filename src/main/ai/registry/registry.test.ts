@@ -505,6 +505,34 @@ describe('Registry', () => {
     })
   })
 
+  describe('notes', () => {
+    it('keeps the line the user is told now with a note that tells, and lets it go with one that does not', async () => {
+      const anchor = { ...ANNA, direction: 'in' as const, messageDate: '2026-11-02T09:00:00.000Z' }
+      const said = {
+        summary: 'Anna chiede la conferma del sopralluogo',
+        nature: 'da_rispondere' as const,
+        priority: 'alta' as const,
+        reason: 'cantiere domattina',
+        due: '2026-11-02'
+      }
+
+      const told = await registry.writeNote(
+        anchor,
+        { ...said, notify: true, alert: '  Anna aspetta la conferma entro le 12.  ' },
+        BACKGROUND
+      )
+      expect(told.record).toMatchObject({
+        notify: true,
+        alert: 'Anna aspetta la conferma entro le 12.'
+      })
+
+      const quiet = await registry.writeNote(anchor, { ...said, alert: 'non detta' }, CHAT, {
+        seenRevision: told.record.revision
+      })
+      expect(quiet.record).toMatchObject({ notify: false, alert: null })
+    })
+  })
+
   describe('replies', () => {
     it('goes to be looked at again when the conversation moves on, and is not offered again once discarded', async () => {
       await registry.writeNote(

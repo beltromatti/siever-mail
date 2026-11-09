@@ -171,7 +171,8 @@ export class MailNotifications {
     clearTimeout(held.timer)
     this.held.delete(key)
     const tell = note.notify && !held.message.isRead
-    this.settle(held, tell ? { message: held.message, summary: note.summary } : null)
+    // Its line says why it cannot wait; a note told without one, its summary.
+    this.settle(held, tell ? { message: held.message, summary: note.alert ?? note.summary } : null)
   }
 
   /**

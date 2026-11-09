@@ -63,6 +63,8 @@ export interface NoteRecord extends MessageAnchor {
   twinAccountId: string | null
   /** The Segretario said to tell the user of the message now, with a notification (§13.3). */
   notify: boolean
+  /** The line the user is told now, why it cannot wait; null: the summary says it. */
+  alert: string | null
   revision: number
   runId: string | null
   /** Who wrote it last: a note the user corrected is not rewritten by a run in the background. */

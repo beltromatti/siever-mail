@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ComponentType } from
 import {
   AlertCircle,
   ArrowUp,
+  AtSign,
   BookOpen,
   Briefcase,
   CalendarDays,
@@ -74,6 +75,8 @@ const TOOL_ICONS: Readonly<Record<string, ComponentType<{ className?: string }>>
   revisione: SpellCheck,
   mostra: Eye,
   diario: History,
+  // The same as Settings › Connessioni.
+  connessioni: AtSign,
   ...extensionRenderer.toolIcons
 }
 

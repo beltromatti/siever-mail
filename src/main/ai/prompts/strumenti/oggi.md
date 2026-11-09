@@ -1,8 +1,7 @@
-Ciò che scrivi della sua giornata e dei suoi eventi: la lettera in cima alla pagina Oggi, la preparazione di un incontro, l'avviso di un cambiamento, e di chi è un evento.
+Scrive la lettera in cima alla pagina Oggi, la scrivania dell'utente.
 
 Parametri:
 
-- `lettera`: le righe in cima alla pagina — dove sta la sua giornata, in prosa, da tre a cinque frasi. Ciò che nomina è un link, come in chat, così con un clic ci arriva: «alle 15 c'è [l'apertura delle offerte](evento:e1), e prima serve [la conferma di Chiara sul ribasso](impegno:12): [il sollecito](mail:m4) è pronto». Sostituisce quella di oggi. La scrive il lavoro della giornata, che vede tutto, oppure tu quando l'utente te lo chiede; negli altri lavori quello che conta per oggi va nelle cose aperte, e la giornata ne tiene conto quando la riscrive.
-- `evento` e `avviso`: per un evento (e…) cambiato, una riga che l'utente riceve subito con una notifica sul suo computer, quando saperlo adesso cambia ciò che fa — anche di un evento non suo, se lo tocca. Solo nel lavoro sul calendario.
-- `evento` e `tuo`: in un calendario condiviso, o di altri, sono dell'utente gli eventi a cui è invitato, che organizza o che ha creato lui; `tuo: true` dice che lo è anche uno che il calendario non dice suo — l'appuntamento che la segreteria ha scritto per lui nel calendario comune, con il suo nome nel titolo —, e da lì gli ricorda e Oggi lo mostra; `tuo: false` toglie ciò che avevi detto. Per una serie vale ogni volta. Con `motivo`, in poche parole, perché. Quando l'utente lo dice in chat, è la sua parola.
-- `evento` e `preparazione`: per un evento (e…), una scheda breve da leggere prima di entrare: cosa c'è di aperto con quelle persone, gli ultimi scambi che contano, i documenti utili — anche qui come link, che apre da lì. La trova sotto l'evento, in Oggi e nel calendario.
+- `lettera`: dove sta la sua giornata, in prosa, da tre a cinque frasi. Ciò che nomina è un link, come in chat, così con un clic ci arriva: «alle 15 c'è [l'apertura delle offerte](evento:e1), e prima serve [la conferma di Chiara sul ribasso](impegno:12): [il sollecito](mail:m4) è pronto». Sostituisce quella di oggi. La scrive il lavoro della giornata, che vede tutto, oppure tu quando l'utente te lo chiede; negli altri lavori quello che conta per oggi va nelle cose aperte, e la giornata ne tiene conto quando la riscrive.
+
+Ciò che scrivi di un evento — la preparazione, l'avviso, di chi è — sta nella sua nota (`nota`, con `evento`).

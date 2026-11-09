@@ -77,6 +77,7 @@ function note(uid: number, notify: boolean, overrides: Partial<MessageNote> = {}
     messageDate: '2026-10-28T08:00:00.000Z',
     twinAccountId: null,
     notify,
+    alert: null,
     writtenBy: 'segretario',
     ...overrides
   }
@@ -276,6 +277,17 @@ describe('the notifications of new mail', () => {
       )
       mail.noteWritten(note(4, true, { accountId: 'a2', messageKey: 'twin4', twinAccountId: 'a1' }))
       expect(shown).toHaveLength(2)
+    })
+
+    it('says why it cannot wait, with the line the Segretario wrote — or its summary, without one', () => {
+      mail.enqueue(ACCOUNT, [message(1), message(2)], INBOX, false)
+      mail.noteWritten(note(1, true, { alert: 'Rossi aspetta la conferma entro le 12.' }))
+      mail.noteWritten(note(2, true))
+
+      expect(shown.map((notification) => notification.options.body)).toEqual([
+        'Rossi aspetta la conferma entro le 12.',
+        'Nota 2'
+      ])
     })
 
     it('tells as it is a message whose note does not come in time', () => {

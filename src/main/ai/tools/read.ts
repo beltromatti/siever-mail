@@ -1,6 +1,7 @@
 import { readFile, stat } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 
+import { seriesKey } from '@shared/calendar'
 import type { MessageRef } from '@shared/models'
 import { pecReceiptAt, pecReceiptWords } from '@shared/pec'
 import { unlinked } from '@shared/segretario-links'
@@ -392,12 +393,23 @@ async function readEvent(
   }
 
   // What the work holds of it, as a message's reading says its note and what is open.
-  const [prep, items, projects] = await Promise.all([
+  const [prep, items, projects, mark] = await Promise.all([
     context.registry.day.prep(eventKey),
     context.registry.commitments.ofPlaces({ events: [eventKey] }),
-    context.registry.projects.ofEvents([eventKey])
+    context.registry.projects.ofEvents([eventKey]),
+    context.registry.ownership.markOf(
+      eventKey,
+      event.seriesId ? seriesKey(event.connectionId, event.calendarId, event.seriesId) : null
+    )
   ])
   rememberCommitments(context, items)
+  // Whose it is (§7.4): what the calendar says, and what was found where it does not.
+  const whose =
+    event.yours === false
+      ? `Di chi è: non dell'utente${mark && !mark.yours && mark.setBy === 'utente' ? ', l’ha detto lui' : ': il suo calendario non lo dice suo'}`
+      : mark?.yours
+        ? `Di chi è: dell'utente, ${mark.setBy === 'utente' ? 'l’ha detto lui' : 'l’hai riconosciuto tu'}${mark.reason ? ` («${mark.reason}»)` : ''}`
+        : ''
 
   return {
     content: [
@@ -406,6 +418,10 @@ async function readEvent(
       `Calendario: ${event.calendarName}`,
       event.location ? `Dove: ${event.location}` : '',
       event.organizer ? `Organizzatore: ${event.organizer}` : '',
+      event.creator && event.creator !== event.organizer
+        ? `Messo nel calendario da: ${event.creator}`
+        : '',
+      whose,
       event.attendees.length > 0
         ? `Invitati: ${event.attendees.map((attendee) => `${attendee.name ?? attendee.email} (${attendee.response})`).join(', ')}`
         : '',
