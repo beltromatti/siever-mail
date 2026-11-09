@@ -149,6 +149,7 @@ function ConnectionsStep({
   removingAccountId,
   googleReady,
   microsoftReady,
+  aiOn,
   onAccountCreated,
   onRemoveMail,
   onNext,
@@ -161,6 +162,7 @@ function ConnectionsStep({
   removingAccountId: string | null
   googleReady: boolean
   microsoftReady: boolean
+  aiOn: boolean
   onAccountCreated: (account: MailAccount) => void
   onRemoveMail: (accountId: string, calendars: ReadonlyArray<CalendarConnection>) => void
   onNext: () => void
@@ -198,6 +200,7 @@ function ConnectionsStep({
             mailStates={mailStates}
             removingAccountId={removingAccountId}
             googleReady={googleReady}
+            aiOn={aiOn}
             onRemoveMail={onRemoveMail}
           />
         )}
@@ -1252,6 +1255,7 @@ export function OnboardingWizard({
               removingAccountId={removingAccountId}
               googleReady={canUseGoogle}
               microsoftReady={canUseMicrosoft}
+              aiOn={aiOn}
               onRemoveMail={onRemoveAccount}
               onAccountCreated={(account) => {
                 onAccountCreated(account)

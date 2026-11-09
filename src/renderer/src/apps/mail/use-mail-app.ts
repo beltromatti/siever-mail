@@ -38,6 +38,7 @@ import {
 } from '@renderer/features/mail/message-list-shared'
 import { rowWorkKey, useRowWork } from '@renderer/features/segretario/row-work'
 import { markKey, useMessageMarks } from '@renderer/features/mail/message-marks'
+import { removalWords } from '@renderer/features/connections/connection-removal'
 import { useConversationProjectTags } from '@renderer/features/segretario/conversation-projects'
 import type { CalendarConnection } from '@shared/calendar'
 import type { MessageMark } from '@shared/message-marks'
@@ -1037,15 +1038,18 @@ export function useMailApp({
       }
 
       const account = accounts.find((entry) => entry.id === accountId)
-      // Asked already where the user chose it — a refusal's window — or asked now.
+      // Asked already where the user chose it — a refusal's window — or asked now, with what goes.
       const confirmed =
         options.confirmed ||
         (await confirm({
-          title: `Disconnettere ${account?.email ?? "l'account"}?`,
-          description: `SIEVER Mail smette di ricevere e inviare con questo account e toglie dal computer la sua posta, la sua firma e quello che il Segretario aveva annotato su questo account${
-            calendars.length > 0 ? ', e i suoi calendari' : ''
-          }. Sul server non cambia nulla: puoi ricollegarlo quando vuoi.`,
-          confirmLabel: 'Disconnetti',
+          title: `Scollegare ${account?.email ?? 'la casella'}?`,
+          ...removalWords({
+            family: 'posta',
+            withCalendars: calendars.length > 0,
+            outgoing: await window.mailApi.outgoingCount(accountId).catch(() => 0),
+            aiOn
+          }),
+          confirmLabel: 'Scollega',
           destructive: true
         }))
 
@@ -1068,15 +1072,13 @@ export function useMailApp({
         setAccounts((current) => current.filter((account) => account.id !== accountId))
       } catch (caughtError) {
         setViewError(
-          caughtError instanceof Error
-            ? caughtError.message
-            : 'Disconnessione account non riuscita.'
+          caughtError instanceof Error ? caughtError.message : 'La casella non si è scollegata.'
         )
       } finally {
         setRemovingAccountId((current) => (current === accountId ? null : current))
       }
     },
-    [accounts, cancelInFlightWork, confirm, removingAccountId, setAccounts]
+    [accounts, aiOn, cancelInFlightWork, confirm, removingAccountId, setAccounts]
   )
 
   const resetMailboxView = useCallback((): void => {

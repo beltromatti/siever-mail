@@ -116,6 +116,10 @@ export function registerMailIpc(
     await mailService.removeAccount(accountId)
   })
 
+  registerDataHandler(IPC_CHANNELS.outgoingCount, async (accountId: string) =>
+    mailService.outgoingCount(accountId)
+  )
+
   registerDataHandler(IPC_CHANNELS.checkMailNow, async () => {
     mailService.checkMailNow()
   })

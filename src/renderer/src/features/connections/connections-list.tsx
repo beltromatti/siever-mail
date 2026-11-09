@@ -34,6 +34,7 @@ import {
   type AccessKind,
   type ConnectionGroup
 } from './connection-groups'
+import { removalWords } from './connection-removal'
 
 const ACCESS_ICONS: Readonly<Record<AccessKind, LucideIcon>> = {
   google: Mail,
@@ -57,12 +58,15 @@ export function ConnectionsList({
   mailStates,
   removingAccountId,
   googleReady,
+  aiOn,
   onRemoveMail
 }: {
   accounts: ReadonlyArray<MailAccount>
   mailStates: Readonly<Record<string, AccountConnectionState | undefined>>
   removingAccountId: string | null
   googleReady: boolean
+  /** With the AI on, removing says what becomes of the Segretario's work. */
+  aiOn: boolean
   /** Removes a mail connection — and the calendars given — after asking the user. */
   onRemoveMail: (accountId: string, calendars: ReadonlyArray<CalendarConnection>) => void
 }): React.JSX.Element {
@@ -96,8 +100,7 @@ export function ConnectionsList({
   ): Promise<void> => {
     const confirmed = await confirm({
       title: `Scollegare il calendario di ${calendar.label}?`,
-      description:
-        'I suoi eventi spariscono da SIEVER Mail; nel calendario restano come sono. Puoi ricollegarlo quando vuoi.',
+      ...removalWords({ family: 'calendario', aiOn }),
       confirmLabel: 'Scollega',
       destructive: true
     })

@@ -359,6 +359,7 @@ Il nuovo scavalca sempre l'arretrato. L'arretrato avanza comunque: quando non c'
 | File nuovo o cambiato, da altri o dall'utente (quando ci saranno le connessioni File) | se è in una cartella di un progetto: accorpato, «Il punto» di quel progetto diventa superato e chi lo riscrive riceve cosa è cambiato (§4.2); altrove, **nessun lavoro AI** |
 | Il Segretario scrive nel registro                                                     | **nessun lavoro AI nuovo**, solo i testi superati (§3.4)                                                                                                                    |
 | Il tempo passa (mattino, scadenze, attese che tardano)                                | la giornata                                                                                                                                                                 |
+| Connessione tolta                                                                     | il lavoro in corso si ferma e aspetta; ciò che era suo se ne va; «Il punto» dei suoi progetti e la lettera diventano superati; una lezione alla riflessione (§11.4)         |
 | L'utente chiede                                                                       | esecuzione interattiva                                                                                                                                                      |
 
 **Perché non ci sono cascate.** Il lavoro AI nasce solo dal mondo (le fonti e il tempo), dall'utente e dai testi superati. Le scritture del Segretario non generano lavoro AI. I testi superati si riscrivono con un limite di frequenza, e chi li riscrive non rende superato nient'altro.
@@ -788,7 +789,8 @@ Da lì li trova da solo (`cerca_file` sulla radice). Così con un'estensione e s
 - le correzioni;
 - le risposte pronte cambiate prima dell'invio;
 - le proposte rifiutate o corrette;
-- le cose aperte segnate "non serve" o riaperte.
+- le cose aperte segnate "non serve" o riaperte;
+- le connessioni tolte, che fanno rivedere ciò che la memoria ne dice (§11.4).
 
 La **riflessione** le trasforma in regole scritte nelle note. Tutte le esecuzioni le leggono.
 
@@ -847,8 +849,33 @@ Quando il Segretario crea un evento da una conversazione, sceglie il calendario 
 - **Le connessioni sono raggruppate per accesso**, per esempio "Google · nome@gmail.com — Posta · Calendario (3 calendari)", e la scheda dice le tre famiglie: Posta, Calendario, File. Per ognuna:
   - stato, ultimo aggiornamento e problemi, in una riga con le stesse parole e lo stesso colore della spia nella barra (§13.1);
   - accendi o spegni i servizi;
-  - scollega.
+  - scollega (§11.4).
 - **"Aggiungi una connessione"** usa la stessa procedura dell'avvio (§12.2).
+
+### 11.4 Togliere una connessione
+
+Una connessione lascia due cose diverse, e ognuna se ne va a modo suo: i suoi **dati**, che toglie il sistema, e ciò che il Segretario **ne ha capito**, che rivede lui. È la distinzione di tutto il prodotto: il registro con le sue invarianti, la memoria libera (§3, §10, §16.3).
+
+**I suoi dati se ne vanno tutti, dal computer.** Sul server non cambia niente, e la si può ricollegare.
+
+- **Una casella:** la posta, le cartelle, gli allegati scaricati, le bozze locali, la firma, le credenziali, i segni delle estensioni (§6.3), i messaggi ancora in uscita, che non partiranno più. Un calendario venuto con lo stesso accesso può restare, da solo.
+- **Un calendario:** gli eventi, i calendari, il registro dei cambiamenti.
+- **Del Segretario, per l'una e per l'altro:** le note, le cose aperte nate dai suoi messaggi o eventi con la loro storia, le risposte pronte e le sue bozze, le preparazioni degli incontri, il posto delle sue conversazioni e dei suoi eventi nei progetti, le proposte (superate), la conoscenza di Conoscimi e l'orizzonte di lettura, il lavoro in coda; e il diario di ciò che riguardava solo lei — le letture dei suoi messaggi, le occhiate al suo calendario, un Conoscimi che conosceva solo lei.
+- **Restano, perché sono dell'utente:** la rubrica (una voce per indirizzo, imparata da tutte le caselle), le cose aperte nate dalla sua parola, i progetti (un contesto sopravvive a una fonte: «Casa al mare» resta anche se se ne va una casella), la storia che mescola le fonti (la chat, le giornate), la spesa, la memoria.
+- **Ciò che ne parlava diventa superato:** «Il punto» dei progetti che perdono conversazioni o eventi, e la lettera di Oggi; si riscrivono con le regole del §3.4.
+- **Un messaggio che si stava scrivendo da quella casella** resta aperto: per tenerlo si sceglie da quale inviarlo; chiuderlo chiede di scartarlo.
+
+**Coerente anche a metà.** Mentre una connessione se ne va:
+
+- non accetta altro lavoro, e un messaggio che sta partendo da lei parte, o no, prima;
+- il lavoro del Segretario in sottofondo si ferma e aspetta che se ne sia andata: tutto, perché ognuno può scrivere di qualunque connessione (una lettura collega un messaggio a un evento, la giornata le tocca tutte). Riparte su ciò che c'è, ritrovato dallo stato (§4.1); un Conoscimi che la conosce si ferma;
+- ciò che il Segretario tiene di lei se ne va dopo che se ne sono andati i suoi dati, con una passata che toglie ciò che resta di ogni connessione che non c'è più. La stessa passata, all'avvio prima di ogni lavoro, ripara una rimozione interrotta o una scrittura arrivata dopo. Una fonte che non risponde viene lasciata stare, mai presa per vuota.
+
+**Ciò che il Segretario ne ha capito non si taglia a macchina.** La memoria non ha una provenienza frase per frase, e quasi tutto resta vero: le persone, il modo di lavorare, le convenzioni non diventano false perché una casella è scollegata (§10). Ricollegare la stessa casella — passando da IMAP all'accesso Google, per esempio — deve ritrovarla. Alcune cose, però, riguardavano la connessione e ora sono false: a cosa serviva, da quale casella scrivere a chi, quale calendario va con quale posta. Così la rimozione lascia una lezione alla riflessione, con ciò che serve per giudicare — quale connessione, da quando, i progetti che perdono qualcosa, se lo stesso indirizzo è ancora collegato in un altro modo —, e il prompt dà il criterio, senza procedure: ciò che riguardava la connessione e il modo di usarla si toglie o si corregge; ciò che è vero delle persone e del lavoro resta; ciò che aveva senso solo lì lo giudica il Segretario; nel dubbio tiene. Ogni cambiamento resta nella storia della memoria. Con l'AI spenta la lezione aspetta; riaccesa, Conoscimi su tutte le connessioni rimette comunque la memoria in pari con ciò che c'è.
+
+**Se l'utente vuole che dimentichi davvero** (la casella di un cliente), a macchina non si può: lo dice in chat, o c'è «Dimentica tutto». La conferma della rimozione lo ricorda in una riga con l'AI accesa, insieme al lavoro del Segretario che se ne va; senza, del Segretario non dice niente (§12.1). Le conferme — dalle Connessioni, dalla Posta, dalla finestra di una connessione rifiutata — dicono le stesse cose.
+
+**I file, quando ci saranno le connessioni File** (§8): uno smontato non è uno tolto. Togliere una connessione File farà come un calendario: via le cartelle di progetto su di lei, i progetti con «Il punto» superato, una lezione alla riflessione.
 
 ---
 
@@ -907,7 +934,7 @@ Un solo componente a schermo intero, riusato in tutti i casi:
 | AI accesa la prima volta             | 2 → 3 → 4 → 5 → 6                                                                                                                                                                                                                                     |
 | AI spenta e riaccesa                 | 2 → 3 → 4 (sempre, su tutte le connessioni: aggiorna ciò che sa) → 5: i messaggi ancora senza nota e **ogni calendario intero**, di nuovo (mentre l'AI era spenta nessuno lo seguiva: guardarlo com'è ora copre ciò che è cambiato nel frattempo) → 6 |
 | "Rifai Conoscimi" dalle impostazioni | 4 su tutte le connessioni, aggiornando la memoria senza cancellarla → 6                                                                                                                                                                               |
-| Connessione rimossa                  | niente procedura: si tolgono i suoi dati, e la memoria che la cita viene rivista dal Segretario (lezione)                                                                                                                                             |
+| Connessione rimossa                  | niente procedura: si tolgono i suoi dati, e la memoria che la cita viene rivista dal Segretario (lezione, §11.4)                                                                                                                                      |
 
 **Conoscimi e lettura sono cose diverse:**
 
@@ -1168,3 +1195,4 @@ Gli agganci nell'interfaccia oggi sono della Posta, perché è lì che il primo 
 17. **Una spia per tutte le connessioni (§13.1):** posta e calendari insieme, nei quattro modi del §14 — verde sincronizzato, grigio al lavoro, giallo aspetta ciò che passa da sé, rosso serve l'utente. Al passaggio, una riga per connessione con le parole di Impostazioni › Connessioni; al clic, si apre lì.
 18. **Per tutti, e su misura (§1):** il pubblico è generale — nessuna scritta, esempio o convenzione di un'organizzazione nell'interfaccia; nei prompt solo esempi da lavori diversi, detti come esempi; nel codice nessun nome reale. Un'estensione privata fa l'edizione di un'organizzazione: istruzioni, strumenti, azioni, dati, la forma della casa.
 19. **Le estensioni portano il nome legale dell'ente** e un identificativo che ne deriva (Siever S.r.l. → `siever-srl`), che tiene separati canali, tabelle, comandi e proposte. Una superficie sola — il contratto e il kit —, controllata dal lint; una per build; in Impostazioni › Estensione si vede quale.
+20. **Togliere una connessione (§11.4)** porta via tutti i suoi dati, del Segretario compresi, in modo deterministico e coerente anche a metà: il lavoro si ferma e aspetta, una passata finale e all'avvio toglie ciò che resta. Ciò che il Segretario ne ha capito non si taglia: la riflessione lo rivede con un criterio, e ciò che è vero delle persone e del lavoro resta.

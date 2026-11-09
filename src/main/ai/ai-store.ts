@@ -116,6 +116,12 @@ function readingOf(row: ReadingRow): StoredReading {
  * notes, commitments, projects, replies — is the registry's; the memory is
  * the notebook's.
  */
+/** What forgetting a connection touched: the projects it was in, the runs taken from the diary. */
+export interface ForgottenConnection {
+  projects: string[]
+  activities: string[]
+}
+
 export class AiStore {
   constructor(private readonly sql: Sql) {}
 
@@ -778,8 +784,21 @@ export class AiStore {
 
   /* ─────────────────────────────── forgetting ─────────────────────────────── */
 
-  /** A connection was removed: what the Segretario kept about it alone goes with it. */
-  async forgetAccount(accountId: string): Promise<void> {
+  /**
+   * A mailbox removed: what the Segretario kept about it alone goes with it —
+   * its notes, what was open from its messages, its replies and drafts, its
+   * conversations' place in projects, Conoscimi's knowing it, the work and
+   * the diary of what was about it only (§11.4). Says the projects that
+   * held its conversations, and the runs taken from the diary.
+   */
+  async forgetAccount(accountId: string): Promise<ForgottenConnection> {
+    const projects = await this.sql.all<{ project_id: string }>(
+      'SELECT DISTINCT project_id FROM ai_project_threads WHERE account_id = ?',
+      accountId
+    )
+    // Before Conoscimi's knowing it goes: it says which runs knew it alone.
+    const activities = await this.forgetRunsOnlyAbout({ accountId, learningKey: accountId })
+
     for (const table of [
       'ai_learning',
       'ai_drafts',
@@ -805,21 +824,23 @@ export class AiStore {
     // The same messages in another account were read here, and carry only a copy of the note:
     // without it, they are read again there, where the work now lives.
     await this.sql.run('DELETE FROM ai_notes WHERE twin_account_id = ?', accountId)
+    return { projects: projects.map((row) => row.project_id), activities }
   }
 
   /**
    * A calendar connection removed: what was kept about its events — how to
    * prepare them, proposals to change them or answer them, what was open
    * from them, their place in projects — and Conoscimi's knowing it go with
-   * it, as a mailbox's go with it. Returns the projects that held its
-   * events.
+   * it, as a mailbox's go with it. Says the projects that held its events,
+   * and the runs taken from the diary.
    */
-  async forgetCalendar(connectionId: string, learningKey: string): Promise<string[]> {
+  async forgetCalendar(connectionId: string, learningKey: string): Promise<ForgottenConnection> {
     const ofIt = `${connectionId}\u0000%`
     const projects = await this.sql.all<{ project_id: string }>(
       `SELECT DISTINCT project_id FROM ai_project_resources WHERE kind = 'evento' AND location LIKE ?`,
       ofIt
     )
+    const activities = await this.forgetRunsOnlyAbout({ calendarId: connectionId, learningKey })
     await this.sql.run('DELETE FROM ai_event_preps WHERE event_key LIKE ?', ofIt)
     await this.sql.run(
       'DELETE FROM ai_item_history WHERE item_id IN (SELECT id FROM ai_items WHERE event_key LIKE ?)',
@@ -838,7 +859,110 @@ export class AiStore {
     )
     await this.sql.run('DELETE FROM ai_learning WHERE account_id = ?', learningKey)
     await this.sql.run('DELETE FROM ai_reading WHERE connection_key = ?', learningKey)
-    return projects.map((row) => row.project_id)
+    await this.sql.run(
+      'DELETE FROM ai_work WHERE scope_key LIKE ?',
+      `calendario-vista:${connectionId}:%`
+    )
+    return { projects: projects.map((row) => row.project_id), activities }
+  }
+
+  /**
+   * The diary of what was about one connection only — the readings of a
+   * mailbox's messages, the looks at a calendar, a Conoscimi that knew it
+   * alone — goes with it: its own data. What mixes the sources (the chat,
+   * the day, «Il punto», a Conoscimi of several) is the user's history, and
+   * stays; so does what it cost.
+   */
+  private async forgetRunsOnlyAbout(about: {
+    accountId?: string
+    calendarId?: string
+    learningKey: string
+  }): Promise<string[]> {
+    const rows = [
+      ...(about.accountId
+        ? await this.sql.all<{ id: string }>(
+            // A reading names its mailbox; one from before it did, by the notes it wrote.
+            `SELECT a.id FROM ai_activities a
+             WHERE COALESCE(a.task, a.kind) = 'lettura'
+               AND COALESCE(json_extract(a.scope_json, '$.accountId'),
+                 (SELECT n.account_id FROM ai_notes n WHERE n.run_id = a.id LIMIT 1)) = ?`,
+            about.accountId
+          )
+        : []),
+      ...(about.calendarId
+        ? await this.sql.all<{ id: string }>(
+            `SELECT id FROM ai_activities
+             WHERE COALESCE(task, kind) = 'calendario' AND json_extract(scope_json, '$.look') = ?`,
+            about.calendarId
+          )
+        : []),
+      ...(await this.sql.all<{ id: string }>(
+        `SELECT l.activity_id AS id FROM ai_learning l
+         WHERE l.account_id = ? AND l.activity_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM ai_learning o WHERE o.activity_id = l.activity_id AND o.account_id <> l.account_id
+           )`,
+        about.learningKey
+      ))
+    ]
+    const ids = [...new Set(rows.map((row) => row.id))]
+
+    for (let at = 0; at < ids.length; at += 500) {
+      const chunk = ids.slice(at, at + 500)
+      await this.sql.run(
+        `DELETE FROM ai_events WHERE activity_id IN (${placeholders(chunk)})`,
+        ...chunk
+      )
+      await this.sql.run(`DELETE FROM ai_activities WHERE id IN (${placeholders(chunk)})`, ...chunk)
+    }
+
+    return ids
+  }
+
+  /**
+   * The connections the Segretario still keeps something of — mailboxes and
+   * calendar connections by id — and those Conoscimi had come to know: what
+   * belongs to one no longer there is found from these (§11.4).
+   */
+  async keptConnections(): Promise<{
+    mail: Set<string>
+    calendars: Set<string>
+    known: Set<string>
+  }> {
+    const mail = await this.sql.all<{ id: string | null }>(
+      `SELECT account_id AS id FROM ai_notes
+       UNION SELECT twin_account_id FROM ai_notes
+       UNION SELECT account_id FROM ai_items
+       UNION SELECT account_id FROM ai_ready_drafts
+       UNION SELECT account_id FROM ai_drafts
+       UNION SELECT account_id FROM ai_project_threads
+       UNION SELECT account_id FROM ai_gone
+       UNION SELECT account_id FROM ai_proposals WHERE status = 'aperta'
+       UNION SELECT account_id FROM ai_learning WHERE account_id NOT LIKE 'calendario:%'
+       UNION SELECT connection_key FROM ai_reading WHERE connection_key NOT LIKE 'calendario:%'
+       UNION SELECT json_extract(scope_json, '$.accountId') FROM ai_activities
+         WHERE COALESCE(task, kind) = 'lettura'`
+    )
+    const calendars = await this.sql.all<{ key: string | null }>(
+      `SELECT event_key AS key FROM ai_event_preps
+       UNION SELECT event_key FROM ai_items
+       UNION SELECT location FROM ai_project_resources WHERE kind = 'evento'
+       UNION SELECT json_extract(payload_json, '$.eventKey') FROM ai_proposals
+         WHERE kind = 'evento' AND status = 'aperta'
+       UNION SELECT substr(account_id, 12) || char(0) FROM ai_learning WHERE account_id LIKE 'calendario:%'
+       UNION SELECT substr(connection_key, 12) || char(0) FROM ai_reading
+         WHERE connection_key LIKE 'calendario:%'
+       UNION SELECT json_extract(scope_json, '$.look') || char(0) FROM ai_activities
+         WHERE COALESCE(task, kind) = 'calendario'`
+    )
+    const known = await this.sql.all<{ id: string }>('SELECT account_id AS id FROM ai_learning')
+
+    return {
+      mail: new Set(mail.flatMap((row) => (row.id ? [row.id] : []))),
+      // An event's key and a look's start with their connection, up to the first NUL.
+      calendars: new Set(calendars.flatMap((row) => (row.key ? [row.key.split('\u0000')[0]] : []))),
+      known: new Set(known.map((row) => row.id))
+    }
   }
 
   /** The Segretario's data gone. */

@@ -55,8 +55,11 @@ interface Running {
   unit: WorkUnit
   keys: string[]
   controller: AbortController
-  /** Why it was stopped, when it was: the user cancelled it, or the computer went to sleep. */
-  stoppedBy: 'user' | 'sleep' | null
+  /**
+   * Why it was stopped, when it was: the user cancelled it, the computer went to sleep, or it
+   * was put aside (`again`) while something it may touch goes away.
+   */
+  stoppedBy: 'user' | 'sleep' | 'again' | null
   startedAt: number
   done: Promise<void>
 }
@@ -175,12 +178,18 @@ export class Scheduler {
     return [...this.running.values()].map((running) => running.unit)
   }
 
-  /** Stops the units running on what is going away (a removed account), and waits for them to stop. */
-  async stopWhere(going: (unit: WorkUnit) => boolean): Promise<void> {
+  /**
+   * Stops the units running that match, and waits for them to stop: cancelled, or — `again` —
+   * only put aside, to wait again uncounted, as after a sleep.
+   */
+  async stopWhere(
+    going: (unit: WorkUnit) => boolean,
+    options: { again?: boolean } = {}
+  ): Promise<void> {
     const stopping = [...this.running.values()].filter((running) => going(running.unit))
 
     for (const running of stopping) {
-      running.stoppedBy = 'user'
+      running.stoppedBy = options.again ? 'again' : 'user'
       running.controller.abort()
     }
 
@@ -389,9 +398,9 @@ export class Scheduler {
     const { unit } = running
 
     if (running.controller.signal.aborted) {
-      // Stopped by a quit, the sleep or the user: a quit or the sleep leaves it to wait again,
-      // the user cancels it.
-      if (this.stopped || running.stoppedBy === 'sleep') {
+      // Stopped by a quit, the sleep, the user, or put aside: a quit, the sleep or a put aside
+      // leaves it to wait again, the user cancels it.
+      if (this.stopped || running.stoppedBy === 'sleep' || running.stoppedBy === 'again') {
         await this.queue.fail(unit.id, 'Interrotto.', { retry: true })
       } else {
         await this.queue.cancel(unit.id)

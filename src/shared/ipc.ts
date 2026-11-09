@@ -58,6 +58,7 @@ export const IPC_CHANNELS = {
   discoverMailSettings: 'account:discover-settings',
   markAccountLastViewed: 'account:mark-last-viewed',
   removeAccount: 'account:remove',
+  outgoingCount: 'account:outgoing-count',
   setActiveMailboxContext: 'app:set-active-mailbox-context',
   checkMailNow: 'app:check-mail-now',
   reconnectAccount: 'app:reconnect-account',
@@ -175,6 +176,8 @@ export interface DesktopMailApi {
   discoverMailSettings: (address: string) => Promise<DiscoveredMailSettings | null>
   markAccountLastViewed: (accountId: string) => Promise<void>
   removeAccount: (accountId: string) => Promise<void>
+  /** The messages waiting in the outbox to go from a mailbox: removing it, they would not. */
+  outgoingCount: (accountId: string) => Promise<number>
   setActiveMailboxContext: (context: ActiveMailboxContext | null) => Promise<void>
   /** Asks every account now whether new mail has arrived. */
   checkMailNow: () => Promise<void>

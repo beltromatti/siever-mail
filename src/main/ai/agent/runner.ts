@@ -131,6 +131,8 @@ export interface RunResult {
 interface LiveRun {
   context: RunContext
   controller: AbortController
+  /** Settled once the run is over and has written all it will: what waits for it to stop. */
+  ended: PromiseWithResolvers<void>
   approvals: Map<
     string,
     {
@@ -189,6 +191,16 @@ export class AgentRunner {
     this.live.get(activityId)?.controller.abort()
   }
 
+  /** Stops a run, and waits until it has written all it will. */
+  async stop(activityId: string): Promise<void> {
+    const live = this.live.get(activityId)
+
+    if (live) {
+      live.controller.abort()
+      await live.ended.promise
+    }
+  }
+
   cancelAll(): void {
     for (const run of this.live.values()) {
       run.controller.abort()
@@ -229,7 +241,13 @@ export class AgentRunner {
       editor: options.editor ?? null,
       fileSearches: new Map()
     }
-    const live: LiveRun = { context, controller, approvals: new Map(), failedCalls: new Map() }
+    const live: LiveRun = {
+      context,
+      controller,
+      ended: Promise.withResolvers<void>(),
+      approvals: new Map(),
+      failedCalls: new Map()
+    }
     const { signal } = controller
     let ended: ActivityStatus = 'failed'
     let failure: SegretarioError | Error | null = null
@@ -381,6 +399,7 @@ export class AgentRunner {
       }
 
       this.live.delete(id)
+      live.ended.resolve()
       await this.emitSummary(id)
     }
 

@@ -103,6 +103,8 @@ interface SettingsDialogProps {
   onClearAccountData: (accountId: string) => void
   onClearDatabaseData: () => void
   onAddAccount: () => void
+  /** Whether the AI is on: what removing a connection says follows it. */
+  aiOn: boolean
   /** The AI switched on: the guided setup takes it from there. */
   onEnableAi: () => void
   /** Conoscimi asked again: the guided setup runs it. */
@@ -324,6 +326,7 @@ export function SettingsDialog({
   onClearAccountData,
   onClearDatabaseData,
   onAddAccount,
+  aiOn,
   onEnableAi,
   onRedoConoscimi,
   onUnifiedPreferencesChanged
@@ -712,6 +715,7 @@ export function SettingsDialog({
                     mailStates={mailStates}
                     removingAccountId={removingAccountId}
                     googleReady={googleReady}
+                    aiOn={aiOn}
                     onRemoveMail={onRemoveAccount}
                   />
                 </div>

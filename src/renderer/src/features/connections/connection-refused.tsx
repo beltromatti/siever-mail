@@ -13,6 +13,8 @@ import {
 import { Input } from '@renderer/components/ui/input'
 import { refusalWords, type ConnectionRefusedNotice } from '@shared/models'
 
+import { removalWords } from './connection-removal'
+
 /**
  * The refusals waiting for an answer, kept outside the screens: the window
  * goes from the launch to the setup to the workspace, and what was said in
@@ -78,12 +80,15 @@ export function showConnectionRefused(notice: ConnectionRefusedNotice): void {
  */
 export function ConnectionRefusedDialog({
   isRefused,
+  aiOn,
   onReconnect,
   onRemove,
   onOpenChange
 }: {
   /** Whether the connection is still turned down; undefined while it is not known yet. */
   isRefused: (notice: ConnectionRefusedNotice) => boolean | undefined
+  /** With the AI on, removing says what becomes of the Segretario's work. */
+  aiOn: boolean
   /** Signs the connection in again; `password` for one that signs in with one. */
   onReconnect: (notice: ConnectionRefusedNotice, password?: string) => Promise<void>
   /** Takes the connection away; the user has confirmed it here. */
@@ -94,7 +99,8 @@ export function ConnectionRefusedDialog({
   const waiting = useSyncExternalStore(subscribe, () => queue)
   const [password, setPassword] = useState('')
   const [working, setWorking] = useState(false)
-  const [removing, setRemoving] = useState(false)
+  // Asking whether to take it away, with the messages that would not leave from it.
+  const [removing, setRemoving] = useState<{ outgoing: number } | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const notice = waiting.find((entry) => isRefused(entry) === true) ?? null
   const key = notice ? `${notice.family}:${notice.id}` : null
@@ -103,7 +109,7 @@ export function ConnectionRefusedDialog({
   useEffect(() => {
     setPassword('')
     setProblem(null)
-    setRemoving(false)
+    setRemoving(null)
   }, [key])
 
   // Put right or taken away meanwhile: nothing left to ask.
@@ -122,6 +128,9 @@ export function ConnectionRefusedDialog({
   }
 
   const { title, body } = refusalWords(notice)
+  const removal = removing
+    ? removalWords({ family: notice.family, outgoing: removing.outgoing, aiOn })
+    : null
   const asksPassword = notice.refusal === 'accesso' && notice.signIn === 'password'
   const signsInAgain =
     notice.refusal !== 'certificato' &&
@@ -162,24 +171,19 @@ export function ConnectionRefusedDialog({
       >
         <DialogHeader>
           <DialogTitle>
-            {removing
+            {removal
               ? `Togliere ${calendar ? 'il calendario' : 'la casella'} ${notice.label}?`
               : title}
           </DialogTitle>
-          <DialogDescription>
-            {removing
-              ? calendar
-                ? 'I suoi eventi spariscono da SIEVER Mail; nel calendario restano come sono. Puoi ricollegarlo quando vuoi.'
-                : 'SIEVER Mail toglie dal computer la sua posta, la sua firma e quello che il Segretario aveva annotato su questa casella. Sul server non cambia nulla: puoi ricollegarla quando vuoi.'
-              : body}
-          </DialogDescription>
+          <DialogDescription>{removal ? removal.description : body}</DialogDescription>
         </DialogHeader>
-        {!removing && notice.detail && (
+        {removal?.details}
+        {!removal && notice.detail && (
           <p className="text-muted-foreground bg-hover rounded-md px-2.5 py-2 text-[12px] break-words">
             Il server ha detto: {notice.detail}
           </p>
         )}
-        {!removing && asksPassword && (
+        {!removal && asksPassword && (
           <form
             onSubmit={(event) => {
               event.preventDefault()
@@ -202,9 +206,9 @@ export function ConnectionRefusedDialog({
         )}
         {problem && <p className="text-destructive-soft-foreground text-[12.5px]">{problem}</p>}
         <DialogFooter className="flex-wrap">
-          {removing ? (
+          {removal ? (
             <>
-              <Button type="button" variant="ghost" onClick={() => setRemoving(false)}>
+              <Button type="button" variant="ghost" onClick={() => setRemoving(null)}>
                 Annulla
               </Button>
               <Button
@@ -233,7 +237,13 @@ export function ConnectionRefusedDialog({
                 type="button"
                 variant="ghost"
                 disabled={working}
-                onClick={() => setRemoving(true)}
+                onClick={() =>
+                  void (
+                    calendar
+                      ? Promise.resolve(0)
+                      : window.mailApi.outgoingCount(notice.id).catch(() => 0)
+                  ).then((outgoing) => setRemoving({ outgoing }))
+                }
               >
                 Togli
               </Button>

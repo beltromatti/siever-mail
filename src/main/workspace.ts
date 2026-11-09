@@ -79,19 +79,37 @@ export class Workspace {
       },
       onMailChanged: () => this.segretario.mailChanged(),
       onConnectionRefused: (notice) => this.connectionRefused(notice),
-      // The Segretario's work on the mailbox stops and what it kept of it alone goes; a
-      // calendar that came with the same access stays, on its own. Each waits to be open; one
-      // that could not open does not keep the mailbox from going.
+      // A mailbox going (§11.4): the Segretario's work that could write about it stops and
+      // waits; a calendar that came with the same access stays, on its own. Once it is gone,
+      // what the Segretario kept of it goes. Each waits to be open; one that could not open does
+      // not keep the mailbox from going.
       onAccountRemoving: async (account) => {
-        await this.segretario.whenReady().then(
-          () => this.segretario.forgetAccount(account.id, account.email),
-          (error: unknown) => logMainError('The Segretario did not let go of a mailbox', error)
-        )
+        await this.segretario
+          .whenReady()
+          .then(() => this.segretario.connectionLeaving({ family: 'posta', id: account.id }))
+          .catch((error: unknown) =>
+            logMainError('The Segretario did not let go of a mailbox', error)
+          )
         await this.calendar.whenOpen().then(
           () => this.calendar.mailAccountRemoved(account.id),
           (error: unknown) => logMainError('The calendar did not let go of a mailbox', error)
         )
-      }
+      },
+      onAccountRemoved: (account) =>
+        this.segretario
+          .whenReady()
+          .then(() =>
+            this.segretario.connectionLeft({
+              family: 'posta',
+              id: account.id,
+              email: account.email,
+              pec: account.pec === true,
+              since: account.createdAt
+            })
+          )
+          .catch((error: unknown) =>
+            logMainError('The Segretario could not let go of a mailbox', error)
+          )
     })
     this.calendar = new CalendarService({
       database: this.database,
@@ -101,10 +119,18 @@ export class Workspace {
       send: (channel, payload) => getAppWindow()?.webContents.send(channel, payload),
       parentWindow: () => getAppWindow(),
       onRefused: (notice) => this.connectionRefused(notice),
-      onDisconnected: (connectionId, names) =>
-        void this.segretario
+      // A calendar connection going (§11.4), as a mailbox.
+      onDisconnecting: (connectionId) =>
+        this.segretario
           .whenReady()
-          .then(() => this.segretario.forgetCalendar(connectionId, names))
+          .then(() => this.segretario.connectionLeaving({ family: 'calendario', id: connectionId }))
+          .catch((error: unknown) =>
+            logMainError('The Segretario did not let go of a calendar', error)
+          ),
+      onDisconnected: (connection) =>
+        this.segretario
+          .whenReady()
+          .then(() => this.segretario.connectionLeft({ family: 'calendario', ...connection }))
           .catch((error: unknown) =>
             logMainError('The Segretario could not let go of a calendar', error)
           )

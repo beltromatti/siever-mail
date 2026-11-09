@@ -2,8 +2,13 @@ import { randomUUID } from 'node:crypto'
 
 import type { PrismaClient } from '@prisma/client'
 
-import type { CalendarResponse, EventChange } from '@shared/calendar'
-import type { MessageRef } from '@shared/models'
+import type {
+  CalendarConnection,
+  CalendarProviderKind,
+  CalendarResponse,
+  EventChange
+} from '@shared/calendar'
+import type { MailAccount, MessageRef } from '@shared/models'
 import {
   noticeWords,
   SEGRETARIO_IPC,
@@ -67,7 +72,7 @@ import {
 } from './agent/tool-types'
 import { AiStore } from './ai-store'
 import { periodWords, searchPeriod, type AskedSearch } from './ask-mail'
-import { calendarLookScope, SegretarioEngine } from './engine/engine'
+import { SegretarioEngine } from './engine/engine'
 import { Reachability } from './engine/reachability'
 import { WorkQueue } from './engine/work-queue'
 import { folderQueryLabel, searchMail, searchScope } from './mail-search'
@@ -265,12 +270,82 @@ const LETTER_LOOKED_AT_STALE_MS = 60 * 60 * 1000
  * runner — woken by the engine for the work it does alone and by the user
  * for the rest, over one registry and one notebook.
  */
+/** A connection about to go: a mailbox, or a calendar connection. */
+export interface GoingConnection {
+  family: 'posta' | 'calendario'
+  id: string
+}
+
+/** A connection the user removed, as the reflection is told of it (§11.4). */
+export type LeftConnection =
+  | { family: 'posta'; id: string; email: string; pec: boolean; since: number }
+  | {
+      family: 'calendario'
+      id: string
+      label: string
+      provider: CalendarProviderKind
+      calendars: string[]
+      since: number
+    }
+
+/** How the Segretario keeps a connection apart: a mailbox by its id, a calendar by its learning key. */
+function connectionKey(connection: GoingConnection): string {
+  return connection.family === 'posta' ? connection.id : calendarLearningKey(connection.id)
+}
+
+/**
+ * The lesson of a connection removed: which, since when, the projects it
+ * leaves, and whether the same address is still connected another way —
+ * then only how it is reached changes.
+ */
+function lessonOf(
+  left: LeftConnection,
+  projects: string[],
+  accounts: ReadonlyArray<MailAccount> | null,
+  calendars: ReadonlyArray<CalendarConnection> | null
+): [kind: string, payload: Record<string, unknown>] {
+  if (left.family === 'posta') {
+    const address = left.email.toLowerCase()
+    return [
+      'account-rimosso',
+      {
+        email: left.email,
+        pec: left.pec,
+        dal: new Date(left.since).toISOString(),
+        progetti: projects,
+        ancora:
+          accounts?.some(
+            (account) => account.id !== left.id && account.email.toLowerCase() === address
+          ) ?? false
+      }
+    ]
+  }
+
+  const label = left.label.toLowerCase()
+  return [
+    'calendario-rimosso',
+    {
+      connessione: left.label,
+      fornitore: left.provider,
+      calendari: left.calendars,
+      dal: new Date(left.since).toISOString(),
+      progetti: projects,
+      ancora:
+        calendars?.some(
+          (connection) => connection.id !== left.id && connection.label.toLowerCase() === label
+        ) ?? false
+    }
+  ]
+}
+
 export class SegretarioService {
   private store: AiStore | null = null
   private registry: Registry | null = null
   private notebook: Notebook | null = null
   private runner: AgentRunner | null = null
   private engine: SegretarioEngine | null = null
+  /** The connections being removed now: each forgets its own (`connectionLeft`). */
+  private readonly leavingKeys = new Set<string>()
   private readonly client: OpenRouterClient
   private status: SegretarioStatus = EMPTY_STATUS
   /**
@@ -461,6 +536,10 @@ export class SegretarioService {
         void this.checkKey()
       }
     }, KEY_RECHECK_MS)
+    // What a removal cut short left of a connection no longer there goes before any work starts.
+    await this.forgetGone().catch((error: unknown) =>
+      logMainError('What was kept of the connections gone could not be let go', error)
+    )
     // An engine that does not start leaves the work done alone stopped, not the Segretario.
     await this.engine
       .start()
@@ -1284,42 +1363,135 @@ export class SegretarioService {
     )
   }
 
+  /* ─────────────────────────── a connection that goes (§11.4) ─────────────────────────── */
+
   /**
-   * A connection was removed: what was kept about it alone goes, and the
-   * next reflection hears of it — the memory is the Segretario's to correct,
-   * wherever it wrote of that mailbox.
+   * A connection is about to go: the work that could still write about it
+   * stops, and waits until it is gone — all that runs in the background,
+   * held by the engine, and a Conoscimi that knows it. Always followed by
+   * `connectionLeft`, whatever the removal did.
    */
-  async forgetAccount(accountId: string, email: string): Promise<void> {
-    const { store } = this.db
-
-    for (const row of await store.listLearning()) {
-      if (row.accountId === accountId && row.activityId) {
-        this.runner?.cancel(row.activityId)
-      }
-    }
-
-    await this.engine?.forgetAccount(accountId)
-    await store.forgetAccount(accountId)
-    await store.addLesson('account-rimosso', { email })
-    this.workChanged({ accountIds: [accountId], threadIds: [], messageKeys: [], projectIds: [] })
+  async connectionLeaving(connection: GoingConnection): Promise<void> {
+    const { engine, store, runner } = this.db
+    const key = connectionKey(connection)
+    this.leavingKeys.add(key)
+    await engine.connectionLeaving()
+    const knowing = (await store.listLearning()).flatMap((row) =>
+      row.accountId === key && row.activityId ? [row.activityId] : []
+    )
+    await Promise.all(knowing.map((activityId) => runner.stop(activityId)))
   }
 
   /**
-   * A calendar connection removed: what was kept about its events goes, and
-   * the next reflection hears of it — the memory is the Segretario's to
-   * correct wherever it wrote of those calendars.
+   * A connection went — or stayed, its removal cut short —: what the
+   * Segretario kept of it goes, the reflection hears of it, and the work
+   * held meanwhile starts again on what is there now.
    */
-  async forgetCalendar(connectionId: string, calendarNames: ReadonlyArray<string>): Promise<void> {
-    const projectIds = await this.db.store.forgetCalendar(
-      connectionId,
-      calendarLearningKey(connectionId)
-    )
-    // Its looks go with it — a failed one too, no longer to try again.
-    await this.db.engine.queue.cancelWaiting({ scopePrefix: calendarLookScope(connectionId) })
-    // "Il punto" of a project that lost its events no longer says the truth.
-    await this.db.registry.projects.markStale(projectIds)
-    await this.db.store.addLesson('calendario-rimosso', { calendari: calendarNames })
-    this.workChanged({ accountIds: [], threadIds: [], messageKeys: [], projectIds })
+  async connectionLeft(left: LeftConnection): Promise<void> {
+    try {
+      await this.forgetGone(left)
+    } finally {
+      this.leavingKeys.delete(connectionKey(left))
+      this.db.engine.connectionLeft()
+    }
+  }
+
+  /**
+   * What the Segretario keeps of connections no longer there goes — the one
+   * just removed, or what a removal cut short or a write that came after it
+   * left: their notes, what was open from them, their place in projects,
+   * Conoscimi's knowing them, the diary of what was about them alone. The
+   * projects that held them have «Il punto» behind, and so has the letter.
+   * The memory is not cut: the reflection hears of each and revises it
+   * (§10, §11.4). A source that does not answer is left alone, never taken
+   * for empty.
+   */
+  private async forgetGone(left?: LeftConnection): Promise<void> {
+    const { store, registry, notebook, engine } = this.db
+    const [accounts, calendars] = await Promise.all([
+      this.options.mail.listAccounts().then(
+        (list) => list,
+        () => null
+      ),
+      this.options.calendar.connections().then(
+        (list) => list,
+        () => null
+      )
+    ])
+    const kept = await store.keptConnections()
+    // Another removal under way forgets its own, and names it.
+    const leftKey = left ? connectionKey(left) : null
+    const away = (key: string): boolean => !this.leavingKeys.has(key) || key === leftKey
+    const goneMail = accounts
+      ? [...kept.mail].filter((id) => !accounts.some((account) => account.id === id) && away(id))
+      : []
+    const goneCalendars = calendars
+      ? [...kept.calendars].filter(
+          (id) =>
+            !calendars.some((connection) => connection.id === id) && away(calendarLearningKey(id))
+        )
+      : []
+    const leftGone =
+      left !== undefined &&
+      (left.family === 'posta'
+        ? accounts !== null && !accounts.some((account) => account.id === left.id)
+        : calendars !== null && !calendars.some((connection) => connection.id === left.id))
+
+    if (goneMail.length === 0 && goneCalendars.length === 0 && !leftGone) {
+      return
+    }
+
+    const projects = new Map<string, string[]>()
+    const activities: string[] = []
+
+    for (const id of goneMail) {
+      const forgotten = await store.forgetAccount(id)
+      projects.set(id, forgotten.projects)
+      activities.push(...forgotten.activities)
+    }
+
+    for (const id of goneCalendars) {
+      const forgotten = await store.forgetCalendar(id, calendarLearningKey(id))
+      projects.set(calendarLearningKey(id), forgotten.projects)
+      activities.push(...forgotten.activities)
+    }
+
+    const stale = [...new Set([...projects.values()].flat())]
+    await registry.projects.markStale(stale)
+
+    // The memory is revised only where there is one; a connection found gone after a removal
+    // cut short is told too, if Conoscimi had known it — not one that never was in it.
+    if ((await notebook.list()).length > 0) {
+      if (left && leftGone) {
+        const titles = (
+          await Promise.all(
+            (projects.get(connectionKey(left)) ?? []).map((id) => registry.projects.get(id))
+          )
+        ).flatMap((project) => (project ? [project.title] : []))
+        await store.addLesson(...lessonOf(left, titles, accounts, calendars))
+      }
+
+      for (const id of goneMail) {
+        if (id !== leftKey && kept.known.has(id)) {
+          await store.addLesson('account-rimosso', {})
+        }
+      }
+
+      for (const id of goneCalendars) {
+        if (calendarLearningKey(id) !== leftKey && kept.known.has(calendarLearningKey(id))) {
+          await store.addLesson('calendario-rimosso', {})
+        }
+      }
+    }
+
+    await engine.connectionGone()
+
+    for (const activityId of activities) {
+      this.emit({ type: 'removed', activityId })
+    }
+
+    this.workChanged({ accountIds: goneMail, threadIds: [], messageKeys: [], projectIds: stale })
+    this.engineChanged()
   }
 
   /**

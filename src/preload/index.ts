@@ -50,6 +50,7 @@ const desktopMailApi: DesktopMailApi = {
   discoverMailSettings: async (address) => invoke(IPC_CHANNELS.discoverMailSettings, address),
   markAccountLastViewed: async (accountId) => invoke(IPC_CHANNELS.markAccountLastViewed, accountId),
   removeAccount: async (accountId) => invoke(IPC_CHANNELS.removeAccount, accountId),
+  outgoingCount: async (accountId) => invoke(IPC_CHANNELS.outgoingCount, accountId),
   setActiveMailboxContext: async (context) => invoke(IPC_CHANNELS.setActiveMailboxContext, context),
   checkMailNow: async () => invoke(IPC_CHANNELS.checkMailNow),
   reconnectAccount: async (accountId, password) =>

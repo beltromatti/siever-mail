@@ -1514,6 +1514,7 @@ function App(): React.JSX.Element {
     <>
       <ConnectionRefusedDialog
         isRefused={isConnectionRefused}
+        aiOn={aiOn}
         onOpenChange={setRefusedOpen}
         onReconnect={async (notice, password) => {
           if (notice.family === 'posta') {
@@ -1933,6 +1934,7 @@ function App(): React.JSX.Element {
                   setSettingsOpen(false)
                   startOnboarding('nuova-connessione')
                 }}
+                aiOn={aiOn}
                 onEnableAi={() => {
                   setSettingsOpen(false)
                   void startAiOnboarding()

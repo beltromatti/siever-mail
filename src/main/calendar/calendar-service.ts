@@ -85,6 +85,16 @@ const WINDOW_SLIDES_EVERY_MS = 24 * 60 * 60 * 1000
 /** How long what changed in the calendars is kept for the Segretario to look at. */
 const CHANGES_KEPT_MS = 30 * 24 * 60 * 60 * 1000
 
+/** A calendar connection taken away, as it was: for the others to let go of it. */
+export interface LeftCalendar {
+  id: string
+  label: string
+  provider: CalendarProviderKind
+  calendars: string[]
+  /** When it was connected. */
+  since: number
+}
+
 export interface CalendarServiceOptions {
   database: {
     storeClient(): Promise<PrismaClient>
@@ -97,8 +107,13 @@ export interface CalendarServiceOptions {
   /** Sends an event to the window. */
   send(channel: string, payload: unknown): void
   parentWindow(): BrowserWindow | null
-  /** A connection was taken away, with its calendars' names: what was kept about it goes too. */
-  onDisconnected?(connectionId: string, calendarNames: string[]): void
+  /** A connection is about to be taken away: the work that could still write about it stops (§11.4). */
+  onDisconnecting?(connectionId: string): Promise<void>
+  /**
+   * A connection was taken away — or stayed, its removal cut short —, as it
+   * was: what was kept about it goes too.
+   */
+  onDisconnected?(connection: LeftCalendar): Promise<void>
   /**
    * A connection was turned down for good and stopped: the user is to be
    * told, once. Not for one being added, signed in again or retried: who
@@ -711,17 +726,35 @@ export class CalendarService {
     return this.listConnections()
   }
 
-  /** Forgets a calendar connection here — its calendars and events; the provider keeps them. */
+  /**
+   * Forgets a calendar connection here — its calendars and events; the
+   * provider keeps them. What the other apps kept of it goes after, even
+   * when the removal is cut short, so nothing stays held (§11.4).
+   */
   async disconnect(connectionId: string): Promise<CalendarConnection[]> {
-    const names = (
-      await this.requirePrisma().calendarCalendar.findMany({
-        where: { connectionId },
-        select: { name: true }
-      })
-    ).map((calendar) => calendar.name)
+    const prisma = this.requirePrisma()
+    const [connection, calendars] = await Promise.all([
+      prisma.calendarConnection.findUnique({ where: { id: connectionId } }),
+      prisma.calendarCalendar.findMany({ where: { connectionId }, select: { name: true } })
+    ])
 
-    await this.forget(connectionId)
-    this.options.onDisconnected?.(connectionId, names)
+    if (!connection) {
+      return this.listConnections()
+    }
+
+    try {
+      await this.options.onDisconnecting?.(connectionId)
+      await this.forget(connectionId)
+    } finally {
+      await this.options.onDisconnected?.({
+        id: connectionId,
+        label: connection.label,
+        provider: connection.provider as CalendarProviderKind,
+        calendars: calendars.map((calendar) => calendar.name),
+        since: Number(connection.connectedAt)
+      })
+    }
+
     return this.listConnections()
   }
 

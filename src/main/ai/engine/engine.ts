@@ -75,6 +75,8 @@ const PREPARING_CONCURRENCY = 8
 const DAY_STARTS_AT_HOUR = 6
 /** The day whose morning look is done (AAAA-MM-GG). */
 const MORNING_DONE = 'morning_done'
+/** In `ai_meta`: when a connection last went — the letter written before it is behind (§11.4). */
+const CONNECTION_LEFT = 'connection_left'
 /** The letter is looked at again when it is this old and the day moved since. */
 const LETTER_STALE_MS = 3 * 60 * 60 * 1000
 /** Projects whose "Il punto" one planning queues at most. */
@@ -224,6 +226,8 @@ export class SegretarioEngine {
   private replan = false
   private preparing = false
   private running = false
+  /** Connections going away now: meanwhile no work starts (§11.4). */
+  private leaving = 0
 
   constructor(private readonly deps: EngineDeps) {
     this.starter = {
@@ -321,9 +325,26 @@ export class SegretarioEngine {
     }
   }
 
-  /** An account is removed: the work on it stops before what it wrote is taken away. */
-  async forgetAccount(accountId: string): Promise<void> {
-    await this.stopWhere((unit) => unit.scopeKey.includes(`:${accountId}:`))
+  /**
+   * A connection is going: the work in the background stops and waits until it is gone — every
+   * run, as any of them may write about any connection (a reading links a message to an event,
+   * the day touches all). What was running waits again, uncounted, and starts on what is there
+   * then; the planning finds the rest from the state (§4.1, §11.4). Ended by `connectionLeft`.
+   */
+  async connectionLeaving(): Promise<void> {
+    this.leaving += 1
+    await this.scheduler.stopWhere(() => true, { again: true })
+  }
+
+  /** A connection went, or stayed: the work held for it starts again. */
+  connectionLeft(): void {
+    this.leaving = Math.max(0, this.leaving - 1)
+    this.wake()
+  }
+
+  /** A connection is gone: the letter written before it names what is no longer there. */
+  async connectionGone(): Promise<void> {
+    await this.deps.store.setMeta(CONNECTION_LEFT, String(Date.now()))
   }
 
   /** Stops the running units that match, and waits for them to stop. */
@@ -655,13 +676,21 @@ export class SegretarioEngine {
 
   /**
    * Whether today's letter is behind: written more than `olderThan` ago, and
-   * something open changed since — not by the day's run itself.
+   * something open changed since — not by the day's run itself — or a
+   * connection went.
    */
   async letterBehind(olderThan: number): Promise<boolean> {
     const letter = await this.deps.registry.day.letter(localDay())
+
+    if (letter === null || Date.now() - letter.writtenAt <= olderThan) {
+      return false
+    }
+
+    // A connection gone since takes what was open from it: nothing changed, yet the letter names
+    // what is no longer there.
+    const left = Number((await this.deps.store.meta(CONNECTION_LEFT)) ?? 0)
     return (
-      letter !== null &&
-      Date.now() - letter.writtenAt > olderThan &&
+      left > letter.writtenAt ||
       (await this.deps.registry.commitments.changedSince(letter.writtenAt))
     )
   }
@@ -731,6 +760,11 @@ export class SegretarioEngine {
    * rule whatever else asks.
    */
   private async setupHolding(): Promise<((unit: WorkUnit) => boolean) | null> {
+    // A connection going away holds everything, the setup's own work too, until it is gone.
+    if (this.leaving > 0) {
+      return () => true
+    }
+
     const setup = await this.deps.onboarding()
 
     if (!setup) {

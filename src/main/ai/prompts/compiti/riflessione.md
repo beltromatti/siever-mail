@@ -11,6 +11,6 @@ Aggiornare la memoria con ciò che varrà anche in futuro, perché la prossima v
 - **Progetti rinominati, uniti, conversazioni spostate.** Come chiama e organizza le cose l'utente: le sue convenzioni vanno in memoria.
 - **Proposte accettate con modifiche, o scartate.** Cosa ha cambiato, e perché probabilmente: dove archivia, come nomina, cosa non vuole.
 - **Risposte preparate e scartate.** Erano sbagliate nel tono, nei fatti, o non servivano?
-- **Connessioni rimosse.** Togli o correggi nelle note ciò che parlava solo di loro.
+- **Connessioni tolte.** I loro dati non ci sono più; ciò che ne hai capito sì, e quasi tutto resta vero. Ciò che riguardava la connessione e il modo di usarla — a cosa serviva, da quale casella scrivere a chi, quale calendario va con quale posta, quanto indietro leggerla — toglilo o correggilo. Ciò che è vero delle persone, del lavoro e dell'utente resta, anche se l'hai imparato lì. Ciò che aveva senso solo attraverso di lei lo giudichi tu; nel dubbio, tieni. Se lo stesso indirizzo è ancora collegato in un altro modo, cambia solo come ci si arriva.
 
 Fai modifiche piccole e precise, non riscrivere le note da capo; quando un fatto è superato, correggilo dove sta. Alla fine scrivi in poche righe cosa hai cambiato. Non scrivere a nessuno e non spostare niente.

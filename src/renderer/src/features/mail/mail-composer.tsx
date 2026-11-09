@@ -579,8 +579,22 @@ export function MailComposer({
 
     const draft = contentWith(committedRecipients())
 
+    // The mailbox it was written from was removed meanwhile: it is kept only from another one.
     if (!draft) {
-      onClosed({ kind: 'untouched' })
+      const discarded = await confirm({
+        title: 'Scartare il messaggio?',
+        description:
+          accounts.length > 0
+            ? 'La casella da cui lo scrivevi non è più collegata: per tenerlo, scegli da quale inviarlo.'
+            : 'La casella da cui lo scrivevi non è più collegata, e non ce n’è un’altra da cui inviarlo.',
+        confirmLabel: 'Scarta',
+        destructive: true
+      })
+
+      if (discarded) {
+        onClosed({ kind: 'discarded', content: null })
+      }
+
       return
     }
 

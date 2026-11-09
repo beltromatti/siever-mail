@@ -462,6 +462,45 @@ describe('Scheduler', () => {
     await until(async () => (await queue.counts()).length === 0)
   })
 
+  it('puts aside what runs, to wait again uncounted and start once it may', async () => {
+    let runs = 0
+    let held = false
+    const executor: TaskExecutor = {
+      lockKeys: async (unit) => [unit.scopeKey],
+      run: async (_unit, signal) => {
+        runs += 1
+
+        if (runs === 1) {
+          await new Promise<void>((_resolve, reject) =>
+            signal.addEventListener('abort', () => reject(new Error('Interrotto.')))
+          )
+        }
+      }
+    }
+    scheduler = new Scheduler(
+      queue,
+      { lettura: executor },
+      { reachability, concurrency: () => 2, holding: async () => () => held }
+    )
+    const unit = await queue.enqueue({ task: 'lettura', scopeKey: 'read', scope: {}, priority: 10 })
+    await scheduler.start()
+    await until(() => runs === 1)
+
+    held = true
+    await scheduler.stopWhere(() => true, { again: true })
+    expect((await queue.get(unit.id))?.status).toBe('da_riprovare')
+    expect((await queue.get(unit.id))?.attempts).toBe(0)
+
+    scheduler.wake()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(runs).toBe(1)
+
+    held = false
+    scheduler.wake()
+    await until(() => runs === 2)
+    await until(async () => (await queue.counts()).length === 0)
+  })
+
   it('leaves a unit that failed failed, without trying it again by itself', async () => {
     let calls = 0
     scheduler = new Scheduler(
@@ -642,6 +681,75 @@ describe('What the guided setup keeps from starting', () => {
   it('holds nothing without a setup, or for Conoscimi done again by hand', async () => {
     expect(await holdingDuring(null)).toBeNull()
     expect(await holdingDuring(setup({ case: 'conoscimi', step: 'conoscimi' }))).toBeNull()
+  })
+})
+
+describe('A connection that goes', () => {
+  let sql: ReturnType<typeof memorySql>
+  let queue: WorkQueue
+
+  beforeEach(async () => {
+    sql = memorySql()
+    await ensureAiSchema(sql)
+    queue = new WorkQueue(sql)
+  })
+
+  afterEach(() => sql.close())
+
+  const engineWith = (letterAt: number | null): SegretarioEngine =>
+    new SegretarioEngine({
+      queue,
+      store: new AiStore(sql),
+      onboarding: async () => null,
+      registry: {
+        day: {
+          letter: async () =>
+            letterAt === null ? null : { text: 'La giornata.', writtenAt: letterAt }
+        },
+        commitments: { changedSince: async () => false }
+      }
+    } as unknown as EngineDeps)
+  const holding = (engine: SegretarioEngine): Promise<((unit: WorkUnit) => boolean) | null> =>
+    (
+      engine as unknown as { setupHolding(): Promise<((unit: WorkUnit) => boolean) | null> }
+    ).setupHolding()
+  const unit = (task: string, scope: object = {}): WorkUnit => ({ task, scope }) as WorkUnit
+
+  it('holds all the work while it goes, the setup’s own too, and lets it through once gone', async () => {
+    const engine = engineWith(null)
+
+    await engine.connectionLeaving()
+    const held = await holding(engine)
+    expect(held?.(unit('lettura', { accountId: 'a9', threadId: 't' }))).toBe(true)
+    expect(held?.(unit('giornata'))).toBe(true)
+    expect(held?.(unit('calendario', { look: 'c1' }))).toBe(true)
+
+    engine.connectionLeft()
+    expect(await holding(engine)).toBeNull()
+  })
+
+  it('holds until the last of two going together is gone', async () => {
+    const engine = engineWith(null)
+
+    await engine.connectionLeaving()
+    await engine.connectionLeaving()
+    engine.connectionLeft()
+    expect((await holding(engine))?.(unit('giornata'))).toBe(true)
+    engine.connectionLeft()
+    expect(await holding(engine)).toBeNull()
+  })
+
+  it('makes behind the letter written before it, and not one written after', async () => {
+    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000
+    const hour = 60 * 60 * 1000
+    const before = engineWith(twoHoursAgo)
+
+    expect(await before.letterBehind(hour)).toBe(false)
+    await before.connectionGone()
+    expect(await before.letterBehind(hour)).toBe(true)
+
+    const after = engineWith(Date.now() + 60_000)
+    expect(await after.letterBehind(-Infinity)).toBe(false)
   })
 })
 

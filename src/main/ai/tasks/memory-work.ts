@@ -33,6 +33,59 @@ const PROVIDER_WORDS: Readonly<Record<CalendarConnection['provider'], string>> =
   ics: 'un link, in sola lettura'
 }
 
+/**
+ * A connection the user took away, as the reflection reads it (§11.4):
+ * which, since when, the projects it leaves, and whether the same address
+ * is still connected another way. One found gone after a removal cut short
+ * has no name left: what is connected now is in the context.
+ */
+function connectionGoneLesson(
+  kind: 'account-rimosso' | 'calendario-rimosso',
+  payload: Record<string, unknown>,
+  when: string
+): string {
+  const text = (value: unknown): string | null =>
+    typeof value === 'string' && value.trim() ? value : null
+  const projects = Array.isArray(payload.progetti) ? payload.progetti.map(String) : []
+  const since = text(payload.dal)
+  const lines: string[] = []
+
+  if (kind === 'account-rimosso') {
+    const email = text(payload.email)
+    lines.push(
+      email
+        ? `La casella ${email}${payload.pec === true ? ' (PEC)' : ''}${since ? `, collegata dal ${shortDate(since)},` : ''} è stata tolta: ${when}.`
+        : `Una casella di posta non c'è più: è stata tolta mentre SIEVER Mail si chiudeva. Quali ci sono ora lo dice il contesto.`
+    )
+  } else {
+    const label = text(payload.connessione)
+    const provider = text(payload.fornitore)
+    const names = Array.isArray(payload.calendari) ? payload.calendari.map(String) : []
+    const calendars = names.length > 0 ? names.map((name) => `«${name}»`).join(', ') : null
+    lines.push(
+      label
+        ? `La connessione di calendario ${label}${provider && provider in PROVIDER_WORDS ? ` (${PROVIDER_WORDS[provider as CalendarConnection['provider']]})` : ''}${calendars ? ` — ${calendars}` : ''}${since ? `, collegata dal ${shortDate(since)},` : ''} è stata tolta: ${when}.`
+        : calendars
+          ? `${calendars} non ${names.length === 1 ? 'è più collegato' : 'sono più collegati'}: ${when}.`
+          : `Un calendario non c'è più: è stato tolto mentre SIEVER Mail si chiudeva. Quali ci sono ora lo dice il contesto.`
+    )
+  }
+
+  if (projects.length > 0) {
+    lines.push(
+      `Aveva ${kind === 'account-rimosso' ? 'conversazioni' : 'eventi'} in ${projects.map((title) => `«${title}»`).join(', ')}: ora non li hanno più.`
+    )
+  }
+
+  if (payload.ancora === true) {
+    lines.push(
+      'Lo stesso indirizzo è ancora collegato in un altro modo: cambia solo come ci si arriva.'
+    )
+  }
+
+  return `## Connessione tolta · ${kind === 'account-rimosso' ? 'posta' : 'calendario'}\n\n${lines.join(' ')}`
+}
+
 function calendarLine(connection: CalendarConnection): string {
   const names = connection.calendars.map((calendar) => `«${calendar.name}»`).join(', ')
   return `- calendario ${connection.label} (${PROVIDER_WORDS[connection.provider]})${names ? `: ${names}` : ''}`
@@ -181,20 +234,12 @@ export async function prepareReflection(deps: {
         confirmed.set(from, (confirmed.get(from) ?? 0) + 1)
         break
       case 'account-rimosso':
-        parts.push(
-          `## Connessione rimossa\n\n${String(payload.email ?? '')} è stata rimossa ${when}.`
-        )
+      case 'calendario-rimosso':
+        parts.push(connectionGoneLesson(lesson.kind, payload, when))
         break
-      case 'calendario-rimosso': {
-        const names = Array.isArray(payload.calendari) ? payload.calendari.map(String) : []
-        parts.push(
-          `## Calendario scollegato\n\n${names.length > 0 ? names.map((name) => `«${name}»`).join(', ') : 'Un calendario'} non ${names.length === 1 ? 'è' : 'sono'} più collegat${names.length === 1 ? 'o' : 'i'} da ${when}.`
-        )
-        break
-      }
       case 'percorso-spostato':
         parts.push(
-          `## Una cartella si è spostata\n\nCiò che stava in ${String(payload.da ?? '')} ora sta in ${String(payload.a ?? '')}, da ${when}: le copie, le cartelle dei progetti e i file recenti seguono già. Dove la tua memoria scrive il percorso vecchio, correggilo.`
+          `## Una cartella si è spostata\n\nCiò che stava in ${String(payload.da ?? '')} ora sta in ${String(payload.a ?? '')}, da ${when}: i posti dei segni, le cartelle dei progetti e i file recenti seguono già. Dove la tua memoria scrive il percorso vecchio, correggilo.`
         )
         break
       default: {

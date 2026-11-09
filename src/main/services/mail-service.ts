@@ -501,8 +501,10 @@ export interface MailServiceOptions {
   segretario: Pick<SegretarioService, 'viewKeys' | 'activeKeys' | 'searchRefs' | 'projectThreads'>
   /** Messages had their text indexed, or went away: what reads the mail may look again. */
   onMailChanged: () => void
-  /** An account is about to go: what the other apps kept of it goes first, and a failure keeps it. */
+  /** An account is about to go: the work that could still write about it stops, and waits (§11.4). */
   onAccountRemoving: (account: MailAccount) => Promise<void>
+  /** An account went — or stayed, its removal cut short: what the other apps kept of it goes. */
+  onAccountRemoved: (account: MailAccount) => Promise<void>
   /** A mailbox turned down for good, and stopped: the user is told, once. */
   onConnectionRefused: (notice: ConnectionRefusedNotice) => void
 }
@@ -518,6 +520,9 @@ export class MailService {
   private readonly drafts: DraftService
   private readonly segretario: MailServiceOptions['segretario']
   private readonly onAccountRemoving: MailServiceOptions['onAccountRemoving']
+  private readonly onAccountRemoved: MailServiceOptions['onAccountRemoved']
+  /** The mailboxes being removed now: they take no more work. */
+  private readonly leaving = new Set<string>()
   // The copy of each attachment last written, and what it held, keyed by its
   // folder: an untouched copy is used again without a download.
   private readonly attachmentCopies = new Map<string, { filePath: string; digest: string }>()
@@ -533,6 +538,7 @@ export class MailService {
     this.microsoftOAuthService = options.microsoft
     this.segretario = options.segretario
     this.onAccountRemoving = options.onAccountRemoving
+    this.onAccountRemoved = options.onAccountRemoved
     this.tokens = new MailTokenBroker(
       this.googleOAuthService,
       this.microsoftOAuthService,
@@ -1143,16 +1149,37 @@ export class MailService {
   }
 
   /**
-   * The connection stops first, so nothing new comes from the mailbox while
-   * the others let go of it; then what is kept of it goes.
+   * The connection stops first, and the mailbox takes no more work: nothing
+   * new comes from it, and a message leaving the outbox from it goes, or
+   * not, before. The others stop the work that could write about it; then
+   * what is kept of it goes, and what they kept of it after — even when the
+   * removal is cut short, so nothing stays held (§11.4).
    */
   async removeAccount(accountId: string): Promise<void> {
     const account = await this.ensureAccountExists(accountId)
-    await this.engine.removeAccount(accountId)
-    await this.onAccountRemoving(account)
-    await this.database.clearAccountData(accountId)
-    await this.database.deleteAccount(accountId)
-    await this.dropAttachmentCopies(accountId)
+    this.leaving.add(accountId)
+
+    try {
+      await this.engine.removeAccount(accountId)
+      await this.sendingOutbox
+
+      try {
+        await this.onAccountRemoving(account)
+        await this.database.clearAccountData(accountId)
+        await this.database.deleteAccount(accountId)
+        await this.dropAttachmentCopies(accountId)
+      } finally {
+        await this.onAccountRemoved(account)
+      }
+    } finally {
+      this.leaving.delete(accountId)
+    }
+  }
+
+  /** The messages waiting in the outbox to go from a mailbox: removing it, they would not. */
+  async outgoingCount(accountId: string): Promise<number> {
+    return (await this.database.listOutgoing()).filter((entry) => entry.accountId === accountId)
+      .length
   }
 
   async markAccountLastViewed(accountId: string): Promise<void> {
@@ -1892,7 +1919,11 @@ export class MailService {
         const payload = entry.payload as ComposeMailInput
         const stored = await this.database.getStoredAccountById(entry.accountId)
 
-        if (!stored || this.engine.accountRefusal(entry.accountId)) {
+        if (
+          !stored ||
+          this.leaving.has(entry.accountId) ||
+          this.engine.accountRefusal(entry.accountId)
+        ) {
           continue
         }
 
@@ -2774,10 +2805,15 @@ export class MailService {
   }
 
   private async ensureAccountExists(accountId: string): Promise<MailAccount> {
+    // A mailbox being removed takes no more work: what asks now would find it half gone.
+    if (this.leaving.has(accountId)) {
+      throw new Error('Questa casella si sta scollegando.')
+    }
+
     const account = await this.database.getStoredAccountById(accountId)
 
     if (!account) {
-      throw new Error('Account not found.')
+      throw new Error('Questa casella non è più collegata.')
     }
 
     return account
