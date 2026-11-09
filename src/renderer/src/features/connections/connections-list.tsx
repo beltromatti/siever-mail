@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   CalendarDays,
   Cloud,
@@ -51,30 +51,44 @@ const ACCESS_ICONS: Readonly<Record<AccessKind, LucideIcon>> = {
  * what it brought — the mail, the calendar — how each stands, and what can
  * be done: add the calendar an account can give, sign one in again whose
  * access failed, take one service away, or the whole access. The same in
- * Settings and in the guided setup.
+ * Settings and in the guided setup; a calendar an account can give is a
+ * connection of its own (§11.1), so outside the setup it is added through
+ * it (`onAddCalendar`, §12.2).
  */
 export function ConnectionsList({
   accounts,
   mailStates,
   removingAccountId,
   googleReady,
+  microsoftReady,
   aiOn,
-  onRemoveMail
+  onRemoveMail,
+  onAddCalendar,
+  connectCalendarOf,
+  onConnectCalendarAsked
 }: {
   accounts: ReadonlyArray<MailAccount>
   mailStates: Readonly<Record<string, AccountConnectionState | undefined>>
   removingAccountId: string | null
   googleReady: boolean
+  microsoftReady: boolean
   /** With the AI on, removing says what becomes of the Segretario's work. */
   aiOn: boolean
   /** Removes a mail connection — and the calendars given — after asking the user. */
   onRemoveMail: (accountId: string, calendars: ReadonlyArray<CalendarConnection>) => void
+  /** Outside the setup: adding the calendar of a mailbox opens the setup for it. */
+  onAddCalendar?: (mailAccountId: string) => void
+  /** The setup opened to add the calendar of this mailbox: asked for at once. */
+  connectCalendarOf?: string | null
+  onConnectCalendarAsked?: () => void
 }): React.JSX.Element {
   const { connections, setConnections } = useCalendarConnections()
   const { confirm, dialog } = useConfirmDialog()
   const [working, setWorking] = useState<string | null>(null)
   const [problems, setProblems] = useState<Readonly<Record<string, string>>>({})
   const groups = connectionGroups(accounts, connections ?? [])
+  const providerReady = (group: ConnectionGroup): boolean =>
+    group.kind === 'microsoft' ? microsoftReady : googleReady
 
   const run = async (key: string, action: () => Promise<CalendarConnection[]>): Promise<void> => {
     setWorking(key)
@@ -93,6 +107,42 @@ export function ConnectionsList({
       setWorking(null)
     }
   }
+
+  /** The calendar a Google or Microsoft account can give, asked of its provider for that mailbox. */
+  const connectCalendar = (group: ConnectionGroup): void => {
+    const mail = group.mail
+
+    if (!mail) {
+      return
+    }
+
+    if (onAddCalendar) {
+      onAddCalendar(mail.id)
+      return
+    }
+
+    void run(group.key, () =>
+      group.kind === 'microsoft'
+        ? window.calendarApi.connectMicrosoft(mail.id)
+        : window.calendarApi.connectGoogle(mail.id)
+    )
+  }
+
+  // Come to the setup for a mailbox's calendar: its provider is asked once the list knows it.
+  const asked = connectCalendarOf
+    ? groups.find((group) => group.mail?.id === connectCalendarOf && canAddCalendar(group))
+    : undefined
+
+  const askedOnce = useRef(false)
+
+  useEffect(() => {
+    // Once, when the mailbox to connect is known: not again as the list changes.
+    if (!askedOnce.current && asked && connections !== null) {
+      askedOnce.current = true
+      onConnectCalendarAsked?.()
+      connectCalendar(asked)
+    }
+  })
 
   const disconnectCalendar = async (
     group: ConnectionGroup,
@@ -261,11 +311,8 @@ export function ConnectionsList({
                     size="sm"
                     variant="outline"
                     className="h-6 px-2 text-[11px]"
-                    disabled={busy || !googleReady}
-                    onClick={() =>
-                      group.mail &&
-                      void run(group.key, () => window.calendarApi.connectGoogle(group.mail!.id))
-                    }
+                    disabled={busy || !providerReady(group)}
+                    onClick={() => connectCalendar(group)}
                   >
                     Collega
                   </Button>

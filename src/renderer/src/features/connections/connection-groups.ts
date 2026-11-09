@@ -107,9 +107,13 @@ export function connectionGroups(
   return groups
 }
 
-/** Whether the access can bring a calendar it has not brought yet: a Google account's, for now. */
+/** Whether the access can bring a calendar it has not brought yet: a Google or Microsoft account's. */
 export function canAddCalendar(group: ConnectionGroup): boolean {
-  return group.kind === 'google' && group.mail !== null && group.calendars.length === 0
+  return (
+    (group.kind === 'google' || group.kind === 'microsoft') &&
+    group.mail !== null &&
+    group.calendars.length === 0
+  )
 }
 
 /**

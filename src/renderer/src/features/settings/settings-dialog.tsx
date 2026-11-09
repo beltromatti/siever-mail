@@ -91,6 +91,7 @@ interface SettingsDialogProps {
   /** How each mail connection stands. */
   mailStates: Readonly<Record<string, AccountConnectionState | undefined>>
   googleReady: boolean
+  microsoftReady: boolean
   selectedAccountId: string | null
   removingAccountId: string | null
   clearingAccountDataId: string | null
@@ -104,6 +105,8 @@ interface SettingsDialogProps {
   onClearAccountData: (accountId: string) => void
   onClearDatabaseData: () => void
   onAddAccount: () => void
+  /** The calendar a mailbox's account can give: a connection of its own, added in the guided setup. */
+  onAddCalendar: (mailAccountId: string) => void
   /** Whether the AI is on: what removing a connection says follows it. */
   aiOn: boolean
   /** The AI switched on: the guided setup takes it from there. */
@@ -317,6 +320,7 @@ export function SettingsDialog({
   accounts,
   mailStates,
   googleReady,
+  microsoftReady,
   selectedAccountId,
   removingAccountId,
   clearingAccountDataId,
@@ -327,6 +331,7 @@ export function SettingsDialog({
   onClearAccountData,
   onClearDatabaseData,
   onAddAccount,
+  onAddCalendar,
   aiOn,
   onEnableAi,
   onRedoConoscimi,
@@ -723,8 +728,10 @@ export function SettingsDialog({
                     mailStates={mailStates}
                     removingAccountId={removingAccountId}
                     googleReady={googleReady}
+                    microsoftReady={microsoftReady}
                     aiOn={aiOn}
                     onRemoveMail={onRemoveAccount}
+                    onAddCalendar={onAddCalendar}
                   />
                 </div>
                 <Button

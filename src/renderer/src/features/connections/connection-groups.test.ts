@@ -95,6 +95,25 @@ describe('connectionGroups', () => {
     expect(canAddCalendar(groups[0])).toBe(true)
     expect(canAddCalendar(groups[1])).toBe(false)
   })
+
+  it('offers the calendar a Microsoft mailbox can give, as a Google one — not a server’s', () => {
+    const groups = connectionGroups(
+      [
+        mail('m', 'anna@brenta.it', { type: 'imap', authType: 'oauth' }),
+        mail('i', 'anna@studio.it', {
+          type: 'imap',
+          authType: 'password',
+          imapHost: 'mail.studio.it'
+        })
+      ],
+      []
+    )
+
+    expect(groups.map((group) => [group.kind, canAddCalendar(group)])).toEqual([
+      ['microsoft', true],
+      ['imap', false]
+    ])
+  })
 })
 
 describe('canRenewConsent', () => {

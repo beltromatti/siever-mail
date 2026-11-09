@@ -151,6 +151,8 @@ function ConnectionsStep({
   googleReady,
   microsoftReady,
   aiOn,
+  connectCalendarOf,
+  onConnectCalendarAsked,
   onAccountCreated,
   onRemoveMail,
   onNext,
@@ -164,6 +166,9 @@ function ConnectionsStep({
   googleReady: boolean
   microsoftReady: boolean
   aiOn: boolean
+  /** Come to add the calendar of this mailbox: its provider is asked at once. */
+  connectCalendarOf: string | null
+  onConnectCalendarAsked: () => void
   onAccountCreated: (account: MailAccount) => void
   onRemoveMail: (accountId: string, calendars: ReadonlyArray<CalendarConnection>) => void
   onNext: () => void
@@ -171,8 +176,11 @@ function ConnectionsStep({
   onCancel: (() => void) | null
 }): React.JSX.Element {
   const hasConnection = accounts.length > 0 || calendarConnections.length > 0
-  // Opened by itself when there is nothing yet, and when the user came to add one.
-  const [adding, setAdding] = useState(!hasConnection || setupCase === 'nuova-connessione')
+  // Opened by itself when there is nothing yet, and when the user came to add one — not a
+  // mailbox's calendar, asked for in the list.
+  const [adding, setAdding] = useState(
+    !hasConnection || (setupCase === 'nuova-connessione' && connectCalendarOf === null)
+  )
   // The calendars there when the step opened: one added since is something added here.
   const [calendarsBefore] = useState(() => new Set(calendarConnections.map(({ id }) => id)))
   const calendarAdded = calendarConnections.some(({ id }) => !calendarsBefore.has(id))
@@ -201,8 +209,11 @@ function ConnectionsStep({
             mailStates={mailStates}
             removingAccountId={removingAccountId}
             googleReady={googleReady}
+            microsoftReady={microsoftReady}
             aiOn={aiOn}
             onRemoveMail={onRemoveMail}
+            connectCalendarOf={connectCalendarOf}
+            onConnectCalendarAsked={onConnectCalendarAsked}
           />
         )}
         {adding ? (
@@ -1088,6 +1099,8 @@ export function OnboardingWizard({
   canUseMicrosoft,
   segretario,
   aiOn,
+  connectCalendarOf = null,
+  onConnectCalendarAsked,
   onAccountCreated,
   onRemoveAccount,
   onChange,
@@ -1102,6 +1115,13 @@ export function OnboardingWizard({
   canUseMicrosoft: boolean
   segretario: SegretarioState
   aiOn: boolean
+  /**
+   * Opened to add the calendar of this mailbox (Settings' «Collega»): its
+   * provider is asked at once, at the connections step — a connection of
+   * its own, added as every one is (§12.2).
+   */
+  connectCalendarOf?: string | null
+  onConnectCalendarAsked?: () => void
   onAccountCreated: (account: MailAccount) => void
   /** Removes a mail connection and the calendars given, after asking the user. */
   onRemoveAccount: (accountId: string, calendars: ReadonlyArray<CalendarConnection>) => void
@@ -1257,6 +1277,8 @@ export function OnboardingWizard({
               googleReady={canUseGoogle}
               microsoftReady={canUseMicrosoft}
               aiOn={aiOn}
+              connectCalendarOf={connectCalendarOf}
+              onConnectCalendarAsked={() => onConnectCalendarAsked?.()}
               onRemoveMail={onRemoveAccount}
               onAccountCreated={(account) => {
                 onAccountCreated(account)

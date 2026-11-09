@@ -509,6 +509,8 @@ function App(): React.JSX.Element {
     }
   }, [])
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /** The mailbox whose calendar the setup was opened to add (Settings' «Collega»), until asked for. */
+  const [calendarToConnect, setCalendarToConnect] = useState<string | null>(null)
   // A notice about the AI waits for an answer: the app's keys rest meanwhile.
   const [noticeOpen, setNoticeOpen] = useState(false)
   // A connection turned down for good waits for an answer (`ConnectionRefusedDialog`).
@@ -1725,11 +1727,14 @@ function App(): React.JSX.Element {
       canUseMicrosoft={capabilities.microsoftOAuthReady}
       segretario={segretario}
       aiOn={aiOn}
+      connectCalendarOf={calendarToConnect}
+      onConnectCalendarAsked={() => setCalendarToConnect(null)}
       onAccountCreated={onAccountCreated}
       onRemoveAccount={(accountId, calendars) => void mail.removeAccount(accountId, calendars)}
       onChange={saveOnboarding}
       onFinish={(entered) => {
         saveOnboarding(null)
+        setCalendarToConnect(null)
 
         if (entered) {
           enterWorkspace()
@@ -2015,6 +2020,7 @@ function App(): React.JSX.Element {
                 accounts={accounts}
                 mailStates={mail.accountConnections}
                 googleReady={capabilities.googleOAuthReady}
+                microsoftReady={capabilities.microsoftOAuthReady}
                 selectedAccountId={mail.selectedAccountId}
                 removingAccountId={mail.removingAccountId}
                 clearingAccountDataId={mail.clearingAccountDataId}
@@ -2028,6 +2034,11 @@ function App(): React.JSX.Element {
                 onClearDatabaseData={() => void mail.clearAllDataKeepAccounts()}
                 onAddAccount={() => {
                   setSettingsOpen(false)
+                  startOnboarding('nuova-connessione')
+                }}
+                onAddCalendar={(mailAccountId) => {
+                  setSettingsOpen(false)
+                  setCalendarToConnect(mailAccountId)
                   startOnboarding('nuova-connessione')
                 }}
                 aiOn={aiOn}
