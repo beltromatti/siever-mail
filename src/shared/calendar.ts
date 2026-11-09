@@ -102,8 +102,8 @@ export const CALENDAR_ROLES: ReadonlyArray<CalendarRole> = ['tutti', 'propri', '
 
 /**
  * A calendar's role when nobody chose it (§7.4): the main one of a
- * connection is the user's; where events do not say who made them (a
- * CalDAV server), so is every one the user writes in — there «only the
+ * connection is the user's; where events do not say who has them in hand
+ * (`EVENTS_SAY_WHO`), so is every one the user writes in — there «only the
  * user's» would know only the invitations.
  */
 export function defaultCalendarRole(calendar: {
@@ -111,7 +111,7 @@ export function defaultCalendarRole(calendar: {
   writable: boolean
   provider: CalendarProviderKind
 }): CalendarRole {
-  return calendar.primary || (calendar.provider === 'caldav' && calendar.writable)
+  return calendar.primary || (!EVENTS_SAY_WHO[calendar.provider] && calendar.writable)
     ? 'tutti'
     : 'propri'
 }
@@ -178,6 +178,20 @@ export interface CalendarConnection {
    */
   renewConsent: boolean
   calendars: CalendarInfo[]
+}
+
+/**
+ * Whether a provider's events say who has them in hand even without guests
+ * (§7.4) — who put one in the calendar, whose calendar organises it —:
+ * Google says who created it, Microsoft whose calendar organises it; a
+ * CalDAV server and a link say it only of an invitation. A provider to come
+ * says it here too.
+ */
+export const EVENTS_SAY_WHO: Readonly<Record<CalendarProviderKind, boolean>> = {
+  google: true,
+  microsoft: true,
+  caldav: false,
+  ics: false
 }
 
 /** How each provider's connection signs in again. */
