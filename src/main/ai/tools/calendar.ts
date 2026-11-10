@@ -574,11 +574,10 @@ function proposalLine(proposal: ProposalRecord): string {
   const attendees = Array.isArray(proposal.payload.attendees)
     ? proposal.payload.attendees.filter((value): value is string => typeof value === 'string')
     : []
-  const when = !times
-    ? ''
-    : times.allDay
-      ? ` · ${DAY.format(times.start)}, tutto il giorno`
-      : ` · ${DAY.format(times.start)} ${TIME.format(times.start)}–${TIME.format(times.end)}`
+  // Kept as an event's are — an all-day one ending the day after its last —: said as one.
+  const when = times
+    ? ` · ${eventWhen(String(proposal.payload.start), String(proposal.payload.end), times.allDay)}`
+    : ''
 
   return `- «${String(proposal.payload.title ?? proposal.title)}»${when}${
     attendees.length > 0 ? ` · con ${attendees.join(', ')}` : ''
