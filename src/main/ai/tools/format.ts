@@ -22,16 +22,24 @@ const EVENT_TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '
  * is not its first. An event of all day ends at the midnight after it.
  */
 export function eventWhen(start: string, end: string, allDay: boolean): string {
-  if (allDay) {
-    const first = new Date(`${start.slice(0, 10)}T00:00`)
-    const last = new Date(new Date(`${end.slice(0, 10)}T00:00`).getTime() - 1)
-    return first.toDateString() === last.toDateString() || last < first
-      ? `${EVENT_DAY.format(first)}, tutto il giorno`
-      : `${EVENT_DAY.format(first)} – ${EVENT_DAY.format(last)}, tutto il giorno`
+  const from = allDay ? new Date(`${start.slice(0, 10)}T00:00`) : new Date(start)
+  const to = allDay ? new Date(new Date(`${end.slice(0, 10)}T00:00`).getTime() - 1) : new Date(end)
+
+  // What is no date stays as it was written.
+  if (Number.isNaN(from.getTime())) {
+    return allDay ? `${start}, tutto il giorno` : start
   }
 
-  const from = new Date(start)
-  const to = new Date(end)
+  if (allDay) {
+    return Number.isNaN(to.getTime()) || from.toDateString() === to.toDateString() || to < from
+      ? `${EVENT_DAY.format(from)}, tutto il giorno`
+      : `${EVENT_DAY.format(from)} – ${EVENT_DAY.format(to)}, tutto il giorno`
+  }
+
+  if (Number.isNaN(to.getTime()) || to < from) {
+    return `${EVENT_DAY.format(from)} ${EVENT_TIME.format(from)}`
+  }
+
   return from.toDateString() === to.toDateString()
     ? `${EVENT_DAY.format(from)} ${EVENT_TIME.format(from)}–${EVENT_TIME.format(to)}`
     : `${EVENT_DAY.format(from)} ${EVENT_TIME.format(from)} – ${EVENT_DAY.format(to)} ${EVENT_TIME.format(to)}`

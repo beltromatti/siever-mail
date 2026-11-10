@@ -172,8 +172,9 @@ export interface CalendarWriteOptions {
 export interface SegretarioCalendarPort {
   /**
    * Tells the user now, with a notification, what cannot wait about an
-   * event (§13.3) — one cancelled too, as it was: `off` when the user has
-   * notifications of the calendar off, `unknown` for an event never kept.
+   * event (§13.3) — one cancelled too, as it was: `off` when the user does
+   * not take it — the calendar's novelties off, or wanted all as they are —,
+   * `unknown` for an event never kept.
    */
   alert(eventKey: string, text: string): Promise<'told' | 'off' | 'unknown'>
   /**

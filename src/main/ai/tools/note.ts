@@ -316,15 +316,17 @@ async function noteOfEvent(
       )
     }
 
-    // It stays with the event, one for each change: found again when the event is read.
-    await context.registry.day.recordAlert(event.eventKey, alert, context.run.actor.runId ?? null)
-
-    lines.push(
-      told === 'told'
-        ? `Avvisato l'utente di «${event.title}».`
-        : `L'utente ha spento le notifiche del calendario: «${event.title}» lo vedrà da sé.`
-    )
-    labels.push('Avvisato l’utente')
+    if (told === 'told') {
+      // It stays with the event, one for each change told: found again when the event is read.
+      await context.registry.day.recordAlert(event.eventKey, alert, context.run.actor.runId ?? null)
+      lines.push(`Avvisato l'utente di «${event.title}».`)
+      labels.push('Avvisato l’utente')
+    } else {
+      lines.push(
+        `I tuoi avvisi del calendario non gli arrivano — ha spento le novità, o le vuole tutte com'è —: «${event.title}» lo vedrà da sé.`
+      )
+      labels.push('Avviso non mandato: novità del calendario spente, o tutte com’è')
+    }
   }
 
   if (yours !== null) {

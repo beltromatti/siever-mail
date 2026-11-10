@@ -81,7 +81,7 @@ interface Held {
   timer: NodeJS.Timeout
   account: NotificationAccount
   message: MailMessageSummary
-  /** Come while the app was closed: told with the others of its mailbox, once all are settled. */
+  /** Come while the app was closed: told as it is, it goes with the others of its mailbox. */
   catchUp: boolean
 }
 
@@ -94,12 +94,15 @@ interface Held {
  *     never alert, nor does a message read elsewhere before it arrived.
  *   • While the Segretario reads the mail as it comes, and the user asked
  *     for it, a new message waits for its note and is told only if the
- *     Segretario said to tell it now (`avvisa`), with its words. Without
- *     the Segretario, every message is told.
+ *     Segretario said to tell it now (`avvisa`), with its words — one by
+ *     one, at launch too: they are few, and each is told for its line.
+ *     Without the Segretario, or the user wanting every message, every
+ *     message is told, as mail apps tell it.
  *   • One message: its sender, subject and first lines, and two buttons —
  *     "Segna come letta" and "Archivia". Several together: one
  *     notification naming who they are from. What came while the app was
- *     closed: one notification per mailbox, once it has all arrived.
+ *     closed and is told as it is: one notification per mailbox, once it
+ *     has all arrived — not a hundred.
  *   • A notification goes away by itself once its messages are read, moved
  *     or deleted — here or on another device.
  */
@@ -121,8 +124,6 @@ export class MailNotifications {
   private segretarioReading: boolean | null = null
   /** New messages waiting for their note, by account and message key. */
   private readonly held = new Map<string, Held>()
-  /** What came while the app was closed and is settled, waiting for the rest of its mailbox. */
-  private readonly caughtUp = new Map<string, { account: NotificationAccount; told: Told[] }>()
   private readonly unsubscribe: () => void
 
   constructor(
@@ -226,20 +227,14 @@ export class MailNotifications {
   withdraw(refs: ReadonlyArray<MessageRef>): void {
     const gone = new Set(refs.map(messageKey))
 
-    // Out of what waits first: settling the last held message of a mailbox tells the rest.
     for (const batch of this.batches.values()) {
       batch.told = batch.told.filter((told) => !gone.has(messageKey(told.message)))
-    }
-
-    for (const waiting of this.caughtUp.values()) {
-      waiting.told = waiting.told.filter((told) => !gone.has(messageKey(told.message)))
     }
 
     for (const [key, held] of this.held) {
       if (gone.has(messageKey(held.message))) {
         clearTimeout(held.timer)
         this.held.delete(key)
-        this.settle(held, null)
       }
     }
 
@@ -275,7 +270,6 @@ export class MailNotifications {
     }
 
     this.held.clear()
-    this.caughtUp.clear()
   }
 
   private tells(accountId: string): boolean {
@@ -308,36 +302,22 @@ export class MailNotifications {
   }
 
   /**
-   * A held message is settled — to be told, or not —: told now, or, come
-   * while the app was closed, once every other of its mailbox is settled.
+   * A held message is settled — to be told, or not. What the Segretario
+   * said to tell goes at once, on its own, with its line, whenever it came;
+   * one whose note did not come in time is told as it is, and, come while
+   * the app was closed, with the rest of its mailbox.
    */
   private settle(held: Held, told: Told | null): void {
-    if (!held.catchUp) {
-      if (told && this.tells(held.account.id)) {
-        this.tell(held.account, [told])
-      }
-
+    if (!told || !this.tells(held.account.id)) {
       return
     }
 
-    const waiting = this.caughtUp.get(held.account.id) ?? { account: held.account, told: [] }
-
-    if (told) {
-      waiting.told.push(told)
+    if (told.summary === undefined && held.catchUp) {
+      this.addToBatch(held.account, told, CATCH_UP_SETTLE_MS)
+      return
     }
 
-    this.caughtUp.set(held.account.id, waiting)
-    const stillHeld = [...this.held.values()].some(
-      (other) => other.catchUp && other.account.id === held.account.id
-    )
-
-    if (!stillHeld) {
-      this.caughtUp.delete(held.account.id)
-
-      if (waiting.told.length > 0 && this.tells(held.account.id)) {
-        this.tell(held.account, waiting.told)
-      }
-    }
+    this.tell(held.account, [told])
   }
 
   /**
@@ -347,23 +327,13 @@ export class MailNotifications {
    */
   private releaseHeld(): void {
     const held = [...this.held.values()]
-    const caughtUp = [...this.caughtUp.values()]
     this.held.clear()
-    this.caughtUp.clear()
 
     for (const { timer, account, message, catchUp } of held) {
       clearTimeout(timer)
 
       if (this.tells(account.id)) {
         this.addToBatch(account, { message }, catchUp ? CATCH_UP_SETTLE_MS : COALESCE_MS)
-      }
-    }
-
-    for (const { account, told } of caughtUp) {
-      if (this.tells(account.id)) {
-        for (const each of told) {
-          this.addToBatch(account, each, CATCH_UP_SETTLE_MS)
-        }
       }
     }
   }
@@ -429,21 +399,14 @@ export class MailNotifications {
           when: 'always',
           group: { id: account.id, title: account.email }
         }
-      : {
+      : // Several, told as they are: what the Segretario says to tell goes one by one (`settle`).
+        {
           family: 'mail',
-          kind: flagged ? 'mail.flagged-batch' : 'mail.batch',
+          kind: 'mail.batch',
           key,
-          title: flagged ? `${told.length} email da guardare` : `${told.length} nuove email`,
+          title: `${told.length} nuove email`,
           subtitle: account.email,
-          body: flagged
-            ? trimText(
-                told
-                  .flatMap(({ summary }) => (summary ? [summary] : []))
-                  .slice(0, 2)
-                  .join(' · '),
-                PREVIEW_MAX_LENGTH
-              )
-            : `Da ${senderList(messages)}`,
+          body: `Da ${senderList(messages)}`,
           concealed: { title: `${told.length} nuove email`, body: account.email },
           target: { kind: 'message', ref: refOf(latest.message) },
           when: 'always',

@@ -316,7 +316,7 @@ describe('the notifications of new mail', () => {
       expect(shown).toHaveLength(1)
     })
 
-    it('tells what came while closed, and is worth it, once every note is in', () => {
+    it('tells what came while closed and is worth it one by one, with its line, as notes come', () => {
       const before = new Date(Date.now() - 3_600_000).toISOString()
       mail.enqueue(
         ACCOUNT,
@@ -325,17 +325,34 @@ describe('the notifications of new mail', () => {
         false
       )
 
-      mail.noteWritten(note(1, true))
+      mail.noteWritten(note(1, true, { alert: 'Rossi aspetta la conferma entro le 12.' }))
       mail.noteWritten(note(2, false))
-      expect(shown).toHaveLength(0)
+      mail.noteWritten(note(3, true, { alert: 'Il DDT non corrisponde all’ordine.' }))
 
-      mail.noteWritten(note(3, true))
-      expect(shown).toHaveLength(1)
-      expect(shown[0].options).toMatchObject({ title: '2 email da guardare' })
-      expect(`${shown[0].options.body}`).toContain('Nota 1')
+      // Not a summary that would hide the second line: each is told for it.
+      expect(shown.map(({ options }) => [options.title, options.body])).toEqual([
+        ['Mittente 1', 'Rossi aspetta la conferma entro le 12.'],
+        ['Mittente 3', 'Il DDT non corrisponde all’ordine.']
+      ])
     })
 
-    it('tells nothing of what came while closed and went before it was told', () => {
+    it('tells together, by mailbox, what came while closed and was not read in time', () => {
+      const before = new Date(Date.now() - 3_600_000).toISOString()
+      mail.enqueue(
+        ACCOUNT,
+        [message(1, { date: before }), message(2, { date: before }), message(3, { date: before })],
+        INBOX,
+        false
+      )
+      mail.noteWritten(note(1, true))
+      vi.advanceTimersByTime(10 * 60 * 1000)
+      expect(shown).toHaveLength(1)
+
+      vi.advanceTimersByTime(20_000)
+      expect(shown.map(({ options }) => options.title)).toEqual(['Mittente 1', '2 nuove email'])
+    })
+
+    it('takes away what it told of what came while closed once it is read, and tells nothing of the rest', () => {
       const before = new Date(Date.now() - 3_600_000).toISOString()
       mail.enqueue(
         ACCOUNT,
@@ -344,14 +361,16 @@ describe('the notifications of new mail', () => {
         false
       )
       mail.noteWritten(note(1, true))
-      // Both read elsewhere at once: the last held settles the mailbox, with nothing left.
+      // Both read elsewhere: the one told goes away, the one waiting is not told.
       mail.withdraw([
         { accountId: 'a1', folderPath: 'INBOX', uid: 1 },
         { accountId: 'a1', folderPath: 'INBOX', uid: 2 }
       ])
       vi.runAllTimers()
 
-      expect(shown).toHaveLength(0)
+      expect(shown.map(({ options, closed }) => [options.title, closed])).toEqual([
+        ['Mittente 1', true]
+      ])
     })
   })
 })

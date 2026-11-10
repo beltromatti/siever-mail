@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('electron', () => ({ app: { focus: () => undefined }, shell: {}, Notification: class {} }))
 
 import type { NotificationCenter, NotificationInput } from '@main/notifications/center'
-import { DEFAULT_NOTIFICATION_PREFERENCES } from '@shared/notifications'
+import {
+  DEFAULT_NOTIFICATION_PREFERENCES,
+  type NotificationPreferences
+} from '@shared/notifications'
 
 import { CalendarNotifications, type ChangeByOthers } from './calendar-notifications'
 import { instantsOf, remindersOf, startWords, whenWords, type RemindedEvent } from './reminders'
@@ -77,6 +80,7 @@ describe('the calendar’s notifications', () => {
   let notifications: CalendarNotifications
   let looking: boolean
   let seen: number | null
+  let preferences: NotificationPreferences
 
   beforeEach(() => {
     vi.useFakeTimers({ now: NOW })
@@ -85,8 +89,11 @@ describe('the calendar’s notifications', () => {
     events = []
     looking = false
     seen = null
+    preferences = DEFAULT_NOTIFICATION_PREFERENCES
     const center = {
-      preferences: DEFAULT_NOTIFICATION_PREFERENCES,
+      get preferences() {
+        return preferences
+      },
       onPreferences: () => () => undefined,
       notify: (input: NotificationInput) => {
         shown.push(input)
@@ -255,6 +262,18 @@ describe('the calendar’s notifications', () => {
       'Spostato alle 8: parti prima.'
     )
     expect(shown[1].key).toBe(shown[0].key)
+
+    // The user wanting every novelty as it is: told at once, as without AI, and its word unsaid.
+    preferences = {
+      ...DEFAULT_NOTIFICATION_PREFERENCES,
+      calendar: { ...DEFAULT_NOTIFICATION_PREFERENCES.calendar, onlyFlagged: false }
+    }
+    notifications.changedByOthers('Studio', [change('c')], 11)
+    expect(shown[2]).toMatchObject({ title: 'Nuovo evento: Sopralluogo c' })
+    expect(
+      notifications.segretarioAlert({ ...change('c').event, title: 'Sopralluogo c' }, 'Conta.')
+    ).toBe(false)
+    expect(shown).toHaveLength(3)
   })
 })
 

@@ -41,4 +41,10 @@ describe('eventWhen', () => {
       'lun 9 mar 09:00 – mer 11 mar 18:00'
     )
   })
+
+  it('keeps as it was written what is no date, rather than failing', () => {
+    expect(eventWhen('domani', 'dopodomani', false)).toBe('domani')
+    expect(eventWhen('2026-11-12', '?', true)).toBe('gio 12 nov, tutto il giorno')
+    expect(eventWhen('2026-11-10T08:00:00', 'presto', false)).toBe('mar 10 nov 08:00')
+  })
 })

@@ -230,7 +230,9 @@ export class CalendarNotifications {
   /**
    * What the Segretario said of an event cannot wait for the user's next
    * look — a meeting moved to this morning, one cancelled today —, with its
-   * words: in place of the novelty told as it is, if that came first.
+   * words: in place of the novelty told as it is, if that came first. Only
+   * while the user takes its word (`onlyFlagged`): otherwise they have the
+   * novelties as they are, as without AI.
    */
   segretarioAlert(
     event: CalendarEvent & { startsAt: number; endsAt: number },
@@ -239,7 +241,7 @@ export class CalendarNotifications {
   ): boolean {
     const { enabled, calendar } = this.deps.center.preferences
 
-    if (!enabled || !calendar.changes) {
+    if (!enabled || !calendar.changes || !calendar.onlyFlagged) {
       return false
     }
 
