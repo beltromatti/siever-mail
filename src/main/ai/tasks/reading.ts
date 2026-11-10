@@ -1,7 +1,7 @@
 import type { MailAddress } from '@shared/models'
 
 import { HandleRegistry, type HandleRecord } from '../agent/handles'
-import type { MessageLocation, SegretarioMailPort } from '../agent/tool-types'
+import { seenKey, type MessageLocation, type SegretarioMailPort } from '../agent/tool-types'
 import type { Registry } from '../registry/registry'
 import { formatAddresses, formatDateTime } from '../tools/format'
 import { nowLine } from './context'
@@ -25,6 +25,10 @@ export interface ReadingPlan {
   handles: HandleRecord[]
   /** The messages the run must leave a note on, by key, with their short names. */
   targets: Array<{ messageKey: string; handle: string }>
+  /** Shown without a note: one written meanwhile by another run is a change it has not seen. */
+  seen: Map<string, number>
+  /** Its messages: their first note is its own (`RunContext.reads`). */
+  reads: string[]
 }
 
 /** The keys a reading holds while it runs: its conversation, its projects, the outside sender. */
@@ -152,6 +156,7 @@ export async function prepareReading(
       } · «${target.location.subject || '(senza oggetto)'}»`
   )
   const lastTarget = targets[targets.length - 1]
+  const noteKeys = targets.map((target) => seenKey('note', scope.accountId, target.messageKey))
   const later = messages.filter(
     (message) => message.location.dateIso > lastTarget.location.dateIso
   ).length
@@ -180,7 +185,9 @@ export async function prepareReading(
     targets: targets.map((target) => ({
       messageKey: target.messageKey,
       handle: handleOf.get(target.messageKey)!
-    }))
+    })),
+    seen: new Map(noteKeys.map((key) => [key, 0])),
+    reads: noteKeys
   }
 }
 

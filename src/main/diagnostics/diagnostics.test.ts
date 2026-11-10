@@ -115,6 +115,27 @@ describe('the log', () => {
     expect(isProgramError(new Error('Il server non accetta questa password'))).toBe(false)
   })
 
+  it('counts apart the same failure of notifications of different kinds', () => {
+    vi.useFakeTimers({ now: new Date('2026-11-09T10:00:00'), toFake: ['Date'] })
+    startDiagnostics({ folder, echo: false, catchConsole: false })
+    const log = diagnostics('app')
+    const refused = (): Error => new Error('UNErrorDomain error 1')
+
+    log.warn('notification.failed', {
+      family: 'segretario',
+      kind: 'segretario.finished',
+      err: refused()
+    })
+    log.warn('notification.failed', { family: 'mail', kind: 'mail.flagged', err: refused() })
+    log.warn('notification.failed', { family: 'mail', kind: 'mail.flagged', err: refused() })
+
+    expect(lines().map((line) => [line.kind, line.repeated])).toEqual([
+      ['segretario.finished', undefined],
+      ['mail.flagged', undefined],
+      ['mail.flagged', 1]
+    ])
+  })
+
   it('counts a warning said again within a minute, and writes the count when it is over', () => {
     vi.useFakeTimers({ now: new Date('2026-11-09T10:00:00'), toFake: ['Date'] })
     startDiagnostics({ folder, echo: false, catchConsole: false })

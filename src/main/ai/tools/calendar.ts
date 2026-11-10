@@ -25,7 +25,7 @@ import {
   UnknownHandle
 } from '../agent/tool-types'
 import { resolveMessage } from './anchors'
-import { countOf } from './format'
+import { countOf, eventWhen } from './format'
 
 /** Without dates, the agenda listed: today and the week after. */
 const DEFAULT_DAYS = 8
@@ -90,23 +90,6 @@ function responseOf(args: Record<string, unknown>): Exclude<CalendarResponse, 'n
   return response
 }
 
-/** When an event is, in the user's words and time: "ven 6 nov 15:00–16:00". */
-function whenWords(start: string, end: string, allDay: boolean): string {
-  if (allDay) {
-    const first = new Date(`${start.slice(0, 10)}T00:00`)
-    const last = new Date(new Date(`${end.slice(0, 10)}T00:00`).getTime() - 1)
-    return first.toDateString() === last.toDateString() || last < first
-      ? `${DAY.format(first)}, tutto il giorno`
-      : `${DAY.format(first)} – ${DAY.format(last)}, tutto il giorno`
-  }
-
-  const from = new Date(start)
-  const to = new Date(end)
-  return from.toDateString() === to.toDateString()
-    ? `${DAY.format(from)} ${TIME.format(from)}–${TIME.format(to)}`
-    : `${DAY.format(from)} ${TIME.format(from)} – ${DAY.format(to)} ${TIME.format(to)}`
-}
-
 /** What a change does to an event, line by line, for the user to confirm: what it was, what it becomes. */
 function changeLines(event: CalendarEvent, change: EventChange): string[] {
   const lines: string[] = []
@@ -114,7 +97,7 @@ function changeLines(event: CalendarEvent, change: EventChange): string[] {
   if (change.title !== undefined) lines.push(`Titolo: «${change.title}» (era «${event.title}»)`)
   if (change.start !== undefined || change.end !== undefined || change.allDay !== undefined) {
     lines.push(
-      `Quando: ${whenWords(change.start ?? event.start, change.end ?? event.end, change.allDay ?? event.allDay)} (era ${whenWords(event.start, event.end, event.allDay)})`
+      `Quando: ${eventWhen(change.start ?? event.start, change.end ?? event.end, change.allDay ?? event.allDay)} (era ${eventWhen(event.start, event.end, event.allDay)})`
     )
   }
   if (change.location !== undefined) lines.push(`Dove: ${change.location ?? '(nessun luogo)'}`)
@@ -146,9 +129,7 @@ export function eventLine(
     { kind: 'event', eventKey: event.key, title: event.title },
     context.newHandles
   )
-  const when = event.allDay
-    ? `${DAY.format(new Date(`${event.start}T00:00`))}, tutto il giorno`
-    : `${DAY.format(new Date(event.start))} ${TIME.format(new Date(event.start))}–${TIME.format(new Date(event.end))}`
+  const when = eventWhen(event.start, event.end, event.allDay)
   const others = event.attendees.filter((attendee) => !attendee.self)
 
   return [
@@ -799,7 +780,7 @@ export const calendarTool: SegretarioTool = {
             kind: 'action',
             title: `Nuovo evento: ${event.title}`,
             details: [
-              `Quando: ${whenWords(event.start, event.end, allDay)}`,
+              `Quando: ${eventWhen(event.start, event.end, allDay)}`,
               ...(event.location ? [`Dove: ${event.location}`] : []),
               `Invitati: ${attendees.join(', ')} (ricevono l'invito)`
             ],

@@ -123,8 +123,10 @@ export async function messageWork(
   ).filter((project): project is ProjectSummary => project !== null)
   const lines: string[] = []
 
+  // No note is what it saw too: one written meanwhile by another run is a change (§4.6).
+  context.run.seen.set(seenKey('note', ref.accountId, messageKey), note?.revision ?? 0)
+
   if (note) {
-    context.run.seen.set(seenKey('note', ref.accountId, messageKey), note.revision)
     lines.push(`La tua nota: ${noteLine(note)}`)
   } else {
     lines.push('Non l’hai ancora letto: nessuna nota.')

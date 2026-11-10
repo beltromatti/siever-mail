@@ -197,10 +197,15 @@ export class NoteStore {
         options.seenRevision !== undefined &&
         current.revision !== options.seenRevision
       ) {
+        const says = `«${current.summary}» (${current.nature}, importanza ${current.priority})`
         throw new RevisionConflict(
-          `La nota di questo messaggio è cambiata da quando l’hai letta${
-            current.writtenBy === 'utente' ? ', per mano dell’utente' : ''
-          }: ora dice «${current.summary}» (${current.nature}, importanza ${current.priority}). Se la tua correzione vale ancora, rifalla.`,
+          options.seenRevision === 0
+            ? `Da quando l’hai letto, questo messaggio ha avuto la sua nota${
+                current.writtenBy === 'utente' ? ', dall’utente' : ''
+              }: dice ${says}. Se c’è da correggerla, correggila.`
+            : `La nota di questo messaggio è cambiata da quando l’hai letta${
+                current.writtenBy === 'utente' ? ', per mano dell’utente' : ''
+              }: ora dice ${says}. Se la tua correzione vale ancora, rifalla.`,
           current
         )
       }

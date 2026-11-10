@@ -275,10 +275,12 @@ function write(
     const err = error === undefined ? undefined : errorOf(error)
 
     // A warning or an error said again and again — a loop that keeps failing — is written once,
-    // then counted, and the count written when its minute is over.
+    // then counted, and the count written when its minute is over. Of what kind it is — a
+    // notification's, say — tells one from another, as its connection, run or channel does.
     if (level !== 'info') {
       const said = saidIn(err, fields)
-      const key = [area, ev, said, fields?.run, fields?.conn, fields?.channel].join('\u0000')
+      const kind = typeof fields?.kind === 'string' ? fields.kind : undefined
+      const key = [area, ev, said, fields?.run, fields?.conn, fields?.channel, kind].join('\u0000')
       const seen = launch.repeats.get(key)
 
       if (seen && now - seen.since < REPEAT_WINDOW_MS) {
@@ -302,6 +304,7 @@ function write(
           ...(fields?.conn ? { conn: fields.conn } : {}),
           ...(fields?.run ? { run: fields.run } : {}),
           ...(fields?.channel ? { channel: fields.channel } : {}),
+          ...(kind ? { kind: clip(kind) } : {}),
           ...(said ? { said: clip(said) } : {})
         },
         timer

@@ -143,6 +143,8 @@ export interface RunOptions {
   signal?: AbortSignal
   /** The revisions of what the run's starting data showed it. */
   seen?: ReadonlyMap<string, number>
+  /** For a reading: the messages it is given (see `RunContext.reads`). */
+  reads?: ReadonlyArray<string>
   /**
    * A turn of a conversation: what the earlier turns read is still read, so a
    * write over what changed since is refused in this turn too.
@@ -283,6 +285,7 @@ export class AgentRunner {
       watched: options.watched ?? !options.background,
       actor: { by: 'segretario', runId: id, background: options.background },
       seen: new Map([...(this.seenByConversation.get(id) ?? []), ...(options.seen ?? [])]),
+      reads: new Set(options.reads ?? []),
       changes: [],
       results: {},
       editor: options.editor ?? null,

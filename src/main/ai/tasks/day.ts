@@ -10,6 +10,11 @@ export interface StartingData {
   handles: HandleRecord[]
   /** The revisions of what the data showed: writes against older looks are refused. */
   seen?: Map<string, number>
+  /**
+   * For a reading, the messages it is given, as `seenKey('note', …)`: their
+   * first note is its own (see `RunContext.reads`).
+   */
+  reads?: ReadonlyArray<string>
 }
 
 /**

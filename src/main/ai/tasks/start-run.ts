@@ -83,6 +83,7 @@ export async function startRun(
     missing: spec.missing,
     signal: spec.signal,
     seen: new Map(spec.data.seen ?? []),
+    reads: spec.data.reads,
     // Work shown in the panel may go on as a conversation: what it read is kept for that.
     conversation: spec.visibility === 'pannello'
   })

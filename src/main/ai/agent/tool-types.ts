@@ -267,6 +267,13 @@ export interface RunContext {
   actor: Actor
   /** The revision of each object of the registry and of the memory this run last saw. */
   seen: Map<string, number>
+  /**
+   * The messages a reading is given, as `seenKey('note', …)`: their first
+   * note is its own — it reads them whole, and decides then whether to tell
+   * the user (§13.3). Another run on its own leaves a message without a
+   * note to its reading. Empty for every other run.
+   */
+  reads: ReadonlySet<string>
   /** What this run changed, for the diary. */
   changes: RegistryChange[]
   results: RunResults

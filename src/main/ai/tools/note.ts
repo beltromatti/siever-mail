@@ -130,6 +130,18 @@ async function noteOfMessage(
   const alert = alertArg(args)
   const seen = seenKey('note', message.accountId, message.messageKey)
 
+  // Its first note is its reading's, which reads its conversation whole and decides then whether
+  // the user is to be told (§13.3): working on its own, another run leaves it to that.
+  if (
+    context.run.background &&
+    !context.run.reads.has(seen) &&
+    !(await context.registry.notes.get(message.accountId, message.messageKey))
+  ) {
+    throw new ToolInputError(
+      `${handle} non ha ancora la sua nota: gliela scrive la lettura della sua conversazione, che la legge per intero e decide se avvisare l'utente. Ciò che ne hai capito usalo nel tuo lavoro.`
+    )
+  }
+
   try {
     const { record, change } = await context.registry.writeNote(
       { ...message, messageDate: message.dateIso },

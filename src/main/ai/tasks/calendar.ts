@@ -2,7 +2,7 @@ import { CALENDAR_HELD_DAYS, type CalendarChange, type CalendarEvent } from '@sh
 
 import { HandleRegistry, type HandleRecord } from '../agent/handles'
 import { eventLine } from '../tools/calendar'
-import { formatDateTime } from '../tools/format'
+import { eventWhen, formatDateTime } from '../tools/format'
 import { nowLine } from './context'
 import type { StartingData } from './day'
 
@@ -64,9 +64,7 @@ function whatChanged(before: CalendarEvent, after: CalendarEvent): string[] {
   const lines: string[] = []
 
   if (before.start !== after.start || before.end !== after.end || before.allDay !== after.allDay) {
-    lines.push(
-      `   prima: ${before.allDay ? `${before.start}, tutto il giorno` : `${formatDateTime(before.start)}–${formatDateTime(before.end)}`}`
-    )
+    lines.push(`   prima: ${eventWhen(before.start, before.end, before.allDay)}`)
   }
 
   if (before.title !== after.title) {

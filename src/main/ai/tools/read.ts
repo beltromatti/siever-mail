@@ -25,6 +25,7 @@ import { commitmentLine, messageWork, noteLine, projectLine, rememberCommitments
 import {
   clip,
   countOf,
+  eventWhen,
   formatAddresses,
   formatDateTime,
   shortDate,
@@ -415,7 +416,7 @@ async function readEvent(
   return {
     content: [
       `${handle} · ${event.title}`,
-      `Quando: ${event.allDay ? `${event.start} (tutto il giorno)` : `${formatDateTime(event.start)} – ${formatDateTime(event.end)}`}`,
+      `Quando: ${eventWhen(event.start, event.end, event.allDay)}`,
       `Calendario: ${event.calendarName}`,
       event.location ? `Dove: ${event.location}` : '',
       event.organizer ? `Organizzatore: ${event.organizer}` : '',

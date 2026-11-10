@@ -9,6 +9,34 @@ const DATE_TIME = new Intl.DateTimeFormat('it-IT', {
   minute: '2-digit'
 })
 
+const EVENT_DAY = new Intl.DateTimeFormat('it-IT', {
+  weekday: 'short',
+  day: 'numeric',
+  month: 'short'
+})
+const EVENT_TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
+
+/**
+ * When an event is, in the user's words and time — "ven 6 nov 15:00–16:00",
+ * "gio 12 nov – ven 13 nov, tutto il giorno" —, its last day said when it
+ * is not its first. An event of all day ends at the midnight after it.
+ */
+export function eventWhen(start: string, end: string, allDay: boolean): string {
+  if (allDay) {
+    const first = new Date(`${start.slice(0, 10)}T00:00`)
+    const last = new Date(new Date(`${end.slice(0, 10)}T00:00`).getTime() - 1)
+    return first.toDateString() === last.toDateString() || last < first
+      ? `${EVENT_DAY.format(first)}, tutto il giorno`
+      : `${EVENT_DAY.format(first)} – ${EVENT_DAY.format(last)}, tutto il giorno`
+  }
+
+  const from = new Date(start)
+  const to = new Date(end)
+  return from.toDateString() === to.toDateString()
+    ? `${EVENT_DAY.format(from)} ${EVENT_TIME.format(from)}–${EVENT_TIME.format(to)}`
+    : `${EVENT_DAY.format(from)} ${EVENT_TIME.format(from)} – ${EVENT_DAY.format(to)} ${EVENT_TIME.format(to)}`
+}
+
 /** A date as the Segretario reads it: "lun 26/10/2026, 10:42", in the user's time. */
 export function formatDateTime(iso: string): string {
   const date = new Date(iso)
