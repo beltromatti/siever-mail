@@ -147,9 +147,15 @@ async function noteOfMessage(
       { seenRevision: context.run.seen.get(seen) }
     )
     context.run.seen.set(seen, record.revision)
+    const corrected = change.action !== 'scritta'
 
     return {
-      content: `Nota di ${handle} ${change.action === 'scritta' ? 'scritta' : 'corretta'}.`,
+      content: `Nota di ${handle} ${corrected ? 'corretta' : 'scritta'}.${
+        // Told or not as it came: a correction does not tell it again, nor take it back.
+        corrected && alert !== null
+          ? ' L’avviso di un messaggio si decide quando arriva: resta com’era.'
+          : ''
+      }`,
       summary: change.label,
       messages: [message.ref]
     }
@@ -228,6 +234,13 @@ async function markYours(
     byUser ? { ...context.run.actor, by: 'utente' } : context.run.actor
   )
 
+  if (!change) {
+    return {
+      line: `«${event.title}» ${yours ? 'è' : 'non è'} dell'utente: l'ha detto lui.`,
+      label: null
+    }
+  }
+
   return {
     line: `«${event.title}»${series ? ', e ogni volta della sua serie,' : ''} ${
       yours
@@ -290,6 +303,9 @@ async function noteOfEvent(
         `«${event.title}» non è più nel calendario e non ne resta traccia: non posso avvisarne.`
       )
     }
+
+    // It stays with the event, one for each change: found again when the event is read.
+    await context.registry.day.recordAlert(event.eventKey, alert, context.run.actor.runId ?? null)
 
     lines.push(
       told === 'told'

@@ -197,6 +197,8 @@ export interface SegretarioCalendarPort {
   >
   /** Whose a calendar's events are, as the user says it in chat (§7.4): their choice, as in Settings. */
   setRole(calendarKey: string, role: CalendarRole | null): Promise<unknown>
+  /** Whose an event is as its calendar alone says it — the Segretario's word left out (§7.4). */
+  calendarSays(eventKey: string): Promise<{ role: CalendarRole; yours: boolean } | null>
   /** The calendar connections: who they are with, and their calendars. */
   connections(): Promise<CalendarConnection[]>
   events(fromIso: string, toIso: string): Promise<CalendarEvent[]>

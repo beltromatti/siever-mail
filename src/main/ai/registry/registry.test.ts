@@ -506,7 +506,7 @@ describe('Registry', () => {
   })
 
   describe('notes', () => {
-    it('keeps the line the user is told now with a note that tells, and lets it go with one that does not', async () => {
+    it('keeps the line the user was told with the note, as it was decided when the message came', async () => {
       const anchor = { ...ANNA, direction: 'in' as const, messageDate: '2026-11-02T09:00:00.000Z' }
       const said = {
         summary: 'Anna chiede la conferma del sopralluogo',
@@ -526,10 +526,73 @@ describe('Registry', () => {
         alert: 'Anna aspetta la conferma entro le 12.'
       })
 
-      const quiet = await registry.writeNote(anchor, { ...said, alert: 'non detta' }, CHAT, {
-        seenRevision: told.record.revision
+      // A correction later — saying otherwise, or nothing of it — leaves what was told as it was.
+      const corrected = await registry.writeNote(
+        anchor,
+        { ...said, summary: 'Anna chiede la conferma', notify: false },
+        CHAT,
+        { seenRevision: told.record.revision }
+      )
+      expect(corrected.record).toMatchObject({
+        summary: 'Anna chiede la conferma',
+        notify: true,
+        alert: 'Anna aspetta la conferma entro le 12.'
       })
-      expect(quiet.record).toMatchObject({ notify: false, alert: null })
+    })
+  })
+
+  describe('whose the events are', () => {
+    const MEETING = { key: 'c1:studio:sopralluogo', title: 'Sopralluogo Rossi', seriesKey: null }
+
+    it('learns from every word of the user that changes whose an event is, in order', async () => {
+      await registry.markEvent(MEETING, true, 'Il suo nome nel titolo', BACKGROUND)
+      await registry.markEvent(MEETING, false, null, USER)
+      await registry.markEvent(MEETING, true, null, USER)
+      // Said again, nothing changes: no lesson.
+      await registry.markEvent(MEETING, true, null, USER)
+      // One the Segretario did not see theirs, said theirs by the user.
+      await registry.markEvent({ ...MEETING, key: 'c1:studio:ferie' }, true, null, USER)
+
+      expect(
+        lessons
+          .filter((lesson) => lesson.kind === 'evento_di_chi')
+          .map(({ payload }) => [payload.prima, payload.perché, payload.lUtente])
+      ).toEqual([
+        ['suo, per il Segretario', 'Il suo nome nel titolo', 'non è suo'],
+        ["non suo, l'aveva detto l'utente", null, 'è suo'],
+        ['non riconosciuto come suo dal Segretario', null, 'è suo']
+      ])
+    })
+
+    it('keeps the user’s word theirs: not overturned in the background, nor made the Segretario’s', async () => {
+      await registry.markEvent(MEETING, false, null, USER)
+
+      // Said again by the Segretario, it stays the user's word.
+      expect(await registry.markEvent(MEETING, false, 'Di Paola', BACKGROUND)).toBeNull()
+      expect(await registry.ownership.markOf(MEETING.key, null)).toMatchObject({
+        yours: false,
+        setBy: 'utente'
+      })
+      await expect(registry.markEvent(MEETING, true, 'Il suo nome', BACKGROUND)).rejects.toThrow(
+        /L'utente ha detto lui/
+      )
+
+      // In the chat, with the user there, it can.
+      await registry.markEvent(MEETING, true, 'Me l’ha detto', CHAT)
+      expect(await registry.ownership.markOf(MEETING.key, null)).toMatchObject({
+        yours: true,
+        setBy: 'segretario'
+      })
+    })
+
+    it('keeps what the user was told of an event, one line for each change', async () => {
+      await registry.day.recordAlert(MEETING.key, ' Spostato alle 8. ', 'run-1')
+      await registry.day.recordAlert(MEETING.key, 'Annullato.', 'run-2')
+
+      expect((await registry.day.alerts(MEETING.key)).map((alert) => alert.text)).toEqual([
+        'Spostato alle 8.',
+        'Annullato.'
+      ])
     })
   })
 

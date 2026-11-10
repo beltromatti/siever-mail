@@ -919,6 +919,7 @@ export class AiStore {
     const activities = await this.forgetRunsOnlyAbout({ calendarId: connectionId, learningKey })
     await this.sql.run('DELETE FROM ai_event_preps WHERE event_key LIKE ?', ofIt)
     await this.sql.run('DELETE FROM ai_own_events WHERE event_key LIKE ?', ofIt)
+    await this.sql.run('DELETE FROM ai_event_alerts WHERE event_key LIKE ?', ofIt)
     await this.sql.run('DELETE FROM ai_calendar_roles WHERE calendar_key LIKE ?', ofIt)
     await this.sql.run(
       'DELETE FROM ai_item_history WHERE item_id IN (SELECT id FROM ai_items WHERE event_key LIKE ?)',
@@ -1025,6 +1026,7 @@ export class AiStore {
     const calendars = await this.sql.all<{ key: string | null }>(
       `SELECT event_key AS key FROM ai_event_preps
        UNION SELECT event_key FROM ai_own_events
+       UNION SELECT event_key FROM ai_event_alerts
        UNION SELECT calendar_key FROM ai_calendar_roles
        UNION SELECT event_key FROM ai_items
        UNION SELECT location FROM ai_project_resources WHERE kind = 'evento'
@@ -1065,6 +1067,7 @@ export class AiStore {
       'ai_briefings',
       'ai_event_preps',
       'ai_own_events',
+      'ai_event_alerts',
       'ai_calendar_roles',
       'ai_projects',
       'ai_project_threads',

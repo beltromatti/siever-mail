@@ -74,7 +74,11 @@ export interface NoteInput {
   priority: NotePriority
   reason: string
   due: string | null
-  /** Tell the user of the message now (`avvisa`); a note says no when it does not say. */
+  /**
+   * Tell the user of the message now (`avvisa`); a note says no when it does
+   * not say. Decided once, as the message comes: a correction of the note
+   * leaves it as it was — what was told, or not, is history.
+   */
   notify?: boolean
   /** The line they are told, why it cannot wait; none: the note's summary. */
   alert?: string | null
@@ -245,8 +249,7 @@ export class NoteStore {
 
       const changed = await this.sql.run(
         `UPDATE ai_notes SET summary = ?, state = ?, priority = ?, reason = ?, due = ?,
-           twin_account_id = ?, notify = ?, alert = ?, run_id = ?, written_by = ?,
-           revision = revision + 1,
+           twin_account_id = ?, run_id = ?, written_by = ?, revision = revision + 1,
            updated_at = ?
          WHERE account_id = ? AND message_key = ? AND revision = ?`,
         summary,
@@ -255,8 +258,6 @@ export class NoteStore {
         input.reason.trim(),
         input.due,
         twin,
-        input.notify ? 1 : 0,
-        input.notify ? (input.alert?.trim() ?? null) || null : null,
         runId,
         actor.by,
         now,

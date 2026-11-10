@@ -1189,30 +1189,53 @@ export class Registry {
   /**
    * An event — and its series — the user's, or not, though its calendar
    * does not say so (§7.4). The user's word stands: a run in the background
-   * does not overturn it.
+   * does not overturn it, and saying it again does not make it the
+   * Segretario's. Null when nothing changes: the user had said so.
    */
   async markEvent(
     event: { key: string; title: string; seriesKey: string | null },
     yours: boolean,
     reason: string | null,
     actor: Actor
-  ): Promise<RegistryChange> {
+  ): Promise<RegistryChange | null> {
     const previous = await this.ownership.markOf(event.key, event.seriesKey)
+    const byUser = actor.by === 'utente'
 
-    if (actor.background && previous?.setBy === 'utente' && previous.yours !== yours) {
-      throw new RegistryRefusal(
-        `L'utente ha detto lui che «${event.title}» ${previous.yours ? 'è' : 'non è'} suo: resta così.`
-      )
+    if (!byUser && previous?.setBy === 'utente') {
+      if (previous.yours === yours) {
+        return null
+      }
+
+      if (actor.background) {
+        throw new RegistryRefusal(
+          `L'utente ha detto lui che «${event.title}» ${previous.yours ? 'è' : 'non è'} suo: resta così.`
+        )
+      }
     }
 
     const mark: Omit<EventMark, 'setAt'> = {
       eventKey: event.key,
       seriesKey: event.seriesKey,
       yours,
-      setBy: actor.by === 'utente' ? 'utente' : 'segretario',
+      setBy: byUser ? 'utente' : 'segretario',
       reason
     }
-    await this.ownership.mark({ ...mark, runId: actor.runId ?? null }, previous)
+    await this.ownership.mark({ ...mark, runId: actor.runId ?? null })
+
+    // Every word of the user's that changes whose an event is teaches the Segretario (§10): one
+    // it said theirs is not, one theirs it missed — or the user changing their mind, in order.
+    if (byUser && (previous?.yours ?? false) !== yours) {
+      this.hooks.lesson('evento_di_chi', {
+        evento: event.key,
+        titolo: event.title,
+        prima: !previous
+          ? 'non riconosciuto come suo dal Segretario'
+          : `${previous.yours ? 'suo' : 'non suo'}, ${previous.setBy === 'utente' ? "l'aveva detto l'utente" : 'per il Segretario'}`,
+        perché: previous?.setBy === 'segretario' ? previous.reason : null,
+        lUtente: yours ? 'è suo' : 'non è suo'
+      })
+    }
+
     return this.emit(
       {
         object: 'evento',

@@ -73,6 +73,7 @@ import { GraphCalendarProvider, MAILBOX_ZONE_NOT_GRANTED } from './graph-calenda
 import type { ChangeByOthers } from './calendar-notifications'
 import { calendarNameOf, canonicalUid, type InvitationInstance } from './icalendar'
 import {
+  eventIsYours,
   handledBy,
   inOthersHands,
   invited,
@@ -2306,6 +2307,31 @@ export class CalendarService {
     log.info('calendar.role', { conn: calendar.connectionId, role: role ?? 'default', by: 'user' })
     this.ownershipChanged()
     return this.calendars()
+  }
+
+  /**
+   * Whose an event is as its calendar alone says it (§7.4) — its calendar's
+   * role, and whether the calendar makes it the user's —, what the Segretario
+   * found left out: where the user may put the Segretario right. Null when
+   * the event is gone.
+   */
+  async calendarSays(key: string): Promise<{ role: CalendarRole; yours: boolean } | null> {
+    const row = await this.requirePrisma().calendarEvent.findUnique({ where: { key } })
+
+    if (!row) {
+      return null
+    }
+
+    const ownership = await this.ownership()
+    const calendar = ownership.calendars.get(calendarKey(row.connectionId, row.calendarId))
+
+    return {
+      role: calendar?.role ?? 'propri',
+      yours: eventIsYours(
+        { ...eventOfRow(row, ''), startsAt: Number(row.startsAt) },
+        { ...ownership, segretario: null }
+      )
+    }
   }
 
   /** An event by its key, as it is now — saying whether it is the user's —; null when it is gone. */

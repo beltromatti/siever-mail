@@ -393,8 +393,9 @@ async function readEvent(
   }
 
   // What the work holds of it, as a message's reading says its note and what is open.
-  const [prep, items, projects, mark] = await Promise.all([
+  const [prep, alerts, items, projects, mark] = await Promise.all([
     context.registry.day.prep(eventKey),
+    context.registry.day.alerts(eventKey),
     context.registry.commitments.ofPlaces({ events: [eventKey] }),
     context.registry.projects.ofEvents([eventKey]),
     context.registry.ownership.markOf(
@@ -436,6 +437,9 @@ async function readEvent(
           )} ${project.title}`
       ),
       prep ? `\nLa preparazione che hai scritto:\n${unlinked(prep.text)}` : '',
+      alerts.length > 0
+        ? `\nGli avvisi che ne hai dato all'utente:\n${alerts.map((alert) => `  ${formatDateTime(new Date(alert.toldAt).toISOString())} · «${alert.text}»`).join('\n')}`
+        : '',
       items.length > 0
         ? `\nCose aperte nate da questo evento (e chiuse di recente):\n${items.map((item) => `  ${commitmentLine(item)}`).join('\n')}`
         : ''

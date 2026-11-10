@@ -16,6 +16,12 @@ export interface MeetingPrep {
   writtenAt: number
 }
 
+/** What the user was told of an event, and when: one line for each change that could not wait (§13.3). */
+export interface EventAlert {
+  text: string
+  toldAt: number
+}
+
 /**
  * What the Segretario writes about a day — the letter at the top of Oggi —
  * and about a meeting, to prepare it. Texts that describe the present:
@@ -119,8 +125,29 @@ export class DayStore {
     )
   }
 
+  /** Keeps what the user was told of an event: it stays with the event, as a message's with its note. */
+  async recordAlert(eventKey: string, text: string, runId: string | null): Promise<void> {
+    await this.sql.run(
+      'INSERT INTO ai_event_alerts (event_key, text, run_id, told_at) VALUES (?, ?, ?, ?)',
+      eventKey,
+      text.trim(),
+      runId,
+      Date.now()
+    )
+  }
+
+  /** What the user was told of an event, the oldest first. */
+  async alerts(eventKey: string): Promise<EventAlert[]> {
+    const rows = await this.sql.all<{ text: string; told_at: number }>(
+      'SELECT text, told_at FROM ai_event_alerts WHERE event_key = ? ORDER BY told_at, id',
+      eventKey
+    )
+    return rows.map((row) => ({ text: row.text, toldAt: Number(row.told_at) }))
+  }
+
   async clear(): Promise<void> {
     await this.sql.run('DELETE FROM ai_briefings')
     await this.sql.run('DELETE FROM ai_event_preps')
+    await this.sql.run('DELETE FROM ai_event_alerts')
   }
 }

@@ -86,6 +86,11 @@ const LETTER_STALE_MS = 3 * 60 * 60 * 1000
 /** Projects whose "Il punto" one planning queues at most. */
 const PROJECT_STATES_PLANNED = 10
 const REFLECTION_INTERVAL_MS = 6 * 60 * 60 * 1000
+/**
+ * How long the user's corrections wait for the rest of theirs: who puts
+ * things right does more than one, and may change their mind.
+ */
+const LESSONS_SETTLE_MS = 2 * 60_000
 const KEEP_UP_INTERVAL_MS = 20 * 60 * 60 * 1000
 const KEEP_UP_MIN_NOTES = 12
 /** How long changes to the calendar wait for the rest of theirs: a meeting moved, then its guests answering. */
@@ -959,24 +964,11 @@ export class SegretarioEngine {
       })
     }
 
-    // What the user taught, to take in; the memory, to keep up with the mail.
-    const lastReflection = await store.lastActivityAt('riflessione', 'done')
+    await this.planReflection(now.getTime())
 
-    if (
-      (lastReflection === null || now.getTime() - lastReflection > REFLECTION_INTERVAL_MS) &&
-      (await store.pendingLessons()).some((lesson) => lesson.kind !== 'confermata') &&
-      !(await queue.busy('riflessione'))
-    ) {
-      await queue.enqueue({
-        task: 'riflessione',
-        scopeKey: 'riflessione',
-        scope: {},
-        priority: PRIORITY.memory
-      })
-    }
-
-    // Keeping the memory in order needs a memory: some connection known through Conoscimi. One
-    // left unknown (Conoscimi failed, the user went on without) does not stop it for the rest.
+    // The memory, to keep up with the mail. Keeping it in order needs a memory: some connection
+    // known through Conoscimi. One left unknown (Conoscimi failed, the user went on without) does
+    // not stop it for the rest.
     const accounts = await mail.listAccounts()
     const someKnown = accounts.some((account) =>
       learnt.some((row) => row.accountId === account.id && row.finishedAt !== null)
@@ -1052,6 +1044,45 @@ export class SegretarioEngine {
         delayMs: CALENDAR_SETTLE_MS
       })
     }
+  }
+
+  /**
+   * What the user taught, taken in once they stopped putting things right:
+   * a reflection waiting waits for the newest lesson; one running is left
+   * to finish, and one failed is done again only for a lesson come after
+   * (§4.3).
+   */
+  private async planReflection(now: number): Promise<void> {
+    const { store, queue } = this.deps
+    const lastReflection = await store.lastActivityAt('riflessione', 'done')
+    const teaching = (await store.pendingLessons()).filter((lesson) => lesson.kind !== 'confermata')
+
+    if (
+      teaching.length === 0 ||
+      (lastReflection !== null && now - lastReflection <= REFLECTION_INTERVAL_MS)
+    ) {
+      return
+    }
+
+    const failedAt = (await queue.failedAt(['riflessione'])).get('riflessione')
+
+    if (
+      (failedAt !== undefined && !teaching.some((lesson) => lesson.createdAt > failedAt)) ||
+      (!(await queue.waitingFor('riflessione')) && (await queue.inProgress('riflessione')))
+    ) {
+      return
+    }
+
+    const newest = Math.max(...teaching.map((lesson) => lesson.createdAt))
+
+    await queue.enqueue({
+      task: 'riflessione',
+      scopeKey: 'riflessione',
+      scope: {},
+      priority: PRIORITY.memory,
+      // From the newest on, not from this planning: planning again does not push it further.
+      delayMs: Math.min(LESSONS_SETTLE_MS, Math.max(0, newest + LESSONS_SETTLE_MS - now))
+    })
   }
 
   /**

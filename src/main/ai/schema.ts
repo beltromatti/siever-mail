@@ -9,7 +9,7 @@ import type { Sql } from './sql'
  * order, as an old one runs the steps it has not had: one path, so what a
  * fresh database looks like is what an upgraded one looks like.
  */
-const SCHEMA_VERSION = 10
+const SCHEMA_VERSION = 11
 
 /** The tables of the first 2.0 builds, as they stood (version 1). */
 /** The open things' indexes: by conversation, by state, and — from version 5 — by event. */
@@ -577,6 +577,20 @@ export async function ensureAiSchema(sql: Sql): Promise<void> {
   // Version 10: what a note tells the user now is its own line (`avvisa`), not only a yes.
   if (version < 10) {
     await addColumn(sql, 'ai_notes', 'alert', 'TEXT')
+  }
+
+  // Version 11: what the user was told of an event stays with it — one line for each change.
+  if (version < 11) {
+    await sql.run(`CREATE TABLE IF NOT EXISTS ai_event_alerts (
+      id INTEGER PRIMARY KEY,
+      event_key TEXT NOT NULL,
+      text TEXT NOT NULL,
+      run_id TEXT,
+      told_at INTEGER NOT NULL
+    )`)
+    await sql.run(
+      'CREATE INDEX IF NOT EXISTS idx_ai_event_alerts_event ON ai_event_alerts(event_key)'
+    )
   }
 
   if (version !== SCHEMA_VERSION) {

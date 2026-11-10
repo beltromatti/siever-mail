@@ -526,4 +526,28 @@ END:VCALENDAR`
     expect((await week())[0].yours).toBe(true)
     expect(await calendar.remindable(from, to)).toHaveLength(1)
   })
+
+  it('says what the calendar says by itself, the Segretario left out: where the user may put it right', async () => {
+    const feed = FEED.replace('X-WR-CALNAME:Calcetto', 'X-WR-CALNAME:Studio comune')
+    let found: SegretarioOwnership | null = null
+    const { calendar } = await calendars(async () => new Response(feed), {
+      ownership: async () => found
+    })
+    await calendar.addIcs('https://studio.example/comune.ics', null)
+    const [entry] = await calendar.calendars()
+    const [match] = await calendar.events(
+      new Date().toISOString(),
+      new Date(Date.now() + 7 * 86_400_000).toISOString()
+    )
+
+    // Found the user's by the Segretario: theirs, though the calendar does not say so.
+    found = { roles: new Map(), events: new Set([match.key]), series: new Set() }
+    expect((await calendar.event(match.key))?.yours).toBe(true)
+    expect(await calendar.calendarSays(match.key)).toEqual({ role: 'propri', yours: false })
+
+    // A calendar of theirs says it of every event: nothing there to put right.
+    await calendar.setCalendarRole(entry.key, 'tutti')
+    expect(await calendar.calendarSays(match.key)).toEqual({ role: 'tutti', yours: true })
+    expect(await calendar.calendarSays(`${match.key}-gone`)).toBeNull()
+  })
 })

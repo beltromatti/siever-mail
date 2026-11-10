@@ -185,6 +185,7 @@ const segretarioApi: SegretarioApi = {
   listProposals: async () => invoke(SEGRETARIO_IPC.listProposals),
   eventPrep: async (eventKey) => invoke(SEGRETARIO_IPC.eventPrep, eventKey),
   eventWork: async (eventKey) => invoke(SEGRETARIO_IPC.eventWork, eventKey),
+  setEventYours: async (eventKey, yours) => invoke(SEGRETARIO_IPC.setEventYours, eventKey, yours),
   commitmentSource: async (id) => invoke(SEGRETARIO_IPC.commitmentSource, id),
   decideProposal: async (id, accepted, result, revision) =>
     invoke(SEGRETARIO_IPC.decideProposal, id, accepted, result, revision),

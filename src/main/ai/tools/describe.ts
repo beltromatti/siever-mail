@@ -45,7 +45,9 @@ export function commitmentLine(record: CommitmentRecord): string {
 export function noteLine(note: NoteRecord): string {
   return `«${note.summary}» · ${NATURE_WORDS[note.nature]} · importanza ${note.priority}${
     note.reason ? ` (${note.reason})` : ''
-  }${note.due ? ` · da fare entro ${dayWithWeekday(note.due)}` : ''}${note.writtenBy === 'utente' ? ' · corretta dall’utente' : ''}`
+  }${note.due ? ` · da fare entro ${dayWithWeekday(note.due)}` : ''}${
+    note.notify ? ` · avviso all’utente${note.alert ? `: «${note.alert}»` : ''}` : ''
+  }${note.writtenBy === 'utente' ? ' · corretta dall’utente' : ''}`
 }
 
 export function replyLines(reply: ReplyRecord): string[] {

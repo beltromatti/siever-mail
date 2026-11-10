@@ -315,6 +315,9 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
   handle(SEGRETARIO_IPC.eventWork, (eventKey: unknown) =>
     segretario.eventWork(z.string().min(1).max(2000).parse(eventKey))
   )
+  handle(SEGRETARIO_IPC.setEventYours, (eventKey: unknown, yours: unknown) =>
+    segretario.setEventYours(z.string().min(1).max(2000).parse(eventKey), z.boolean().parse(yours))
+  )
   handle(SEGRETARIO_IPC.commitmentSource, (id: unknown) =>
     segretario.commitmentSource(z.number().int().positive().parse(id))
   )

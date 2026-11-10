@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto'
 
 import type { PrismaClient } from '@prisma/client'
 
-import type {
-  CalendarConnection,
-  CalendarProviderKind,
-  CalendarResponse,
-  EventChange
+import {
+  seriesKey,
+  type CalendarConnection,
+  type CalendarProviderKind,
+  type CalendarResponse,
+  type EventChange
 } from '@shared/calendar'
 import type { MailAccount, MessageRef } from '@shared/models'
 import {
@@ -28,6 +29,7 @@ import {
   type ConnectionReadiness,
   type DayLine,
   type EngineState,
+  type EventWhose,
   type EventWork,
   type SelectionWork,
   type MemoryNote,
@@ -2085,9 +2087,10 @@ export class SegretarioService {
   /** What the work holds of an event: the things born from it, the projects that gather it. */
   async eventWork(eventKey: string): Promise<EventWork> {
     const { registry } = this.db
-    const [items, projects] = await Promise.all([
+    const [items, projects, whose] = await Promise.all([
       registry.commitments.ofPlaces({ events: [eventKey] }),
-      registry.projects.ofEvents([eventKey])
+      registry.projects.ofEvents([eventKey]),
+      this.eventWhose(eventKey)
     ])
 
     return {
@@ -2095,8 +2098,58 @@ export class SegretarioService {
       projects: (projects.get(eventKey) ?? []).map((project) => ({
         id: project.id,
         title: project.title
-      }))
+      })),
+      whose
     }
+  }
+
+  /**
+   * Whose an event is, where a word counts (§7.4): in a calendar shared,
+   * one its calendar does not make the user's — as the Segretario found
+   * it, as the user said it, or not theirs. Null elsewhere.
+   */
+  private async eventWhose(eventKey: string): Promise<EventWhose | null> {
+    const says = await this.options.calendar.calendarSays(eventKey)
+
+    if (!says || says.role !== 'propri' || says.yours) {
+      return null
+    }
+
+    const event = await this.options.calendar.event(eventKey)
+    const mark = event
+      ? await this.db.registry.ownership.markOf(
+          eventKey,
+          event.seriesId ? seriesKey(event.connectionId, event.calendarId, event.seriesId) : null
+        )
+      : null
+
+    return mark
+      ? { yours: mark.yours, by: mark.setBy, reason: mark.reason }
+      : { yours: false, by: null, reason: null }
+  }
+
+  /** The user says whose an event is, in its panel: their word, which puts the Segretario right. */
+  async setEventYours(eventKey: string, yours: boolean): Promise<void> {
+    const event = await this.options.calendar.event(eventKey)
+
+    if (!event) {
+      throw new Error('L’evento non c’è più nel calendario.')
+    }
+
+    await plainly(
+      this.db.registry.markEvent(
+        {
+          key: event.key,
+          title: event.title,
+          seriesKey: event.seriesId
+            ? seriesKey(event.connectionId, event.calendarId, event.seriesId)
+            : null
+        },
+        yours,
+        null,
+        USER
+      )
+    )
   }
 
   /**

@@ -949,3 +949,70 @@ describe("A calendar's first look", () => {
     expect(await queue.within(calendarLookScope('c1'))).toHaveLength(5)
   })
 })
+
+describe('What the user taught', () => {
+  let sql: ReturnType<typeof memorySql>
+  let queue: WorkQueue
+  let store: AiStore
+
+  beforeEach(async () => {
+    sql = memorySql()
+    await ensureAiSchema(sql)
+    queue = new WorkQueue(sql)
+    store = new AiStore(sql)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    sql.close()
+  })
+
+  const plan = (at: number): Promise<void> =>
+    (
+      new SegretarioEngine({ queue, store } as unknown as EngineDeps) as unknown as {
+        planReflection(now: number): Promise<void>
+      }
+    ).planReflection(at)
+
+  const reflections = async (): Promise<WorkUnit[]> =>
+    (await queue.within('riflessione')).filter((unit) => unit.task === 'riflessione')
+
+  it('is taken in once the user stopped putting things right: a change of mind with it', async () => {
+    const start = new Date('2026-11-10T09:00:00.000Z').getTime()
+    vi.useFakeTimers({ now: start, toFake: ['Date'] })
+    await store.addLesson('evento_di_chi', { lUtente: 'è suo' })
+    await plan(start)
+    const [waiting] = await reflections()
+    expect(waiting.notBefore).toBe(start + 2 * 60_000)
+
+    // A minute later they change their mind: the same reflection waits for that too.
+    vi.setSystemTime(start + 60_000)
+    await store.addLesson('evento_di_chi', { lUtente: 'non è suo' })
+    await plan(start + 60_000)
+    // Planning again does not push it further.
+    await plan(start + 90_000)
+
+    expect((await reflections()).map((unit) => [unit.id, unit.notBefore])).toEqual([
+      [waiting.id, start + 3 * 60_000]
+    ])
+  })
+
+  it('lets a reflection running finish, and does one failed again only for a lesson come after', async () => {
+    await store.addLesson('nota_corretta', {})
+    await plan(Date.now())
+    const [unit] = await reflections()
+    await queue.claim(unit.id)
+    await store.addLesson('nota_corretta', {})
+    await plan(Date.now())
+    expect((await reflections()).map(({ status }) => status)).toEqual(['al_lavoro'])
+
+    await queue.fail(unit.id, 'Mi sono fermato.', { retry: false })
+    await plan(Date.now())
+    expect((await reflections()).map(({ status }) => status)).toEqual(['fallito'])
+
+    vi.useFakeTimers({ now: Date.now() + 1_000, toFake: ['Date'] })
+    await store.addLesson('impegno_riaperto', {})
+    await plan(Date.now())
+    expect((await reflections()).map(({ status }) => status).sort()).toEqual(['fallito', 'in_coda'])
+  })
+})

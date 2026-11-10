@@ -77,42 +77,44 @@ export class OwnershipStore {
   }
 
   async marks(): Promise<EventMark[]> {
-    const rows = await this.sql.all<{
-      event_key: string
-      series_key: string | null
-      yours: number
-      set_by: 'segretario' | 'utente'
-      reason: string | null
-      set_at: number
-    }>('SELECT event_key, series_key, yours, set_by, reason, set_at FROM ai_own_events')
-
-    return rows.map((row) => ({
-      eventKey: row.event_key,
-      seriesKey: row.series_key,
-      yours: Number(row.yours) === 1,
-      setBy: row.set_by,
-      reason: row.reason,
-      setAt: Number(row.set_at)
-    }))
-  }
-
-  /** The mark an event has — its own, or its series'. */
-  async markOf(eventKey: string, seriesKey: string | null): Promise<EventMark | null> {
-    const marks = await this.marks()
-    return (
-      marks.find((mark) => mark.eventKey === eventKey) ??
-      (seriesKey ? marks.find((mark) => mark.seriesKey === seriesKey) : undefined) ??
-      null
+    const rows = await this.sql.all<MarkRow>(
+      'SELECT event_key, series_key, yours, set_by, reason, set_at FROM ai_own_events'
     )
+    return rows.map(toMark)
   }
 
-  /** Marks an event — and its series — the user's or not; a mark of the Segretario's taken back goes. */
-  async mark(
-    mark: Omit<EventMark, 'setAt'> & { runId: string | null },
-    previous: EventMark | null
-  ): Promise<void> {
-    if (previous && previous.eventKey !== mark.eventKey) {
-      await this.sql.run('DELETE FROM ai_own_events WHERE event_key = ?', previous.eventKey)
+  /** The mark an event has — its own, or its series' —, looked for by its key. */
+  async markOf(eventKey: string, seriesKey: string | null): Promise<EventMark | null> {
+    const own = await this.sql.get<MarkRow>(
+      'SELECT event_key, series_key, yours, set_by, reason, set_at FROM ai_own_events WHERE event_key = ?',
+      eventKey
+    )
+
+    if (own) {
+      return toMark(own)
+    }
+
+    const series = seriesKey
+      ? await this.sql.get<MarkRow>(
+          `SELECT event_key, series_key, yours, set_by, reason, set_at FROM ai_own_events
+           WHERE series_key = ? ORDER BY set_at DESC LIMIT 1`,
+          seriesKey
+        )
+      : null
+    return series ? toMark(series) : null
+  }
+
+  /**
+   * Marks an event — and its series, one mark for it — the user's or not; a
+   * mark of the Segretario's taken back goes.
+   */
+  async mark(mark: Omit<EventMark, 'setAt'> & { runId: string | null }): Promise<void> {
+    if (mark.seriesKey) {
+      await this.sql.run(
+        'DELETE FROM ai_own_events WHERE series_key = ? AND event_key <> ?',
+        mark.seriesKey,
+        mark.eventKey
+      )
     }
 
     if (!mark.yours && mark.setBy === 'segretario') {
@@ -134,5 +136,25 @@ export class OwnershipStore {
       mark.runId,
       Date.now()
     )
+  }
+}
+
+interface MarkRow {
+  event_key: string
+  series_key: string | null
+  yours: number
+  set_by: 'segretario' | 'utente'
+  reason: string | null
+  set_at: number
+}
+
+function toMark(row: MarkRow): EventMark {
+  return {
+    eventKey: row.event_key,
+    seriesKey: row.series_key,
+    yours: Number(row.yours) === 1,
+    setBy: row.set_by,
+    reason: row.reason,
+    setAt: Number(row.set_at)
   }
 }

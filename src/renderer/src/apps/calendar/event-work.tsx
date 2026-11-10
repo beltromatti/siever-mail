@@ -8,7 +8,7 @@ import { dayKey } from '@renderer/features/calendar/calendar-dates'
 import { CommitmentRow } from '@renderer/features/segretario/commitment-row'
 import { useOpenLink } from '@renderer/features/segretario/segretario-text'
 import type { CalendarEvent } from '@shared/calendar'
-import type { EventWork } from '@shared/segretario'
+import type { EventWhose, EventWork } from '@shared/segretario'
 
 /** What the work holds of an event, kept current while the Segretario and the user change it. */
 function useEventWork(eventKey: string): EventWork | null {
@@ -31,6 +31,56 @@ function useEventWork(eventKey: string): EventWork | null {
   }, [eventKey])
 
   return work?.eventKey === eventKey ? work.value : null
+}
+
+/** Whose the event is, in words: as the Segretario found it, as the user said it, or not theirs. */
+function whoseWords(whose: EventWhose): string {
+  if (whose.yours) {
+    return whose.by === 'utente' ? 'Tuo: l’hai detto tu' : 'Tuo, per il Segretario'
+  }
+
+  return whose.by === 'utente' ? 'Non tuo: l’hai detto tu' : 'Non è tra i tuoi eventi'
+}
+
+/**
+ * Whose the event is, where a word counts (§7.4) — in a calendar shared,
+ * one the calendar does not say is the user's —, and the user's word to
+ * put it right: it stands, and teaches the Segretario.
+ */
+function WhoseRow({ eventKey, whose }: { eventKey: string; whose: EventWhose }): React.JSX.Element {
+  const [saving, setSaving] = useState(false)
+
+  const say = async (yours: boolean): Promise<void> => {
+    setSaving(true)
+
+    try {
+      await window.segretarioApi.setEventYours(eventKey, yours)
+    } catch (error) {
+      toast.error('Non è stato salvato', {
+        description: error instanceof Error ? error.message : undefined
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <p className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-[12px]">
+      {whose.by === 'segretario' && <CompassStar className="text-ai-star size-3.5 shrink-0" />}
+      <span className="min-w-0 truncate" title={whose.reason ?? undefined}>
+        {whoseWords(whose)}
+        {whose.reason ? ` — ${whose.reason}` : ''}
+      </span>
+      <button
+        type="button"
+        disabled={saving}
+        onClick={() => void say(!whose.yours)}
+        className="hover:text-foreground focus-visible:ring-ring/60 shrink-0 rounded-sm underline underline-offset-2 outline-none focus-visible:ring-2 disabled:no-underline"
+      >
+        {whose.yours ? 'Non è mio' : 'È mio'}
+      </button>
+    </p>
+  )
 }
 
 /**
@@ -78,6 +128,7 @@ export function EventWorkSection({ event }: { event: CalendarEvent }): React.JSX
 
   return (
     <div className="flex flex-col gap-2">
+      {work.whose && <WhoseRow eventKey={event.key} whose={work.whose} />}
       {work.projects.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           {work.projects.map((project) => (

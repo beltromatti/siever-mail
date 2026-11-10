@@ -214,6 +214,21 @@ export interface ProjectLabel {
 export interface EventWork {
   commitments: Commitment[]
   projects: ProjectLabel[]
+  /**
+   * Whose the event is, where someone's word counts (§7.4): in a calendar
+   * shared, one the calendar does not say is the user's. Null elsewhere —
+   * the calendar says it, and there is nothing to put right.
+   */
+  whose: EventWhose | null
+}
+
+/** Whose an event is, as the Segretario found it or the user said it — or as nobody did yet. */
+export interface EventWhose {
+  yours: boolean
+  /** Who said it: the Segretario, the user; null when nobody did (it is not theirs). */
+  by: 'segretario' | 'utente' | null
+  /** Why, as the Segretario said it. */
+  reason: string | null
 }
 
 /** A reply prepared ahead, while it waits for the user. */
@@ -814,6 +829,7 @@ export const SEGRETARIO_IPC = {
   listProposals: 'segretario:list-proposals',
   eventPrep: 'segretario:event-prep',
   eventWork: 'segretario:event-work',
+  setEventYours: 'segretario:set-event-yours',
   commitmentSource: 'segretario:commitment-source',
   getToday: 'segretario:get-today',
   refreshToday: 'segretario:refresh-today',
@@ -944,6 +960,8 @@ export interface SegretarioApi {
   eventPrep: (eventKey: string) => Promise<(LinkedText & { writtenAt: number }) | null>
   /** What the work holds of an event, as the reader shows it of a message: its open things and its projects. */
   eventWork: (eventKey: string) => Promise<EventWork>
+  /** The user says whose an event is (§7.4): their word stands, and puts the Segretario right. */
+  setEventYours: (eventKey: string, yours: boolean) => Promise<void>
   /**
    * Where an open thing comes from, to open it: its message where it is now,
    * its event, the user's word (with its project); null when its message or

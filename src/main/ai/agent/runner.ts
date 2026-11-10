@@ -354,8 +354,7 @@ export class AgentRunner {
             this.deps.client.chat(
               key,
               {
-                // The hour now: a step tried again after a wait is told it as it is then.
-                messages: buildConversation(system, events, Date.now()),
+                messages: buildConversation(system, events),
                 tools,
                 reasoningEffort: TASK_EFFORT[options.task],
                 sessionId: id

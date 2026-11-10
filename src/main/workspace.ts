@@ -223,6 +223,7 @@ export class Workspace {
         alert: (eventKey, text) => this.calendarAlert(eventKey, text),
         calendars: () => this.calendar.calendars(),
         setRole: (calendarKey, role) => this.calendar.setCalendarRole(calendarKey, role),
+        calendarSays: (eventKey) => this.calendar.calendarSays(eventKey),
         connections: () => this.calendar.listConnections(),
         events: (fromIso, toIso) => this.calendar.events(fromIso, toIso),
         search: (query) => this.calendar.search(query),
