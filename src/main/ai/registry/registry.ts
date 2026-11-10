@@ -13,6 +13,7 @@ import { ReplyStore } from './replies'
 import {
   OWED_KINDS,
   type Actor,
+  type ActorKind,
   type CommitmentKind,
   type CommitmentOrigin,
   type CommitmentRecord,
@@ -72,6 +73,13 @@ const ROLE_WORDS: Record<CalendarRole, string> = {
   tutti: 'tutti gli eventi sono tuoi',
   propri: 'solo i tuoi eventi',
   nessuno: 'nessun evento è tuo'
+}
+
+/** Who set a thing as it was, in a lesson's words. */
+const WHO_SAID: Record<ActorKind, string> = {
+  utente: "l'aveva detto l'utente",
+  segretario: 'per il Segretario',
+  sistema: 'per il sistema'
 }
 
 const STATUS_LABELS: Record<CommitmentStatus, string> = {
@@ -271,20 +279,31 @@ export class Registry {
     const place = await this.commitmentPlace(record)
 
     if (actor.by === 'utente' && before) {
-      // What teaches: a thing the Segretario opened that was not needed, one it closed that was
-      // not done, the answer to what it asked.
-      if (
-        status === 'non_serve' ||
-        (status === 'aperta' && before.status !== 'aperta' && before.setBy === 'segretario')
-      ) {
-        this.hooks.lesson(status === 'non_serve' ? 'impegno_non_serve' : 'impegno_riaperto', {
-          ...lessonSource(record),
-          impegno: record.id,
-          tipo: record.kind,
-          testo: record.text,
-          prima: before.status,
-          motivo: options.reason ?? null
-        })
+      // What teaches: a thing that was not needed, one the Segretario closed that was not done,
+      // the answer to what it asked — and the user taking back their own "not needed", which
+      // had taught: the reflection has their words in order, and the last one counts.
+      const reopened =
+        status === 'aperta' && before.status !== 'aperta' && before.setBy === 'segretario'
+      const takenBack =
+        before.status === 'non_serve' && before.setBy === 'utente' && status !== 'non_serve'
+
+      if (status === 'non_serve' || reopened || takenBack) {
+        this.hooks.lesson(
+          status === 'non_serve'
+            ? 'impegno_non_serve'
+            : status === 'aperta'
+              ? 'impegno_riaperto'
+              : 'impegno_ripensato',
+          {
+            ...lessonSource(record),
+            impegno: record.id,
+            tipo: record.kind,
+            testo: record.text,
+            prima: `${before.status.replace('_', ' ')}, ${WHO_SAID[before.setBy]}`,
+            ora: status.replace('_', ' '),
+            motivo: options.reason ?? null
+          }
+        )
       } else if (before.question) {
         this.hooks.lesson('domanda_risposta', {
           ...lessonSource(record),
@@ -480,10 +499,15 @@ export class Registry {
     actor: Actor,
     seenRevision?: number
   ): Promise<ProjectRecord> {
+    const before = await this.projects.get(id)
     const record = await this.projects.setHidden(id, hidden, actor, seenRevision)
 
-    if (actor.by === 'utente' && hidden) {
-      this.hooks.lesson('progetto_nascosto', { progetto: record.title })
+    // Hidden by the user, or shown again — the Segretario put right, or their own word taken
+    // back: either teaches.
+    if (actor.by === 'utente' && before && (before.hiddenAt !== null) !== hidden) {
+      this.hooks.lesson(hidden ? 'progetto_nascosto' : 'progetto_mostrato', {
+        progetto: record.title
+      })
     }
 
     this.emitProject(
@@ -1230,7 +1254,7 @@ export class Registry {
         titolo: event.title,
         prima: !previous
           ? 'non riconosciuto come suo dal Segretario'
-          : `${previous.yours ? 'suo' : 'non suo'}, ${previous.setBy === 'utente' ? "l'aveva detto l'utente" : 'per il Segretario'}`,
+          : `${previous.yours ? 'suo' : 'non suo'}, ${WHO_SAID[previous.setBy]}`,
         perché: previous?.setBy === 'segretario' ? previous.reason : null,
         lUtente: yours ? 'è suo' : 'non è suo'
       })

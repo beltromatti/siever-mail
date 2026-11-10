@@ -808,6 +808,8 @@ Da lì li trova da solo (`cerca_file` sulla radice). Così con un'estensione e s
 - le connessioni tolte, che fanno rivedere ciò che la memoria ne dice (§11.4);
 - gli eventi di cui l'utente ha detto di chi sono (§7.4).
 
+Ognuna dice ciò che c'era prima. Quando l'utente ritira una parola che aveva fatto lezione — riapre una cosa che aveva detto non servire, mostra di nuovo un progetto nascosto, cambia idea su di chi è un evento —, anche il ritiro è una lezione: altrimenti la riflessione imparerebbe ciò che lui ha già smentito. Le riceve in ordine, quando l'utente ha smesso di correggere (§4.5), e su una cosa conta l'ultima parola.
+
 La **riflessione** le trasforma in regole scritte nelle note. Tutte le esecuzioni le leggono.
 
 ---

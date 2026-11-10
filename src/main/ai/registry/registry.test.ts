@@ -316,6 +316,24 @@ describe('Registry', () => {
       expect(lessons.map((lesson) => lesson.kind)).toContain('impegno_non_serve')
     })
 
+    it('learns from the user taking back their own "not needed", in order', async () => {
+      const { record } = await registry.openCommitment(
+        { kind: 'messaggio', ...ANNA },
+        { kind: 'ti_chiedono', text: 'Integrazioni SCIA' },
+        BACKGROUND
+      )
+      await registry.setCommitmentStatus(record.id, 'non_serve', USER)
+      await registry.setCommitmentStatus(record.id, 'aperta', USER)
+      // Done and opened again by the user alone: nothing to learn.
+      await registry.setCommitmentStatus(record.id, 'fatta', USER)
+      await registry.setCommitmentStatus(record.id, 'aperta', USER)
+
+      expect(lessons.map(({ kind, payload }) => [kind, payload.prima, payload.ora])).toEqual([
+        ['impegno_non_serve', 'aperta, per il Segretario', 'non serve'],
+        ['impegno_riaperto', "non serve, l'aveva detto l'utente", 'aperta']
+      ])
+    })
+
     it('undoes a change only while nothing changed it since', async () => {
       const { record } = await registry.openCommitment(
         { kind: 'messaggio', ...ANNA },
@@ -407,6 +425,16 @@ describe('Registry', () => {
         registry.renameProject(made.record.id, 'Matrimonio', BACKGROUND)
       ).rejects.toBeInstanceOf(RegistryRefusal)
       expect(lessons.map((lesson) => lesson.kind)).toContain('progetto_rinominato')
+    })
+
+    it('learns from a project hidden, and from one shown again — whoever had hidden it', async () => {
+      const { record } = await registry.createProject('Partita del giovedì', BACKGROUND)
+      await registry.setProjectHidden(record.id, true, CHAT)
+      await registry.setProjectHidden(record.id, false, USER)
+      await registry.setProjectHidden(record.id, true, USER)
+      await registry.setProjectHidden(record.id, true, USER)
+
+      expect(lessons.map(({ kind }) => kind)).toEqual(['progetto_mostrato', 'progetto_nascosto'])
     })
 
     it('never files again a conversation the user took out', async () => {

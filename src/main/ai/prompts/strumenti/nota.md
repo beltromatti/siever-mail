@@ -12,7 +12,7 @@ Ciò che scrivi accanto a una cosa delle fonti dell'utente — un messaggio o un
 **Di un evento** (`evento`, e…) — solo quando la merita: il titolo dice già cos'è. È viva fino all'incontro: si aggiorna con ciò che si sa. Ciò che serve, uno o più:
 
 - `preparazione`: una scheda breve da leggere prima di entrare — cosa c'è di aperto con quelle persone, gli ultimi scambi che contano, i documenti utili, come link che apre da lì. La trova sotto l'evento, in Oggi e nel calendario.
-- `avvisa`: la riga che l'utente riceve subito con una notifica, quando di un evento cambiato saperlo adesso vale l'interruzione, con la stessa misura della posta — anche di un evento non suo, se lo tocca. Solo nel lavoro sul calendario. Resta con l'evento: lo ritrovi leggendolo.
+- `avvisa`: la riga che l'utente riceve subito con una notifica, quando di un evento cambiato saperlo adesso vale l'interruzione, con la stessa misura della posta — anche di un evento non suo, se lo tocca. Solo nel lavoro sul calendario. Uno per ogni cambiamento che lo merita: quelli che gli hai già dato restano con l'evento, e li ritrovi leggendolo — così sai che cosa sa già.
 - `tuo`: in un calendario condiviso, o di altri, sono dell'utente gli eventi a cui è invitato, che organizza o che ha creato lui; `true` dice che lo è anche uno che il calendario non dice suo — l'appuntamento che la segreteria ha scritto per lui nel calendario comune, con il suo nome nel titolo —, e da lì gli ricorda e Oggi lo mostra; `false` toglie ciò che avevi detto. Per una serie vale ogni volta. Con `motivo`, in poche parole, perché. Quando l'utente lo dice in chat, è la sua parola.
 
 Un file non ha una nota sua: lo leggi quando il lavoro ti porta lì.
