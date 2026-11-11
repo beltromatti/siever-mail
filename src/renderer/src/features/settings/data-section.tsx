@@ -78,7 +78,8 @@ function sectionWords(section: DataStorageSection, aiShown: boolean): string {
 
 /**
  * Impostazioni › Dati (vision §13.2): what SIEVER Mail keeps on this
- * computer, by whose it is — each connection at par, with the Segretario's
+ * computer — not what lives outside it, the mail on the servers, the user's
+ * files, what an extension wrote out (an archive on a share) —, by whose it is — each connection at par, with the Segretario's
  * share of it, the Segretario's own, what every app shares, the
  * extension's, the files beside — and what can go: a mailbox's mail, to be
  * downloaded again; the copies of opened attachments; the Segretario's all,
@@ -285,8 +286,8 @@ export function DataSection({
           {aiShown
             ? '; il Segretario dimentica tutto, anche la chiave, e le funzioni AI si spengono'
             : ''}
-          . Restano le connessioni e le tue preferenze: la posta e i calendari si scaricano di
-          nuovo.
+          . Restano le connessioni e le tue preferenze, e ciò che sta fuori da SIEVER Mail: la posta
+          sui server, i calendari, i tuoi file. La posta e i calendari si scaricano di nuovo.
         </p>
         <Button
           type="button"
@@ -297,7 +298,7 @@ export function DataSection({
           onClick={() =>
             void confirm({
               title: 'Eliminare tutti i dati?',
-              description: `Si tolgono ${everything}${aiShown ? '; il Segretario dimentica tutto e le funzioni AI si spengono' : ''}. Le connessioni restano: la posta e i calendari si scaricano di nuovo.`,
+              description: `Si tolgono ${everything}${aiShown ? '; il Segretario dimentica tutto e le funzioni AI si spengono' : ''}. Restano le connessioni, le preferenze e ciò che sta fuori da SIEVER Mail, come la posta sui server e i tuoi file: la posta e i calendari si scaricano di nuovo.`,
               confirmLabel: 'Elimina tutti i dati',
               destructive: true
             }).then((confirmed) => confirmed && onClearAll())

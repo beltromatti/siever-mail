@@ -432,9 +432,11 @@ export interface ExtensionRenderer {
    */
   readonly fontFaceCss: string
   /**
-   * What `clearData` deletes, as it reads in the list the settings show
-   * under "Elimina tutti i dati" — e.g. "i modelli salvati". Empty when
-   * nothing.
+   * What the extension keeps in SIEVER Mail, as Impostazioni › Dati names it
+   * beside its tables' size and in what "Elimina tutti i dati" takes
+   * (`clearData`) — e.g. "i modelli salvati". Only that: what it wrote out of
+   * the app (an archive on a share) is not SIEVER Mail's, and stays where it
+   * is. Empty when nothing.
    */
   readonly localDataLabel: string
   /**
