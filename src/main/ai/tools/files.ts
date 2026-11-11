@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, isAbsolute, join, resolve } from 'node:path'
+import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 
 import { foldSearchText } from '@shared/search'
 
@@ -11,8 +11,8 @@ import { PROMPTS } from '../prompts'
 import {
   booleanArg,
   numberArg,
-  requireString,
   stringArg,
+  stringListArg,
   ToolInputError,
   type FileSearch,
   type FoundFile,
@@ -22,6 +22,7 @@ import {
 import { countOf, formatDateTime } from './format'
 
 const DEFAULT_FILE_LIMIT = 30
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 /**
  * The path that reaches `path` now, wherever its network share is mounted;
@@ -67,8 +68,8 @@ const SKIPPED_DIRECTORIES = new Set([
 
 /**
  * Where a search without a folder looks: the File sources (see
- * `src/main/files`) — the user's own folders first, then their home, then
- * each mounted volume, local or network.
+ * `src/main/files`) — the user's own folders first, then their home with
+ * the drives synced into it, then each mounted volume, local or network.
  */
 async function defaultRoots(): Promise<string[]> {
   const home = homedir()
@@ -79,7 +80,52 @@ async function defaultRoots(): Promise<string[]> {
     .filter((source) => source.kind !== 'computer' && source.mounted)
     .map((source) => source.path)
 
-  return [...own, home, ...volumes]
+  return [...own, home, ...(await syncedDrives(home)), ...volumes]
+}
+
+/**
+ * The drives of the providers synced on this computer where a search of the
+ * home would not go: on macOS they live under Library, which holds the
+ * system's files too — OneDrive, Google Drive, Dropbox and Box in
+ * CloudStorage, iCloud Drive in Mobile Documents. On Windows and Linux they
+ * are folders of the home (OneDrive, Dropbox) or a drive of their own
+ * (Google Drive), which the search finds already.
+ */
+async function syncedDrives(home: string): Promise<string[]> {
+  if (process.platform !== 'darwin') {
+    return []
+  }
+
+  const cloud = join(home, 'Library', 'CloudStorage')
+  const drives = await readdir(cloud, { withFileTypes: true }).catch(() => [])
+  const iCloud = join(home, 'Library', 'Mobile Documents', 'com~apple~CloudDocs')
+
+  return [
+    ...drives
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => join(cloud, entry.name)),
+    ...(existsSync(iCloud) ? [iCloud] : [])
+  ]
+}
+
+/** Whether a file found by name is also of the kind and the time asked. */
+function wanted(search: FileSearch, path: string, directory: boolean, modified: number): boolean {
+  if (
+    search.types.length > 0 &&
+    (directory || !search.types.includes(extname(path).toLowerCase()))
+  ) {
+    return false
+  }
+
+  if (search.changedFrom === undefined && search.changedTo === undefined) {
+    return true
+  }
+
+  return (
+    !directory &&
+    modified >= (search.changedFrom ?? -Infinity) &&
+    modified <= (search.changedTo ?? Infinity)
+  )
 }
 
 /**
@@ -118,10 +164,16 @@ async function findFiles(search: FileSearch): Promise<FoundFile[]> {
       const isDirectory = entry.isDirectory()
       const name = foldSearchText(entry.name)
 
-      if (search.words.every((word) => name.includes(word))) {
+      if (
+        search.words.every((word) => name.includes(word)) &&
+        (search.types.length === 0 || search.types.includes(extname(entry.name).toLowerCase()))
+      ) {
         try {
           const info = await stat(path)
-          found.push({ path, directory: isDirectory, size: info.size, modified: info.mtimeMs })
+
+          if (wanted(search, path, isDirectory, info.mtimeMs)) {
+            found.push({ path, directory: isDirectory, size: info.size, modified: info.mtimeMs })
+          }
         } catch {
           // Gone, or not ours to read.
         }
@@ -156,6 +208,9 @@ export const searchFilesTool: SegretarioTool = {
     type: 'object',
     properties: {
       nome: { type: 'string' },
+      tipo: { type: 'array', items: { type: 'string' } },
+      dal: { type: 'string' },
+      al: { type: 'string' },
       cartella: { type: 'string' },
       elenca: { type: 'boolean' },
       pagina: { type: 'integer' },
@@ -168,7 +223,9 @@ export const searchFilesTool: SegretarioTool = {
       ? 'Guardo nella cartella…'
       : stringArg(args, 'continua')
         ? 'Continuo a cercare i file…'
-        : `Cerco i file «${stringArg(args, 'nome') ?? ''}»…`,
+        : stringArg(args, 'nome')
+          ? `Cerco i file «${stringArg(args, 'nome')}»…`
+          : 'Cerco i file…',
   readsOnly: () => true,
   async execute(args, context) {
     const given = stringArg(args, 'cartella')
@@ -251,9 +308,35 @@ export const searchFilesTool: SegretarioTool = {
       }
     }
 
-    const name = requireString(args, 'nome')
+    const name = stringArg(args, 'nome') ?? ''
+    const types = stringListArg(args, 'tipo')
+      .flatMap((item) => item.split(/[\s,;]+/))
+      .filter(Boolean)
+      .map((item) => `.${item.toLowerCase().replace(/^\*?\./, '')}`)
+    const from = stringArg(args, 'dal')
+    const to = stringArg(args, 'al')
+
+    for (const [label, value] of [
+      ['dal', from],
+      ['al', to]
+    ] as const) {
+      if (value && !ISO_DATE.test(value)) {
+        throw new ToolInputError(`\`${label}\` va scritto come AAAA-MM-GG.`)
+      }
+    }
+
+    if (!name.trim() && types.length === 0 && !from && !to) {
+      throw new ToolInputError(
+        'Indica che cosa cercare: `nome`, `tipo` o il periodo (`dal`, `al`); per guardare in una cartella usa `elenca`.'
+      )
+    }
+
     const search: FileSearch = {
       words: foldSearchText(name).split(/\s+/).filter(Boolean),
+      types,
+      // The days of the user's calendar: from the first moment of `dal` to the last of `al`.
+      changedFrom: from ? new Date(`${from}T00:00:00`).getTime() : undefined,
+      changedTo: to ? new Date(`${to}T23:59:59.999`).getTime() : undefined,
       queue: folder ? [resolve(folder)] : await defaultRoots(),
       seen: new Set(),
       pending: []
@@ -262,7 +345,9 @@ export const searchFilesTool: SegretarioTool = {
 
     return searchResult(context, id, search, await findFiles(search), limit, {
       name,
-      folder
+      folder,
+      from,
+      to
     })
   }
 }
@@ -278,7 +363,7 @@ function searchResult(
   search: FileSearch,
   found: FoundFile[],
   limit: number,
-  first?: { name: string; folder: string | undefined }
+  first?: { name: string; folder: string | undefined; from?: string; to?: string }
 ): { content: string; summary: string; files?: string[] } {
   // What an earlier slice found past its limit comes first, with this one's, the newest first.
   const all = [...search.pending, ...found].sort((a, b) => b.modified - a.modified)
@@ -292,8 +377,19 @@ function searchResult(
     context.run.fileSearches.delete(id)
   }
 
+  const asked = first
+    ? [
+        first.name.trim() ? `«${first.name.trim()}» nel nome` : null,
+        search.types.length > 0 ? search.types.join(' ') : null,
+        search.changedFrom !== undefined || search.changedTo !== undefined
+          ? `modificati ${first.from ? `dal ${first.from}` : ''}${first.from && first.to ? ' ' : ''}${first.to ? `al ${first.to}` : ''}`
+          : null
+      ]
+        .filter(Boolean)
+        .join(', ')
+    : ''
   const where = first
-    ? `«${first.name}» nel nome${first.folder ? ` in ${first.folder}` : ' nelle cartelle dell’utente e nei dischi collegati'}`
+    ? `${asked}${first.folder ? ` in ${first.folder}` : ' nelle cartelle dell’utente, nei drive sincronizzati e nei dischi collegati'}`
     : 'altri, continuando la ricerca'
   const left = [
     search.pending.length > 0

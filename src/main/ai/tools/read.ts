@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises'
+import { open, readFile, stat } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 
 import { seriesKey } from '@shared/calendar'
@@ -6,7 +6,8 @@ import type { MessageRef } from '@shared/models'
 import { pecReceiptAt, pecReceiptWords } from '@shared/pec'
 import { unlinked } from '@shared/segretario-links'
 
-import { extractContent } from '../extraction'
+import { looksLikeText, TEXT_SNIFF_BYTES } from '../document-formats'
+import { extractContent, knownFormat } from '../extraction'
 import { reachShare } from './files'
 import { threadMessages } from '../mail-search'
 import type { ContentPart } from '../openrouter'
@@ -145,7 +146,8 @@ export function describeExtraction(
         failed: true
       }
     case 'pdf': {
-      const scanned = extracted.pages.filter((page) => 'dataUrl' in page).length
+      const scanned = extracted.pages.filter((page) => page.dataUrl && !page.text).length
+      const looked = extracted.pages.filter((page) => page.dataUrl).length
       const shown = extracted.pages.map((page) => page.page)
       const range =
         shown.length === 0
@@ -158,16 +160,22 @@ export function describeExtraction(
           type: 'text',
           text: `${handle} ${fileName} · PDF di ${countOf(extracted.totalPages, 'pagina', 'pagine')}${
             range ? ` · qui ${shown.length === 1 ? 'la' : 'le'} ${range}` : ''
-          }${scanned > 0 ? ' (le pagine scansionate sono immagini da guardare)' : ''}`
+          }${
+            looked > scanned
+              ? ' (ogni pagina con il suo testo e la sua immagine)'
+              : scanned > 0
+                ? ' (le pagine scansionate sono immagini da guardare)'
+                : ''
+          }`
         }
       ]
 
       for (const page of extracted.pages) {
         content.push(
-          'text' in page
-            ? { type: 'text', text: `— Pagina ${page.page} —\n${page.text}` }
-            : { type: 'text', text: `— Pagina ${page.page} (scansione) —` },
-          ...('dataUrl' in page
+          page.dataUrl && !page.text
+            ? { type: 'text', text: `— Pagina ${page.page} (scansione) —` }
+            : { type: 'text', text: `— Pagina ${page.page} —\n${page.text}` },
+          ...(page.dataUrl
             ? [{ type: 'image_url' as const, image_url: { url: page.dataUrl } }]
             : [])
         )
@@ -179,7 +187,7 @@ export function describeExtraction(
 
       return {
         content,
-        summary: `${scanned > 0 ? 'Guardato' : 'Letto'} ${fileName}${
+        summary: `${looked > 0 ? 'Guardato' : 'Letto'} ${fileName}${
           range && extracted.totalPages > 1 ? ` · ${range}` : ''
         }`
       }
@@ -356,6 +364,18 @@ async function readThreadMessage(
   return { item, own, page: clip(own.text, THREAD_MESSAGE_CHARS) }
 }
 
+/** The first `bytes` of a file, without reading the rest. */
+async function readHead(path: string, bytes: number): Promise<Buffer> {
+  const file = await open(path, 'r')
+
+  try {
+    const { buffer, bytesRead } = await file.read(Buffer.alloc(bytes), 0, bytes, 0)
+    return buffer.subarray(0, bytesRead)
+  } finally {
+    await file.close()
+  }
+}
+
 async function readFileAt(
   context: ToolContext,
   given: string,
@@ -372,13 +392,26 @@ async function readFileAt(
     { kind: 'file', file: { kind: 'path', path, fileName: basename(path) } },
     context.newHandles
   )
+  const name = basename(path)
+  // A large file of a format not known by name is read whole only when it is text: a video or a
+  // program is said for what it is, not loaded to be refused.
+  const head =
+    knownFormat(name) || info.size <= TEXT_SNIFF_BYTES
+      ? null
+      : await readHead(path, TEXT_SNIFF_BYTES)
   const outcome = describeExtraction(
     handle,
-    basename(path),
-    await extractContent(basename(path), undefined, await readFile(path), {
-      offset: numberArg(args, 'da_carattere'),
-      page: numberArg(args, 'pagina')
-    })
+    name,
+    await extractContent(
+      name,
+      undefined,
+      head && !looksLikeText(head) ? head : await readFile(path),
+      {
+        offset: numberArg(args, 'da_carattere'),
+        page: numberArg(args, 'pagina'),
+        look: booleanArg(args, 'guarda')
+      }
+    )
   )
 
   return { ...outcome, files: [path] }
@@ -574,7 +607,8 @@ export const readTool: SegretarioTool = {
       cosa: { type: 'string' },
       conversazione: { type: 'boolean' },
       da_carattere: { type: 'integer' },
-      pagina: { type: 'integer' }
+      pagina: { type: 'integer' },
+      guarda: { type: 'boolean' }
     },
     required: ['cosa']
   },
@@ -618,7 +652,8 @@ export const readTool: SegretarioTool = {
           file.fileName,
           await extractContent(file.fileName, contentType ?? attachment.contentType, data, {
             offset: numberArg(args, 'da_carattere'),
-            page: numberArg(args, 'pagina')
+            page: numberArg(args, 'pagina'),
+            look: booleanArg(args, 'guarda')
           })
         )
       }

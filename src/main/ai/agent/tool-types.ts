@@ -293,11 +293,17 @@ export interface RunContext {
 }
 
 /**
- * A file search under way: what it looks for, the folders it has not looked
- * in yet, and what it found and has not shown yet.
+ * A file search under way: what it looks for — words of the name, kinds of
+ * file, when they were last changed —, the folders it has not looked in
+ * yet, and what it found and has not shown yet.
  */
 export interface FileSearch {
   words: string[]
+  /** Extensions, lower case with their dot (".pdf"); none: any file or folder. */
+  types: string[]
+  /** Last changed in this span, in milliseconds; files only. */
+  changedFrom?: number
+  changedTo?: number
   queue: string[]
   seen: Set<string>
   pending: FoundFile[]

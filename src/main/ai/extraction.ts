@@ -4,13 +4,25 @@ import { strFromU8, unzipSync } from 'fflate'
 import { NodeHtmlMarkdown } from 'node-html-markdown'
 
 import { parseMessageSource } from '../services/mail-engine/message-parts'
+import {
+  decodeText,
+  looksLikeText,
+  outlookMessageText,
+  rtfText,
+  signedEnvelopeContent,
+  wordDocumentText,
+  zipListing
+} from './document-formats'
 import { renderPdfPages } from './pdf-pages'
 
 /**
  * What a document says, for the Segretario to read: an attachment, a file
  * on the computer or on a share. Text comes out of what can be read as
- * text — PDF, Word, Excel and CSV, PowerPoint, OpenDocument, HTML, mail;
- * a picture is handed to the model as a picture, and so is a scanned page.
+ * text — PDF, Word (also 97–2003), Excel and CSV, PowerPoint, OpenDocument,
+ * RTF, HTML, mail (.eml, Outlook's .msg), a signed envelope's document
+ * (.p7m), an archive's list, and any file that is text inside, whatever
+ * its trade; a picture is handed to the model as a picture, and so is a
+ * scanned page, or any page it asks to look at.
  */
 export type ExtractedContent =
   | {
@@ -24,8 +36,11 @@ export type ExtractedContent =
   | {
       kind: 'pdf'
       totalPages: number
-      /** The pages read, in order: a page's text, or the page drawn as a picture where it is a scan. */
-      pages: Array<{ page: number; text: string } | { page: number; dataUrl: string }>
+      /**
+       * The pages read, in order: each page's text, and the page drawn as a
+       * picture where it is a scan, or where the reader asked to look at it.
+       */
+      pages: Array<{ page: number; text: string; dataUrl?: string }>
       /** The page the document goes on from, when there is more. */
       nextPage: number | null
     }
@@ -45,26 +60,63 @@ const PDF_PICTURES_PER_READ = 5
 /** How wide a scanned page is drawn: small print stays legible. */
 const PDF_PICTURE_WIDTH = 1600
 
+/** The pictures the model takes as they are (OpenRouter: PNG, JPEG, WebP, GIF). */
 const IMAGE_TYPES: Readonly<Record<string, string>> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.jfif': 'image/jpeg',
   '.gif': 'image/gif',
   '.webp': 'image/webp'
 }
 
-const PLAIN_TEXT_EXTENSIONS = new Set([
-  '.txt',
-  '.md',
-  '.csv',
-  '.tsv',
-  '.json',
-  '.xml',
-  '.log',
-  '.ini',
-  '.yaml',
-  '.yml'
+/**
+ * Pictures in a format the model does not take: sent as they are, the
+ * provider would refuse the whole request. Drawn again as JPEG where the
+ * system can, said otherwise.
+ */
+const OTHER_IMAGE_EXTENSIONS = new Set([
+  '.tif',
+  '.tiff',
+  '.bmp',
+  '.heic',
+  '.heif',
+  '.avif',
+  '.ico',
+  '.psd'
 ])
+
+const WORD_EXTENSIONS = new Set(['.docx', '.docm', '.dotx', '.dotm'])
+const SHEET_EXTENSIONS = new Set([
+  '.xlsx',
+  '.xlsm',
+  '.xlsb',
+  '.xltx',
+  '.xltm',
+  '.xls',
+  '.ods',
+  '.ots'
+])
+const SLIDES_EXTENSIONS = new Set(['.pptx', '.pptm', '.ppsx', '.ppsm', '.potx', '.potm'])
+const OPEN_DOCUMENT_EXTENSIONS = new Set(['.odt', '.ott', '.odp', '.otp'])
+
+/**
+ * The formats this reader knows by name; any other file is read when it is
+ * text inside (`looksLikeText`).
+ */
+export function knownFormat(fileName: string): boolean {
+  const extension = extname(fileName).toLowerCase()
+  return (
+    extension === '.pdf' ||
+    Boolean(IMAGE_TYPES[extension]) ||
+    OTHER_IMAGE_EXTENSIONS.has(extension) ||
+    WORD_EXTENSIONS.has(extension) ||
+    SHEET_EXTENSIONS.has(extension) ||
+    SLIDES_EXTENSIONS.has(extension) ||
+    OPEN_DOCUMENT_EXTENSIONS.has(extension) ||
+    ['.doc', '.dot', '.msg', '.rtf', '.eml', '.ics', '.p7m', '.zip'].includes(extension)
+  )
+}
 
 const htmlToMarkdown = new NodeHtmlMarkdown({ keepDataImages: false, maxConsecutiveNewlines: 2 })
 
@@ -98,65 +150,100 @@ export async function extractContent(
   fileName: string,
   contentType: string | undefined,
   data: Buffer,
-  options: { offset?: number; page?: number } = {}
+  options: { offset?: number; page?: number; look?: boolean } = {}
 ): Promise<ExtractedContent> {
   const extension = extname(fileName).toLowerCase()
-  const type = (contentType ?? '').toLowerCase()
+  const type = (contentType ?? '').toLowerCase().split(';')[0].trim()
   const offset = options.offset ?? 0
 
   if (extension === '.pdf' || type === 'application/pdf') {
-    return extractPdf(data, options.page ?? 1)
+    return extractPdf(data, options.page ?? 1, options.look ?? false)
   }
 
-  if (IMAGE_TYPES[extension] || type.startsWith('image/')) {
-    const mimeType = IMAGE_TYPES[extension] ?? type
+  // A signed document (CAdES): the document it carries, read as what it is — "fattura.xml.p7m" as XML.
+  if (
+    extension === '.p7m' ||
+    type === 'application/pkcs7-mime' ||
+    type === 'application/x-pkcs7-mime'
+  ) {
+    const content = signedEnvelopeContent(data)
 
+    if (!content) {
+      return {
+        kind: 'unreadable',
+        reason: 'La busta firmata non contiene il documento (è solo la firma) o non si apre.'
+      }
+    }
+
+    const inner = extension === '.p7m' ? fileName.slice(0, -extension.length) : 'documento'
+    return extractContent(inner, undefined, content, options)
+  }
+
+  if (extension === '.svg' || type === 'image/svg+xml') {
+    return page(decodeText(data), offset)
+  }
+
+  const modelImageType =
+    IMAGE_TYPES[extension] ?? (Object.values(IMAGE_TYPES).includes(type) ? type : undefined)
+
+  if (modelImageType) {
     if (data.length <= IMAGE_MAX_BYTES) {
       return {
         kind: 'image',
-        mimeType,
-        dataUrl: `data:${mimeType};base64,${data.toString('base64')}`
+        mimeType: modelImageType,
+        dataUrl: `data:${modelImageType};base64,${data.toString('base64')}`
       }
     }
 
     // Too large to send as it is: drawn smaller, as a scanned page is.
-    const { nativeImage } = await import('electron')
-    const picture = nativeImage.createFromBuffer(data)
-
-    if (picture.isEmpty()) {
-      return {
+    return (
+      (await drawnAgain(data)) ?? {
         kind: 'unreadable',
         reason: `L'immagine è grande (${Math.round(data.length / (1024 * 1024))} MB) e in un formato che non riesco a ridurre.`
       }
-    }
-
-    const fitted =
-      picture.getSize().width > IMAGE_FIT_WIDTH
-        ? picture.resize({ width: IMAGE_FIT_WIDTH, quality: 'best' })
-        : picture
-    return {
-      kind: 'image',
-      mimeType: 'image/jpeg',
-      dataUrl: `data:image/jpeg;base64,${fitted.toJPEG(85).toString('base64')}`
-    }
+    )
   }
 
-  if (extension === '.docx') {
+  if (OTHER_IMAGE_EXTENSIONS.has(extension) || type.startsWith('image/')) {
+    return (
+      (await drawnAgain(data)) ?? {
+        kind: 'unreadable',
+        reason: `Le immagini ${extension || type} non riesco ancora a guardarle: posso guardare PNG, JPEG, WebP e GIF, e i PDF.`
+      }
+    )
+  }
+
+  if (WORD_EXTENSIONS.has(extension)) {
     const mammoth = await import('mammoth')
     const { value } = await mammoth.convertToHtml({ buffer: data })
     return page(htmlToMarkdown.translate(value), offset)
   }
 
-  if (['.xlsx', '.xlsm', '.xls', '.ods'].includes(extension)) {
+  if (SHEET_EXTENSIONS.has(extension)) {
     return page(await sheetsText(data), offset)
   }
 
-  if (['.pptx', '.odp', '.odt'].includes(extension)) {
-    return page(officeXmlText(data, extension), offset)
+  if (SLIDES_EXTENSIONS.has(extension) || OPEN_DOCUMENT_EXTENSIONS.has(extension)) {
+    return page(officeXmlText(data), offset)
   }
 
-  if (['.html', '.htm'].includes(extension) || type === 'text/html') {
-    return page(htmlToMarkdown.translate(data.toString('utf8')), offset)
+  if (extension === '.doc' || extension === '.dot' || type === 'application/msword') {
+    return textOrReason(await wordDocumentText(data), offset)
+  }
+
+  if (extension === '.msg' || type === 'application/vnd.ms-outlook') {
+    return textOrReason(
+      await outlookMessageText(data, (html) => htmlToMarkdown.translate(html)),
+      offset
+    )
+  }
+
+  if (extension === '.rtf' || type === 'application/rtf' || type === 'text/rtf') {
+    return page(rtfText(decodeText(data)), offset)
+  }
+
+  if (['.html', '.htm', '.xhtml'].includes(extension) || type === 'text/html') {
+    return page(htmlToMarkdown.translate(decodeText(data)), offset)
   }
 
   if (extension === '.eml' || type === 'message/rfc822') {
@@ -180,60 +267,107 @@ export async function extractContent(
 
   // An invitation travels as `text/calendar` in the message and as `application/ics` attached.
   if (extension === '.ics' || type === 'text/calendar' || type === 'application/ics') {
-    return page(calendarText(data.toString('utf8')), offset)
+    return page(calendarText(decodeText(data)), offset)
   }
 
-  if (PLAIN_TEXT_EXTENSIONS.has(extension) || type.startsWith('text/')) {
-    return page(data.toString('utf8'), offset)
+  if (
+    extension === '.zip' ||
+    type === 'application/zip' ||
+    type === 'application/x-zip-compressed'
+  ) {
+    return page(zipListing(data), offset)
   }
 
-  if (extension === '.doc' || extension === '.ppt') {
+  if (extension === '.ppt') {
     return {
       kind: 'unreadable',
-      reason: `I file ${extension} del vecchio Office non si leggono: serve la versione ${extension}x.`
+      reason:
+        'Le presentazioni .ppt del vecchio PowerPoint non si leggono: serve la versione .pptx, o un PDF.'
     }
   }
 
-  return { kind: 'unreadable', reason: `Non so leggere i file ${extension || 'di questo tipo'}.` }
+  // Anything that is text inside, whatever its name: a CSV, code, a drawing or a model exchanged as text.
+  if (type.startsWith('text/') || looksLikeText(data)) {
+    return page(decodeText(data), offset)
+  }
+
+  return {
+    kind: 'unreadable',
+    reason: `I file ${extension || 'di questo tipo'} non sono testo e non so leggerli: di solito c'è anche una copia in PDF, o un formato d'ufficio.`
+  }
+}
+
+/** A text, or why the document gave none. */
+function textOrReason(read: string | { reason: string }, offset: number): ExtractedContent {
+  return typeof read === 'string' ? page(read, offset) : { kind: 'unreadable', reason: read.reason }
+}
+
+/**
+ * A picture drawn again as JPEG, at most as wide as a scanned page: one too
+ * large to send, or in a format the model does not take. None where the
+ * system cannot decode it.
+ */
+async function drawnAgain(data: Buffer): Promise<ExtractedContent | null> {
+  const { nativeImage } = await import('electron')
+  const picture = nativeImage.createFromBuffer(data)
+
+  if (picture.isEmpty()) {
+    return null
+  }
+
+  const fitted =
+    picture.getSize().width > IMAGE_FIT_WIDTH
+      ? picture.resize({ width: IMAGE_FIT_WIDTH, quality: 'best' })
+      : picture
+
+  return {
+    kind: 'image',
+    mimeType: 'image/jpeg',
+    dataUrl: `data:image/jpeg;base64,${fitted.toJPEG(85).toString('base64')}`
+  }
 }
 
 /**
  * A PDF from `fromPage`, as many pages as one read holds: each page's
- * text, or — where a page has none, a scan — the page drawn as a picture.
+ * text, and — where a page has none, a scan — the page drawn as a picture.
  * A document of typed pages and a signed, scanned last one reads whole.
+ * Asked to `look`, every page comes as a picture too, with its text: a
+ * drawing, a plan, a chart, a form with its ticks and stamps say in their
+ * layout what their words alone do not.
  */
-async function extractPdf(data: Buffer, fromPage: number): Promise<ExtractedContent> {
+async function extractPdf(
+  data: Buffer,
+  fromPage: number,
+  look: boolean
+): Promise<ExtractedContent> {
   const { extractText, getDocumentProxy } = await import('unpdf')
   const { totalPages, text } = await extractText(await getDocumentProxy(new Uint8Array(data)), {
     mergePages: false
   })
   const first = Math.max(1, Math.min(Math.trunc(fromPage), totalPages))
-  const read: Array<{ page: number; text: string } | { page: number; picture: true }> = []
+  const read: Array<{ page: number; text: string; picture: boolean }> = []
   let chars = 0
   let pictures = 0
   let next: number | null = null
 
   for (let page = first; page <= totalPages; page++) {
     const pageText = text[page - 1].trim()
+    const picture = look || pageText.length < PDF_TEXT_PAGE_MIN_CHARS
 
-    if (pageText.length >= PDF_TEXT_PAGE_MIN_CHARS) {
-      if (read.length > 0 && chars + pageText.length > EXTRACT_PAGE_CHARS) {
-        next = page
-        break
-      }
-
-      // A page is read whole, however long: it is what the reading moves by.
-      read.push({ page, text: pageText })
-      chars += pageText.length
-    } else {
-      if (pictures === PDF_PICTURES_PER_READ) {
-        next = page
-        break
-      }
-
-      read.push({ page, picture: true })
-      pictures++
+    if (picture && pictures === PDF_PICTURES_PER_READ) {
+      next = page
+      break
     }
+
+    if (!picture && read.length > 0 && chars + pageText.length > EXTRACT_PAGE_CHARS) {
+      next = page
+      break
+    }
+
+    // A page is read whole, however long: it is what the reading moves by.
+    read.push({ page, text: picture && !look ? '' : pageText, picture })
+    chars += pageText.length
+    pictures += picture ? 1 : 0
   }
 
   const drawn = new Map(
@@ -241,7 +375,7 @@ async function extractPdf(data: Buffer, fromPage: number): Promise<ExtractedCont
       ? (
           await renderPdfPages(
             new Uint8Array(data),
-            read.flatMap((item) => ('picture' in item ? [item.page] : [])),
+            read.flatMap((item) => (item.picture ? [item.page] : [])),
             PDF_PICTURE_WIDTH
           )
         ).map((image) => [image.page, `data:image/jpeg;base64,${image.jpeg.toString('base64')}`])
@@ -251,18 +385,18 @@ async function extractPdf(data: Buffer, fromPage: number): Promise<ExtractedCont
   return {
     kind: 'pdf',
     totalPages,
-    pages: read.map((item) => {
-      if (!('picture' in item)) {
-        return item
+    pages: read.map(({ page, text: pageText, picture }) => {
+      if (!picture) {
+        return { page, text: pageText }
       }
 
-      const dataUrl = drawn.get(item.page)
+      const dataUrl = drawn.get(page)
 
       if (!dataUrl) {
-        throw new Error(`La pagina ${item.page} del PDF non è stata disegnata.`)
+        throw new Error(`La pagina ${page} del PDF non è stata disegnata.`)
       }
 
-      return { page: item.page, dataUrl }
+      return { page, text: pageText, dataUrl }
     }),
     nextPage: next
   }
@@ -281,32 +415,51 @@ async function sheetsText(data: Buffer): Promise<string> {
 
 /**
  * The text of an Office Open XML presentation or an OpenDocument file: the
- * runs of text of each slide, or the paragraphs of the content, in order.
+ * runs of text of each slide with its speaker notes, or the paragraphs of
+ * the content, in order.
  */
-function officeXmlText(data: Buffer, extension: string): string {
-  const files = unzipSync(new Uint8Array(data))
+function officeXmlText(data: Buffer): string {
+  const files = unzipSync(new Uint8Array(data), {
+    filter: (file) =>
+      /^ppt\/(slides|notesSlides)\/\w+\.xml$/.test(file.name) || file.name === 'content.xml'
+  })
   const decode = (xml: string): string =>
     xml
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"')
       .replace(/&apos;/g, "'")
+      .replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)))
       .replace(/&amp;/g, '&')
+  const runs = (xml: string): string =>
+    xml
+      .split(/<\/a:p>/)
+      .map((paragraph) =>
+        [...paragraph.matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((run) => decode(run[1])).join('')
+      )
+      .filter((line) => line.trim())
+      .join('\n')
+  const numbered = (folder: string): string[] =>
+    Object.keys(files)
+      .filter((name) => name.startsWith(folder))
+      .sort((a, b) => Number(a.match(/(\d+)\.xml$/)?.[1]) - Number(b.match(/(\d+)\.xml$/)?.[1]))
 
-  if (extension === '.pptx') {
-    const slides = Object.keys(files)
-      .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
-      .sort((a, b) => Number(a.match(/\d+/)?.[0]) - Number(b.match(/\d+/)?.[0]))
+  const slides = numbered('ppt/slides/')
+
+  if (slides.length > 0) {
+    // A slide's notes are the notes slide that names it (its number, as PowerPoint writes them).
+    const notes = new Map(
+      numbered('ppt/notesSlides/').map((name) => [name.match(/(\d+)\.xml$/)?.[1], name])
+    )
 
     return slides
       .map((name, index) => {
-        const xml = strFromU8(files[name])
-        const paragraphs = xml
-          .split(/<\/a:p>/)
-          .map((paragraph) =>
-            [...paragraph.matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((run) => decode(run[1])).join('')
-          )
-        return `— Diapositiva ${index + 1} —\n${paragraphs.filter((line) => line.trim()).join('\n')}`
+        const number = name.match(/(\d+)\.xml$/)?.[1]
+        const note = notes.get(number)
+        const noteText = note ? runs(strFromU8(files[note])).replace(/^\d+$/m, '').trim() : ''
+        return `— Diapositiva ${index + 1} —\n${runs(strFromU8(files[name]))}${
+          noteText ? `\n[Note: ${noteText}]` : ''
+        }`
       })
       .join('\n\n')
   }
