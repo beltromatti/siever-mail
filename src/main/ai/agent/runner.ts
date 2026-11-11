@@ -103,7 +103,6 @@ export const TASK_EFFORT: Readonly<Record<TaskKind, 'low' | 'max'>> = {
   lettura: 'low',
   calendario: 'low',
   punto: 'low',
-  scrittura: 'low',
   revisione: 'low',
   ricerca: 'low'
 }
@@ -133,7 +132,6 @@ export interface RunOptions {
   background: boolean
   /** The user sees the run and can confirm; by default, any run that is not on its own. */
   watched?: boolean
-  editor?: RunContext['editor']
   /**
    * What the task must leave and has not, when the model stops: a line to
    * tell it, or null when the work is complete.
@@ -295,7 +293,6 @@ export class AgentRunner {
       looking: new Set(options.looking ?? []),
       changes: [],
       results: {},
-      editor: options.editor ?? null,
       fileSearches: new Map()
     }
     const live: LiveRun = {

@@ -7,7 +7,6 @@ import taskDay from './prompts/compiti/giornata.md?raw'
 import taskProjectState from './prompts/compiti/punto.md?raw'
 import taskCalendar from './prompts/compiti/calendario.md?raw'
 import taskRequest from './prompts/compiti/richiesta.md?raw'
-import taskWriting from './prompts/compiti/scrittura.md?raw'
 import taskReview from './prompts/compiti/revisione.md?raw'
 import taskSearch from './prompts/compiti/ricerca.md?raw'
 import taskGettingToKnow from './prompts/compiti/conoscimi.md?raw'
@@ -54,7 +53,6 @@ export const PROMPTS = {
     punto: taskProjectState.trim(),
     calendario: taskCalendar.trim(),
     richiesta: taskRequest.trim(),
-    scrittura: taskWriting.trim(),
     revisione: taskReview.trim(),
     ricerca: taskSearch.trim(),
     conoscimi: taskGettingToKnow.trim(),

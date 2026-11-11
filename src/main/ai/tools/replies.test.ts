@@ -56,7 +56,6 @@ describe('risposta', () => {
         looking: new Set(),
         changes: [],
         results: {},
-        editor: null,
         fileSearches: new Map()
       } as RunContext,
       handles,

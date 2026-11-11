@@ -52,7 +52,7 @@ const SPLITS: Readonly<Record<string, string>> = {
   message_id_keys:
     "SELECT 'mail:' || account_id AS owner, COUNT(*) AS weight FROM message_id_keys GROUP BY account_id",
   account_signatures:
-    "SELECT 'mail:' || account_id AS owner, octet_length(html) + 32 AS weight FROM account_signatures",
+    "SELECT 'mail:' || account_id AS owner, octet_length(html) + octet_length(header_html) + 32 AS weight FROM account_signatures",
   recent_folders:
     "SELECT 'mail:' || account_id AS owner, COUNT(*) AS weight FROM recent_folders GROUP BY account_id",
   drafts:

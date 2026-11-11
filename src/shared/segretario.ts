@@ -400,20 +400,6 @@ export interface LinkedText {
 
 /* ──────────────────────────────── writing ──────────────────────────────── */
 
-/** What the user asks of the Segretario while writing a message. */
-export interface WritingRequest {
-  /** Names the request, for the user to stop it (`stopAsking`). */
-  requestId: string
-  draftId: string
-  accountId: string
-  instruction: string
-  writtenText: string
-  selectedText: string | null
-  subject: string
-  to: string[]
-  replyTo: MessageRef | null
-}
-
 /** A message about to be sent, for the Segretario to reread. */
 export interface ReviewRequest {
   /** Names the request, for the user to stop it — and send at once (`stopAsking`). */
@@ -602,7 +588,6 @@ export type TaskKind =
   | 'giornata'
   | 'punto'
   | 'calendario'
-  | 'scrittura'
   | 'revisione'
   | 'ricerca'
   | 'conoscimi'
@@ -616,7 +601,6 @@ export const TASK_LABELS: Readonly<Record<TaskKind, string>> = {
   giornata: 'La giornata',
   punto: 'Il punto di un progetto',
   calendario: 'Calendario',
-  scrittura: 'Scrittura',
   revisione: 'Revisione',
   ricerca: 'Ricerca in parole',
   conoscimi: 'Conoscimi',
@@ -649,6 +633,27 @@ export interface SegretarioContext {
   folderLabel: string | null
   /** The calendar's event open in front of the user, by its key. */
   eventKey?: string | null
+  /** The message the user is writing, in front of them (vision §6.6). */
+  composing?: ComposingContext | null
+}
+
+/** A message being written, as the Segretario sees it from the panel beside it. */
+export interface ComposingContext {
+  /** Its draft: the one `scrivi_bozza` writes in, in place (`bozza`). */
+  draftId: string
+  accountId: string
+  kind: 'new' | 'reply' | 'forward'
+  to: string[]
+  cc: string[]
+  subject: string
+  /** What is written so far, between the letterhead and the signature, as plain text. */
+  writtenText: string
+  /** What the signature below it says — a closing included — as plain text: not to be written again. */
+  signatureText: string
+  /** The passage selected in it, if any: what "this" may mean. */
+  selectedText: string | null
+  /** The message a reply or forward is about. */
+  replyTo: MessageRef | null
 }
 
 /** A step a tool took, as the user sees it: one line, and what it touched. */
@@ -753,7 +758,8 @@ export type ActivityEvent =
 
 /** A message the Segretario writes for the user, handed to the page to open as a draft. */
 export interface ComposeSpec {
-  kind: 'reply' | 'replyAll' | 'forward' | 'new'
+  /** What a new draft is; absent when writing in one that exists (`draftId`). */
+  kind?: 'reply' | 'replyAll' | 'forward' | 'new'
   source?: MessageRef
   accountId?: string
   to?: string[]
@@ -763,6 +769,12 @@ export interface ComposeSpec {
   text: string
   attachments?: Array<{ path: string; name: string }>
   draftId?: string
+  /**
+   * `text` takes the place of the passage the user had selected in the
+   * message being written when they wrote to the Segretario — that passage
+   * alone, the rest as it is.
+   */
+  selection?: boolean
 }
 
 export type ComposeResult = { draftId: string } | { error: string }
@@ -829,7 +841,6 @@ export const SEGRETARIO_IPC = {
   getToday: 'segretario:get-today',
   refreshToday: 'segretario:refresh-today',
   getDue: 'segretario:get-due',
-  assistWriting: 'segretario:assist-writing',
   reviewDraft: 'segretario:review-draft',
   askMail: 'segretario:ask-mail',
   stopAsking: 'segretario:stop-asking',
@@ -984,7 +995,6 @@ export interface SegretarioApi {
   refreshToday: () => Promise<void>
   /** What is due from today through a day: the calendar's deadlines. */
   getDue: (throughDay: string) => Promise<DayLine[]>
-  assistWriting: (request: WritingRequest) => Promise<{ text: string }>
   reviewDraft: (request: ReviewRequest) => Promise<string[]>
   askMail: (question: string, requestId: string) => Promise<AskedMail>
   /** Stops a request the user waits for: the writing, the reread, the search in words. */

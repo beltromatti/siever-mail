@@ -8,7 +8,7 @@ const ASSISTANT_SHARE_OF_WIDTH = 0.27
  * The Segretario's column: room for its sentences and its cards, never so
  * wide it takes the message's place. The workspace spans the window, so its
  * share is of the window's width — which lets what is fixed on the window,
- * the dock and the notices, keep clear of it.
+ * the notices, keep clear of it.
  */
 export const ASSISTANT_WIDTH = `clamp(${ASSISTANT_MIN_WIDTH}px, ${ASSISTANT_SHARE_OF_WIDTH * 100}vw, ${ASSISTANT_MAX_WIDTH}px)`
 

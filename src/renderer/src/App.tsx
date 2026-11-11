@@ -35,7 +35,7 @@ import {
   type ComposerSummary,
   type MailComposerHandle
 } from '@renderer/features/mail/mail-composer'
-import { COMPOSE_DOCK_HEIGHT, ComposeDock } from '@renderer/features/mail/compose-dock'
+import { ComposerLayer, ComposerSlotProvider } from '@renderer/features/mail/composer-layer'
 import { AppRail } from '@renderer/features/workspace/app-rail'
 import { WelcomeScreen } from '@renderer/features/workspace/welcome-screen'
 import {
@@ -89,6 +89,7 @@ import { CommandShortcutsProvider, isOverlaySurfaceOpen } from '@renderer/lib/co
 import { uiLog } from '@renderer/lib/diagnostics'
 import { buildOutgoingMailHtml } from '@renderer/lib/outgoing-mail-html'
 import { messageRefKey, summaryToMessageRef } from '@renderer/lib/message-selection'
+import { cn } from '@renderer/lib/utils'
 import { clampReaderZoom, DEFAULT_UI_PREFERENCES } from '@shared/models'
 import { findCommand, type HostCommandId } from '@shared/commands'
 import { replyRecipients, replyReferences } from '@shared/reply'
@@ -273,9 +274,6 @@ function AppFrame({
   onMinimizeWindow,
   onToggleMaximizeWindow,
   onCloseWindow,
-  inert = false,
-  dock,
-  dockVisible = false,
   rightInset = 0,
   framed = false,
   cover,
@@ -287,12 +285,6 @@ function AppFrame({
   onMinimizeWindow: () => void
   onToggleMaximizeWindow: () => void
   onCloseWindow: () => void
-  /** A message is being written in front: the app behind takes neither focus nor clicks. */
-  inert?: boolean
-  /** The messages being written that are put aside, outside what `inert` stills. */
-  dock?: ReactNode
-  /** Whether the dock shows: the notices rise above it. */
-  dockVisible?: boolean
   /** What takes the window's right edge — the Segretario's column — in px: the notices keep clear of it. */
   rightInset?: number
   /** The workspace: its panes' headers are the title bar the window is dragged by. */
@@ -354,7 +346,7 @@ function AppFrame({
             </button>
           </div>
         )}
-        <div className="h-full min-h-0" inert={inert || Boolean(cover)}>
+        <div className="h-full min-h-0" inert={Boolean(cover)}>
           {/* Screens without panes are dragged by their top edge. */}
           {!framed && windowControlsState.dragTopRegionEnabled && (
             <div className="window-drag-edge" aria-hidden />
@@ -371,19 +363,9 @@ function AppFrame({
           </div>
         )}
       </div>
-      {dock}
       <AiNotice onOpenChange={onNoticeOpenChange} />
       {overlay}
-      {/* In front of a message being written, notices come in at the top: at
-          the bottom they would sit on its Invia. */}
-      <Toaster
-        position={inert ? 'top-center' : 'bottom-right'}
-        offset={
-          inert
-            ? 16
-            : { bottom: 16 + (dockVisible ? COMPOSE_DOCK_HEIGHT : 0), right: 16 + rightInset }
-        }
-      />
+      <Toaster position="bottom-right" offset={{ bottom: 16, right: 16 + rightInset }} />
     </TooltipProvider>
   )
 }
@@ -402,12 +384,20 @@ function App(): React.JSX.Element {
   const { uiPreferences, uiPreferencesRef, updateUiPreferences, changeReaderZoom } =
     useUiPreferences()
 
-  /** The messages being written: one in front at most, the others parked in the dock. */
+  /**
+   * The messages being written, each a tab of the reading pane (vision
+   * §6.6): the one in front, or none — the message being read.
+   */
   const [composeSessions, setComposeSessions] = useState<ComposerSession[]>([])
   const [activeComposeId, setActiveComposeId] = useState<string | null>(null)
+  // The message brought in front by the Segretario, which does not take the keyboard.
+  const [quietComposeId, setQuietComposeId] = useState<string | null>(null)
   const [composeSummaries, setComposeSummaries] = useState<Record<string, ComposerSummary>>({})
   const composerHandlesRef = useRef(new Map<string, MailComposerHandle>())
-  const composerOpen = activeComposeId !== null
+  // The reading pane's place for the message in front, where the composers' layer lies.
+  const [composerSlot, setComposerSlot] = useState<HTMLElement | null>(null)
+  // Asked to the Segretario from a message being written: its panel takes the words.
+  const [segretarioFocusRequest, setSegretarioFocusRequest] = useState(0)
   /** Sends the Segretario asked for, waiting to hear how they went, by draft. */
   const segretarioSendWaitersRef = useRef(new Map<string, (outcome: SendOutcome) => void>())
   const [segretarioOpen, setSegretarioOpen] = useState(false)
@@ -471,13 +461,12 @@ function App(): React.JSX.Element {
   useEffect(() => {
     if (!segretarioOffered) {
       // Closed, not hidden: it stays closed when the AI comes back on.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSegretarioOpen(false)
     }
   }, [segretarioOffered])
 
-  // Sends that failed, oldest first. Each is offered back once no composer
-  // is open, so retrying never replaces a message being written.
+  // Sends that failed, oldest first, each offered back in turn: taken up again, it opens in a
+  // tab of its own, beside the messages being written.
   const [failedSends, setFailedSends] = useState<
     ReadonlyArray<{ id: number; draft: ComposerInitialData; message: string }>
   >([])
@@ -560,11 +549,17 @@ function App(): React.JSX.Element {
     show()
   }, [])
 
-  /** A message to write comes in front. */
+  /**
+   * A message to write comes in front, in the reading pane of the Posta.
+   * `quiet`: brought there by the Segretario, it leaves the keyboard where
+   * the user is — writing to the Segretario, most likely.
+   */
   const showComposer = useCallback(
-    (id: string): void =>
+    (id: string, options: { quiet?: boolean } = {}): void =>
       whenSetupAllows(() => {
         setActiveComposeId(id)
+        setQuietComposeId(options.quiet ? id : null)
+        setActiveApp('mail')
         setWelcome(null)
       }),
     [whenSetupAllows]
@@ -612,13 +607,12 @@ function App(): React.JSX.Element {
     void window.mailApi.closeWindow()
   }, [])
 
-  // The failed send offered back right now, once no composer is open — and the setup is over.
-  const failedSend = composerOpen || onboarding ? null : (failedSends[0] ?? null)
+  // The failed send offered back right now, once the setup is over.
+  const failedSend = onboarding ? null : (failedSends[0] ?? null)
 
   // What the shell has open in front: the mail's keys and commands rest under it too.
   const shellModalOpen =
     workspaceCovered ||
-    composerOpen ||
     failedSend !== null ||
     confirmOpen ||
     noticeOpen ||
@@ -626,12 +620,12 @@ function App(): React.JSX.Element {
     settingsOpen
 
   /**
-   * Brings a message to write in front — a new one, or a draft: one already
-   * being written comes forward as it was left. Whatever was in front goes
-   * to the dock.
+   * Brings a message to write in front, in a tab of the reading pane — a new
+   * one, or a draft: one already being written comes forward as it was left.
+   * What was in front stays in its own tab.
    */
   const openComposer = useCallback(
-    (data: ComposerInitialData, draft?: { status?: DraftStatus }): void => {
+    (data: ComposerInitialData, draft?: { status?: DraftStatus; quiet?: boolean }): void => {
       const id = data.draftId ?? crypto.randomUUID()
 
       setComposeSessions((current) =>
@@ -647,7 +641,7 @@ function App(): React.JSX.Element {
               }
             ]
       )
-      showComposer(id)
+      showComposer(id, { quiet: draft?.quiet })
       uiLog.info('composer.open', { kind: data.kind, draft: data.draftId !== undefined })
 
       // A draft whose message waits in the outbox is the user's again, opened to change.
@@ -733,7 +727,7 @@ function App(): React.JSX.Element {
     [openComposer, removeComposeSession]
   )
 
-  // The drafts left open — or not yet in Bozze — when the app last closed come back to the dock.
+  // The drafts left open — or not yet in Bozze — when the app last closed come back to their tabs.
   useEffect(() => {
     if (bootstrapLoading) {
       return
@@ -936,17 +930,55 @@ function App(): React.JSX.Element {
     [ownAddresses]
   )
 
-  // The Segretario writes a draft: it opens in a composer parked in the dock,
-  // is kept and filed in Bozze like any draft, and the Segretario hears its id
-  // once the first save has landed.
+  // The Segretario writes a draft. In one open in a tab — the message the user is writing — it
+  // writes in place, as a step ⌘Z takes back. Otherwise the draft opens in a tab of its own,
+  // kept and filed in Bozze like any draft, and the Segretario hears its id once the first save
+  // has landed.
   useEffect(
     () =>
       window.segretarioApi.onComposeRequest(({ requestId, spec }) => {
         void (async () => {
           try {
-            if (spec.draftId) {
-              removeComposeSession(spec.draftId)
-              await window.mailApi.discardDraft(spec.draftId).catch(() => undefined)
+            const { draftId } = spec
+
+            if (draftId) {
+              let handle = composerHandlesRef.current.get(draftId)
+
+              if (!handle) {
+                if (spec.selection) {
+                  throw new Error('Il messaggio con il passaggio selezionato non è più aperto.')
+                }
+
+                // A draft in Bozze not open: taken up in a tab, with what the user put in it — and,
+                // waiting in the outbox, back in their hands, as any draft opened again.
+                const stored = await window.mailApi.getStoredDraft(draftId)
+
+                if (!stored) {
+                  throw new Error('La bozza non c’è più: è stata inviata o scartata.')
+                }
+
+                openComposer(draftToInitialData(stored.content), {
+                  status: stored.status,
+                  quiet: true
+                })
+
+                for (let waited = 0; !handle && waited < 5_000; waited += 50) {
+                  await new Promise((resolve) => window.setTimeout(resolve, 50))
+                  handle = composerHandlesRef.current.get(draftId)
+                }
+              }
+
+              if (!handle) {
+                throw new Error('La bozza non si è aperta.')
+              }
+
+              showComposer(draftId, { quiet: true })
+              const problem = await handle.write(spec)
+              await window.segretarioApi.completeCompose(
+                requestId,
+                problem ? { error: problem } : { draftId }
+              )
+              return
             }
 
             const data = await composerDataFor(spec)
@@ -969,6 +1001,9 @@ function App(): React.JSX.Element {
               ...current,
               { id, initialData: { ...data, draftId: id }, existing: false }
             ])
+            // Asked for in the panel, it comes in front: the user is there to read it — the
+            // keyboard stays with them, in the panel.
+            showComposer(id, { quiet: true })
             uiLog.info('composer.open', { kind: data.kind, by: 'segretario' })
             await saved
             await window.segretarioApi.completeCompose(requestId, { draftId: id })
@@ -979,7 +1014,7 @@ function App(): React.JSX.Element {
           }
         })()
       }),
-    [composerDataFor, removeComposeSession]
+    [composerDataFor, openComposer, removeComposeSession, showComposer]
   )
 
   /**
@@ -1133,6 +1168,7 @@ function App(): React.JSX.Element {
     aiOn,
     // In sight: in front, with a mailbox, past the welcome screen — its keys act on nothing else.
     active: shownApp === 'mail' && accounts.length > 0 && !workspaceCovered,
+    writingInFront: activeComposeId !== null,
     show: showMail,
     uiPreferences,
     uiPreferencesRef,
@@ -1144,6 +1180,29 @@ function App(): React.JSX.Element {
     shellModalOpen,
     runAppCommandRef
   })
+
+  // Writing in the column layout, where the reading pane is a band under the list, takes the
+  // workspace — a new message has room to be written in — and gives it back when the message
+  // is no longer in front, unless the user chose otherwise meanwhile (vision §6.6).
+  const [seenWritingId, setSeenWritingId] = useState(activeComposeId)
+  const [expandedForWriting, setExpandedForWriting] = useState(false)
+
+  if (activeComposeId !== seenWritingId) {
+    setSeenWritingId(activeComposeId)
+
+    if (activeComposeId !== null && uiPreferences.layoutMode === 'outlook') {
+      if (!mail.isMessageExpanded) {
+        mail.setIsMessageExpanded(true)
+        setExpandedForWriting(true)
+      }
+    } else if (activeComposeId === null && expandedForWriting) {
+      setExpandedForWriting(false)
+
+      if (mail.isMessageExpanded) {
+        mail.setIsMessageExpanded(false)
+      }
+    }
+  }
 
   // How every connection stands — mail and calendars — for the rail's dot.
   const connectionStatus = useMemo(
@@ -1177,6 +1236,8 @@ function App(): React.JSX.Element {
     (ref: MessageRef): void =>
       whenSetupAllows(() => {
         setWelcome(null)
+        // A message asked to be seen comes in front of what is being written, which stays in its tab.
+        setActiveComposeId(null)
         openMailMessage(ref)
       }),
     [openMailMessage, whenSetupAllows]
@@ -1365,8 +1426,39 @@ function App(): React.JSX.Element {
           return false
         }
 
+        // Open, with the user writing a message: the panel takes the words. Otherwise, and from
+        // the panel itself, the key opens and closes it.
+        if (
+          segretarioOpen &&
+          activeComposeId !== null &&
+          shownApp === 'mail' &&
+          !document.activeElement?.closest('[data-segretario-panel]')
+        ) {
+          setSegretarioFocusRequest((current) => current + 1)
+          return true
+        }
+
         setSegretarioOpen((open) => !open)
         return true
+      case 'next-tab':
+      case 'previous-tab': {
+        // The reading pane's tabs, in turn: the message read, then each being written.
+        if (shownApp !== 'mail' || composeSessions.length === 0) {
+          return false
+        }
+
+        const order = [null, ...composeSessions.map((session) => session.id)]
+        const step = commandId === 'next-tab' ? 1 : -1
+        const next = order[(order.indexOf(activeComposeId) + step + order.length) % order.length]
+
+        if (next) {
+          showComposer(next)
+        } else {
+          setActiveComposeId(null)
+        }
+
+        return true
+      }
       case 'search':
         // "Cerca" looks in the app in front that has a search: the calendar its events, the mail
         // its messages. Elsewhere there is nothing to search, and the key is left alone.
@@ -1381,7 +1473,14 @@ function App(): React.JSX.Element {
         // The others are the mail's — and the extension's, on the mail's selection. What acts on
         // the selected messages or the reader waits for Mail to be in front: nothing is answered,
         // archived or moved unseen. Writing a new message and the way to a folder go anywhere.
-        if (shownApp !== 'mail' && actsOnMailShown(commandId)) {
+        // A message being written in front hides the one read: what would act on it waits too —
+        // a chord meant for the text never moves or answers a message out of sight. The zoom is
+        // the message being written's as well.
+        if (
+          actsOnMailShown(commandId) &&
+          (shownApp !== 'mail' ||
+            (activeComposeId !== null && !commandId.startsWith('reader-zoom')))
+        ) {
           return false
         }
 
@@ -1514,7 +1613,7 @@ function App(): React.JSX.Element {
       if (retry) {
         openComposer(failedSend.draft)
       } else if (failedSend.draft.draftId) {
-        // Not reopened now: it waits in Bozze, not in the dock.
+        // Not reopened now: it waits in Bozze, not in a tab.
         void window.mailApi.closeDraft(failedSend.draft.draftId).catch(() => undefined)
       }
     },
@@ -1689,23 +1788,47 @@ function App(): React.JSX.Element {
   const mailSight = mail.sight
   // In the calendar, what it shows: the days, and the event open.
   const calendarInSight = shownApp === 'calendar' ? calendarSight : null
+  // A message being written in front is what the user is looking at: read as they send, with the
+  // passage selected then (vision §6.6).
+  const composingInFront =
+    shownApp === 'mail' && activeComposeId !== null
+      ? (composeSessions.find((session) => session.id === activeComposeId) ?? null)
+      : null
+  const composingSummary = composingInFront ? composeSummaries[composingInFront.id] : undefined
   // What the user is looking at goes along with what they ask the Segretario.
-  const segretarioContext: SegretarioContextChip = {
-    context: {
-      messages: shownPage ? [] : mailSight.messages,
-      accountId: mailSight.accountId,
-      folderLabel: calendarInSight?.label ?? shownPage ?? mailSight.viewLabel,
-      eventKey: calendarInSight?.event?.key ?? null
-    },
-    label: calendarInSight
-      ? calendarInSight.event
-        ? `«${calendarInSight.event.title}»`
-        : calendarInSight.label
-      : shownPage
-        ? shownPage
-        : mailSight.label
-  }
+  const segretarioContext: SegretarioContextChip = composingInFront
+    ? {
+        context: { messages: [], accountId: null, folderLabel: null },
+        resolve: () => ({
+          messages: [],
+          accountId: null,
+          folderLabel: null,
+          composing: composerHandlesRef.current.get(composingInFront.id)?.describe() ?? null
+        }),
+        label: composingSummary?.subject.trim()
+          ? `Il messaggio che scrivi: «${composingSummary.subject.trim()}»`
+          : 'Il messaggio che scrivi',
+        kind: 'composing'
+      }
+    : {
+        context: {
+          messages: shownPage ? [] : mailSight.messages,
+          accountId: mailSight.accountId,
+          folderLabel: calendarInSight?.label ?? shownPage ?? mailSight.viewLabel,
+          eventKey: calendarInSight?.event?.key ?? null
+        },
+        label: calendarInSight
+          ? calendarInSight.event
+            ? `«${calendarInSight.event.title}»`
+            : calendarInSight.label
+          : shownPage
+            ? shownPage
+            : mailSight.label
+      }
   const segretarioSuggestionList = segretarioSuggestions({
+    composing: composingInFront
+      ? { answering: composingInFront.initialData.kind === 'reply' }
+      : null,
     selectionCount: shownPage ? 0 : mailSight.selectionCount,
     work: shownPage ? null : mailSight.work,
     messageOpen: !shownPage && mailSight.messageOpen,
@@ -1765,36 +1888,21 @@ function App(): React.JSX.Element {
           onCloseWindow={handleCloseWindow}
           onNoticeOpenChange={setNoticeOpen}
           overlay={frameOverlay}
-          inert={composerOpen}
           framed={workspaceExists}
           cover={cover}
-          dockVisible={!workspaceCovered && !composerOpen && composeSessions.length > 0}
           rightInset={assistantInset}
-          dock={
-            <ComposeDock
-              entries={composeSessions
-                .filter((session) => session.id !== activeComposeId)
-                .map((session) => ({
-                  id: session.id,
-                  kind: session.initialData.kind,
-                  summary: composeSummaries[session.id] ?? null
-                }))}
-              hidden={composerOpen || workspaceCovered}
-              rightInset={assistantInset}
-              onRestore={showComposer}
-              onClose={(id) => void composerHandlesRef.current.get(id)?.close()}
-            />
-          }
         >
           {workspaceExists && (
-            <>
+            <ComposerSlotProvider onSlot={setComposerSlot}>
               <WorkspaceLayout
                 mode={uiPreferences.layoutMode}
                 readerExpanded={mail.isMessageExpanded}
                 readerKey={mail.readingRef ? messageRefKey(mail.readingRef) : null}
                 rail={
                   <AppRail
-                    items={railItems}
+                    items={railItems.map((item) =>
+                      item.id === 'mail' ? { ...item, writing: composeSessions.length } : item
+                    )}
                     activeItemId={shownApp}
                     onSelectItem={(id) => {
                       const app = railItems.find((item) => item.id === id)
@@ -1836,6 +1944,7 @@ function App(): React.JSX.Element {
                     segretarioOpen={segretarioOpen}
                     canWrite={segretario.status?.keyState === 'ready'}
                     onRemind={remindAbout}
+                    onRowActivated={() => setActiveComposeId(null)}
                   />
                 }
                 notice={<MailNotice mail={mail} />}
@@ -1845,6 +1954,17 @@ function App(): React.JSX.Element {
                     segretarioOpen={segretarioOpen}
                     onRemind={(commitment) => void remindAbout(commitment)}
                     onTakeUpReply={takeUpReply}
+                    writing={{
+                      tabs: composeSessions.map((session) => ({
+                        id: session.id,
+                        kind: session.initialData.kind,
+                        summary: composeSummaries[session.id] ?? null
+                      })),
+                      activeId: activeComposeId,
+                      onSelect: (id) => (id ? showComposer(id) : setActiveComposeId(null)),
+                      onClose: (id) => void composerHandlesRef.current.get(id)?.close(),
+                      onNew: () => void mail.runCommand('compose')
+                    }}
                   />
                 }
                 app={
@@ -1954,37 +2074,59 @@ function App(): React.JSX.Element {
                         void answerSegretarioApproval(activityId, approval, approved)
                       }
                       onOpenDraft={(draftId) => void openDraftById(draftId)}
+                      focusRequest={segretarioFocusRequest}
                     />
                   ) : null
                 }
               />
 
-              {composeSessions.map((session) => (
-                <MailComposer
-                  key={session.id}
-                  ref={(handle) => {
-                    if (handle) {
-                      composerHandlesRef.current.set(session.id, handle)
-                    } else {
-                      composerHandlesRef.current.delete(session.id)
-                    }
-                  }}
-                  session={session}
-                  open={session.id === activeComposeId}
-                  accounts={accounts}
-                  onMinimize={() =>
-                    setActiveComposeId((current) => (current === session.id ? null : current))
-                  }
-                  onClosed={(outcome) => handleComposerClosed(session.id, outcome)}
-                  onSendRequested={handleComposerSendRequested}
-                  onSummaryChange={(summary) => updateComposeSummary(session.id, summary)}
-                  canAskSegretario={
-                    aiOn &&
-                    (segretario.status?.keyState === 'ready' ||
-                      segretario.status?.keyState === 'unchecked')
-                  }
-                />
-              ))}
+              {/* Every message being written stays mounted, in the reading pane's place. */}
+              <ComposerLayer
+                slot={composerSlot}
+                hidden={workspaceCovered || shownApp !== 'mail' || activeComposeId === null}
+              >
+                {composeSessions.map((session) => (
+                  <div
+                    key={session.id}
+                    className={cn('absolute inset-0', session.id !== activeComposeId && 'hidden')}
+                  >
+                    <MailComposer
+                      ref={(handle) => {
+                        if (handle) {
+                          composerHandlesRef.current.set(session.id, handle)
+                        } else {
+                          composerHandlesRef.current.delete(session.id)
+                        }
+                      }}
+                      session={session}
+                      active={
+                        session.id === activeComposeId && shownApp === 'mail' && !workspaceCovered
+                      }
+                      accounts={accounts}
+                      zoom={uiPreferences.readerZoom}
+                      onZoomChange={changeReaderZoom}
+                      expanded={mail.isMessageExpanded}
+                      onToggleExpanded={() => mail.setIsMessageExpanded((current) => !current)}
+                      takeFocus={session.id !== quietComposeId}
+                      atWindowTopRight={false}
+                      onLeave={() =>
+                        setActiveComposeId((current) => (current === session.id ? null : current))
+                      }
+                      onClosed={(outcome) => handleComposerClosed(session.id, outcome)}
+                      onSendRequested={handleComposerSendRequested}
+                      onSummaryChange={(summary) => updateComposeSummary(session.id, summary)}
+                      onAskSegretario={
+                        segretarioOffered
+                          ? () => {
+                              setSegretarioOpen(true)
+                              setSegretarioFocusRequest((current) => current + 1)
+                            }
+                          : undefined
+                      }
+                    />
+                  </div>
+                ))}
+              </ComposerLayer>
 
               <ConfirmDialog
                 open={failedSend !== null}
@@ -2062,7 +2204,7 @@ function App(): React.JSX.Element {
                 }}
                 onUnifiedPreferencesChanged={mail.handleUnifiedPreferencesChanged}
               />
-            </>
+            </ComposerSlotProvider>
           )}
         </AppFrame>
       </SegretarioLinkProvider>

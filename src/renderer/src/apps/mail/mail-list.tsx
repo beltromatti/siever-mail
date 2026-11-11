@@ -36,9 +36,12 @@ export function MailMessageList({
   mail,
   segretarioOpen,
   canWrite,
-  onRemind
+  onRemind,
+  onRowActivated
 }: {
   mail: MailApp
+  /** A message clicked or opened in the list: it comes in front of what is being written. */
+  onRowActivated?: () => void
   /** The Segretario's column takes the window's right edge. */
   segretarioOpen: boolean
   /** The Segretario can work: a project's "Il punto" can be written again. */
@@ -213,8 +216,14 @@ export function MailMessageList({
     onLoadMoreMessages: loadMoreMessagesHandler,
     revealCursorToken,
     onRowsInView: hydratePreviewsInView,
-    onActivateRow: handleActivateRow,
-    onOpenRow: handleOpenRow,
+    onActivateRow: (ref, intent) => {
+      onRowActivated?.()
+      handleActivateRow(ref, intent)
+    },
+    onOpenRow: (ref) => {
+      onRowActivated?.()
+      handleOpenRow(ref)
+    },
     onRowContextMenu: (ref) => void openMessageContextMenu(ref),
     onRowDragStart: handleRowDragStart,
     onRowDragEnd: () => setDraggedRefs(null),

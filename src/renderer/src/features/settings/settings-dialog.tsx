@@ -148,9 +148,9 @@ const CORE_SETTINGS_GROUPS: SettingsSection[][] = [
     },
     {
       id: 'signatures',
-      label: 'Firme',
-      title: 'Firme',
-      description: 'La firma di ogni casella, in fondo ai messaggi che scrivi da lì.',
+      label: 'Intestazione e firma',
+      title: 'Intestazione e firma',
+      description: 'Ciò che ogni casella mette in cima e in fondo ai messaggi che scrivi da lì.',
       icon: Signature
     }
   ],

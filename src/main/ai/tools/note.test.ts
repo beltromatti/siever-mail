@@ -96,7 +96,6 @@ describe('nota and avvisa', () => {
       looking: new Set(options.looking ?? []),
       changes: [],
       results: {},
-      editor: null,
       fileSearches: new Map()
     } as RunContext
 

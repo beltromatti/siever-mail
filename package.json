@@ -65,7 +65,7 @@
     "nodemailer": "^8.0.11",
     "pdfjs-dist": "^6.4.299",
     "sonner": "^2.0.8",
-    "squire-rte": "^2.4.9",
+    "squire-rte": "^2.4.11",
     "streamdown": "^2.7.1",
     "tailwind-merge": "^3.7.0",
     "timezones-ical-library": "^2.4.0",

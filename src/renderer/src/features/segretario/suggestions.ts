@@ -19,10 +19,20 @@ export function segretarioSuggestions(context: {
   calendarConnected: boolean
   /** The calendar in front, and whether one of its events is open. */
   calendar?: { eventOpen: boolean } | null
+  /** A message being written in front: a reply or forward, or a new one. */
+  composing?: { answering: boolean } | null
 }): string[] {
   const suggestions: string[] = []
 
-  if (context.calendar?.eventOpen) {
+  if (context.composing) {
+    // The usual asks of someone writing: the message written for them, or what is written reworded.
+    suggestions.push(
+      context.composing.answering ? 'Scrivi la risposta' : 'Scrivi il messaggio',
+      'Rendilo più breve',
+      'Rendilo più formale',
+      'Correggi gli errori'
+    )
+  } else if (context.calendar?.eventOpen) {
     suggestions.push(
       'Preparami a questo appuntamento',
       'Trova le email e i file collegati',

@@ -249,8 +249,6 @@ export type { TaskKind } from '@shared/segretario'
 
 /** What an interactive run hands back to whoever is waiting for it. */
 export interface RunResults {
-  /** For `scrittura`: the text that goes in the editor, in place of what was written or selected. */
-  editorText?: string
   /** For `revisione`: what to point out before sending; empty when all is well. */
   review?: string[]
   /** For `ricerca`: the search to show. */
@@ -290,8 +288,6 @@ export interface RunContext {
   /** What this run changed, for the diary. */
   changes: RegistryChange[]
   results: RunResults
-  /** For `scrittura`: the draft open in the editor, and the passage selected in it. */
-  editor: { draftId: string; selection: string | null } | null
   /** File searches not finished yet, by name (`s1`): where each goes on from. */
   fileSearches: Map<string, FileSearch>
 }

@@ -28,6 +28,7 @@ const TASK_WORDS: Record<string, string> = {
   giornata: 'giornata',
   punto: 'il punto di un progetto',
   calendario: 'calendario',
+  // Runs before the writing in the editor became the panel's.
   scrittura: 'scrittura nell’editor',
   revisione: 'revisione prima dell’invio',
   ricerca: 'ricerca in parole',

@@ -542,18 +542,6 @@
     background-color: hsl(var(--card));
   }
 
-  /* A bar of the compose dock arriving: the message it stands for shrank into it. */
-  .dock-enter {
-    animation: dock-enter 180ms ease-out;
-  }
-
-  @keyframes dock-enter {
-    from {
-      opacity: 0;
-      transform: translateY(8px) scale(0.97);
-    }
-  }
-
   /* The logo's two colours, as a glow behind it; a small one asks a stronger glow (`--glow`). */
   .logo-glow {
     background-image: radial-gradient(

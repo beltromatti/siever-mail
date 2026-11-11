@@ -20,6 +20,8 @@ export interface RailItem {
   group: string
   /** A dot on the icon: something there wants the user. */
   attention?: boolean
+  /** Messages being written there, waiting in their tabs (vision §6.6): a mark while elsewhere. */
+  writing?: number
   /** Not here yet: it opens on what it will be. */
   soon?: boolean
 }
@@ -114,8 +116,13 @@ export function AppRail({
                     )}
                   >
                     <Icon className="size-[17px]" strokeWidth={1.7} />
-                    {item.attention && (
+                    {item.attention ? (
                       <span className="bg-ai-star ring-background absolute top-[7px] right-[7px] size-[7px] rounded-full ring-2" />
+                    ) : (
+                      !active &&
+                      Boolean(item.writing) && (
+                        <span className="bg-primary ring-background absolute top-[7px] right-[7px] size-[7px] rounded-full ring-2" />
+                      )
                     )}
                   </button>
                 </TooltipTrigger>
@@ -123,6 +130,13 @@ export function AppRail({
                   {item.label}
                   {item.soon && (
                     <span className="text-muted-foreground font-normal"> · in arrivo</span>
+                  )}
+                  {Boolean(item.writing) && (
+                    <span className="text-muted-foreground font-normal">
+                      {' '}
+                      · {item.writing === 1 ? 'un messaggio' : `${item.writing} messaggi`} in
+                      scrittura
+                    </span>
                   )}
                 </TooltipContent>
               </Tooltip>

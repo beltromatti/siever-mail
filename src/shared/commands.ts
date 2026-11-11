@@ -163,6 +163,25 @@ const HOST_COMMANDS = [
     editable: true
   },
   {
+    id: 'next-tab',
+    label: 'Scheda successiva',
+    description:
+      'Nel riquadro di lettura, passa dal messaggio letto a quelli che stai scrivendo, uno dopo l’altro.',
+    group: 'navigation',
+    scope: 'main',
+    defaultChord: 'Mod+Shift+BracketRight',
+    editable: true
+  },
+  {
+    id: 'previous-tab',
+    label: 'Scheda precedente',
+    description: 'Nel riquadro di lettura, torna alla scheda prima.',
+    group: 'navigation',
+    scope: 'main',
+    defaultChord: 'Mod+Shift+BracketLeft',
+    editable: true
+  },
+  {
     id: 'send',
     label: 'Invia',
     description: 'Invia il messaggio che stai scrivendo.',
@@ -181,15 +200,6 @@ const HOST_COMMANDS = [
     editable: true
   },
   {
-    id: 'segretario-write',
-    label: 'Scrivi con il Segretario',
-    description: 'Chiede al Segretario di scrivere o riscrivere il messaggio che stai scrivendo.',
-    group: 'writing',
-    scope: 'composer',
-    defaultChord: 'Mod+KeyJ',
-    editable: true
-  },
-  {
     id: 'show-cc',
     label: 'Mostra Cc e Ccn',
     description: 'Apre i campi per le copie e le copie nascoste.',
@@ -201,7 +211,8 @@ const HOST_COMMANDS = [
   {
     id: 'segretario',
     label: 'Segretario',
-    description: 'Apre e chiude il pannello del Segretario.',
+    description:
+      'Apre e chiude il pannello del Segretario; mentre scrivi un messaggio, gli passa la parola, con il messaggio davanti.',
     group: 'app',
     scope: 'main',
     defaultChord: 'Mod+KeyJ',

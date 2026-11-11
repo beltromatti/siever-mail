@@ -226,7 +226,8 @@ const activeMailboxContextSchema = z.object({
 const MAX_ACCOUNT_SIGNATURE_HTML_LENGTH = 32000
 const accountSignatureInputSchema = z.object({
   accountId: z.string().trim().min(1),
-  html: z.string().max(MAX_ACCOUNT_SIGNATURE_HTML_LENGTH)
+  html: z.string().max(MAX_ACCOUNT_SIGNATURE_HTML_LENGTH),
+  headerHtml: z.string().max(MAX_ACCOUNT_SIGNATURE_HTML_LENGTH)
 })
 
 /** Recipients a draft keeps, as typed — valid addresses or not. */
@@ -337,7 +338,8 @@ function normalizeAccountSignatureHtml(rawHtml: string): string | null {
     return null
   }
 
-  const hasEmbeddedMedia = /<(?:img|svg|video|audio)\b/i.test(trimmed)
+  // A rule or a table shows as much as a picture: a letterhead can be just a line.
+  const hasEmbeddedMedia = /<(?:img|svg|video|audio|hr|table)\b/i.test(trimmed)
   const visibleText = trimmed
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ')
@@ -2164,17 +2166,17 @@ export class MailService {
     return this.database.getAccountSignature(normalizedAccountId)
   }
 
-  async setAccountSignature(accountId: string, html: string): Promise<MailAccountSignature | null> {
-    const payload = accountSignatureInputSchema.parse({
-      accountId,
-      html
-    })
+  async setAccountSignature(
+    accountId: string,
+    content: { html: string; headerHtml: string }
+  ): Promise<MailAccountSignature> {
+    const payload = accountSignatureInputSchema.parse({ accountId, ...content })
     await this.ensureAccountExists(payload.accountId)
 
-    return this.database.setAccountSignature(
-      payload.accountId,
-      normalizeAccountSignatureHtml(payload.html)
-    )
+    return this.database.setAccountSignature(payload.accountId, {
+      html: normalizeAccountSignatureHtml(payload.html),
+      headerHtml: normalizeAccountSignatureHtml(payload.headerHtml)
+    })
   }
 
   async clearAccountData(accountId: string): Promise<void> {

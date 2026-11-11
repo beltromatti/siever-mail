@@ -2,27 +2,43 @@ import { Fragment } from 'react'
 
 import extensionRenderer from '@app/extension/renderer'
 import { InvitationCard } from '@renderer/features/calendar/invitation-card'
+import { ComposerSlot } from '@renderer/features/mail/composer-layer'
+import { ComposerTabs, type ComposerTab } from '@renderer/features/mail/composer-tabs'
 import { MessageMarksLine } from '@renderer/features/mail/message-marks'
 import { MessageViewer } from '@renderer/features/mail/message-viewer'
 import { PecPanel } from '@renderer/features/mail/pec-panel'
 import { MessageWorkPanel } from '@renderer/features/segretario/message-work'
 import { summaryToMessageRef } from '@renderer/lib/message-selection'
+import { cn } from '@renderer/lib/utils'
 import { isIcsAttachment } from '@shared/calendar'
 import { segretarioProjectPath } from '@shared/folders'
 import type { Commitment } from '@shared/segretario'
 
 import type { MailApp } from './use-mail-app'
 
+/** The messages being written, as the reading pane holds them: a tab each. */
+export interface ReaderWriting {
+  tabs: ReadonlyArray<ComposerTab>
+  /** The one in front; null for the message being read. */
+  activeId: string | null
+  onSelect: (id: string | null) => void
+  onClose: (id: string) => void
+  onNew: () => void
+}
+
 /**
  * The reading pane: the message in sight with what goes with it — an
  * invitation, the Segretario's work on it, the extension's actions — or,
- * over a selection of several, what can be done with them all.
+ * over a selection of several, what can be done with them all. While
+ * something is being written it has tabs (vision §6.6): the message read,
+ * and each message being written, which takes the pane when in front.
  */
 export function MailReader({
   mail,
   segretarioOpen,
   onRemind,
-  onTakeUpReply
+  onTakeUpReply,
+  writing
 }: {
   mail: MailApp
   /** The Segretario's column takes the window's right edge. */
@@ -31,6 +47,7 @@ export function MailReader({
   onRemind: (commitment: Commitment) => void
   /** A reply the Segretario prepared, taken up in a composer. */
   onTakeUpReply: (accountId: string, messageKey: string, text: string) => Promise<void>
+  writing: ReaderWriting
 }): React.JSX.Element {
   const {
     accounts,
@@ -81,7 +98,16 @@ export function MailReader({
     viewerMarks
   } = mail
 
-  return (
+  // The pane's first band is the window's title bar where the pane meets its top right corner.
+  const atWindowTopRight =
+    !segretarioOpen && (isMessageExpanded || uiPreferences.layoutMode === 'apple')
+  const tabsShown = writing.tabs.length > 0
+  const readingLabel =
+    selection.selectedRefs.length > 1
+      ? `${selection.selectedRefs.length.toLocaleString('it-IT')} selezionati`
+      : messageForViewer?.subject || null
+
+  const viewer = (
     <MessageViewer
       message={messageForViewer}
       brief={
@@ -145,9 +171,7 @@ export function MailReader({
             }
           : undefined
       }
-      atWindowTopRight={
-        !segretarioOpen && (isMessageExpanded || uiPreferences.layoutMode === 'apple')
-      }
+      atWindowTopRight={atWindowTopRight && !tabsShown}
       extensionActions={
         selection.selectedRefs.length > 0 &&
         extensionRenderer.toolbarActions.map((action) => (
@@ -199,5 +223,25 @@ export function MailReader({
       onDetailsOpenChange={(readerDetailsOpen) => updateUiPreferences({ readerDetailsOpen })}
       addressActions={addressActions}
     />
+  )
+
+  // One tree whatever is in front: the message read stays mounted under a message being
+  // written — its frame, where it was scrolled to — as each message being written stays in its own.
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {tabsShown && (
+        <ComposerTabs
+          readingLabel={readingLabel}
+          tabs={writing.tabs}
+          activeId={writing.activeId}
+          atWindowTopRight={atWindowTopRight}
+          onSelect={writing.onSelect}
+          onClose={writing.onClose}
+          onNew={writing.onNew}
+        />
+      )}
+      <div className={cn('min-h-0 flex-1', writing.activeId && 'hidden')}>{viewer}</div>
+      {writing.activeId && <ComposerSlot />}
+    </div>
   )
 }

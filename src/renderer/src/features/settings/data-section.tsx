@@ -166,7 +166,7 @@ export function DataSection({
     ])
   )
   // What goes, in words: the app's, then the extension's, which says its own in a phrase.
-  const everything = `la posta e i calendari, la rubrica, le firme, le bozze, i file recenti e le copie degli allegati${
+  const everything = `la posta e i calendari, la rubrica, le intestazioni e le firme, le bozze, i file recenti e le copie degli allegati${
     extensionRenderer.localDataLabel ? `; ${extensionRenderer.localDataLabel}` : ''
   }`
 

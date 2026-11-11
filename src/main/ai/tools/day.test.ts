@@ -36,7 +36,6 @@ describe('oggi', () => {
         looking: new Set(),
         changes: [],
         results: {},
-        editor: null,
         fileSearches: new Map()
       } as RunContext,
       handles: new HandleRegistry(),

@@ -1,5 +1,5 @@
 import type { MessageRef } from '@shared/models'
-import type { ReviewRequest, WritingRequest } from '@shared/segretario'
+import type { ReviewRequest } from '@shared/segretario'
 
 import { HandleRegistry, type HandleRecord } from '../agent/handles'
 import type { SegretarioMailPort } from '../agent/tool-types'
@@ -21,47 +21,6 @@ async function answeredLine(
     from: formatAddresses(message.from, 2),
     date: formatDateTime(message.date),
     subject: message.subject || '(senza oggetto)'
-  }
-}
-
-/** What a writing in the editor starts from: the request, the text so far, the message answered. */
-export async function prepareWriting(
-  deps: { mail: SegretarioMailPort },
-  request: WritingRequest
-): Promise<StartingData> {
-  const handles = new HandleRegistry()
-  const added: HandleRecord[] = []
-  const account = (await deps.mail.listAccounts()).find(
-    (candidate) => candidate.id === request.accountId
-  )
-  const sections = [
-    nowLine(),
-    `## La richiesta\n\n${request.instruction.trim()}`,
-    `Scrive da: ${account?.email ?? 'un suo account'} · A: ${request.to.join(', ') || '(nessuno ancora)'} · Oggetto: ${request.subject || '(nessuno)'}`,
-    `## Il testo scritto finora\n\n${request.writtenText.trim() || '(vuoto)'}`
-  ]
-
-  if (request.selectedText?.trim()) {
-    sections.push(
-      `## Il passaggio selezionato (riscrivi solo questo)\n\n${request.selectedText.trim()}`
-    )
-  }
-
-  if (request.replyTo) {
-    try {
-      const answered = await answeredLine(deps.mail, request.replyTo, handles, added)
-      sections.push(
-        `Risponde a ${answered.handle} · ${answered.date} · da ${answered.from} · «${answered.subject}».`
-      )
-    } catch {
-      // The message answered left meanwhile: the writing goes on without it.
-    }
-  }
-
-  return {
-    title: `Scrittura · ${request.instruction.trim().slice(0, 60)}`,
-    data: sections.join('\n\n'),
-    handles: added
   }
 }
 

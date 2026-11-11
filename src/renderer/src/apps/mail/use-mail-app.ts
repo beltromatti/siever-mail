@@ -216,6 +216,12 @@ export interface MailHost {
    * watches live, and the keys of the list and Escape are the mail's.
    */
   active: boolean
+  /**
+   * A message being written is in the reading pane, in front: the list's
+   * keys and Escape are left to it — a Delete meant for the text must never
+   * reach the selected message.
+   */
+  writingInFront: boolean
   /** Brings the mail to the front, from wherever the user is. */
   show: () => void
   uiPreferences: UiPreferences
@@ -428,6 +434,7 @@ export function useMailApp({
   setAccounts,
   aiOn,
   active,
+  writingInFront,
   show,
   uiPreferences,
   uiPreferencesRef,
@@ -1356,7 +1363,11 @@ export function useMailApp({
   useEffect(() => {
     const hasMultiSelection = selection.selectedRefs.length > 1
 
-    if (!active || (!isMessageExpanded && !hasMultiSelection && !hasActiveSearch)) {
+    if (
+      !active ||
+      writingInFront ||
+      (!isMessageExpanded && !hasMultiSelection && !hasActiveSearch)
+    ) {
       return
     }
 
@@ -1405,7 +1416,14 @@ export function useMailApp({
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [active, clearSearch, hasActiveSearch, isMessageExpanded, selection.selectedRefs.length])
+  }, [
+    active,
+    clearSearch,
+    hasActiveSearch,
+    isMessageExpanded,
+    selection.selectedRefs.length,
+    writingInFront
+  ])
 
   // The folder in sight, which the engine watches live; none outside the Posta, so every
   // account watches its Posta in arrivo while the user is in Oggi or the calendar.
@@ -3038,6 +3056,11 @@ export function useMailApp({
         return
       }
 
+      // A key a message being written has answered — its own commands, Esc — is done.
+      if (event.defaultPrevented) {
+        return
+      }
+
       const target = event.target as HTMLElement | null
       const isTypingSurface = Boolean(
         target &&
@@ -3069,9 +3092,9 @@ export function useMailApp({
       }
 
       // The keys of the list — select all, the arrows, Invio, Elimina — are the
-      // mail's: with another app in front they are left to it, and only the
-      // chords above, the whole app's, answer.
-      if (!active) {
+      // mail's: with another app in front, or a message being written, they are
+      // left to it, and only the chords above, the whole app's, answer.
+      if (!active || writingInFront) {
         return
       }
 
@@ -3144,7 +3167,15 @@ export function useMailApp({
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [active, deleteMessages, handleOpenRow, handleSelectAll, isModalSurfaceOpen, runAppCommandRef])
+  }, [
+    active,
+    deleteMessages,
+    handleOpenRow,
+    handleSelectAll,
+    isModalSurfaceOpen,
+    runAppCommandRef,
+    writingInFront
+  ])
 
   const attachmentActions = useAttachmentActions(readingRef)
 

@@ -47,11 +47,25 @@ const messageRefSchema = z.object({
   uid: z.number().int().nonnegative()
 })
 
+const composingSchema = z.object({
+  draftId: z.string().min(1).max(100),
+  accountId: z.string().min(1),
+  kind: z.enum(['new', 'reply', 'forward']),
+  to: z.array(z.string().max(500)).max(500),
+  cc: z.array(z.string().max(500)).max(500),
+  subject: z.string().max(2000),
+  writtenText: z.string().max(200_000),
+  signatureText: z.string().max(20_000),
+  selectedText: z.string().max(50_000).nullable(),
+  replyTo: messageRefSchema.nullable()
+})
+
 const contextSchema = z.object({
   messages: z.array(messageRefSchema).max(200),
   accountId: z.string().nullable(),
   folderLabel: z.string().max(200).nullable(),
-  eventKey: z.string().max(2000).nullable().optional()
+  eventKey: z.string().max(2000).nullable().optional(),
+  composing: composingSchema.nullable().optional()
 })
 
 const preferencesSchema = z.object({ enabled: z.boolean() }).strict()
@@ -70,18 +84,6 @@ const reviewRequestSchema = z.object({
 })
 
 const memoryPathSchema = z.string().trim().min(1).max(300)
-
-const writingRequestSchema = z.object({
-  requestId: requestIdSchema,
-  draftId: z.string().min(1).max(100),
-  accountId: z.string().min(1),
-  instruction: z.string().trim().min(1, 'Scrivi cosa vuoi che scriva.').max(4000),
-  writtenText: z.string().max(200_000),
-  selectedText: z.string().max(50_000).nullable(),
-  subject: z.string().max(2000),
-  to: z.array(z.string().max(500)).max(500),
-  replyTo: messageRefSchema.nullable()
-})
 
 const idSchema = z.string().min(1).max(100)
 const messageKeySchema = z.string().min(1).max(1000)
@@ -341,11 +343,6 @@ export function registerSegretarioIpc(
   // Writing, rereading, searching.
   // They wait for the model: how long each took is in its run (§14.4), not a slow channel.
   const forModel = { untimed: true }
-  handle(
-    SEGRETARIO_IPC.assistWriting,
-    (request: unknown) => segretario.assistWriting(writingRequestSchema.parse(request)),
-    forModel
-  )
   handle(
     SEGRETARIO_IPC.reviewDraft,
     (request: unknown) => segretario.reviewDraft(reviewRequestSchema.parse(request)),

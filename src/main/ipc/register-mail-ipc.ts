@@ -313,9 +313,11 @@ export function registerMailIpc(
     return mailService.getAccountSignature(accountId)
   })
 
-  registerDataHandler(IPC_CHANNELS.setAccountSignature, async (accountId: string, html: string) => {
-    return mailService.setAccountSignature(accountId, html)
-  })
+  registerDataHandler(
+    IPC_CHANNELS.setAccountSignature,
+    async (accountId: string, content: { html: string; headerHtml: string }) =>
+      mailService.setAccountSignature(accountId, content)
+  )
 
   registerDataHandler(IPC_CHANNELS.getDataStorageBreakdown, async () => workspace.dataStorage())
 

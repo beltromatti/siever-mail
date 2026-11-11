@@ -86,6 +86,64 @@ const KINDS: Readonly<Record<string, ComposeSpec['kind']>> = {
   nuovo: 'new'
 }
 
+/** The files a call names, as the composer attaches them. */
+async function attachmentsOf(
+  args: Record<string, unknown>,
+  context: ToolContext
+): Promise<Array<{ path: string; name: string }>> {
+  const attachments: Array<{ path: string; name: string }> = []
+
+  for (const handle of stringListArg(args, 'allegati')) {
+    const file = context.handles.file(handle)
+
+    if (!file) {
+      throw new UnknownHandle(`Non conosco il file «${handle}».`)
+    }
+
+    if (file.kind === 'path') {
+      attachments.push({ path: file.path, name: file.fileName })
+    } else {
+      attachments.push(...(await context.mail.copyAttachments(file.ref, [file.attachmentId])))
+    }
+  }
+
+  return attachments
+}
+
+/** Recipients, subject and files a call sets, as the spec carries them: what it leaves out stays. */
+async function envelopeOf(
+  args: Record<string, unknown>,
+  context: ToolContext
+): Promise<Pick<ComposeSpec, 'to' | 'cc' | 'bcc' | 'subject' | 'attachments'>> {
+  const envelope: Pick<ComposeSpec, 'to' | 'cc' | 'bcc' | 'subject' | 'attachments'> = {}
+
+  for (const [field, name] of [
+    ['to', 'a'],
+    ['cc', 'cc'],
+    ['bcc', 'ccn']
+  ] as const) {
+    const addresses = stringListArg(args, name)
+
+    if (addresses.length > 0) {
+      envelope[field] = addresses
+    }
+  }
+
+  const subject = stringArg(args, 'oggetto')
+
+  if (subject !== undefined) {
+    envelope.subject = subject
+  }
+
+  const attachments = await attachmentsOf(args, context)
+
+  if (attachments.length > 0) {
+    envelope.attachments = attachments
+  }
+
+  return envelope
+}
+
 export const writeDraftTool: SegretarioTool = {
   name: 'scrivi_bozza',
   description: PROMPTS.tools.scrivi_bozza,
@@ -101,24 +159,14 @@ export const writeDraftTool: SegretarioTool = {
       oggetto: { type: 'string' },
       testo: { type: 'string' },
       allegati: { type: 'array', items: { type: 'string' } },
-      bozza: { type: 'string' }
+      bozza: { type: 'string' },
+      selezione: { type: 'boolean' }
     },
     required: ['testo']
   },
-  running: (args) => (args.tipo ? 'Scrivo la bozza…' : 'Scrivo…'),
+  running: (args) => (args.bozza ? 'Scrivo nel messaggio…' : 'Scrivo la bozza…'),
   async execute(args, context) {
     const text = requireString(args, 'testo')
-
-    // Writing in the message open in the editor: the words go there, in place.
-    if (context.run.task === 'scrittura') {
-      context.run.results.editorText = text
-      return {
-        content: context.run.editor?.selection
-          ? 'Il passaggio scelto è riscritto nel messaggio.'
-          : 'Il testo è nel messaggio che l’utente sta scrivendo.',
-        summary: 'Scritto nel messaggio'
-      }
-    }
 
     requireInteractive(
       context,
@@ -126,111 +174,91 @@ export const writeDraftTool: SegretarioTool = {
       'prepara la risposta con `risposta` (azione `prepara`): l’utente la trova pronta nel lettore.'
     )
 
-    const kind = KINDS[requireString(args, 'tipo')]
+    const selection = args.selezione === true
+    let draftRef = stringArg(args, 'bozza')
 
-    if (!kind) {
-      throw new ToolInputError('`tipo` è risposta, risposta_a_tutti, inoltro o nuovo.')
+    if (selection && !draftRef) {
+      throw new ToolInputError(
+        'Con `selezione` indica in `bozza` il messaggio che l’utente sta scrivendo.'
+      )
     }
 
-    const spec: ComposeSpec = { kind, text }
-    const sourceHandle = stringArg(args, 'messaggio')
+    const kind = draftRef ? undefined : KINDS[requireString(args, 'tipo')]
     let answered: { accountId: string; messageKey: string } | null = null
+    const spec: ComposeSpec = { kind, text, ...(await envelopeOf(args, context)) }
 
-    if (kind !== 'new') {
-      if (!sourceHandle) {
-        throw new ToolInputError('Per una risposta o un inoltro indica `messaggio`.')
+    if (!draftRef) {
+      if (!kind) {
+        throw new ToolInputError('`tipo` è risposta, risposta_a_tutti, inoltro o nuovo.')
       }
 
-      const source = context.handles.message(sourceHandle)
+      if (kind !== 'new') {
+        const sourceHandle = stringArg(args, 'messaggio')
 
-      if (!source) {
-        throw new UnknownHandle(`Non conosco il messaggio «${sourceHandle}».`)
-      }
+        if (!sourceHandle) {
+          throw new ToolInputError('Per una risposta o un inoltro indica `messaggio`.')
+        }
 
-      spec.source = source.ref
+        const source = context.handles.message(sourceHandle)
 
-      if (kind === 'reply' || kind === 'replyAll') {
-        answered = { accountId: source.ref.accountId, messageKey: source.messageKey }
-      }
-    } else {
-      const accounts = await context.mail.listAccounts()
-      const address = stringArg(args, 'account')
-      const account = address
-        ? accounts.find((item) => item.email.toLowerCase() === address.toLowerCase())
-        : accounts.length === 1
-          ? accounts[0]
-          : undefined
+        if (!source) {
+          throw new UnknownHandle(`Non conosco il messaggio «${sourceHandle}».`)
+        }
 
-      if (!account) {
-        throw new ToolInputError(
-          `Indica \`account\` tra: ${accounts.map((item) => item.email).join(', ')}.`
-        )
-      }
+        spec.source = source.ref
 
-      spec.accountId = account.id
-      spec.subject = stringArg(args, 'oggetto') ?? ''
-    }
-
-    for (const [field, name] of [
-      ['to', 'a'],
-      ['cc', 'cc'],
-      ['bcc', 'ccn']
-    ] as const) {
-      const addresses = stringListArg(args, name)
-
-      if (addresses.length > 0) {
-        spec[field] = addresses
-      }
-    }
-
-    if (kind === 'new' && !spec.to?.length) {
-      throw new ToolInputError('Un messaggio nuovo ha bisogno di almeno un destinatario in `a`.')
-    }
-
-    const attachments: Array<{ path: string; name: string }> = []
-
-    for (const handle of stringListArg(args, 'allegati')) {
-      const file = context.handles.file(handle)
-
-      if (!file) {
-        throw new UnknownHandle(`Non conosco il file «${handle}».`)
-      }
-
-      if (file.kind === 'path') {
-        attachments.push({ path: file.path, name: file.fileName })
+        if (kind === 'reply' || kind === 'replyAll') {
+          answered = { accountId: source.ref.accountId, messageKey: source.messageKey }
+          // A reply goes on the one the Segretario already wrote to that message, while the
+          // user has not taken it in hand: never a second beside it.
+          draftRef = await untouchedReplyDraft(context, source.ref)
+        }
       } else {
-        attachments.push(...(await context.mail.copyAttachments(file.ref, [file.attachmentId])))
+        const accounts = await context.mail.listAccounts()
+        const address = stringArg(args, 'account')
+        const account = address
+          ? accounts.find((item) => item.email.toLowerCase() === address.toLowerCase())
+          : accounts.length === 1
+            ? accounts[0]
+            : undefined
+
+        if (!account) {
+          throw new ToolInputError(
+            `Indica \`account\` tra: ${accounts.map((item) => item.email).join(', ')}.`
+          )
+        }
+
+        spec.accountId = account.id
+        spec.subject ??= ''
+
+        if (!spec.to?.length) {
+          throw new ToolInputError(
+            'Un messaggio nuovo ha bisogno di almeno un destinatario in `a`.'
+          )
+        }
       }
     }
 
-    if (attachments.length > 0) {
-      spec.attachments = attachments
-    }
-
-    // A reply goes on the one the Segretario already wrote to that message,
-    // while the user has not taken it in hand: never a second beside it.
-    const rewrite =
-      stringArg(args, 'bozza') ??
-      (spec.source && (kind === 'reply' || kind === 'replyAll')
-        ? await untouchedReplyDraft(context, spec.source)
-        : undefined)
-
-    if (rewrite) {
-      const draftId = await draftIdOf(context, rewrite)
-
-      spec.draftId = draftId
-      // The draft it replaces is thrown away: what it said is no longer what was written.
-      await context.store.takeDraft(draftId)
+    // In a draft that exists — the message the user is writing, one written before, one in
+    // Bozze —: the words go in it, in place, on the user's desk.
+    if (draftRef) {
+      spec.draftId = await draftIdOf(context, draftRef)
+      spec.selection = selection
     }
 
     const draftId = await context.page.compose(spec, context.signal)
+
+    // What the Segretario had written in it is no longer what it says — once the words are in.
+    if (draftRef) {
+      await context.store.takeDraft(draftId)
+    }
     const handle = context.handles.name({ kind: 'draft', draftId }, context.newHandles)
     const draft = await context.mail.getDraft(draftId)
     const accountId = draft?.accountId ?? spec.accountId ?? spec.source?.accountId
 
-    // Kept as written, to learn from what the user changes before sending,
-    // and as it was left, to know later whether the user touched it.
-    if (accountId) {
+    // Kept as written, to learn from what the user changes before sending, and as it was left,
+    // to know later whether the user touched it — the whole text, not a passage in theirs.
+    if (accountId && !selection) {
       await context.store.recordDraft({
         draftId,
         activityId: context.run.activityId,
@@ -254,9 +282,19 @@ export const writeDraftTool: SegretarioTool = {
       }
     }
 
+    const envelope = draft
+      ? ` · ${draft.to.length > 0 ? `a ${draft.to.join(', ')}` : 'senza destinatari'} · oggetto «${draft.subject}»`
+      : ''
+
     return {
-      content: `Bozza ${handle} pronta${draft ? ` · ${draft.to.length > 0 ? `a ${draft.to.join(', ')}` : 'senza destinatari'} · oggetto «${draft.subject}»` : ''}. È aperta per l'utente e in Bozze; per inviarla usa invia_bozza.`,
-      summary: rewrite ? 'Corretta la bozza' : 'Preparata una bozza'
+      content: selection
+        ? `Il passaggio selezionato è riscritto nella bozza ${handle}, davanti all'utente.`
+        : `Bozza ${handle} scritta${envelope}. È aperta davanti all'utente e in Bozze; per inviarla usa invia_bozza.`,
+      summary: selection
+        ? 'Riscritto il passaggio'
+        : draftRef
+          ? 'Scritto nel messaggio'
+          : 'Preparata una bozza'
     }
   }
 }

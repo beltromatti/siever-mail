@@ -55,7 +55,11 @@ import type { SegretarioState } from './use-segretario'
 /** What the user is looking at, as the input shows it before it is sent along. */
 export interface SegretarioContextChip {
   context: SegretarioContext
+  /** What goes along, read as the user sends: a message being written changes as it is typed. */
+  resolve?: () => SegretarioContext
   label: string
+  /** A message being written, rather than one read or an event. */
+  kind?: 'composing'
 }
 
 /** Each tool's icon in the Segretario's work: the host's, then the extension's own. */
@@ -651,10 +655,13 @@ export function SegretarioPanel({
   onClose,
   onOpenHandle,
   onApprove,
-  onOpenDraft
+  onOpenDraft,
+  focusRequest = 0
 }: {
   state: SegretarioState
   contextChip: SegretarioContextChip | null
+  /** Raised when the user turns to the panel from elsewhere (⌘J in a message): its input takes the words. */
+  focusRequest?: number
   suggestions: ReadonlyArray<string>
   atWindowTopRight: boolean
   onClose: () => void
@@ -682,7 +689,7 @@ export function SegretarioPanel({
 
   useEffect(() => {
     inputRef.current?.focus()
-  }, [state.selectedId])
+  }, [state.selectedId, focusRequest])
 
   useLayoutEffect(() => {
     const input = inputRef.current
@@ -714,7 +721,10 @@ export function SegretarioPanel({
     setError(null)
 
     try {
-      const context = contextChip && !contextDetached ? contextChip.context : EMPTY_CONTEXT
+      const context =
+        contextChip && !contextDetached
+          ? (contextChip.resolve?.() ?? contextChip.context)
+          : EMPTY_CONTEXT
       await (onDiaryRun ? state.start(trimmed, context) : state.send(trimmed, context))
       setShowDiary(false)
       setText('')
@@ -728,6 +738,7 @@ export function SegretarioPanel({
   return (
     <aside
       aria-label="Segretario"
+      data-segretario-panel
       className="paper flex h-full min-h-0 w-full min-w-0 flex-col border-l"
     >
       <header
@@ -828,7 +839,9 @@ export function SegretarioPanel({
           <div className="sheet rounded-[12px] p-2 pb-1.5">
             {contextChip && !contextDetached && (
               <span className="bg-hover text-muted-foreground mb-1.5 inline-flex max-w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-[11.5px]">
-                {contextChip.context.eventKey ? (
+                {contextChip.kind === 'composing' ? (
+                  <PenLine className="size-3 shrink-0" />
+                ) : contextChip.context.eventKey ? (
                   <CalendarDays className="size-3 shrink-0" />
                 ) : (
                   <Mail className="size-3 shrink-0" />

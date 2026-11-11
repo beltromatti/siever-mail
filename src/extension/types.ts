@@ -102,6 +102,23 @@ export interface ExtensionMain {
    */
   readonly defaultAccountSignatureHtml: string
   /**
+   * HTML used as the default letterhead of that same first account: what
+   * heads every message written from it, above the lines the user writes
+   * on (vision §6.6). Empty, or left out, for none.
+   */
+  readonly defaultAccountHeaderHtml?: string
+  /**
+   * Brings up to date a mailbox's letterhead and signature that the
+   * extension set itself in an earlier shape — a letterhead kept inside
+   * the signature, before there were two. Called as they are read; null
+   * (or the same) when there is nothing to change. Whatever the user wrote
+   * that is not the extension's own must come back untouched.
+   */
+  upgradeAccountSignature?(stored: {
+    html: string
+    headerHtml: string
+  }): { html: string; headerHtml: string } | null
+  /**
    * Its tables, its channels, its startup work. Called once at startup, as
    * soon as the database is open and before the sources connect, so they
    * are there before anything asks for them.

@@ -36,7 +36,6 @@ export async function startRun(
     origin?: 'segretario'
     workId?: string | null
     scope?: unknown
-    editor?: RunContext['editor']
     missing?: (run: RunContext) => Promise<string | null>
     signal?: AbortSignal
     /** Called with the activity as soon as it exists, before it runs. */
@@ -79,7 +78,6 @@ export async function startRun(
     background: spec.background,
     // Only a conversation in the panel shows what it asks to confirm.
     watched: !spec.background && spec.visibility === 'pannello',
-    editor: spec.editor,
     missing: spec.missing,
     signal: spec.signal,
     seen: new Map(spec.data.seen ?? []),

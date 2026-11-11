@@ -97,8 +97,8 @@ const desktopMailApi: DesktopMailApi = {
   onDraftStatusChanged: (listener) => subscribe(IPC_CHANNELS.draftStatusChanged, listener),
   listAccountSignatures: async () => invoke(IPC_CHANNELS.listAccountSignatures),
   getAccountSignature: async (accountId) => invoke(IPC_CHANNELS.getAccountSignature, accountId),
-  setAccountSignature: async (accountId, html) =>
-    invoke(IPC_CHANNELS.setAccountSignature, accountId, html),
+  setAccountSignature: async (accountId, content) =>
+    invoke(IPC_CHANNELS.setAccountSignature, accountId, content),
   getDataStorageBreakdown: async () => invoke(IPC_CHANNELS.getDataStorageBreakdown),
   clearAccountData: async (accountId) => invoke(IPC_CHANNELS.clearAccountData, accountId),
   clearAllDataKeepAccounts: async () => invoke(IPC_CHANNELS.clearAllDataKeepAccounts),
@@ -193,7 +193,6 @@ const segretarioApi: SegretarioApi = {
   getToday: async () => invoke(SEGRETARIO_IPC.getToday),
   refreshToday: async () => invoke(SEGRETARIO_IPC.refreshToday),
   getDue: async (throughDay) => invoke(SEGRETARIO_IPC.getDue, throughDay),
-  assistWriting: async (request) => invoke(SEGRETARIO_IPC.assistWriting, request),
   reviewDraft: async (request) => invoke(SEGRETARIO_IPC.reviewDraft, request),
   askMail: async (question, requestId) => invoke(SEGRETARIO_IPC.askMail, question, requestId),
   stopAsking: async (requestId) => invoke(SEGRETARIO_IPC.stopAsking, requestId),

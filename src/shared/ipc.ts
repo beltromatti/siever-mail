@@ -251,7 +251,11 @@ export interface DesktopMailApi {
   forgetContact: (address: string) => Promise<void>
   listAccountSignatures: () => Promise<MailAccountSignature[]>
   getAccountSignature: (accountId: string) => Promise<MailAccountSignature | null>
-  setAccountSignature: (accountId: string, html: string) => Promise<MailAccountSignature | null>
+  /** A mailbox's letterhead and signature, saved together; either may be empty. */
+  setAccountSignature: (
+    accountId: string,
+    content: { html: string; headerHtml: string }
+  ) => Promise<MailAccountSignature>
   getDataStorageBreakdown: () => Promise<DataStorageBreakdown>
   clearAccountData: (accountId: string) => Promise<void>
   clearAllDataKeepAccounts: () => Promise<void>

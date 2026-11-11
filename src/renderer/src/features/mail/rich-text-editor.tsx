@@ -18,8 +18,10 @@ import {
   Link2,
   List,
   ListOrdered,
-  Maximize2,
-  Minimize2,
+  MoreHorizontal,
+  Redo2,
+  Table as TableIcon,
+  Undo2,
   Outdent,
   Palette,
   Pilcrow,
@@ -43,56 +45,106 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
 import { Input } from '@renderer/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
-import { htmlToPlainText } from '@renderer/lib/email'
+import { READER_ZOOM_RESET, wheelReaderZoom } from '@renderer/lib/reader-zoom'
 import { buildMailFrameDocument, sanitizeMailHtmlToFragment } from '@renderer/lib/mail-html'
 import {
   areMailFontFamiliesEquivalent,
   findMailFontOption,
   getDisplayMailFontFamily,
-  getPrimaryMailFontFamily,
   MAIL_EDITOR_DEFAULT_FONT_FAMILY,
   MAIL_FONT_OPTIONS,
   normalizeMailFontFamilyValue
 } from '@shared/mail-fonts'
 import { cn } from '@renderer/lib/utils'
 
-/** What the host can ask of the body from outside it. */
+/**
+ * What the host can do with the body from outside it. The body is the
+ * editor's: the host reads it when it needs it and changes it only through
+ * here, each change a step ⌘Z takes back.
+ */
 export interface RichTextEditorHandle {
+  /** The body as it is now, as the message carries it. */
+  getHTML(): string
+  /**
+   * The whole body anew — a deliberate replacement, for a body nobody wrote
+   * in yet: the caret goes to the start, the undo history starts again.
+   */
+  setHTML(html: string): void
+  /** Changes the body in place, in its live DOM: the caret stays where it is, unless what it was in goes. */
+  modify(change: (root: HTMLElement) => void): void
+  /** Puts `html` in place of the selection, or at the caret. */
+  insertHTML(html: string): void
   /**
    * The passage selected in the body, kept to be written over later — once
    * the focus has moved to a popover, say: null when nothing is selected.
    */
-  captureSelection(): { text: string; replace: (html: string) => void } | null
+  captureSelection(): {
+    text: string
+    /** The line the selection starts in, whose style lines written over it take. */
+    block: Element | null
+    /**
+     * Writes `html` over the passage, if it is still there as it was —
+     * false when the user has typed over it, or undone past it, meanwhile.
+     * The keyboard stays where the user is.
+     */
+    replace: (html: string) => boolean
+  } | null
+  /** Focuses the body; at the start of the node `where` picks, when it picks one. */
+  focus(where?: (root: HTMLElement) => Node | null): void
+  /**
+   * Puts the caret at the start of the node `where` picks without taking
+   * the focus: the toolbar shows that line's style, and the caret is there
+   * when the body is entered.
+   */
+  select(where: (root: HTMLElement) => Node | null): void
 }
 
 interface RichTextEditorProps {
   /** Filled with the body's handle while the editor is up. */
   handleRef?: React.RefObject<RichTextEditorHandle | null>
-  value: string
+  /**
+   * What the body opens with. Read once, when the editor is made: from then
+   * on the body is the editor's, and changes through the handle.
+   */
+  initialHtml: string
   placeholder?: string
   disabled?: boolean
-  expanded?: boolean
-  showExpandToggle?: boolean
+  /**
+   * `boxed` stands on a page among other things, framed; `pane` fills the
+   * pane it is in, its toolbar a band of the pane (the composer).
+   */
+  variant?: 'boxed' | 'pane'
   expandToContainer?: boolean
   defaultFontFamily?: string
-  /**
-   * Put the caret at the very top of the body, once, when this turns true
-   * with the editor ready. The host turns it on once the body it opens with
-   * is in place — for a reply, where the next thing the user does is write.
-   */
-  autoFocusBody?: boolean
+  /** How large the body shows, in percent (`UiPreferences.readerZoom`): the message stays as written. */
+  zoom?: number
+  /** Ctrl/⌘ + wheel over the body, as over a message being read. */
+  onZoomChange?: (zoom: number) => void
   /**
    * A file is being dragged over the body. The editor never takes the drop
    * itself — Chromium would open the file in its frame — so the host can
    * cover it with a drop target of its own.
    */
   onFileDragEnter?: () => void
-  onExpandedChange?: (expanded: boolean) => void
-  onChange: (html: string, text: string) => void
+  /**
+   * A block the body keeps whole at its top (the composer's letterhead):
+   * Backspace at the start of the line after it does not merge that line
+   * into it, so what is written there never ends up inside it.
+   */
+  headSelector?: string
+  /** The body changed: read it with the handle, when needed. */
+  onInput?: () => void
+  /** The editor is up, with its handle. */
+  onReady?: (handle: RichTextEditorHandle) => void
 }
 
 // Minimal type surface for Squire — covers exactly the methods/events we
@@ -103,6 +155,7 @@ interface SquireInstance {
   setHTML(html: string): SquireInstance
   getHTML(withBookmark?: boolean): string
   insertHTML(html: string, isPaste?: boolean): SquireInstance
+  insertPlainText(text: string, isPaste?: boolean): SquireInstance
   insertImage(src: string, attributes?: Record<string, string>): HTMLImageElement
   bold(): SquireInstance
   removeBold(): SquireInstance
@@ -144,6 +197,14 @@ interface SquireInstance {
   blur(): SquireInstance
   addEventListener(type: string, fn: (event: Event) => void): SquireInstance
   removeEventListener(type: string, fn?: (event: Event) => void): SquireInstance
+  setKeyHandler(
+    key: string,
+    fn: ((squire: SquireInstance, event: KeyboardEvent, range: Range) => void) | null
+  ): SquireInstance
+  undo(): SquireInstance
+  redo(): SquireInstance
+  /** Which tag a block becomes when Enter splits it; a tag not here becomes the default block. */
+  tagAfterSplit: Record<string, string>
 }
 
 interface SquireConfig {
@@ -286,26 +347,304 @@ const TEXT_HIGHLIGHT_OPTIONS = [
   { value: '#c4b5fd', label: 'Lilla' }
 ] as const
 
-function LineSpacingIcon({ className }: { className?: string }): React.JSX.Element {
+/** A command's name with the chord that runs it: "Grassetto (⌘B)", "Grassetto (Ctrl+B)". */
+function withChord(label: string, key: string): string {
+  const chord = navigator.platform.includes('Mac')
+    ? `⌘${key.replace('Shift+', '⇧')}`
+    : `Ctrl+${key}`
+
+  return `${label} (${chord})`
+}
+
+/** Where the toolbar has room for everything; narrower, the rarer commands go under "Altro". */
+const TOOLBAR_FULL_WIDTH = 900
+/** Narrower still, it gives up its separators and the redo button, which ⌘⇧Z and "Altro" keep. */
+const TOOLBAR_COMPACT_WIDTH = 580
+
+function ToolbarSeparator(): React.JSX.Element {
+  return <span aria-hidden className="bg-border mx-0.5 h-5 w-px shrink-0" />
+}
+
+const TABLE_PICKER_ROWS = 6
+const TABLE_PICKER_COLUMNS = 8
+
+/** The size of a new table, picked on a grid as Word and Outlook have it. */
+function TableGridPicker({
+  onPick
+}: {
+  onPick: (rows: number, columns: number) => void
+}): React.JSX.Element {
+  const [hover, setHover] = useState({ rows: 0, columns: 0 })
+
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <path d="M11 6h8" />
-      <path d="M11 12h8" />
-      <path d="M11 18h8" />
-      <path d="M5 4v16" />
-      <path d="m3 6 2-2 2 2" />
-      <path d="m3 18 2 2 2-2" />
-    </svg>
+    <div className="p-1.5">
+      <p className="text-muted-foreground mb-1.5 text-[11px]">
+        {hover.rows > 0 ? `Tabella ${hover.columns} × ${hover.rows}` : 'Inserisci una tabella'}
+      </p>
+      <div
+        className="grid gap-[3px]"
+        style={{ gridTemplateColumns: `repeat(${TABLE_PICKER_COLUMNS}, 0.9rem)` }}
+        onMouseLeave={() => setHover({ rows: 0, columns: 0 })}
+      >
+        {Array.from({ length: TABLE_PICKER_ROWS * TABLE_PICKER_COLUMNS }, (_, index) => {
+          const rows = Math.floor(index / TABLE_PICKER_COLUMNS) + 1
+          const columns = (index % TABLE_PICKER_COLUMNS) + 1
+          const lit = rows <= hover.rows && columns <= hover.columns
+
+          return (
+            <button
+              key={index}
+              type="button"
+              aria-label={`Tabella di ${columns} colonne e ${rows} righe`}
+              onMouseEnter={() => setHover({ rows, columns })}
+              onFocus={() => setHover({ rows, columns })}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onPick(rows, columns)}
+              className={cn(
+                'size-[0.9rem] rounded-[3px] border outline-none',
+                lit ? 'border-primary/70 bg-selected' : 'border-border bg-background'
+              )}
+            />
+          )
+        })}
+      </div>
+    </div>
   )
+}
+
+/** A table's cell as a message carries it: its border and spacing written on it — no mail client has the app's styles. */
+const TABLE_CELL_STYLE =
+  'border: 1px solid #c8ccd2; padding: 4px 8px; vertical-align: top; min-width: 2em;'
+
+/** What a table takes from the line it is put in: the colour and face its text is written in. */
+const TABLE_INHERITED_PROPERTIES = ['color', 'font-family', 'font-size', 'line-height'] as const
+
+/** The top-level line of the body the caret is in, or null inside a list, a quote, a cell. */
+function lineAtCaret(editor: SquireInstance): HTMLElement | null {
+  const root = editor.getRoot()
+  let node: Node | null = editor.getSelection().startContainer
+
+  while (node && node.parentNode !== root) {
+    node = node.parentNode
+  }
+
+  return node && isElementNode(node) && ['DIV', 'P'].includes(node.nodeName) ? node : null
+}
+
+function hasNoContent(element: Element): boolean {
+  return (
+    !(element.textContent ?? '').replace(ZERO_WIDTH_SPACE_PATTERN, '').replace(/\s/g, '').length &&
+    !element.querySelector('img, table, hr')
+  )
+}
+
+/**
+ * Puts a table of `rows` × `columns` where the caret is, in the style of
+ * its line, with a line like it below to go on writing, and the caret in
+ * its first cell — a step ⌘Z takes back. In a list or a quote, where
+ * there is no line of its own, it goes in as Squire inserts any HTML.
+ */
+function insertTable(editor: SquireInstance, rows: number, columns: number): void {
+  const document = editor.getRoot().ownerDocument
+  const line = lineAtCaret(editor)
+  const table = document.createElement('table')
+  table.setAttribute('style', 'border-collapse: collapse; width: 100%;')
+
+  for (const property of TABLE_INHERITED_PROPERTIES) {
+    const value = line?.style.getPropertyValue(property)
+
+    if (value) {
+      table.style.setProperty(property, value)
+    }
+  }
+
+  const body = table.appendChild(document.createElement('tbody'))
+
+  for (let row = 0; row < rows; row += 1) {
+    const tr = body.appendChild(document.createElement('tr'))
+
+    for (let column = 0; column < columns; column += 1) {
+      const cell = tr.appendChild(document.createElement('td'))
+      cell.setAttribute('style', TABLE_CELL_STYLE)
+      cell.appendChild(document.createElement('br'))
+    }
+  }
+
+  if (!line) {
+    editor.insertHTML(`${table.outerHTML}<div><br></div>`)
+    return
+  }
+
+  editor.saveUndoState()
+
+  if (hasNoContent(line)) {
+    // An empty line: the table takes its place above it, and it stays as the line after.
+    line.before(table)
+  } else {
+    const after = line.cloneNode(false) as HTMLElement
+    after.appendChild(document.createElement('br'))
+    line.after(table, after)
+  }
+
+  const range = document.createRange()
+  range.setStart(table.rows[0].cells[0], 0)
+  range.collapse(true)
+  editor.focus()
+  editor.setSelection(range)
+}
+
+/**
+ * Tab in a table: the next cell (`step` 1) or the one before (-1), its
+ * text selected to be typed over, as in Word; past the last, a new row.
+ * False when the caret is in no table.
+ */
+function moveBetweenCells(editor: SquireInstance, step: 1 | -1): boolean {
+  const cell = cellAtCaret(editor)
+  const table = cell?.closest('table')
+
+  if (!cell || !table) {
+    return false
+  }
+
+  const cells = Array.from(table.querySelectorAll('td, th')).filter(
+    (candidate) => candidate.closest('table') === table
+  )
+  let target = cells[cells.indexOf(cell) + step] as HTMLTableCellElement | undefined
+
+  if (!target && step === 1) {
+    const last = table.rows[table.rows.length - 1]
+    const added = last.cloneNode(false) as HTMLTableRowElement
+
+    editor.saveUndoState()
+    Array.from(last.cells).forEach((model) => added.appendChild(emptyCellLike(model)))
+    last.after(added)
+    target = added.cells[0]
+  }
+
+  if (target) {
+    const range = table.ownerDocument.createRange()
+    range.selectNodeContents(target)
+
+    if (hasNoContent(target)) {
+      range.collapse(true)
+    }
+
+    editor.setSelection(range)
+  }
+
+  return true
+}
+
+type TableOperation =
+  | 'row-above'
+  | 'row-below'
+  | 'column-left'
+  | 'column-right'
+  | 'delete-row'
+  | 'delete-column'
+  | 'delete-table'
+
+/** The table cell the caret is in, if any. */
+function cellAtCaret(editor: SquireInstance): HTMLTableCellElement | null {
+  const root = editor.getRoot()
+  let node: Node | null = editor.getSelection().startContainer
+
+  while (node && node !== root) {
+    if (node.nodeName === 'TD' || node.nodeName === 'TH') {
+      return node as HTMLTableCellElement
+    }
+    node = node.parentNode
+  }
+
+  return null
+}
+
+/** A cell like `model`, empty: the same borders and spacing. */
+function emptyCellLike(model: HTMLTableCellElement): HTMLTableCellElement {
+  const cell = model.cloneNode(false) as HTMLTableCellElement
+  cell.removeAttribute('colspan')
+  cell.removeAttribute('rowspan')
+  cell.appendChild(model.ownerDocument.createElement('br'))
+  return cell
+}
+
+/** Adds or takes away a row or column where the caret is, or the whole table: a step ⌘Z takes back. */
+function changeTable(editor: SquireInstance, operation: TableOperation): void {
+  const cell = cellAtCaret(editor)
+  const row = cell?.parentElement as HTMLTableRowElement | null | undefined
+  const table = cell?.closest('table')
+
+  if (!cell || !row || !table) {
+    return
+  }
+
+  const document = editor.getRoot().ownerDocument
+  const rows = Array.from(table.rows)
+  const column = cell.cellIndex
+  let caret: Node | null = cell
+
+  editor.saveUndoState()
+
+  switch (operation) {
+    case 'row-above':
+    case 'row-below': {
+      const added = row.cloneNode(false) as HTMLTableRowElement
+      Array.from(row.cells).forEach((model) => added.appendChild(emptyCellLike(model)))
+      row.parentElement?.insertBefore(added, operation === 'row-above' ? row : row.nextSibling)
+      caret = added.cells[Math.min(column, added.cells.length - 1)] ?? added
+      break
+    }
+    case 'column-left':
+    case 'column-right':
+      for (const each of rows) {
+        const model = each.cells[Math.min(column, each.cells.length - 1)]
+
+        if (model) {
+          const added = emptyCellLike(model)
+          each.insertBefore(added, operation === 'column-left' ? model : model.nextSibling)
+
+          if (each === row) {
+            caret = added
+          }
+        }
+      }
+      break
+    case 'delete-row':
+      caret = (row.nextElementSibling ?? row.previousElementSibling)?.firstElementChild ?? null
+      row.remove()
+      break
+    case 'delete-column':
+      for (const each of rows) {
+        each.cells[Math.min(column, each.cells.length - 1)]?.remove()
+      }
+      caret = row.cells[Math.min(column, row.cells.length - 1)] ?? null
+      break
+    case 'delete-table':
+      caret = table.nextElementSibling ?? table.previousElementSibling
+      table.remove()
+      break
+  }
+
+  // What is left without cells goes too: a table of no rows, rows of no cells.
+  for (const each of Array.from(table.rows)) {
+    if (each.cells.length === 0) {
+      each.remove()
+    }
+  }
+
+  if (table.isConnected && table.rows.length === 0) {
+    caret = table.nextElementSibling ?? table.previousElementSibling
+    table.remove()
+  }
+
+  editor.focus()
+
+  if (caret?.isConnected) {
+    const range = document.createRange()
+    range.setStart(caret, 0)
+    range.collapse(true)
+    editor.setSelection(range)
+  }
 }
 
 // Realm-agnostic node-type guards.
@@ -747,21 +1086,6 @@ function readActiveHighlightHex(editor: SquireInstance): string | null {
   return readActiveColorAcrossSelection(editor, 'backgroundColor')
 }
 
-interface InlineTypingFormat {
-  fontFamily: string | null
-  fontSizePx: number
-  color: string | null
-  highlight: string | null
-  lineHeight: string | null
-  textAlign: string | null
-  isBold: boolean
-  isItalic: boolean
-  isUnderline: boolean
-  isStrike: boolean
-  isSub: boolean
-  isSup: boolean
-}
-
 const INLINE_TYPING_BLOCK_TAGS = new Set([
   'DIV',
   'P',
@@ -775,46 +1099,6 @@ const INLINE_TYPING_BLOCK_TAGS = new Set([
   'TD',
   'TH'
 ])
-
-// The typing snapshot preserves *raw* CSS color strings (e.g. `purple`,
-// `rgba(...)`, `#800080`) — the toolbar uses a hex-normalised view, but for
-// re-emitting the format on a fresh empty block we need to replay whatever
-// the imported content authored, including named colours that
-// `normalizeColorToHex` (which only understands hex/rgb) would reject as
-// `null` and silently drop on the next line.
-function readInlineTypingFormat(editor: SquireInstance): InlineTypingFormat {
-  return {
-    fontFamily: readActiveFontFamily(editor),
-    fontSizePx: readActiveFontSizePx(editor),
-    color: readContextualStyleFromCursor(editor, 'color'),
-    highlight: readContextualStyleFromCursor(editor, 'backgroundColor'),
-    lineHeight: readContextualStyleFromCursor(editor, 'lineHeight'),
-    textAlign: readContextualStyleFromCursor(editor, 'textAlign') || readActiveAlignment(editor),
-    isBold: hasInlineBold(editor),
-    isItalic: hasInlineItalic(editor),
-    isUnderline: hasInlineUnderline(editor),
-    isStrike: hasInlineStrike(editor),
-    isSub: hasInlineSubscript(editor),
-    isSup: hasInlineSuperscript(editor)
-  }
-}
-
-function hasInlineTypingFormat(format: InlineTypingFormat): boolean {
-  return (
-    Boolean(format.fontFamily) ||
-    format.fontSizePx !== BASE_FONT_SIZE_PX ||
-    Boolean(format.color) ||
-    Boolean(format.highlight) ||
-    Boolean(format.lineHeight) ||
-    Boolean(format.textAlign) ||
-    format.isBold ||
-    format.isItalic ||
-    format.isUnderline ||
-    format.isStrike ||
-    format.isSub ||
-    format.isSup
-  )
-}
 
 function findClosestTypingBlock(root: HTMLElement, node: Node): HTMLElement | null {
   let current: Node | null = isElementNode(node) ? node : node.parentNode
@@ -1049,318 +1333,6 @@ function hasInlineSuperscript(editor: SquireInstance): boolean {
   )
 }
 
-function isEmptyTypingBlock(block: HTMLElement): boolean {
-  const text = block.textContent?.replace(ZERO_WIDTH_SPACE_PATTERN, '').trim() ?? ''
-  return !text && !block.querySelector('img, table')
-}
-
-function wrapNode(
-  document: Document,
-  child: Node,
-  tagName: string,
-  style?: Partial<CSSStyleDeclaration>
-): HTMLElement {
-  const element = document.createElement(tagName)
-  if (style) {
-    Object.assign(element.style, style)
-  }
-  element.appendChild(child)
-  return element
-}
-
-// Wrap an arbitrary leaf node (a text node, the user's typed character, or a
-// ZWS placeholder for the caret) in the inline tags + style span demanded by
-// the typing snapshot. Used by both the typing-into-empty-block path and the
-// post-Enter seeding path so the two flows produce identical structure.
-function wrapLeafWithTypingFormat(
-  document: Document,
-  leaf: Node,
-  format: InlineTypingFormat
-): Node {
-  let node: Node = leaf
-
-  if (format.isSub) {
-    node = wrapNode(document, node, 'sub')
-  } else if (format.isSup) {
-    node = wrapNode(document, node, 'sup')
-  }
-  if (format.isStrike) {
-    node = wrapNode(document, node, 's')
-  }
-  if (format.isUnderline) {
-    node = wrapNode(document, node, 'u')
-  }
-  if (format.isItalic) {
-    node = wrapNode(document, node, 'i')
-  }
-  if (format.isBold) {
-    node = wrapNode(document, node, 'b')
-  }
-
-  const inlineStyle: Partial<CSSStyleDeclaration> = {}
-  if (format.fontFamily) {
-    inlineStyle.fontFamily = format.fontFamily
-  }
-  if (format.fontSizePx !== BASE_FONT_SIZE_PX) {
-    inlineStyle.fontSize = formatFontSizePxForCss(format.fontSizePx)
-  }
-  if (format.color) {
-    inlineStyle.color = format.color
-  }
-  if (format.highlight) {
-    inlineStyle.backgroundColor = format.highlight
-  }
-
-  if (Object.keys(inlineStyle).length > 0) {
-    node = wrapNode(document, node, 'span', inlineStyle)
-  }
-
-  return node
-}
-
-function applyBlockTypingFormat(block: HTMLElement, format: InlineTypingFormat): void {
-  if (format.lineHeight) {
-    block.style.lineHeight = format.lineHeight
-  }
-  if (
-    format.textAlign === 'left' ||
-    format.textAlign === 'center' ||
-    format.textAlign === 'right' ||
-    format.textAlign === 'justify'
-  ) {
-    block.style.textAlign = format.textAlign
-  }
-}
-
-// Single shared seeder for both the typing-into-empty-block flow and the
-// post-Enter empty-block flow. Both want the same outcome: replace the empty
-// block's content with the styled wrapper chain demanded by the typing
-// snapshot, then place the caret at the end of the seeded text so the next
-// keystroke extends the innermost text node naturally. Centralising this
-// avoids a parallel implementation that drifted from the typing path.
-//
-// `text` is either the typed character (intercepted in beforeinput) or a
-// ZWS placeholder (post-Enter, so the caret has somewhere to rest until the
-// user types). Squire's MutationObserver auto-cleans the leftover ZWS once
-// real content arrives.
-function seedEmptyBlockWithFormat(
-  editor: SquireInstance,
-  block: HTMLElement,
-  format: InlineTypingFormat,
-  text: string
-): void {
-  const document = block.ownerDocument
-  const seedTextNode = document.createTextNode(text)
-  const formattedNode = wrapLeafWithTypingFormat(document, seedTextNode, format)
-
-  editor.saveUndoState(editor.getSelection())
-  applyBlockTypingFormat(block, format)
-  block.replaceChildren(formattedNode)
-
-  const range = document.createRange()
-  range.setStart(seedTextNode, seedTextNode.data.length)
-  range.collapse(true)
-  editor.setSelection(range)
-}
-
-function restoreInlineTypingFormatIfEmpty(
-  editor: SquireInstance,
-  format: InlineTypingFormat
-): void {
-  if (!hasInlineTypingFormat(format)) {
-    return
-  }
-
-  const range = editor.getSelection()
-  if (!range.collapsed) {
-    return
-  }
-
-  const block = findClosestTypingBlock(editor.getRoot(), range.startContainer)
-  if (!block || !isEmptyTypingBlock(block)) {
-    return
-  }
-
-  // Seed with a ZWS so the caret has a Text node to live in, inside the
-  // innermost styled wrapper. Squire's chained set*Methods (which previously
-  // drove this path) are sensitive to collapsed-range ordering and silently
-  // leave the caret outside their wrappers in some edge cases — direct DOM
-  // seeding is byte-for-byte deterministic instead.
-  seedEmptyBlockWithFormat(editor, block, format, ZERO_WIDTH_SPACE)
-}
-
-// Decide which active style properties the typed character would *fail* to
-// inherit at the current caret position.
-//
-// The check is grounded in `getComputedStyle(targetElement)`: the toolbar
-// reports the *contextual* style (which may walk up to a sibling span via
-// `findContextualStyleAnchors`), but what the user actually sees when they
-// type is the **cascade-resolved** style of whatever element the inserted
-// character would land in. If those two agree on every active property the
-// cascade is doing the right thing and we must stay out of the browser's
-// way (otherwise we just add DOM bloat). If they disagree — the canonical
-// case is `<p style="color:dark"><span style="color:purple">&nbsp;</span></p>`
-// with the caret outside the span: toolbar shows purple, cascade gives
-// dark — we have to wrap the typed character ourselves so the visible glyph
-// matches the toolbar.
-function diffFormatVsCaretCascade(
-  range: Range,
-  format: InlineTypingFormat,
-  document: Document
-): InlineTypingFormat {
-  const start = range.startContainer
-  const target = isElementNode(start) ? start : start.parentElement
-  const view = document.defaultView
-  if (!target || !view) {
-    return format
-  }
-
-  const cs = view.getComputedStyle(target)
-  const remaining: InlineTypingFormat = { ...format }
-
-  if (remaining.fontFamily) {
-    const want = getPrimaryMailFontFamily(remaining.fontFamily)
-    const have = getPrimaryMailFontFamily(cs.fontFamily)
-    if (want && want === have) {
-      remaining.fontFamily = null
-    }
-  }
-
-  if (remaining.fontSizePx !== BASE_FONT_SIZE_PX) {
-    const have = parseFontSizePx(cs.fontSize)
-    if (have !== null && Math.abs(have - remaining.fontSizePx) <= 0.5) {
-      remaining.fontSizePx = BASE_FONT_SIZE_PX
-    }
-  }
-
-  if (remaining.color) {
-    const want = resolveCssColorToHex(remaining.color, document)
-    const have = resolveCssColorToHex(cs.color, document)
-    if (want && want === have) {
-      remaining.color = null
-    }
-  }
-
-  if (remaining.highlight) {
-    const want = resolveCssColorToHex(remaining.highlight, document)
-    const have = resolveCssColorToHex(cs.backgroundColor, document)
-    if (want && want === have) {
-      remaining.highlight = null
-    }
-  }
-
-  if (remaining.isBold && hasBoldWeight(cs.fontWeight)) {
-    remaining.isBold = false
-  }
-  if (remaining.isItalic && /^italic|^oblique/i.test(cs.fontStyle)) {
-    remaining.isItalic = false
-  }
-  if (remaining.isUnderline && cs.textDecorationLine.toLowerCase().includes('underline')) {
-    remaining.isUnderline = false
-  }
-  if (remaining.isStrike && cs.textDecorationLine.toLowerCase().includes('line-through')) {
-    remaining.isStrike = false
-  }
-  if (remaining.isSub && cs.verticalAlign.toLowerCase().includes('sub')) {
-    remaining.isSub = false
-  }
-  if (remaining.isSup && cs.verticalAlign.toLowerCase().includes('super')) {
-    remaining.isSup = false
-  }
-
-  // line-height / text-align are block-level properties: they're only
-  // meaningful for the post-Enter / empty-block seeding paths (where we
-  // apply them to the new <div>/<p> via `applyBlockTypingFormat`). For
-  // inline typing they never appear on the wrapper span, so they must
-  // NEVER drive the "should I intercept?" decision — otherwise every
-  // keystroke inside a styled block produces a fresh, redundantly-wrapped
-  // span and the user's toolbar actions stop taking effect.
-  remaining.lineHeight = null
-  remaining.textAlign = null
-
-  return remaining
-}
-
-// Insert the typed character at the caret wrapped in the styling that the
-// inline ancestor chain doesn't already carry. The browser's natural
-// insertion would land the character at a point that loses that styling
-// (most commonly: caret in a non-empty block whose visible glyph is held
-// by an inner styled <span> the click landed beside, or caret at the very
-// boundary of a block where `range.startContainer` is the block element
-// itself). Wrapping at insertion preserves the toolbar-reported style on
-// every keystroke regardless of how the surrounding HTML was authored.
-function insertFormattedTextAtCursor(
-  editor: SquireInstance,
-  format: InlineTypingFormat,
-  text: string
-): void {
-  const range = editor.getSelection()
-  const document = editor.getRoot().ownerDocument
-  if (!document) {
-    return
-  }
-  const seedTextNode = document.createTextNode(text)
-  const formattedNode = wrapLeafWithTypingFormat(document, seedTextNode, format)
-
-  editor.saveUndoState(range)
-  range.insertNode(formattedNode)
-
-  const next = document.createRange()
-  next.setStart(seedTextNode, seedTextNode.data.length)
-  next.collapse(true)
-  editor.setSelection(next)
-}
-
-function handleFormattedEmptyBlockBeforeInput(editor: SquireInstance, event: InputEvent): void {
-  if (
-    event.inputType !== 'insertText' ||
-    event.isComposing ||
-    !event.data ||
-    event.data.length === 0
-  ) {
-    return
-  }
-
-  const range = editor.getSelection()
-  if (!range.collapsed) {
-    return
-  }
-
-  const format = readInlineTypingFormat(editor)
-  if (!hasInlineTypingFormat(format)) {
-    return
-  }
-
-  const block = findClosestTypingBlock(editor.getRoot(), range.startContainer)
-  if (!block) {
-    return
-  }
-
-  // If the cascade-resolved style at the caret already matches every active
-  // property the toolbar is reporting, the browser's natural typing will
-  // produce a glyph that visually matches the toolbar — leaving the DOM
-  // alone keeps the typed text from accumulating redundant <span> wrappers.
-  // Only when the cascade disagrees with the toolbar (the canonical case is
-  // a styled <span> sitting beside the caret in a paragraph whose own
-  // `color` differs) do we step in and seed the styling explicitly.
-  const ownerDocument = editor.getRoot().ownerDocument
-  if (!ownerDocument) {
-    return
-  }
-  const uncovered = diffFormatVsCaretCascade(range, format, ownerDocument)
-  if (!hasInlineTypingFormat(uncovered)) {
-    return
-  }
-
-  event.preventDefault()
-
-  if (isEmptyTypingBlock(block)) {
-    seedEmptyBlockWithFormat(editor, block, format, event.data)
-  } else {
-    insertFormattedTextAtCursor(editor, format, event.data)
-  }
-}
-
 // Squire exposes a "/"-delimited element path from <body> to caret. Using
 // regex segment-matching keeps this stable even when intermediate inline
 // wrappers (B, I, FONT, SPAN…) appear in any order.
@@ -1428,9 +1400,7 @@ function applyAuthoringDefaultsToInitialHtml(
     return rawHtml
   }
 
-  // Nothing to add: hand back the input untouched, so the caller's
-  // `value === lastSynced` check short-circuits instead of forcing a
-  // setHTML round-trip on every controlled re-render.
+  // Nothing to add: the input as it came, untouched by a serialisation round trip.
   return writeAuthoringDefaults(root, declarations) ? root.innerHTML : rawHtml
 }
 
@@ -1466,12 +1436,20 @@ function writeAuthoringDefaults(
 
 interface UseSquireInstanceOptions {
   iframeRef: React.RefObject<HTMLIFrameElement | null>
+  /** What the body opens with: read once, when the editor is made. */
   initialHtml: string
   placeholder: string
   defaultFontFamily: string | null
   disabled: boolean
-  onChange: (html: string) => void
+  /** The body's zoom, in percent: how it shows, never what it says. */
+  zoom: number
+  onInput: () => void
+  /** Ctrl/⌘ + wheel over the body: the zoom is the host's. */
+  onZoomWheel?: (deltaY: number) => void
   onFileDragEnter?: () => void
+  /** ⌘K / Ctrl+K: a link on the selection. */
+  onLinkShortcut: () => void
+  headSelector?: string
 }
 
 interface SquireBootstrap {
@@ -1479,9 +1457,9 @@ interface SquireBootstrap {
   editor: SquireInstance | null
 }
 
-// Squire seeds empty blocks with U+200B (zero-width space) on WebKit so the
-// caret can land in them. We strip those out when sniffing for "is the body
-// genuinely empty?" — otherwise the placeholder pseudo-element never appears.
+// Squire seeds empty inline elements with U+200B (zero-width space) on
+// WebKit so the caret can land in them. We strip those out when sniffing for
+// "is the body genuinely empty?" — otherwise the placeholder never appears.
 const ZERO_WIDTH_SPACE_PATTERN = new RegExp(ZERO_WIDTH_SPACE, 'g')
 
 // Toggle `data-empty` on the iframe's <html> element, NOT on body. Squire
@@ -1492,49 +1470,51 @@ const ZERO_WIDTH_SPACE_PATTERN = new RegExp(ZERO_WIDTH_SPACE, 'g')
 // never reported, so writing to <html> is safe. The CSS rule reads the flag
 // from <html> and the placeholder text from body via `attr()`.
 function refreshEmptyState(body: HTMLElement): void {
-  const text = body.textContent?.replace(ZERO_WIDTH_SPACE_PATTERN, '').trim() ?? ''
-  const hasMedia = Boolean(body.querySelector('img, table'))
-  const next = !text && !hasMedia ? 'true' : 'false'
+  const empty =
+    body.childElementCount <= 1 &&
+    !body.querySelector('img, table, hr') &&
+    !(body.textContent?.replace(ZERO_WIDTH_SPACE_PATTERN, '').trim() ?? '')
+  const next = empty ? 'true' : 'false'
   const documentElement = body.ownerDocument.documentElement
   if (documentElement.getAttribute('data-empty') !== next) {
     documentElement.setAttribute('data-empty', next)
   }
 }
 
-/**
- * The body as the editor hands it out: the authoring defaults written on
- * the blocks Squire made, its own marker classes taken off.
- */
-function readEditorHtml(editor: SquireInstance, defaultFontFamily: string | null): string {
-  const root = editor.getRoot()
-  writeAuthoringDefaults(root, authoringBlockDeclarations(defaultFontFamily))
-  return stripEditorMarkerClassesFromHtml(editor.getHTML(), root.ownerDocument)
+/** The body as the editor hands it out: its own marker classes taken off. */
+function readEditorHtml(editor: SquireInstance): string {
+  return stripEditorMarkerClassesFromHtml(editor.getHTML(), editor.getRoot().ownerDocument)
 }
 
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform)
+/** Squire names its chords by the modifier the platform calls "command". */
+const MOD = IS_MAC ? 'Meta-' : 'Ctrl-'
+
+/**
+ * Squire inside the editor's frame, as an uncontrolled editor — the way
+ * Fastmail and Proton Mail, which built their composers on it, run it.
+ *
+ * The body is put in once, when the editor is made; from then on it is the
+ * editor's, and the host reads it when it needs it (`getHTML`) and changes
+ * it only by an explicit step (`setHTML`, `modify`, `insertHTML`). Feeding
+ * the editor back the body it reported, as a controlled input does, raced
+ * the keyboard: a value one keystroke old arrived after the next keystroke,
+ * `setHTML` put it back and threw the caret to the top — the cursor that
+ * "ran away" a few words into a message, the letters typed in reverse.
+ */
 function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
-  const { iframeRef, initialHtml, placeholder, defaultFontFamily, disabled, onChange } = options
-  const [ready, setReady] = useState(false)
-  const editorRef = useRef<SquireInstance | null>(null)
-  const onChangeRef = useRef(onChange)
-  const onFileDragEnterRef = useRef(options.onFileDragEnter)
-  // Track the last `initialHtml` value we pushed into Squire. Comparing the
-  // *prop* (not the HTML round-trip from `editor.getHTML()`) is what makes
-  // the controlled-component pattern stable: Squire reformats on setHTML so
-  // round-trip equality is unreliable, but the prop reference is stable.
-  const lastSyncedHtmlRef = useRef<string | null>(null)
-  // The body as last handed out, or as it read right after a value was put
-  // in. Only a body that reads differently is a change: Squire reports any
-  // mutation of the body as `input` — an attribute set on it, a block it
-  // normalises — and those leave what the user wrote as it was.
-  const contentHtmlRef = useRef<string | null>(null)
-  const isApplyingExternalValueRef = useRef(false)
-  const defaultFontFamilyRef = useRef(defaultFontFamily)
+  const { iframeRef, placeholder, defaultFontFamily, disabled, zoom } = options
+  const [editor, setEditor] = useState<SquireInstance | null>(null)
+  const initialHtmlRef = useRef(options.initialHtml)
+  const disabledRef = useRef(disabled)
+  const zoomRef = useRef(zoom)
+  const callbacksRef = useRef(options)
 
   useEffect(() => {
-    onChangeRef.current = onChange
-    onFileDragEnterRef.current = options.onFileDragEnter
-    defaultFontFamilyRef.current = defaultFontFamily
-  }, [defaultFontFamily, onChange, options.onFileDragEnter])
+    callbacksRef.current = options
+    disabledRef.current = disabled
+    zoomRef.current = zoom
+  })
 
   // Bootstrap Squire inside the iframe. We use `srcdoc` with an embedded
   // `<script src="…">` tag pointing at the Squire bundle — the script is
@@ -1546,9 +1526,8 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
   // external-script form satisfies CSP because the asset is served from the
   // renderer's own origin.
   //
-  // We deliberately do NOT depend on `initialHtml` / `placeholder` here —
-  // those are pushed via dedicated effects below. Re-creating the iframe on
-  // every prop change would wipe the editor and the user's caret/undo.
+  // Once per frame: re-creating the iframe would wipe the editor and the
+  // user's caret and undo.
   useEffect(() => {
     const iframe = iframeRef.current
     if (!iframe) {
@@ -1556,26 +1535,8 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
     }
 
     let disposed = false
+    let created: SquireInstance | null = null
     const frameCleanupFns: Array<() => void> = []
-
-    const teardown = (): void => {
-      disposed = true
-      while (frameCleanupFns.length > 0) {
-        frameCleanupFns.pop()?.()
-      }
-      const editor = editorRef.current
-      if (editor) {
-        try {
-          editor.destroy()
-        } catch (error) {
-          console.warn('[mail-editor] destroy failed', error)
-        }
-        editorRef.current = null
-      }
-      lastSyncedHtmlRef.current = null
-      contentHtmlRef.current = null
-      setReady(false)
-    }
 
     const handleLoad = (): void => {
       if (disposed) {
@@ -1592,44 +1553,8 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
 
       const SquireClass = frameWindow.Squire
       if (typeof SquireClass !== 'function') {
-        console.error(
-          '[mail-editor] Squire constructor not found on iframe.contentWindow.\n' +
-            '→ Did the bundled squire script load? URL:',
-          squireScriptUrl,
-          '\n→ Document readyState:',
-          frameDocument.readyState,
-          '\n→ contentWindow keys (first 30):',
-          Object.keys(frameWindow as object).slice(0, 30)
-        )
+        console.error('[mail-editor] Squire constructor not found in the frame:', squireScriptUrl)
         return
-      }
-
-      const blockAttributes = { style: authoringBlockStyle(defaultFontFamily) }
-
-      const handlePreSquireKeyDown = (event: KeyboardEvent): void => {
-        if (event.key !== 'Enter' || event.defaultPrevented || event.isComposing) {
-          return
-        }
-
-        const editor = editorRef.current
-        if (!editor) {
-          return
-        }
-
-        const format = readInlineTypingFormat(editor)
-        frameWindow.setTimeout(() => {
-          if (!disposed && editorRef.current === editor) {
-            restoreInlineTypingFormatIfEmpty(editor, format)
-          }
-        }, 0)
-      }
-
-      const handlePreSquireBeforeInput = (event: InputEvent): void => {
-        const editor = editorRef.current
-        if (!editor || event.defaultPrevented) {
-          return
-        }
-        handleFormattedEmptyBlockBeforeInput(editor, event)
       }
 
       // Files dragged in from the desktop belong to the host (attachments),
@@ -1644,20 +1569,19 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
         event.preventDefault()
 
         if (event.type === 'dragenter') {
-          onFileDragEnterRef.current?.()
+          callbacksRef.current.onFileDragEnter?.()
         } else if (event.type === 'dragover') {
-          event.dataTransfer.dropEffect = onFileDragEnterRef.current ? 'copy' : 'none'
+          event.dataTransfer.dropEffect = callbacksRef.current.onFileDragEnter ? 'copy' : 'none'
         }
       }
       const fileDragEvents = ['dragenter', 'dragover', 'drop'] as const
 
       // Key events do not leave an iframe. What the editor leaves alone is
-      // the host's — Escape, which closes the composer or leaves its
-      // full-screen editor, and the chords of its commands (send, attach, …)
-      // — so it is handed to the frame element, from where it travels
-      // through the host's DOM as if it had been pressed there. Squire's own
-      // chords (bold, lists, undo…) arrive here already handled, and the
-      // clipboard and select-all stay with the page.
+      // the host's — Escape, and the chords of its commands (send, attach,
+      // the zoom…) — so it is handed to the frame element, from where it
+      // travels through the host's DOM as if it had been pressed there.
+      // Squire's own chords (bold, lists, undo…) arrive here already
+      // handled, and the clipboard and select-all stay with the page.
       const forwardHostKey = (event: KeyboardEvent): void => {
         if (event.defaultPrevented || event.isComposing) {
           return
@@ -1690,31 +1614,45 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
         }
       }
 
-      frameDocument.body.addEventListener('keydown', handlePreSquireKeyDown, true)
-      frameDocument.body.addEventListener('beforeinput', handlePreSquireBeforeInput, true)
+      // Wheel events do not leave an iframe either: the zoom gesture over the
+      // body — Ctrl/⌘ + wheel, a pinch on a trackpad — goes to the host.
+      const handleWheel = (event: WheelEvent): void => {
+        if (!(event.ctrlKey || event.metaKey) || !callbacksRef.current.onZoomWheel) {
+          return
+        }
+
+        event.preventDefault()
+        callbacksRef.current.onZoomWheel(event.deltaY)
+      }
+
       frameDocument.addEventListener('keydown', forwardHostKey)
+      frameDocument.addEventListener('wheel', handleWheel, { passive: false })
       fileDragEvents.forEach((type) => frameDocument.addEventListener(type, handleFileDrag, true))
       frameCleanupFns.push(() => {
-        frameDocument.body.removeEventListener('keydown', handlePreSquireKeyDown, true)
-        frameDocument.body.removeEventListener('beforeinput', handlePreSquireBeforeInput, true)
         frameDocument.removeEventListener('keydown', forwardHostKey)
+        frameDocument.removeEventListener('wheel', handleWheel)
         fileDragEvents.forEach((type) =>
           frameDocument.removeEventListener(type, handleFileDrag, true)
         )
       })
 
-      let editor: SquireInstance
+      let instance: SquireInstance
       try {
-        editor = new SquireClass(frameDocument.body, {
+        instance = new SquireClass(frameDocument.body, {
           blockTag: 'div',
-          blockAttributes,
+          // No attributes of our own on the blocks Squire makes: a line split
+          // by Enter is then the line it came from — its colour, face, size —
+          // as in every word processor, instead of a fresh block that dropped
+          // them. The default face and line height are written onto the
+          // lines as they appear (`writeAuthoringDefaults`).
+          blockAttributes: null,
           // Distinct, private marker classes per property. Squire's
           // `_removeFormat` matches SPANs by `class=<className>`; if the four
           // classes were the same (or all empty) each set-method would unwrap
           // the spans created by the others, making font-family / font-size /
           // colour / highlight mutually exclusive on a single text run.
-          // We strip these markers on output (`willCutCopy` and below in
-          // `handleInput`) so the wire format stays inline-style-only.
+          // We strip these markers on output so the wire format stays
+          // inline-style-only.
           classNames: {
             color: STYLE_CLASS_NAMES.color,
             fontFamily: STYLE_CLASS_NAMES.fontFamily,
@@ -1733,49 +1671,110 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
         return
       }
 
-      editorRef.current = editor
+      created = instance
+      // A paragraph split by Enter stays a paragraph, with its style: Squire
+      // turns any block but a list item into its default block otherwise,
+      // and a signature's or a reply's lines are paragraphs.
+      instance.tagAfterSplit.P = 'P'
+      frameDocument.documentElement.style.zoom = String(zoomRef.current / 100)
+      instance.setHTML(
+        applyAuthoringDefaultsToInitialHtml(initialHtmlRef.current, defaultFontFamily)
+      )
 
-      isApplyingExternalValueRef.current = true
-      editor.modifyDocument(() => {
-        editor.setHTML(initialHtml)
-        contentHtmlRef.current = readEditorHtml(editor, defaultFontFamilyRef.current)
+      instance.setKeyHandler(`${MOD}k`, (_squire, event) => {
+        event.preventDefault()
+        callbacksRef.current.onLinkShortcut()
       })
-      isApplyingExternalValueRef.current = false
-      lastSyncedHtmlRef.current = initialHtml
+
+      // Tab moves between the cells of a table, indents a list item as Squire does, and
+      // elsewhere puts a tab's worth of space at the caret: the keyboard never leaves the
+      // message by itself.
+      const keyHandlers = (
+        instance as unknown as {
+          _keyHandlers: Record<
+            string,
+            ((squire: SquireInstance, event: KeyboardEvent, range: Range) => void) | undefined
+          >
+        }
+      )._keyHandlers
+      const listTab = keyHandlers.Tab
+      const listShiftTab = keyHandlers['Shift-Tab']
+      const deleteBackward = keyHandlers.Backspace
+
+      instance.setKeyHandler('Backspace', (squire, event, range) => {
+        const head = callbacksRef.current.headSelector
+
+        if (head && range.collapsed) {
+          const root = squire.getRoot()
+          let line: Node | null = range.startContainer
+
+          while (line && line.parentNode !== root) {
+            line = line.parentNode
+          }
+
+          if (line && isElementNode(line) && line.previousElementSibling?.matches(head)) {
+            const before = root.ownerDocument.createRange()
+            before.setStart(line, 0)
+            before.setEnd(range.startContainer, range.startOffset)
+
+            if (
+              !before.toString().replace(ZERO_WIDTH_SPACE_PATTERN, '').length &&
+              !before.cloneContents().querySelector?.('img, table')
+            ) {
+              event.preventDefault()
+              return
+            }
+          }
+        }
+
+        deleteBackward?.(squire, event, range)
+      })
+      const INDENT = String.fromCharCode(0xa0).repeat(4)
+
+      instance.setKeyHandler('Tab', (squire, event, range) => {
+        if (moveBetweenCells(squire, 1)) {
+          event.preventDefault()
+          return
+        }
+
+        listTab?.(squire, event, range)
+
+        if (!event.defaultPrevented) {
+          event.preventDefault()
+          squire.insertPlainText(INDENT, false)
+        }
+      })
+      instance.setKeyHandler('Shift-Tab', (squire, event, range) => {
+        if (moveBetweenCells(squire, -1)) {
+          event.preventDefault()
+          return
+        }
+
+        listShiftTab?.(squire, event, range)
+        event.preventDefault()
+      })
 
       const handleInput = (): void => {
-        if (isApplyingExternalValueRef.current) {
-          return
-        }
-        // A block made just now — a list, a heading, a paste — gets the
-        // authoring defaults here, in the live document, where the caret
-        // stays put. Left to the value the parent hands back, they would be
-        // added by a setHTML that throws the caret to the top of the body.
-        const html = readEditorHtml(editor, defaultFontFamilyRef.current)
-
+        // A line made just now — Enter, a list, a paste — gets the default
+        // face and line height here, in the live document, where the caret
+        // stays put.
+        writeAuthoringDefaults(frameDocument.body, authoringBlockDeclarations(defaultFontFamily))
         refreshEmptyState(frameDocument.body)
-
-        if (html === contentHtmlRef.current) {
-          return
-        }
-
-        contentHtmlRef.current = html
-        lastSyncedHtmlRef.current = html
-        onChangeRef.current(html)
+        callbacksRef.current.onInput()
       }
 
-      editor.addEventListener('input', handleInput)
+      instance.addEventListener('input', handleInput)
       refreshEmptyState(frameDocument.body)
 
       // Squire force-sets contenteditable=true at construction; only override
       // when `disabled` actually requires read-only — assigning the same
       // value still routes through setAttribute and would trip Squire's
       // MutationObserver chain (see `refreshEmptyState` for context).
-      if (disabled && frameDocument.body.contentEditable !== 'false') {
+      if (disabledRef.current && frameDocument.body.contentEditable !== 'false') {
         frameDocument.body.contentEditable = 'false'
       }
 
-      setReady(true)
+      setEditor(instance)
     }
 
     // Attach the listener BEFORE setting srcdoc so we never miss the load
@@ -1790,67 +1789,54 @@ function useSquireInstance(options: UseSquireInstanceOptions): SquireBootstrap {
     })
 
     return () => {
+      disposed = true
       iframe.removeEventListener('load', handleLoad)
-      teardown()
+      while (frameCleanupFns.length > 0) {
+        frameCleanupFns.pop()?.()
+      }
+      if (created) {
+        try {
+          created.destroy()
+        } catch (error) {
+          console.warn('[mail-editor] destroy failed', error)
+        }
+      }
+      setEditor(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [iframeRef])
 
-  // Keep the editor's HTML in sync when the parent passes a new external value
-  // (signature load, reply/forward bootstrap, retry-after-failure, …). Compare
-  // the *prop* against the last value we pushed in — see the comment on
-  // `lastSyncedHtmlRef` above.
+  // The zoom shows the body larger or smaller; the message stays as written.
   useEffect(() => {
-    if (!ready) {
-      return
-    }
-    const editor = editorRef.current
-    if (!editor) {
-      return
-    }
-    if (lastSyncedHtmlRef.current === initialHtml) {
-      return
-    }
+    const documentElement = editor?.getRoot().ownerDocument.documentElement
 
-    lastSyncedHtmlRef.current = initialHtml
-    isApplyingExternalValueRef.current = true
-    editor.modifyDocument(() => {
-      editor.setHTML(initialHtml)
-      contentHtmlRef.current = readEditorHtml(editor, defaultFontFamilyRef.current)
-    })
-    isApplyingExternalValueRef.current = false
-    refreshEmptyState(editor.getRoot())
-  }, [initialHtml, ready])
+    if (documentElement) {
+      documentElement.style.zoom = String(zoom / 100)
+    }
+  }, [editor, zoom])
 
   // Placeholder text is bonded to the iframe srcdoc once at construction
   // (see `buildMailFrameDocument` in mail-html.ts). We deliberately do NOT
   // mutate `body[data-placeholder]` post-mount: it would fire Squire's body
   // MutationObserver and chain through `input → handleInput → setAttribute
-  // → MutationObserver → …` until the renderer freezes. Placeholder is a
-  // prop that effectively never changes during an editor's lifetime in
-  // this app, so set-once-at-srcdoc is the right trade-off.
+  // → MutationObserver → …` until the renderer freezes.
 
-  // Toggle the caret editable state when the dialog flips `disabled`.
+  // Toggle the caret editable state when the host flips `disabled`.
   useEffect(() => {
-    if (!ready) {
-      return
-    }
-    const editor = editorRef.current
     if (!editor) {
       return
     }
     // Skip the assignment if the value is already correct — the IDL setter
     // calls setAttribute under the hood, and writing to body's attributes
-    // outside Squire's modifyDocument bracket fires its MutationObserver
-    // and triggers a stray `input` event we'd then have to ignore.
+    // fires Squire's MutationObserver and a stray `input` event.
     const root = editor.getRoot()
     const target = disabled ? 'false' : 'true'
     if (root.contentEditable !== target) {
       root.contentEditable = target
     }
-  }, [disabled, ready])
+  }, [disabled, editor])
 
-  return { ready, editor: editorRef.current }
+  return { ready: editor !== null, editor }
 }
 
 type TextAlignment = 'left' | 'center' | 'right' | 'justify' | null
@@ -1879,6 +1865,7 @@ interface EditorActiveState {
   isH2: boolean
   isH3: boolean
   isQuote: boolean
+  isInTable: boolean
   alignment: TextAlignment
   isFocused: boolean
   isEmpty: boolean
@@ -1903,6 +1890,7 @@ const INITIAL_ACTIVE_STATE: EditorActiveState = {
   isH2: false,
   isH3: false,
   isQuote: false,
+  isInTable: false,
   alignment: null,
   isFocused: false,
   isEmpty: true
@@ -1976,6 +1964,7 @@ function readActiveAlignment(editor: SquireInstance): TextAlignment {
 }
 
 const QUOTE_PATH_PATTERN = /(?:^|>)BLOCKQUOTE(?:\.|>|$)/
+const TABLE_PATH_PATTERN = /(?:^|>)T[DH](?:\.|>|$)/
 
 function useEditorActiveState(editor: SquireInstance | null): EditorActiveState {
   const [state, setState] = useState<EditorActiveState>(INITIAL_ACTIVE_STATE)
@@ -2002,16 +1991,17 @@ function useEditorActiveState(editor: SquireInstance | null): EditorActiveState 
         lineHeightRatio: readActiveLineHeightRatio(editor),
         color: readActiveColorHex(editor),
         highlight: readActiveHighlightHex(editor),
-        isBold: editor.hasFormat('B'),
-        isItalic: editor.hasFormat('I'),
-        isUnderline: editor.hasFormat('U'),
-        isStrike: editor.hasFormat('S'),
-        isSub: editor.hasFormat('SUB'),
-        isSup: editor.hasFormat('SUP'),
+        isBold: hasInlineBold(editor),
+        isItalic: hasInlineItalic(editor),
+        isUnderline: hasInlineUnderline(editor),
+        isStrike: hasInlineStrike(editor),
+        isSub: hasInlineSubscript(editor),
+        isSup: hasInlineSuperscript(editor),
         isUL: pathHasPattern(path, PATH_PATTERNS.ul),
         isOL: pathHasPattern(path, PATH_PATTERNS.ol),
         isLink: pathHasPattern(path, PATH_PATTERNS.link),
         isQuote: pathHasPattern(path, QUOTE_PATH_PATTERN),
+        isInTable: pathHasPattern(path, TABLE_PATH_PATTERN),
         alignment: readActiveAlignment(editor),
         isH1: pathHasPattern(path, HEADING_PATTERNS.h1),
         isH2: pathHasPattern(path, HEADING_PATTERNS.h2),
@@ -2089,20 +2079,20 @@ function applyLineHeight(editor: SquireInstance, lineHeight: string): void {
 
 export function RichTextEditor({
   handleRef,
-  value,
+  initialHtml,
   placeholder = "Scrivi il contenuto dell'email...",
   disabled = false,
-  expanded,
-  showExpandToggle = true,
+  variant = 'boxed',
   expandToContainer,
   defaultFontFamily = MAIL_EDITOR_DEFAULT_FONT_FAMILY,
-  autoFocusBody = false,
+  zoom = READER_ZOOM_RESET,
+  onZoomChange,
   onFileDragEnter,
-  onExpandedChange,
-  onChange
+  headSelector,
+  onInput,
+  onReady
 }: RichTextEditorProps): React.JSX.Element {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
-  const [editorExpandedInternal, setEditorExpandedInternal] = useState(false)
   const [fontFamilyMenuOpen, setFontFamilyMenuOpen] = useState(false)
   const [fontSizeMenuOpen, setFontSizeMenuOpen] = useState(false)
   const [headingMenuOpen, setHeadingMenuOpen] = useState(false)
@@ -2111,7 +2101,11 @@ export function RichTextEditor({
   const [highlightMenuOpen, setHighlightMenuOpen] = useState(false)
   const [fontSizeInputFocused, setFontSizeInputFocused] = useState(false)
   const [fontSizeDraft, setFontSizeDraft] = useState('')
-  const [lineHeightMenuOpen, setLineHeightMenuOpen] = useState(false)
+  const [tableMenuOpen, setTableMenuOpen] = useState(false)
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const [undoState, setUndoState] = useState({ canUndo: false, canRedo: false })
+  const [toolbarWidth, setToolbarWidth] = useState(0)
+  const toolbarRef = useRef<HTMLDivElement | null>(null)
   const [linkEditorOpen, setLinkEditorOpen] = useState(false)
   const [linkDraft, setLinkDraft] = useState('')
   const [linkError, setLinkError] = useState<string | null>(null)
@@ -2123,53 +2117,74 @@ export function RichTextEditor({
   const customHighlightInputRef = useRef<HTMLInputElement | null>(null)
   const inlineMediaInputRef = useRef<HTMLInputElement | null>(null)
   const fontSizeControlRef = useRef<HTMLDivElement | null>(null)
+  // ⌘K reaches the link editor through here: it lives below, the frame above.
+  const openLinkEditorRef = useRef<() => void>(() => undefined)
 
-  const editorExpanded = expanded ?? editorExpandedInternal
   const normalizedDefaultFontFamily = normalizeMailFontFamilyValue(defaultFontFamily)
 
-  const setEditorExpanded = useCallback(
-    (next: boolean): void => {
-      if (onExpandedChange) {
-        onExpandedChange(next)
-        return
-      }
-      setEditorExpandedInternal(next)
-    },
-    [onExpandedChange]
-  )
+  // The zoom builds on the one the previous wheel notch set, not on a stale render's.
+  const zoomStateRef = useRef({ zoom, onZoomChange })
+  const onReadyRef = useRef(onReady)
+  const onInputRef = useRef(onInput)
 
-  // Apply the default font family to the leading authored block of the
-  // incoming value (idempotent — does nothing if the block already has a
-  // font-family declaration). The hook compares this transformed prop against
-  // its internal "last synced" reference, so passing it on every render is
-  // safe: equal values short-circuit, mutations push a new setHTML.
-  const initialHtml = applyAuthoringDefaultsToInitialHtml(value, normalizedDefaultFontFamily)
+  useEffect(() => {
+    zoomStateRef.current = { zoom, onZoomChange }
+    onReadyRef.current = onReady
+    onInputRef.current = onInput
+  }, [zoom, onZoomChange, onReady, onInput])
 
-  const handleEditorChange = useCallback(
-    (html: string): void => {
-      onChange(html, htmlToPlainText(html))
-    },
-    [onChange]
-  )
-
-  const { editor, ready } = useSquireInstance({
+  const { editor } = useSquireInstance({
     iframeRef,
     initialHtml,
     placeholder,
     defaultFontFamily: normalizedDefaultFontFamily,
     disabled,
-    onChange: handleEditorChange,
-    onFileDragEnter
+    zoom,
+    onInput: () => onInputRef.current?.(),
+    onZoomWheel: onZoomChange
+      ? (deltaY) => {
+          const state = zoomStateRef.current
+          const next = wheelReaderZoom(state.zoom, deltaY)
+
+          if (next !== state.zoom) {
+            zoomStateRef.current = { ...state, zoom: next }
+            state.onZoomChange?.(next)
+          }
+        }
+      : undefined,
+    onFileDragEnter,
+    onLinkShortcut: () => openLinkEditorRef.current(),
+    headSelector
   })
 
   const active = useEditorActiveState(editor)
 
   useEffect(() => {
-    if (!handleRef || !editor) {
+    if (!editor) {
       return
     }
 
-    handleRef.current = {
+    const root = editor.getRoot()
+    const document = root.ownerDocument
+
+    const handle: RichTextEditorHandle = {
+      getHTML: () => readEditorHtml(editor),
+      setHTML: (html) => {
+        editor.setHTML(applyAuthoringDefaultsToInitialHtml(html, normalizedDefaultFontFamily))
+        refreshEmptyState(root)
+        onInputRef.current?.()
+      },
+      modify: (change) => {
+        // One step back with ⌘Z: the state before, kept; the change, made in
+        // the live body where Squire sees it as any edit.
+        editor.saveUndoState()
+        change(root)
+        refreshEmptyState(root)
+      },
+      insertHTML: (html) => {
+        editor.focus()
+        editor.insertHTML(html)
+      },
       captureSelection: () => {
         const range = editor.getSelection()
         const text = range.toString().trim()
@@ -2179,61 +2194,63 @@ export function RichTextEditor({
         }
 
         const kept = range.cloneRange()
+        let block: Node | null = range.startContainer
+
+        while (block && block !== root && !['DIV', 'P'].includes(block.nodeName)) {
+          block = block.parentNode
+        }
+
         return {
           text,
+          block: block && block !== root ? (block as Element) : null,
           // Squire writes over a selection it is given: the passage goes, the new one takes its place.
           replace: (html) => {
-            editor.focus()
+            if (!kept.startContainer.isConnected || kept.toString().trim() !== text) {
+              return false
+            }
+
             editor.setSelection(kept)
             editor.insertHTML(html)
+            return true
           }
+        }
+      },
+      focus: (where) => {
+        const target = where?.(root)
+
+        editor.focus()
+
+        if (target) {
+          const range = document.createRange()
+          range.setStart(target, 0)
+          range.collapse(true)
+          editor.setSelection(range)
+        }
+      },
+      select: (where) => {
+        const target = where(root)
+
+        if (target) {
+          const range = document.createRange()
+          range.setStart(target, 0)
+          range.collapse(true)
+          editor.setSelection(range)
         }
       }
     }
 
+    if (handleRef) {
+      handleRef.current = handle
+    }
+
+    onReadyRef.current?.(handle)
+
     return () => {
-      handleRef.current = null
+      if (handleRef?.current === handle) {
+        handleRef.current = null
+      }
     }
-  }, [editor, handleRef])
-
-  /**
-   * A reply opened with the caret in the "A" field, which is the one field
-   * already filled in: the user had to click into the body before writing a
-   * word. Placing it at the start of the body puts it above the quote and
-   * the signature, which is where the reply belongs.
-   *
-   * Once per editor, when the host says the body is ready: placing it on
-   * every change of the value — every keystroke — put each letter in front
-   * of the one before, so a reply came out backwards.
-   */
-  const autoFocusedRef = useRef(false)
-
-  useEffect(() => {
-    if (!autoFocusBody || !ready || disabled || !editor || autoFocusedRef.current) {
-      return
-    }
-
-    const frameDocument = iframeRef.current?.contentDocument
-
-    if (!frameDocument?.body.firstChild) {
-      return
-    }
-
-    autoFocusedRef.current = true
-
-    // Inside the first line rather than before it, so the toolbar shows the
-    // face and colour the first keystroke will have — a signature's leading
-    // lines can carry their own.
-    const frame = window.requestAnimationFrame(() => {
-      const range = frameDocument.createRange()
-      range.setStart(frameDocument.body.firstElementChild ?? frameDocument.body, 0)
-      range.collapse(true)
-      editor.focus()
-      editor.setSelection(range)
-    })
-
-    return () => window.cancelAnimationFrame(frame)
-  }, [autoFocusBody, disabled, editor, iframeRef, ready])
+  }, [editor, handleRef, normalizedDefaultFontFamily])
 
   // The font-size input shows `active.fontSizePx` directly when not focused
   // and the user's `fontSizeDraft` while typing — see the input's `value`
@@ -2243,6 +2260,39 @@ export function RichTextEditor({
   // Line-height is applied only when the user explicitly picks a value from
   // the menu — never on first mount. Pushing it on mount would clobber the
   // line-height authored by senders inside reply / forward / paste content.
+
+  // The toolbar keeps to one line: narrower than everything needs, the rarer commands go under
+  // "Altro" instead of wrapping onto a second.
+  useEffect(() => {
+    const toolbar = toolbarRef.current
+
+    if (!toolbar) {
+      return
+    }
+
+    const observer = new ResizeObserver(([entry]) =>
+      setToolbarWidth(Math.round(entry.contentRect.width))
+    )
+    observer.observe(toolbar)
+    return () => observer.disconnect()
+  }, [])
+
+  // Undo and redo, as far as the editor's history goes.
+  useEffect(() => {
+    if (!editor) {
+      return
+    }
+
+    const onUndoState = (event: Event): void => {
+      const detail = (event as CustomEvent<{ canUndo: boolean; canRedo: boolean }>).detail
+      setUndoState({ canUndo: Boolean(detail?.canUndo), canRedo: Boolean(detail?.canRedo) })
+    }
+
+    editor.addEventListener('undoStateChange', onUndoState)
+    return () => {
+      editor.removeEventListener('undoStateChange', onUndoState)
+    }
+  }, [editor])
 
   useEffect(() => {
     if (!linkEditorOpen) {
@@ -2423,6 +2473,10 @@ export function RichTextEditor({
     setLinkEditorOpen(true)
   }, [disabled, editor])
 
+  useEffect(() => {
+    openLinkEditorRef.current = openLinkEditor
+  }, [openLinkEditor])
+
   const closeLinkEditor = useCallback((): void => {
     setLinkEditorOpen(false)
     setLinkError(null)
@@ -2547,7 +2601,7 @@ export function RichTextEditor({
       active: active.isBold,
       disabled: toolButtonDisabled,
       action: toggleBold,
-      title: 'Grassetto'
+      title: withChord('Grassetto', 'B')
     },
     {
       id: 'italic',
@@ -2555,7 +2609,7 @@ export function RichTextEditor({
       active: active.isItalic,
       disabled: toolButtonDisabled,
       action: toggleItalic,
-      title: 'Corsivo'
+      title: withChord('Corsivo', 'I')
     },
     {
       id: 'underline',
@@ -2563,7 +2617,7 @@ export function RichTextEditor({
       active: active.isUnderline,
       disabled: toolButtonDisabled,
       action: toggleUnderline,
-      title: 'Sottolineato'
+      title: withChord('Sottolineato', 'U')
     },
     {
       id: 'strike',
@@ -2571,7 +2625,7 @@ export function RichTextEditor({
       active: active.isStrike,
       disabled: toolButtonDisabled,
       action: toggleStrike,
-      title: 'Barrato'
+      title: withChord('Barrato', 'Shift+7')
     },
     {
       id: 'subscript',
@@ -2597,7 +2651,7 @@ export function RichTextEditor({
       active: active.isUL,
       disabled: toolButtonDisabled,
       action: toggleBulletList,
-      title: 'Lista puntata'
+      title: withChord('Elenco puntato', 'Shift+8')
     },
     {
       id: 'ordered-list',
@@ -2605,7 +2659,7 @@ export function RichTextEditor({
       active: active.isOL,
       disabled: toolButtonDisabled,
       action: toggleOrderedList,
-      title: 'Lista numerata'
+      title: withChord('Elenco numerato', 'Shift+9')
     }
   ]
   const indentQuoteButtons: ToolbarButton[] = [
@@ -2615,7 +2669,7 @@ export function RichTextEditor({
       active: false,
       disabled: toolButtonDisabled,
       action: decreaseIndent,
-      title: 'Riduci rientro'
+      title: withChord('Riduci rientro', '[')
     },
     {
       id: 'indent',
@@ -2623,7 +2677,7 @@ export function RichTextEditor({
       active: false,
       disabled: toolButtonDisabled,
       action: increaseIndent,
-      title: 'Aumenta rientro'
+      title: withChord('Aumenta rientro', ']')
     },
     {
       id: 'blockquote',
@@ -2662,6 +2716,208 @@ export function RichTextEditor({
   const hasCustomTextColor = Boolean(active.color && active.color !== DEFAULT_TEXT_COLOR_HEX)
   const hasCustomHighlightColor = Boolean(active.highlight)
 
+  // Room for every command, or the rarer ones under "Altro". Unmeasured yet: room.
+  const wide = toolbarWidth === 0 || toolbarWidth >= TOOLBAR_FULL_WIDTH
+  const compact = toolbarWidth > 0 && toolbarWidth < TOOLBAR_COMPACT_WIDTH
+
+  const insertNewTable = (rows: number, columns: number): void => {
+    setTableMenuOpen(false)
+    setMoreMenuOpen(false)
+
+    if (editor) {
+      insertTable(editor, rows, columns)
+    }
+  }
+
+  const tableOperation = (operation: TableOperation): void => {
+    setTableMenuOpen(false)
+    setMoreMenuOpen(false)
+
+    if (editor) {
+      changeTable(editor, operation)
+    }
+  }
+
+  const tableMenuItems = (
+    <>
+      <TableGridPicker onPick={insertNewTable} />
+      {active.isInTable && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="text-xs" onSelect={() => tableOperation('row-above')}>
+            Inserisci una riga sopra
+          </DropdownMenuItem>
+          <DropdownMenuItem className="text-xs" onSelect={() => tableOperation('row-below')}>
+            Inserisci una riga sotto
+          </DropdownMenuItem>
+          <DropdownMenuItem className="text-xs" onSelect={() => tableOperation('column-left')}>
+            Inserisci una colonna a sinistra
+          </DropdownMenuItem>
+          <DropdownMenuItem className="text-xs" onSelect={() => tableOperation('column-right')}>
+            Inserisci una colonna a destra
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="text-xs" onSelect={() => tableOperation('delete-row')}>
+            Elimina la riga
+          </DropdownMenuItem>
+          <DropdownMenuItem className="text-xs" onSelect={() => tableOperation('delete-column')}>
+            Elimina la colonna
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="text-destructive-soft-foreground text-xs"
+            onSelect={() => tableOperation('delete-table')}
+          >
+            Elimina la tabella
+          </DropdownMenuItem>
+        </>
+      )}
+    </>
+  )
+
+  // Under "Altro": what the toolbar has no room for, then what is always there.
+  const moreMenuItems = (
+    <>
+      {!wide && (
+        <>
+          <DropdownMenuCheckboxItem
+            checked={active.isStrike}
+            className="gap-2 text-xs"
+            onSelect={toggleStrike}
+          >
+            Barrato
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="text-xs">Stile del paragrafo</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="min-w-[10rem] p-1">
+              {[
+                { level: null, label: 'Paragrafo' },
+                { level: 1, label: 'Titolo 1' },
+                { level: 2, label: 'Titolo 2' },
+                { level: 3, label: 'Titolo 3' }
+              ].map((option) => (
+                <DropdownMenuCheckboxItem
+                  key={option.label}
+                  checked={activeHeadingLevel === option.level}
+                  className="text-xs"
+                  onSelect={() => setHeadingLevel(option.level as 1 | 2 | 3 | null)}
+                >
+                  {option.label}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="text-xs">Allineamento</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="min-w-[10rem] p-1">
+              {[
+                { value: 'left', label: 'A sinistra' },
+                { value: 'center', label: 'Al centro' },
+                { value: 'right', label: 'A destra' },
+                { value: 'justify', label: 'Giustificato' }
+              ].map((option) => (
+                <DropdownMenuCheckboxItem
+                  key={option.value}
+                  checked={
+                    option.value === 'left'
+                      ? active.alignment === null || active.alignment === 'left'
+                      : active.alignment === option.value
+                  }
+                  className="text-xs"
+                  onSelect={() => setAlignment(option.value as Exclude<TextAlignment, null>)}
+                >
+                  {option.label}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuItem className="text-xs" onSelect={decreaseIndent}>
+            Riduci rientro
+          </DropdownMenuItem>
+          <DropdownMenuItem className="text-xs" onSelect={increaseIndent}>
+            Aumenta rientro
+          </DropdownMenuItem>
+          <DropdownMenuCheckboxItem
+            checked={active.isQuote}
+            className="text-xs"
+            onSelect={toggleBlockquote}
+          >
+            Citazione
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="text-xs" onSelect={openMediaPicker}>
+            Inserisci un’immagine…
+          </DropdownMenuItem>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="text-xs">Tabella</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="p-1">{tableMenuItems}</DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuItem
+            className="text-xs"
+            disabled={active.isEmpty}
+            onSelect={clearFormatting}
+          >
+            Rimuovi formattazione
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+        </>
+      )}
+      {compact && (
+        <DropdownMenuItem
+          className="text-xs"
+          disabled={!undoState.canRedo}
+          onSelect={() => runWithFocus((e) => e.redo())}
+        >
+          {withChord('Ripeti', 'Shift+Z')}
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuCheckboxItem
+        checked={active.isSub}
+        className="text-xs"
+        onSelect={toggleSubscript}
+      >
+        {withChord('Pedice', 'Shift+5')}
+      </DropdownMenuCheckboxItem>
+      <DropdownMenuCheckboxItem
+        checked={active.isSup}
+        className="text-xs"
+        onSelect={toggleSuperscript}
+      >
+        {withChord('Apice', 'Shift+6')}
+      </DropdownMenuCheckboxItem>
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger className="text-xs">Interlinea</DropdownMenuSubTrigger>
+        <DropdownMenuSubContent className="min-w-[5rem] p-1">
+          {EDITOR_LINE_HEIGHT_OPTIONS.map((option) => {
+            const checked =
+              active.lineHeightRatio !== null &&
+              Math.abs(active.lineHeightRatio - Number(option.value)) < 0.02
+            return (
+              <DropdownMenuCheckboxItem
+                key={option.value}
+                checked={checked}
+                className="text-xs"
+                onSelect={() => {
+                  if (editor) {
+                    applyLineHeight(editor, option.value)
+                    editor.focus()
+                  }
+                }}
+              >
+                {option.label}
+              </DropdownMenuCheckboxItem>
+            )
+          })}
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+      <DropdownMenuItem
+        className="text-xs"
+        onSelect={() => runWithFocus((e) => e.insertHTML('<hr><div><br></div>'))}
+      >
+        Linea orizzontale
+      </DropdownMenuItem>
+    </>
+  )
+
   const renderToolbarButton = (
     key: string,
     title: string,
@@ -2678,12 +2934,58 @@ export function RichTextEditor({
   return (
     <div
       className={cn(
-        'mail-editor border-border overflow-hidden rounded-lg border bg-transparent',
+        'mail-editor overflow-hidden bg-transparent',
+        variant === 'boxed' && 'border-border rounded-lg border',
         expandToContainer && 'flex h-full min-h-0 flex-col'
       )}
     >
-      <div className="border-border bg-card/80 flex items-start gap-2 border-b p-2">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+      <div
+        className={cn(
+          'border-border flex items-start gap-2 border-b',
+          variant === 'boxed' ? 'bg-card/80 p-2' : 'px-3 py-1.5'
+        )}
+      >
+        <div
+          ref={toolbarRef}
+          className={cn(
+            'flex min-w-0 flex-1 flex-wrap items-center',
+            wide ? 'gap-1' : compact ? 'gap-0' : 'gap-0.5'
+          )}
+        >
+          {renderToolbarButton(
+            'undo',
+            withChord('Annulla', 'Z'),
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              onClick={() => runWithFocus((e) => e.undo())}
+              onMouseDown={(event) => event.preventDefault()}
+              aria-label="Annulla"
+              disabled={toolButtonDisabled || !undoState.canUndo}
+            >
+              <Undo2 className="size-4" />
+            </Button>
+          )}
+          {!compact &&
+            renderToolbarButton(
+              'redo',
+              withChord('Ripeti', 'Shift+Z'),
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                onClick={() => runWithFocus((e) => e.redo())}
+                onMouseDown={(event) => event.preventDefault()}
+                aria-label="Ripeti"
+                disabled={toolButtonDisabled || !undoState.canRedo}
+              >
+                <Redo2 className="size-4" />
+              </Button>
+            )}
+          {!compact && <ToolbarSeparator />}
           {renderToolbarButton(
             'font-family',
             'Font',
@@ -2697,7 +2999,10 @@ export function RichTextEditor({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="h-8 max-w-[10rem] gap-1 px-2 text-xs font-medium"
+                  className={cn(
+                    'h-8 gap-1 px-2 text-xs font-medium',
+                    wide ? 'max-w-[10rem]' : 'max-w-[6.5rem]'
+                  )}
                   onMouseDown={(event) => event.preventDefault()}
                   aria-label="Font"
                   disabled={disabled || !editor}
@@ -2858,6 +3163,32 @@ export function RichTextEditor({
             </PopoverPrimitive.Root>
           )}
 
+          {!compact && <ToolbarSeparator />}
+          {inlineMarkButtons
+            .filter(
+              (button) =>
+                ['bold', 'italic', 'underline'].includes(button.id) ||
+                (wide && button.id === 'strike')
+            )
+            .map((button) => {
+              const Icon = button.icon
+              return renderToolbarButton(
+                button.id,
+                button.title,
+                <Button
+                  type="button"
+                  variant={button.active ? 'secondary' : 'ghost'}
+                  size="icon"
+                  className="size-8"
+                  onClick={button.action}
+                  onMouseDown={(event) => event.preventDefault()}
+                  aria-label={button.title}
+                  disabled={button.disabled || !editor}
+                >
+                  <Icon className="size-4" />
+                </Button>
+              )
+            })}
           {renderToolbarButton(
             'text-color',
             'Colore testo',
@@ -3066,130 +3397,55 @@ export function RichTextEditor({
             </PopoverPrimitive.Root>
           )}
 
-          {renderToolbarButton(
-            'heading',
-            'Titoli',
-            <DropdownMenu open={headingMenuOpen} onOpenChange={setHeadingMenuOpen} modal={false}>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant={headingMenuOpen || activeHeadingLevel !== null ? 'secondary' : 'ghost'}
-                  size="icon"
-                  className="size-8"
-                  onMouseDown={(event) => event.preventDefault()}
-                  aria-label="Titoli"
-                  disabled={disabled || !editor}
+          {!compact && <ToolbarSeparator />}
+          {wide &&
+            renderToolbarButton(
+              'heading',
+              'Titoli',
+              <DropdownMenu open={headingMenuOpen} onOpenChange={setHeadingMenuOpen} modal={false}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant={headingMenuOpen || activeHeadingLevel !== null ? 'secondary' : 'ghost'}
+                    size="icon"
+                    className="size-8"
+                    onMouseDown={(event) => event.preventDefault()}
+                    aria-label="Titoli"
+                    disabled={disabled || !editor}
+                  >
+                    <HeadingTriggerIcon className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  className="min-w-[10rem] p-1"
+                  onCloseAutoFocus={(event) => event.preventDefault()}
                 >
-                  <HeadingTriggerIcon className="size-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                className="min-w-[10rem] p-1"
-                onCloseAutoFocus={(event) => event.preventDefault()}
-              >
-                {[
-                  { level: null, label: 'Paragrafo', icon: Pilcrow },
-                  { level: 1, label: 'Titolo 1', icon: Heading1 },
-                  { level: 2, label: 'Titolo 2', icon: Heading2 },
-                  { level: 3, label: 'Titolo 3', icon: Heading3 }
-                ].map((option) => {
-                  const Icon = option.icon
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={option.label}
-                      checked={activeHeadingLevel === option.level}
-                      className="gap-2 text-xs"
-                      onSelect={(event) => {
-                        event.preventDefault()
-                        setHeadingLevel(option.level as 1 | 2 | 3 | null)
-                        setHeadingMenuOpen(false)
-                      }}
-                    >
-                      <Icon className="size-4" />
-                      {option.label}
-                    </DropdownMenuCheckboxItem>
-                  )
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-
-          {inlineMarkButtons.map((button) => {
-            const Icon = button.icon
-            return renderToolbarButton(
-              button.id,
-              button.title,
-              <Button
-                type="button"
-                variant={button.active ? 'secondary' : 'ghost'}
-                size="icon"
-                className="size-8"
-                onClick={button.action}
-                onMouseDown={(event) => event.preventDefault()}
-                aria-label={button.title}
-                disabled={button.disabled || !editor}
-              >
-                <Icon className="size-4" />
-              </Button>
-            )
-          })}
-
-          {renderToolbarButton(
-            'alignment',
-            'Allineamento',
-            <DropdownMenu
-              open={alignmentMenuOpen}
-              onOpenChange={setAlignmentMenuOpen}
-              modal={false}
-            >
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant={alignmentMenuOpen || hasNonDefaultAlignment ? 'secondary' : 'ghost'}
-                  size="icon"
-                  className="size-8"
-                  onMouseDown={(event) => event.preventDefault()}
-                  aria-label="Allineamento"
-                  disabled={disabled || !editor}
-                >
-                  <AlignmentTriggerIcon className="size-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                className="min-w-[11rem] p-1"
-                onCloseAutoFocus={(event) => event.preventDefault()}
-              >
-                {[
-                  { value: 'left', label: 'Allinea a sinistra', icon: AlignLeft },
-                  { value: 'center', label: 'Centra', icon: AlignCenter },
-                  { value: 'right', label: 'Allinea a destra', icon: AlignRight },
-                  { value: 'justify', label: 'Giustifica', icon: AlignJustify }
-                ].map((option) => {
-                  const Icon = option.icon
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={option.value}
-                      checked={
-                        option.value === 'left'
-                          ? active.alignment === null || active.alignment === 'left'
-                          : active.alignment === option.value
-                      }
-                      className="gap-2 text-xs"
-                      onSelect={(event) => {
-                        event.preventDefault()
-                        setAlignment(option.value as Exclude<TextAlignment, null>)
-                        setAlignmentMenuOpen(false)
-                      }}
-                    >
-                      <Icon className="size-4" />
-                      {option.label}
-                    </DropdownMenuCheckboxItem>
-                  )
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-
+                  {[
+                    { level: null, label: 'Paragrafo', icon: Pilcrow },
+                    { level: 1, label: 'Titolo 1', icon: Heading1 },
+                    { level: 2, label: 'Titolo 2', icon: Heading2 },
+                    { level: 3, label: 'Titolo 3', icon: Heading3 }
+                  ].map((option) => {
+                    const Icon = option.icon
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={option.label}
+                        checked={activeHeadingLevel === option.level}
+                        className="gap-2 text-xs"
+                        onSelect={(event) => {
+                          event.preventDefault()
+                          setHeadingLevel(option.level as 1 | 2 | 3 | null)
+                          setHeadingMenuOpen(false)
+                        }}
+                      >
+                        <Icon className="size-4" />
+                        {option.label}
+                      </DropdownMenuCheckboxItem>
+                    )
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           {listButtons.map((button) => {
             const Icon = button.icon
             return renderToolbarButton(
@@ -3210,7 +3466,7 @@ export function RichTextEditor({
             )
           })}
 
-          {indentQuoteButtons.map((button) => {
+          {(wide ? indentQuoteButtons : []).map((button) => {
             const Icon = button.icon
             return renderToolbarButton(
               button.id,
@@ -3229,88 +3485,66 @@ export function RichTextEditor({
               </Button>
             )
           })}
-
-          {renderToolbarButton(
-            'line-height',
-            'Interlinea',
-            <DropdownMenu
-              open={lineHeightMenuOpen}
-              onOpenChange={setLineHeightMenuOpen}
-              modal={false}
-            >
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant={
-                    lineHeightMenuOpen ||
-                    (active.lineHeightRatio !== null &&
-                      Math.abs(active.lineHeightRatio - Number(DEFAULT_EDITOR_LINE_HEIGHT)) > 0.02)
-                      ? 'secondary'
-                      : 'ghost'
-                  }
-                  size="icon"
-                  className="size-8"
-                  onMouseDown={(event) => event.preventDefault()}
-                  aria-label="Interlinea"
-                  disabled={disabled || !editor}
-                >
-                  <LineSpacingIcon className="size-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                className="min-w-[4.5rem] p-1"
-                onCloseAutoFocus={(event) => event.preventDefault()}
+          {wide &&
+            renderToolbarButton(
+              'alignment',
+              'Allineamento',
+              <DropdownMenu
+                open={alignmentMenuOpen}
+                onOpenChange={setAlignmentMenuOpen}
+                modal={false}
               >
-                {EDITOR_LINE_HEIGHT_OPTIONS.map((option) => {
-                  // Match the option to the cascade-resolved ratio from the
-                  // caret. When nothing matches (e.g. caret on a paragraph
-                  // whose authored line-height is 1.4 — not in our presets,
-                  // or `normal`), no checkmark is shown — same UX as Gmail.
-                  const checked =
-                    active.lineHeightRatio !== null &&
-                    Math.abs(active.lineHeightRatio - Number(option.value)) < 0.02
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={option.value}
-                      checked={checked}
-                      className="text-xs"
-                      onSelect={(event) => {
-                        event.preventDefault()
-                        if (editor) {
-                          applyLineHeight(editor, option.value)
-                          editor.focus()
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant={alignmentMenuOpen || hasNonDefaultAlignment ? 'secondary' : 'ghost'}
+                    size="icon"
+                    className="size-8"
+                    onMouseDown={(event) => event.preventDefault()}
+                    aria-label="Allineamento"
+                    disabled={disabled || !editor}
+                  >
+                    <AlignmentTriggerIcon className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  className="min-w-[11rem] p-1"
+                  onCloseAutoFocus={(event) => event.preventDefault()}
+                >
+                  {[
+                    { value: 'left', label: 'Allinea a sinistra', icon: AlignLeft },
+                    { value: 'center', label: 'Centra', icon: AlignCenter },
+                    { value: 'right', label: 'Allinea a destra', icon: AlignRight },
+                    { value: 'justify', label: 'Giustifica', icon: AlignJustify }
+                  ].map((option) => {
+                    const Icon = option.icon
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={option.value}
+                        checked={
+                          option.value === 'left'
+                            ? active.alignment === null || active.alignment === 'left'
+                            : active.alignment === option.value
                         }
-                        setLineHeightMenuOpen(false)
-                      }}
-                    >
-                      {option.label}
-                    </DropdownMenuCheckboxItem>
-                  )
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-
-          {renderToolbarButton(
-            'inline-media',
-            'Inserisci media nel contenuto',
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-8"
-              onClick={openMediaPicker}
-              onMouseDown={(event) => event.preventDefault()}
-              aria-label="Inserisci media nel contenuto"
-              disabled={disabled || !editor}
-            >
-              <ImagePlus className="size-4" />
-            </Button>
-          )}
-
+                        className="gap-2 text-xs"
+                        onSelect={(event) => {
+                          event.preventDefault()
+                          setAlignment(option.value as Exclude<TextAlignment, null>)
+                          setAlignmentMenuOpen(false)
+                        }}
+                      >
+                        <Icon className="size-4" />
+                        {option.label}
+                      </DropdownMenuCheckboxItem>
+                    )
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          {!compact && <ToolbarSeparator />}
           {renderToolbarButton(
             'link',
-            'Link',
+            withChord('Link', 'K'),
             <Button
               type="button"
               variant={active.isLink ? 'secondary' : 'ghost'}
@@ -3325,40 +3559,93 @@ export function RichTextEditor({
             </Button>
           )}
 
+          {wide &&
+            renderToolbarButton(
+              'inline-media',
+              'Inserisci media nel contenuto',
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                onClick={openMediaPicker}
+                onMouseDown={(event) => event.preventDefault()}
+                aria-label="Inserisci media nel contenuto"
+                disabled={disabled || !editor}
+              >
+                <ImagePlus className="size-4" />
+              </Button>
+            )}
+          {wide &&
+            renderToolbarButton(
+              'table',
+              'Tabella',
+              <DropdownMenu open={tableMenuOpen} onOpenChange={setTableMenuOpen} modal={false}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant={tableMenuOpen || active.isInTable ? 'secondary' : 'ghost'}
+                    size="icon"
+                    className="size-8"
+                    onMouseDown={(event) => event.preventDefault()}
+                    aria-label="Tabella"
+                    disabled={toolButtonDisabled}
+                  >
+                    <TableIcon className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  className="p-1"
+                  onCloseAutoFocus={(event) => event.preventDefault()}
+                >
+                  {tableMenuItems}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          {wide &&
+            renderToolbarButton(
+              'clear-formatting',
+              'Rimuovi formattazione',
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                onClick={clearFormatting}
+                onMouseDown={(event) => event.preventDefault()}
+                aria-label="Rimuovi formattazione"
+                disabled={disabled || !editor || active.isEmpty}
+              >
+                <RemoveFormatting className="size-4" />
+              </Button>
+            )}
           {renderToolbarButton(
-            'clear-formatting',
-            'Rimuovi formattazione',
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-8"
-              onClick={clearFormatting}
-              onMouseDown={(event) => event.preventDefault()}
-              aria-label="Rimuovi formattazione"
-              disabled={disabled || !editor || active.isEmpty}
-            >
-              <RemoveFormatting className="size-4" />
-            </Button>
+            'more',
+            'Altro',
+            <DropdownMenu open={moreMenuOpen} onOpenChange={setMoreMenuOpen} modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant={moreMenuOpen ? 'secondary' : 'ghost'}
+                  size="icon"
+                  className="size-8"
+                  onMouseDown={(event) => event.preventDefault()}
+                  aria-label="Altri comandi di formattazione"
+                  disabled={toolButtonDisabled}
+                >
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className="min-w-[13rem] p-1 text-xs"
+                onCloseAutoFocus={(event) => event.preventDefault()}
+              >
+                {moreMenuItems}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
-
-        {showExpandToggle &&
-          renderToolbarButton(
-            'toggle-editor-size',
-            editorExpanded ? 'Riduci box di scrittura' : 'Espandi box di scrittura',
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-8 shrink-0 self-start"
-              onClick={() => setEditorExpanded(!editorExpanded)}
-              onMouseDown={(event) => event.preventDefault()}
-              aria-label={editorExpanded ? 'Riduci box di scrittura' : 'Espandi box di scrittura'}
-            >
-              {editorExpanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-            </Button>
-          )}
       </div>
 
       <input
@@ -3433,7 +3720,7 @@ export function RichTextEditor({
       <div
         className={cn(
           'mail-editor-content bg-mail-editor-surface relative transition-[height] duration-150',
-          expandToContainer ? 'min-h-0 flex-1' : editorExpanded ? 'h-[560px]' : 'h-[350px]'
+          expandToContainer ? 'min-h-0 flex-1' : 'h-[350px]'
         )}
       >
         <iframe

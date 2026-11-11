@@ -54,7 +54,6 @@ import {
   type SendOutcome,
   type TodayPage,
   type WorkChange,
-  type WritingRequest,
   READING_DAYS,
   setupTurnsAiOn
 } from '@shared/segretario'
@@ -102,7 +101,7 @@ import {
 } from './registry/types'
 import { prismaSql } from './sql'
 import { contextBlock, nowLine } from './tasks/context'
-import { prepareSearch, prepareReview, prepareWriting } from './tasks/interactive'
+import { prepareSearch, prepareReview } from './tasks/interactive'
 import { prepareConoscimi } from './tasks/memory-work'
 import { startRun, type RunStarter } from './tasks/start-run'
 import { SEGRETARIO_TOOLS } from './tools'
@@ -165,7 +164,7 @@ const PURPOSE_LABELS: Readonly<Record<string, string>> = {
   sollecito: 'Solleciti (prima versione)',
   oggi: 'La giornata (prima versione)',
   argomento: 'Argomenti (prima versione)',
-  scrittura: TASK_LABELS.scrittura
+  scrittura: 'Scrittura nell’editor (prima versione)'
 }
 
 const PRIORITY_ORDER = { alta: 0, media: 1, bassa: 2 } as const
@@ -2843,52 +2842,7 @@ export class SegretarioService {
     return folder.location
   }
 
-  /* ───────────────────────── writing, rereading, searching ───────────────────────── */
-
-  /**
-   * The message being written, written or rewritten as the user asks — by
-   * the Segretario, which may look things up while the user waits. What
-   * comes back is kept as its draft, so what the user changes is learnt from.
-   */
-  async assistWriting(request: WritingRequest): Promise<{ text: string }> {
-    await this.requireKey()
-    const data = await prepareWriting({ mail: this.options.mail }, request)
-    const result = await this.asked(request.requestId, (signal) =>
-      startRun(this.starter(), {
-        task: 'scrittura',
-        background: false,
-        visibility: 'nascosta',
-        data,
-        shown: request.instruction,
-        editor: { draftId: request.draftId, selection: request.selectedText },
-        signal,
-        missing: async (run) =>
-          run.results.editorText
-            ? null
-            : 'Scrivi il testo nel messaggio con `scrivi_bozza` (il solo `testo`).'
-      })
-    )
-    const text = result.run.results.editorText
-
-    if (result.status === 'cancelled') {
-      throw new SegretarioError('cancelled', 'Interrotto.')
-    }
-
-    if (!text) {
-      throw new Error(result.error?.message ?? 'Non sono riuscito a scrivere il testo.')
-    }
-
-    if (!request.selectedText) {
-      await this.db.store.recordDraft({
-        draftId: request.draftId,
-        activityId: result.activityId,
-        accountId: request.accountId,
-        text
-      })
-    }
-
-    return { text }
-  }
+  /* ───────────────────────── rereading, searching ───────────────────────── */
 
   /** Rereads a message about to be sent: what the user would want to correct first, a line each. */
   async reviewDraft(request: ReviewRequest): Promise<string[]> {
@@ -2907,7 +2861,6 @@ export class SegretarioService {
     )
     return result.run.results.review ?? []
   }
-
   /**
    * A search asked in words: the Segretario finds the search that shows
    * what the user means, and its list is kept for the page to open.
@@ -3308,7 +3261,37 @@ export class SegretarioService {
       'Sullo schermo dell’utente mentre ti scrive — può riguardare la richiesta oppure no'
     const lines = [nowLine(), '', text.trim()]
 
-    if (context.messages.length > 0) {
+    if (context.composing) {
+      // The message they are writing: the draft to write in, in place, if they ask (vision §6.6).
+      const composing = context.composing
+      const draft = handles.name({ kind: 'draft', draftId: composing.draftId }, added)
+      const account = (await this.options.mail.listAccounts()).find(
+        (candidate) => candidate.id === composing.accountId
+      )
+      const answered = composing.replyTo
+        ? await this.describeMessages([composing.replyTo], handles, added).catch(() => [])
+        : []
+      const what =
+        composing.kind === 'reply'
+          ? 'una risposta'
+          : composing.kind === 'forward'
+            ? 'un inoltro'
+            : 'un messaggio nuovo'
+
+      lines.push(
+        '',
+        `${screen}: il messaggio che sta scrivendo, ${what} — la bozza ${draft}. Da ${account?.email ?? 'una sua casella'} · a ${composing.to.join(', ') || '(nessuno ancora)'}${composing.cc.length > 0 ? ` · cc ${composing.cc.join(', ')}` : ''} · oggetto «${composing.subject.trim() || '(nessuno)'}»${answered[0] ? `\nRisponde a: ${answered[0]}` : ''}`,
+        '',
+        `Il testo scritto finora:\n${composing.writtenText.trim() || '(vuoto)'}`,
+        ...(composing.signatureText.trim()
+          ? ['', `La firma, che il programma mette sotto:\n${composing.signatureText.trim()}`]
+          : [])
+      )
+
+      if (composing.selectedText?.trim()) {
+        lines.push('', `Il passaggio selezionato:\n${composing.selectedText.trim()}`)
+      }
+    } else if (context.messages.length > 0) {
       const described = await this.describeMessages(context.messages, handles, added)
       lines.push(
         '',

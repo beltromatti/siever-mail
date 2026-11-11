@@ -31,11 +31,11 @@ Without AI, SIEVER Mail is a set of fast, honest apps for mail and calendars. Wi
 
 **On its own, it only proposes.** Nothing reaches anyone without you: it does not send, invite or move your mail by itself — it leaves you a proposal, one click away. A diary shows everything it did, each change with its undo.
 
-**Ask it anything.** In its panel it searches every message, attachment and file, drafts and fixes replies, schedules and tidies. In any search field, ask in words — _"the offers from Gallo since September, with the pdf"_ — and keep the answer as a folder. In the composer, ⌘J writes the reply for you.
+**Ask it anything.** In its panel it searches every message, attachment and file, drafts and fixes replies, schedules and tidies. In any search field, ask in words — _"the offers from Gallo since September, with the pdf"_ — and keep the answer as a folder. While you write, it writes with you: the reply, shorter, more formal — in your message, one undo away.
 
 **Every source, connected properly.** Google, Microsoft 365 and Outlook.com, iCloud, any IMAP mailbox, certified mail (PEC) read for what it is; calendars from Google, Microsoft, any CalDAV server or a published link. One dot tells you how all of them stand.
 
-**A client that is fast where it is felt.** Messages open at once; the list is endless and smooth; search covers the full text of every message; drafts are never lost and live in your server's Drafts; a message arrives exactly as you wrote it; every command has a shortcut you can change.
+**A client that is fast where it is felt.** Messages open at once; the list is endless and smooth; search covers the full text of every message. You write where you read, a tab for each message, with the tools of a word processor — tables included — and a letterhead and a signature for each mailbox; drafts are never lost and live in your server's Drafts; a message arrives exactly as you wrote it; every command has a shortcut you can change.
 
 **Private by construction.** Your data stays on your computer, in a local database; passwords and tokens in the system keychain. The AI runs on your own [OpenRouter](https://openrouter.ai/) key, only through providers that keep no data, and you always see what it costs. No telemetry, no tracking: even the diagnostic log stays on your computer, and leaves it only when you export it to send it.
 

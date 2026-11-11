@@ -654,9 +654,13 @@ export interface DataStorageBreakdown {
   sections: DataStorageSection[]
 }
 
+/** What a mailbox puts around what is written from it (vision §6.6): either may be empty. */
 export interface MailAccountSignature {
   accountId: string
+  /** The signature, below what is written. */
   html: string
+  /** The letterhead, above it: what heads every message from the mailbox. */
+  headerHtml: string
   updatedAt: number
 }
 
