@@ -45,6 +45,8 @@ export interface ShortcutKeyEvent {
   ctrlKey: boolean
   altKey: boolean
   shiftKey: boolean
+  /** A keyboard event's: AltGr says it is typing a character (€, @, #), not a shortcut. */
+  getModifierState?: (key: string) => boolean
 }
 
 interface ChordParts {
@@ -249,6 +251,11 @@ export function matchesChord(event: ShortcutKeyEvent, value: string, isMac: bool
   const parts = parseChord(value)
 
   if (!parts) {
+    return false
+  }
+
+  // On Windows and Linux AltGr arrives as Ctrl+Alt: on an Italian keyboard it writes € @ # [ ].
+  if (!isMac && event.getModifierState?.('AltGraph')) {
     return false
   }
 

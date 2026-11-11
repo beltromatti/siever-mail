@@ -40,19 +40,26 @@ async function readFileSources(): Promise<FileSource[]> {
     { kind: 'computer', label: 'Questo computer', path: homedir(), mounted: true },
     ...mounted.map((path): FileSource => ({
       kind: network.has(path) ? 'rete' : 'volume',
-      label: volumeLabel(path),
+      label: volumeLabel(path, network.has(path)),
       path,
       mounted: true
     })),
     ...[...unmounted]
       .filter((path) => !mounted.includes(path))
-      .map((path): FileSource => ({ kind: 'rete', label: volumeLabel(path), path, mounted: false }))
+      .map((path): FileSource => ({
+        kind: 'rete',
+        label: volumeLabel(path, true),
+        path,
+        mounted: false
+      }))
   ]
 }
 
 /** A volume as the user knows it: its name, or the drive's letter on Windows. */
-function volumeLabel(path: string): string {
-  return process.platform === 'win32' ? `Disco ${path.slice(0, 2)}` : basename(path) || path
+function volumeLabel(path: string, network: boolean): string {
+  return process.platform === 'win32'
+    ? `${network ? 'Unità di rete' : 'Disco'} ${path.slice(0, 2)}`
+    : basename(path) || path
 }
 
 async function mountedVolumes(): Promise<string[]> {

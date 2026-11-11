@@ -4,7 +4,7 @@ import { rm, rmdir } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 
 import { app, BrowserWindow, Menu, Tray, nativeImage, powerMonitor, session, shell } from 'electron'
-import { electronApp, is, optimizer } from '@electron-toolkit/utils'
+import { electronApp, is } from '@electron-toolkit/utils'
 import { config as loadDotenv } from 'dotenv'
 import { z } from 'zod'
 import { IPC_CHANNELS } from '@shared/ipc'
@@ -368,9 +368,19 @@ if (hasSingleInstanceLock) {
       app.dock?.setIcon(icon)
     }
 
-    app.on('browser-window-created', (_event, window) => {
-      optimizer.watchWindowShortcuts(window)
-    })
+    // Every key goes to the app: ⌘R / Ctrl+R is Rispondi and ⌘− / Ctrl+− the messages' zoom, which
+    // the toolkit's shortcut guard held back in the installed app — the menu's too. Nothing reloads
+    // the page outside development: the menu has no reload there. In development, F12 opens the
+    // developer tools.
+    if (is.dev) {
+      app.on('browser-window-created', (_event, window) => {
+        window.webContents.on('before-input-event', (_input, input) => {
+          if (input.type === 'keyDown' && input.code === 'F12') {
+            window.webContents.toggleDevTools()
+          }
+        })
+      })
+    }
 
     // The screen locked: nobody is at the window; unlocked with it in front, someone is (§14.4).
     powerMonitor.on('lock-screen', () => log.info('system.lock'))

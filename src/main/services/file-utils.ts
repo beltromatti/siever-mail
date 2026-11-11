@@ -4,13 +4,29 @@
  * Intentionally domain-agnostic: nothing here knows about accounts or any
  * product concept.
  */
-import { access, writeFile } from 'node:fs/promises'
+import { access, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /**
  * Resolves to `true` if the path exists on disk and is accessible by the
  * current process, `false` otherwise.
  */
+/**
+ * Removes what the app keeps on disk, as much as can go now: on Windows a
+ * file another program holds open — an attachment open in Acrobat or Word —
+ * cannot be removed until it is closed. What stays is left for the next
+ * time, and said, instead of failing what removes it after the database
+ * has already let it go.
+ */
+export async function removeKept(path: string): Promise<{ error: unknown } | null> {
+  try {
+    await rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+    return null
+  } catch (error) {
+    return { error }
+  }
+}
+
 export async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path)

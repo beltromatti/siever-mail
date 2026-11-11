@@ -40,6 +40,8 @@ const KNOWN_SHARES_FILE = 'network-volumes.json'
 const MOUNT_DEADLINE_MS = 60_000
 const RECONNECT_DEADLINE_MS = 30_000
 const MAPPINGS_DEADLINE_MS = 15_000
+/** How long the mapped drives read stay good. */
+const MAPPINGS_FRESH_MS = 20_000
 const NETWORK_FILE_SYSTEMS = new Set(['smbfs', 'afpfs', 'nfs', 'webdav'])
 
 export interface MountedShare {
@@ -372,9 +374,40 @@ function exists(path: string): Promise<boolean> {
 
 class WindowsNetworkDrives {
   private readonly known = new KnownShares()
+  /**
+   * The mappings read last, shared by whoever asks meanwhile: a PowerShell
+   * takes a second to start, and the recent files, the File sources and the
+   * Segretario ask together.
+   */
+  private recent: { at: number; mappings: Promise<DriveMapping[]> } | null = null
 
   /** The drives mapped to shares now, remembered for when they are not. */
-  async mappings(): Promise<DriveMapping[]> {
+  mappings(): Promise<DriveMapping[]> {
+    if (!this.recent || Date.now() - this.recent.at > MAPPINGS_FRESH_MS) {
+      const read = this.readMappings()
+      this.recent = { at: Date.now(), mappings: read }
+      read.catch(() => {
+        if (this.recent?.mappings === read) {
+          this.recent = null
+        }
+      })
+    }
+
+    return this.recent.mappings
+  }
+
+  /** The roots ("Z:\\") of the drives mapped to shares, there now or left unavailable. */
+  async driveRoots(available: boolean): Promise<ReadonlySet<string>> {
+    return new Set(
+      (await this.mappings())
+        .filter((mapping) => (mapping.status === 'OK') === available)
+        .map((mapping) => `${mapping.letter}\\`)
+    )
+  }
+
+  private async readMappings(): Promise<DriveMapping[]> {
+    // PowerShell writes to a pipe in the console's code page (850 on an Italian Windows): a
+    // share named "Società" would arrive garbled.
     const output = await run(
       'powershell.exe',
       [
@@ -383,7 +416,7 @@ class WindowsNetworkDrives {
         '-ExecutionPolicy',
         'Bypass',
         '-Command',
-        'Get-SmbMapping | Select-Object LocalPath, RemotePath, @{n="Status";e={"$($_.Status)"}} | ConvertTo-Json -Compress'
+        '[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); Get-SmbMapping | Select-Object LocalPath, RemotePath, @{n="Status";e={"$($_.Status)"}} | ConvertTo-Json -Compress'
       ],
       MAPPINGS_DEADLINE_MS
     )
@@ -420,6 +453,12 @@ class WindowsNetworkDrives {
     }
 
     const drive = `${letter}:`
+
+    // A drive never seen mapped to a share — a USB disk unplugged — has nothing to reach it by.
+    if (!mount && !(await this.known.all()).has(drive)) {
+      return path
+    }
+
     const mappings = await this.mappings().catch((error: unknown) => {
       log.error('Reading the mapped drives failed', error)
       return []
@@ -428,6 +467,7 @@ class WindowsNetworkDrives {
 
     if (mine && mount) {
       await reconnect(drive, mine.remote)
+      this.recent = null
       return path
     }
 
@@ -519,15 +559,27 @@ export async function canonicalPath(path: string): Promise<string> {
 }
 
 /**
- * The volumes of shares the app has seen mounted that are not mounted now
- * (macOS): a file on one is still there, and comes back with the share.
+ * The volumes of shares the app has seen mounted that are not mounted now —
+ * on Windows the drives mapped to a share and left unavailable: a file on
+ * one is still there, and comes back with the share.
  */
 export async function unmountedShareMountPoints(): Promise<ReadonlySet<string>> {
+  if (windowsDrives) {
+    return windowsDrives.driveRoots(false)
+  }
+
   return macVolumes ? macVolumes.unmountedShares() : new Set()
 }
 
-/** The volumes of the network shares mounted now (macOS), learnt as `rememberMountedShares` does. */
+/**
+ * The volumes of the network shares mounted now — on Windows the drives
+ * mapped to a share —, learnt as `rememberMountedShares` does.
+ */
 export async function mountedShareMountPoints(): Promise<ReadonlySet<string>> {
+  if (windowsDrives) {
+    return windowsDrives.driveRoots(true)
+  }
+
   return new Set((await macVolumes?.mountedShares())?.map((share) => share.mountPoint) ?? [])
 }
 

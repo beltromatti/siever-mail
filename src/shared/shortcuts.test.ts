@@ -43,6 +43,16 @@ describe('matchesChord', () => {
     expect(matchesChord(mac, 'Mod+Shift+KeyR', false)).toBe(false)
   })
 
+  it('takes AltGr for typing on Windows and Linux, where it arrives as Ctrl+Alt', () => {
+    const euro = {
+      ...press({ ctrlKey: true, altKey: true }),
+      getModifierState: (key: string) => key === 'AltGraph'
+    }
+
+    expect(matchesChord(euro, 'Mod+Alt+KeyR', false)).toBe(false)
+    expect(matchesChord(press({ ctrlKey: true, altKey: true }), 'Mod+Alt+KeyR', false)).toBe(true)
+  })
+
   it('matches the physical key, not the character a layout or ⌥ produces', () => {
     expect(
       matchesChord(press({ metaKey: true, altKey: true, key: '®' }), 'Mod+Alt+KeyR', true)

@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
+import type { Dirent } from 'node:fs'
+import { lstat, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 
@@ -73,9 +74,24 @@ const SKIPPED_DIRECTORIES = new Set([
  */
 async function defaultRoots(): Promise<string[]> {
   const home = homedir()
-  const own = ['Desktop', 'Documents', 'Downloads', 'Documenti', 'Scrivania']
-    .map((name) => join(home, name))
-    .filter((path) => existsSync(path))
+  const { app } = await import('electron')
+  // The system's own folders — moved into OneDrive on many Windows, named in the user's language
+  // on Linux —, then the usual names.
+  const system = (['desktop', 'documents', 'downloads'] as const).flatMap((name) => {
+    try {
+      return [app.getPath(name)]
+    } catch {
+      return []
+    }
+  })
+  const own = [
+    ...new Set([
+      ...system,
+      ...['Desktop', 'Documents', 'Downloads', 'Documenti', 'Scrivania'].map((name) =>
+        join(home, name)
+      )
+    ])
+  ].filter((path) => existsSync(path))
   const volumes = (await fileSources())
     .filter((source) => source.kind !== 'computer' && source.mounted)
     .map((source) => source.path)
@@ -106,6 +122,26 @@ async function syncedDrives(home: string): Promise<string[]> {
       .map((entry) => join(cloud, entry.name)),
     ...(existsSync(iCloud) ? [iCloud] : [])
   ]
+}
+
+/**
+ * What an entry is, for a search that never follows a link out of where it
+ * looks. On Windows the files and folders of a synced drive (OneDrive, also
+ * Desktop and Documents when OneDrive keeps them, Dropbox) are reparse
+ * points, which a listing calls links: `lstat` tells a true link — a
+ * symbolic link, a junction — from them.
+ */
+async function entryKind(directory: string, entry: Dirent): Promise<'directory' | 'file' | 'link'> {
+  if (!entry.isSymbolicLink()) {
+    return entry.isDirectory() ? 'directory' : 'file'
+  }
+
+  if (process.platform !== 'win32') {
+    return 'link'
+  }
+
+  const info = await lstat(join(directory, entry.name)).catch(() => null)
+  return !info || info.isSymbolicLink() ? 'link' : info.isDirectory() ? 'directory' : 'file'
 }
 
 /** Whether a file found by name is also of the kind and the time asked. */
@@ -156,12 +192,14 @@ async function findFiles(search: FileSearch): Promise<FoundFile[]> {
     }
 
     for (const entry of entries) {
-      if (entry.name.startsWith('.') || entry.isSymbolicLink()) {
+      const kind = entry.name.startsWith('.') ? 'link' : await entryKind(directory, entry)
+
+      if (kind === 'link') {
         continue
       }
 
       const path = join(directory, entry.name)
-      const isDirectory = entry.isDirectory()
+      const isDirectory = kind === 'directory'
       const name = foldSearchText(entry.name)
 
       if (
@@ -276,7 +314,8 @@ export const searchFilesTool: SegretarioTool = {
               undated += late ? 1 : 0
               return {
                 path,
-                directory: entry.isDirectory(),
+                // What the entry leads to: a folder of a synced drive is a folder on Windows too.
+                directory: info?.isDirectory() ?? entry.isDirectory(),
                 size: info?.size ?? 0,
                 modified: info?.mtimeMs ?? 0
               }

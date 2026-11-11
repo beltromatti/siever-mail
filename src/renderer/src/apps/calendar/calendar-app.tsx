@@ -500,7 +500,7 @@ export function CalendarApp({
         <header
           className={cn(
             'window-drag-region flex h-[52px] shrink-0 items-center gap-2 border-b pl-4',
-            atWindowTopRight && !selection ? 'pr-[calc(var(--titlebar-controls)+8px)]' : 'pr-3'
+            atWindowTopRight ? 'pr-[calc(var(--titlebar-controls)+8px)]' : 'pr-3'
           )}
         >
           <ActionTooltip label="Vai a oggi" commandId="calendar-today">

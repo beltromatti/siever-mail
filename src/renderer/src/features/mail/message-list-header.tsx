@@ -11,7 +11,7 @@ import {
 } from '@renderer/components/ui/dropdown-menu'
 import { ShortcutKeys } from '@renderer/components/ui/shortcut-keys'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
-import { useCommandKeys } from '@renderer/lib/command-shortcuts'
+import { IS_MAC, useCommandKeys } from '@renderer/lib/command-shortcuts'
 import { cn, formatCount } from '@renderer/lib/utils'
 import type { MessageListFilter } from '@shared/models'
 
@@ -196,7 +196,7 @@ export function MessageListHeader({
               <TooltipContent side="bottom">
                 {askSegretario.busy
                   ? 'Il Segretario sta cercando: ferma'
-                  : 'Chiedi al Segretario: cerca come lo diresti · ⌘↵'}
+                  : `Chiedi al Segretario: cerca come lo diresti · ${IS_MAC ? '⌘↵' : 'Ctrl+Invio'}`}
               </TooltipContent>
             </Tooltip>
           )}

@@ -335,7 +335,14 @@ export class NotificationCenter {
           .then(() => action?.run())
           .catch((error: unknown) => log.failed('notification.action-failed', error, said))
       })
-      notification.once('close', () => {
+      notification.on('close', (details) => {
+        // On Windows a toast closes on screen after a few seconds and goes on in the Action
+        // Centre: it is still there — to click, to withdraw when it is no longer true —, and
+        // nobody dismissed it.
+        if (process.platform === 'win32' && details.reason === 'timedOut') {
+          return
+        }
+
         // Closed by the user, unread: what it said was not worth it (§14.4).
         if (this.live.has(notification) && !this.withdrawn.has(notification)) {
           log.info('notification.dismissed', said)

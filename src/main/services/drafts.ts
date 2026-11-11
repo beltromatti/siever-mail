@@ -33,7 +33,7 @@ import type {
 } from '@shared/models'
 
 import type { AppDatabase, StoredDraftRecord } from './database'
-import { writeUniqueFile } from './file-utils'
+import { removeKept, writeUniqueFile } from './file-utils'
 import type { MailEngine } from './mail-engine'
 import {
   buildRawOutgoingMessage,
@@ -623,7 +623,12 @@ export class DraftService {
 
     const record = await this.deps.database.getDraft(id)
     await this.deps.database.deleteDraft(id)
-    await rm(draftDirectory(id), { recursive: true, force: true })
+    const left = await removeKept(draftDirectory(id))
+
+    if (left) {
+      log.warn('draft.files-not-removed', { draftId: id, err: left.error })
+    }
+
     this.statuses.delete(id)
     return record
   }

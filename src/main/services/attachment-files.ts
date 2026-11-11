@@ -11,12 +11,16 @@
  * recipient of a forward sees.
  */
 import { createHash } from 'node:crypto'
-import { readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 
 import { app } from 'electron'
 
-import { pathExists } from './file-utils'
+import { diagnostics } from '@main/diagnostics/log'
+
+import { pathExists, removeKept } from './file-utils'
+
+const log = diagnostics('mail')
 
 const ATTACHMENT_CACHE_DIRECTORY_NAME = 'attachments'
 
@@ -177,8 +181,11 @@ export async function directorySize(directoryPath: string): Promise<number> {
 }
 
 export async function clearAttachmentCache(accountId?: string): Promise<void> {
-  await rm(accountId ? accountAttachmentCacheDirectory(accountId) : attachmentCacheRoot(), {
-    recursive: true,
-    force: true
-  })
+  const left = await removeKept(
+    accountId ? accountAttachmentCacheDirectory(accountId) : attachmentCacheRoot()
+  )
+
+  if (left) {
+    log.warn('attachments.not-removed', { err: left.error })
+  }
 }
