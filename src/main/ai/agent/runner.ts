@@ -256,6 +256,13 @@ export class AgentRunner {
     }
   }
 
+  /** Stops every run, and waits until each has written all it will. */
+  async stopAll(): Promise<void> {
+    const runs = [...this.live.values()]
+    this.cancelAll()
+    await Promise.all(runs.map((run) => run.ended.promise))
+  }
+
   /** The user's answer to a confirmation a run asked for. */
   async resolveApproval(
     activityId: string,

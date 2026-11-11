@@ -12,18 +12,23 @@ import { toast } from 'sonner'
 import { Button } from '@renderer/components/ui/button'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { Input } from '@renderer/components/ui/input'
+import { CompassStar } from '@renderer/components/ui/compass-star'
+import {
+  SettingsGroup,
+  SettingsLoading,
+  SettingsNotice,
+  SettingsPage
+} from '@renderer/components/ui/settings'
 import { Switch } from '@renderer/components/ui/switch'
 import { cn } from '@renderer/lib/utils'
 import {
   OPENROUTER_CREDITS_URL,
   OPENROUTER_KEYS_URL,
-  TASK_LABELS,
   type EngineState,
   type SegretarioKeyState,
   type SegretarioPreferences,
   type SegretarioSpending,
-  type SegretarioStatus,
-  type TaskKind
+  type SegretarioStatus
 } from '@shared/segretario'
 
 const DOLLARS = new Intl.NumberFormat('it-IT', {
@@ -66,44 +71,14 @@ function openExternal(url: string): void {
   void window.mailApi.openExternalUrl(url)
 }
 
-/** Where the Segretario's own work stands: what it has read, what waits. */
-function EngineLine({ engine }: { engine: EngineState }): React.JSX.Element {
-  const busy = (Object.entries(engine.running) as Array<[TaskKind, number]>).filter(
-    ([, count]) => count > 0
-  )
-  const waiting = Object.values(engine.queued).reduce((total, count) => total + (count ?? 0), 0)
-
-  return (
-    <div className="text-muted-foreground flex flex-col gap-1 text-[11.5px]">
-      {engine.waiting && (
-        <p className="flex items-start gap-2">
-          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          <span className="min-w-0">{engine.waiting}</span>
-        </p>
-      )}
-      <p>
-        Posta da leggere, fin dove si legge ogni connessione: letti{' '}
-        <span className="text-foreground tabular font-medium">
-          {engine.reading.read.toLocaleString('it-IT')}
-        </span>{' '}
-        messaggi su {engine.reading.total.toLocaleString('it-IT')}.
-      </p>
-      {(busy.length > 0 || waiting > 0) && (
-        <p>
-          {busy.length > 0 &&
-            `Al lavoro: ${busy.map(([task, count]) => `${TASK_LABELS[task].toLowerCase()}${count > 1 ? ` (${count})` : ''}`).join(', ')}. `}
-          {waiting > 0 && `${waiting.toLocaleString('it-IT')} in coda.`}
-        </p>
-      )}
-    </div>
-  )
-}
-
 /**
- * Impostazioni › Segretario: the user's own OpenRouter key — checked when
- * given, kept encrypted like the accounts' passwords — what is left of the
- * credit, what the Segretario has cost, and what happens to the mail it
- * reads. The model is not a choice: SIEVER Mail follows the newest one.
+ * Impostazioni › Segretario (vision §12.1, §13.2): first the switch that
+ * makes SIEVER Mail intelligent or a set of plain apps — on, through the
+ * guided setup; then the user's own OpenRouter key — checked when given,
+ * kept encrypted like the connections' passwords —, the credit, what the
+ * Segretario has cost, where the data goes; last, «Dimentica tutto», as if
+ * it had never been on. The model is not a choice: SIEVER Mail follows the
+ * newest one.
  */
 export function SegretarioSection({
   onEnableAi
@@ -115,6 +90,8 @@ export function SegretarioSection({
   const [spending, setSpending] = useState<SegretarioSpending | null>(null)
   const [preferences, setPreferences] = useState<SegretarioPreferences | null>(null)
   const [engine, setEngine] = useState<EngineState | null>(null)
+  // Whether «Dimentica tutto» has anything to take — the same the Dati page says.
+  const [keepsAnything, setKeepsAnything] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [keyInput, setKeyInput] = useState('')
   const [replacing, setReplacing] = useState(false)
@@ -129,14 +106,16 @@ export function SegretarioSection({
       window.segretarioApi.getStatus(),
       window.segretarioApi.getSpending(),
       window.segretarioApi.getPreferences(),
-      window.segretarioApi.getEngineState()
+      window.segretarioApi.getEngineState(),
+      window.segretarioApi.keepsAnything()
     ])
-      .then(([storedStatus, storedSpending, storedPreferences, engineState]) => {
+      .then(([storedStatus, storedSpending, storedPreferences, engineState, keeps]) => {
         if (current) {
           setStatus(storedStatus)
           setSpending(storedSpending)
           setPreferences(storedPreferences)
           setEngine(engineState)
+          setKeepsAnything(keeps)
         }
       })
       .catch((error: unknown) => {
@@ -146,6 +125,7 @@ export function SegretarioSection({
       })
 
     const unsubscribe = window.segretarioApi.onStatusChanged(setStatus)
+    // Only for when it waits on OpenRouter: the rest of its work is told where it is done.
     const unsubscribeEngine = window.segretarioApi.onEngineChanged(setEngine)
     // The AI goes off by itself when the key or the credit gives out: the switch follows.
     const unsubscribePreferences = window.segretarioApi.onPreferencesChanged(setPreferences)
@@ -213,7 +193,7 @@ export function SegretarioSection({
     const confirmed = await confirm({
       title: 'Togliere la chiave OpenRouter?',
       description:
-        'Il Segretario si ferma finché non ne inserisci un’altra. Quello che ha imparato e i lavori fatti restano.',
+        'Il Segretario si spegne: per riaccenderlo, la procedura guidata ti chiederà una chiave. Ciò che ha imparato e il lavoro fatto restano.',
       confirmLabel: 'Togli la chiave',
       cancelLabel: 'Annulla',
       destructive: true
@@ -227,6 +207,7 @@ export function SegretarioSection({
 
     try {
       setStatus(await window.segretarioApi.removeKey())
+      setKeepsAnything(await window.segretarioApi.keepsAnything())
       setReplacing(false)
     } catch (error) {
       toast.error('Chiave non tolta', { description: errorText(error) })
@@ -239,7 +220,7 @@ export function SegretarioSection({
     const confirmed = await confirm({
       title: 'Far dimenticare tutto al Segretario?',
       description:
-        'Memoria, note, cose aperte, progetti, risposte pronte e diario si cancellano, e non tornano. La posta e i calendari non cambiano; la chiave resta.',
+        'Si cancellano la memoria, le note, le cose aperte, i progetti, le risposte pronte, il diario, le spese e la chiave, e le funzioni AI si spengono: come se non fossero mai state accese. La posta, i calendari e i file restano come sono.',
       confirmLabel: 'Dimentica tutto',
       cancelLabel: 'Annulla',
       destructive: true
@@ -253,8 +234,16 @@ export function SegretarioSection({
 
     try {
       await window.segretarioApi.forgetAll()
-      setPreferences(await window.segretarioApi.getPreferences())
-      setSpending(await window.segretarioApi.getSpending())
+      const [nextStatus, nextPreferences, nextSpending] = await Promise.all([
+        window.segretarioApi.getStatus(),
+        window.segretarioApi.getPreferences(),
+        window.segretarioApi.getSpending()
+      ])
+      setStatus(nextStatus)
+      setPreferences(nextPreferences)
+      setSpending(nextSpending)
+      setKeepsAnything(false)
+      setReplacing(false)
       toast('Il Segretario ha dimenticato tutto.')
     } catch (error) {
       toast.error('Non è andata', { description: errorText(error) })
@@ -265,39 +254,69 @@ export function SegretarioSection({
 
   if (loadError) {
     return (
-      <div className="text-destructive-soft-foreground border-destructive/35 bg-destructive/10 mt-4 rounded-md border px-3 py-2 text-[12px]">
-        {loadError}
-      </div>
+      <SettingsPage>
+        <SettingsNotice tone="error">{loadError}</SettingsNotice>
+      </SettingsPage>
     )
   }
 
   if (!status) {
-    return (
-      <div className="text-muted-foreground mt-4 flex items-center gap-2 text-[12px]">
-        <LoaderCircle className="size-4 animate-spin" />
-        Caricamento delle impostazioni…
-      </div>
-    )
+    return <SettingsLoading>Caricamento delle impostazioni…</SettingsLoading>
   }
 
   const hasKey = status.keyState !== 'missing'
-  const askingForKey = !hasKey || replacing
   const state = KEY_STATE[status.keyState]
   const credit = status.credit
 
-  return (
-    <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-      <div className="settings-group flex flex-col gap-3">
-        <div>
-          <p className="eyebrow">Chiave OpenRouter</p>
-          <p className="text-muted-foreground mt-1 text-[11px]">
-            Il Segretario lavora con un modello linguistico che usi attraverso il tuo account
-            OpenRouter: paghi a consumo solo quello che fa, senza abbonamenti. La chiave resta su
-            questo computer, cifrata come le password degli account.
-          </p>
-        </div>
+  // On is the switch up and a key given (§12.1): without the key, turning it on asks for one.
+  const on = Boolean(preferences?.enabled && hasKey)
+  const waiting = on ? engine?.waiting : null
 
-        {hasKey && (
+  return (
+    <SettingsPage>
+      <label
+        htmlFor="segretario-enabled"
+        className={cn(
+          'flex cursor-pointer items-center gap-4 rounded-lg border px-4 py-3.5 transition-colors',
+          on ? 'border-ai-line/45 bg-ai-soft' : 'border-border bg-hover'
+        )}
+      >
+        <CompassStar
+          className={cn('size-6 shrink-0', on ? 'text-ai-star' : 'text-faint-foreground')}
+          strokeWidth={1.6}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="display-title block text-[15px]">
+            {on ? 'Il Segretario lavora per te' : 'Il Segretario è spento'}
+          </span>
+          <span className="text-muted-foreground mt-0.5 block text-[11.5px] leading-[1.45]">
+            {on
+              ? 'Segue la posta e i calendari mentre cambiano, tiene il conto di ciò che ti chiedono, che hai promesso e che aspetti, e prepara risposte e incontri.'
+              : 'SIEVER Mail è un insieme di app, senza intelligenza. Accendilo: una procedura guidata lo collega e gli fa conoscere il tuo lavoro.'}
+          </span>
+        </span>
+        <Switch
+          id="segretario-enabled"
+          checked={on}
+          disabled={busy !== null || !preferences}
+          aria-label="Segretario acceso"
+          onCheckedChange={(enabled) =>
+            enabled ? onEnableAi() : void changePreferences({ enabled })
+          }
+        />
+      </label>
+      {waiting && (
+        <p className="text-muted-foreground -mt-1 flex items-start gap-2 text-[11.5px]">
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+          <span className="min-w-0">{waiting}</span>
+        </p>
+      )}
+
+      {hasKey && (
+        <SettingsGroup
+          title="Chiave OpenRouter"
+          description="Il Segretario lavora con un modello che usi dal tuo account OpenRouter: paghi solo quello che fa, senza abbonamenti. La chiave resta su questo computer, cifrata."
+        >
           <div className="flex flex-col gap-1.5 text-[12px]">
             <div className="flex items-center gap-2">
               <span className={cn('size-2 shrink-0 rounded-full', state.tone)} />
@@ -338,124 +357,126 @@ export function SegretarioSection({
               </p>
             )}
           </div>
-        )}
 
-        {askingForKey ? (
-          <form
-            className="flex flex-col gap-2"
-            onSubmit={(event) => {
-              event.preventDefault()
-              void saveKey()
-            }}
-          >
-            <div className="flex gap-2">
-              <Input
-                type="password"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="sk-or-v1-…"
-                aria-label="Chiave OpenRouter"
-                value={keyInput}
-                onChange={(event) => {
-                  setKeyInput(event.target.value)
-                  setKeyError(null)
-                }}
-                className="tabular"
-                autoFocus={replacing}
-              />
-              <Button type="submit" size="sm" disabled={!keyInput.trim() || busy !== null}>
-                {busy === 'save' ? (
-                  <LoaderCircle className="size-3.5 animate-spin" />
-                ) : (
-                  <KeyRound className="size-3.5" />
-                )}
-                Collega
-              </Button>
-              {replacing && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={busy !== null}
-                  onClick={() => {
-                    setReplacing(false)
-                    setKeyInput('')
+          {replacing ? (
+            <form
+              className="flex flex-col gap-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void saveKey()
+              }}
+            >
+              <div className="flex gap-2">
+                <Input
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="sk-or-v1-…"
+                  aria-label="Chiave OpenRouter"
+                  value={keyInput}
+                  onChange={(event) => {
+                    setKeyInput(event.target.value)
                     setKeyError(null)
                   }}
-                >
-                  Annulla
+                  className="tabular"
+                  autoFocus
+                />
+                <Button type="submit" size="sm" disabled={!keyInput.trim() || busy !== null}>
+                  {busy === 'save' ? (
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : (
+                    <KeyRound className="size-3.5" />
+                  )}
+                  Collega
                 </Button>
+                {replacing && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy !== null}
+                    onClick={() => {
+                      setReplacing(false)
+                      setKeyInput('')
+                      setKeyError(null)
+                    }}
+                  >
+                    Annulla
+                  </Button>
+                )}
+              </div>
+              {keyError && (
+                <p className="text-destructive-soft-foreground text-[12px]">{keyError}</p>
               )}
-            </div>
-            {keyError && <p className="text-destructive-soft-foreground text-[12px]">{keyError}</p>}
-            <p className="text-muted-foreground text-[11px]">
-              Non hai una chiave? Crea un account su OpenRouter, aggiungi qualche dollaro di credito
-              e genera una chiave.{' '}
-              <button
+              <p className="text-muted-foreground text-[11px]">
+                Non hai una chiave? Crea un account su OpenRouter, aggiungi qualche dollaro di
+                credito e genera una chiave.{' '}
+                <button
+                  type="button"
+                  className="text-foreground inline-flex items-center gap-1 underline underline-offset-2"
+                  onClick={() => openExternal(OPENROUTER_KEYS_URL)}
+                >
+                  Apri openrouter.ai
+                  <ExternalLink className="size-3" />
+                </button>
+              </p>
+            </form>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <Button
                 type="button"
-                className="text-foreground inline-flex items-center gap-1 underline underline-offset-2"
-                onClick={() => openExternal(OPENROUTER_KEYS_URL)}
+                variant="outline"
+                size="sm"
+                disabled={busy !== null}
+                onClick={() => void checkKey()}
               >
-                Apri openrouter.ai
-                <ExternalLink className="size-3" />
-              </button>
-            </p>
-          </form>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={busy !== null}
-              onClick={() => void checkKey()}
-            >
-              {busy === 'check' ? (
-                <LoaderCircle className="size-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="size-3.5" />
-              )}
-              Verifica di nuovo
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={busy !== null}
-              onClick={() => setReplacing(true)}
-            >
-              <KeyRound className="size-3.5" />
-              Sostituisci
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => openExternal(OPENROUTER_CREDITS_URL)}
-            >
-              <ExternalLink className="size-3.5" />
-              Ricarica il credito
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-destructive"
-              disabled={busy !== null}
-              onClick={() => void removeKey()}
-            >
-              {busy === 'remove' ? (
-                <LoaderCircle className="size-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="size-3.5" />
-              )}
-              Togli
-            </Button>
-          </div>
-        )}
-      </div>
+                {busy === 'check' ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3.5" />
+                )}
+                Verifica di nuovo
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={busy !== null}
+                onClick={() => setReplacing(true)}
+              >
+                <KeyRound className="size-3.5" />
+                Sostituisci
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => openExternal(OPENROUTER_CREDITS_URL)}
+              >
+                <ExternalLink className="size-3.5" />
+                Ricarica il credito
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-destructive"
+                disabled={busy !== null}
+                onClick={() => void removeKey()}
+              >
+                {busy === 'remove' ? (
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="size-3.5" />
+                )}
+                Togli
+              </Button>
+            </div>
+          )}
+        </SettingsGroup>
+      )}
 
-      {spending && (
+      {spending && (on || hasKey || spending.thisMonth > 0 || spending.byFunction.length > 0) && (
         <div className="settings-group flex flex-col gap-2">
           <p className="eyebrow">Spesa</p>
           <div className="flex gap-8 text-[12px]">
@@ -485,36 +506,6 @@ export function SegretarioSection({
         </div>
       )}
 
-      {hasKey && preferences && (
-        <div className="settings-group flex flex-col gap-3">
-          <label
-            htmlFor="segretario-enabled"
-            className="flex cursor-pointer items-center justify-between gap-3"
-          >
-            <span className="min-w-0">
-              <span className="block text-[12px] font-medium">Funzioni AI</span>
-              <span className="text-muted-foreground block text-[11px]">
-                Il Segretario segue la posta e i calendari mentre cambiano, tiene il conto di cosa
-                ti chiedono, cosa hai promesso e cosa aspetti, riconosce i progetti, prepara le
-                risposte e gli incontri, scrive la giornata e rilegge i messaggi prima che partano.
-                Spente, restano le app senza Segretario: quello che ha imparato resta. Si spengono
-                da sole se il credito OpenRouter finisce o la chiave viene rifiutata: le riaccendi
-                da qui, dopo aver ricaricato.
-              </span>
-            </span>
-            <Switch
-              id="segretario-enabled"
-              checked={preferences.enabled}
-              onCheckedChange={(enabled) =>
-                enabled ? onEnableAi() : void changePreferences({ enabled })
-              }
-            />
-          </label>
-
-          {preferences.enabled && engine && <EngineLine engine={engine} />}
-        </div>
-      )}
-
       <div className="settings-group flex flex-col gap-2">
         <p className="eyebrow">Riservatezza</p>
         <p className="text-[12px] leading-[1.5]">
@@ -525,31 +516,34 @@ export function SegretarioSection({
         </p>
       </div>
 
-      <div className="settings-group flex flex-col gap-2">
-        <p className="eyebrow">Dimentica tutto</p>
-        <p className="text-muted-foreground text-[11.5px] leading-[1.5]">
-          Cancella quello che il Segretario sa e ha fatto: memoria, note, cose aperte, progetti,
-          risposte pronte, diario e spese. Restano la chiave e le copie archiviate su disco. Le
-          funzioni AI si spengono: riaccese, ripartono da capo, da Conoscimi.
-        </p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="text-destructive-soft-foreground w-fit"
-          disabled={busy !== null}
-          onClick={() => void forgetAll()}
-        >
-          {busy === 'forget' ? (
-            <LoaderCircle className="size-3.5 animate-spin" />
-          ) : (
-            <Trash2 className="size-3.5" />
-          )}
-          Dimentica tutto
-        </Button>
-      </div>
+      {(hasKey || keepsAnything) && (
+        <div className="border-destructive/35 bg-destructive/5 flex flex-col gap-2 rounded-md border p-3">
+          <p className="eyebrow">Dimentica tutto</p>
+          <p className="text-muted-foreground text-[11.5px] leading-[1.5]">
+            Come se il Segretario non fosse mai stato acceso: si cancellano ciò che sa e ciò che ha
+            fatto — memoria, note, cose aperte, progetti, risposte pronte, diario e spese — e la
+            chiave. Riacceso, riparte dalla procedura guidata. La posta, i calendari e i file
+            restano come sono.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="text-destructive-soft-foreground w-fit"
+            disabled={busy !== null}
+            onClick={() => void forgetAll()}
+          >
+            {busy === 'forget' ? (
+              <LoaderCircle className="size-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="size-3.5" />
+            )}
+            Dimentica tutto
+          </Button>
+        </div>
+      )}
 
       {confirmDialog}
-    </div>
+    </SettingsPage>
   )
 }

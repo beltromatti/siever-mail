@@ -56,10 +56,23 @@ interface Form {
   description: string
 }
 
-/** The form an editor starts with: the range drawn, or the event as it is. */
-function initialForm(target: EditorTarget, calendars: ReadonlyArray<CalendarListEntry>): Form {
+/**
+ * The form an editor starts with: the range drawn, or the event as it is. A
+ * new event goes to the calendar the user chose for them (Impostazioni ›
+ * Preferenze), while it is there to write in; else to the principal one.
+ */
+function initialForm(
+  target: EditorTarget,
+  calendars: ReadonlyArray<CalendarListEntry>,
+  preferredKey: string | null
+): Form {
   const writable = calendars.filter((calendar) => calendar.writable && !calendar.hidden)
-  const fallback = (writable.find((calendar) => calendar.primary) ?? writable[0])?.key ?? ''
+  const fallback =
+    (
+      writable.find((calendar) => calendar.key === preferredKey) ??
+      writable.find((calendar) => calendar.primary) ??
+      writable[0]
+    )?.key ?? ''
 
   if (target.mode === 'new') {
     const start = localDateTime(target.start)
@@ -192,15 +205,18 @@ function changedWrite(key: string, change: EventChange): (() => Promise<Calendar
 export function EventEditor({
   target,
   calendars,
+  preferredCalendarKey,
   onClose,
   onSaved
 }: {
   target: EditorTarget
   calendars: ReadonlyArray<CalendarListEntry>
+  /** Where the user wants new events, by calendar key; null: the principal calendar. */
+  preferredCalendarKey: string | null
   onClose: () => void
   onSaved: (event: CalendarEvent) => void
 }): React.JSX.Element {
-  const [opened] = useState<Form>(() => initialForm(target, calendars))
+  const [opened] = useState<Form>(() => initialForm(target, calendars, preferredCalendarKey))
   const [form, setForm] = useState<Form>(opened)
   const [saving, setSaving] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)

@@ -62,9 +62,14 @@ export interface DraftServiceDependencies {
   onStatus: (status: DraftStatus) => void
 }
 
+/** Where the files of the drafts opened from Bozze are written, one folder each. */
+export function draftFilesRoot(): string {
+  return join(app.getPath('userData'), DRAFTS_DIRECTORY_NAME)
+}
+
 /** The folder the files of a draft opened from Bozze are written to. */
 function draftDirectory(id: string): string {
-  return join(app.getPath('userData'), DRAFTS_DIRECTORY_NAME, id)
+  return join(draftFilesRoot(), id)
 }
 
 function errorText(error: unknown, fallback: string): string {

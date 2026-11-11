@@ -99,6 +99,13 @@
   --shadow: 222 40% 2%;
   --specular: 0 0% 100% / 0.07;
   --scrim: 222 30% 3% / 0.55;
+  /* Whose what SIEVER Mail keeps is, in Impostazioni › Dati: each source, the Segretario, the rest. */
+  --data-mail: 208 100% 56%;
+  --data-calendar: 168 56% 44%;
+  --data-segretario: 46 92% 58%;
+  --data-common: 216 12% 58%;
+  --data-extension: 268 52% 66%;
+  --data-files: 216 10% 38%;
   --radius: 0.5rem;
 }
 
@@ -159,6 +166,12 @@
     --shadow: 222 40% 12%;
     --specular: 0 0% 100% / 0.8;
     --scrim: 222 30% 12% / 0.22;
+    --data-mail: 208 100% 46%;
+    --data-calendar: 168 60% 34%;
+    --data-segretario: 44 96% 46%;
+    --data-common: 216 12% 60%;
+    --data-extension: 268 45% 54%;
+    --data-files: 216 12% 76%;
   }
 }
 
@@ -227,6 +240,12 @@
   --color-flagged: hsl(var(--flagged));
   --color-warning: hsl(var(--warning));
   --color-scrim: hsl(var(--scrim));
+  --color-data-mail: hsl(var(--data-mail));
+  --color-data-calendar: hsl(var(--data-calendar));
+  --color-data-segretario: hsl(var(--data-segretario));
+  --color-data-common: hsl(var(--data-common));
+  --color-data-extension: hsl(var(--data-extension));
+  --color-data-files: hsl(var(--data-files));
 }
 
 @layer base {

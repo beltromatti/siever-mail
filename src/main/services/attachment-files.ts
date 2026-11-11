@@ -164,7 +164,13 @@ export async function directorySize(directoryPath: string): Promise<number> {
   const sizes = await Promise.all(
     entries
       .filter((entry) => entry.isFile())
-      .map(async (entry) => (await stat(join(entry.parentPath, entry.name))).size)
+      // A file gone between the listing and its size weighs nothing.
+      .map((entry) =>
+        stat(join(entry.parentPath, entry.name)).then(
+          (stats) => stats.size,
+          () => 0
+        )
+      )
   )
 
   return sizes.reduce((total, size) => total + size, 0)

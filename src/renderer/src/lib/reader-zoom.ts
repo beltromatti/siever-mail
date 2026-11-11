@@ -1,7 +1,7 @@
 import { clampReaderZoom, READER_ZOOM_DEFAULT } from '@shared/models'
 
 /** The steps a browser zooms through, so a notch feels the same here. */
-const READER_ZOOM_STEPS = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200] as const
+export const READER_ZOOM_STEPS = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200] as const
 
 /** The next step above (`1`) or below (`-1`) the current zoom. */
 export function steppedReaderZoom(current: number, direction: 1 | -1): number {

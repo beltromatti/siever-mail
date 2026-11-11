@@ -1,30 +1,21 @@
-import { useEffect, useMemo, useState, type ComponentType } from 'react'
+import { Fragment, useEffect, useState, type ComponentType } from 'react'
 import {
   AtSign,
   Bell,
   Blocks,
   Database,
   Keyboard,
-  LoaderCircle,
-  Monitor,
-  Moon,
   NotebookPen,
   Plus,
   Puzzle,
-  Save,
   Signature,
-  SlidersHorizontal,
-  Sun,
-  Trash2,
-  type LucideIcon
+  SlidersHorizontal
 } from 'lucide-react'
 
 import extensionRenderer from '@app/extension/renderer'
 import extensionShared from '@app/extension/shared'
 import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
-import { ConnectionsList } from '@renderer/features/connections/connections-list'
-import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import {
   Dialog,
   DialogContent,
@@ -32,35 +23,20 @@ import {
   DialogHeader,
   DialogTitle
 } from '@renderer/components/ui/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@renderer/components/ui/select'
-import { Switch } from '@renderer/components/ui/switch'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
-import { GROUPING_OPTIONS } from '@renderer/features/mail/message-list-shared'
-import { RichTextEditor } from '@renderer/features/mail/rich-text-editor'
-import { DiagnosticsGroup } from '@renderer/features/settings/diagnostics-group'
+import { ConnectionsList } from '@renderer/features/connections/connections-list'
+import { DataSection } from '@renderer/features/settings/data-section'
 import { ExtensionSection } from '@renderer/features/settings/extension-section'
-import { NotificationsSection } from '@renderer/features/settings/notifications-section'
 import { MemorySection } from '@renderer/features/settings/memory-section'
+import { NotificationsSection } from '@renderer/features/settings/notifications-section'
+import { PreferencesSection } from '@renderer/features/settings/preferences-section'
 import { SegretarioSection } from '@renderer/features/settings/segretario-section'
 import { ShortcutsSection } from '@renderer/features/settings/shortcuts-section'
+import { SignaturesSection } from '@renderer/features/settings/signatures-section'
 import { AppEdition } from '@renderer/features/workspace/app-edition'
 import { uiLog } from '@renderer/lib/diagnostics'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarConnection } from '@shared/calendar'
-import type {
-  AccountConnectionState,
-  DataStorageBreakdown,
-  MailAccount,
-  MailLayoutMode,
-  ThemeMode,
-  UiPreferences
-} from '@shared/models'
+import type { AccountConnectionState, MailAccount, UiPreferences } from '@shared/models'
 
 export type SettingsSectionId =
   | 'accounts'
@@ -113,205 +89,100 @@ interface SettingsDialogProps {
   onEnableAi: () => void
   /** Conoscimi asked again: the guided setup runs it. */
   onRedoConoscimi: () => void
-  /** The accounts "Tutti gli account" gathers changed. */
+  /** The mailboxes «Tutte le caselle» gathers changed. */
   onUnifiedPreferencesChanged: () => void
 }
 
-const CORE_SETTINGS_SECTIONS: SettingsSection[] = [
-  {
-    id: 'accounts',
-    label: 'Connessioni',
-    title: 'Connessioni',
-    description:
-      'La posta e i calendari collegati, ognuno una connessione a sé, raggruppati per accesso.',
-    icon: AtSign
-  },
-  {
-    id: 'preferences',
-    label: 'Preferenze',
-    title: 'Preferenze',
-    description: "Configura le preferenze generali dell'applicazione.",
-    icon: SlidersHorizontal
-  },
-  {
-    id: 'segretario',
-    label: 'Segretario',
-    title: 'Segretario',
-    description: 'La chiave del modello con cui lavora, il credito e quanto spende.',
-    icon: CompassStar
-  },
-  {
-    id: 'memoria',
-    label: 'Cosa so di te',
-    title: 'Cosa so di te',
-    description: 'Come il Segretario impara a conoscerti, e le sue note: leggile e correggile.',
-    icon: NotebookPen
-  },
-  {
-    id: 'notifications',
-    label: 'Notifiche',
-    title: 'Notifiche',
-    description: "Ciò che ti interrompe, app per app, e il numero sull'icona.",
-    icon: Bell
-  },
-  {
-    id: 'shortcuts',
-    label: 'Scorciatoie',
-    title: 'Scorciatoie da tastiera',
-    description: 'I tasti che eseguono ogni comando, da qualunque punto della finestra.',
-    icon: Keyboard
-  },
-  {
-    id: 'data',
-    label: 'Dati',
-    title: 'Dati',
-    description: 'Gestisci archiviazione locale, cache e preferenze dati.',
-    icon: Database
-  },
-  {
-    id: 'signatures',
-    label: 'Firme',
-    title: 'Firme',
-    description: 'Configura firme per gli account e per la composizione messaggi.',
-    icon: Signature
-  },
-  {
-    id: 'extension',
-    label: 'Estensione',
-    title: 'Estensione',
-    // A legal name may end with its own full stop ("S.r.l."): the sentence does not add another.
-    description: extensionShared.identity
-      ? `L’edizione di SIEVER Mail per ${extensionShared.identity.name}`.replace(/\.?$/, '.')
-      : 'SIEVER Mail su misura per un’organizzazione.',
-    icon: Puzzle
-  }
-]
-
-// The extension's own tabs follow the host's, under "Estensione"; the public
-// build has none.
-const SETTINGS_SECTIONS: SettingsSection[] = [
-  ...CORE_SETTINGS_SECTIONS,
-  ...extensionRenderer.settingsTabs.map((tab) => ({
-    id: tab.id,
-    label: tab.label,
-    title: tab.title,
-    description: tab.description,
-    icon: tab.icon ?? Blocks
-  }))
-]
-
-const THEME_OPTIONS: ReadonlyArray<{ mode: ThemeMode; label: string; icon: LucideIcon }> = [
-  { mode: 'system', label: 'Sistema', icon: Monitor },
-  { mode: 'light', label: 'Chiaro', icon: Sun },
-  { mode: 'dark', label: 'Scuro', icon: Moon }
-]
-
-const LAYOUT_OPTIONS: ReadonlyArray<{
-  mode: MailLayoutMode
-  label: string
-  description: string
-}> = [
-  {
-    mode: 'apple',
-    label: 'Apple',
-    description: 'Cartelle, elenco e lettura affiancati. Righe compatte su più linee.'
-  },
-  {
-    mode: 'outlook',
-    label: 'Outlook',
-    description: 'Tabella densa in alto, messaggio in basso. Circa 15 email a schermo.'
-  }
-]
-
 /**
- * Wireframe of each arrangement. A picture settles "where does the message
- * end up" faster than a paragraph, and it keeps the two options comparable
- * at a glance instead of describing them in prose.
+ * The pages, in three groups as the rail's apps are (§13.1, §13.2): what
+ * SIEVER Mail is for the user — what it reaches, and whether the
+ * Segretario works for them —; how it looks and behaves, app by app; what
+ * it keeps, and whose edition it is.
  */
-function LayoutPreview({
-  mode,
-  active
-}: {
-  mode: MailLayoutMode
-  active: boolean
-}): React.JSX.Element {
-  const paneClass = active ? 'bg-primary/35' : 'bg-muted-foreground/25'
-  const accentClass = active ? 'bg-primary/60' : 'bg-muted-foreground/40'
-
-  return (
-    <div
-      aria-hidden
-      className="border-border/70 bg-background/60 flex h-16 w-full gap-1 rounded border p-1"
-    >
-      <div className={cn('w-1/5 rounded-[2px]', paneClass)} />
-      {mode === 'outlook' ? (
-        <div className="flex flex-1 flex-col gap-1">
-          <div className={cn('h-2/5 rounded-[2px]', accentClass)} />
-          <div className={cn('flex-1 rounded-[2px]', paneClass)} />
-        </div>
-      ) : (
-        <div className="flex flex-1 gap-1">
-          <div className={cn('w-2/5 rounded-[2px]', accentClass)} />
-          <div className={cn('flex-1 rounded-[2px]', paneClass)} />
-        </div>
-      )}
-    </div>
-  )
-}
-
-const ACCOUNT_SEGMENT_COLOR_CLASSES = [
-  'bg-primary',
-  'bg-accent',
-  'bg-secondary',
-  'bg-primary/70',
-  'bg-accent/70',
-  'bg-secondary/70'
+const CORE_SETTINGS_GROUPS: SettingsSection[][] = [
+  [
+    {
+      id: 'accounts',
+      label: 'Connessioni',
+      title: 'Connessioni',
+      description:
+        'La posta, i calendari e i file che SIEVER Mail raggiunge, alla pari: ognuno una connessione a sé, raggruppati per accesso.',
+      icon: AtSign
+    },
+    {
+      id: 'segretario',
+      label: 'Segretario',
+      title: 'Segretario',
+      description: 'Se lavora per te, con quale chiave, e quanto spende.',
+      icon: CompassStar
+    },
+    {
+      id: 'memoria',
+      label: 'Cosa so di te',
+      title: 'Cosa so di te',
+      description: 'Come il Segretario ti conosce, e le sue note: leggile e correggile.',
+      icon: NotebookPen
+    }
+  ],
+  [
+    {
+      id: 'preferences',
+      label: 'Preferenze',
+      title: 'Preferenze',
+      description: 'Come si presenta SIEVER Mail, e come lavorano le sue app.',
+      icon: SlidersHorizontal
+    },
+    {
+      id: 'notifications',
+      label: 'Notifiche',
+      title: 'Notifiche',
+      description: "Ciò che ti interrompe, app per app, e il numero sull'icona.",
+      icon: Bell
+    },
+    {
+      id: 'shortcuts',
+      label: 'Scorciatoie',
+      title: 'Scorciatoie da tastiera',
+      description: 'I tasti che eseguono ogni comando, app per app.',
+      icon: Keyboard
+    },
+    {
+      id: 'signatures',
+      label: 'Firme',
+      title: 'Firme',
+      description: 'La firma di ogni casella, in fondo ai messaggi che scrivi da lì.',
+      icon: Signature
+    }
+  ],
+  [
+    {
+      id: 'data',
+      label: 'Dati',
+      title: 'Dati',
+      description: 'Ciò che SIEVER Mail tiene su questo computer, e ciò che puoi togliere.',
+      icon: Database
+    },
+    {
+      id: 'extension',
+      label: 'Estensione',
+      title: 'Estensione',
+      // A legal name may end with its own full stop ("S.r.l."): the sentence does not add another.
+      description: extensionShared.identity
+        ? `L’edizione di SIEVER Mail per ${extensionShared.identity.name}`.replace(/\.?$/, '.')
+        : 'SIEVER Mail su misura per un’organizzazione.',
+      icon: Puzzle
+    },
+    // The extension's own pages follow its own, under "Estensione"; the public build has none.
+    ...extensionRenderer.settingsTabs.map((tab) => ({
+      id: tab.id,
+      label: tab.label,
+      title: tab.title,
+      description: tab.description,
+      icon: tab.icon ?? Blocks
+    }))
+  ]
 ]
-const GLOBAL_SEGMENT_COLOR_CLASS = 'bg-muted-foreground'
-
-/** What "Elimina tutti i dati" deletes, with whatever the extension keeps. */
-const LOCAL_DATA_DESCRIPTION = `Cancella ogni dato locale: email, cartelle, contatti, firme, file recenti e copie degli allegati${
-  extensionRenderer.localDataLabel ? `, ${extensionRenderer.localDataLabel}` : ''
-}.`
-const FILES_SEGMENT_COLOR_CLASS = 'bg-foreground/30'
-
-function formatMegabytes(sizeBytes: number): string {
-  const megabytes = Math.max(0, sizeBytes) / (1024 * 1024)
-
-  if (megabytes >= 100) {
-    return `${megabytes.toFixed(0)} MB`
-  }
-
-  if (megabytes >= 10) {
-    return `${megabytes.toFixed(1)} MB`
-  }
-
-  return `${megabytes.toFixed(2)} MB`
-}
-
-function normalizeSignatureHtmlForComparison(value: string | null | undefined): string {
-  const trimmed = (value ?? '').trim()
-
-  if (!trimmed) {
-    return ''
-  }
-
-  const hasEmbeddedMedia = /<(?:img|svg|video|audio)\b/i.test(trimmed)
-  const visibleText = trimmed
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<(?:br|hr)\b[^>]*>/gi, ' ')
-    .replace(/&nbsp;|&#160;/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  if (!visibleText && !hasEmbeddedMedia) {
-    return ''
-  }
-
-  return trimmed
-}
+const SETTINGS_SECTIONS = CORE_SETTINGS_GROUPS.flat()
 
 export function SettingsDialog({
   open,
@@ -349,27 +220,6 @@ export function SettingsDialog({
       setActiveSectionId(initialSectionId)
     }
   }
-  const { confirm, dialog: confirmDialog } = useConfirmDialog()
-  const [dataBreakdown, setDataBreakdown] = useState<DataStorageBreakdown | null>(null)
-  const [dataBreakdownLoading, setDataBreakdownLoading] = useState(false)
-  const [dataBreakdownError, setDataBreakdownError] = useState<string | null>(null)
-  // Bumped after something the breakdown measures was emptied from here.
-  const [dataBreakdownRevision, setDataBreakdownRevision] = useState(0)
-  const [clearingAttachmentCopies, setClearingAttachmentCopies] = useState(false)
-  const [signaturesByAccountId, setSignaturesByAccountId] = useState<Record<string, string>>({})
-  const [signatureDraftsByAccountId, setSignatureDraftsByAccountId] = useState<
-    Record<string, string>
-  >({})
-  const [signatureAccountId, setSignatureAccountId] = useState<string | null>(null)
-  const [signaturesLoading, setSignaturesLoading] = useState(false)
-  const [signatureSavingAccountId, setSignatureSavingAccountId] = useState<string | null>(null)
-  const [signaturesError, setSignaturesError] = useState<string | null>(null)
-  const [signaturesStatusMessage, setSignaturesStatusMessage] = useState<string | null>(null)
-  // The accounts "Tutti gli account" gathers, as stored; null while loading.
-  const [unifiedIncludedAccountIds, setUnifiedIncludedAccountIds] = useState<string[] | null>(null)
-  const [unifiedPreferencesSaving, setUnifiedPreferencesSaving] = useState(false)
-  const [unifiedPreferencesError, setUnifiedPreferencesError] = useState<string | null>(null)
-
   const activeSection =
     SETTINGS_SECTIONS.find((section) => section.id === activeSectionId) ?? SETTINGS_SECTIONS[0]
 
@@ -380,293 +230,9 @@ export function SettingsDialog({
     }
   }, [activeSectionId, open])
 
-  useEffect(() => {
-    if (!open || activeSectionId !== 'preferences') {
-      return
-    }
-
-    let disposed = false
-
-    void window.mailApi
-      .getUnifiedPreferences()
-      .then((preferences) => {
-        if (!disposed) {
-          setUnifiedIncludedAccountIds(preferences.includedAccountIds)
-          setUnifiedPreferencesError(null)
-        }
-      })
-      .catch((caughtError: unknown) => {
-        if (!disposed) {
-          setUnifiedPreferencesError(
-            caughtError instanceof Error && caughtError.message.trim()
-              ? caughtError.message
-              : 'Caricamento degli account inclusi non riuscito.'
-          )
-        }
-      })
-
-    return () => {
-      disposed = true
-    }
-  }, [accounts, activeSectionId, open])
-
-  useEffect(() => {
-    if (!open || activeSectionId !== 'data') {
-      return
-    }
-
-    let disposed = false
-    setDataBreakdownLoading(true)
-    setDataBreakdownError(null)
-
-    void window.mailApi
-      .getDataStorageBreakdown()
-      .then((payload) => {
-        if (disposed) {
-          return
-        }
-
-        setDataBreakdown(payload)
-      })
-      .catch((caughtError: unknown) => {
-        if (disposed) {
-          return
-        }
-
-        const message =
-          caughtError instanceof Error && caughtError.message.trim()
-            ? caughtError.message
-            : 'Calcolo ripartizione dati non riuscito.'
-        setDataBreakdownError(message)
-      })
-      .finally(() => {
-        if (!disposed) {
-          setDataBreakdownLoading(false)
-        }
-      })
-
-    return () => {
-      disposed = true
-    }
-  }, [
-    activeSectionId,
-    open,
-    accounts.length,
-    removingAccountId,
-    clearingAccountDataId,
-    clearingDatabaseData,
-    dataBreakdownRevision
-  ])
-
-  const clearAttachmentCopies = async (): Promise<void> => {
-    setClearingAttachmentCopies(true)
-
-    try {
-      await window.mailApi.clearAttachmentCache()
-      setDataBreakdownRevision((current) => current + 1)
-    } catch (caughtError) {
-      setDataBreakdownError(
-        caughtError instanceof Error && caughtError.message.trim()
-          ? caughtError.message
-          : 'Pulizia delle copie degli allegati non riuscita.'
-      )
-    } finally {
-      setClearingAttachmentCopies(false)
-    }
-  }
-
-  useEffect(() => {
-    if (!open || activeSectionId !== 'signatures') {
-      return
-    }
-
-    setSignatureAccountId((current) => {
-      if (current && accounts.some((account) => account.id === current)) {
-        return current
-      }
-
-      if (selectedAccountId && accounts.some((account) => account.id === selectedAccountId)) {
-        return selectedAccountId
-      }
-
-      return accounts[0]?.id ?? null
-    })
-  }, [accounts, activeSectionId, open, selectedAccountId])
-
-  useEffect(() => {
-    if (!open || activeSectionId !== 'signatures') {
-      return
-    }
-
-    let disposed = false
-    setSignaturesLoading(true)
-    setSignaturesError(null)
-    setSignaturesStatusMessage(null)
-
-    void window.mailApi
-      .listAccountSignatures()
-      .then((signatures) => {
-        if (disposed) {
-          return
-        }
-
-        const normalizedSignaturesByAccountId: Record<string, string> = {}
-
-        for (const signature of signatures) {
-          normalizedSignaturesByAccountId[signature.accountId] = signature.html
-        }
-
-        const emptyAwareDrafts: Record<string, string> = {}
-
-        for (const account of accounts) {
-          emptyAwareDrafts[account.id] = normalizedSignaturesByAccountId[account.id] ?? ''
-        }
-
-        setSignaturesByAccountId(normalizedSignaturesByAccountId)
-        setSignatureDraftsByAccountId(emptyAwareDrafts)
-      })
-      .catch((caughtError: unknown) => {
-        if (disposed) {
-          return
-        }
-
-        const message =
-          caughtError instanceof Error && caughtError.message.trim()
-            ? caughtError.message
-            : 'Caricamento firme non riuscito.'
-        setSignaturesError(message)
-      })
-      .finally(() => {
-        if (!disposed) {
-          setSignaturesLoading(false)
-        }
-      })
-
-    return () => {
-      disposed = true
-    }
-  }, [accounts, activeSectionId, open])
-
   const anyAccountMutationInFlight = Boolean(
     removingAccountId || clearingAccountDataId || clearingDatabaseData
   )
-  const selectedSignatureDraft = signatureAccountId
-    ? (signatureDraftsByAccountId[signatureAccountId] ?? '')
-    : ''
-  const selectedSavedSignature = signatureAccountId
-    ? (signaturesByAccountId[signatureAccountId] ?? '')
-    : ''
-  const selectedSignatureDirty =
-    normalizeSignatureHtmlForComparison(selectedSignatureDraft) !==
-    normalizeSignatureHtmlForComparison(selectedSavedSignature)
-  const signatureActionBlocked =
-    !signatureAccountId ||
-    anyAccountMutationInFlight ||
-    signaturesLoading ||
-    Boolean(signatureSavingAccountId)
-
-  const saveSignature = async (signatureHtmlOverride?: string): Promise<void> => {
-    if (!signatureAccountId || signatureActionBlocked) {
-      return
-    }
-
-    setSignaturesError(null)
-    setSignaturesStatusMessage(null)
-    setSignatureSavingAccountId(signatureAccountId)
-
-    try {
-      const savedSignature = await window.mailApi.setAccountSignature(
-        signatureAccountId,
-        signatureHtmlOverride ?? selectedSignatureDraft
-      )
-      const persistedHtml = savedSignature?.html ?? ''
-
-      setSignaturesByAccountId((current) => ({
-        ...current,
-        [signatureAccountId]: persistedHtml
-      }))
-      setSignatureDraftsByAccountId((current) => ({
-        ...current,
-        [signatureAccountId]: persistedHtml
-      }))
-      setSignaturesStatusMessage(persistedHtml ? 'Firma salvata.' : 'Firma rimossa.')
-    } catch (caughtError) {
-      setSignaturesError(
-        caughtError instanceof Error ? caughtError.message : 'Salvataggio firma non riuscito.'
-      )
-    } finally {
-      setSignatureSavingAccountId((current) => (current === signatureAccountId ? null : current))
-    }
-  }
-
-  const clearSignature = async (): Promise<void> => {
-    if (!signatureAccountId || signatureActionBlocked) {
-      return
-    }
-
-    setSignatureDraftsByAccountId((current) => ({
-      ...current,
-      [signatureAccountId]: ''
-    }))
-
-    await saveSignature('')
-  }
-
-  const dataSections = useMemo(() => {
-    if (!dataBreakdown) {
-      return []
-    }
-
-    const totalBytes = Math.max(0, dataBreakdown.totalBytes)
-    let accountColorIndex = 0
-
-    return dataBreakdown.sections
-      .filter((section) => section.sizeBytes > 0)
-      .map((section) => {
-        const colorClass =
-          section.kind === 'global'
-            ? GLOBAL_SEGMENT_COLOR_CLASS
-            : section.kind === 'files'
-              ? FILES_SEGMENT_COLOR_CLASS
-              : ACCOUNT_SEGMENT_COLOR_CLASSES[
-                  accountColorIndex++ % ACCOUNT_SEGMENT_COLOR_CLASSES.length
-                ] || ACCOUNT_SEGMENT_COLOR_CLASSES[0]
-
-        return {
-          ...section,
-          colorClass,
-          ratio: totalBytes > 0 ? section.sizeBytes / totalBytes : 0
-        }
-      })
-  }, [dataBreakdown])
-  /** Includes or leaves out an account at once, as every other preference applies. */
-  const setAccountIncluded = async (accountId: string, included: boolean): Promise<void> => {
-    if (!unifiedIncludedAccountIds || unifiedPreferencesSaving || anyAccountMutationInFlight) {
-      return
-    }
-
-    const next = included
-      ? [...new Set([...unifiedIncludedAccountIds, accountId])]
-      : unifiedIncludedAccountIds.filter((includedId) => includedId !== accountId)
-
-    setUnifiedPreferencesError(null)
-    setUnifiedPreferencesSaving(true)
-
-    try {
-      const saved = await window.mailApi.setUnifiedIncludedAccounts(next)
-      setUnifiedIncludedAccountIds(saved.includedAccountIds)
-      onUnifiedPreferencesChanged()
-    } catch (caughtError) {
-      setUnifiedPreferencesError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : 'Salvataggio degli account inclusi non riuscito.'
-      )
-    } finally {
-      setUnifiedPreferencesSaving(false)
-    }
-  }
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="h-[min(700px,calc(100vh-3rem))] w-[min(1000px,calc(100vw-2rem))] max-w-none gap-0 overflow-hidden p-0">
@@ -676,44 +242,51 @@ export function SettingsDialog({
             <DialogHeader className="px-2 pb-4">
               <DialogTitle className="display-title text-[17px]">Impostazioni</DialogTitle>
               <DialogDescription className="sr-only">
-                Account, preferenze, Segretario, notifiche e dati di SIEVER Mail.
+                Connessioni, Segretario, preferenze, notifiche e dati di SIEVER Mail.
               </DialogDescription>
             </DialogHeader>
-            <ul className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
-              {SETTINGS_SECTIONS.map((section) => {
-                const Icon = section.icon
-                const active = section.id === activeSectionId
+            <div className="flex min-h-0 flex-col overflow-y-auto">
+              {CORE_SETTINGS_GROUPS.map((group, index) => (
+                <Fragment key={group[0].id}>
+                  {index > 0 && <div aria-hidden className="bg-border mx-2.5 my-2 h-px" />}
+                  <ul className="flex flex-col gap-0.5">
+                    {group.map((section) => {
+                      const Icon = section.icon
+                      const active = section.id === activeSectionId
 
-                return (
-                  <li key={section.id}>
-                    <button
-                      type="button"
-                      aria-current={active ? 'page' : undefined}
-                      className={cn(
-                        'focus-visible:ring-ring/60 flex h-8 w-full items-center gap-2.5 rounded-[7px] px-2.5 text-left text-[12.5px] font-medium transition-colors outline-none focus-visible:ring-2',
-                        active
-                          ? 'bg-selected text-foreground'
-                          : 'text-muted-foreground hover:bg-hover hover:text-foreground'
-                      )}
-                      onClick={() => setActiveSectionId(section.id)}
-                    >
-                      <Icon
-                        className={cn(
-                          'size-[15px] shrink-0',
-                          active
-                            ? section.id === 'segretario'
-                              ? 'text-ai-star'
-                              : 'text-primary-text'
-                            : 'text-faint-foreground'
-                        )}
-                        strokeWidth={1.8}
-                      />
-                      <span className="min-w-0 truncate">{section.label}</span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
+                      return (
+                        <li key={section.id}>
+                          <button
+                            type="button"
+                            aria-current={active ? 'page' : undefined}
+                            className={cn(
+                              'focus-visible:ring-ring/60 flex h-8 w-full items-center gap-2.5 rounded-[7px] px-2.5 text-left text-[12.5px] font-medium transition-colors outline-none focus-visible:ring-2',
+                              active
+                                ? 'bg-selected text-foreground'
+                                : 'text-muted-foreground hover:bg-hover hover:text-foreground'
+                            )}
+                            onClick={() => setActiveSectionId(section.id)}
+                          >
+                            <Icon
+                              className={cn(
+                                'size-[15px] shrink-0',
+                                active
+                                  ? section.id === 'segretario'
+                                    ? 'text-ai-star'
+                                    : 'text-primary-text'
+                                  : 'text-faint-foreground'
+                              )}
+                              strokeWidth={1.8}
+                            />
+                            <span className="min-w-0 truncate">{section.label}</span>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </Fragment>
+              ))}
+            </div>
             <AppEdition className="text-faint-foreground mt-auto px-2 pt-3 text-[11px] leading-snug" />
           </nav>
 
@@ -747,208 +320,13 @@ export function SettingsDialog({
                 </Button>
               </div>
             ) : activeSectionId === 'preferences' ? (
-              <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-                <div className="settings-group">
-                  <p className="eyebrow">Tema</p>
-                  <p className="text-muted-foreground mt-1 text-[11px]">
-                    Aspetto dell&apos;applicazione. Con Sistema segue il tema chiaro o scuro del
-                    computer, anche quando cambia durante la giornata. Il testo dei messaggi resta
-                    su pagina bianca in entrambi, come viene scritto e ricevuto.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {THEME_OPTIONS.map((option) => {
-                      const Icon = option.icon
-                      const active = uiPreferences.themeMode === option.mode
-
-                      return (
-                        <Button
-                          key={option.mode}
-                          type="button"
-                          variant={active ? 'default' : 'outline'}
-                          size="sm"
-                          className="gap-2"
-                          aria-pressed={active}
-                          onClick={() => onUiPreferencesChange({ themeMode: option.mode })}
-                        >
-                          <Icon className="size-3.5" />
-                          {option.label}
-                        </Button>
-                      )
-                    })}
-                  </div>
-                </div>
-
-                <div className="settings-group flex flex-col">
-                  <p className="eyebrow">Layout finestra</p>
-                  <p className="text-muted-foreground mt-1 text-[11px]">
-                    Due disposizioni dello stesso spazio di lavoro. Cambiano la geometria e la
-                    densità, non le funzioni: colori, comandi e scorciatoie restano identici.
-                  </p>
-
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {LAYOUT_OPTIONS.map((option) => {
-                      const active = uiPreferences.layoutMode === option.mode
-
-                      return (
-                        <button
-                          key={option.mode}
-                          type="button"
-                          aria-pressed={active}
-                          onClick={() => onUiPreferencesChange({ layoutMode: option.mode })}
-                          className={cn(
-                            'focus-visible:ring-ring/70 flex flex-col gap-2 rounded-md border p-3 text-left transition-colors outline-none focus-visible:ring-2',
-                            active
-                              ? 'border-primary/60 bg-primary/10'
-                              : 'border-border bg-background/40 hover:bg-secondary/40'
-                          )}
-                        >
-                          <LayoutPreview mode={option.mode} active={active} />
-                          <span
-                            className={cn(
-                              'text-[12px] font-semibold',
-                              active ? 'text-primary' : 'text-foreground'
-                            )}
-                          >
-                            {option.label}
-                          </span>
-                          <span className="text-muted-foreground text-[11px]">
-                            {option.description}
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-
-                <div className="settings-group flex flex-col">
-                  <p className="eyebrow">Visualizzazione lista email</p>
-                  <p className="text-muted-foreground mt-1 text-[11px]">
-                    L&apos;ordinamento (data, mittente, oggetto) resta invariato. In modalità
-                    invertita l&apos;intera lista viene rovesciata, gruppi compresi: i messaggi più
-                    recenti stanno in fondo, la lista parte dal fondo e si scorre verso l&apos;alto
-                    per andare indietro — stile chat (iMessage, WhatsApp). Le frecce seguono
-                    l&apos;ordine che vedi.
-                  </p>
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant={uiPreferences.invertMessageListOrder ? 'outline' : 'default'}
-                      size="sm"
-                      onClick={() => onUiPreferencesChange({ invertMessageListOrder: false })}
-                    >
-                      Standard (parti dall&apos;alto)
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={uiPreferences.invertMessageListOrder ? 'default' : 'outline'}
-                      size="sm"
-                      onClick={() => onUiPreferencesChange({ invertMessageListOrder: true })}
-                    >
-                      Invertita (parti dal fondo)
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="settings-group flex flex-col">
-                  <p className="eyebrow">Raggruppamento predefinito</p>
-                  <p className="text-muted-foreground mt-1 text-[11px]">
-                    Come la lista divide i messaggi in sezioni. Automatico segue l&apos;ordinamento:
-                    per data se ordini per data, per mittente se ordini per mittente. Mittente
-                    raggruppa per mittente con qualsiasi ordinamento. Un clic sull&apos;intestazione
-                    di una sezione ne seleziona tutti i messaggi.
-                  </p>
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {GROUPING_OPTIONS.map((option) => (
-                      <Button
-                        key={option.mode}
-                        type="button"
-                        variant={
-                          uiPreferences.messageGrouping === option.mode ? 'default' : 'outline'
-                        }
-                        size="sm"
-                        onClick={() => onUiPreferencesChange({ messageGrouping: option.mode })}
-                      >
-                        {option.label}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="settings-group flex flex-col">
-                  <p className="eyebrow">Tutti gli account</p>
-                  <p className="text-muted-foreground mt-1 text-[11px]">
-                    Gli account che la sezione «Tutti gli account» della barra laterale riunisce:
-                    per ciascuno la Posta in arrivo, la Posta inviata, le Bozze, l&apos;Archivio, lo
-                    Spam e il Cestino, in un unico elenco. Un account escluso resta consultabile
-                    dalla sua sezione.
-                  </p>
-
-                  {accounts.length < 2 ? (
-                    <div className="border-border text-muted-foreground mt-3 rounded-md border border-dashed px-3 py-3 text-[12px]">
-                      La sezione compare quando gli account collegati sono almeno due.
-                    </div>
-                  ) : (
-                    <div className="mt-3 flex flex-col gap-2">
-                      {unifiedIncludedAccountIds === null && !unifiedPreferencesError ? (
-                        <div className="text-muted-foreground flex items-center gap-2 rounded-md border border-dashed px-3 py-3 text-[12px]">
-                          <LoaderCircle className="size-4 animate-spin" />
-                          Caricamento degli account inclusi…
-                        </div>
-                      ) : (
-                        accounts.map((account) => {
-                          const included = unifiedIncludedAccountIds?.includes(account.id) ?? false
-                          const switchId = `unified-account-${account.id}`
-
-                          return (
-                            <label
-                              key={switchId}
-                              htmlFor={switchId}
-                              className="bg-hover flex cursor-pointer items-center justify-between gap-3 rounded-md px-3 py-2"
-                            >
-                              <span className="min-w-0">
-                                <span className="block truncate text-[12px] font-medium">
-                                  {account.displayName || account.email}
-                                </span>
-                                <span className="text-muted-foreground block truncate text-[11px]">
-                                  {account.email}
-                                </span>
-                              </span>
-
-                              <Switch
-                                id={switchId}
-                                checked={included}
-                                disabled={
-                                  unifiedIncludedAccountIds === null ||
-                                  unifiedPreferencesSaving ||
-                                  anyAccountMutationInFlight
-                                }
-                                onCheckedChange={(checked) =>
-                                  void setAccountIncluded(account.id, checked)
-                                }
-                                aria-label={`Includi ${account.email} in Tutti gli account`}
-                              />
-                            </label>
-                          )
-                        })
-                      )}
-
-                      {unifiedIncludedAccountIds?.length === 0 && (
-                        <div className="text-muted-foreground rounded-md border border-dashed px-3 py-2 text-[12px]">
-                          Nessun account incluso: la sezione «Tutti gli account» non compare.
-                        </div>
-                      )}
-
-                      {unifiedPreferencesError && (
-                        <div className="text-destructive-soft-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
-                          {unifiedPreferencesError}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
+              <PreferencesSection
+                preferences={uiPreferences}
+                onChange={onUiPreferencesChange}
+                accounts={accounts}
+                busy={anyAccountMutationInFlight}
+                onUnifiedChanged={onUnifiedPreferencesChanged}
+              />
             ) : activeSectionId === 'segretario' ? (
               <SegretarioSection onEnableAi={onEnableAi} />
             ) : activeSectionId === 'memoria' ? (
@@ -961,292 +339,21 @@ export function SettingsDialog({
                 onChange={(shortcutOverrides) => onUiPreferencesChange({ shortcutOverrides })}
               />
             ) : activeSectionId === 'data' ? (
-              <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-                <div className="settings-group">
-                  <p className="eyebrow">Spazio occupato</p>
-                  <p className="mt-1 text-[14px] font-semibold">
-                    {formatMegabytes(dataBreakdown?.totalBytes ?? 0)}
-                  </p>
-                </div>
-
-                <div className="settings-group flex flex-col">
-                  {dataBreakdownLoading ? (
-                    <div className="text-muted-foreground flex items-center gap-2 py-6 text-[12px]">
-                      <LoaderCircle className="size-4 animate-spin" />
-                      Calcolo ripartizione dati...
-                    </div>
-                  ) : dataBreakdownError ? (
-                    <div className="text-destructive-soft-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
-                      {dataBreakdownError}
-                    </div>
-                  ) : dataSections.length === 0 ? (
-                    <div className="text-muted-foreground py-6 text-[12px]">
-                      Nessun dato disponibile da visualizzare.
-                    </div>
-                  ) : (
-                    <>
-                      <div className="bg-muted/45 flex h-8 w-full overflow-hidden rounded-md">
-                        {dataSections.map((section) => (
-                          <Tooltip key={section.id}>
-                            <TooltipTrigger asChild>
-                              <div
-                                className={cn(
-                                  'h-full transition-opacity hover:opacity-90',
-                                  section.colorClass
-                                )}
-                                style={{ width: `${Math.max(0, section.ratio * 100)}%` }}
-                                aria-label={`${section.label}: ${formatMegabytes(section.sizeBytes)}`}
-                              />
-                            </TooltipTrigger>
-                            <TooltipContent side="top">
-                              {section.label}: {formatMegabytes(section.sizeBytes)}
-                            </TooltipContent>
-                          </Tooltip>
-                        ))}
-                      </div>
-
-                      <div className="mt-3 space-y-2">
-                        {dataSections.map((section) => (
-                          <div
-                            key={`legend-${section.id}`}
-                            className="bg-hover flex items-center justify-between gap-3 rounded-md px-3 py-2 text-[12px]"
-                          >
-                            <div className="flex min-w-0 items-center gap-2">
-                              <span
-                                className={cn('size-2.5 shrink-0 rounded-full', section.colorClass)}
-                              />
-                              <span className="truncate">{section.label}</span>
-                            </div>
-                            <div className="flex shrink-0 items-center gap-2">
-                              <span className="text-muted-foreground">
-                                {formatMegabytes(section.sizeBytes)}
-                              </span>
-                              {section.kind === 'files' && (
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 px-2 text-[11px]"
-                                  disabled={clearingAttachmentCopies}
-                                  onClick={() => void clearAttachmentCopies()}
-                                >
-                                  {clearingAttachmentCopies && (
-                                    <LoaderCircle className="size-3 animate-spin" />
-                                  )}
-                                  Svuota
-                                </Button>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                <div className="settings-group">
-                  <p className="eyebrow">Cancella dati per account</p>
-                  <p className="text-muted-foreground mt-1 text-[11px]">
-                    Reimposta a zero i dati locali di un singolo account mantenendo il login attivo.
-                    La posta si scarica di nuovo, come alla prima connessione.
-                  </p>
-                  {accounts.length === 0 ? (
-                    <div className="border-border text-muted-foreground mt-3 rounded-md border border-dashed px-3 py-3 text-[12px]">
-                      Nessun account collegato.
-                    </div>
-                  ) : (
-                    <div className="mt-3 space-y-2">
-                      {accounts.map((account) => (
-                        <div
-                          key={`clear-${account.id}`}
-                          className="bg-hover flex items-center justify-between gap-3 rounded-md px-3 py-2"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-[12px] font-medium">
-                              {account.displayName}
-                            </p>
-                            <p className="text-muted-foreground truncate text-[11px]">
-                              {account.email}
-                            </p>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="text-destructive hover:text-destructive shrink-0 gap-1.5"
-                            disabled={anyAccountMutationInFlight}
-                            onClick={() =>
-                              void confirm({
-                                title: `Cancellare i dati di ${account.email}?`,
-                                description:
-                                  "Email, cartelle e copie degli allegati di questo account vengono tolte dal computer. L'account resta collegato e la posta si scarica di nuovo, come alla prima connessione.",
-                                confirmLabel: 'Cancella dati',
-                                destructive: true
-                              }).then((confirmed) => confirmed && onClearAccountData(account.id))
-                            }
-                          >
-                            {clearingAccountDataId === account.id ? (
-                              <LoaderCircle className="size-3.5 animate-spin" />
-                            ) : (
-                              <Trash2 className="size-3.5" />
-                            )}
-                            Cancella
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <DiagnosticsGroup aiOn={aiOn} />
-
-                <div className="border-destructive/35 bg-destructive/5 rounded-md border p-3">
-                  <p className="eyebrow">Azione nucleare</p>
-                  <p className="text-muted-foreground mt-1 text-[11px]">
-                    {LOCAL_DATA_DESCRIPTION} Gli account restano collegati e la posta si scarica di
-                    nuovo, per ognuno in parallelo.
-                  </p>
-                  <div className="mt-3">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="destructive"
-                      className="gap-2"
-                      disabled={clearingDatabaseData || anyAccountMutationInFlight}
-                      onClick={() =>
-                        void confirm({
-                          title: 'Cancellare tutti i dati locali?',
-                          description: `${LOCAL_DATA_DESCRIPTION} Gli account restano collegati e la posta si scarica di nuovo.`,
-                          confirmLabel: 'Cancella tutto',
-                          destructive: true
-                        }).then((confirmed) => confirmed && onClearDatabaseData())
-                      }
-                    >
-                      {clearingDatabaseData ? (
-                        <LoaderCircle className="size-4 animate-spin" />
-                      ) : (
-                        <Trash2 className="size-4" />
-                      )}
-                      Elimina tutti i dati
-                    </Button>
-                  </div>
-                </div>
-              </div>
+              <DataSection
+                aiOn={aiOn}
+                clearingMailboxId={clearingAccountDataId}
+                clearingAll={clearingDatabaseData}
+                busy={anyAccountMutationInFlight}
+                onClearMailbox={onClearAccountData}
+                onClearAll={onClearDatabaseData}
+                onOpenSegretario={() => setActiveSectionId('segretario')}
+              />
             ) : activeSectionId === 'signatures' ? (
-              <div className="mt-3 flex min-h-0 flex-1 flex-col gap-2.5">
-                {accounts.length === 0 ? (
-                  <div className="border-border text-muted-foreground rounded-md border border-dashed px-3 py-4 text-[12px]">
-                    Collega almeno un account per configurare le firme.
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-                      <div>
-                        <p className="text-muted-foreground mb-1 text-[11px] tracking-[0.08em] uppercase">
-                          Account
-                        </p>
-                        <Select
-                          value={signatureAccountId ?? undefined}
-                          onValueChange={(nextAccountId) => {
-                            setSignatureAccountId(nextAccountId)
-                            setSignaturesError(null)
-                            setSignaturesStatusMessage(null)
-                          }}
-                          disabled={signaturesLoading || anyAccountMutationInFlight}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Seleziona account" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {accounts.map((account) => (
-                              <SelectItem key={account.id} value={account.id}>
-                                {account.displayName || account.email}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="gap-2"
-                          disabled={
-                            signatureActionBlocked ||
-                            !normalizeSignatureHtmlForComparison(selectedSignatureDraft)
-                          }
-                          onClick={() => void clearSignature()}
-                        >
-                          {signatureSavingAccountId === signatureAccountId ? (
-                            <LoaderCircle className="size-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="size-4" />
-                          )}
-                          Rimuovi firma
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="gap-2"
-                          disabled={signatureActionBlocked || !selectedSignatureDirty}
-                          onClick={() => void saveSignature()}
-                        >
-                          {signatureSavingAccountId === signatureAccountId ? (
-                            <LoaderCircle className="size-4 animate-spin" />
-                          ) : (
-                            <Save className="size-4" />
-                          )}
-                          Salva firma
-                        </Button>
-                      </div>
-                    </div>
-
-                    {signaturesLoading ? (
-                      <div className="text-muted-foreground flex min-h-0 flex-1 items-center gap-2 rounded-md border border-dashed px-3 py-4 text-[12px]">
-                        <LoaderCircle className="size-4 animate-spin" />
-                        Caricamento firme...
-                      </div>
-                    ) : (
-                      <div className="min-h-0 flex-1">
-                        <RichTextEditor
-                          value={selectedSignatureDraft}
-                          placeholder="Scrivi la firma per questo account..."
-                          disabled={!signatureAccountId || anyAccountMutationInFlight}
-                          showExpandToggle={false}
-                          // Without this the editor keeps its natural height
-                          // and spills past the section's rounded border, so
-                          // the signature ran into the panel's bottom edge.
-                          expandToContainer
-                          onChange={(html) => {
-                            if (!signatureAccountId) {
-                              return
-                            }
-
-                            setSignatureDraftsByAccountId((current) => ({
-                              ...current,
-                              [signatureAccountId]: html
-                            }))
-                          }}
-                        />
-                      </div>
-                    )}
-
-                    {signaturesError && (
-                      <div className="text-destructive-soft-foreground border-destructive/35 bg-destructive/10 rounded-md border px-3 py-2 text-[12px]">
-                        {signaturesError}
-                      </div>
-                    )}
-
-                    {signaturesStatusMessage && !signaturesError && (
-                      <div className="bg-hover text-muted-foreground rounded-md px-3 py-2 text-[12px]">
-                        {signaturesStatusMessage}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
+              <SignaturesSection
+                accounts={accounts}
+                selectedAccountId={selectedAccountId}
+                busy={anyAccountMutationInFlight}
+              />
             ) : activeSectionId === 'extension' ? (
               <ExtensionSection />
             ) : (
@@ -1257,7 +364,6 @@ export function SettingsDialog({
           </section>
         </div>
       </DialogContent>
-      {confirmDialog}
     </Dialog>
   )
 }

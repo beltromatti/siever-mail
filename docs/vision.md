@@ -505,7 +505,7 @@ Un principio di tutto il prodotto:
   - IMAP: cartella `\Archive`, oppure la crea come fanno Thunderbird e Apple Mail;
   - Microsoft: la cartella Archivio.
   - Un messaggio già archiviato non si sposta.
-  - "Tutti gli account" archivia ogni messaggio nel suo account.
+  - «Tutte le caselle» archivia ogni messaggio nella sua casella.
 - **L'app pubblica non ha un «salva su disco».** Un salvataggio come quello di Siever è il modo di lavorare di un'organizzazione — le sue cartelle, i suoi nomi, gli allegati spacchettati, la PEC aperta — e non un «salva con nome» che servirebbe a tutti: non sono nemmeno la stessa cosa. Se un giorno un salvataggio servirà a tutti, sarà un'altra funzione, pensata con l'app File.
 
 ### 6.3 I segni di un'estensione
@@ -802,7 +802,7 @@ Da lì li trova da solo (`cerca_file` sulla radice). Così con un'estensione e s
 - `modifica` e `inserisci` si applicano se il testo da cambiare c'è ancora. È una patch che si fonde da sola con le modifiche degli altri.
 - `scrivi` su una nota cambiata dopo che questa esecuzione l'ha letta torna come conflitto, con la versione nuova.
 
-**Ogni versione si conserva** (`ai_memory_history`), con l'esecuzione o l'utente che l'ha scritta. Nelle impostazioni si può vedere e ripristinare.
+**Ogni versione si conserva** (`ai_memory_history`), con l'esecuzione o l'utente che l'ha scritta. Nelle Impostazioni (Cosa so di te) l'utente la vede, la corregge e la ripristina; non la cancella da lì: dimenticare è «Dimentica tutto», con tutto il resto del lavoro del Segretario (§12.1, §13.2).
 
 **Apprendimento continuo** (tramite la memoria, non sui pesi del modello). Diventano lezioni:
 
@@ -842,7 +842,7 @@ Una fonte nuova porta la sua famiglia.
 - "gli eventi del calcio arrivano da Fubles sulla posta personale";
 - "l'archivio dei progetti è il volume di rete Archivio".
 
-Quando il Segretario crea un evento da una conversazione, sceglie il calendario giusto con questa conoscenza. L'interfaccia, per gli eventi creati a mano, ha un calendario predefinito.
+Quando il Segretario crea un evento da una conversazione, sceglie il calendario giusto con questa conoscenza. L'interfaccia, per gli eventi creati a mano, ha un calendario predefinito: il principale, o quello che l'utente sceglie in Impostazioni › Preferenze.
 
 **Una persona per installazione.** L'utente può avere molte connessioni, anche di altri (una casella condivisa, la posta di un ente che gestisce). Chi scrive da dove lo dice la memoria.
 
@@ -913,8 +913,8 @@ Una connessione lascia due cose diverse, e ognuna se ne va a modo suo: i suoi **
   - la sincronizzazione continua uguale.
 - **Spegnere:**
   - ferma ogni lavoro AI;
-  - **conserva** i dati;
-  - nelle impostazioni si possono cancellare.
+  - **conserva** i dati: riaccese, le funzioni AI ritrovano ciò che il Segretario sapeva.
+- **«Dimentica tutto»** (Impostazioni › Segretario, e dentro «Elimina tutti i dati»): **come se le funzioni AI non fossero mai state accese.** Prima si spengono, e ogni esecuzione si ferma e finisce di scrivere; poi se ne va tutto ciò che il Segretario tiene — memoria, note, segni di lettura, avvisi, cose aperte, progetti, risposte pronte, proposte, diario, spese — e la chiave; e di ciò che è dell'app, quello che aveva senso solo con lui: le notifiche che prendono la sua parola tornano come le trova un primo avvio, e le sue notifiche di una volta sola (la preparazione finita, la giornata pronta) si possono dare di nuovo. Riaccese, si riparte dalla procedura guidata, dalla chiave. Restano dov'è ciò che il Segretario ha fatto nel mondo: gli eventi nei calendari, le bozze e la posta sui server, i segni di un'estensione sui messaggi (§6.3), le scelte dell'utente sui calendari.
 - **Accese o spente, mai «in pausa».** Credito OpenRouter finito o chiave rifiutata — una richiesta qualunque rifiutata, o il controllo periodico che lo trova — spengono l'AI in quell'istante, come se l'utente togliesse la spunta: SIEVER Mail torna la versione senza AI. Un popup lo dice e spiega come tornare (resta finché non si vede: anche dopo un riavvio, e con la finestra in secondo piano anche una notifica di sistema, §13.3). Per riaccendere: ricaricare il credito, poi riattivare la spunta, che passa dalla procedura guidata; il passo «Segretario» non riaccende finché il credito non risulta cresciuto (OpenRouter rifiuta prima che il credito segni zero), e chiede un'altra chiave se è stata rifiutata.
 - **Credito basso, per tempo:** un popup quando il credito copre meno di una settimana al ritmo degli ultimi sette giorni (almeno 1 $), un altro sotto i due giorni (almeno 0,30 $); uno per discesa, di nuovo dopo una ricarica. Il credito si riguarda ogni 20 minuti e ogni volta che si è speso un decimo di quello che restava.
 - **Nel codice ogni funzione resta separata e rimovibile:** strumenti e compiti sono moduli. Per ora non ci sono interruttori singoli: uno solo, chiaro.
@@ -1008,12 +1008,29 @@ Il giallo c'è perché «la rete è caduta» e «la password è cambiata» non s
 
 ### 13.2 Le Impostazioni
 
-Le sezioni, nella colonna a sinistra: **Connessioni** (§11.3), **Preferenze**, **Segretario**, **Cosa so di te** (la memoria, §10), **Notifiche**, **Scorciatoie**, **Dati**, **Firme**, **Estensione**; poi le schede di un'estensione installata, se ne porta.
+Le pagine, nella colonna a sinistra, in tre gruppi separati da una linea sottile, come le app nella barra (§13.1):
 
-- **Estensione** dice quale estensione è installata — il suo nome, che cosa aggiunge, il suo identificativo, la versione dell'app — e che cos'è un'estensione; senza, che questa è l'edizione per tutti e che per averne una si contattano gli sviluppatori (§1).
+1. **che cosa SIEVER Mail è per l'utente:** **Connessioni** (§11.3), **Segretario**, **Cosa so di te** (la memoria, §10) — ciò che raggiunge, e se l'intelligenza lavora per lui;
+2. **come si presenta e si comporta:** **Preferenze**, **Notifiche**, **Scorciatoie**, **Firme** — ognuna fatta come Notifiche: prima ciò che è di SIEVER Mail, poi un gruppo per app, nell'ordine della barra; un'app senza connessioni non ha niente da scegliere, e non compare;
+3. **ciò che tiene, e di chi è l'edizione:** **Dati**, **Estensione**, poi le pagine di un'estensione installata, se ne porta.
+
+Tutte sono fatte degli stessi pezzi (`components/ui/settings`): un gruppo con il suo titolo e una riga su che cosa serve, e le sue righe — un interruttore, una scelta tra poche cose in vista, un menu, un'azione — a destra di ciò che regolano. Un'estensione usa gli stessi, così la sua pagina è una delle altre.
+
+- **Segretario** comincia dall'interruttore (§12.1), che è ciò che fa di SIEVER Mail un insieme di app o un sistema intelligente: acceso, il Segretario lavora per l'utente; spento, ci sono le app; accenderlo passa dalla procedura guidata. Sotto, la chiave OpenRouter e il credito, la spesa, la riservatezza. In fondo **«Dimentica tutto»**, finché il Segretario tiene qualcosa (anche solo la chiave): come se non fosse mai stato acceso — §12.1. Senza la chiave l'interruttore è giù anche se era su, e riaccenderlo passa dalla procedura, che la chiede. Del suo lavoro non conta i messaggi letti: la posta è una delle fonti, e quel numero non serve all'utente.
+- **Cosa so di te** mostra Conoscimi, connessione per connessione, e le note della memoria: si leggono, si correggono, si ripristinano dalla loro storia. Non si cancellano da qui, né una né tutte: una memoria cancellata sotto il resto del lavoro del Segretario sarebbe un Segretario che sa meno di ciò che ha fatto. Ricominciare è «Dimentica tutto».
+- **Preferenze:** di SIEVER Mail, l'aspetto e l'apertura all'accesso al computer (sui sistemi che lo permettono: così le notifiche e il Segretario ci sono da subito); della Posta, la disposizione, l'ordine e il raggruppamento dell'elenco, la dimensione dei messaggi, le caselle che «Tutte le caselle» riunisce; del Calendario, il calendario dei nuovi eventi (di base il principale) e la loro durata.
 - **Notifiche** dice che cosa interrompe l'utente, app per app, e il numero sull'icona (§13.3).
-- **Dati** dice quanto occupa ogni cosa sul computer e la toglie; in fondo, la diagnostica: che cosa tiene, e l'esportazione da mandare (§14.4).
+- **Scorciatoie** le elenca app per app: quelle di SIEVER Mail (cercare, il Segretario, le Impostazioni), della Posta, del Calendario; le scorciatoie di un'estensione stanno con la sua app.
+- **Firme** è della Posta: la firma di ogni casella.
+- **Dati** dice ciò che SIEVER Mail tiene sul computer, di chi è, e che cosa se ne toglie:
+  - **una riga per connessione, alla pari** — ogni casella, ogni calendario —, con la parte che il Segretario ne tiene (le note, i segni di lettura, le cose aperte di quella connessione); poi **il Segretario** (la memoria, i progetti, il diario e le conversazioni), **ciò che è comune a tutte le app** (la rubrica, le preferenze, i file recenti), **l'estensione** (le sue tabelle, che portano il suo nome, §15.4), **le copie degli allegati**, la diagnostica. I byte sono quelli che SQLite dice di ogni tabella, divisi tra le connessioni per righe; una tabella vuota è struttura dell'app. Del Segretario non si mostra niente se non c'è niente;
+  - **che cosa si toglie:** la posta di una casella, che si scarica di nuovo dal server (restano il collegamento, la firma, le bozze e ciò che il Segretario ne sa: le chiavi dei messaggi non cambiano); le copie degli allegati; ciò che tiene il Segretario, dalla sua pagina; tutto, con «Elimina tutti i dati». Un calendario non si svuota da solo: è uno specchio leggero del server, e rileggerlo tutto non libera niente che conti;
+  - **«Elimina tutti i dati»** toglie la posta e i calendari, la rubrica, le firme, le bozze con i loro file, i file recenti, le copie degli allegati, ciò che tiene l'estensione (`clearData`), e fa «Dimentica tutto». Restano le connessioni e le preferenze — anche quelle di ogni calendario: nascosto, di chi sono i suoi eventi —, e posta e calendari si scaricano di nuovo; un calendario riletto così è letto per la prima volta, che non è un cambiamento e non avvisa di niente (§7.2);
+  - in fondo, la diagnostica: che cosa tiene, e l'esportazione da mandare (§14.4).
+- **Estensione** dice quale estensione è installata — il suo nome, che cosa aggiunge, il suo identificativo, la versione dell'app — e che cos'è un'estensione; senza, che questa è l'edizione per tutti e che per averne una si contattano gli sviluppatori (§1).
 - **In fondo alla colonna**, sempre: «SIEVER Mail» e la versione (in sviluppo 0.0.0: la versione vera la scrive la build), e sotto il nome dell'estensione, se c'è; le stesse parole del marchio nella barra (§13.1).
+
+**Le parole.** Una casella è una casella, non un «account»: le connessioni sono alla pari, e l'«account» era il nome del client di posta che SIEVER Mail non è più.
 
 ### 13.3 Le notifiche
 
@@ -1307,3 +1324,4 @@ Gli agganci nell'interfaccia oggi sono della Posta, perché è lì che il primo 
 21. **La diagnostica (§14.4):** un registro strutturato e locale per tutta l'app, alla pari per ogni app, per il Segretario e per un'estensione — errori, stato, uso, con la causalità nei campi comuni (chi, quale esecuzione, quale connessione, quanto) —, mai un segreto né un contenuto. Esce solo con l'esportazione dell'utente: uno zip che si legge da solo, con le sessioni intere del Segretario se l'utente le include.
 22. **Le notifiche (§13.3):** un'interruzione, spesa solo quando saperlo adesso cambia ciò che l'utente fa. Un centro solo per tutte le app alla pari, il Segretario e SIEVER Mail, con le stesse regole: una per cosa, ritirata quando non è più vera, il clic che porta dove serve, davanti o dietro la finestra con una regola sola. Il Segretario filtra le novità, non le sveglie: decide l'interruzione (`avvisa`, uno strumento suo, di chi guarda la cosa mentre arriva o cambia) con la misura dell'utente, che tiene in memoria; il sistema la garantisce (dieci minuti, poi si dice com'è). Senza AI, o con l'AI ma senza «solo ciò che il Segretario ti segnala», le notifiche sono classiche: tutto, e ciò che arriva ad app chiusa una per casella o calendario. Il calendario ricorda gli eventi dell'utente — di chi è un calendario e di chi un evento (§7.4), per qualunque modo di organizzarsi — ai tempi che ognuno tiene, e con l'anticipo scelto quelli che non ne dicono; il numero sull'icona dice ciò che aspetta l'utente oggi.
 23. **Segno, nota, avviso, revisione (§4.2, §4.6, §13.3):** che una cosa sia stata guardata lo dice il sistema, con un segno per ogni unità di cambiamento — un messaggio letto, un cambiamento del calendario —, messo quando il lavoro che l'aveva finisce bene; la nota è ciò che il Segretario ne ha capito, con la forma della cosa — di un messaggio sempre, di un evento quando la merita —, e la scrive chiunque lavori su quella cosa; l'avviso è un'azione (`avvisa`), di chi guarda la cosa mentre arriva o cambia, una volta, e resta con la cosa; nessuno scrive sopra ciò che non ha visto com'è (cambiato, comparso, mai visto): torna un conflitto che lo mostra, e il modello ci ripensa.
+24. **Le Impostazioni (§13.2):** tre gruppi di pagine come la barra — che cosa SIEVER Mail è per l'utente (Connessioni, Segretario, Cosa so di te), come si presenta e si comporta, app per app (Preferenze, Notifiche, Scorciatoie, Firme), ciò che tiene (Dati, Estensione e le pagine di un'estensione) —, fatte degli stessi pezzi. L'interruttore del Segretario in cima alla sua pagina; «Dimentica tutto», come se non fosse mai stato acceso, chiave compresa (§12.1); la memoria si corregge, non si cancella a pezzi. Dati mostra ogni connessione alla pari con la parte del Segretario, il Segretario, ciò che è comune, l'estensione, i file, e toglie la posta di una casella, le copie degli allegati, o tutto — connessioni e preferenze escluse.

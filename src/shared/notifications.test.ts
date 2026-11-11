@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { DEFAULT_NOTIFICATION_PREFERENCES, notificationPreferencesOf } from './notifications'
+import {
+  DEFAULT_NOTIFICATION_PREFERENCES,
+  notificationPreferencesOf,
+  withoutSegretario
+} from './notifications'
 
 describe('the notifications’ preferences', () => {
   it('takes the defaults for what is not there or not well formed', () => {
@@ -43,5 +47,28 @@ describe('the notifications’ preferences', () => {
     expect(
       notificationPreferencesOf({ calendar: { defaultLead: null } }).calendar.defaultLead
     ).toBe(null)
+  })
+})
+
+describe('the notifications after «Dimentica tutto»', () => {
+  it('give up only what the Segretario meant, as a first start finds it; the rest is the user’s', () => {
+    const chosen = {
+      ...DEFAULT_NOTIFICATION_PREFERENCES,
+      sound: false,
+      badge: 'unread' as const,
+      mail: { enabled: true, onlyFlagged: false, mutedAccountIds: ['casa'] },
+      calendar: { reminders: false, defaultLead: 30, changes: true, onlyFlagged: false },
+      segretario: { needsYou: false, day: false }
+    }
+
+    expect(withoutSegretario(chosen)).toEqual({
+      ...chosen,
+      badge: DEFAULT_NOTIFICATION_PREFERENCES.badge,
+      mail: { enabled: true, onlyFlagged: true, mutedAccountIds: ['casa'] },
+      calendar: { reminders: false, defaultLead: 30, changes: true, onlyFlagged: true },
+      segretario: DEFAULT_NOTIFICATION_PREFERENCES.segretario
+    })
+    // No number on the icon stays none.
+    expect(withoutSegretario({ ...chosen, badge: 'none' }).badge).toBe('none')
   })
 })

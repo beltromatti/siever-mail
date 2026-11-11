@@ -30,10 +30,11 @@ const REJECTION_MESSAGES: Record<Exclude<ShortcutValidation, { ok: true }>['reas
 }
 
 const GROUP_ORDER: ReadonlyArray<CommandGroup> = [
+  'app',
   'messages',
   'navigation',
   'writing',
-  'view',
+  'reading',
   'calendar'
 ]
 
@@ -171,7 +172,7 @@ export function ShortcutsSection({
 
       <div className="bg-hover rounded-md">
         <p className="text-muted-foreground border-border/60 border-b px-3 py-2 text-[11px] tracking-[0.08em] uppercase">
-          Sempre disponibili
+          Posta · Tasti fissi
         </p>
         <ul className="divide-border/50 divide-y">
           {FIXED_KEYS.map((entry) => (

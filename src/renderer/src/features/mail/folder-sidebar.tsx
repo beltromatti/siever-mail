@@ -475,8 +475,8 @@ export function FolderSidebar({
           )}
 
           {unifiedFolders.length > 0 && (
-            <section aria-label="Tutti gli account">
-              <SectionHeading>Tutti gli account</SectionHeading>
+            <section aria-label="Tutte le caselle">
+              <SectionHeading>Tutte le caselle</SectionHeading>
               {unifiedFolders.map((summary) => {
                 const path = unifiedFolderPath(summary.role)
 

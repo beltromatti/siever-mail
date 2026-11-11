@@ -1,4 +1,4 @@
-import { shell, type BrowserWindow } from 'electron'
+import { app, shell, type BrowserWindow } from 'electron'
 import { z } from 'zod'
 
 import { popupPageContextMenu } from '@main/context-menu'
@@ -22,10 +22,33 @@ import type {
   MoveMessagesToRoleInput,
   RenameFolderInput,
   SetMessagesKeywordInput,
+  OpenAtLogin,
   UiPreferences
 } from '@shared/models'
 
 const log = diagnostics('mail')
+
+/**
+ * Whether SIEVER Mail opens as the user signs in: the system's login items,
+ * which macOS and Windows let an app set. Only the installed app: from
+ * development it would be Electron that opened.
+ */
+function openAtLogin(): OpenAtLogin {
+  const supported =
+    app.isPackaged && (process.platform === 'darwin' || process.platform === 'win32')
+
+  if (!supported) {
+    return { supported, enabled: false, needsApproval: false }
+  }
+
+  const settings = app.getLoginItemSettings()
+  // macOS may hold a login item until the user allows it in its own settings.
+  return {
+    supported,
+    enabled: settings.openAtLogin,
+    needsApproval: settings.status === 'requires-approval'
+  }
+}
 
 /** A channel of the shell: the window, the storage, the sign-ins. */
 function registerHandler<Args extends unknown[], ReturnValue>(
@@ -78,6 +101,17 @@ export function registerMailIpc(
   registerDataHandler(IPC_CHANNELS.setUiPreferences, async (preferences) =>
     mailService.setUiPreferences(preferences as UiPreferences)
   )
+
+  registerDataHandler(IPC_CHANNELS.getOpenAtLogin, async () => openAtLogin())
+
+  registerDataHandler(IPC_CHANNELS.setOpenAtLogin, async (enabled) => {
+    if (openAtLogin().supported) {
+      app.setLoginItemSettings({ openAtLogin: enabled === true })
+      diagnostics('app').info('settings.open-at-login', { enabled: enabled === true })
+    }
+
+    return openAtLogin()
+  })
 
   registerDataHandler(
     IPC_CHANNELS.addGoogleAccount,
@@ -283,9 +317,7 @@ export function registerMailIpc(
     return mailService.setAccountSignature(accountId, html)
   })
 
-  registerDataHandler(IPC_CHANNELS.getDataStorageBreakdown, async () => {
-    return mailService.getDataStorageBreakdown()
-  })
+  registerDataHandler(IPC_CHANNELS.getDataStorageBreakdown, async () => workspace.dataStorage())
 
   registerDataHandler(IPC_CHANNELS.clearAccountData, async (accountId: string) => {
     await mailService.clearAccountData(accountId)

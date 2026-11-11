@@ -1,9 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronRight, History, LoaderCircle, RotateCcw, Trash2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ChevronRight, History, LoaderCircle, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@renderer/components/ui/button'
-import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
+import {
+  ActionRow,
+  SettingsEmpty,
+  SettingsGroup,
+  SettingsLoading,
+  SettingsNotice,
+  SettingsPage
+} from '@renderer/components/ui/settings'
 import { Textarea } from '@renderer/components/ui/textarea'
 import { cn } from '@renderer/lib/utils'
 import type { ConnectionLearning, MemoryNote, MemoryVersion } from '@shared/segretario'
@@ -48,12 +55,10 @@ function errorText(error: unknown): string | undefined {
 function NoteRow({
   note,
   onSave,
-  onDelete,
   onRestore
 }: {
   note: MemoryNote
   onSave: (content: string) => Promise<void>
-  onDelete: () => Promise<void>
   onRestore: (revision: number) => Promise<void>
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
@@ -142,16 +147,6 @@ function NoteRow({
               <History className="size-3.5" />
               {versions ? 'Nascondi la storia' : 'Storia'}
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-destructive"
-              disabled={saving}
-              onClick={() => void onDelete()}
-            >
-              <Trash2 className="size-3.5" />
-              Dimentica questa nota
-            </Button>
           </div>
           {versions && (
             <ul className="flex flex-col gap-1 border-t pt-2">
@@ -192,9 +187,11 @@ function NoteRow({
 /**
  * Impostazioni › Cosa so di te: how far the Segretario knows each
  * connection — Conoscimi, to be done again when the user wants — and its
- * notes: every one readable, correctable, restorable to an earlier
- * version and deletable, because what it believes about the user is the
- * user's to see.
+ * notes: every one readable, correctable and restorable to an earlier
+ * version, because what it believes about the user is the user's to see.
+ * Nothing is forgotten from here: half a memory over the rest of its work
+ * would be a Segretario that knows less than what it did, and to start
+ * again is «Dimentica tutto», in Segretario (§10, §12.1).
  */
 export function MemorySection({
   onRedoConoscimi
@@ -205,23 +202,25 @@ export function MemorySection({
   const [learning, setLearning] = useState<ConnectionLearning[] | null>(null)
   const [notes, setNotes] = useState<MemoryNote[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const { confirm, dialog: confirmDialog } = useConfirmDialog()
   const reloadTimer = useRef<number | null>(null)
 
-  const reload = useCallback(async (): Promise<void> => {
-    const [storedLearning, storedNotes] = await Promise.all([
-      window.segretarioApi.listLearning(),
-      window.segretarioApi.listMemory()
-    ])
-    setLearning(storedLearning)
-    setNotes(storedNotes)
-  }, [])
-
   useEffect(() => {
-    reload().catch((error: unknown) =>
-      setLoadError(errorText(error) ?? 'Impossibile leggere la memoria del Segretario.')
-    )
+    let current = true
+    const load = (): Promise<void> =>
+      Promise.all([window.segretarioApi.listLearning(), window.segretarioApi.listMemory()]).then(
+        ([storedLearning, storedNotes]) => {
+          if (current) {
+            setLearning(storedLearning)
+            setNotes(storedNotes)
+          }
+        }
+      )
+
+    load().catch((error: unknown) => {
+      if (current) {
+        setLoadError(errorText(error) ?? 'Impossibile leggere la memoria del Segretario.')
+      }
+    })
 
     // While it works, its notes change: the page follows, a moment after.
     const unsubscribe = window.segretarioApi.onActivityEvent((event) => {
@@ -235,83 +234,41 @@ export function MemorySection({
 
       reloadTimer.current = window.setTimeout(() => {
         reloadTimer.current = null
-        void reload().catch(() => undefined)
+        void load().catch(() => undefined)
       }, 800)
     })
 
     return () => {
+      current = false
       unsubscribe()
 
       if (reloadTimer.current !== null) {
         window.clearTimeout(reloadTimer.current)
       }
     }
-  }, [reload])
-
-  const forgetEverything = async (): Promise<void> => {
-    const confirmed = await confirm({
-      title: 'Dimenticare tutto?',
-      description:
-        'Il Segretario cancella tutte le sue note su di te, sulle persone e sulle questioni, e cosa sa delle connessioni: Conoscimi è da rifare. Le cose aperte, i progetti e le note dei messaggi restano.',
-      confirmLabel: 'Dimentica tutto',
-      cancelLabel: 'Annulla',
-      destructive: true
-    })
-
-    if (!confirmed) {
-      return
-    }
-
-    setBusy(true)
-
-    try {
-      await window.segretarioApi.forgetEverything()
-      await reload()
-    } catch (error) {
-      toast.error('Memoria non cancellata', { description: errorText(error) })
-    } finally {
-      setBusy(false)
-    }
-  }
+  }, [])
 
   if (loadError) {
     return (
-      <div className="text-destructive-soft-foreground border-destructive/35 bg-destructive/10 mt-4 rounded-md border px-3 py-2 text-[12px]">
-        {loadError}
-      </div>
+      <SettingsPage>
+        <SettingsNotice tone="error">{loadError}</SettingsNotice>
+      </SettingsPage>
     )
   }
 
   if (!learning || !notes) {
-    return (
-      <div className="text-muted-foreground mt-4 flex items-center gap-2 text-[12px]">
-        <LoaderCircle className="size-4 animate-spin" />
-        Caricamento della memoria…
-      </div>
-    )
+    return <SettingsLoading>Caricamento della memoria…</SettingsLoading>
   }
 
   const running = learning.some((connection) => connection.state === 'running')
 
   return (
-    <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-      <div className="settings-group flex flex-col gap-3">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="eyebrow">Conoscimi</p>
-            <p className="text-muted-foreground mt-1 text-[11px]">
-              Il Segretario legge la tua posta, i tuoi calendari e le tue cartelle per capire chi
-              sei, come lavori, con chi e su cosa, e prende appunti. Rifarlo aggiorna quello che sa,
-              senza cancellarlo.
-            </p>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="shrink-0"
-            disabled={running}
-            onClick={onRedoConoscimi}
-          >
+    <SettingsPage>
+      <SettingsGroup
+        title="Conoscimi"
+        description="Il Segretario legge la tua posta, i tuoi calendari e le tue cartelle per capire chi sei, come lavori, con chi e su cosa, e prende appunti. Rifarlo aggiorna quello che sa, senza cancellarlo."
+        action={
+          <Button variant="outline" size="sm" disabled={running} onClick={onRedoConoscimi}>
             {running ? (
               <LoaderCircle className="size-3.5 animate-spin" />
             ) : (
@@ -321,58 +278,27 @@ export function MemorySection({
               ? 'Rifai Conoscimi'
               : 'Fatti conoscere'}
           </Button>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          {learning.map((connection) => (
-            <div
-              key={connection.key}
-              className="bg-hover flex items-center gap-3 rounded-md px-3 py-2"
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12px] font-medium">{connection.label}</span>
-                <span className="text-muted-foreground block text-[11px]">
-                  {connection.state === 'done' && connection.finishedAt
-                    ? `${LEARNING_STATE.done} ${WHEN.format(connection.finishedAt)}`
-                    : LEARNING_STATE[connection.state]}
-                </span>
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
+        }
+      >
+        {learning.map((connection) => (
+          <ActionRow
+            key={connection.key}
+            title={connection.label}
+            description={
+              connection.state === 'done' && connection.finishedAt
+                ? `${LEARNING_STATE.done} ${WHEN.format(connection.finishedAt)}`
+                : LEARNING_STATE[connection.state]
+            }
+          />
+        ))}
+      </SettingsGroup>
 
-      <div className="settings-group flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="eyebrow">Note</p>
-            <p className="text-muted-foreground mt-1 text-[11px]">
-              Quello che il Segretario sa: di te, del tuo modo di scrivere, delle persone e delle
-              questioni. Le scrive e le aggiorna lui mentre lavora; correggile quando sbaglia: da lì
-              impara.
-            </p>
-          </div>
-          {notes.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-destructive shrink-0"
-              disabled={busy}
-              onClick={() => void forgetEverything()}
-            >
-              {busy ? (
-                <LoaderCircle className="size-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="size-3.5" />
-              )}
-              Dimentica tutto
-            </Button>
-          )}
-        </div>
-
+      <SettingsGroup
+        title="Note"
+        description="Quello che il Segretario sa: di te, del tuo modo di scrivere, delle persone e delle questioni. Le scrive e le aggiorna lui mentre lavora; correggile quando sbaglia: da lì impara."
+      >
         {notes.length === 0 ? (
-          <div className="text-muted-foreground rounded-md border border-dashed px-3 py-3 text-[12px]">
-            Nessuna nota, per ora.
-          </div>
+          <SettingsEmpty>Nessuna nota, per ora.</SettingsEmpty>
         ) : (
           notes.map((note) => (
             <NoteRow
@@ -387,13 +313,6 @@ export function MemorySection({
                   toast.error('Nota non salvata', { description: errorText(error) })
                 }
               }}
-              onDelete={async () => {
-                try {
-                  setNotes(await window.segretarioApi.deleteMemory(note.path))
-                } catch (error) {
-                  toast.error('Nota non cancellata', { description: errorText(error) })
-                }
-              }}
               onRestore={async (revision) => {
                 try {
                   setNotes(await window.segretarioApi.restoreMemory(note.path, revision))
@@ -404,9 +323,7 @@ export function MemorySection({
             />
           ))
         )}
-      </div>
-
-      {confirmDialog}
-    </div>
+      </SettingsGroup>
+    </SettingsPage>
   )
 }

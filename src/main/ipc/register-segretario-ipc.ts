@@ -37,9 +37,7 @@ const USER_ANSWERS: Readonly<
     fields: (_id, accepted) => ({ accepted: accepted === true })
   },
   [SEGRETARIO_IPC.writeMemory]: { ev: 'memory.edited' },
-  [SEGRETARIO_IPC.deleteMemory]: { ev: 'memory.deleted' },
   [SEGRETARIO_IPC.restoreMemory]: { ev: 'memory.restored' },
-  [SEGRETARIO_IPC.forgetEverything]: { ev: 'memory.forgotten' },
   [SEGRETARIO_IPC.saveSearch]: { ev: 'search.saved' }
 }
 
@@ -163,7 +161,11 @@ const onboardingSchema = z
  * The Segretario's channels. Each waits for it to be open — after the
  * storage and the mail engine — and checks what the page sends.
  */
-export function registerSegretarioIpc(segretario: SegretarioService): void {
+export function registerSegretarioIpc(
+  segretario: SegretarioService,
+  /** «Dimentica tutto», with what of the app's own was only the Segretario's (`Workspace`). */
+  forgetAll: () => Promise<void>
+): void {
   const handle = <Args extends unknown[], Result>(
     channel: string,
     handler: (...args: Args) => Promise<Result> | Result,
@@ -191,7 +193,8 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
     segretario.saveKey(z.string().max(500).parse(key))
   )
   handle(SEGRETARIO_IPC.removeKey, () => segretario.removeKey())
-  handle(SEGRETARIO_IPC.forgetAll, () => segretario.forgetAll())
+  handle(SEGRETARIO_IPC.forgetAll, () => forgetAll())
+  handle(SEGRETARIO_IPC.keepsAnything, () => segretario.keepsAnything())
   handle(SEGRETARIO_IPC.checkKey, () => segretario.checkKey({ byUser: true }))
   handle(SEGRETARIO_IPC.getNotice, () => segretario.getNotice())
   handle(SEGRETARIO_IPC.dismissNotice, () => segretario.dismissNotice())
@@ -211,9 +214,6 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
       z.number().int().positive().optional().parse(seenRevision)
     )
   )
-  handle(SEGRETARIO_IPC.deleteMemory, (path: unknown) =>
-    segretario.deleteMemory(memoryPathSchema.parse(path))
-  )
   handle(SEGRETARIO_IPC.memoryHistory, (path: unknown) =>
     segretario.memoryHistory(memoryPathSchema.parse(path))
   )
@@ -223,7 +223,6 @@ export function registerSegretarioIpc(segretario: SegretarioService): void {
       z.number().int().positive().parse(revision)
     )
   )
-  handle(SEGRETARIO_IPC.forgetEverything, () => segretario.forgetEverything())
   handle(SEGRETARIO_IPC.listLearning, () => segretario.listLearning())
   handle(SEGRETARIO_IPC.startConoscimi, (keys: unknown) =>
     segretario.startConoscimi(z.array(z.string().min(1).max(200)).max(100).optional().parse(keys))

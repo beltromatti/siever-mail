@@ -252,3 +252,33 @@ describe('AiStore learning', () => {
     ])
   })
 })
+
+describe('AiStore.keepsAnything', () => {
+  let sql: ReturnType<typeof memorySql>
+  let store: AiStore
+
+  beforeEach(async () => {
+    sql = memorySql()
+    await ensureAiSchema(sql)
+    store = new AiStore(sql)
+  })
+
+  afterEach(() => sql.close())
+
+  it('says whether «Dimentica tutto» has anything to take: a row of its own, or the key', async () => {
+    expect(await store.keepsAnything()).toBe(false)
+
+    await sql.run(
+      "INSERT INTO ai_memory (path, content, created_at, updated_at, read_at) VALUES ('tu.md', 'Lucia', 1, 1, 1)"
+    )
+    expect(await store.keepsAnything()).toBe(true)
+
+    await store.clearData()
+    expect(await store.keepsAnything()).toBe(false)
+
+    await sql.run(
+      "INSERT INTO ai_settings (id, encrypted_api_key, key_status_json, preferences_json, updated_at) VALUES (1, 'cifrata', '{}', '{}', 1)"
+    )
+    expect(await store.keepsAnything()).toBe(true)
+  })
+})

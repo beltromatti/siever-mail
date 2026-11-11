@@ -390,7 +390,7 @@ if (hasSingleInstanceLock) {
     void workspace.start(extensionMain)
 
     registerMailIpc(workspace, () => mainWindow)
-    registerSegretarioIpc(workspace.segretario)
+    registerSegretarioIpc(workspace.segretario, () => workspace.forgetSegretario())
     registerFilesIpc()
     registerDiagnosticsIpc(
       () => workspace.diagnosticsSource(),

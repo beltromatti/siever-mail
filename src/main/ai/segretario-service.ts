@@ -52,7 +52,6 @@ import {
   type SegretarioSpending,
   type SegretarioStatus,
   type SendOutcome,
-  type TaskKind,
   type TodayPage,
   type WorkChange,
   type WritingRequest,
@@ -271,9 +270,6 @@ function plainly<T>(work: Promise<T>): Promise<T> {
     throw error instanceof RegistryRefusal ? new Error(error.message) : error
   })
 }
-
-/** The work that writes the memory: stopped before the memory is emptied. */
-const MEMORY_TASKS: ReadonlyArray<TaskKind> = ['al_passo', 'riflessione', 'conoscimi']
 
 /** A letter looked at in Oggi is written again when it is behind by more than this. */
 const LETTER_LOOKED_AT_STALE_MS = 60 * 60 * 1000
@@ -1299,11 +1295,6 @@ export class SegretarioService {
     return this.listMemory()
   }
 
-  async deleteMemory(path: string): Promise<MemoryNote[]> {
-    await this.db.notebook.delete(normalizeMemoryPath(path), USER)
-    return this.listMemory()
-  }
-
   async memoryHistory(path: string): Promise<MemoryVersion[]> {
     return (await this.db.notebook.history(normalizeMemoryPath(path))).map((version) => ({
       revision: version.revision,
@@ -1317,20 +1308,6 @@ export class SegretarioService {
   async restoreMemory(path: string, revision: number): Promise<MemoryNote[]> {
     await plainly(this.db.notebook.restore(normalizeMemoryPath(path), revision, USER))
     return this.listMemory()
-  }
-
-  /** Forgets what it learnt, and that it knows the connections: Conoscimi is to be done again. */
-  async forgetEverything(): Promise<void> {
-    // What writes the memory stops first: it would write again into the memory just emptied.
-    for (const row of await this.db.store.listLearning()) {
-      if (row.activityId) {
-        this.runner?.cancel(row.activityId)
-      }
-    }
-
-    await this.db.engine.stopWhere((unit) => MEMORY_TASKS.includes(unit.task as TaskKind))
-    await this.db.notebook.clear()
-    await this.db.store.resetLearning()
   }
 
   /* ──────────────────────── getting to know the connections ──────────────────────── */
@@ -1677,34 +1654,30 @@ export class SegretarioService {
   }
 
   /**
-   * "Elimina tutti i dati": everything the Segretario kept goes, and — as
-   * after "Dimentica tutto" — the AI turns off: on again, it starts from the
-   * guided setup, Conoscimi first, instead of reading a month of mail
-   * knowing nothing.
+   * "Dimentica tutto" — and, with the rest, "Elimina tutti i dati": the
+   * Segretario as if it had never been on (§12.1). Off first, and every run
+   * stopped and done writing; then all it kept goes — memory, notes, read
+   * marks, alerts, open things, projects, replies, proposals, diary,
+   * spending — and the key. On again, it starts from the guided setup, from
+   * the key. What it did out in the world stays where it is: the events in
+   * the calendars, the drafts and the mail on the servers, an extension's
+   * marks on messages (§6.3).
    */
-  async clearData(): Promise<void> {
-    // Off first, so nothing starts while what it kept goes; off again after, the switch being
-    // among what goes.
+  async forgetAll(): Promise<void> {
     await this.setPreferences({ enabled: false })
-    this.runner?.cancelAll()
-    this.engine?.cancelRunning()
+    // Units still getting ready stop too, and every run ends before its tables go.
+    await this.engine?.stopWhere(() => true)
+    await this.runner?.stopAll()
     await this.db.store.clearData()
     this.searches.clear()
+    await this.removeKey()
+    // Off again: the switch is among what went.
     await this.setPreferences({ enabled: false })
   }
 
-  /**
-   * "Dimentica tutto": what the Segretario knows and did goes — memory,
-   * notes, open things, projects, replies, diary, spending — the key stays.
-   * The AI turns off: on again, it starts from the guided setup, knowing
-   * nothing. What extensions marked on messages is the mail's, and stays.
-   */
-  async forgetAll(): Promise<void> {
-    this.runner?.cancelAll()
-    this.engine?.cancelRunning()
-    await this.db.store.clearData()
-    this.searches.clear()
-    await this.setPreferences({ enabled: false })
+  /** Whether «Dimentica tutto» has anything to take: its page offers it only then. */
+  keepsAnything(): Promise<boolean> {
+    return this.db.store.keepsAnything()
   }
 
   /* ──────────────────────────────── the user's work ──────────────────────────────── */

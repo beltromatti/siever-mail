@@ -1,16 +1,16 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import { BellRing, ExternalLink, LoaderCircle, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@renderer/components/ui/button'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@renderer/components/ui/select'
-import { Switch } from '@renderer/components/ui/switch'
+  ChoiceRow,
+  SettingRow,
+  SettingsGroup as Group,
+  SettingsLoading,
+  SettingsNotice,
+  SettingsPage
+} from '@renderer/components/ui/settings'
 import { useCalendarList } from '@renderer/features/calendar/use-calendar'
 import { CALENDAR_ROLES, type CalendarListEntry, type CalendarRole } from '@shared/calendar'
 import type { MailAccount } from '@shared/models'
@@ -66,83 +66,6 @@ function errorText(error: unknown): string | undefined {
   return error instanceof Error && error.message.trim() ? error.message : undefined
 }
 
-function SettingRow({
-  id,
-  title,
-  description,
-  checked,
-  disabled,
-  onCheckedChange
-}: {
-  id: string
-  title: ReactNode
-  description?: ReactNode
-  checked: boolean
-  disabled?: boolean
-  onCheckedChange: (checked: boolean) => void
-}): React.JSX.Element {
-  return (
-    <label
-      htmlFor={id}
-      className="bg-hover flex cursor-pointer items-center justify-between gap-3 rounded-md px-3 py-2 has-[button:disabled]:cursor-default"
-    >
-      <span className="min-w-0">
-        <span className="block truncate text-[12px] font-medium">{title}</span>
-        {description && (
-          <span className="text-muted-foreground block text-[11px]">{description}</span>
-        )}
-      </span>
-      <Switch id={id} checked={checked} disabled={disabled} onCheckedChange={onCheckedChange} />
-    </label>
-  )
-}
-
-/** A setting chosen among a few: what it is on the left, the choice on the right. */
-function ChoiceRow<T extends string>({
-  title,
-  description,
-  value,
-  options,
-  words,
-  label,
-  width = 'w-45',
-  disabled,
-  onChange
-}: {
-  title: ReactNode
-  description?: ReactNode
-  value: T
-  options: ReadonlyArray<T>
-  words: (option: T) => string
-  label: string
-  width?: string
-  disabled?: boolean
-  onChange: (value: T) => void
-}): React.JSX.Element {
-  return (
-    <div className="bg-hover flex items-center justify-between gap-3 rounded-md px-3 py-2">
-      <span className="min-w-0">
-        <span className="block truncate text-[12px] font-medium">{title}</span>
-        {description && (
-          <span className="text-muted-foreground block text-[11px]">{description}</span>
-        )}
-      </span>
-      <Select value={value} onValueChange={(next) => onChange(next as T)} disabled={disabled}>
-        <SelectTrigger className={`${width} shrink-0`} aria-label={label}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => (
-            <SelectItem key={option} value={option}>
-              {words(option)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  )
-}
-
 /** Who chose a calendar's role, in words: the user (with the way back), the Segretario, or nobody. */
 function RoleChosen({
   calendar,
@@ -183,26 +106,6 @@ function RoleChosen({
   }
 
   return <>{where}</>
-}
-
-function Group({
-  title,
-  description,
-  children
-}: {
-  title: string
-  description?: ReactNode
-  children: ReactNode
-}): React.JSX.Element {
-  return (
-    <div className="settings-group flex flex-col gap-3">
-      <div>
-        <p className="eyebrow">{title}</p>
-        {description && <p className="text-muted-foreground mt-1 text-[11px]">{description}</p>}
-      </div>
-      {children}
-    </div>
-  )
 }
 
 /**
@@ -308,19 +211,14 @@ export function NotificationsSection({
 
   if (loadError) {
     return (
-      <div className="text-destructive-soft-foreground border-destructive/35 bg-destructive/10 mt-4 rounded-md border px-3 py-2 text-[12px]">
-        {loadError}
-      </div>
+      <SettingsPage>
+        <SettingsNotice tone="error">{loadError}</SettingsNotice>
+      </SettingsPage>
     )
   }
 
   if (!preferences || !status) {
-    return (
-      <div className="text-muted-foreground mt-4 flex items-center gap-2 text-[12px]">
-        <LoaderCircle className="size-4 animate-spin" />
-        Caricamento delle impostazioni…
-      </div>
-    )
+    return <SettingsLoading>Caricamento delle impostazioni…</SettingsLoading>
   }
 
   const delivery = status.delivery
@@ -328,7 +226,7 @@ export function NotificationsSection({
   const off = saving || !preferences.enabled
 
   return (
-    <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+    <SettingsPage>
       <Group
         title="SIEVER Mail"
         description="Una notifica interrompe ciò che stai facendo: arriva solo quando saperlo adesso, e non alla prossima occhiata, cambia ciò che fai. Il resto ti aspetta dove lo trovi."
@@ -650,6 +548,6 @@ export function NotificationsSection({
           />
         )}
       </Group>
-    </div>
+    </SettingsPage>
   )
 }

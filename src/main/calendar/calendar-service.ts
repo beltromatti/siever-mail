@@ -920,16 +920,31 @@ export class CalendarService {
     })
   }
 
-  /** "Elimina tutti i dati": the events go, the connections stay and read them anew. */
+  /**
+   * "Elimina tutti i dati": the events go, the connections stay and read them
+   * anew. The calendars stay too, with what the user chose of each — hidden,
+   * whose its events are —: only how far they were read goes, so the next
+   * read is a first one, which is no change and tells nothing (§7.2).
+   */
   async clearData(): Promise<void> {
     const prisma = this.requirePrisma()
+    const connections = await prisma.calendarConnection.findMany({ select: { id: true } })
+    const clear = async (): Promise<void> => {
+      await prisma.$transaction([
+        prisma.calendarChange.deleteMany(),
+        prisma.calendarEvent.deleteMany(),
+        prisma.calendarObject.deleteMany(),
+        prisma.calendarCalendar.updateMany({ data: { syncToken: null, windowEnd: null } })
+      ])
+    }
 
-    await prisma.$transaction([
-      prisma.calendarChange.deleteMany(),
-      prisma.calendarEvent.deleteMany(),
-      prisma.calendarObject.deleteMany(),
-      prisma.calendarCalendar.deleteMany()
-    ])
+    // In every connection's turn: a read under way would write what it had read over the empty tables.
+    await connections.reduceRight<() => Promise<void>>(
+      (inner, { id }) =>
+        () =>
+          this.inTurn(id, inner),
+      clear
+    )()
     this.eventsChanged()
     void this.syncAll()
   }

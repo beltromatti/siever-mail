@@ -286,6 +286,27 @@ export interface UiPreferences {
    * (see `shared/commands.ts`).
    */
   shortcutOverrides: Record<string, string>
+  /**
+   * The calendar a new event made in the Calendario goes to, by calendar key;
+   * null: the principal one of the first connection, or the first the user
+   * writes in. One no longer there, or hidden, falls back the same way.
+   */
+  newEventCalendarKey: string | null
+  /** How long a new event lasts when it is not drawn: a click, «Nuovo evento». */
+  newEventMinutes: number
+}
+
+/** How long a new event can last at first, in minutes. */
+export const NEW_EVENT_MINUTES = [15, 30, 45, 60, 90, 120] as const
+export const NEW_EVENT_MINUTES_DEFAULT = 60
+
+/** Whether SIEVER Mail opens as the user signs in to the computer: where the system lets it. */
+export interface OpenAtLogin {
+  /** The system has login items an app can set (macOS, Windows), and this is the installed app. */
+  supported: boolean
+  enabled: boolean
+  /** macOS holds it until the user allows it in its own settings (Generali › Elementi login). */
+  needsApproval: boolean
 }
 
 /**
@@ -313,7 +334,9 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   messageGrouping: DEFAULT_MESSAGE_GROUPING_MODE,
   readerZoom: READER_ZOOM_DEFAULT,
   readerDetailsOpen: false,
-  shortcutOverrides: {}
+  shortcutOverrides: {},
+  newEventCalendarKey: null,
+  newEventMinutes: NEW_EVENT_MINUTES_DEFAULT
 }
 
 export interface ListMessagesOptions {
@@ -604,12 +627,26 @@ export interface AppBootstrap {
   accounts: MailAccount[]
 }
 
+/**
+ * Whose a share of what SIEVER Mail keeps is (Impostazioni › Dati): a
+ * mailbox, a calendar connection — each with the Segretario's share of it —,
+ * the Segretario's own, what every app shares, the extension's; and the
+ * files beside the database: the copies of opened attachments, the
+ * diagnostics.
+ */
+export type DataStorageKind =
+  'mail' | 'calendar' | 'segretario' | 'common' | 'extension' | 'attachments' | 'diagnostics'
+
 export interface DataStorageSection {
   id: string
+  kind: DataStorageKind
+  /** The mailbox or calendar connection it is of. */
+  connectionId?: string
   label: string
-  /** `files`: copies of opened attachments, on disk beside the database. */
-  kind: 'account' | 'global' | 'files'
+  /** All of it, the Segretario's share included. */
   sizeBytes: number
+  /** Of which the Segretario's: what it keeps of that connection; all, for its own. */
+  segretarioBytes: number
 }
 
 export interface DataStorageBreakdown {

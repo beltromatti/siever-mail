@@ -1878,6 +1878,10 @@ function App(): React.JSX.Element {
                     <CalendarApp
                       key={calendarFocus?.at}
                       aiOn={aiOn}
+                      newEventDefaults={{
+                        calendarKey: uiPreferences.newEventCalendarKey,
+                        minutes: uiPreferences.newEventMinutes
+                      }}
                       focus={calendarFocus?.focus}
                       onSight={setCalendarSight}
                       searchInputRef={calendarSearchRef}

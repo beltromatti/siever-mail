@@ -252,6 +252,7 @@ function CalendarsList({
  */
 export function CalendarApp({
   aiOn,
+  newEventDefaults,
   focus,
   onSight,
   atWindowTopRight,
@@ -261,6 +262,8 @@ export function CalendarApp({
   keysEnabled
 }: {
   aiOn: boolean
+  /** Where a new event goes and how long it lasts, as the user chose (Impostazioni › Preferenze). */
+  newEventDefaults: { calendarKey: string | null; minutes: number }
   /** Where the calendar opens: a day, and an event of it to show. Today when not given. */
   focus?: CalendarFocus
   /** Told what the calendar shows, as it changes. */
@@ -383,7 +386,7 @@ export function CalendarApp({
     setEditor({
       mode: 'new',
       start: base.getTime(),
-      end: base.getTime() + 60 * 60_000,
+      end: base.getTime() + newEventDefaults.minutes * 60_000,
       allDay: false
     })
   }
@@ -622,6 +625,7 @@ export function CalendarApp({
                 proposals={proposals}
                 selection={selection}
                 onSelect={setSelection}
+                newEventMinutes={newEventDefaults.minutes}
                 onDraw={(range) => setEditor({ mode: 'new', ...range })}
                 onMove={(event, start, end) => void moveEvent(event, start, end)}
                 onOpenLine={openLine}
@@ -648,6 +652,7 @@ export function CalendarApp({
         <EventEditor
           target={editor}
           calendars={calendars}
+          preferredCalendarKey={newEventDefaults.calendarKey}
           onClose={() => setEditor(null)}
           onSaved={(saved) => {
             setEditor(null)

@@ -19,6 +19,7 @@ import { extensionChannel } from '@shared/extension-ipc'
 import { IPC_CHANNELS, type AddedAccount } from '@shared/ipc'
 import {
   NOTIFICATIONS_IPC,
+  withoutSegretario,
   type BadgeShown,
   type NotificationPreferences,
   type NotificationStatus
@@ -29,11 +30,14 @@ import {
   mailRefusedNotice,
   refusalWords,
   type ConnectionRefusedNotice,
+  type DataStorageBreakdown,
   type MailAccount,
   type MessageRef
 } from '@shared/models'
 
 import { SegretarioService } from './ai/segretario-service'
+import { prismaSql } from './ai/sql'
+import { measureDatabase, storageSections, type StorageOwners } from './data-storage'
 import { updateAppMenuAi } from './app-menu'
 import { getAppWindow } from './app-window'
 import { CalendarNotifications } from './calendar/calendar-notifications'
@@ -45,7 +49,9 @@ import { GOOGLE_CALENDAR_SCOPE } from './calendar/google-calendar'
 import { invitationParties, occurrenceIn } from './calendar/icalendar'
 import { parseInvitation } from './calendar/ics'
 import type { RuntimeConfig } from './config/env'
+import { attachmentCacheRoot, directorySize } from './services/attachment-files'
 import { AppDatabase } from './services/database'
+import { draftFilesRoot } from './services/drafts'
 import { finalizeUpgradeMigration } from './services/data-migration'
 import { GOOGLE_MAIL_SCOPE, GoogleOAuthService } from './services/google-oauth'
 import { MailService } from './services/mail-service'
@@ -55,7 +61,7 @@ import { movedUnder } from './files/paths'
 import { watchSystemSleep } from './services/system-sleep'
 import { appDiagnosticState } from '@main/diagnostics/app-state'
 import type { BundleFile, DiagnosticsBundleSource } from '@main/diagnostics/export'
-import { diagnostics } from '@main/diagnostics/log'
+import { diagnostics, diagnosticsFolder } from '@main/diagnostics/log'
 import { diagnosticState, provideDiagnosticState } from '@main/diagnostics/state'
 
 const log = diagnostics('app')
@@ -903,16 +909,82 @@ export class Workspace {
   }
 
   /**
+   * What SIEVER Mail keeps on this computer, by whose it is (Impostazioni ›
+   * Dati, §13.2): each connection with the Segretario's share of it, the
+   * Segretario's own, what every app shares, the extension's tables — named
+   * after it (§15.4) —, and the files beside the database.
+   */
+  async dataStorage(): Promise<DataStorageBreakdown> {
+    await this.openStorage()
+    const [accounts, calendars] = await Promise.all([
+      this.database.getAccounts(),
+      // Calendars that did not open have no row of their own: their tables are measured all the same.
+      this.calendar
+        .whenOpen()
+        .then(() => this.calendar.listConnections())
+        .catch(() => [])
+    ])
+    const identity = extensionShared.identity
+    const owners: StorageOwners = {
+      mail: accounts.map((account) => ({ id: account.id, label: account.email })),
+      calendars: calendars.map((calendar) => ({ id: calendar.id, label: calendar.label })),
+      extension:
+        identity && this.extension
+          ? { label: identity.name, tablePrefix: `${identity.id.replace(/-/g, '_')}_` }
+          : null
+    }
+    const folder = diagnosticsFolder()
+    // A folder that cannot be read weighs nothing here, and the rest is still told.
+    const sizeOf = (path: string | null): Promise<number> =>
+      path ? directorySize(path).catch(() => 0) : Promise.resolve(0)
+    const [shares, attachments, draftFiles, diagnostics] = await Promise.all([
+      measureDatabase(prismaSql(await this.database.storeClient()), owners),
+      sizeOf(attachmentCacheRoot()),
+      sizeOf(draftFilesRoot()),
+      sizeOf(folder)
+    ])
+    const sections = storageSections(shares, owners, { attachments, draftFiles, diagnostics })
+
+    return {
+      totalBytes: sections.reduce((total, section) => total + section.sizeBytes, 0),
+      sections
+    }
+  }
+
+  /**
+   * «Dimentica tutto»: the Segretario as if it had never been on (§12.1) —
+   * all it kept, its key too (`SegretarioService.forgetAll`), and what of
+   * the app's own had a meaning only with it: the notifications that take
+   * its word go back to how a first start finds them, and its once-only
+   * notifications — the setup ready, the day ready — may be given again.
+   */
+  async forgetSegretario(): Promise<void> {
+    await this.segretarioForgotten()
+    // Its pages go back to the disk, as Dati then says.
+    await this.database.compact()
+  }
+
+  /** «Dimentica tutto», the file left as it is: «Elimina tutti i dati» compacts it once, at its end. */
+  private async segretarioForgotten(): Promise<void> {
+    await Promise.all([this.segretario.whenReady(), this.openStorage()])
+    await this.segretario.forgetAll()
+    const preferences = withoutSegretario(this.notifications.preferences)
+    await this.database.setNotificationPreferences(preferences)
+    this.notifications.setPreferences(preferences)
+    await this.database.forgetNotificationsGiven(['setup-ready:', 'day:'])
+  }
+
+  /**
    * "Elimina tutti i dati": what every app keeps goes — the Segretario's,
-   * the mail's, the calendars', the extension's — with the mail's
-   * connections stopped meanwhile. The accounts, the calendar connections
-   * and the preferences stay. Every app is open first, or nothing goes: a
-   * clear that could not reach one would be done by half. The Segretario
-   * goes first, so no run reads the mail while it is wiped.
+   * as «Dimentica tutto» does, the mail's, the calendars', the extension's —
+   * with the mail's connections stopped meanwhile. The connections and the
+   * preferences stay. Every app is open first, or nothing goes: a clear that
+   * could not reach one would be done by half. The Segretario goes first, so
+   * no run reads the mail while it is wiped.
    */
   async clearAllDataKeepAccounts(): Promise<void> {
     await Promise.all([this.segretario.whenReady(), this.calendar.whenOpen()])
-    await this.segretario.clearData()
+    await this.segretarioForgotten()
     await this.mail.whileDisconnected(async () => {
       await this.mail.clearData()
       await this.calendar.clearData()

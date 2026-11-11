@@ -18,13 +18,15 @@ import {
  * platform's own (select all, settings, zoom) and are shown, not changed.
  */
 
-export type CommandGroup = 'messages' | 'navigation' | 'writing' | 'view' | 'calendar'
+/** Where a command belongs, app by app as the rail has them (§13.1): SIEVER Mail's own, then each app's. */
+export type CommandGroup = 'app' | 'messages' | 'navigation' | 'writing' | 'reading' | 'calendar'
 
 export const COMMAND_GROUP_LABELS: Readonly<Record<CommandGroup, string>> = {
-  messages: 'Messaggi',
-  navigation: 'Navigazione',
-  writing: 'Scrittura',
-  view: 'Vista',
+  app: 'SIEVER Mail',
+  messages: 'Posta · Messaggi',
+  navigation: 'Posta · Navigazione',
+  writing: 'Posta · Scrittura',
+  reading: 'Posta · Lettura',
   calendar: 'Calendario'
 }
 
@@ -45,7 +47,7 @@ const HOST_COMMANDS = [
   {
     id: 'compose',
     label: 'Nuovo messaggio',
-    description: "Scrive un messaggio dall'account selezionato.",
+    description: 'Scrive un messaggio dalla casella che hai davanti.',
     group: 'messages',
     scope: 'main',
     defaultChord: 'Mod+KeyN',
@@ -81,7 +83,7 @@ const HOST_COMMANDS = [
   {
     id: 'archive',
     label: 'Archivia',
-    description: "Sposta la selezione nell'archivio del suo account.",
+    description: 'Archivia la selezione, ogni messaggio nella sua casella.',
     group: 'messages',
     scope: 'main',
     defaultChord: 'Mod+Shift+KeyA',
@@ -127,8 +129,8 @@ const HOST_COMMANDS = [
   {
     id: 'search',
     label: 'Cerca',
-    description: 'Porta il cursore nella ricerca.',
-    group: 'navigation',
+    description: 'Porta il cursore nella ricerca dell’app che hai davanti.',
+    group: 'app',
     scope: 'main',
     defaultChord: 'Mod+KeyF',
     editable: true
@@ -136,7 +138,7 @@ const HOST_COMMANDS = [
   {
     id: 'go-inbox',
     label: 'Vai alla Posta in arrivo',
-    description: "Apre la Posta in arrivo: di tutti gli account, o dell'unico.",
+    description: "Apre la Posta in arrivo: di tutte le caselle, o dell'unica.",
     group: 'navigation',
     scope: 'main',
     defaultChord: 'Mod+Digit1',
@@ -145,7 +147,7 @@ const HOST_COMMANDS = [
   {
     id: 'go-to-folder',
     label: 'Vai a una cartella…',
-    description: "Cerca una cartella dell'account e la apre.",
+    description: 'Cerca una cartella della casella e la apre.',
     group: 'navigation',
     scope: 'main',
     defaultChord: 'Mod+Shift+KeyG',
@@ -154,7 +156,7 @@ const HOST_COMMANDS = [
   {
     id: 'check-mail',
     label: 'Controlla nuova posta',
-    description: 'Chiede subito a ogni account se è arrivato qualcosa.',
+    description: 'Chiede subito a ogni casella se è arrivato qualcosa.',
     group: 'navigation',
     scope: 'main',
     defaultChord: 'Mod+Shift+KeyN',
@@ -200,7 +202,7 @@ const HOST_COMMANDS = [
     id: 'segretario',
     label: 'Segretario',
     description: 'Apre e chiude il pannello del Segretario.',
-    group: 'view',
+    group: 'app',
     scope: 'main',
     defaultChord: 'Mod+KeyJ',
     editable: true
@@ -209,7 +211,7 @@ const HOST_COMMANDS = [
     id: 'settings',
     label: 'Impostazioni',
     description: 'Apre le impostazioni.',
-    group: 'view',
+    group: 'app',
     scope: 'main',
     defaultChord: 'Mod+Comma',
     editable: false
@@ -218,7 +220,7 @@ const HOST_COMMANDS = [
     id: 'reader-zoom-in',
     label: 'Ingrandisci messaggio',
     description: 'Ingrandisce il testo del messaggio aperto.',
-    group: 'view',
+    group: 'reading',
     scope: 'main',
     defaultChord: 'Mod+Equal',
     editable: false
@@ -227,7 +229,7 @@ const HOST_COMMANDS = [
     id: 'reader-zoom-out',
     label: 'Riduci messaggio',
     description: 'Rimpicciolisce il testo del messaggio aperto.',
-    group: 'view',
+    group: 'reading',
     scope: 'main',
     defaultChord: 'Mod+Minus',
     editable: false
@@ -236,7 +238,7 @@ const HOST_COMMANDS = [
     id: 'reader-zoom-reset',
     label: 'Dimensioni reali',
     description: 'Riporta il messaggio aperto al 100%.',
-    group: 'view',
+    group: 'reading',
     scope: 'main',
     defaultChord: 'Mod+Digit0',
     editable: false

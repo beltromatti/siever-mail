@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Resolver } from 'node:dns/promises'
-import { mkdir, stat, writeFile } from 'node:fs/promises'
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { connect as netConnect } from 'node:net'
 import { basename, join } from 'node:path'
 import { connect as tlsConnect } from 'node:tls'
@@ -24,7 +24,6 @@ import type {
   RenameFolderInput,
   AttachmentRef,
   CopiedAttachment,
-  DataStorageBreakdown,
   FetchedMessageDetail,
   ListMessagesOptions,
   MailAccount,
@@ -71,7 +70,8 @@ import {
   MAX_MESSAGES_PER_ACTION,
   MESSAGE_LIST_PAGE_SIZE,
   READER_ZOOM_MAX,
-  READER_ZOOM_MIN
+  READER_ZOOM_MIN,
+  NEW_EVENT_MINUTES
 } from '@shared/models'
 import { parseSearchQuery } from '@shared/search'
 
@@ -80,7 +80,6 @@ import {
   attachmentCacheRoot,
   attachmentCopyDirectory,
   clearAttachmentCache,
-  directorySize,
   fileSha256,
   isExecutableAttachment,
   markFromInternet,
@@ -93,7 +92,7 @@ import { isIcsAttachment, type CalendarResponse } from '@shared/calendar'
 import type { MarkedBefore, MessageMark, MessageMarksChange } from '@shared/message-marks'
 import type { MessageLocation, SegretarioMailPort } from '@main/ai/agent/tool-types'
 import type { NotificationCenter } from '@main/notifications/center'
-import { DraftService, draftRefKey } from './drafts'
+import { DraftService, draftFilesRoot, draftRefKey } from './drafts'
 import type { AppDatabase, MessageListView } from './database'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
 import type { GoogleAuthResult, GoogleOAuthService } from './google-oauth'
@@ -286,7 +285,11 @@ const uiPreferencesSchema = z.object({
   messageGrouping: z.enum(['none', 'auto', 'sender']),
   readerZoom: z.number().int().min(READER_ZOOM_MIN).max(READER_ZOOM_MAX),
   readerDetailsOpen: z.boolean(),
-  shortcutOverrides: z.record(z.string(), z.string())
+  shortcutOverrides: z.record(z.string(), z.string()),
+  newEventCalendarKey: z.string().min(1).nullable(),
+  newEventMinutes: z
+    .number()
+    .refine((minutes) => (NEW_EVENT_MINUTES as ReadonlyArray<number>).includes(minutes))
 })
 
 const unifiedInboxIncludedAccountsSchema = z.array(z.string().trim().min(1))
@@ -2174,31 +2177,6 @@ export class MailService {
     )
   }
 
-  /**
-   * The database's share per account, plus the copies of opened
-   * attachments on disk beside it — everything local that the data
-   * settings let the user empty.
-   */
-  async getDataStorageBreakdown(): Promise<DataStorageBreakdown> {
-    const [database, openedAttachmentsBytes] = await Promise.all([
-      this.database.getDataStorageBreakdown(),
-      directorySize(attachmentCacheRoot())
-    ])
-
-    return {
-      totalBytes: database.totalBytes + openedAttachmentsBytes,
-      sections: [
-        ...database.sections,
-        {
-          id: 'attachment-copies',
-          label: 'Copie degli allegati',
-          kind: 'files',
-          sizeBytes: openedAttachmentsBytes
-        }
-      ]
-    }
-  }
-
   async clearAccountData(accountId: string): Promise<void> {
     await this.ensureAccountExists(accountId)
     await this.engine.removeAccount(accountId)
@@ -2250,6 +2228,8 @@ export class MailService {
   async clearData(): Promise<void> {
     await this.database.clearAllDataKeepAccounts()
     await this.dropAttachmentCopies()
+    // The drafts went with the rest: the files they were opened with go too.
+    await rm(draftFilesRoot(), { recursive: true, force: true })
   }
 
   async pickAttachments(parentWindow?: BrowserWindow): Promise<PickedAttachment[]> {

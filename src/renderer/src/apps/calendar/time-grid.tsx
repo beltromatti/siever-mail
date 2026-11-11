@@ -116,6 +116,7 @@ export function TimeGrid({
   due,
   proposals,
   selection,
+  newEventMinutes,
   onSelect,
   onDraw,
   onMove,
@@ -127,6 +128,8 @@ export function TimeGrid({
   due: ReadonlyArray<DayLine>
   proposals: ReadonlyArray<ProposedEvent>
   selection: CalendarSelection
+  /** How long a new event made with a click lasts. */
+  newEventMinutes: number
   onSelect: (selection: CalendarSelection) => void
   onDraw: (range: DrawnRange) => void
   /** An event dragged elsewhere: its new start and end. */
@@ -245,9 +248,9 @@ export function TimeGrid({
 
     const from = Math.min(drawing.from, drawing.to)
     const to = Math.max(drawing.from, drawing.to)
-    // A click is an hour from the half hour it fell in; a drag, what was drawn.
+    // A click is a new event's length from the half hour it fell in; a drag, what was drawn.
     const start = to - from < SLOT_MINUTES ? Math.floor(from / 30) * 30 : from
-    const end = to - from < SLOT_MINUTES ? Math.min(24 * 60, start + 60) : to
+    const end = to - from < SLOT_MINUTES ? Math.min(24 * 60, start + newEventMinutes) : to
 
     setDrawing(null)
     onDraw({

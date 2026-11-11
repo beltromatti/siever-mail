@@ -2,6 +2,7 @@ import { ExternalLink } from 'lucide-react'
 
 import extensionShared from '@app/extension/shared'
 import { Button } from '@renderer/components/ui/button'
+import { SettingsPage } from '@renderer/components/ui/settings'
 import { formatAppVersion } from '@renderer/lib/utils'
 
 /** Where SIEVER Mail lives, and its developers can be reached. */
@@ -15,7 +16,7 @@ export function ExtensionSection(): React.JSX.Element {
   const identity = extensionShared.identity
 
   return (
-    <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+    <SettingsPage>
       {identity ? (
         <div className="settings-group">
           <p className="eyebrow">Installata</p>
@@ -63,6 +64,6 @@ export function ExtensionSection(): React.JSX.Element {
           </>
         )}
       </div>
-    </div>
+    </SettingsPage>
   )
 }

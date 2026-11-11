@@ -39,7 +39,8 @@ import type {
   RecentFile,
   SavedAttachments,
   SetMessagesKeywordInput,
-  UiPreferences
+  UiPreferences,
+  OpenAtLogin
 } from './models'
 import type { DiscoveredMailSettings } from './connections'
 import type { MarkedBefore, MessageMark, MessageMarksChange } from './message-marks'
@@ -49,6 +50,8 @@ export const IPC_CHANNELS = {
   getAccountConnectionStates: 'app:get-account-connection-states',
   getUiPreferences: 'app:get-ui-preferences',
   setUiPreferences: 'app:set-ui-preferences',
+  getOpenAtLogin: 'app:get-open-at-login',
+  setOpenAtLogin: 'app:set-open-at-login',
   addGoogleAccount: 'account:add-google',
   addImapAccount: 'account:add-imap',
   addMicrosoftAccount: 'account:add-microsoft',
@@ -150,6 +153,9 @@ export interface DesktopMailApi {
   getUiPreferences: () => Promise<UiPreferences>
   /** Persists the whole record and echoes back what was actually stored. */
   setUiPreferences: (preferences: UiPreferences) => Promise<UiPreferences>
+  /** Whether SIEVER Mail opens as the user signs in, where the system lets it be set. */
+  getOpenAtLogin: () => Promise<OpenAtLogin>
+  setOpenAtLogin: (enabled: boolean) => Promise<OpenAtLogin>
   /**
    * A Google account, in one consent: its mail, and its calendar when asked —
    * with why the calendar did not come, when it did not (`calendarProblem`).

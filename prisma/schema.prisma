@@ -292,6 +292,8 @@ model AppPreference {
   readerZoom                     Int     @default(100) @map("reader_zoom")
   readerDetailsOpen              Boolean @default(false) @map("reader_details_open")
   shortcutOverrides              String  @default("{}") @map("shortcut_overrides")
+  newEventCalendarKey            String? @map("new_event_calendar_key")
+  newEventMinutes                Int     @default(60) @map("new_event_minutes")
   updatedAt                      BigInt  @map("updated_at")
 
   @@map("app_preferences")

@@ -462,11 +462,6 @@ export class Notebook {
     return this.replaceOrRefuse(current, version.content, `ripristina ${revision}`, actor)
   }
 
-  async clear(): Promise<void> {
-    await this.sql.run('DELETE FROM ai_memory')
-    await this.sql.run('DELETE FROM ai_memory_history')
-  }
-
   /* ───────────────────────────── internals ───────────────────────────── */
 
   private async require(path: string): Promise<MemoryDocument> {

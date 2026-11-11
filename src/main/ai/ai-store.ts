@@ -15,6 +15,39 @@ import { placeholders, type Sql } from './sql'
 
 const SETTINGS_ID = 1
 
+/** Every table of the Segretario's: what «Dimentica tutto» empties (vision §12.1). */
+const SEGRETARIO_TABLES = [
+  'ai_events',
+  'ai_activities',
+  'ai_memory',
+  'ai_memory_history',
+  'ai_usage',
+  'ai_learning',
+  'ai_reading',
+  'ai_lessons',
+  'ai_drafts',
+  'ai_notes',
+  'ai_read',
+  'ai_alerts',
+  'ai_item_history',
+  'ai_items',
+  'ai_ready_drafts',
+  'ai_briefings',
+  'ai_event_preps',
+  'ai_own_events',
+  'ai_calendar_roles',
+  'ai_projects',
+  'ai_project_threads',
+  'ai_project_resources',
+  'ai_proposals',
+  'ai_saved_searches',
+  'ai_work',
+  'ai_gone'
+] as const
+
+/** The engine's facts in `ai_meta`: all of it, the schema's version apart. */
+const ENGINE_FACTS = "key <> 'schema_version'"
+
 /** An event of an activity as it is stored: its type and what it carries. */
 export interface StoredEvent<T = unknown> {
   id: number
@@ -621,13 +654,6 @@ export class AiStore {
     }
   }
 
-  async resetLearning(accountId?: string): Promise<void> {
-    await this.sql.run(
-      `DELETE FROM ai_learning ${accountId ? 'WHERE account_id = ?' : ''}`,
-      ...(accountId ? [accountId] : [])
-    )
-  }
-
   /* ─────────────────────── how far each connection is read ─────────────────────── */
 
   /** What is kept of how far each connection is read: decided, and looked at so far. */
@@ -1055,38 +1081,24 @@ export class AiStore {
 
   /** The Segretario's data gone. */
   async clearData(): Promise<void> {
-    for (const table of [
-      'ai_events',
-      'ai_activities',
-      'ai_memory',
-      'ai_memory_history',
-      'ai_usage',
-      'ai_learning',
-      'ai_reading',
-      'ai_lessons',
-      'ai_drafts',
-      'ai_notes',
-      'ai_read',
-      'ai_alerts',
-      'ai_item_history',
-      'ai_items',
-      'ai_ready_drafts',
-      'ai_briefings',
-      'ai_event_preps',
-      'ai_own_events',
-      'ai_calendar_roles',
-      'ai_projects',
-      'ai_project_threads',
-      'ai_project_resources',
-      'ai_proposals',
-      'ai_saved_searches',
-      'ai_work',
-      'ai_gone'
-    ]) {
+    for (const table of SEGRETARIO_TABLES) {
       await this.sql.run(`DELETE FROM ${table}`)
     }
 
     // The facts the engine kept go too; the schema's version stays.
-    await this.sql.run("DELETE FROM ai_meta WHERE key <> 'schema_version'")
+    await this.sql.run(`DELETE FROM ai_meta WHERE ${ENGINE_FACTS}`)
+  }
+
+  /** Whether «Dimentica tutto» has anything to take: a row of the Segretario's, or the key. */
+  async keepsAnything(): Promise<boolean> {
+    const kept = await this.sql.get<{ kept: number }>(
+      `SELECT EXISTS (${[
+        ...SEGRETARIO_TABLES.map((table) => `SELECT 1 FROM ${table}`),
+        `SELECT 1 FROM ai_meta WHERE ${ENGINE_FACTS}`,
+        'SELECT 1 FROM ai_settings WHERE encrypted_api_key IS NOT NULL'
+      ].join(' UNION ALL ')}) AS kept`
+    )
+
+    return Boolean(kept?.kept)
   }
 }

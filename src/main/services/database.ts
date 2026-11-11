@@ -12,8 +12,6 @@ import { diagnostics } from '@main/diagnostics/log'
 import { sanitizeShortcutOverrides } from '@shared/commands'
 import { upgradeMailFontStacksInHtml } from '@shared/mail-fonts'
 import type {
-  DataStorageBreakdown,
-  DataStorageSection,
   DraftAttachment,
   DraftContent,
   DraftKind,
@@ -48,6 +46,8 @@ import {
   DEFAULT_MESSAGE_LIST_SORT_FIELD,
   DEFAULT_THEME_MODE,
   DEFAULT_UI_PREFERENCES,
+  NEW_EVENT_MINUTES,
+  NEW_EVENT_MINUTES_DEFAULT,
   READER_ZOOM_DEFAULT
 } from '@shared/models'
 import { addressKey, isValidEmailAddress } from '@shared/email-address'
@@ -775,56 +775,6 @@ function latestLabelUse(uses: ReadonlyArray<SenderLabelUse>): SenderLabelUse | u
   )
 }
 
-function normalizeStorageSectionSizesToTotal(
-  sections: DataStorageSection[],
-  targetTotalBytes: number
-): DataStorageSection[] {
-  if (sections.length === 0) {
-    return sections
-  }
-
-  const safeTargetTotal = Math.max(0, Math.floor(targetTotalBytes))
-  const currentTotal = sections.reduce(
-    (total, section) => total + Math.max(0, section.sizeBytes),
-    0
-  )
-
-  if (safeTargetTotal === 0 || currentTotal <= 0) {
-    return sections.map((section) => ({ ...section, sizeBytes: 0 }))
-  }
-
-  const scaled = sections.map((section) => {
-    const exact = (Math.max(0, section.sizeBytes) / currentTotal) * safeTargetTotal
-    const floor = Math.floor(exact)
-
-    return {
-      ...section,
-      sizeBytes: floor,
-      _fraction: exact - floor
-    }
-  })
-
-  let remaining = safeTargetTotal - scaled.reduce((total, section) => total + section.sizeBytes, 0)
-
-  if (remaining > 0) {
-    scaled.sort((left, right) => right._fraction - left._fraction)
-
-    for (let index = 0; index < scaled.length && remaining > 0; index += 1) {
-      scaled[index].sizeBytes += 1
-      remaining -= 1
-    }
-  }
-
-  return scaled
-    .map((section) => ({
-      id: section.id,
-      label: section.label,
-      kind: section.kind,
-      sizeBytes: section.sizeBytes
-    }))
-    .sort((left, right) => right.sizeBytes - left.sizeBytes)
-}
-
 /** The stored notification preferences; what is missing or unreadable takes its default. */
 function parseNotificationPreferences(value: string | null | undefined): NotificationPreferences {
   try {
@@ -1319,190 +1269,6 @@ export class AppDatabase {
     }
   }
 
-  async getDataStorageBreakdown(): Promise<DataStorageBreakdown> {
-    await this.ready
-
-    const accounts = await this.prisma.account.findMany({
-      orderBy: {
-        createdAt: 'asc'
-      },
-      select: {
-        id: true,
-        email: true,
-        displayName: true
-      }
-    })
-
-    const accountEstimateRows = (await this.prisma.$queryRawUnsafe(`
-      SELECT account_id AS accountId, COALESCE(SUM(estimated_bytes), 0) AS bytes
-      FROM (
-        SELECT
-          id AS account_id,
-          (
-            LENGTH(id) +
-            LENGTH(type) +
-            LENGTH(email) +
-            LENGTH(display_name) +
-            LENGTH(imap_host) +
-            LENGTH(smtp_host) +
-            LENGTH(username) +
-            LENGTH(auth_type) +
-            LENGTH(encrypted_secret) +
-            64
-          ) AS estimated_bytes
-        FROM accounts
-        UNION ALL
-        SELECT
-          account_id,
-          (
-            LENGTH(id) +
-            LENGTH(path) +
-            LENGTH(name) +
-            LENGTH(COALESCE(delimiter, '')) +
-            LENGTH(COALESCE(special_use, '')) +
-            48
-          ) AS estimated_bytes
-        FROM folders
-        UNION ALL
-        SELECT
-          account_id,
-          (
-            LENGTH(id) +
-            LENGTH(folder_path) +
-            LENGTH(COALESCE(thread_id, '')) +
-            LENGTH(COALESCE(message_id, '')) +
-            LENGTH(subject) +
-            LENGTH(subject_sort) +
-            LENGTH(sender_name) +
-            LENGTH(sender_key) +
-            LENGTH(sender_label) +
-            LENGTH(sender_sort) +
-            LENGTH(from_json) +
-            LENGTH(to_json) +
-            LENGTH(cc_json) +
-            LENGTH(bcc_json) +
-            LENGTH(date_iso) +
-            LENGTH(preview) +
-            LENGTH(flags_json) +
-            96
-          ) AS estimated_bytes
-        FROM messages
-        UNION ALL
-        SELECT
-          account_id,
-          (
-            LENGTH(message_key) +
-            LENGTH(COALESCE(html, '')) +
-            LENGTH(COALESCE(text, '')) +
-            LENGTH(attachments_json) +
-            LENGTH(subject) +
-            LENGTH(sender) +
-            LENGTH(recipients) +
-            2 * LENGTH(body) +
-            64
-          ) AS estimated_bytes
-        FROM message_bodies
-        UNION ALL
-        SELECT
-          account_id,
-          (
-            2 * LENGTH(message_key) +
-            LENGTH(thread_id) +
-            LENGTH(content_digest) +
-            48
-          ) AS estimated_bytes
-        FROM message_id_keys
-        UNION ALL
-        SELECT
-          account_id,
-          (
-            LENGTH(account_id) +
-            LENGTH(html) +
-            32
-          ) AS estimated_bytes
-        FROM account_signatures
-      ) account_scoped
-      GROUP BY account_id
-    `)) as Array<{ accountId?: string | null; bytes?: bigint | number | string | null }>
-
-    const globalEstimateRows = (await this.prisma.$queryRawUnsafe(`
-      SELECT COALESCE(SUM(estimated_bytes), 0) AS bytes
-      FROM (
-        SELECT
-          (
-            LENGTH(email_normalized) +
-            LENGTH(email_address) +
-            LENGTH(COALESCE(display_name, '')) +
-            LENGTH(COALESCE(name_normalized, '')) +
-            40
-          ) AS estimated_bytes
-        FROM contacts
-      ) global_scoped
-    `)) as Array<{ bytes?: bigint | number | string | null }>
-
-    const pageCountRow = (await this.prisma.$queryRawUnsafe('PRAGMA page_count')) as Array<{
-      page_count?: bigint | number | string | null
-    }>
-    const pageSizeRow = (await this.prisma.$queryRawUnsafe('PRAGMA page_size')) as Array<{
-      page_size?: bigint | number | string | null
-    }>
-
-    const accountBytesById = new Map<string, number>()
-
-    for (const row of accountEstimateRows) {
-      const accountId = (row.accountId || '').trim()
-
-      if (!accountId) {
-        continue
-      }
-
-      accountBytesById.set(accountId, toFiniteNonNegativeNumber(row.bytes))
-    }
-
-    const sections: DataStorageSection[] = accounts.map((account) => ({
-      id: account.id,
-      label: account.displayName || account.email,
-      kind: 'account',
-      sizeBytes: accountBytesById.get(account.id) ?? 0
-    }))
-
-    sections.push({
-      id: 'global-data',
-      label: 'Dati globali',
-      kind: 'global',
-      sizeBytes: toFiniteNonNegativeNumber(globalEstimateRows[0]?.bytes)
-    })
-
-    const estimatedTotalBytes = sections.reduce((total, section) => total + section.sizeBytes, 0)
-    const pageCount = toFiniteNonNegativeNumber(pageCountRow[0]?.page_count)
-    const pageSize = toFiniteNonNegativeNumber(pageSizeRow[0]?.page_size)
-    const dbTotalBytes = Math.max(0, Math.floor(pageCount * pageSize))
-
-    if (dbTotalBytes > 0) {
-      const normalizedSections =
-        estimatedTotalBytes > 0
-          ? normalizeStorageSectionSizesToTotal(sections, dbTotalBytes)
-          : [
-              {
-                id: 'global-data',
-                label: 'Dati globali',
-                kind: 'global' as const,
-                sizeBytes: dbTotalBytes
-              }
-            ]
-
-      return {
-        totalBytes: dbTotalBytes,
-        sections: normalizedSections
-      }
-    }
-
-    return {
-      totalBytes: estimatedTotalBytes,
-      sections: [...sections].sort((left, right) => right.sizeBytes - left.sizeBytes)
-    }
-  }
-
   async clearAccountData(accountId: string): Promise<void> {
     await this.ready
 
@@ -1531,15 +1297,20 @@ export class AppDatabase {
     // again takes its keys back.
     await this.markKeysLeft(accountId, null)
 
-    // Checkpoint + VACUUM the same way clearAllDataKeepAccounts does: SQLite
-    // keeps deleted rows' pages as reusable "free pages" and never returns
-    // their bytes to the OS until VACUUM rewrites the file. Without this, the
-    // Settings > Dati breakdown (which normalises per-account sizes against
-    // PRAGMA page_count × page_size) would misattribute the freed pages to
-    // "Dati globali" until the account's bootstrap refills them — looks like
-    // the data wasn't actually deleted, even though it was.
-    await this.prisma.$executeRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)')
+    await this.compact()
+  }
+
+  /**
+   * The file rewritten without what was deleted: SQLite keeps a deleted
+   * row's pages as free pages, its bytes still in the file, until VACUUM
+   * rewrites it — what the user had removed would still take the disk, and
+   * still be there to read. With the WAL the rewritten file lands in the
+   * log first: the checkpoint after it is what shrinks the file itself.
+   */
+  async compact(): Promise<void> {
+    await this.ready
     await this.prisma.$executeRawUnsafe('VACUUM')
+    await this.prisma.$executeRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)')
   }
 
   async clearAllDataKeepAccounts(): Promise<void> {
@@ -1572,8 +1343,7 @@ export class AppDatabase {
       `
     ])
 
-    await this.prisma.$executeRawUnsafe('PRAGMA wal_checkpoint(TRUNCATE)')
-    await this.prisma.$executeRawUnsafe('VACUUM')
+    await this.compact()
   }
 
   /**
@@ -2817,6 +2587,17 @@ export class AppDatabase {
     `
 
     return parseNotificationPreferences(rows[0]?.value)
+  }
+
+  /** Once-only notifications of these kinds (by the start of their keys) may be given again. */
+  async forgetNotificationsGiven(prefixes: ReadonlyArray<string>): Promise<void> {
+    await this.ready
+
+    for (const prefix of prefixes) {
+      await this.prisma.$executeRaw`
+        DELETE FROM notifications_given WHERE substr(key, 1, ${prefix.length}) = ${prefix}
+      `
+    }
   }
 
   /**
@@ -5689,6 +5470,8 @@ export class AppDatabase {
         reader_details_open INTEGER NOT NULL DEFAULT 0,
         shortcut_overrides TEXT NOT NULL DEFAULT '{}',
         notification_preferences TEXT NOT NULL DEFAULT '{}',
+        new_event_calendar_key TEXT,
+        new_event_minutes INTEGER NOT NULL DEFAULT 60,
         updated_at INTEGER NOT NULL
       )
     `)
@@ -5774,7 +5557,9 @@ export class AppDatabase {
       ['reader_details_open', 'INTEGER NOT NULL DEFAULT 0'],
       ['shortcut_overrides', "TEXT NOT NULL DEFAULT '{}'"],
       ['theme_mode', "TEXT NOT NULL DEFAULT 'system'"],
-      ['notification_preferences', "TEXT NOT NULL DEFAULT '{}'"]
+      ['notification_preferences', "TEXT NOT NULL DEFAULT '{}'"],
+      ['new_event_calendar_key', 'TEXT'],
+      ['new_event_minutes', 'INTEGER NOT NULL DEFAULT 60']
     ]
 
     for (const [column, definition] of additions) {
@@ -5816,7 +5601,9 @@ export class AppDatabase {
              message_grouping AS grouping,
              reader_zoom AS readerZoom,
              reader_details_open AS readerDetailsOpen,
-             shortcut_overrides AS shortcutOverrides
+             shortcut_overrides AS shortcutOverrides,
+             new_event_calendar_key AS newEventCalendarKey,
+             new_event_minutes AS newEventMinutes
       FROM app_preferences
       WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
       LIMIT 1
@@ -5830,6 +5617,8 @@ export class AppDatabase {
       readerZoom?: unknown
       readerDetailsOpen?: unknown
       shortcutOverrides?: unknown
+      newEventCalendarKey?: unknown
+      newEventMinutes?: unknown
     }>
 
     const row = rows[0]
@@ -5865,7 +5654,16 @@ export class AppDatabase {
       ),
       readerZoom: clampReaderZoom(toFiniteNonNegativeNumber(row.readerZoom) || READER_ZOOM_DEFAULT),
       readerDetailsOpen: toBooleanFlag(row.readerDetailsOpen),
-      shortcutOverrides: sanitizeShortcutOverrides(parseJsonObject(row.shortcutOverrides))
+      shortcutOverrides: sanitizeShortcutOverrides(parseJsonObject(row.shortcutOverrides)),
+      newEventCalendarKey:
+        typeof row.newEventCalendarKey === 'string' && row.newEventCalendarKey
+          ? row.newEventCalendarKey
+          : null,
+      newEventMinutes: NEW_EVENT_MINUTES.includes(
+        Number(row.newEventMinutes) as (typeof NEW_EVENT_MINUTES)[number]
+      )
+        ? Number(row.newEventMinutes)
+        : NEW_EVENT_MINUTES_DEFAULT
     }
   }
 
@@ -5883,6 +5681,8 @@ export class AppDatabase {
           reader_zoom = ${preferences.readerZoom},
           reader_details_open = ${preferences.readerDetailsOpen ? 1 : 0},
           shortcut_overrides = ${JSON.stringify(sanitizeShortcutOverrides(preferences.shortcutOverrides))},
+          new_event_calendar_key = ${preferences.newEventCalendarKey},
+          new_event_minutes = ${preferences.newEventMinutes},
           updated_at = ${Date.now()}
       WHERE id = ${APP_PREFERENCES_SINGLETON_ID}
     `

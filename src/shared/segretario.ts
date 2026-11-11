@@ -787,6 +787,7 @@ export const SEGRETARIO_IPC = {
   saveKey: 'segretario:save-key',
   removeKey: 'segretario:remove-key',
   forgetAll: 'segretario:forget-all',
+  keepsAnything: 'segretario:keeps-anything',
   checkKey: 'segretario:check-key',
   getNotice: 'segretario:get-notice',
   dismissNotice: 'segretario:dismiss-notice',
@@ -797,10 +798,8 @@ export const SEGRETARIO_IPC = {
   retryReading: 'segretario:retry-reading',
   listMemory: 'segretario:list-memory',
   writeMemory: 'segretario:write-memory',
-  deleteMemory: 'segretario:delete-memory',
   memoryHistory: 'segretario:memory-history',
   restoreMemory: 'segretario:restore-memory',
-  forgetEverything: 'segretario:forget-everything',
   listLearning: 'segretario:list-learning',
   startConoscimi: 'segretario:start-conoscimi',
   getOnboarding: 'segretario:get-onboarding',
@@ -871,8 +870,10 @@ export interface SegretarioApi {
   /** Checks a key with OpenRouter and, if it answers, keeps it encrypted. */
   saveKey: (key: string) => Promise<SegretarioStatus>
   removeKey: () => Promise<SegretarioStatus>
-  /** Everything the Segretario knows and did, gone; the key stays, the AI turns off. */
+  /** As if the AI had never been on (vision §12.1): all the Segretario kept goes, the key too. */
   forgetAll: () => Promise<void>
+  /** Whether it keeps anything «Dimentica tutto» would take. */
+  keepsAnything: () => Promise<boolean>
   checkKey: () => Promise<SegretarioStatus>
   /** What SIEVER Mail has to tell the user about the AI and they have not seen, or null. */
   getNotice: () => Promise<SegretarioNotice | null>
@@ -887,11 +888,8 @@ export interface SegretarioApi {
   listMemory: () => Promise<MemoryNote[]>
   /** Writes a note as the user corrected it; `seenRevision`, the version they opened: changed since, the write is refused. */
   writeMemory: (path: string, content: string, seenRevision?: number) => Promise<MemoryNote[]>
-  deleteMemory: (path: string) => Promise<MemoryNote[]>
   memoryHistory: (path: string) => Promise<MemoryVersion[]>
   restoreMemory: (path: string, revision: number) => Promise<MemoryNote[]>
-  /** Empties the memory and what the Segretario knows of every connection. */
-  forgetEverything: () => Promise<void>
   listLearning: () => Promise<ConnectionLearning[]>
   /**
    * Starts Conoscimi on these connections (`ConnectionLearning.key`; all when

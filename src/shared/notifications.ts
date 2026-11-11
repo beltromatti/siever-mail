@@ -190,3 +190,22 @@ export interface NotificationsApi {
   onBadgeChanged: (listener: (badge: BadgeShown) => void) => () => void
   setBadgeImage: (dataUrl: string | null, description: string) => Promise<void>
 }
+
+/**
+ * The preferences as a first start finds those that only the Segretario
+ * gives a meaning to — taking its word on the mail and on the calendar,
+ * its own notifications, the count of what waits today — after «Dimentica
+ * tutto» (§12.1). What the user chose for the app and its sources stays.
+ */
+export function withoutSegretario(preferences: NotificationPreferences): NotificationPreferences {
+  const defaults = DEFAULT_NOTIFICATION_PREFERENCES
+
+  return {
+    ...preferences,
+    // Without the Segretario «what waits today» and «the unread» are one count; none stays none.
+    badge: preferences.badge === 'none' ? 'none' : defaults.badge,
+    mail: { ...preferences.mail, onlyFlagged: defaults.mail.onlyFlagged },
+    calendar: { ...preferences.calendar, onlyFlagged: defaults.calendar.onlyFlagged },
+    segretario: { ...defaults.segretario }
+  }
+}
