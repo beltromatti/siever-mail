@@ -542,16 +542,6 @@
     background-color: hsl(var(--card));
   }
 
-  /* The logo's two colours, as a glow behind it; a small one asks a stronger glow (`--glow`). */
-  .logo-glow {
-    background-image: radial-gradient(
-      closest-side,
-      hsl(var(--ai-star) / calc(0.16 * var(--glow, 1))),
-      hsl(var(--primary) / calc(0.1 * var(--glow, 1))) 55%,
-      transparent
-    );
-  }
-
   /* The welcome screen coming back over the workspace, from the rail's mark. */
   .welcome-enter {
     animation: welcome-enter 280ms ease-out;

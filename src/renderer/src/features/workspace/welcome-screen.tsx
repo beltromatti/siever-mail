@@ -45,15 +45,12 @@ export function WelcomeScreen({
               step === 'logo' ? 'gap-0' : 'gap-4 lg:gap-5'
             )}
           >
-            <span className="relative grid shrink-0 place-items-center">
-              <span aria-hidden className="logo-glow absolute -inset-16 rounded-full" />
-              <img
-                src={appLogo}
-                alt="Logo SIEVER Mail"
-                className="relative size-[5.5rem] select-none lg:size-[6.5rem]"
-                draggable={false}
-              />
-            </span>
+            <img
+              src={appLogo}
+              alt="Logo SIEVER Mail"
+              className="size-[5.5rem] shrink-0 select-none lg:size-[6.5rem]"
+              draggable={false}
+            />
             <div
               className={cn(
                 'overflow-hidden transition-all duration-[1800ms] ease-out',
@@ -68,7 +65,7 @@ export function WelcomeScreen({
               >
                 SIEVER Mail
                 <span className="text-muted-foreground mt-2 block font-serif text-2xl leading-tight font-normal tracking-normal whitespace-nowrap italic">
-                  Il tuo lavoro, con un segretario.
+                  Il tuo sistema operativo personale
                 </span>
               </h1>
             </div>

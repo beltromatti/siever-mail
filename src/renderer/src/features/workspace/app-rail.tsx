@@ -69,10 +69,6 @@ export function AppRail({
             onClick={onOpenWelcome}
             className="window-no-drag group focus-visible:ring-ring/60 relative mt-0.5 mb-3 grid size-9 shrink-0 place-items-center rounded-full outline-none focus-visible:ring-2"
           >
-            <span
-              aria-hidden
-              className="logo-glow absolute -inset-3 rounded-full opacity-0 transition-opacity duration-300 [--glow:3] group-hover:opacity-100"
-            />
             <img
               src={appMark}
               alt=""
