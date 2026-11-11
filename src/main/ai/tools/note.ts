@@ -6,13 +6,14 @@ import { RegistryRefusal, RevisionConflict } from '../registry/types'
 import type { NoteNature, NotePriority } from '../registry/types'
 import {
   booleanArg,
+  markSeenKey,
   requireString,
   seenKey,
+  seenOf,
   stringArg,
   ToolConflict,
   ToolInputError,
   type SegretarioTool,
-  type TaskKind,
   type ToolContext,
   type ToolOutcome
 } from '../agent/tool-types'
@@ -33,32 +34,11 @@ const PRIORITIES: ReadonlyArray<NotePriority> = ['alta', 'media', 'bassa']
 const MESSAGE_FIELDS = ['sintesi', 'natura', 'importanza', 'scadenza'] as const
 const EVENT_FIELDS = ['preparazione', 'tuo'] as const
 
-/** Who interrupts the user about an event: the look at the calendar's changes, which nobody watches. */
-const ALERT_WRITERS: ReadonlyArray<TaskKind> = ['calendario']
 /** How far ahead an event named by its title is looked for. */
 const EVENT_AHEAD_DAYS = 14
 
 function given(args: Record<string, unknown>, name: string): boolean {
   return args[name] !== undefined && args[name] !== null && args[name] !== ''
-}
-
-/**
- * What to tell the user now (`avvisa`): the line written — or, for a
- * message, `true`, its note's summary. Null when nothing is to be told.
- */
-function alertArg(args: Record<string, unknown>): string | true | null {
-  const value = args.avvisa
-
-  if (value === true || value === 'true') {
-    return true
-  }
-
-  if (typeof value !== 'string') {
-    return null
-  }
-
-  const line = value.replace(/\s+/g, ' ').trim()
-  return line && line !== 'false' ? line : null
 }
 
 /**
@@ -107,8 +87,7 @@ async function eventNamed(
 
 /**
  * A message's note: what it asked of the user when it came — history, not
- * rewritten as the matter goes on —, and whether to tell them now, with
- * the line that says why.
+ * rewritten as the matter goes on. Over the note the run saw (§4.6).
  */
 async function noteOfMessage(
   args: Record<string, unknown>,
@@ -119,7 +98,7 @@ async function noteOfMessage(
 
   if (misplaced.length > 0) {
     throw new ToolInputError(
-      `La nota di un messaggio non ha ${misplaced.map((name) => `\`${name}\``).join(' né ')}: è \`sintesi\`, \`natura\`, \`importanza\`, \`motivo\`, \`scadenza\` e, se va detto adesso, \`avvisa\`.`
+      `La nota di un messaggio non ha ${misplaced.map((name) => `\`${name}\``).join(' né ')}: è \`sintesi\`, \`natura\`, \`importanza\`, \`motivo\` e \`scadenza\`.`
     )
   }
 
@@ -127,20 +106,7 @@ async function noteOfMessage(
   const summary = requireString(args, 'sintesi')
   const nature = requireString(args, 'natura') as NoteNature
   const priority = requireString(args, 'importanza') as NotePriority
-  const alert = alertArg(args)
   const seen = seenKey('note', message.accountId, message.messageKey)
-
-  // Its first note is its reading's, which reads its conversation whole and decides then whether
-  // the user is to be told (§13.3): working on its own, another run leaves it to that.
-  if (
-    context.run.background &&
-    !context.run.reads.has(seen) &&
-    !(await context.registry.notes.get(message.accountId, message.messageKey))
-  ) {
-    throw new ToolInputError(
-      `${handle} non ha ancora la sua nota: gliela scrive la lettura della sua conversazione, che la legge per intero e decide se avvisare l'utente. Ciò che ne hai capito usalo nel tuo lavoro.`
-    )
-  }
 
   try {
     const { record, change } = await context.registry.writeNote(
@@ -150,24 +116,15 @@ async function noteOfMessage(
         nature,
         priority,
         reason: stringArg(args, 'motivo') ?? '',
-        due: dayArg(args, 'scadenza'),
-        // Only a message that came: what the user sent is told to no one.
-        notify: message.direction === 'in' && alert !== null,
-        alert: alert === true ? null : alert
+        due: dayArg(args, 'scadenza')
       },
       context.run.actor,
-      { seenRevision: context.run.seen.get(seen) }
+      { seenRevision: seenOf(context.run, seen) }
     )
     context.run.seen.set(seen, record.revision)
-    const corrected = change.action !== 'scritta'
 
     return {
-      content: `Nota di ${handle} ${corrected ? 'corretta' : 'scritta'}.${
-        // Told or not as it came: a correction does not tell it again, nor take it back.
-        corrected && alert !== null
-          ? ' L’avviso di un messaggio si decide quando arriva: resta com’era.'
-          : ''
-      }`,
+      content: `Nota di ${handle} ${change.action === 'scritta' ? 'scritta' : 'corretta'}.`,
       summary: change.label,
       messages: [message.ref]
     }
@@ -179,6 +136,26 @@ async function noteOfMessage(
 
     if (error instanceof RegistryRefusal) {
       throw new ToolInputError(error.message)
+    }
+
+    throw error
+  }
+}
+
+/**
+ * A write over what the run saw of a thing (§4.6): refused, it shows the
+ * thing as it is now — and the run has seen it, so rewriting it knowingly goes.
+ */
+async function overSeen<T>(
+  context: ToolContext,
+  seen: string,
+  write: (seenAt: number) => Promise<T>
+): Promise<T> {
+  try {
+    return await write(seenOf(context.run, seen))
+  } catch (error) {
+    if (error instanceof RevisionConflict) {
+      context.run.seen.set(seen, error.current.revision)
     }
 
     throw error
@@ -239,11 +216,19 @@ async function markYours(
   }
 
   const byUser = context.run.task === 'richiesta'
-  const change = await context.registry.markEvent(
-    { key: event.key, title: event.title, seriesKey: series },
-    yours,
-    reason,
-    byUser ? { ...context.run.actor, by: 'utente' } : context.run.actor
+  const seen = markSeenKey({ eventKey: event.key, seriesKey: series })
+  const change = await overSeen(context, seen, (seenAt) =>
+    context.registry.markEvent(
+      { key: event.key, title: event.title, seriesKey: series },
+      yours,
+      reason,
+      byUser ? { ...context.run.actor, by: 'utente' } : context.run.actor,
+      seenAt
+    )
+  )
+  context.run.seen.set(
+    seen,
+    (await context.registry.ownership.markOf(event.key, series))?.setAt ?? 0
   )
 
   if (!change) {
@@ -265,8 +250,8 @@ async function markYours(
 
 /**
  * An event's note — only when it deserves one: the title says what it is
- * (§7.2). How to prepare it, alive until it comes; what of it the user is
- * to know now; whether it is theirs where its calendar does not say (§7.4).
+ * (§7.2). How to prepare it, alive until it comes; whether it is the user's
+ * where its calendar does not say (§7.4). Over what the run saw (§4.6).
  */
 async function noteOfEvent(
   args: Record<string, unknown>,
@@ -277,29 +262,16 @@ async function noteOfEvent(
 
   if (misplaced.length > 0) {
     throw new ToolInputError(
-      `Un evento non ha una nota come un messaggio — il titolo dice già cos'è —: niente ${misplaced.map((name) => `\`${name}\``).join(', ')}. Della nota di un evento, ciò che serve: \`preparazione\`, \`avvisa\`, \`tuo\` (con \`motivo\`).`
+      `Un evento non ha una nota come un messaggio — il titolo dice già cos'è —: niente ${misplaced.map((name) => `\`${name}\``).join(', ')}. Della nota di un evento, ciò che serve: \`preparazione\`, \`tuo\` (con \`motivo\`).`
     )
   }
 
-  const alert = alertArg(args)
   const preparation = stringArg(args, 'preparazione')?.trim() || null
   const yours = given(args, 'tuo') ? booleanArg(args, 'tuo') : null
 
-  if (alert === null && preparation === null && yours === null) {
+  if (preparation === null && yours === null) {
     throw new ToolInputError(
-      'Della nota di un evento indica ciò che serve: `preparazione`, `avvisa` (la riga da dire adesso) o `tuo`.'
-    )
-  }
-
-  if (alert === true) {
-    throw new ToolInputError(
-      "Per un evento, in `avvisa` scrivi la riga che l'utente riceve: un evento non ha una sintesi da mostrare."
-    )
-  }
-
-  if (alert !== null && !ALERT_WRITERS.includes(context.run.task)) {
-    throw new ToolInputError(
-      'Avvisare l’utente di un evento con una notifica si fa guardando i cambiamenti del calendario; con l’utente davanti, diglielo e basta.'
+      'Della nota di un evento indica ciò che serve: `preparazione`, o `tuo` con `motivo`.'
     )
   }
 
@@ -307,47 +279,56 @@ async function noteOfEvent(
   const lines: string[] = []
   const labels: string[] = []
 
-  if (alert !== null) {
-    const told = await context.calendar.alert(event.eventKey, alert)
+  // A write over what changed since the run looked, or that it never looked at, is shown first.
+  const checked = async (write: () => Promise<void>): Promise<void> => {
+    try {
+      await write()
+    } catch (error) {
+      if (error instanceof RevisionConflict) {
+        throw new ToolConflict([...lines, error.message].join(' '))
+      }
 
-    if (told === 'unknown') {
-      throw new ToolInputError(
-        `«${event.title}» non è più nel calendario e non ne resta traccia: non posso avvisarne.`
-      )
-    }
+      if (error instanceof RegistryRefusal) {
+        throw new ToolInputError([...lines, error.message].join(' '))
+      }
 
-    if (told === 'told') {
-      // It stays with the event, one for each change told: found again when the event is read.
-      await context.registry.day.recordAlert(event.eventKey, alert, context.run.actor.runId ?? null)
-      lines.push(`Avvisato l'utente di «${event.title}».`)
-      labels.push('Avvisato l’utente')
-    } else {
-      lines.push(
-        `I tuoi avvisi del calendario non gli arrivano — ha spento le novità, o le vuole tutte com'è —: «${event.title}» lo vedrà da sé.`
-      )
-      labels.push('Avviso non mandato: novità del calendario spente, o tutte com’è')
+      throw error
     }
   }
 
   if (yours !== null) {
-    const marked = await markYours(context, event, yours, stringArg(args, 'motivo')?.trim() || null)
-    lines.push(marked.line)
+    await checked(async () => {
+      const marked = await markYours(
+        context,
+        event,
+        yours,
+        stringArg(args, 'motivo')?.trim() || null
+      )
+      lines.push(marked.line)
 
-    if (marked.label) {
-      labels.push(marked.label)
-    }
+      if (marked.label) {
+        labels.push(marked.label)
+      }
+    })
   }
 
   if (preparation !== null) {
-    await context.registry.savePrep(
-      event.eventKey,
-      event.title,
-      preparation,
-      linksIn(preparation, context.handles),
-      context.run.actor
-    )
-    lines.push(`Preparazione di «${event.title}» salvata: la trova sotto l'evento.`)
-    labels.push('Preparata una riunione')
+    await checked(async () => {
+      const seen = seenKey('prep', event.eventKey)
+      const prep = await overSeen(context, seen, (seenAt) =>
+        context.registry.savePrep(
+          event.eventKey,
+          event.title,
+          preparation,
+          linksIn(preparation, context.handles),
+          context.run.actor,
+          seenAt
+        )
+      )
+      context.run.seen.set(seen, prep.writtenAt)
+      lines.push(`Preparazione di «${event.title}» salvata: la trova sotto l'evento.`)
+      labels.push('Preparata una riunione')
+    })
   }
 
   return { content: lines.join(' '), summary: labels.join(' · ') }
@@ -374,8 +355,7 @@ export const noteTool: SegretarioTool = {
       scadenza: { type: ['string', 'null'] },
       evento: { type: 'string' },
       preparazione: { type: 'string' },
-      tuo: { type: 'boolean' },
-      avvisa: { type: 'string' }
+      tuo: { type: 'boolean' }
     }
   },
   running: (args) => {
@@ -383,15 +363,18 @@ export const noteTool: SegretarioTool = {
       return 'Annoto…'
     }
 
-    if (alertArg(args) !== null) {
-      return 'Avviso l’utente…'
-    }
-
     return given(args, 'tuo') ? 'Guardo di chi è l’evento…' : 'Preparo la riunione…'
   },
   async execute(args, context) {
     const message = stringArg(args, 'messaggio')
     const event = stringArg(args, 'evento')
+
+    // Telling the user is an action of its own, not a note's (§13.3).
+    if (given(args, 'avvisa')) {
+      throw new ToolInputError(
+        'Una nota non avvisa: per dire all’utente adesso ciò che non può aspettare, c’è `avvisa`. Scrivi la nota senza.'
+      )
+    }
 
     if (message && event) {
       throw new ToolInputError(

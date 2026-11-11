@@ -161,10 +161,6 @@ export interface MessageNote {
   messageDate: string
   /** The same message came to another of the user's accounts: this copies that note. */
   twinAccountId: string | null
-  /** The Segretario said to tell the user of it now, with a notification (§13.3). */
-  notify: boolean
-  /** What the notification says, why it cannot wait; null: the summary. */
-  alert: string | null
   writtenBy: WorkActor
 }
 

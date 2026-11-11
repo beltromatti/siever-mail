@@ -19,6 +19,7 @@ import toolSearchMail from './prompts/strumenti/cerca_posta.md?raw'
 import toolSearchFiles from './prompts/strumenti/cerca_file.md?raw'
 import toolRead from './prompts/strumenti/leggi.md?raw'
 import toolNote from './prompts/strumenti/nota.md?raw'
+import toolAlert from './prompts/strumenti/avvisa.md?raw'
 import toolCommitments from './prompts/strumenti/impegni.md?raw'
 import toolProjects from './prompts/strumenti/progetti.md?raw'
 import toolReply from './prompts/strumenti/risposta.md?raw'
@@ -67,6 +68,7 @@ export const PROMPTS = {
     cerca_file: toolSearchFiles.trim(),
     leggi: toolRead.trim(),
     nota: toolNote.trim(),
+    avvisa: toolAlert.trim(),
     impegni: toolCommitments.trim(),
     progetti: toolProjects.trim(),
     risposta: toolReply.trim(),

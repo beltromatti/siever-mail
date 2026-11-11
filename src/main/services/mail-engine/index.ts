@@ -15,7 +15,6 @@ import type {
   UnifiedFolderSummary
 } from '@shared/models'
 import { folderForRole, UNIFIED_FOLDER_ROLES, type FolderRole } from '@shared/folders'
-import type { MessageNote } from '@shared/segretario'
 import type { NotificationCenter } from '@main/notifications/center'
 
 import type { AppDatabase } from '../database'
@@ -140,9 +139,14 @@ export class MailEngine {
     this.notifications.setSegretarioReading(reading)
   }
 
-  /** A note the Segretario wrote, for the alert of a new message waiting for it. */
-  noteWritten(note: MessageNote): void {
-    this.notifications.noteWritten(note)
+  /** Messages the Segretario read: a new one waiting for its reading is not told. */
+  messagesRead(accountId: string, messageKeys: ReadonlyArray<string>): void {
+    this.notifications.read(accountId, messageKeys)
+  }
+
+  /** What the Segretario says of a message that came: told now, with its line. */
+  alert(accountId: string, messageKey: string, line: string): 'told' | 'off' | 'not-new' {
+    return this.notifications.alert(accountId, messageKey, line)
   }
 
   /** "Controlla nuova posta": every account looks at once instead of on its next poll. */

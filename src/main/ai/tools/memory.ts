@@ -11,6 +11,7 @@ import {
   objectListArg,
   requireString,
   seenKey,
+  seenOf,
   stringArg,
   ToolConflict,
   ToolInputError,
@@ -110,6 +111,7 @@ export const memoryTool: SegretarioTool = {
     args.comando === 'leggi' || args.comando === 'cerca' || args.comando === 'storia'
       ? 'Rileggo la memoria…'
       : 'Aggiorno la memoria…',
+  readsOnly: (args) => ['leggi', 'cerca', 'storia'].includes(String(args.comando)),
   async execute(args, context) {
     const command = requireString(args, 'comando') as (typeof COMMANDS)[number]
     const actor = context.run.actor
@@ -197,9 +199,7 @@ export const memoryTool: SegretarioTool = {
             numberArg(args, 'riga') ?? null,
             text,
             actor,
-            {
-              seenRevision: context.run.seen.get(seenKey('memory', path))
-            }
+            { seenRevision: seenOf(context.run, seenKey('memory', path)) }
           )
           remember(context, document)
           return {
@@ -209,19 +209,11 @@ export const memoryTool: SegretarioTool = {
         }
         case 'scrivi': {
           const text = textArg(args)
-          const read = context.run.seen.get(seenKey('memory', path))
+          // Over the note as the run read it — never read, it is shown first (§4.6).
           const { document, created } = await notebook.write(path, text, actor, {
-            seenRevision: read
+            seenRevision: seenOf(context.run, seenKey('memory', path))
           })
           remember(context, document)
-
-          if (!created && read === undefined) {
-            // Rewritten whole without having been read in this work: said, so it is a choice.
-            return {
-              content: `${path} riscritta per intero (non l'avevi letta in questo lavoro: se conteneva altro, ora non c'è più — controlla con \`storia\`).${lengthWord(document)}`,
-              summary: `Riscritta la nota ${path}`
-            }
-          }
 
           return {
             content: `${created ? `Nota ${path} creata.` : `Nota ${path} riscritta.`}${lengthWord(document)}`,

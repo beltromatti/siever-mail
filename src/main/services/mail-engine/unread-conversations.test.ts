@@ -3,10 +3,10 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
-  unnotedConversationsQuery,
-  unnotedMessagesOf,
-  type UnnotedMessage
-} from './unnoted-conversations'
+  unreadConversationsQuery,
+  unreadMessagesOf,
+  type UnreadMessage
+} from './unread-conversations'
 
 /** The columns the statement reads, as the app's tables have them. */
 const SCHEMA = `
@@ -20,7 +20,7 @@ const SCHEMA = `
   CREATE TABLE message_bodies (
     account_id TEXT NOT NULL, message_key TEXT NOT NULL, UNIQUE (account_id, message_key)
   );
-  CREATE TABLE ai_notes (
+  CREATE TABLE ai_read (
     account_id TEXT NOT NULL, message_key TEXT NOT NULL, PRIMARY KEY (account_id, message_key)
   );
 `
@@ -28,7 +28,7 @@ const SCHEMA = `
 const FOLDERS = { read: ['INBOX', '[Gmail]/Tutti i messaggi', 'Sent'], drafts: ['Drafts'] }
 const SINCE = '2026-10-06T00:00:00.000Z'
 
-describe('unnotedConversationsQuery', () => {
+describe('unreadConversationsQuery', () => {
   let db: DatabaseSync
 
   const message = (
@@ -52,9 +52,9 @@ describe('unnotedConversationsQuery', () => {
       db.prepare('INSERT OR IGNORE INTO message_bodies VALUES (?, ?)').run(account, key)
     }
   }
-  const run = (threadLimit = 300, messageLimit = 300): UnnotedMessage[] => {
-    const query = unnotedConversationsQuery('a', FOLDERS, SINCE, threadLimit, messageLimit)
-    return unnotedMessagesOf(
+  const run = (threadLimit = 300, messageLimit = 300): UnreadMessage[] => {
+    const query = unreadConversationsQuery('a', FOLDERS, SINCE, threadLimit, messageLimit)
+    return unreadMessagesOf(
       db.prepare(query.sql).all(...(query.params as Array<string | number>)) as never
     )
   }
@@ -82,9 +82,9 @@ describe('unnotedConversationsQuery', () => {
     ])
   })
 
-  it('leaves out what is noted, not indexed, a draft, too old, elsewhere or another account’s', () => {
-    message('INBOX', 1, 'e:noted', 't:A', '11-01')
-    db.prepare('INSERT INTO ai_notes VALUES (?, ?)').run('a', 'e:noted')
+  it('leaves out what is read, not indexed, a draft, too old, elsewhere or another account’s', () => {
+    message('INBOX', 1, 'e:read', 't:A', '11-01')
+    db.prepare('INSERT INTO ai_read VALUES (?, ?)').run('a', 'e:read')
     message('INBOX', 2, 'e:waiting', 't:A', '11-01', { body: false })
     message('[Gmail]/Tutti i messaggi', 3, 'e:draft', 't:B', '11-01')
     message('Drafts', 4, 'e:draft', 't:B', '11-01')
@@ -115,7 +115,7 @@ describe('unnotedConversationsQuery', () => {
       message('INBOX', index + 1, `e:${index}`, `t:${index % 7}`, `10-${String(10 + (index % 20))}`)
     }
 
-    const query = unnotedConversationsQuery('a', FOLDERS, SINCE, 300, 300)
+    const query = unreadConversationsQuery('a', FOLDERS, SINCE, 300, 300)
     const plan = db
       .prepare(`EXPLAIN QUERY PLAN ${query.sql}`)
       .all(...(query.params as Array<string | number>))

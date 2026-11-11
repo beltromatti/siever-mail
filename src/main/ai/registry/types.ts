@@ -61,10 +61,6 @@ export interface NoteRecord extends MessageAnchor {
   messageDate: string
   /** The same message came to another of the user's accounts, read there: this copies that note. */
   twinAccountId: string | null
-  /** The Segretario said to tell the user of the message now, with a notification (§13.3). */
-  notify: boolean
-  /** The line the user is told now, why it cannot wait; null: the summary says it. */
-  alert: string | null
   revision: number
   runId: string | null
   /** Who wrote it last: a note the user corrected is not rewritten by a run in the background. */
@@ -325,6 +321,19 @@ export class RegistryRefusal extends Error {
  * between. The message says what the object is now, so the caller has
  * seen it and may decide again — the same write included.
  */
+/**
+ * What a run saw of an object it is about to write over (§4.6), as its
+ * revision: 0 when it saw there was none, `UNSEEN` when it never looked. A
+ * write over an object that is not as it was seen — changed since, come
+ * since, never looked at — is a conflict that shows it as it is.
+ */
+export const UNSEEN = -1
+
+/** How a run's look at an object stands to what it is now: never looked at, come since, changed since. */
+export function lookedAt(seen: number): 'mai' | 'comparsa' | 'cambiata' {
+  return seen === UNSEEN ? 'mai' : seen === 0 ? 'comparsa' : 'cambiata'
+}
+
 export class RevisionConflict extends RegistryRefusal {
   constructor(
     message: string,

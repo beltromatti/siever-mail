@@ -169,6 +169,7 @@ export const searchFilesTool: SegretarioTool = {
       : stringArg(args, 'continua')
         ? 'Continuo a cercare i file…'
         : `Cerco i file «${stringArg(args, 'nome') ?? ''}»…`,
+  readsOnly: () => true,
   async execute(args, context) {
     const given = stringArg(args, 'cartella')
     const limit = Math.max(1, numberArg(args, 'limite') ?? DEFAULT_FILE_LIMIT)

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AiStore } from './ai-store'
+import { Registry } from './registry/registry'
 import { ensureAiSchema } from './schema'
 import { memorySql } from './testing/memory-sql'
 
@@ -154,6 +155,26 @@ describe('AiStore forgetting a connection', () => {
         (row) => row.id
       )
     ).toEqual(['chat', 'know-both', 'read-a2'])
+  })
+
+  it('takes its read marks and alerts, and those of the copies read through it elsewhere', async () => {
+    const registry = new Registry(sql, { changed: () => undefined, lesson: () => undefined })
+    await registry.markRead('a1', ['m1'], 'read-a1')
+    await registry.alerts.told(
+      { kind: 'message', accountId: 'a1', messageKey: 'm1' },
+      'Da sapere.',
+      null
+    )
+    // Its copy in a2, read through a1; another message of a2, read there.
+    await registry.markRead('a2', ['m1'], null, 'a1')
+    await registry.markRead('a2', ['m2'], 'read-a2')
+
+    await store.forgetAccount('a1')
+
+    expect(await sql.all('SELECT account_id, message_key FROM ai_read')).toEqual([
+      { account_id: 'a2', message_key: 'm2' }
+    ])
+    expect(await sql.all('SELECT id FROM ai_alerts')).toEqual([])
   })
 
   it('takes from the diary the looks at a calendar, and keeps the look at its changes', async () => {

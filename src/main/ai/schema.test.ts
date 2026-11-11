@@ -115,7 +115,7 @@ describe('ensureAiSchema', () => {
       )
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '11'
+      value: '12'
     })
   })
 
@@ -243,7 +243,7 @@ describe('ensureAiSchema', () => {
       { id: 'p1', revision: 1 }
     ])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '11'
+      value: '12'
     })
   })
 
@@ -269,7 +269,7 @@ describe('ensureAiSchema', () => {
       await sql.all("SELECT name FROM sqlite_master WHERE name = 'idx_ai_items_project'")
     ).toEqual([{ name: 'idx_ai_items_project' }])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '11'
+      value: '12'
     })
   })
 
@@ -291,27 +291,35 @@ describe('ensureAiSchema', () => {
       await sql.get("SELECT name FROM sqlite_master WHERE name = 'ai_saved_copies'")
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '11'
+      value: '12'
     })
   })
 
-  it('gives a version 7 database the notes that say whether to tell the user now', async () => {
+  it('takes a version 7 database through the alerts that came and went, to the last', async () => {
     await ensureAiSchema(sql)
     await sql.run("UPDATE ai_meta SET value = '7' WHERE key = 'schema_version'")
-    await sql.run('ALTER TABLE ai_notes DROP COLUMN notify')
+    await sql.run('DROP TABLE ai_read')
+    await sql.run('DROP TABLE ai_alerts')
 
     await ensureAiSchema(sql)
 
     const columns = await sql.all<{ name: string }>('PRAGMA table_info(ai_notes)')
-    expect(columns.map((column) => column.name)).toContain('notify')
+    expect(columns.map((column) => column.name)).not.toContain('notify')
+    const tables = await sql.all<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('ai_read', 'ai_alerts', 'ai_event_alerts') ORDER BY name"
+    )
+    expect(tables.map((table) => table.name)).toEqual(['ai_alerts', 'ai_read'])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '11'
+      value: '12'
     })
   })
 
   it('gives a version 8 database whose things are: the calendars’ roles and the events found the user’s', async () => {
     await ensureAiSchema(sql)
     await sql.run("UPDATE ai_meta SET value = '8' WHERE key = 'schema_version'")
+    await sql.run('ALTER TABLE ai_notes ADD COLUMN notify INTEGER NOT NULL DEFAULT 0')
+    await sql.run('DROP TABLE ai_read')
+    await sql.run('DROP TABLE ai_alerts')
     await sql.run('DROP TABLE ai_calendar_roles')
     await sql.run('DROP TABLE ai_own_events')
 
@@ -322,39 +330,103 @@ describe('ensureAiSchema', () => {
     )
     expect(tables.map((table) => table.name)).toEqual(['ai_calendar_roles', 'ai_own_events'])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '11'
+      value: '12'
     })
   })
 
-  it('gives a version 9 database the line a note tells the user now', async () => {
+  it('gives a version 11 database the read marks its notes stood for, and every alert in one table', async () => {
     await ensureAiSchema(sql)
-    await sql.run("UPDATE ai_meta SET value = '9' WHERE key = 'schema_version'")
-    await sql.run('ALTER TABLE ai_notes DROP COLUMN alert')
-
-    await ensureAiSchema(sql)
-
-    const columns = await sql.all<{ name: string }>('PRAGMA table_info(ai_notes)')
-    expect(columns.map((column) => column.name)).toContain('alert')
-    expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '11'
-    })
-  })
-
-  it('gives a version 10 database what the user was told of each event', async () => {
-    await ensureAiSchema(sql)
-    await sql.run("UPDATE ai_meta SET value = '10' WHERE key = 'schema_version'")
-    await sql.run('DROP TABLE ai_event_alerts')
+    await sql.run("UPDATE ai_meta SET value = '11' WHERE key = 'schema_version'")
+    await sql.run('DROP TABLE ai_read')
+    await sql.run('DROP TABLE ai_alerts')
+    await sql.run('ALTER TABLE ai_notes ADD COLUMN notify INTEGER NOT NULL DEFAULT 0')
+    await sql.run('ALTER TABLE ai_notes ADD COLUMN alert TEXT')
+    await sql.run(
+      'CREATE TABLE ai_event_alerts (id INTEGER PRIMARY KEY, event_key TEXT NOT NULL, text TEXT NOT NULL, run_id TEXT, told_at INTEGER NOT NULL)'
+    )
+    const note = `INSERT INTO ai_notes (account_id, message_key, thread_id, direction, summary, state,
+      priority, reason, message_date, created_at, notify, alert, run_id)
+      VALUES (?, ?, 't', 'in', ?, 'da_rispondere', 'alta', '', '2026-11-10', ?, ?, ?, 'run-1')`
+    await sql.run(
+      note,
+      'acc',
+      'm:anna',
+      'Anna chiede la conferma',
+      10,
+      1,
+      'Anna aspetta entro le 12.'
+    )
+    await sql.run(note, 'acc', 'm:bruno', 'Bruno ringrazia', 20, 0, null)
+    await sql.run(note, 'acc', 'm:carla', 'Carla chiede il preventivo', 30, 1, null)
+    await sql.run(
+      "INSERT INTO ai_event_alerts (event_key, text, run_id, told_at) VALUES ('c1:visita', 'Spostata alle 9.', 'run-2', 40)"
+    )
 
     await ensureAiSchema(sql)
 
     expect(
+      await sql.all('SELECT account_id, message_key, read_at FROM ai_read ORDER BY message_key')
+    ).toEqual([
+      { account_id: 'acc', message_key: 'm:anna', read_at: 10 },
+      { account_id: 'acc', message_key: 'm:bruno', read_at: 20 },
+      { account_id: 'acc', message_key: 'm:carla', read_at: 30 }
+    ])
+    // A note told without its own line was told with its summary.
+    expect(
+      await sql.all('SELECT message_key, event_key, text FROM ai_alerts ORDER BY told_at')
+    ).toEqual([
+      { message_key: 'm:anna', event_key: null, text: 'Anna aspetta entro le 12.' },
+      { message_key: 'm:carla', event_key: null, text: 'Carla chiede il preventivo' },
+      { message_key: null, event_key: 'c1:visita', text: 'Spostata alle 9.' }
+    ])
+    const columns = await sql.all<{ name: string }>('PRAGMA table_info(ai_notes)')
+    expect(columns.map((column) => column.name)).not.toContain('alert')
+    expect(
       await sql.get(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_event_alerts'"
       )
-    ).toEqual({ name: 'ai_event_alerts' })
+    ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '11'
+      value: '12'
     })
+  })
+
+  it('moves the alerts once, even after a launch stopped halfway through the step', async () => {
+    await ensureAiSchema(sql)
+    await sql.run("UPDATE ai_meta SET value = '11' WHERE key = 'schema_version'")
+    await sql.run('ALTER TABLE ai_notes ADD COLUMN notify INTEGER NOT NULL DEFAULT 0')
+    await sql.run(
+      'CREATE TABLE ai_event_alerts (id INTEGER PRIMARY KEY, event_key TEXT NOT NULL, text TEXT NOT NULL, run_id TEXT, told_at INTEGER NOT NULL)'
+    )
+    // A copy read through another account: its mark says so.
+    await sql.run(
+      `INSERT INTO ai_notes (account_id, message_key, thread_id, direction, summary, state,
+        priority, reason, message_date, created_at, notify, twin_account_id)
+       VALUES ('acc', 'm:anna', 't', 'in', 'Anna chiede la conferma', 'da_rispondere', 'alta', '',
+        '2026-11-10', 10, 1, 'ufficio')`
+    )
+    await sql.run(
+      "INSERT INTO ai_event_alerts (event_key, text, run_id, told_at) VALUES ('c1:visita', 'Spostata alle 9.', 'run-2', 40)"
+    )
+    // Moved already, by the launch that stopped before the old ones went.
+    await sql.run(
+      `INSERT INTO ai_alerts (account_id, message_key, text, told_at) VALUES ('acc', 'm:anna', 'Anna chiede la conferma', 10)`
+    )
+    await sql.run(
+      `INSERT INTO ai_alerts (event_key, text, run_id, told_at) VALUES ('c1:visita', 'Spostata alle 9.', 'run-2', 40)`
+    )
+
+    await ensureAiSchema(sql)
+
+    expect(
+      await sql.all('SELECT message_key, event_key, delivered FROM ai_alerts ORDER BY told_at')
+    ).toEqual([
+      { message_key: 'm:anna', event_key: null, delivered: 1 },
+      { message_key: null, event_key: 'c1:visita', delivered: 1 }
+    ])
+    expect(await sql.all('SELECT message_key, twin_account_id FROM ai_read')).toEqual([
+      { message_key: 'm:anna', twin_account_id: 'ufficio' }
+    ])
   })
 
   it('runs again on a database already brought up, changing nothing', async () => {

@@ -9,7 +9,7 @@ import type { Sql } from './sql'
  * order, as an old one runs the steps it has not had: one path, so what a
  * fresh database looks like is what an upgraded one looks like.
  */
-const SCHEMA_VERSION = 11
+const SCHEMA_VERSION = 12
 
 /** The tables of the first 2.0 builds, as they stood (version 1). */
 /** The open things' indexes: by conversation, by state, and — from version 5 — by event. */
@@ -364,6 +364,34 @@ const STEP_9: ReadonlyArray<string> = [
   'CREATE INDEX IF NOT EXISTS idx_ai_own_events_series ON ai_own_events(series_key) WHERE series_key IS NOT NULL'
 ]
 
+/**
+ * Version 12: the mark that a message was read — by its reading, at its
+ * end; by the system, for a copy of one read in another account —, and what
+ * the user was told, of a message or of an event, one line for each.
+ */
+const STEP_12 = [
+  `CREATE TABLE IF NOT EXISTS ai_read (
+    account_id TEXT NOT NULL,
+    message_key TEXT NOT NULL,
+    run_id TEXT,
+    read_at INTEGER NOT NULL,
+    twin_account_id TEXT,
+    PRIMARY KEY (account_id, message_key)
+  )`,
+  `CREATE TABLE IF NOT EXISTS ai_alerts (
+    id INTEGER PRIMARY KEY,
+    account_id TEXT,
+    message_key TEXT,
+    event_key TEXT,
+    text TEXT NOT NULL,
+    run_id TEXT,
+    told_at INTEGER NOT NULL,
+    delivered INTEGER NOT NULL DEFAULT 1
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_ai_alerts_message ON ai_alerts(account_id, message_key)',
+  'CREATE INDEX IF NOT EXISTS idx_ai_alerts_event ON ai_alerts(event_key)'
+] as const
+
 async function hasTable(sql: Sql, table: string): Promise<boolean> {
   return (
     (await sql.get<{ name: string }>(
@@ -591,6 +619,54 @@ export async function ensureAiSchema(sql: Sql): Promise<void> {
     await sql.run(
       'CREATE INDEX IF NOT EXISTS idx_ai_event_alerts_event ON ai_event_alerts(event_key)'
     )
+  }
+
+  // Version 12: that a message was read is the system's mark, set as its reading ends (§4.1) —
+  // a note no longer stands for it —; what the user was told of anything — a message, an event —
+  // is one table, the action of `avvisa`, no longer a field of the note (§13.3).
+  if (version < 12) {
+    for (const statement of STEP_12) {
+      await sql.run(statement)
+    }
+
+    // Every message with a note was read: until now, the note said so.
+    await sql.run(
+      `INSERT OR IGNORE INTO ai_read (account_id, message_key, run_id, read_at, twin_account_id)
+       SELECT account_id, message_key, run_id, created_at, twin_account_id FROM ai_notes`
+    )
+
+    const columns = new Set(
+      (await sql.all<{ name: string }>('PRAGMA table_info(ai_notes)')).map((column) => column.name)
+    )
+
+    // Moved once, even if a launch stops halfway and the step runs again: a message was told
+    // once, an event once for each change.
+    if (columns.has('notify')) {
+      await sql.run(
+        `INSERT INTO ai_alerts (account_id, message_key, text, run_id, told_at)
+         SELECT account_id, message_key, ${columns.has('alert') ? 'COALESCE(alert, summary)' : 'summary'},
+           run_id, created_at
+         FROM ai_notes WHERE notify = 1 AND NOT EXISTS (
+           SELECT 1 FROM ai_alerts WHERE ai_alerts.account_id = ai_notes.account_id
+             AND ai_alerts.message_key = ai_notes.message_key)`
+      )
+    }
+
+    if (await hasTable(sql, 'ai_event_alerts')) {
+      await sql.run(
+        `INSERT INTO ai_alerts (event_key, text, run_id, told_at)
+         SELECT event_key, text, run_id, told_at FROM ai_event_alerts WHERE NOT EXISTS (
+           SELECT 1 FROM ai_alerts WHERE ai_alerts.event_key = ai_event_alerts.event_key
+             AND ai_alerts.told_at = ai_event_alerts.told_at)`
+      )
+      await sql.run('DROP TABLE ai_event_alerts')
+    }
+
+    for (const column of ['alert', 'notify']) {
+      if (columns.has(column)) {
+        await sql.run(`ALTER TABLE ai_notes DROP COLUMN ${column}`)
+      }
+    }
   }
 
   if (version !== SCHEMA_VERSION) {

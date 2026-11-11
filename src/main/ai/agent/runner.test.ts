@@ -146,6 +146,75 @@ describe('AgentRunner', () => {
     expect(requests.every((request) => request.maxTokens === undefined)).toBe(true)
   })
 
+  it('runs a turn’s reads together and its writes one after another, in the order asked', async () => {
+    const log: string[] = []
+    let open = 0
+    const timed = (name: string, readsOnly?: SegretarioTool['readsOnly']): SegretarioTool => ({
+      ...tool(name, async (args) => {
+        open += 1
+        log.push(`${args.n} parte (${open} insieme)`)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        open -= 1
+        log.push(`${args.n} finisce`)
+        return { content: 'ok', summary: 'ok' }
+      }),
+      readsOnly
+    })
+    const runner = runnerWith(
+      (_request, index) =>
+        answer(
+          index === 0
+            ? {
+                calls: [
+                  { name: 'leggi', args: { n: 'a' } },
+                  { name: 'leggi', args: { n: 'b' } },
+                  { name: 'scrivi', args: { n: 'c' } },
+                  { name: 'progetto', args: { n: 'd', azione: 'punto' } },
+                  { name: 'progetto', args: { n: 'e', azione: 'elenco' } },
+                  { name: 'leggi', args: { n: 'f' } }
+                ]
+              }
+            : {}
+        ),
+      [
+        timed('leggi', () => true),
+        timed('scrivi'),
+        timed('progetto', (args) => args.azione === 'elenco')
+      ]
+    )
+
+    const result = await runner.run({
+      activityId: await start(),
+      task: 'lettura',
+      background: true
+    })
+
+    expect(result.status).toBe('done')
+    expect(log).toEqual([
+      'a parte (1 insieme)',
+      'b parte (2 insieme)',
+      'a finisce',
+      'b finisce',
+      'c parte (1 insieme)',
+      'c finisce',
+      'd parte (1 insieme)',
+      'd finisce',
+      'e parte (1 insieme)',
+      'f parte (2 insieme)',
+      'e finisce',
+      'f finisce'
+    ])
+    // The model reads the results in the order it asked them.
+    const { messages } = requests[1]
+    expect(
+      messages.flatMap((message) => (message.role === 'tool' ? [message.tool_call_id] : []))
+    ).toEqual(
+      messages.flatMap((message) =>
+        message.role === 'assistant' ? (message.tool_calls ?? []).map((call) => call.id) : []
+      )
+    )
+  })
+
   it('stops a run that gets nowhere for ten turns in a row, and only then', async () => {
     const failing = tool('sbaglia', async () => {
       throw new ToolInputError('No.')

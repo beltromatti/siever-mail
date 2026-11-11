@@ -1,5 +1,6 @@
 import { placeholders, type Sql } from '../sql'
 import {
+  lookedAt,
   RegistryRefusal,
   RevisionConflict,
   type Actor,
@@ -22,8 +23,6 @@ interface NoteRow {
   due: string | null
   message_date: string
   twin_account_id: string | null
-  notify: number
-  alert: string | null
   revision: number
   run_id: string | null
   written_by: string
@@ -32,7 +31,7 @@ interface NoteRow {
 }
 
 const COLUMNS = `account_id, message_key, thread_id, direction, summary, state, priority, reason, due,
-  message_date, twin_account_id, notify, alert, revision, run_id, written_by, created_at, updated_at`
+  message_date, twin_account_id, revision, run_id, written_by, created_at, updated_at`
 
 const NATURES: ReadonlyArray<NoteNature> = [
   'da_rispondere',
@@ -57,8 +56,6 @@ function recordOf(row: NoteRow): NoteRecord {
     due: row.due,
     messageDate: row.message_date,
     twinAccountId: row.twin_account_id,
-    notify: Number(row.notify) === 1,
-    alert: row.alert,
     revision: Number(row.revision),
     runId: row.run_id,
     writtenBy:
@@ -74,20 +71,12 @@ export interface NoteInput {
   priority: NotePriority
   reason: string
   due: string | null
-  /**
-   * Tell the user of the message now (`avvisa`); a note says no when it does
-   * not say. Decided once, as the message comes: a correction of the note
-   * leaves it as it was — what was told, or not, is history.
-   */
-  notify?: boolean
-  /** The line they are told, why it cannot wait; none: the note's summary. */
-  alert?: string | null
 }
 
 /**
  * The notes: what each message said for the user when it came. History —
- * written when the message is read, corrected only when it was read wrong.
- * A note's existence is also how the app knows a message was read.
+ * written as the message is read, corrected only when it was read wrong.
+ * That it was read is the system's mark (`ReadMarks`), not the note's.
  */
 export class NoteStore {
   constructor(private readonly sql: Sql) {}
@@ -198,14 +187,14 @@ export class NoteStore {
         current.revision !== options.seenRevision
       ) {
         const says = `«${current.summary}» (${current.nature}, importanza ${current.priority})`
+        const byUser = current.writtenBy === 'utente'
+        const look = lookedAt(options.seenRevision)
         throw new RevisionConflict(
-          options.seenRevision === 0
-            ? `Da quando l’hai letto, questo messaggio ha avuto la sua nota${
-                current.writtenBy === 'utente' ? ', dall’utente' : ''
-              }: dice ${says}. Se c’è da correggerla, correggila.`
-            : `La nota di questo messaggio è cambiata da quando l’hai letta${
-                current.writtenBy === 'utente' ? ', per mano dell’utente' : ''
-              }: ora dice ${says}. Se la tua correzione vale ancora, rifalla.`,
+          look === 'mai'
+            ? `Questo messaggio ha già la sua nota${byUser ? ', dell’utente' : ''}, e non l’hai ancora letta: dice ${says}. Se c’è da correggerla, correggila.`
+            : look === 'comparsa'
+              ? `Da quando l’hai letto, questo messaggio ha avuto la sua nota${byUser ? ', dall’utente' : ''}: dice ${says}. Se c’è da correggerla, correggila.`
+              : `La nota di questo messaggio è cambiata da quando l’hai letta${byUser ? ', per mano dell’utente' : ''}: ora dice ${says}. Se la tua correzione vale ancora, rifalla.`,
           current
         )
       }
@@ -221,9 +210,9 @@ export class NoteStore {
         const row = await this.sql.get<NoteRow>(
           `INSERT INTO ai_notes (
             account_id, message_key, thread_id, direction, summary, state, priority, reason, due,
-            message_date, created_at, dismissed_at, twin_account_id, notify, alert, revision, run_id,
-            written_by, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, ?, ?, ?)
+            message_date, created_at, dismissed_at, twin_account_id, revision, run_id, written_by,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 1, ?, ?, ?)
           ON CONFLICT(account_id, message_key) DO NOTHING
           RETURNING ${COLUMNS}`,
           anchor.accountId,
@@ -238,8 +227,6 @@ export class NoteStore {
           anchor.messageDate,
           now,
           twin,
-          input.notify ? 1 : 0,
-          input.notify ? (input.alert?.trim() ?? null) || null : null,
           runId,
           actor.by,
           now

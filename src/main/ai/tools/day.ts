@@ -36,8 +36,8 @@ const LETTER_WRITERS: ReadonlyArray<TaskKind> = ['giornata', 'richiesta']
 
 /**
  * The desk's own text (vision §13.1): the letter at the top of Oggi. What
- * the Segretario writes of an event — how to prepare it, what to tell now,
- * whose it is — is that event's note (`nota`).
+ * the Segretario writes of an event — how to prepare it, whose it is — is
+ * that event's note (`nota`); what the user is to know now, `avvisa`.
  */
 export const todayTool: SegretarioTool = {
   name: 'oggi',
@@ -128,6 +128,7 @@ export const journalTool: SegretarioTool = {
     }
   },
   running: () => 'Rileggo cosa ho fatto…',
+  readsOnly: () => true,
   async execute(args, context) {
     const days = Math.min(30, Math.max(1, numberArg(args, 'giorni') ?? 3))
     const words = foldSearchText(stringArg(args, 'cerca') ?? '')

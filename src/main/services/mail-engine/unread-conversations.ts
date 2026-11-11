@@ -5,7 +5,7 @@ export interface ReadFolders {
 }
 
 /** A message of an account the Segretario has not read yet, in its conversation. */
-export interface UnnotedMessage {
+export interface UnreadMessage {
   folderPath: string
   uid: number
   messageKey: string
@@ -17,7 +17,7 @@ export interface UnnotedMessage {
 
 /**
  * The statement that finds an account's conversations with messages the
- * Segretario has written no note for — in `folders.read` (every folder
+ * Segretario has not read yet (§4.1: its mark, `ai_read`) — in `folders.read` (every folder
  * but the Trash, Spam and Bozze), since `sinceIso`, their text indexed,
  * never a draft, which Gmail lists in All Mail too — in one pass over the
  * messages since then: each message once whatever folders hold it, the
@@ -25,7 +25,7 @@ export interface UnnotedMessage {
  * each its `messageLimit` newest such messages. Rows come conversation by
  * conversation, the newest first, each oldest message first.
  */
-export function unnotedConversationsQuery(
+export function unreadConversationsQuery(
   accountId: string,
   folders: ReadFolders,
   sinceIso: string,
@@ -37,7 +37,7 @@ export function unnotedConversationsQuery(
 
   return {
     sql: `
-      WITH unnoted AS MATERIALIZED (
+      WITH unread AS MATERIALIZED (
         SELECT m.folder_path AS folderPath, m.uid AS uid, m.message_key AS messageKey,
           m.thread_id AS threadId, m.date_iso AS dateIso
         FROM messages m
@@ -49,8 +49,8 @@ export function unnotedConversationsQuery(
             WHERE b.account_id = m.account_id AND b.message_key = m.message_key
           )
           AND NOT EXISTS (
-            SELECT 1 FROM ai_notes n
-            WHERE n.account_id = m.account_id AND n.message_key = m.message_key
+            SELECT 1 FROM ai_read r
+            WHERE r.account_id = m.account_id AND r.message_key = m.message_key
           )
           AND NOT EXISTS (
             SELECT 1 FROM messages d
@@ -61,7 +61,7 @@ export function unnotedConversationsQuery(
       copies AS (
         SELECT folderPath, uid, messageKey, threadId, dateIso,
           ROW_NUMBER() OVER (PARTITION BY messageKey ORDER BY folderPath, uid) AS copy
-        FROM unnoted
+        FROM unread
       ),
       messages_once AS (
         SELECT folderPath, uid, messageKey, threadId, dateIso,
@@ -87,9 +87,9 @@ export function unnotedConversationsQuery(
   }
 }
 
-/** The rows of `unnotedConversationsQuery` as they come back from SQLite. */
-export function unnotedMessagesOf(
-  rows: ReadonlyArray<Omit<UnnotedMessage, 'uid'> & { uid: number | bigint }>
-): UnnotedMessage[] {
+/** The rows of `unreadConversationsQuery` as they come back from SQLite. */
+export function unreadMessagesOf(
+  rows: ReadonlyArray<Omit<UnreadMessage, 'uid'> & { uid: number | bigint }>
+): UnreadMessage[] {
   return rows.map((row) => ({ ...row, uid: Number(row.uid) }))
 }

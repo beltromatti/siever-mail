@@ -3,12 +3,14 @@ import type { HandleLink } from '@shared/segretario'
 
 import { movedUnder } from '../../files/paths'
 import { placeholders, type Sql } from '../sql'
+import { AlertStore } from './alerts'
 import { CommitmentStore } from './commitments'
-import { DayStore } from './day'
+import { DayStore, type MeetingPrep } from './day'
 import { NoteStore, type NoteInput } from './notes'
 import { OwnershipStore, type EventMark } from './ownership'
 import { ProjectStore } from './projects'
 import { ProposalStore } from './proposals'
+import { ReadMarks } from './read-marks'
 import { ReplyStore } from './replies'
 import {
   OWED_KINDS,
@@ -31,7 +33,9 @@ import {
   type ReplyStatus,
   type ThreadRef,
   type UndoSpec,
+  lookedAt,
   RegistryRefusal,
+  RevisionConflict,
   SYSTEM,
   USER
 } from './types'
@@ -44,6 +48,8 @@ export interface RegistryHooks {
   changed(change: RegistryChange, actor: Actor): void
   /** The user corrected or decided something: a lesson for the reflection. */
   lesson(kind: string, payload: Record<string, unknown>): void
+  /** Messages read — their reading over, or a copy of one read elsewhere —: what waited for it, settles. */
+  read?(accountId: string, messageKeys: ReadonlyArray<string>): void
 }
 
 /** How long a message must stay missing before it is taken as deleted. */
@@ -102,6 +108,8 @@ export class Registry {
   readonly proposals: ProposalStore
   readonly day: DayStore
   readonly ownership: OwnershipStore
+  readonly alerts: AlertStore
+  readonly readMarks: ReadMarks
 
   constructor(
     private readonly sql: Sql,
@@ -114,9 +122,30 @@ export class Registry {
     this.proposals = new ProposalStore(sql)
     this.day = new DayStore(sql)
     this.ownership = new OwnershipStore(sql)
+    this.alerts = new AlertStore(sql)
+    this.readMarks = new ReadMarks(sql)
   }
 
   /* ─────────────────────────────── notes ─────────────────────────────── */
+
+  /**
+   * Marks messages read (§4.1) — the system's mark, as their reading ends, or
+   * for a copy of a message read in another account —, and says so to what
+   * waits for it: a new message's notification (§13.3).
+   */
+  async markRead(
+    accountId: string,
+    messageKeys: ReadonlyArray<string>,
+    runId: string | null,
+    twinAccountId: string | null = null
+  ): Promise<void> {
+    if (messageKeys.length === 0) {
+      return
+    }
+
+    await this.readMarks.mark(accountId, messageKeys, runId, twinAccountId)
+    this.hooks.read?.(accountId, messageKeys)
+  }
 
   async writeNote(
     anchor: MessageAnchor & { direction: 'in' | 'out'; messageDate: string },
@@ -704,10 +733,11 @@ export class Registry {
   async saveReply(
     anchor: MessageAnchor,
     input: { kind: ReplyKind; text: string; doubts: string },
-    actor: Actor
+    actor: Actor,
+    options: { seenRevision?: number } = {}
   ): Promise<{ record: ReplyRecord; change: RegistryChange }> {
     const before = await this.replies.get(anchor.accountId, anchor.messageKey)
-    const { record, created } = await this.replies.save(anchor, input, actor)
+    const { record, created } = await this.replies.save(anchor, input, actor, options)
     return {
       record,
       change: this.emit(
@@ -1156,15 +1186,16 @@ export class Registry {
     )
   }
 
-  /** How to prepare for a meeting, under the event. */
+  /** How to prepare for a meeting, under the event: over the one the run saw (`DayStore.savePrep`). */
   async savePrep(
     eventKey: string,
     title: string,
     text: string,
     links: ReadonlyArray<HandleLink>,
-    actor: Actor
-  ): Promise<void> {
-    await this.day.savePrep(eventKey, text, links, actor.runId ?? null)
+    actor: Actor,
+    seenAt?: number
+  ): Promise<MeetingPrep> {
+    const prep = await this.day.savePrep(eventKey, text, links, actor.runId ?? null, seenAt)
     this.emit(
       {
         object: 'giornata',
@@ -1178,6 +1209,7 @@ export class Registry {
       },
       actor
     )
+    return prep
   }
 
   /* ─────────────────────────────── whose things are (§7.4) ─────────────────────────────── */
@@ -1191,8 +1223,23 @@ export class Registry {
     calendar: { key: string; name: string; role: CalendarRole },
     role: CalendarRole,
     reason: string | null,
-    actor: Actor
+    actor: Actor,
+    seenAt?: number
   ): Promise<RegistryChange> {
+    const decided = await this.ownership.role(calendar.key)
+
+    // Over the decision the run saw (§4.6): another run's since, or one it never read, it sees first.
+    if (seenAt !== undefined && (decided?.setAt ?? 0) !== seenAt && decided) {
+      throw new RevisionConflict(
+        `${
+          lookedAt(seenAt) === 'mai'
+            ? `Di chi sono gli eventi di «${calendar.name}» l'hai già deciso, e non l'hai ancora riletto`
+            : `Di chi sono gli eventi di «${calendar.name}» è stato deciso di nuovo da quando l'hai letto`
+        }: ${ROLE_WORDS[decided.role]}${decided.reason ? ` («${decided.reason}»)` : ''}. Se la tua decisione vale ancora, rifalla.`,
+        { revision: decided.setAt }
+      )
+    }
+
     await this.ownership.setRole(calendar.key, role, reason, actor.runId ?? null)
     return this.emit(
       {
@@ -1220,10 +1267,23 @@ export class Registry {
     event: { key: string; title: string; seriesKey: string | null },
     yours: boolean,
     reason: string | null,
-    actor: Actor
+    actor: Actor,
+    seenAt?: number
   ): Promise<RegistryChange | null> {
     const previous = await this.ownership.markOf(event.key, event.seriesKey)
     const byUser = actor.by === 'utente'
+
+    // Over what the run saw (§4.6): said meanwhile by another run, or never read, it is seen first.
+    if (!byUser && seenAt !== undefined && previous && previous.setAt !== seenAt) {
+      throw new RevisionConflict(
+        `${
+          lookedAt(seenAt) === 'mai'
+            ? `Di chi è «${event.title}» è già stato detto, e non l'hai ancora letto`
+            : `Di chi è «${event.title}» è cambiato da quando l'hai letto`
+        }: ${previous.yours ? 'è' : 'non è'} dell'utente, ${previous.setBy === 'utente' ? "l'ha detto lui" : 'per il Segretario'}${previous.reason ? ` («${previous.reason}»)` : ''}. Se ciò che dici vale ancora, rifallo.`,
+        { revision: previous.setAt }
+      )
+    }
 
     if (!byUser && previous?.setBy === 'utente') {
       if (previous.yours === yours) {

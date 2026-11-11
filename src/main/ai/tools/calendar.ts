@@ -664,6 +664,7 @@ export const calendarTool: SegretarioTool = {
       proponi: 'Preparo la proposta…',
       liberi: 'Cerco gli orari liberi…'
     })[String(args.azione)] ?? 'Guardo il calendario…',
+  readsOnly: (args) => ['elenco', 'cerca', 'liberi'].includes(String(args.azione)),
   async execute(args, context): Promise<ToolOutcome> {
     const action = requireString(args, 'azione') as (typeof ACTIONS)[number]
 

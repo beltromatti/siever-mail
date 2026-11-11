@@ -1,6 +1,6 @@
 import type { Sql } from '../sql'
 import { foldTitle } from '../registry/projects'
-import { RegistryRefusal, type Actor } from '../registry/types'
+import { lookedAt, RegistryRefusal, type Actor } from '../registry/types'
 
 /**
  * Past this length a note is long for what it is — every run that opens it
@@ -253,7 +253,9 @@ export class Notebook {
       current.revision !== options.seenRevision
     ) {
       throw new RegistryRefusal(
-        `${path} è cambiata da quando l'hai letta (ora è la versione ${current.revision}): rileggila e modifica solo ciò che serve.`,
+        lookedAt(options.seenRevision) === 'mai'
+          ? `${path} c'è già, e non l'hai ancora letta: riscriverla per intero toglierebbe ciò che contiene. Eccola: modifica solo ciò che serve, o riscrivila sapendo cosa c'era.`
+          : `${path} è cambiata da quando l'hai letta (ora è la versione ${current.revision}): rileggila e modifica solo ciò che serve.`,
         current
       )
     }
@@ -362,7 +364,9 @@ export class Notebook {
         current.revision !== options.seenRevision
       ) {
         throw new RegistryRefusal(
-          `${path} è cambiata da quando l'hai letta (ora è la versione ${current.revision}): la riga ${afterLine} non è più quella che hai visto.`,
+          lookedAt(options.seenRevision) === 'mai'
+            ? `Non hai ancora letto ${path}: la riga ${afterLine} non sai qual è. Eccola com'è.`
+            : `${path} è cambiata da quando l'hai letta (ora è la versione ${current.revision}): la riga ${afterLine} non è più quella che hai visto.`,
           current
         )
       }

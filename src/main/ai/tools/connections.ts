@@ -7,11 +7,15 @@ import type { StoredReading } from '../ai-store'
 import {
   numberArg,
   requireString,
+  seenKey,
+  seenOf,
   stringArg,
+  ToolConflict,
   ToolInputError,
   type SegretarioTool,
   type ToolContext
 } from '../agent/tool-types'
+import { RevisionConflict } from '../registry/types'
 import { firstLookDone, heldWindow, lookItems } from '../tasks/calendar'
 import { countOf } from './format'
 
@@ -128,6 +132,13 @@ async function calendarLine(
     window.today
   )
   const past = items.filter((item) => item.at < window.today).length
+  const own = calendars.filter((calendar) => calendar.connectionId === connectionId)
+  const decided = await context.registry.ownership.roles()
+
+  // What the run saw of each decision — none, too — for a decision over it (§4.6).
+  for (const calendar of own) {
+    context.run.seen.set(seenKey('role', calendar.key), decided.get(calendar.key)?.setAt ?? 0)
+  }
 
   return [
     `- Calendario ${connection.label} — si guarda tutto ciò che tiene, da ${CALENDAR_HELD_DAYS.back} giorni fa a un anno avanti: ${countOf(items.length, 'evento', 'eventi')} (una serie ricorrente conta per uno), ${past} passati e ${items.length - past} in arrivo; ${
@@ -135,12 +146,10 @@ async function calendarLine(
         ? 'li hai guardati tutti, e da qui guardi ciò che vi appare o cambia'
         : 'la prima occhiata non è ancora finita'
     }.`,
-    ...calendars
-      .filter((calendar) => calendar.connectionId === connectionId)
-      .map(
-        (calendar) =>
-          `  «${calendar.name}»${calendar.primary ? ' (il principale)' : ''}${calendar.writable ? '' : ', in sola lettura'}: ${ROLE_WORDS[calendar.role]} — ${roleDecided(calendar)}.`
-      )
+    ...own.map(
+      (calendar) =>
+        `  «${calendar.name}»${calendar.primary ? ' (il principale)' : ''}${calendar.writable ? '' : ', in sola lettura'}: ${ROLE_WORDS[calendar.role]} — ${roleDecided(calendar)}.`
+    )
   ].join('\n')
 }
 
@@ -348,12 +357,27 @@ async function setRole(
     return { content: `Già così: ${words}.`, summary: 'Già così' }
   }
 
-  const change = await context.registry.decideCalendarRole(
-    calendar,
-    chosen,
-    stringArg(args, 'motivo')?.trim() || null,
-    context.run.actor
-  )
+  const seen = seenKey('role', calendar.key)
+  let change
+
+  try {
+    change = await context.registry.decideCalendarRole(
+      calendar,
+      chosen,
+      stringArg(args, 'motivo')?.trim() || null,
+      context.run.actor,
+      seenOf(context.run, seen)
+    )
+  } catch (error) {
+    if (error instanceof RevisionConflict) {
+      context.run.seen.set(seen, error.current.revision)
+      throw new ToolConflict(error.message)
+    }
+
+    throw error
+  }
+
+  context.run.seen.set(seen, (await context.registry.ownership.role(calendar.key))?.setAt ?? 0)
   return {
     content: `Da ora ${words}: i promemoria, le novità e la giornata di Oggi seguono questo.`,
     summary: change.label
@@ -381,6 +405,7 @@ export const connectionsTool: SegretarioTool = {
       : args.azione === 'di_chi'
         ? 'Decido di chi sono gli eventi…'
         : 'Guardo le connessioni…',
+  readsOnly: (args) => args.azione === 'elenco',
   async execute(args, context) {
     const action = requireString(args, 'azione')
 

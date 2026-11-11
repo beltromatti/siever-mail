@@ -12,6 +12,7 @@ import { journalTool, reviewTool, todayTool } from './day'
 import { sendDraftTool, writeDraftTool } from './drafts'
 import { searchFilesTool } from './files'
 import { memoryTool } from './memory'
+import { alertTool } from './alert'
 import { noteTool } from './note'
 import { organizeTool } from './organize'
 import { projectsTool } from './projects'
@@ -144,6 +145,7 @@ export const SEGRETARIO_TOOLS: ReadonlyArray<SegretarioTool> = [
   searchFilesTool,
   readTool,
   noteTool,
+  alertTool,
   commitmentsTool,
   projectsTool,
   replyTool,

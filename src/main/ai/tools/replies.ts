@@ -3,6 +3,7 @@ import { RegistryRefusal, RevisionConflict, type ReplyKind } from '../registry/t
 import {
   requireString,
   seenKey,
+  seenOf,
   stringArg,
   ToolConflict,
   ToolInputError,
@@ -83,6 +84,7 @@ export const replyTool: SegretarioTool = {
           ? 'Preparo il sollecito…'
           : 'Preparo la risposta…'
         : 'Aggiorno la risposta preparata…',
+  readsOnly: (args) => args.azione === 'elenco',
   async execute(args, context) {
     const action = requireString(args, 'azione')
 
@@ -102,7 +104,8 @@ export const replyTool: SegretarioTool = {
           const { record, change } = await context.registry.saveReply(
             message,
             { kind, text: requireString(args, 'testo'), doubts: stringArg(args, 'dubbi') ?? '' },
-            context.run.actor
+            context.run.actor,
+            { seenRevision: seenOf(context.run, key) }
           )
           context.run.seen.set(key, record.revision)
           return {
@@ -117,7 +120,7 @@ export const replyTool: SegretarioTool = {
             message.messageKey,
             'pronta',
             context.run.actor,
-            { seenRevision: context.run.seen.get(key) }
+            { seenRevision: seenOf(context.run, key) }
           )
 
           if (!record) {
@@ -134,13 +137,14 @@ export const replyTool: SegretarioTool = {
             message.messageKey,
             context.run.background ? 'superata' : 'scartata',
             context.run.actor,
-            { seenRevision: context.run.seen.get(key), reason: stringArg(args, 'motivo') }
+            { seenRevision: seenOf(context.run, key), reason: stringArg(args, 'motivo') }
           )
 
           if (!record) {
             throw new ToolInputError(`Per ${handle} non c'è una risposta preparata.`)
           }
 
+          context.run.seen.set(key, record.revision)
           return { content: 'Tolta: non è più da offrire.', summary: 'Risposta preparata tolta' }
         }
         default:

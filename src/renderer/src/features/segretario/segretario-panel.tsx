@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowUp,
   AtSign,
+  Bell,
   BookOpen,
   Briefcase,
   CalendarDays,
@@ -63,6 +64,8 @@ const TOOL_ICONS: Readonly<Record<string, ComponentType<{ className?: string }>>
   cerca_file: FileSearch,
   leggi: MailOpen,
   nota: StickyNote,
+  // The same as Settings › Notifiche.
+  avvisa: Bell,
   impegni: ListTodo,
   progetti: Briefcase,
   risposta: MessageSquareReply,

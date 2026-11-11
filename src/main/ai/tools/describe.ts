@@ -2,7 +2,7 @@ import type { MessageRef } from '@shared/models'
 
 import type { CommitmentRecord, NoteRecord, ProjectSummary, ReplyRecord } from '../registry/types'
 import { seenKey, type ToolContext } from '../agent/tool-types'
-import { dayWithWeekday, shortDate } from './format'
+import { dayWithWeekday, formatDateTime, shortDate } from './format'
 
 const KIND_WORDS: Record<CommitmentRecord['kind'], string> = {
   ti_chiedono: 'ti chiedono',
@@ -46,8 +46,8 @@ export function noteLine(note: NoteRecord): string {
   return `«${note.summary}» · ${NATURE_WORDS[note.nature]} · importanza ${note.priority}${
     note.reason ? ` (${note.reason})` : ''
   }${note.due ? ` · da fare entro ${dayWithWeekday(note.due)}` : ''}${
-    note.notify ? ` · avviso all’utente${note.alert ? `: «${note.alert}»` : ''}` : ''
-  }${note.writtenBy === 'utente' ? ' · corretta dall’utente' : ''}`
+    note.writtenBy === 'utente' ? ' · corretta dall’utente' : ''
+  }`
 }
 
 export function replyLines(reply: ReplyRecord): string[] {
@@ -103,8 +103,9 @@ export async function messageWork(
   options: { withConversation: boolean } = { withConversation: true }
 ): Promise<string[]> {
   const thread = { accountId: ref.accountId, threadId }
-  const [note, items, links, reply, drafts, marks, proposals] = await Promise.all([
+  const [note, alerts, items, links, reply, drafts, marks, proposals] = await Promise.all([
     context.registry.notes.get(ref.accountId, messageKey),
+    context.registry.alerts.of({ kind: 'message', accountId: ref.accountId, messageKey }),
     options.withConversation
       ? context.registry.commitments.ofThreads([thread])
       : Promise.resolve([]),
@@ -130,6 +131,16 @@ export async function messageWork(
     lines.push(`La tua nota: ${noteLine(note)}`)
   } else {
     lines.push('Non l’hai ancora letto: nessuna nota.')
+  }
+
+  // What the user was told of it, kept with it (§13.3).
+  for (const alert of alerts) {
+    const when = formatDateTime(new Date(alert.toldAt).toISOString())
+    lines.push(
+      alert.delivered
+        ? `L'hai detto all'utente, ${when}: «${alert.text}»`
+        : `Volevi dirlo all'utente, ${when}, ma l'avviso non gli è arrivato: «${alert.text}»`
+    )
   }
 
   if (items.length > 0) {

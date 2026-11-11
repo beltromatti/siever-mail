@@ -34,7 +34,6 @@ import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   type NotificationPreferences
 } from '@shared/notifications'
-import type { MessageNote } from '@shared/segretario'
 
 const INBOX: MailFolder = {
   accountId: 'a1',
@@ -61,26 +60,6 @@ function message(uid: number, overrides: Partial<MailMessageSummary> = {}): Mail
     isRead: false,
     ...overrides
   } as MailMessageSummary
-}
-
-function note(uid: number, notify: boolean, overrides: Partial<MessageNote> = {}): MessageNote {
-  return {
-    accountId: 'a1',
-    messageKey: `k${uid}`,
-    threadId: `t${uid}`,
-    direction: 'in',
-    summary: `Nota ${uid}`,
-    nature: 'da_rispondere',
-    priority: 'alta',
-    reason: '',
-    due: null,
-    messageDate: '2026-10-28T08:00:00.000Z',
-    twinAccountId: null,
-    notify,
-    alert: null,
-    writtenBy: 'segretario',
-    ...overrides
-  }
 }
 
 describe('the notifications of new mail', () => {
@@ -239,63 +218,100 @@ describe('the notifications of new mail', () => {
   describe('while the Segretario reads the mail', () => {
     beforeEach(() => mail.setSegretarioReading(true))
 
-    it('tells only what it said to tell now, with its words', () => {
+    it('tells only what it said to tell now, with its words; what it read and said nothing of, never', () => {
       mail.enqueue(ACCOUNT, [message(1), message(2), message(3)], INBOX, false)
       vi.advanceTimersByTime(5_000)
       expect(shown).toHaveLength(0)
 
-      mail.noteWritten(note(1, true))
-      mail.noteWritten(note(2, false))
+      expect(mail.alert('a1', 'k1', 'Rossi aspetta la conferma entro le 12.')).toBe('told')
+      mail.read('a1', ['k1', 'k2', 'k3'])
+      vi.advanceTimersByTime(10 * 60 * 1000)
 
-      expect(shown).toHaveLength(1)
-      expect(shown[0].options.title).toBe('Mittente 1')
-      expect(`${shown[0].options.body}`).toContain('Nota 1')
+      expect(shown.map(({ options }) => [options.title, options.body])).toEqual([
+        ['Mittente 1', 'Rossi aspetta la conferma entro le 12.']
+      ])
     })
 
     it('tells a copy in another mailbox only where it was not told', () => {
       const copy = { messageId: '<m3@brenta.it>' }
       mail.enqueue(ACCOUNT, [message(3, copy)], INBOX, false)
-      mail.noteWritten(note(3, true))
+      mail.alert('a1', 'k3', 'Da sapere.')
       mail.enqueue(
         OTHER,
         [message(3, { ...copy, accountId: 'a2', messageKey: 'twin' })],
         { ...INBOX, accountId: 'a2' },
         false
       )
-      mail.noteWritten(note(3, true, { accountId: 'a2', messageKey: 'twin', twinAccountId: 'a1' }))
+      mail.alert('a2', 'twin', 'Da sapere.')
       expect(shown).toHaveLength(1)
 
       // Its first mailbox muted: the copy is told.
       prefer((current) => ({ ...current, mail: { ...current.mail, mutedAccountIds: ['a1'] } }))
       const muted = { messageId: '<m4@brenta.it>' }
       mail.enqueue(ACCOUNT, [message(4, muted)], INBOX, false)
+      expect(mail.alert('a1', 'k4', 'Da sapere.')).toBe('off')
       mail.enqueue(
         OTHER,
         [message(4, { ...muted, accountId: 'a2', messageKey: 'twin4' })],
         { ...INBOX, accountId: 'a2' },
         false
       )
-      mail.noteWritten(note(4, true, { accountId: 'a2', messageKey: 'twin4', twinAccountId: 'a1' }))
+      mail.alert('a2', 'twin4', 'Da sapere.')
       expect(shown).toHaveLength(2)
     })
 
-    it('says why it cannot wait, with the line the Segretario wrote — or its summary, without one', () => {
-      mail.enqueue(ACCOUNT, [message(1), message(2)], INBOX, false)
-      mail.noteWritten(note(1, true, { alert: 'Rossi aspetta la conferma entro le 12.' }))
-      mail.noteWritten(note(2, true))
-
-      expect(shown.map((notification) => notification.options.body)).toEqual([
-        'Rossi aspetta la conferma entro le 12.',
-        'Nota 2'
-      ])
-    })
-
-    it('tells as it is a message whose note does not come in time', () => {
+    it('tells as it is a message its reading does not reach in time, and its line in place, if it comes', () => {
       mail.enqueue(ACCOUNT, [message(4)], INBOX, false)
       vi.advanceTimersByTime(10 * 60 * 1000)
 
       expect(shown).toHaveLength(1)
       expect(`${shown[0].options.body}`).toContain('Anteprima 4')
+
+      expect(mail.alert('a1', 'k4', 'Il DDT non corrisponde all’ordine.')).toBe('told')
+      // In its place: the one told as it was goes.
+      expect(shown.map(({ options, closed }) => [options.body, closed])).toEqual([
+        ['Anteprima 4', true],
+        ['Il DDT non corrisponde all’ordine.', false]
+      ])
+    })
+
+    it('gives a late line once: not again for a copy told elsewhere, and out of the summary it was in', () => {
+      const copy = { messageId: '<m5@brenta.it>' }
+      mail.enqueue(ACCOUNT, [message(5, copy)], INBOX, false)
+      mail.alert('a1', 'k5', 'Da sapere.')
+      mail.enqueue(
+        OTHER,
+        [message(5, { ...copy, accountId: 'a2', messageKey: 'twin5' })],
+        { ...INBOX, accountId: 'a2' },
+        false
+      )
+      vi.advanceTimersByTime(10 * 60 * 1000)
+      expect(mail.alert('a2', 'twin5', 'Da sapere.')).toBe('told')
+      expect(shown).toHaveLength(1)
+
+      // Told late in the summary of what came while closed: on its own with its line, and the
+      // summary keeps the other — and goes when that one is read.
+      shown.length = 0
+      const before = new Date(Date.now() - 3_600_000).toISOString()
+      mail.enqueue(
+        ACCOUNT,
+        [message(1, { date: before }), message(2, { date: before })],
+        INBOX,
+        false
+      )
+      vi.advanceTimersByTime(10 * 60 * 1000 + 20_000)
+      mail.alert('a1', 'k1', 'Rossi aspetta la conferma entro le 12.')
+      mail.withdraw([{ accountId: 'a1', folderPath: 'INBOX', uid: 2 }])
+
+      expect(shown.map(({ options, closed }) => [options.title, closed])).toEqual([
+        ['2 nuove email', true],
+        ['Mittente 1', false]
+      ])
+    })
+
+    it('says a message not just come is not new: an alert is for what arrives', () => {
+      expect(mail.alert('a1', 'k99', 'Da sapere.')).toBe('not-new')
+      expect(shown).toHaveLength(0)
     })
 
     it('lets go of what waited when it stops reading, and forgets what was read', () => {
@@ -308,15 +324,16 @@ describe('the notifications of new mail', () => {
       expect(shown[0].options.title).toBe('Mittente 5')
     })
 
-    it('tells everything when the user wants every message', () => {
+    it('tells everything when the user wants every message, and not the Segretario’s word', () => {
       prefer((current) => ({ ...current, mail: { ...current.mail, onlyFlagged: false } }))
       mail.enqueue(ACCOUNT, [message(7)], INBOX, false)
       vi.runAllTimers()
 
       expect(shown).toHaveLength(1)
+      expect(mail.alert('a1', 'k7', 'Da sapere.')).toBe('off')
     })
 
-    it('tells what came while closed and is worth it one by one, with its line, as notes come', () => {
+    it('tells what came while closed and is worth it one by one, with its line, as it is read', () => {
       const before = new Date(Date.now() - 3_600_000).toISOString()
       mail.enqueue(
         ACCOUNT,
@@ -325,9 +342,9 @@ describe('the notifications of new mail', () => {
         false
       )
 
-      mail.noteWritten(note(1, true, { alert: 'Rossi aspetta la conferma entro le 12.' }))
-      mail.noteWritten(note(2, false))
-      mail.noteWritten(note(3, true, { alert: 'Il DDT non corrisponde all’ordine.' }))
+      mail.alert('a1', 'k1', 'Rossi aspetta la conferma entro le 12.')
+      mail.read('a1', ['k1', 'k2'])
+      mail.alert('a1', 'k3', 'Il DDT non corrisponde all’ordine.')
 
       // Not a summary that would hide the second line: each is told for it.
       expect(shown.map(({ options }) => [options.title, options.body])).toEqual([
@@ -344,7 +361,7 @@ describe('the notifications of new mail', () => {
         INBOX,
         false
       )
-      mail.noteWritten(note(1, true))
+      mail.alert('a1', 'k1', 'Da sapere.')
       vi.advanceTimersByTime(10 * 60 * 1000)
       expect(shown).toHaveLength(1)
 
@@ -352,7 +369,7 @@ describe('the notifications of new mail', () => {
       expect(shown.map(({ options }) => options.title)).toEqual(['Mittente 1', '2 nuove email'])
     })
 
-    it('takes away what it told of what came while closed once it is read, and tells nothing of the rest', () => {
+    it('takes away what it told once it is read, and tells nothing of what waited', () => {
       const before = new Date(Date.now() - 3_600_000).toISOString()
       mail.enqueue(
         ACCOUNT,
@@ -360,7 +377,7 @@ describe('the notifications of new mail', () => {
         INBOX,
         false
       )
-      mail.noteWritten(note(1, true))
+      mail.alert('a1', 'k1', 'Da sapere.')
       // Both read elsewhere: the one told goes away, the one waiting is not told.
       mail.withdraw([
         { accountId: 'a1', folderPath: 'INBOX', uid: 1 },

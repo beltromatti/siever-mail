@@ -1319,20 +1319,32 @@ export class SegretarioEngine {
             return
           }
 
-          settle(
-            await startRun(starter, {
-              task: 'lettura',
-              background: true,
-              visibility: 'diario',
-              data: plan,
-              origin: 'segretario',
-              shown: plan.title,
-              workId: unit.id,
-              scope,
-              signal,
-              missing: () => readingMissing(deps.registry, scope, plan.targets),
-              onCreated: (activityId) => deps.queue.attachActivity(unit.id, activityId)
-            })
+          const result = await startRun(starter, {
+            task: 'lettura',
+            background: true,
+            visibility: 'diario',
+            data: plan,
+            origin: 'segretario',
+            shown: plan.title,
+            workId: unit.id,
+            scope,
+            signal,
+            missing: () => readingMissing(deps.registry, scope, plan.targets),
+            onCreated: (activityId) => deps.queue.attachActivity(unit.id, activityId)
+          })
+          settle(result)
+
+          // Read, as the reading ends — the system's mark (§4.1): its messages with their note.
+          const noted = await deps.registry.notes.many(
+            plan.targets.map((target) => ({
+              accountId: scope.accountId,
+              messageKey: target.messageKey
+            }))
+          )
+          await deps.registry.markRead(
+            scope.accountId,
+            noted.map((note) => note.messageKey),
+            result.activityId
           )
         }
       },

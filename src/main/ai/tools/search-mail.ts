@@ -12,6 +12,7 @@ import { PROMPTS } from '../prompts'
 import {
   booleanArg,
   numberArg,
+  seenKey,
   stringArg,
   ToolInputError,
   type SegretarioTool,
@@ -139,6 +140,7 @@ export const searchMailTool: SegretarioTool = {
       : stringArg(args, 'testo')
         ? `Cerco «${stringArg(args, 'testo')}»…`
         : 'Cerco nella posta…',
+  readsOnly: () => true,
   async execute(args, context) {
     if (booleanArg(args, 'quadro')) {
       return overview(args, context)
@@ -286,6 +288,8 @@ export const searchMailTool: SegretarioTool = {
         context.newHandles
       )
       const note = noteOf.get(`${hit.ref.accountId}\u0000${hit.messageKey}`)
+      // What the run saw of its note — none, too — for a write over it (§4.6).
+      context.run.seen.set(seenKey('note', hit.ref.accountId, hit.messageKey), note?.revision ?? 0)
       const flags = [
         hit.pecKind
           ? hit.pecKind === 'busta'

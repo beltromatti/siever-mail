@@ -143,8 +143,8 @@ export interface RunOptions {
   signal?: AbortSignal
   /** The revisions of what the run's starting data showed it. */
   seen?: ReadonlyMap<string, number>
-  /** For a reading: the messages it is given (see `RunContext.reads`). */
-  reads?: ReadonlyArray<string>
+  /** What it looks at as its source changed (see `RunContext.looking`). */
+  looking?: ReadonlyArray<string>
   /**
    * A turn of a conversation: what the earlier turns read is still read, so a
    * write over what changed since is refused in this turn too.
@@ -285,7 +285,7 @@ export class AgentRunner {
       watched: options.watched ?? !options.background,
       actor: { by: 'segretario', runId: id, background: options.background },
       seen: new Map([...(this.seenByConversation.get(id) ?? []), ...(options.seen ?? [])]),
-      reads: new Set(options.reads ?? []),
+      looking: new Set(options.looking ?? []),
       changes: [],
       results: {},
       editor: options.editor ?? null,
@@ -419,9 +419,7 @@ export class AgentRunner {
         // Written past the length the provider gives one answer, the calls' arguments are cut:
         // said as such.
         const truncated = result.finishReason === 'length'
-        const outcomes = await Promise.all(
-          result.toolCalls.map((call) => this.runTool(live, call, handles, truncated))
-        )
+        const outcomes = await this.runTurn(live, result.toolCalls, handles, truncated)
         stalled = outcomes.some((progressed) => progressed) ? 0 : stalled + 1
         this.stopIfStuck(stalled)
         await this.manageContext(id, key, system, options.task, result.usage.promptTokens, signal)
@@ -484,6 +482,55 @@ export class AgentRunner {
     }
 
     return { status: ended, run: context, error: ended === 'done' ? null : failure }
+  }
+
+  /**
+   * A turn's calls: those that only read go together; one that may write
+   * waits for what comes before it and goes alone — so it sees, as written,
+   * what the turn wrote before it, and a run never conflicts with itself
+   * (§4.6). In the order the model asked them.
+   */
+  private async runTurn(
+    live: LiveRun,
+    calls: ReadonlyArray<ToolCall>,
+    handles: HandleRegistry,
+    truncated: boolean
+  ): Promise<boolean[]> {
+    const outcomes: boolean[] = []
+    let reading: Array<Promise<boolean>> = []
+
+    for (const call of calls) {
+      if (this.readsOnly(call)) {
+        reading.push(this.runTool(live, call, handles, truncated))
+        continue
+      }
+
+      outcomes.push(...(await Promise.all(reading)))
+      reading = []
+      outcomes.push(await this.runTool(live, call, handles, truncated))
+    }
+
+    outcomes.push(...(await Promise.all(reading)))
+    return outcomes
+  }
+
+  /** Whether a call only reads, as its tool says; one it cannot tell of, it takes as writing. */
+  private readsOnly(call: ToolCall): boolean {
+    const tool = this.deps.tools.find((candidate) => candidate.name === call.function.name)
+
+    try {
+      const args: unknown = call.function.arguments.trim()
+        ? JSON.parse(call.function.arguments)
+        : {}
+      return Boolean(
+        tool?.readsOnly &&
+        args &&
+        typeof args === 'object' &&
+        tool.readsOnly(args as Record<string, unknown>)
+      )
+    } catch {
+      return false
+    }
   }
 
   /**

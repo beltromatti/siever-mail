@@ -7,6 +7,7 @@ import { PROMPTS } from '../prompts'
 import {
   RegistryRefusal,
   RevisionConflict,
+  UNSEEN,
   type ProjectRecord,
   type ThreadRef
 } from '../registry/types'
@@ -164,9 +165,9 @@ async function threadsOf(
   return [...threads.values()]
 }
 
-/** The revision of a project this run last saw: a write over a newer one is refused. */
-function seenOf(context: ToolContext, projectId: string): number | undefined {
-  return context.run.seen.get(seenKey('project', projectId))
+/** The revision of a project this run last saw — `UNSEEN`, never —: a write over another is refused. */
+function seenOf(context: ToolContext, projectId: string): number {
+  return context.run.seen.get(seenKey('project', projectId)) ?? UNSEEN
 }
 
 /** A project as this run wrote it: what it has seen now. */
@@ -209,6 +210,7 @@ export const projectsTool: SegretarioTool = {
     args.azione === 'elenco' || args.azione === 'cerca'
       ? 'Guardo i progetti…'
       : 'Aggiorno i progetti…',
+  readsOnly: (args) => ['elenco', 'cerca'].includes(String(args.azione)),
   async execute(args, context) {
     const action = requireString(args, 'azione') as (typeof ACTIONS)[number]
     const actor = context.run.actor
@@ -279,6 +281,13 @@ export const projectsTool: SegretarioTool = {
             if (change) {
               linked += 1
             }
+          }
+
+          // Made by this run, it has seen it as it is; one there already, it has not read yet.
+          const made = created ? await context.registry.projects.get(record.id) : null
+
+          if (made) {
+            saw(context, made)
           }
 
           // One there already may be set aside: said, for the conversations not to go into it unseen.

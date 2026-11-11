@@ -91,11 +91,11 @@ import { isPecReceipt } from './mail-engine/pec'
 import { plainTextOfHtml } from './mail-engine/preview'
 import type { UnreadableMessage } from './mail-engine/unreadable-messages'
 import {
-  unnotedConversationsQuery,
-  unnotedMessagesOf,
+  unreadConversationsQuery,
+  unreadMessagesOf,
   type ReadFolders,
-  type UnnotedMessage
-} from './mail-engine/unnoted-conversations'
+  type UnreadMessage
+} from './mail-engine/unread-conversations'
 
 const log = diagnostics('app')
 
@@ -4594,26 +4594,26 @@ export class AppDatabase {
   /**
    * An account's conversations with messages the Segretario has written no
    * note for, the latest first, each with those messages, the oldest first
-   * (see `unnotedConversationsQuery`): one statement, however many.
+   * (see `unreadConversationsQuery`): one statement, however many.
    */
-  async listUnnotedConversations(
+  async listUnreadConversations(
     accountId: string,
     folders: ReadFolders,
     sinceIso: string,
     threadLimit: number,
     messageLimit: number
-  ): Promise<UnnotedMessage[]> {
+  ): Promise<UnreadMessage[]> {
     await this.ready
 
     if (folders.read.length === 0) {
       return []
     }
 
-    const query = unnotedConversationsQuery(accountId, folders, sinceIso, threadLimit, messageLimit)
+    const query = unreadConversationsQuery(accountId, folders, sinceIso, threadLimit, messageLimit)
 
-    return unnotedMessagesOf(
+    return unreadMessagesOf(
       await this.prisma.$queryRawUnsafe<
-        Array<Omit<UnnotedMessage, 'uid'> & { uid: number | bigint }>
+        Array<Omit<UnreadMessage, 'uid'> & { uid: number | bigint }>
       >(query.sql, ...query.params)
     )
   }
@@ -4622,7 +4622,7 @@ export class AppDatabase {
    * Of an account's messages the Segretario reads since a date — in these
    * folders, never a draft — how many there are, and how many it has read.
    */
-  async noteProgress(
+  async readProgress(
     accountId: string,
     folders: { read: ReadonlyArray<string>; drafts: ReadonlyArray<string> },
     sinceIso: string
@@ -4635,11 +4635,11 @@ export class AppDatabase {
 
     const drafts = folders.drafts.length > 0 ? [...folders.drafts] : ['']
     const [row] = await this.prisma.$queryRaw<
-      Array<{ total: number | bigint; noted: number | bigint }>
+      Array<{ total: number | bigint; read: number | bigint }>
     >`
-      SELECT COUNT(DISTINCT m.message_key) AS total, COUNT(DISTINCT n.message_key) AS noted
+      SELECT COUNT(DISTINCT m.message_key) AS total, COUNT(DISTINCT r.message_key) AS read
       FROM messages m
-      LEFT JOIN ai_notes n ON n.account_id = m.account_id AND n.message_key = m.message_key
+      LEFT JOIN ai_read r ON r.account_id = m.account_id AND r.message_key = m.message_key
       WHERE m.account_id = ${accountId}
         AND m.folder_path IN (${Prisma.join([...folders.read])})
         AND m.date_iso >= ${sinceIso}
@@ -4650,7 +4650,7 @@ export class AppDatabase {
         )
     `
 
-    return { read: Number(row?.noted ?? 0), total: Number(row?.total ?? 0) }
+    return { read: Number(row?.read ?? 0), total: Number(row?.total ?? 0) }
   }
 
   /** The keys of a conversation's messages in these folders, the oldest first, each once. */

@@ -214,7 +214,7 @@ export class Workspace {
         updateAppMenuAi(on)
         this.countBadge()
       },
-      onNoteWritten: (note) => this.mail.noteWritten(note),
+      onMessagesRead: (accountId, messageKeys) => this.mail.messagesRead(accountId, messageKeys),
       notifications: this.notifications,
       onWorkChanged: () => this.countBadge(),
       onOwnershipChanged: () => this.calendar.ownershipChanged(),

@@ -1,8 +1,14 @@
 import type { MailAddress } from '@shared/models'
 
 import { HandleRegistry, type HandleRecord } from '../agent/handles'
-import { seenKey, type MessageLocation, type SegretarioMailPort } from '../agent/tool-types'
+import {
+  lookingKey,
+  seenKey,
+  type MessageLocation,
+  type SegretarioMailPort
+} from '../agent/tool-types'
 import type { Registry } from '../registry/registry'
+import type { NoteRecord } from '../registry/types'
 import { formatAddresses, formatDateTime } from '../tools/format'
 import { nowLine } from './context'
 
@@ -27,8 +33,8 @@ export interface ReadingPlan {
   targets: Array<{ messageKey: string; handle: string }>
   /** Shown without a note: one written meanwhile by another run is a change it has not seen. */
   seen: Map<string, number>
-  /** Its messages: their first note is its own (`RunContext.reads`). */
-  reads: string[]
+  /** Its messages, as it looks at them: marked read as it ends, and its to tell (`RunContext.looking`). */
+  looking: string[]
 }
 
 /** The keys a reading holds while it runs: its conversation, its projects, the outside sender. */
@@ -90,27 +96,42 @@ export async function prepareReading(
       (message): message is { messageKey: string; location: MessageLocation } =>
         message.location !== undefined && !message.location.setAside && !message.location.draft
     )
-  const read = new Set(
-    (
-      await registry.notes.many(
-        messages.map((message) => ({ accountId: scope.accountId, messageKey: message.messageKey }))
-      )
-    ).map((note) => note.messageKey)
+  const read = await registry.readMarks.read(
+    scope.accountId,
+    messages.map((message) => message.messageKey)
   )
   let targets = messages.filter(
     (message) => !read.has(message.messageKey) && message.location.dateIso >= sinceIso
   )
 
-  // A copy of a message read in another account: its note, without reading it again.
+  // A copy of a message read in another account: its note, what the user was told of it, and its
+  // mark, without reading it again — told where it is not muted, once (§13.3).
   for (const message of [...targets]) {
-    const twins = await mail.sameMessageElsewhere(message.location.ref)
-    const twin = (await registry.notes.many(twins)).find((note) => note.twinAccountId === null)
+    // Read there by its own reading: a note of its own, and the mark.
+    let twin: NoteRecord | null = null
 
-    if (twin) {
+    for (const note of await registry.notes.many(
+      await mail.sameMessageElsewhere(message.location.ref)
+    )) {
+      if (
+        note.twinAccountId === null &&
+        (await registry.readMarks.read(note.accountId, [note.messageKey])).size > 0
+      ) {
+        twin = note
+        break
+      }
+    }
+
+    if (!twin) {
+      continue
+    }
+
+    const here = { accountId: scope.accountId, messageKey: message.messageKey }
+
+    if (!(await registry.notes.get(here.accountId, here.messageKey))) {
       await registry.writeNote(
         {
-          accountId: scope.accountId,
-          messageKey: message.messageKey,
+          ...here,
           threadId: scope.threadId,
           direction: isOwn(message.location.from, own) ? 'out' : 'in',
           messageDate: message.location.dateIso
@@ -120,16 +141,23 @@ export async function prepareReading(
           nature: twin.nature,
           priority: twin.priority,
           reason: twin.reason,
-          due: twin.due,
-          // Told where it is not muted, once: the notifications know a copy (§13.3).
-          notify: twin.notify,
-          alert: twin.alert
+          due: twin.due
         },
         { by: 'sistema' },
         { twinAccountId: twin.accountId }
       )
-      targets = targets.filter((target) => target.messageKey !== message.messageKey)
     }
+
+    // Told there, the user knows; not arrived there — that mailbox muted —, told here.
+    if ((await registry.alerts.of({ kind: 'message', ...here })).length === 0) {
+      for (const alert of await registry.alerts.of({ kind: 'message', ...twin })) {
+        const delivered = alert.delivered || (await mail.alert(here, alert.text)) === 'told'
+        await registry.alerts.told({ kind: 'message', ...here }, alert.text, null, delivered)
+      }
+    }
+
+    await registry.markRead(here.accountId, [here.messageKey], null, twin.accountId)
+    targets = targets.filter((target) => target.messageKey !== message.messageKey)
   }
 
   if (targets.length === 0) {
@@ -156,7 +184,14 @@ export async function prepareReading(
       } · «${target.location.subject || '(senza oggetto)'}»`
   )
   const lastTarget = targets[targets.length - 1]
-  const noteKeys = targets.map((target) => seenKey('note', scope.accountId, target.messageKey))
+  // What the data shows of their notes: none, for those without — a note come since is a change.
+  const noted = new Set(
+    (
+      await registry.notes.many(
+        targets.map((target) => ({ accountId: scope.accountId, messageKey: target.messageKey }))
+      )
+    ).map((note) => note.messageKey)
+  )
   const later = messages.filter(
     (message) => message.location.dateIso > lastTarget.location.dateIso
   ).length
@@ -186,8 +221,14 @@ export async function prepareReading(
       messageKey: target.messageKey,
       handle: handleOf.get(target.messageKey)!
     })),
-    seen: new Map(noteKeys.map((key) => [key, 0])),
-    reads: noteKeys
+    seen: new Map(
+      targets
+        .filter((target) => !noted.has(target.messageKey))
+        .map((target) => [seenKey('note', scope.accountId, target.messageKey), 0])
+    ),
+    looking: targets.map((target) =>
+      lookingKey({ kind: 'message', accountId: scope.accountId, messageKey: target.messageKey })
+    )
   }
 }
 

@@ -38,6 +38,8 @@ export const MESSAGE_ID_KEYS_SCHEMA = [
  */
 const NAMING_TABLES = [
   'ai_notes',
+  'ai_read',
+  'ai_alerts',
   'ai_items',
   'ai_ready_drafts',
   'ai_proposals',

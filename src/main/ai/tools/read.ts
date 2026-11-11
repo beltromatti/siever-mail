@@ -15,6 +15,8 @@ import {
   booleanArg,
   numberArg,
   requireString,
+  markSeenKey,
+  seenKey,
   ToolInputError,
   type SegretarioTool,
   type ToolContext,
@@ -296,6 +298,10 @@ async function readConversation(context: ToolContext, ref: MessageRef): Promise<
     flushSkipped()
     const { item, own, page } = whole
     const note = await context.registry.notes.get(entry.ref.accountId, entry.messageKey)
+    context.run.seen.set(
+      seenKey('note', entry.ref.accountId, entry.messageKey),
+      note?.revision ?? 0
+    )
     parts.push(
       [
         `## ${index + 1}/${thread.length}`,
@@ -394,17 +400,20 @@ async function readEvent(
   }
 
   // What the work holds of it, as a message's reading says its note and what is open.
+  const series = event.seriesId
+    ? seriesKey(event.connectionId, event.calendarId, event.seriesId)
+    : null
   const [prep, alerts, items, projects, mark] = await Promise.all([
     context.registry.day.prep(eventKey),
-    context.registry.day.alerts(eventKey),
+    context.registry.alerts.of({ kind: 'event', eventKey }),
     context.registry.commitments.ofPlaces({ events: [eventKey] }),
     context.registry.projects.ofEvents([eventKey]),
-    context.registry.ownership.markOf(
-      eventKey,
-      event.seriesId ? seriesKey(event.connectionId, event.calendarId, event.seriesId) : null
-    )
+    context.registry.ownership.markOf(eventKey, series)
   ])
   rememberCommitments(context, items)
+  // What it saw of what it may write over (§4.6): the preparation, whose it is — none, too.
+  context.run.seen.set(seenKey('prep', eventKey), prep?.writtenAt ?? 0)
+  context.run.seen.set(markSeenKey({ eventKey, seriesKey: series }), mark?.setAt ?? 0)
   // Whose it is (§7.4): what the calendar says, and what was found where it does not.
   const whose =
     event.yours === false
@@ -439,7 +448,7 @@ async function readEvent(
       ),
       prep ? `\nLa preparazione che hai scritto:\n${unlinked(prep.text)}` : '',
       alerts.length > 0
-        ? `\nGli avvisi che ne hai dato all'utente:\n${alerts.map((alert) => `  ${formatDateTime(new Date(alert.toldAt).toISOString())} · «${alert.text}»`).join('\n')}`
+        ? `\nGli avvisi che ne hai dato all'utente:\n${alerts.map((alert) => `  ${formatDateTime(new Date(alert.toldAt).toISOString())} · «${alert.text}»${alert.delivered ? '' : ' (non gli è arrivato)'}`).join('\n')}`
         : '',
       items.length > 0
         ? `\nCose aperte nate da questo evento (e chiuse di recente):\n${items.map((item) => `  ${commitmentLine(item)}`).join('\n')}`
@@ -570,6 +579,7 @@ export const readTool: SegretarioTool = {
     required: ['cosa']
   },
   running: (args) => (booleanArg(args, 'conversazione') ? 'Leggo la conversazione…' : 'Leggo…'),
+  readsOnly: () => true,
   async execute(args, context) {
     const reference = requireString(args, 'cosa')
 

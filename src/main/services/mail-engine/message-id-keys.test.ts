@@ -20,6 +20,8 @@ const SCHEMA = `
     message_key TEXT NOT NULL
   );
   CREATE TABLE ai_notes (account_id TEXT NOT NULL, message_key TEXT NOT NULL);
+  CREATE TABLE ai_read (account_id TEXT NOT NULL, message_key TEXT NOT NULL);
+  CREATE TABLE ai_alerts (account_id TEXT, message_key TEXT);
   CREATE TABLE ai_items (account_id TEXT NOT NULL, message_key TEXT NOT NULL);
   CREATE TABLE ai_ready_drafts (account_id TEXT NOT NULL, message_key TEXT NOT NULL);
   CREATE TABLE ai_proposals (account_id TEXT, message_key TEXT);

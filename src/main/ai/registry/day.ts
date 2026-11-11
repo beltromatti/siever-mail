@@ -1,6 +1,7 @@
 import type { HandleLink } from '@shared/segretario'
 
 import type { Sql } from '../sql'
+import { lookedAt, RevisionConflict } from './types'
 
 export interface DayLetter {
   day: string
@@ -14,12 +15,6 @@ export interface MeetingPrep {
   text: string
   links: HandleLink[]
   writtenAt: number
-}
-
-/** What the user was told of an event, and when: one line for each change that could not wait (§13.3). */
-export interface EventAlert {
-  text: string
-  toldAt: number
 }
 
 /**
@@ -107,47 +102,66 @@ export class DayStore {
     )
   }
 
+  /**
+   * Writes a meeting's preparation — over the one there only if it is the one
+   * the run saw (§4.6): `seenAt`, when the one it read was written; 0, that
+   * there was none; `UNSEEN`, that it never looked.
+   */
   async savePrep(
     eventKey: string,
     text: string,
     links: ReadonlyArray<HandleLink>,
-    runId: string | null
-  ): Promise<void> {
-    await this.sql.run(
-      `INSERT INTO ai_event_preps (event_key, text, links_json, run_id, written_at) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(event_key) DO UPDATE SET text = excluded.text, links_json = excluded.links_json,
-         run_id = excluded.run_id, written_at = excluded.written_at`,
-      eventKey,
-      text.trim(),
-      JSON.stringify(links),
-      runId,
-      Date.now()
-    )
-  }
+    runId: string | null,
+    seenAt?: number
+  ): Promise<MeetingPrep> {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const current = await this.prep(eventKey)
 
-  /** Keeps what the user was told of an event: it stays with the event, as a message's with its note. */
-  async recordAlert(eventKey: string, text: string, runId: string | null): Promise<void> {
-    await this.sql.run(
-      'INSERT INTO ai_event_alerts (event_key, text, run_id, told_at) VALUES (?, ?, ?, ?)',
-      eventKey,
-      text.trim(),
-      runId,
-      Date.now()
-    )
-  }
+      if (current && seenAt !== undefined && current.writtenAt !== seenAt) {
+        throw new RevisionConflict(
+          `${
+            lookedAt(seenAt) === 'mai'
+              ? 'Questo evento ha già una preparazione, e non l’hai ancora letta'
+              : lookedAt(seenAt) === 'comparsa'
+                ? 'Da quando l’hai letto, questo evento ha avuto una preparazione'
+                : 'La preparazione di questo evento è cambiata da quando l’hai letta'
+          }: dice «${current.text}». Se la tua vale ancora, riscrivila tenendo ciò che serve.`,
+          { revision: current.writtenAt }
+        )
+      }
 
-  /** What the user was told of an event, the oldest first. */
-  async alerts(eventKey: string): Promise<EventAlert[]> {
-    const rows = await this.sql.all<{ text: string; told_at: number }>(
-      'SELECT text, told_at FROM ai_event_alerts WHERE event_key = ? ORDER BY told_at, id',
-      eventKey
-    )
-    return rows.map((row) => ({ text: row.text, toldAt: Number(row.told_at) }))
+      const now = Math.max(Date.now(), (current?.writtenAt ?? 0) + 1)
+      const changed = current
+        ? await this.sql.run(
+            `UPDATE ai_event_preps SET text = ?, links_json = ?, run_id = ?, written_at = ?
+             WHERE event_key = ? AND written_at = ?`,
+            text.trim(),
+            JSON.stringify(links),
+            runId,
+            now,
+            eventKey,
+            current.writtenAt
+          )
+        : await this.sql.run(
+            `INSERT INTO ai_event_preps (event_key, text, links_json, run_id, written_at) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(event_key) DO NOTHING`,
+            eventKey,
+            text.trim(),
+            JSON.stringify(links),
+            runId,
+            now
+          )
+
+      if (changed === 1) {
+        return { text: text.trim(), links: [...links], writtenAt: now }
+      }
+    }
+
+    throw new Error(`La preparazione di ${eventKey} non si scrive: cambia di continuo.`)
   }
 
   async clear(): Promise<void> {
     await this.sql.run('DELETE FROM ai_briefings')
     await this.sql.run('DELETE FROM ai_event_preps')
-    await this.sql.run('DELETE FROM ai_event_alerts')
   }
 }

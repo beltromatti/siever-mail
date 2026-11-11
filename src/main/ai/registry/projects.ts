@@ -5,6 +5,7 @@ import type { HandleLink } from '@shared/segretario'
 import { placeholders, type Sql } from '../sql'
 import {
   RegistryRefusal,
+  lookedAt,
   RevisionConflict,
   type Actor,
   type ActorKind,
@@ -744,9 +745,11 @@ export class ProjectStore {
         current.hiddenAt ? 'nascosto' : null
       ].filter(Boolean)
       throw new RevisionConflict(
-        `«${current.title}» è cambiato da quando l'hai letto (un altro lavoro, o l'utente, l'ha scritto nel frattempo)${
-          now.length > 0 ? `. Ora: ${now.join('; ')}` : ''
-        }. Se la tua modifica vale ancora, rifalla.`,
+        `${
+          seenRevision !== undefined && lookedAt(seenRevision) === 'mai'
+            ? `Non hai ancora letto «${current.title}»`
+            : `«${current.title}» è cambiato da quando l'hai letto (un altro lavoro, o l'utente, l'ha scritto nel frattempo)`
+        }${now.length > 0 ? `. Ora: ${now.join('; ')}` : ''}. Se la tua modifica vale ancora, rifalla.`,
         current
       )
     }

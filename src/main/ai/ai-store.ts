@@ -879,6 +879,8 @@ export class AiStore {
       'ai_learning',
       'ai_drafts',
       'ai_notes',
+      'ai_read',
+      'ai_alerts',
       'ai_ready_drafts',
       'ai_project_threads',
       'ai_gone'
@@ -898,7 +900,8 @@ export class AiStore {
     await this.sql.run('DELETE FROM ai_work WHERE scope_key LIKE ?', `%:${accountId}:%`)
     await this.sql.run('DELETE FROM ai_reading WHERE connection_key = ?', accountId)
     // The same messages in another account were read here, and carry only a copy of the note:
-    // without it, they are read again there, where the work now lives.
+    // without it, and without its mark, they are read again there, where the work now lives.
+    await this.sql.run('DELETE FROM ai_read WHERE twin_account_id = ?', accountId)
     await this.sql.run('DELETE FROM ai_notes WHERE twin_account_id = ?', accountId)
     return { projects: projects.map((row) => row.project_id), activities }
   }
@@ -919,7 +922,7 @@ export class AiStore {
     const activities = await this.forgetRunsOnlyAbout({ calendarId: connectionId, learningKey })
     await this.sql.run('DELETE FROM ai_event_preps WHERE event_key LIKE ?', ofIt)
     await this.sql.run('DELETE FROM ai_own_events WHERE event_key LIKE ?', ofIt)
-    await this.sql.run('DELETE FROM ai_event_alerts WHERE event_key LIKE ?', ofIt)
+    await this.sql.run('DELETE FROM ai_alerts WHERE event_key LIKE ?', ofIt)
     await this.sql.run('DELETE FROM ai_calendar_roles WHERE calendar_key LIKE ?', ofIt)
     await this.sql.run(
       'DELETE FROM ai_item_history WHERE item_id IN (SELECT id FROM ai_items WHERE event_key LIKE ?)',
@@ -1012,6 +1015,8 @@ export class AiStore {
     const mail = await this.sql.all<{ id: string | null }>(
       `SELECT account_id AS id FROM ai_notes
        UNION SELECT twin_account_id FROM ai_notes
+       UNION SELECT account_id FROM ai_read
+       UNION SELECT account_id FROM ai_alerts WHERE account_id IS NOT NULL
        UNION SELECT account_id FROM ai_items
        UNION SELECT account_id FROM ai_ready_drafts
        UNION SELECT account_id FROM ai_drafts
@@ -1026,7 +1031,7 @@ export class AiStore {
     const calendars = await this.sql.all<{ key: string | null }>(
       `SELECT event_key AS key FROM ai_event_preps
        UNION SELECT event_key FROM ai_own_events
-       UNION SELECT event_key FROM ai_event_alerts
+       UNION SELECT event_key FROM ai_alerts WHERE event_key IS NOT NULL
        UNION SELECT calendar_key FROM ai_calendar_roles
        UNION SELECT event_key FROM ai_items
        UNION SELECT location FROM ai_project_resources WHERE kind = 'evento'
@@ -1061,13 +1066,14 @@ export class AiStore {
       'ai_lessons',
       'ai_drafts',
       'ai_notes',
+      'ai_read',
+      'ai_alerts',
       'ai_item_history',
       'ai_items',
       'ai_ready_drafts',
       'ai_briefings',
       'ai_event_preps',
       'ai_own_events',
-      'ai_event_alerts',
       'ai_calendar_roles',
       'ai_projects',
       'ai_project_threads',

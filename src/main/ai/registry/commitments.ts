@@ -1,6 +1,7 @@
 import { placeholders, type Sql } from '../sql'
 import {
   RegistryRefusal,
+  lookedAt,
   RevisionConflict,
   type Actor,
   type CommitmentHistoryEntry,
@@ -756,10 +757,13 @@ export class CommitmentStore {
       const current = await this.require(id)
 
       if (options.seenRevision !== undefined && options.seenRevision !== current.revision) {
+        const now = `${STATUS_WORDS[current.status]}${
+          current.setBy === 'utente' ? ', per mano dell’utente' : ''
+        } («${current.text}»${current.due ? `, entro ${current.due}` : ''})`
         throw new RevisionConflict(
-          `La cosa #${id} è cambiata da quando l'hai letta: ora è ${STATUS_WORDS[current.status]}${
-            current.setBy === 'utente' ? ', per mano dell’utente' : ''
-          } («${current.text}»${current.due ? `, entro ${current.due}` : ''}). Se ciò che volevi fare vale ancora, rifallo.`,
+          lookedAt(options.seenRevision) === 'mai'
+            ? `Non hai ancora letto la cosa #${id}: è ${now}. Se ciò che volevi fare vale ancora, rifallo.`
+            : `La cosa #${id} è cambiata da quando l'hai letta: ora è ${now}. Se ciò che volevi fare vale ancora, rifallo.`,
           current
         )
       }

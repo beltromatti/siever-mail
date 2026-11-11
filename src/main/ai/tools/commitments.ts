@@ -6,6 +6,7 @@ import {
   objectListArg,
   requireString,
   seenKey,
+  seenOf,
   stringArg,
   numberArg,
   ToolInputError,
@@ -59,7 +60,8 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
   // The message that proves a change — read where a change takes one, not when opening.
   const evidence = (): ReturnType<typeof evidenceOf> =>
     evidenceOf(context, stringArg(operation, 'prova'))
-  const seenRevision = id !== undefined ? context.run.seen.get(seenKey('item', id)) : undefined
+  // What the run saw of the thing it changes — never seen, it is shown first (§4.6).
+  const seenRevision = id !== undefined ? seenOf(context.run, seenKey('item', id)) : undefined
   const remember = (record: CommitmentRecord): void => {
     context.run.seen.set(seenKey('item', record.id), record.revision)
   }
@@ -176,6 +178,12 @@ async function runOperation(context: ToolContext, operation: Operation): Promise
       }
 
       await context.registry.mergeCommitments(keep, [...new Set(others)], actor)
+
+      // Closed by this run: as it left them.
+      for (const record of await context.registry.commitments.many(others)) {
+        remember(record)
+      }
+
       return `Unite in #${keep}: ${others.map((other) => `#${other}`).join(', ')}`
     }
     default:
@@ -532,6 +540,14 @@ export const commitmentsTool: SegretarioTool = {
     required: ['operazioni']
   },
   running: () => 'Aggiorno le cose aperte…',
+  readsOnly: (args) =>
+    Array.isArray(args.operazioni) &&
+    args.operazioni.every(
+      (operation) =>
+        operation !== null &&
+        typeof operation === 'object' &&
+        (operation as Record<string, unknown>).azione === 'elenco'
+    ),
   async execute(args, context) {
     const operations = objectListArg(args, 'operazioni')
 

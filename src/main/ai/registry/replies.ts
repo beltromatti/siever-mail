@@ -1,6 +1,7 @@
 import { placeholders, type Sql } from '../sql'
 import {
   RegistryRefusal,
+  lookedAt,
   RevisionConflict,
   type Actor,
   type MessageAnchor,
@@ -107,7 +108,8 @@ export class ReplyStore {
   async save(
     anchor: MessageAnchor,
     input: { kind: ReplyKind; text: string; doubts: string },
-    actor: Actor
+    actor: Actor,
+    options: { seenRevision?: number } = {}
   ): Promise<{ record: ReplyRecord; created: boolean }> {
     const text = input.text.trim()
 
@@ -116,8 +118,10 @@ export class ReplyStore {
     }
 
     const now = Date.now()
-    // From the background, written only over a reply the user has not decided on — checked in
-    // the very statement, so a decision taken a moment before is never written over.
+    const seen = options.seenRevision
+    // From the background, written only over a reply the user has not decided on; and only over
+    // the one the run saw (§4.6) — checked in the very statement, so what was written a moment
+    // before is never written over unseen.
     const changed = await this.sql.run(
       `INSERT INTO ai_ready_drafts (
         account_id, message_key, thread_id, kind, text, doubts, status, stale_reason, revision,
@@ -128,7 +132,9 @@ export class ReplyStore {
         doubts = excluded.doubts, status = 'pronta', stale_reason = NULL,
         revision = ai_ready_drafts.revision + 1, run_id = excluded.run_id,
         updated_at = excluded.updated_at
-      ${actor.background ? "WHERE ai_ready_drafts.status NOT IN ('usata', 'scartata')" : ''}`,
+      WHERE 1 = 1
+        ${actor.background ? "AND ai_ready_drafts.status NOT IN ('usata', 'scartata')" : ''}
+        ${seen === undefined ? '' : 'AND ai_ready_drafts.revision = ?'}`,
       anchor.accountId,
       anchor.messageKey,
       anchor.threadId,
@@ -137,9 +143,23 @@ export class ReplyStore {
       input.doubts.trim(),
       actor.runId ?? null,
       now,
-      now
+      now,
+      ...(seen === undefined ? [] : [seen])
     )
     const record = (await this.get(anchor.accountId, anchor.messageKey))!
+
+    if (changed === 0 && seen !== undefined && record.revision !== seen) {
+      throw new RevisionConflict(
+        `${
+          lookedAt(seen) === 'mai'
+            ? 'Per questo messaggio c’è già una risposta preparata, e non l’hai ancora letta'
+            : 'La risposta preparata è cambiata da quando l’hai letta'
+        }: è ${record.status.replace('_', ' ')}, e dice «${
+          record.text.length > 600 ? `${record.text.slice(0, 600)}…` : record.text
+        }». Se la tua vale ancora, rifalla.`,
+        record
+      )
+    }
 
     if (changed === 0) {
       throw new RegistryRefusal(
@@ -177,10 +197,13 @@ export class ReplyStore {
       }
 
       if (options.seenRevision !== undefined && options.seenRevision !== current.revision) {
+        const now = `${current.status === 'pronta' ? 'pronta' : current.status.replace('_', ' ')}, e dice «${
+          current.text.length > 600 ? `${current.text.slice(0, 600)}…` : current.text
+        }»`
         throw new RevisionConflict(
-          `La risposta preparata è cambiata da quando l’hai letta: ora è ${
-            current.status === 'pronta' ? 'pronta' : current.status.replace('_', ' ')
-          }, e dice «${current.text.length > 600 ? `${current.text.slice(0, 600)}…` : current.text}». Se ciò che volevi fare vale ancora, rifallo.`,
+          lookedAt(options.seenRevision) === 'mai'
+            ? `Non hai ancora letto la risposta preparata: è ${now}. Se ciò che volevi fare vale ancora, rifallo.`
+            : `La risposta preparata è cambiata da quando l’hai letta: ora è ${now}. Se ciò che volevi fare vale ancora, rifallo.`,
           current
         )
       }

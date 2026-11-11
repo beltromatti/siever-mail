@@ -91,7 +91,6 @@ import type { SegretarioService } from '@main/ai/segretario-service'
 import { invitationReply } from '@main/calendar/icalendar'
 import { isIcsAttachment, type CalendarResponse } from '@shared/calendar'
 import type { MarkedBefore, MessageMark, MessageMarksChange } from '@shared/message-marks'
-import type { MessageNote } from '@shared/segretario'
 import type { MessageLocation, SegretarioMailPort } from '@main/ai/agent/tool-types'
 import type { NotificationCenter } from '@main/notifications/center'
 import { DraftService, draftRefKey } from './drafts'
@@ -593,7 +592,7 @@ export class MailService {
         >()
 
         for (const account of await this.database.getAccounts()) {
-          const rows = await this.database.listUnnotedConversations(
+          const rows = await this.database.listUnreadConversations(
             account.id,
             segretarioFolders(await this.database.listFolders(account.id)),
             sinceOf(account.id),
@@ -631,7 +630,7 @@ export class MailService {
         for (const account of (await this.database.getAccounts()).filter(
           (candidate) => !accountIds || accountIds.includes(candidate.id)
         )) {
-          const progress = await this.database.noteProgress(
+          const progress = await this.database.readProgress(
             account.id,
             segretarioFolders(await this.database.listFolders(account.id)),
             sinceOf(account.id)
@@ -653,6 +652,8 @@ export class MailService {
         )
         return this.database.anySentTo(sent.flat(), addresses)
       },
+      alert: async (message, line) =>
+        this.engine.alert(message.accountId, message.messageKey, line),
       sameMessageElsewhere: async (ref) => {
         const messageId = (await this.database.getMessage(ref))?.messageId
 
@@ -803,9 +804,9 @@ export class MailService {
     this.engine.setSegretarioReading(reading)
   }
 
-  /** A message's note, written as it was read: an alert waiting for it is let go. */
-  noteWritten(note: MessageNote): void {
-    this.engine.noteWritten(note)
+  /** Messages the Segretario read (§4.1): a new one waiting for its reading is not told. */
+  messagesRead(accountId: string, messageKeys: ReadonlyArray<string>): void {
+    this.engine.messagesRead(accountId, messageKeys)
   }
 
   /** The unread messages of every mailbox's Posta in arrivo, as the app's icon may count them. */

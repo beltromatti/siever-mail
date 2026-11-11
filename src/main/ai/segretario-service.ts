@@ -187,8 +187,8 @@ export interface SegretarioServiceOptions {
    * what is offered outside the page (the menu) follows.
    */
   onEnabledChange(on: boolean): void
-  /** A message's note, written as it was read: an alert waiting for it is let go. */
-  onNoteWritten(note: MessageNote): void
+  /** Messages read (§4.1): a new one waiting for its reading is not told, unless it said so. */
+  onMessagesRead(accountId: string, messageKeys: ReadonlyArray<string>): void
   /** The app's notifications (§13.3): the AI's notices, and what the Segretario tells the user. */
   notifications: NotificationCenter
   /** The user's work changed — something opened, closed, put off —: what counts it counts again. */
@@ -212,8 +212,6 @@ function noteOf(record: NoteRecord): MessageNote {
     due: record.due,
     messageDate: record.messageDate,
     twinAccountId: record.twinAccountId,
-    notify: record.notify,
-    alert: record.alert,
     writtenBy: record.writtenBy
   }
 }
@@ -494,10 +492,6 @@ export class SegretarioService {
           projectIds: change.projectIds
         })
 
-        if (change.object === 'nota' && change.accountId && change.messageKeys[0]) {
-          void this.noteWritten(change.accountId, change.messageKeys[0])
-        }
-
         if (
           change.object === 'calendario' ||
           (change.object === 'evento' && change.action === 'tuo')
@@ -509,7 +503,8 @@ export class SegretarioService {
         void store
           .addLesson(kind, payload)
           .catch((error: unknown) => log.error('A lesson could not be kept', error))
-      }
+      },
+      read: (accountId, messageKeys) => this.options.onMessagesRead(accountId, messageKeys)
     })
     const page: SegretarioPagePort = {
       compose: (spec, signal) => this.requestCompose(spec, signal),
@@ -1263,14 +1258,6 @@ export class SegretarioService {
   private workChanged(change: WorkChange): void {
     this.options.send(SEGRETARIO_IPC.workChanged, change)
     this.options.onWorkChanged?.()
-  }
-
-  private async noteWritten(accountId: string, messageKey: string): Promise<void> {
-    const note = await this.registry?.notes.get(accountId, messageKey)
-
-    if (note) {
-      this.options.onNoteWritten(noteOf(note))
-    }
   }
 
   /* ───────────────────────────────── the memory ───────────────────────────────── */

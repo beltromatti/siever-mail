@@ -2,11 +2,12 @@ import { Notification } from 'electron'
 
 import type { NotificationCenter, NotificationInput } from '@main/notifications/center'
 import { folderRole } from '@shared/folders'
-import type { MessageNote } from '@shared/segretario'
 import type { MailFolder, MailMessageSummary, MessageRef } from '@shared/models'
 
-/** The longest a new message waits for the Segretario's note before it is told as it is. */
-const NOTE_WAIT_MS = 10 * 60 * 1000
+/** The longest a new message waits for its reading before it is told as it is. */
+const READING_WAIT_MS = 10 * 60 * 1000
+/** A message told as it is, its reading late, still takes the Segretario's line in its place so long. */
+const LATE_LINE_MS = 60 * 60 * 1000
 /** Messages arriving together are told together. */
 const COALESCE_MS = 1_500
 /** The mail come while the app was closed arrives in bursts: told together once it stops. */
@@ -36,6 +37,11 @@ function refOf(message: Pick<MailMessageSummary, 'accountId' | 'folderPath' | 'u
 
 function messageKey(ref: MessageRef): string {
   return `${ref.accountId}:${ref.folderPath}:${ref.uid}`
+}
+
+/** The notification telling one message alone: another for it takes its place. */
+function singleKey(ref: MessageRef): string {
+  return `mail:${messageKey(ref)}`
 }
 
 /**
@@ -93,9 +99,11 @@ interface Held {
  *     muted — archived, sent, spam and the folders the user files into
  *     never alert, nor does a message read elsewhere before it arrived.
  *   • While the Segretario reads the mail as it comes, and the user asked
- *     for it, a new message waits for its note and is told only if the
+ *     for it, a new message waits for its reading and is told only if the
  *     Segretario said to tell it now (`avvisa`), with its words — one by
  *     one, at launch too: they are few, and each is told for its line.
+ *     One its reading has not reached in ten minutes is told as it is, and
+ *     takes the Segretario's line in its place if it comes after.
  *     Without the Segretario, or the user wanting every message, every
  *     message is told, as mail apps tell it.
  *   • One message: its sender, subject and first lines, and two buttons —
@@ -122,8 +130,13 @@ export class MailNotifications {
    * finds waits to know, rather than be told unsifted.
    */
   private segretarioReading: boolean | null = null
-  /** New messages waiting for their note, by account and message key. */
+  /** New messages waiting for their reading, by account and message key. */
   private readonly held = new Map<string, Held>()
+  /** Told as they were, their reading late, by account and message key: when. */
+  private readonly late = new Map<
+    string,
+    { account: NotificationAccount; message: MailMessageSummary; at: number }
+  >()
   private readonly unsubscribe: () => void
 
   constructor(
@@ -160,20 +173,70 @@ export class MailNotifications {
     }
   }
 
-  /** A message's note is written: a new message waiting for it is told if the Segretario said so. */
-  noteWritten(note: MessageNote): void {
-    const key = `${note.accountId}\u0000${note.messageKey}`
-    const held = this.held.get(key)
+  /**
+   * Messages read (§4.1) — their reading over, or a copy of one read in
+   * another mailbox —: a new one still waiting is not told; what the
+   * Segretario said to tell was told already (`alert`).
+   */
+  read(accountId: string, messageKeys: ReadonlyArray<string>): void {
+    for (const messageKey of messageKeys) {
+      const key = `${accountId}\u0000${messageKey}`
+      const held = this.held.get(key)
 
-    if (!held) {
-      return
+      if (held) {
+        clearTimeout(held.timer)
+        this.held.delete(key)
+      }
+    }
+  }
+
+  /**
+   * What the Segretario says of a message that came (`avvisa`, §13.3): told
+   * now, on its own, with its line — in place of the notification told as it
+   * was, if its reading came late. `off` when the user does not take its
+   * word — the mail's notifications off, this mailbox muted, every message
+   * wanted as it is —; `not-new` for a message not just come.
+   */
+  alert(accountId: string, keyOfMessage: string, line: string): 'told' | 'off' | 'not-new' {
+    if (!this.tells(accountId) || !this.waitsForNotes()) {
+      return 'off'
     }
 
-    clearTimeout(held.timer)
-    this.held.delete(key)
-    const tell = note.notify && !held.message.isRead
-    // Its line says why it cannot wait; a note told without one, its summary.
-    this.settle(held, tell ? { message: held.message, summary: note.alert ?? note.summary } : null)
+    const key = `${accountId}\u0000${keyOfMessage}`
+    const held = this.held.get(key)
+
+    if (held) {
+      clearTimeout(held.timer)
+      this.held.delete(key)
+
+      if (!held.message.isRead) {
+        this.tell(held.account, [{ message: held.message, summary: line }])
+      }
+
+      return 'told'
+    }
+
+    const late = this.late.get(key)
+
+    if (late && Date.now() - late.at < LATE_LINE_MS) {
+      this.late.delete(key)
+
+      if (!late.message.isRead) {
+        // In place of its own notification; one of several keeps the others. Not shown — its copy
+        // told elsewhere —, told as anything new, so the copy keeps it from being told twice.
+        const shown = this.keyByMessage.get(messageKey(late.message))
+
+        if (shown !== undefined && shown !== singleKey(late.message)) {
+          this.untell(shown, messageKey(late.message))
+        }
+
+        this.tell(late.account, [{ message: late.message, summary: line }], shown !== undefined)
+      }
+
+      return 'told'
+    }
+
+    return 'not-new'
   }
 
   /**
@@ -238,20 +301,17 @@ export class MailNotifications {
       }
     }
 
+    for (const [key, late] of this.late) {
+      if (gone.has(messageKey(late.message))) {
+        this.late.delete(key)
+      }
+    }
+
     for (const key of gone) {
       const notificationKey = this.keyByMessage.get(key)
-      this.keyByMessage.delete(key)
 
-      if (notificationKey === undefined) {
-        continue
-      }
-
-      const remaining = this.messagesByKey.get(notificationKey)
-      remaining?.delete(key)
-
-      if (!remaining || remaining.size === 0) {
-        this.messagesByKey.delete(notificationKey)
-        this.deps.center.withdraw(notificationKey)
+      if (notificationKey !== undefined) {
+        this.untell(notificationKey, key)
       }
     }
   }
@@ -270,6 +330,19 @@ export class MailNotifications {
     }
 
     this.held.clear()
+    this.late.clear()
+  }
+
+  /** A message no longer told by a notification: taken away once it tells none. */
+  private untell(notificationKey: string, message: string): void {
+    this.keyByMessage.delete(message)
+    const remaining = this.messagesByKey.get(notificationKey)
+    remaining?.delete(message)
+
+    if (!remaining || remaining.size === 0) {
+      this.messagesByKey.delete(notificationKey)
+      this.deps.center.withdraw(notificationKey)
+    }
   }
 
   private tells(accountId: string): boolean {
@@ -281,7 +354,7 @@ export class MailNotifications {
     return this.deps.center.preferences.mail.onlyFlagged && this.segretarioReading !== false
   }
 
-  /** A new message waits for its note — at most `NOTE_WAIT_MS`, then it is told as it is. */
+  /** A new message waits for its reading — at most `READING_WAIT_MS`, then it is told as it is. */
   private hold(account: NotificationAccount, message: MailMessageSummary, catchUp: boolean): void {
     const key = `${account.id}\u0000${message.messageKey}`
 
@@ -293,37 +366,44 @@ export class MailNotifications {
       const held = this.held.get(key)
       this.held.delete(key)
 
-      if (held) {
-        this.settle(held, held.message.isRead ? null : { message: held.message })
+      if (held && !held.message.isRead) {
+        const now = Date.now()
+
+        for (const [other, late] of this.late) {
+          if (now - late.at >= LATE_LINE_MS) {
+            this.late.delete(other)
+          }
+        }
+
+        this.late.set(key, { account: held.account, message: held.message, at: now })
+        this.tellAsItIs(held)
       }
-    }, NOTE_WAIT_MS)
+    }, READING_WAIT_MS)
 
     this.held.set(key, { timer, account, message, catchUp })
   }
 
   /**
-   * A held message is settled — to be told, or not. What the Segretario
-   * said to tell goes at once, on its own, with its line, whenever it came;
-   * one whose note did not come in time is told as it is, and, come while
-   * the app was closed, with the rest of its mailbox.
+   * A new message its reading did not reach in time is told as it is — come
+   * while the app was closed, with the rest of its mailbox.
    */
-  private settle(held: Held, told: Told | null): void {
-    if (!told || !this.tells(held.account.id)) {
+  private tellAsItIs(held: Held): void {
+    if (!this.tells(held.account.id)) {
       return
     }
 
-    if (told.summary === undefined && held.catchUp) {
-      this.addToBatch(held.account, told, CATCH_UP_SETTLE_MS)
+    if (held.catchUp) {
+      this.addToBatch(held.account, { message: held.message }, CATCH_UP_SETTLE_MS)
       return
     }
 
-    this.tell(held.account, [told])
+    this.tell(held.account, [{ message: held.message }])
   }
 
   /**
-   * What waited for a note is told as it is, as if no note had been waited
-   * for: together by mailbox, what came while the app was closed once the
-   * rest of it has come too.
+   * What waited for its reading is told as it is, as if nothing had been
+   * waited for: together by mailbox, what came while the app was closed once
+   * the rest of it has come too.
    */
   private releaseHeld(): void {
     const held = [...this.held.values()]
@@ -359,14 +439,14 @@ export class MailNotifications {
   /**
    * One notification for what came: a single message by its sender and
    * subject, with its first lines — or, when the Segretario said to tell
-   * it, its words.
+   * it, its words. `again`: the same message told before, now with them.
    */
-  private tell(account: NotificationAccount, all: ReadonlyArray<Told>): void {
+  private tell(account: NotificationAccount, all: ReadonlyArray<Told>, again = false): void {
     const now = Date.now()
     // A copy of a message come to another mailbox too was told there.
     const told = all.filter(({ message }) => {
       const at = this.toldCopies.get(copyKey(message))
-      return !message.isRead && (at === undefined || now - at >= COPY_TTL_MS)
+      return !message.isRead && (again || at === undefined || now - at >= COPY_TTL_MS)
     })
     const latest = told.at(-1)
 
@@ -377,7 +457,7 @@ export class MailNotifications {
     const messages = told.map(({ message }) => message)
     const single = told.length === 1
     const flagged = told.some(({ summary }) => summary !== undefined)
-    const key = single ? `mail:${messageKey(latest.message)}` : `mail:${account.id}:batch:${now}`
+    const key = single ? singleKey(latest.message) : `mail:${account.id}:batch:${now}`
     const subject = trimText(latest.message.subject || '(nessun oggetto)', SUBJECT_MAX_LENGTH)
     const input: NotificationInput = single
       ? {

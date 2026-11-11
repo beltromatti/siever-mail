@@ -35,7 +35,7 @@ import type { AskedSearch } from '../ask-mail'
 import type { Notebook } from '../memory/notebook'
 import type { ContentPart } from '../openrouter'
 import type { Registry } from '../registry/registry'
-import type { Actor, RegistryChange } from '../registry/types'
+import { UNSEEN, type Actor, type RegistryChange } from '../registry/types'
 import type { HandleRecord, HandleRegistry } from './handles'
 
 /** Where a message is, wherever that is — the Trash and Spam included. */
@@ -92,6 +92,16 @@ export interface SegretarioMailPort {
   sameMessageElsewhere(
     ref: MessageRef
   ): Promise<Array<{ accountId: string; messageKey: string; threadId: string }>>
+  /**
+   * Tells the user now, with a notification, what cannot wait about a message
+   * that came (§13.3) — in place of the one told as it was, if it came late:
+   * `off` when the user does not take the Segretario's word on the mail,
+   * `not-new` for a message not just come.
+   */
+  alert(
+    message: { accountId: string; messageKey: string },
+    line: string
+  ): Promise<'told' | 'off' | 'not-new'>
   /** An account's conversations with mail from this address since a date, the latest first. */
   threadsFromSender(
     accountId: string,
@@ -269,12 +279,13 @@ export interface RunContext {
   /** The revision of each object of the registry and of the memory this run last saw. */
   seen: Map<string, number>
   /**
-   * The messages a reading is given, as `seenKey('note', …)`: their first
-   * note is its own — it reads them whole, and decides then whether to tell
-   * the user (§13.3). Another run on its own leaves a message without a
-   * note to its reading. Empty for every other run.
+   * What the run looks at as its source changed (`lookingKey`): the messages
+   * a reading is given, the events whose changes a look at the calendar is
+   * given. That they were looked at is marked as it ends (§4.1), and whether
+   * to tell the user of them now is its own (`avvisa`, §13.3). Empty for
+   * every other run.
    */
-  reads: ReadonlySet<string>
+  looking: ReadonlySet<string>
   /** What this run changed, for the diary. */
   changes: RegistryChange[]
   results: RunResults
@@ -302,12 +313,35 @@ export interface FoundFile {
   modified: number
 }
 
+/** What a run looks at, as `RunContext.looking` keeps it: a message that came, or an event that changed. */
+export function lookingKey(
+  target:
+    { kind: 'message'; accountId: string; messageKey: string } | { kind: 'event'; eventKey: string }
+): string {
+  return target.kind === 'message'
+    ? `message:${target.accountId}\u0000${target.messageKey}`
+    : `event:${target.eventKey}`
+}
+
 /** The key the run remembers a revision under: `item:12`, `note:acc:key`, `memory:tu.md`… */
 export function seenKey(
-  kind: 'item' | 'note' | 'project' | 'reply' | 'memory',
+  kind: 'item' | 'note' | 'project' | 'reply' | 'memory' | 'prep' | 'mark' | 'role',
   ...parts: Array<string | number>
 ): string {
   return `${kind}:${parts.join(':')}`
+}
+
+/** Whose an event is is said once for its whole series (§7.4): what the run saw of it, too. */
+export function markSeenKey(event: { eventKey: string; seriesKey: string | null }): string {
+  return seenKey('mark', event.seriesKey ?? event.eventKey)
+}
+
+/**
+ * What a run saw of what it is about to write over (§4.6): the revision it
+ * read — 0, that there was none —, or `UNSEEN`, that it never looked.
+ */
+export function seenOf(run: RunContext, key: string): number {
+  return run.seen.get(key) ?? UNSEEN
 }
 
 export interface ToolContext {
@@ -347,6 +381,12 @@ export interface SegretarioTool {
   parameters: Record<string, unknown>
   /** The line the user sees while it runs, from its arguments. */
   running(args: Record<string, unknown>): string
+  /**
+   * Whether this call only reads: a turn's calls that only read go
+   * together, the others one after another, in the order asked — a write
+   * sees the one before it in the same turn (§4.6). Without it, it may write.
+   */
+  readsOnly?(args: Record<string, unknown>): boolean
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolOutcome>
 }
 

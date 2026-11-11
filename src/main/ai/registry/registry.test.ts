@@ -4,7 +4,7 @@ import { ensureAiSchema } from '../schema'
 import type { Sql } from '../sql'
 import { memorySql } from '../testing/memory-sql'
 import { Registry } from './registry'
-import { RegistryRefusal, RevisionConflict, type Actor, type RegistryChange } from './types'
+import { RegistryRefusal, RevisionConflict, UNSEEN, type Actor, type RegistryChange } from './types'
 
 const ANNA = { accountId: 'acc', messageKey: 'm:anna', threadId: 't1' }
 const BACKGROUND: Actor = { by: 'segretario', runId: 'run-1', background: true }
@@ -29,6 +29,7 @@ describe('Registry', () => {
   let registry: Registry
   let changes: RegistryChange[]
   let lessons: Array<{ kind: string; payload: Record<string, unknown> }>
+  let read: Array<[string, ReadonlyArray<string>]>
 
   beforeEach(async () => {
     sql = memorySql()
@@ -36,9 +37,11 @@ describe('Registry', () => {
     await ensureAiSchema(sql)
     changes = []
     lessons = []
+    read = []
     registry = new Registry(sql, {
       changed: (change) => changes.push(change),
-      lesson: (kind, payload) => lessons.push({ kind, payload })
+      lesson: (kind, payload) => lessons.push({ kind, payload }),
+      read: (accountId, messageKeys) => read.push([accountId, messageKeys])
     })
   })
 
@@ -533,39 +536,119 @@ describe('Registry', () => {
     })
   })
 
-  describe('notes', () => {
-    it('keeps the line the user was told with the note, as it was decided when the message came', async () => {
-      const anchor = { ...ANNA, direction: 'in' as const, messageDate: '2026-11-02T09:00:00.000Z' }
-      const said = {
-        summary: 'Anna chiede la conferma del sopralluogo',
-        nature: 'da_rispondere' as const,
-        priority: 'alta' as const,
-        reason: 'cantiere domattina',
-        due: '2026-11-02'
-      }
+  describe('notes, and what a run saw', () => {
+    const anchor = { ...ANNA, direction: 'in' as const, messageDate: '2026-11-02T09:00:00.000Z' }
+    const said = {
+      summary: 'Anna chiede la conferma del sopralluogo',
+      nature: 'da_rispondere' as const,
+      priority: 'alta' as const,
+      reason: 'cantiere domattina',
+      due: '2026-11-02'
+    }
 
-      const told = await registry.writeNote(
-        anchor,
-        { ...said, notify: true, alert: '  Anna aspetta la conferma entro le 12.  ' },
-        BACKGROUND
-      )
-      expect(told.record).toMatchObject({
-        notify: true,
-        alert: 'Anna aspetta la conferma entro le 12.'
-      })
+    it('writes over a note only as the run saw it: never read, come since, changed since', async () => {
+      // Seen without a note, the first note goes.
+      const first = await registry.writeNote(anchor, said, BACKGROUND, { seenRevision: 0 })
 
-      // A correction later — saying otherwise, or nothing of it — leaves what was told as it was.
+      // Another run that saw none, or never looked, is shown it first.
+      await expect(
+        registry.writeNote(anchor, { ...said, summary: 'Altro' }, CHAT, { seenRevision: 0 })
+      ).rejects.toThrow(/Da quando l’hai letto, questo messaggio ha avuto la sua nota/)
+      await expect(
+        registry.writeNote(anchor, { ...said, summary: 'Altro' }, CHAT, { seenRevision: UNSEEN })
+      ).rejects.toThrow(/ha già la sua nota, e non l’hai ancora letta/)
+
+      // Seen as it is, it is put right; seen before that, it is changed since.
       const corrected = await registry.writeNote(
         anchor,
-        { ...said, summary: 'Anna chiede la conferma', notify: false },
+        { ...said, summary: 'Anna chiede la conferma' },
         CHAT,
-        { seenRevision: told.record.revision }
+        { seenRevision: first.record.revision }
       )
-      expect(corrected.record).toMatchObject({
-        summary: 'Anna chiede la conferma',
-        notify: true,
-        alert: 'Anna aspetta la conferma entro le 12.'
+      expect(corrected.record.revision).toBe(2)
+      await expect(
+        registry.writeNote(anchor, said, BACKGROUND, { seenRevision: first.record.revision })
+      ).rejects.toThrow(/è cambiata da quando l’hai letta/)
+    })
+
+    it('writes over a reply, a preparation, whose an event is, only as the run saw them', async () => {
+      const reply = await registry.saveReply(
+        ANNA,
+        { kind: 'risposta', text: 'Ciao Anna, confermo.', doubts: '' },
+        BACKGROUND,
+        { seenRevision: 0 }
+      )
+      await expect(
+        registry.saveReply(ANNA, { kind: 'risposta', text: 'Altro', doubts: '' }, CHAT, {
+          seenRevision: UNSEEN
+        })
+      ).rejects.toThrow(/c’è già una risposta preparata, e non l’hai ancora letta/)
+      await registry.saveReply(ANNA, { kind: 'risposta', text: 'Ciao Anna.', doubts: '' }, CHAT, {
+        seenRevision: reply.record.revision
       })
+
+      const prep = await registry.savePrep(
+        'c1:visita',
+        'Visita',
+        'Porta il computo.',
+        [],
+        BACKGROUND,
+        0
+      )
+      await expect(
+        registry.savePrep('c1:visita', 'Visita', 'Altro.', [], CHAT, UNSEEN)
+      ).rejects.toThrow(
+        /ha già una preparazione, e non l’hai ancora letta: dice «Porta il computo\.»/
+      )
+      const again = await registry.savePrep(
+        'c1:visita',
+        'Visita',
+        'Porta il computo e la tavola.',
+        [],
+        CHAT,
+        prep.writtenAt
+      )
+      expect(again.writtenAt).toBeGreaterThan(prep.writtenAt)
+      await expect(
+        registry.savePrep('c1:visita', 'Visita', 'Altro.', [], BACKGROUND, prep.writtenAt)
+      ).rejects.toThrow(/è cambiata da quando l’hai letta/)
+
+      const event = { key: 'c1:visita', title: 'Visita', seriesKey: null }
+      await registry.markEvent(event, true, 'Il suo nome nel titolo', BACKGROUND, 0)
+      await expect(registry.markEvent(event, false, null, CHAT, UNSEEN)).rejects.toThrow(
+        /Di chi è «Visita» è già stato detto, e non l'hai ancora letto/
+      )
+    })
+  })
+
+  describe('what the user was told, and what was read', () => {
+    it('keeps what the user was told of a thing — a message once, an event once a change', async () => {
+      const message = { kind: 'message', accountId: 'acc', messageKey: 'm:anna' } as const
+      const event = { kind: 'event', eventKey: 'c1:sopralluogo' } as const
+      await registry.alerts.told(message, ' Anna aspetta la conferma entro le 12. ', 'run-1')
+      await registry.alerts.told(event, 'Spostato alle 8.', 'run-2')
+      await registry.alerts.told(event, 'Annullato.', 'run-3')
+
+      expect((await registry.alerts.of(message)).map((alert) => alert.text)).toEqual([
+        'Anna aspetta la conferma entro le 12.'
+      ])
+      expect((await registry.alerts.of(event)).map((alert) => [alert.text, alert.runId])).toEqual([
+        ['Spostato alle 8.', 'run-2'],
+        ['Annullato.', 'run-3']
+      ])
+    })
+
+    it('marks messages read, once, and says so to what waits for it', async () => {
+      await registry.markRead('acc', ['m:anna', 'm:bruno'], 'run-1')
+      await registry.markRead('acc', ['m:anna'], 'run-2')
+
+      expect([...(await registry.readMarks.read('acc', ['m:anna', 'm:bruno', 'm:carla']))]).toEqual(
+        ['m:anna', 'm:bruno']
+      )
+      expect(read).toEqual([
+        ['acc', ['m:anna', 'm:bruno']],
+        ['acc', ['m:anna']]
+      ])
     })
   })
 
@@ -611,16 +694,6 @@ describe('Registry', () => {
         yours: true,
         setBy: 'segretario'
       })
-    })
-
-    it('keeps what the user was told of an event, one line for each change', async () => {
-      await registry.day.recordAlert(MEETING.key, ' Spostato alle 8. ', 'run-1')
-      await registry.day.recordAlert(MEETING.key, 'Annullato.', 'run-2')
-
-      expect((await registry.day.alerts(MEETING.key)).map((alert) => alert.text)).toEqual([
-        'Spostato alle 8.',
-        'Annullato.'
-      ])
     })
   })
 

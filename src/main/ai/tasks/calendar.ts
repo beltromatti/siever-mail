@@ -1,6 +1,7 @@
 import { CALENDAR_HELD_DAYS, type CalendarChange, type CalendarEvent } from '@shared/calendar'
 
 import { HandleRegistry, type HandleRecord } from '../agent/handles'
+import { lookingKey } from '../agent/tool-types'
 import { eventLine } from '../tools/calendar'
 import { eventWhen, formatDateTime } from '../tools/format'
 import { nowLine } from './context'
@@ -138,6 +139,8 @@ export function prepareCalendarChanges(changes: ReadonlyArray<CalendarChange>): 
     title: `Calendario · ${groups.length === 1 ? changes[0].event.title : `${groups.length} cambiamenti`}`,
     data: `${nowLine()}\n\n## Cambiati nel calendario, non da te\n\n${lines.join('\n\n')}`,
     handles: added,
+    // The events it looks at as they changed: whether to tell the user of them is its own (§13.3).
+    looking: changes.map((change) => lookingKey({ kind: 'event', eventKey: change.event.key })),
     seen: new Map()
   }
 }
