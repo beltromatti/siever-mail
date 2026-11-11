@@ -103,8 +103,9 @@ export async function messageWork(
   options: { withConversation: boolean } = { withConversation: true }
 ): Promise<string[]> {
   const thread = { accountId: ref.accountId, threadId }
-  const [note, alerts, items, links, reply, drafts, marks, proposals] = await Promise.all([
+  const [note, read, alerts, items, links, reply, drafts, marks, proposals] = await Promise.all([
     context.registry.notes.get(ref.accountId, messageKey),
+    context.registry.readMarks.read(ref.accountId, [messageKey]),
     context.registry.alerts.of({ kind: 'message', accountId: ref.accountId, messageKey }),
     options.withConversation
       ? context.registry.commitments.ofThreads([thread])
@@ -129,8 +130,16 @@ export async function messageWork(
 
   if (note) {
     lines.push(`La tua nota: ${noteLine(note)}`)
-  } else {
-    lines.push('Non l’hai ancora letto: nessuna nota.')
+  }
+
+  // Read is the system's mark, set as its reading ends well (§4.2) — not the note's: a note may
+  // come first, from another run that met the message.
+  if (!read.has(messageKey)) {
+    lines.push(
+      note
+        ? 'Non è ancora stato letto: la sua lettura non c’è ancora stata, o non è finita.'
+        : 'Non l’hai ancora letto: nessuna nota.'
+    )
   }
 
   // What the user was told of it, kept with it (§13.3).

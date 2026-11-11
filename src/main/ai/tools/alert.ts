@@ -76,8 +76,8 @@ async function alertOfMessage(
         summary: 'Avviso non mandato: notifiche della posta spente, o tutte com’è'
       }
     : {
-        content: `${handle} non è appena arrivato: un avviso è per ciò che arriva. Lo trova nella posta.`,
-        summary: 'Avviso non mandato: il messaggio non è nuovo'
+        content: `Di ${handle} non parte una notifica: non è tra i messaggi appena arrivati nella Posta in arrivo che aspettano — l'utente l'ha già aperto, oppure è arrivato in un'altra cartella o da tempo. Lo trova nella posta.`,
+        summary: 'Avviso non mandato: il messaggio non aspetta una notifica'
       }
 }
 

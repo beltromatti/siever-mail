@@ -5,7 +5,7 @@ import { movedUnder } from '../../files/paths'
 import { placeholders, type Sql } from '../sql'
 import { AlertStore } from './alerts'
 import { CommitmentStore } from './commitments'
-import { DayStore, type MeetingPrep } from './day'
+import { DayStore, type DayLetter, type MeetingPrep } from './day'
 import { NoteStore, type NoteInput } from './notes'
 import { OwnershipStore, type EventMark } from './ownership'
 import { ProjectStore } from './projects'
@@ -1163,14 +1163,15 @@ export class Registry {
 
   /* ──────────────────────────────── the day ──────────────────────────────── */
 
-  /** The letter at the top of Oggi, for a day. */
+  /** The letter at the top of Oggi, for a day: over the one the run saw that day (`DayStore.saveLetter`). */
   async saveLetter(
     day: string,
     text: string,
     links: ReadonlyArray<HandleLink>,
-    actor: Actor
-  ): Promise<void> {
-    await this.day.saveLetter(day, text, links)
+    actor: Actor,
+    seenAt?: number
+  ): Promise<DayLetter> {
+    const letter = await this.day.saveLetter(day, text, links, seenAt)
     this.emit(
       {
         object: 'giornata',
@@ -1184,6 +1185,7 @@ export class Registry {
       },
       actor
     )
+    return letter
   }
 
   /** How to prepare for a meeting, under the event: over the one the run saw (`DayStore.savePrep`). */

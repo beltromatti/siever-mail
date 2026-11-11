@@ -1334,16 +1334,11 @@ export class SegretarioEngine {
           })
           settle(result)
 
-          // Read, as the reading ends — the system's mark (§4.1): its messages with their note.
-          const noted = await deps.registry.notes.many(
-            plan.targets.map((target) => ({
-              accountId: scope.accountId,
-              messageKey: target.messageKey
-            }))
-          )
+          // Read, as the reading ends well — the system's mark (§4.2), not its notes': each of
+          // the messages it was given.
           await deps.registry.markRead(
             scope.accountId,
-            noted.map((note) => note.messageKey),
+            plan.targets.map((target) => target.messageKey),
             result.activityId
           )
         }

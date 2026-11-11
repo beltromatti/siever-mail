@@ -181,6 +181,12 @@ export interface ExtensionAssistantTool {
   readonly parameters: Record<string, unknown>
   /** The line the user sees while it runs, from its arguments. */
   running(args: Record<string, unknown>): string
+  /**
+   * Whether this call only reads — looks, without writing anything: it then
+   * runs together with the other reads of the same step. Without it, it
+   * runs on its own, in order.
+   */
+  readsOnly?(args: Record<string, unknown>): boolean
   execute(
     args: Record<string, unknown>,
     context: ExtensionToolContext

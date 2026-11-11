@@ -134,7 +134,7 @@ export class MailEngine {
     }
   }
 
-  /** Whether the Segretario reads new mail as it comes: alerts may wait for its notes. */
+  /** Whether the Segretario reads new mail as it comes: notifications may wait for its reading. */
   setSegretarioReading(reading: boolean): void {
     this.notifications.setSegretarioReading(reading)
   }

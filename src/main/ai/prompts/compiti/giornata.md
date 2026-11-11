@@ -14,6 +14,8 @@ Guarda tu ciò che serve per capire la sua giornata: il calendario di oggi e dei
 - Se non c'è niente di urgente, dillo in una frase: è una buona notizia.
 - Usa solo ciò che sai; non inventare. Non elencare tutto, perché l'elenco completo è già nella pagina: scegli, e collega ciò che nomini, così con un clic ci arriva. Niente saluti di circostanza, niente titoli, niente elenchi, niente grassetti: è prosa, come una nota scritta a mano.
 
+Se oggi l'hai già scritta (la giornata è cambiata e la rivedi), parti da quella: rileggila (`oggi`, senza `lettera`) e aggiornala con ciò che è cambiato, tenendo ciò che resta vero e come l'avevi impostata. L'utente l'ha già letta: una lettera rifatta da capo per un appuntamento spostato gli fa rileggere tutto per trovare che cosa è cambiato. Vale lo stato di adesso: ciò che non è più vero esce. Un giorno nuovo comincia dallo stato: la lettera di ieri non conta più.
+
 La lettera racconta la giornata com'è dopo il tuo lavoro: viene meglio quando il resto è sistemato.
 
 ## Il resto lo decidi tu

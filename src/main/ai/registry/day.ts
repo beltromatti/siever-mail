@@ -1,4 +1,5 @@
 import type { HandleLink } from '@shared/segretario'
+import { unlinked } from '@shared/segretario-links'
 
 import type { Sql } from '../sql'
 import { lookedAt, RevisionConflict } from './types'
@@ -43,22 +44,60 @@ export class DayStore {
       : null
   }
 
+  /**
+   * Writes a day's letter — over that day's only if it is the one the run saw
+   * (§4.6): `seenAt`, when the one it read was written; 0, that there was
+   * none; `UNSEEN`, that it never looked. A letter is a day's: a new day's
+   * starts from the state, not over yesterday's (§3.4).
+   */
   async saveLetter(
     day: string,
     text: string,
-    links: ReadonlyArray<HandleLink>
+    links: ReadonlyArray<HandleLink>,
+    seenAt?: number
   ): Promise<DayLetter> {
-    const writtenAt = Date.now()
-    await this.sql.run(
-      `INSERT INTO ai_briefings (day, text, basis, links_json, created_at) VALUES (?, ?, '[]', ?, ?)
-       ON CONFLICT(day) DO UPDATE SET text = excluded.text, links_json = excluded.links_json,
-         created_at = excluded.created_at`,
-      day,
-      text.trim(),
-      JSON.stringify(links),
-      writtenAt
-    )
-    return { day, text: text.trim(), links: [...links], writtenAt }
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const current = await this.letter(day)
+
+      if (current && seenAt !== undefined && current.writtenAt !== seenAt) {
+        const at = new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(
+          new Date(current.writtenAt)
+        )
+        throw new RevisionConflict(
+          `${
+            lookedAt(seenAt) === 'mai'
+              ? `La lettera di oggi c'è già, scritta alle ${at}, e non l'hai ancora letta`
+              : `La lettera di oggi è stata riscritta alle ${at}, da quando l'hai letta`
+          }: dice «${unlinked(current.text)}». Se la tua vale ancora, riscrivila partendo da lì.`,
+          { revision: current.writtenAt }
+        )
+      }
+
+      const writtenAt = Math.max(Date.now(), (current?.writtenAt ?? 0) + 1)
+      const changed = current
+        ? await this.sql.run(
+            'UPDATE ai_briefings SET text = ?, links_json = ?, created_at = ? WHERE day = ? AND created_at = ?',
+            text.trim(),
+            JSON.stringify(links),
+            writtenAt,
+            day,
+            current.writtenAt
+          )
+        : await this.sql.run(
+            `INSERT INTO ai_briefings (day, text, basis, links_json, created_at) VALUES (?, ?, '[]', ?, ?)
+             ON CONFLICT(day) DO NOTHING`,
+            day,
+            text.trim(),
+            JSON.stringify(links),
+            writtenAt
+          )
+
+      if (changed === 1) {
+        return { day, text: text.trim(), links: [...links], writtenAt }
+      }
+    }
+
+    throw new Error(`La lettera del ${day} non si scrive: cambia di continuo.`)
   }
 
   async prep(eventKey: string): Promise<MeetingPrep | null> {
@@ -125,7 +164,7 @@ export class DayStore {
               : lookedAt(seenAt) === 'comparsa'
                 ? 'Da quando l’hai letto, questo evento ha avuto una preparazione'
                 : 'La preparazione di questo evento è cambiata da quando l’hai letta'
-          }: dice «${current.text}». Se la tua vale ancora, riscrivila tenendo ciò che serve.`,
+          }: dice «${unlinked(current.text)}». Se la tua vale ancora, riscrivila tenendo ciò che serve.`,
           { revision: current.writtenAt }
         )
       }

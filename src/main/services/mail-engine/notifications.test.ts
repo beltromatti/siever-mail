@@ -267,12 +267,20 @@ describe('the notifications of new mail', () => {
       expect(shown).toHaveLength(1)
       expect(`${shown[0].options.body}`).toContain('Anteprima 4')
 
+      // However late, while it is unread.
+      vi.advanceTimersByTime(3 * 60 * 60 * 1000)
       expect(mail.alert('a1', 'k4', 'Il DDT non corrisponde all’ordine.')).toBe('told')
       // In its place: the one told as it was goes.
       expect(shown.map(({ options, closed }) => [options.body, closed])).toEqual([
         ['Anteprima 4', true],
         ['Il DDT non corrisponde all’ordine.', false]
       ])
+
+      // Its reading over without a line: none comes after.
+      mail.enqueue(ACCOUNT, [message(6)], INBOX, false)
+      vi.advanceTimersByTime(10 * 60 * 1000)
+      mail.read('a1', ['k6'])
+      expect(mail.alert('a1', 'k6', 'Da sapere.')).toBe('not-new')
     })
 
     it('gives a late line once: not again for a copy told elsewhere, and out of the summary it was in', () => {

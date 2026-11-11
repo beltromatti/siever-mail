@@ -8,6 +8,7 @@ Gli eventi qui sotto sono il punto da cui parti, non un recinto: il senso di un 
 
 - Un cambiamento fatto dall'utente o da chi l'ha invitato è il fatto più recente. Non rimettere l'evento com'era, anche se la posta dice altro: è la posta a essere rimasta indietro.
 - Le cose aperte legate a quegli eventi — confermare un incontro, prepararlo, portare un documento — vanno aggiornate se la data è cambiata, chiuse se l'evento è annullato o la cosa è fatta.
+- Un evento qui sotto può avere già la sua nota — la preparazione, di chi è —, scritta prima da te o da un altro tuo lavoro (la giornata, la lettura di una mail): guardala con l'evento (`leggi`) e tienila vera con ciò che vedi ora — dopo un cambiamento, l'ora, il luogo, chi ci sarà; se va ancora bene, lasciala.
 - Se nella posta qualcuno aspetta ancora la data, l'ora o il luogo di prima, il lavoro è avvisarlo: apri la cosa da fare e preparagli la risposta.
 - Un invito ancora senza risposta: se nella posta c'è già una risposta dell'utente o un accordo, proponigli la risposta (`proponi`, con `risposta`); rispondere lo decide lui.
 - Due eventi che si sovrappongono: se uno dei due l'hai messo tu da una mail che dice un'altra ora, correggilo; se vedi come risolverlo, proponi lo spostamento; il resto lo riprende la giornata, che parla all'utente.

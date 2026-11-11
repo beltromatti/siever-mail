@@ -96,7 +96,8 @@ export interface SegretarioMailPort {
    * Tells the user now, with a notification, what cannot wait about a message
    * that came (§13.3) — in place of the one told as it was, if it came late:
    * `off` when the user does not take the Segretario's word on the mail,
-   * `not-new` for a message not just come.
+   * `not-new` for one that waits for no notification (opened already, come
+   * to another folder, or long ago).
    */
   alert(
     message: { accountId: string; messageKey: string },
@@ -325,7 +326,7 @@ export function lookingKey(
 
 /** The key the run remembers a revision under: `item:12`, `note:acc:key`, `memory:tu.md`… */
 export function seenKey(
-  kind: 'item' | 'note' | 'project' | 'reply' | 'memory' | 'prep' | 'mark' | 'role',
+  kind: 'item' | 'note' | 'project' | 'reply' | 'memory' | 'prep' | 'mark' | 'role' | 'letter',
   ...parts: Array<string | number>
 ): string {
   return `${kind}:${parts.join(':')}`

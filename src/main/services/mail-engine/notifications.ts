@@ -6,8 +6,6 @@ import type { MailFolder, MailMessageSummary, MessageRef } from '@shared/models'
 
 /** The longest a new message waits for its reading before it is told as it is. */
 const READING_WAIT_MS = 10 * 60 * 1000
-/** A message told as it is, its reading late, still takes the Segretario's line in its place so long. */
-const LATE_LINE_MS = 60 * 60 * 1000
 /** Messages arriving together are told together. */
 const COALESCE_MS = 1_500
 /** The mail come while the app was closed arrives in bursts: told together once it stops. */
@@ -15,7 +13,7 @@ const CATCH_UP_SETTLE_MS = 20_000
 const PREVIEW_MAX_LENGTH = 180
 const SUBJECT_MAX_LENGTH = 80
 const DEDUPE_TTL_MS = 10 * 60 * 1000
-/** A copy of a message told is not told again so long after: past any wait for its note. */
+/** A copy of a message told is not told again so long after: past any wait for its reading. */
 const COPY_TTL_MS = 60 * 60 * 1000
 /** Senders a notification of several messages names before "e altri N". */
 const NAMED_SENDERS = 2
@@ -132,10 +130,13 @@ export class MailNotifications {
   private segretarioReading: boolean | null = null
   /** New messages waiting for their reading, by account and message key. */
   private readonly held = new Map<string, Held>()
-  /** Told as they were, their reading late, by account and message key: when. */
+  /**
+   * Told as they were, their reading late, by account and message key: the
+   * Segretario's line, if it comes, takes their place — until they are read.
+   */
   private readonly late = new Map<
     string,
-    { account: NotificationAccount; message: MailMessageSummary; at: number }
+    { account: NotificationAccount; message: MailMessageSummary }
   >()
   private readonly unsubscribe: () => void
 
@@ -154,7 +155,7 @@ export class MailNotifications {
         }
       }
 
-      if (!this.waitsForNotes()) {
+      if (!this.waitsForReading()) {
         this.releaseHeld()
       }
     })
@@ -162,13 +163,13 @@ export class MailNotifications {
 
   /**
    * Whether the Segretario reads new mail as it comes: while it does, a new
-   * message waits for its note. When it stops — the key fails, the AI goes
+   * message waits for its reading. When it stops — the key fails, the AI goes
    * off — what was waiting is told as it is.
    */
   setSegretarioReading(reading: boolean): void {
     this.segretarioReading = reading
 
-    if (!this.waitsForNotes()) {
+    if (!this.waitsForReading()) {
       this.releaseHeld()
     }
   }
@@ -182,6 +183,8 @@ export class MailNotifications {
     for (const messageKey of messageKeys) {
       const key = `${accountId}\u0000${messageKey}`
       const held = this.held.get(key)
+      // Told late as it was: no line comes now in its place.
+      this.late.delete(key)
 
       if (held) {
         clearTimeout(held.timer)
@@ -195,10 +198,11 @@ export class MailNotifications {
    * now, on its own, with its line — in place of the notification told as it
    * was, if its reading came late. `off` when the user does not take its
    * word — the mail's notifications off, this mailbox muted, every message
-   * wanted as it is —; `not-new` for a message not just come.
+   * wanted as it is —; `not-new` for one that waits for no notification:
+   * opened already, come to another folder, or long ago.
    */
   alert(accountId: string, keyOfMessage: string, line: string): 'told' | 'off' | 'not-new' {
-    if (!this.tells(accountId) || !this.waitsForNotes()) {
+    if (!this.tells(accountId) || !this.waitsForReading()) {
       return 'off'
     }
 
@@ -218,7 +222,7 @@ export class MailNotifications {
 
     const late = this.late.get(key)
 
-    if (late && Date.now() - late.at < LATE_LINE_MS) {
+    if (late) {
       this.late.delete(key)
 
       if (!late.message.isRead) {
@@ -273,7 +277,7 @@ export class MailNotifications {
       // Come while the app was closed: what a launch finds, told with the rest of its mailbox.
       const catchUp = Date.parse(message.date) < this.launchedAt
 
-      if (this.waitsForNotes()) {
+      if (this.waitsForReading()) {
         this.hold(account, message, catchUp)
       } else {
         this.addToBatch(account, { message }, catchUp ? CATCH_UP_SETTLE_MS : COALESCE_MS)
@@ -350,7 +354,7 @@ export class MailNotifications {
     return enabled && mail.enabled && !mail.mutedAccountIds.includes(accountId)
   }
 
-  private waitsForNotes(): boolean {
+  private waitsForReading(): boolean {
     return this.deps.center.preferences.mail.onlyFlagged && this.segretarioReading !== false
   }
 
@@ -367,15 +371,7 @@ export class MailNotifications {
       this.held.delete(key)
 
       if (held && !held.message.isRead) {
-        const now = Date.now()
-
-        for (const [other, late] of this.late) {
-          if (now - late.at >= LATE_LINE_MS) {
-            this.late.delete(other)
-          }
-        }
-
-        this.late.set(key, { account: held.account, message: held.message, at: now })
+        this.late.set(key, { account: held.account, message: held.message })
         this.tellAsItIs(held)
       }
     }, READING_WAIT_MS)

@@ -59,6 +59,7 @@ function extensionTool(tool: ExtensionAssistantTool, extensionId: string): Segre
     description: tool.description,
     parameters: tool.parameters,
     running: (args) => tool.running(args),
+    readsOnly: tool.readsOnly ? (args) => tool.readsOnly?.(args) ?? false : undefined,
     async execute(args, context) {
       const result = await tool.execute(args, {
         message: (handle) => extensionMessage(context, handle),

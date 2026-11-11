@@ -1,11 +1,16 @@
 import { foldSearchText } from '@shared/search'
+import { unlinked } from '@shared/segretario-links'
 
 import { linksIn } from '../agent/entries'
 import { PROMPTS } from '../prompts'
+import { RevisionConflict } from '../registry/types'
 import {
   numberArg,
+  seenKey,
+  seenOf,
   stringArg,
   stringListArg,
+  ToolConflict,
   ToolInputError,
   type SegretarioTool,
   type TaskKind
@@ -35,9 +40,11 @@ const TASK_WORDS: Record<string, string> = {
 const LETTER_WRITERS: ReadonlyArray<TaskKind> = ['giornata', 'richiesta']
 
 /**
- * The desk's own text (vision §13.1): the letter at the top of Oggi. What
- * the Segretario writes of an event — how to prepare it, whose it is — is
- * that event's note (`nota`); what the user is to know now, `avvisa`.
+ * The desk's own text (vision §13.1): the letter at the top of Oggi, a day's
+ * (§3.4) — shown as it is, and written over the one the run saw that day
+ * (§4.6). What the Segretario writes of an event — how to prepare it, whose
+ * it is — is that event's note (`nota`); what the user is to know now,
+ * `avvisa`.
  */
 export const todayTool: SegretarioTool = {
   name: 'oggi',
@@ -46,16 +53,33 @@ export const todayTool: SegretarioTool = {
     type: 'object',
     properties: {
       lettera: { type: 'string' }
-    },
-    required: ['lettera']
+    }
   },
-  running: () => 'Scrivo la giornata…',
+  running: (args) =>
+    args.lettera === undefined ? 'Guardo la lettera di oggi…' : 'Scrivo la giornata…',
+  readsOnly: (args) => args.lettera === undefined,
   async execute(args, context) {
+    const day = localDay()
+    const seen = seenKey('letter', day)
+
+    // Without a letter, today's as it is: what a rewrite the same day starts from.
+    if (args.lettera === undefined) {
+      const current = await context.registry.day.letter(day)
+      context.run.seen.set(seen, current?.writtenAt ?? 0)
+
+      return {
+        content: current
+          ? `La lettera di oggi, scritta alle ${new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(new Date(current.writtenAt))}:\n${unlinked(current.text)}`
+          : "Oggi non c'è ancora una lettera.",
+        summary: 'Guardata la lettera di oggi'
+      }
+    }
+
     const letter = stringArg(args, 'lettera')
 
     if (!letter) {
       throw new ToolInputError(
-        "Indica la `lettera`. Ciò che scrivi di un evento — la preparazione, l'avviso, di chi è — va nella sua nota (`nota`, con `evento`)."
+        'Indica la `lettera`. Ciò che scrivi di un evento — la preparazione, di chi è — va nella sua nota (`nota`, con `evento`); ciò che l’utente deve sapere adesso, in `avvisa`.'
       )
     }
 
@@ -67,12 +91,23 @@ export const todayTool: SegretarioTool = {
       )
     }
 
-    await context.registry.saveLetter(
-      localDay(),
-      letter,
-      linksIn(letter, context.handles),
-      context.run.actor
-    )
+    try {
+      const written = await context.registry.saveLetter(
+        day,
+        letter,
+        linksIn(letter, context.handles),
+        context.run.actor,
+        seenOf(context.run, seen)
+      )
+      context.run.seen.set(seen, written.writtenAt)
+    } catch (error) {
+      if (error instanceof RevisionConflict) {
+        context.run.seen.set(seen, error.current.revision)
+        throw new ToolConflict(error.message)
+      }
+
+      throw error
+    }
 
     return { content: 'La lettera di oggi è in cima a Oggi.', summary: 'Scritta la giornata' }
   }
