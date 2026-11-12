@@ -172,7 +172,11 @@ const PRIORITY_ORDER = { alta: 0, media: 1, bassa: 2 } as const
 const ONBOARDING = 'onboarding'
 
 export interface SegretarioServiceOptions {
-  database: { storeClient(): Promise<PrismaClient> }
+  database: {
+    storeClient(): Promise<PrismaClient>
+    /** The connections a former install kept, taken by this start: the first start begins over them. */
+    adoptedConnections(): Promise<{ accountIds: string[] } | null>
+  }
   mail: SegretarioMailPort
   calendar: SegretarioCalendarPort
   fetch: FetchFunction
@@ -530,6 +534,21 @@ export class SegretarioService {
       emit: (event) => this.emit(event),
       recordUsage: (activityId, purpose, result) => this.recordUsage(activityId, purpose, result)
     })
+
+    // Connections kept by an uninstall, found by this install: a first start, already connected —
+    // the guided setup takes the user from them, as from any first start (§12.2).
+    const adopted = await this.options.database.adoptedConnections()
+
+    if (adopted && !(await store.meta(ONBOARDING))) {
+      const setup: OnboardingState = {
+        case: 'primo-avvio',
+        step: 'connessioni',
+        accountIds: adopted.accountIds,
+        conoscimiId: null,
+        startedAt: Date.now()
+      }
+      await store.setMeta(ONBOARDING, JSON.stringify(setup))
+    }
 
     this.store = store
     this.notebook = notebook

@@ -649,6 +649,23 @@ export interface DataStorageSection {
   segretarioBytes: number
 }
 
+/**
+ * What an uninstall leaves (vision §13.2): the connections — the mailboxes
+ * and calendars, with their accesses, so the next install finds them
+ * connected — or nothing of SIEVER Mail.
+ */
+export type UninstallKeep = 'connessioni' | 'niente'
+
+/** What taking SIEVER Mail away from Settings › Dati can do on this computer. */
+export interface UninstallOffer {
+  /** Only the installed app takes itself away. */
+  available: boolean
+  /** The program goes too — the bundle, the AppImage, the Windows install —, not only its data. */
+  removesProgram: boolean
+  /** Where it runs: how a program is taken away there is said in its words. */
+  system: 'mac' | 'windows' | 'linux'
+}
+
 export interface DataStorageBreakdown {
   totalBytes: number
   sections: DataStorageSection[]

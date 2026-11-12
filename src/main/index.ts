@@ -27,6 +27,7 @@ import { prepareUpgradeMigration } from './services/data-migration'
 import { normalizeExternalHttpUrl } from './utils/external-url'
 import { profileKind, systemLine } from '@main/diagnostics/app-state'
 import { diagnostics, flushDiagnostics, startDiagnostics } from '@main/diagnostics/log'
+import { runUninstall, uninstallRequest } from './uninstall'
 import { Workspace } from './workspace'
 import {
   applyStoredThemeMode,
@@ -72,9 +73,19 @@ let mainWindow: BrowserWindow | null = null
 let appWorkspace: Workspace | null = null
 let appTray: Tray | null = null
 let isQuitting = false
-const hasSingleInstanceLock = app.requestSingleInstanceLock()
+// Started only to take SIEVER Mail away (§13.2): it clears, and nothing of the app starts.
+const uninstall = uninstallRequest()
+// The Windows installer asks the app to close as the user would, before it replaces or removes it:
+// the running app quits, finishing what it was writing; one that was not running does not start.
+const quitAsked = app.commandLine.hasSwitch('siever-quit')
+const hasSingleInstanceLock = !uninstall && app.requestSingleInstanceLock()
+const starts = hasSingleInstanceLock && !quitAsked
 
-if (!hasSingleInstanceLock) {
+if (uninstall) {
+  // It draws nothing but a message: no graphics process to leave its caches behind.
+  app.disableHardwareAcceleration()
+  void runUninstall(uninstall)
+} else if (!starts) {
   app.quit()
 } else {
   // The diagnostics start before anything else, in this profile's folder (§14.4, §15.3): what
@@ -344,7 +355,12 @@ function createMainWindow(): BrowserWindow {
   return window
 }
 
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv) => {
+  if (argv.includes('--siever-quit')) {
+    app.quit()
+    return
+  }
+
   const showExistingWindow = (): void => {
     showMainWindow()
   }
@@ -357,7 +373,7 @@ app.on('second-instance', () => {
   void app.whenReady().then(showExistingWindow)
 })
 
-if (hasSingleInstanceLock) {
+if (starts) {
   void app.whenReady().then(() => {
     restrictWebPermissions()
     applyStoredThemeMode()

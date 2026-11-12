@@ -71,6 +71,12 @@ import { subjectSortKey } from '@shared/subject'
 
 import { rankContactSuggestions, type ContactCandidate } from './contact-ranking'
 import { fullTextMatchExpression, numberWords, queryNumbers } from './full-text-query'
+import {
+  forgetKeptConnections,
+  insertStatements,
+  keptConnectionsOf,
+  type KeptConnections
+} from './kept-connections'
 import { isPecServer } from './mail-discovery'
 import {
   forgetLeftKeysStatement,
@@ -141,6 +147,12 @@ const MESSAGE_LIST_SORT_FIELDS: ReadonlyArray<MessageListSortField> = [
 const MESSAGE_LIST_SORT_DIRECTIONS: ReadonlyArray<MessageListSortDirection> = ['asc', 'desc']
 const MESSAGE_GROUPING_MODES: ReadonlyArray<MessageGroupingMode> = ['none', 'auto', 'sender']
 const THEME_MODES: ReadonlyArray<ThemeMode> = ['system', 'light', 'dark']
+
+/** The connections a start took from a former install (see `AppDatabase.adoptKeptConnections`). */
+export interface AdoptedConnections {
+  accountIds: string[]
+  calendarConnectionIds: string[]
+}
 
 export interface StoredMailAccount extends MailAccount {
   encryptedSecret: string
@@ -1017,7 +1029,10 @@ export class AppDatabase {
   /** The tokens of the last searches' index matches (see `indexHitsToken`), oldest first. */
   private readonly indexSearches = new Map<string, { token: string; generation: number }>()
 
-  constructor(filePath: string) {
+  /** The connections a former install kept, taken by this start (see `adoptKeptConnections`). */
+  private adopted: AdoptedConnections | null = null
+
+  constructor(private readonly filePath: string) {
     mkdirSync(dirname(filePath), { recursive: true })
 
     const adapter = new PrismaBetterSqlite3({
@@ -5550,6 +5565,66 @@ export class AppDatabase {
     if (this.contactsOutdated) {
       await this.rebuildContacts()
     }
+
+    await this.adoptKeptConnections()
+  }
+
+  /**
+   * The connections a former install kept for this one, when the user
+   * uninstalled keeping them (vision §13.2): put back before anything reads
+   * the accounts, with their access as it was, and the file that held them
+   * goes. A file that cannot be read is said and let go: the app starts as
+   * a first install would.
+   */
+  private async adoptKeptConnections(): Promise<void> {
+    const profile = dirname(this.filePath)
+    let kept: KeptConnections | null
+
+    try {
+      kept = keptConnectionsOf(profile)
+    } catch (error) {
+      log.warn('connections.kept-unreadable', { err: error })
+      forgetKeptConnections(profile)
+      return
+    }
+
+    if (!kept) {
+      return
+    }
+
+    const statements: ReturnType<typeof insertStatements> = []
+
+    for (const [table, rows] of [
+      ['accounts', kept.accounts],
+      ['calendar_connections', kept.calendarConnections]
+    ] as const) {
+      const columns = await this.prisma.$queryRawUnsafe<Array<{ name: string }>>(
+        `PRAGMA table_info(${table})`
+      )
+      statements.push(
+        ...insertStatements(table, rows, new Set(columns.map((column) => column.name)))
+      )
+    }
+
+    await this.prisma.$transaction(
+      statements.map(({ sql, values }) => this.prisma.$executeRawUnsafe(sql, ...values))
+    )
+    forgetKeptConnections(profile)
+    this.adopted = {
+      accountIds: kept.accounts.map((row) => String(row['id'])),
+      calendarConnectionIds: kept.calendarConnections.map((row) => String(row['id']))
+    }
+    log.info('connections.kept-adopted', {
+      mail: this.adopted.accountIds.length,
+      calendars: this.adopted.calendarConnectionIds.length,
+      keptAt: kept.keptAt
+    })
+  }
+
+  /** The connections this start took from a former install, if it did. */
+  async adoptedConnections(): Promise<AdoptedConnections | null> {
+    await this.ready
+    return this.adopted
   }
 
   /**

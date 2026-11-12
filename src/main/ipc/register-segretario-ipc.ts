@@ -229,7 +229,11 @@ export function registerSegretarioIpc(
   handle(SEGRETARIO_IPC.startConoscimi, (keys: unknown) =>
     segretario.startConoscimi(z.array(z.string().min(1).max(200)).max(100).optional().parse(keys))
   )
-  handle(SEGRETARIO_IPC.getOnboarding, () => segretario.getOnboarding())
+  // Asked as the window opens: read once the Segretario is open, not refused before.
+  handle(SEGRETARIO_IPC.getOnboarding, async () => {
+    await segretario.whenReady()
+    return segretario.getOnboarding()
+  })
   handle(SEGRETARIO_IPC.setOnboarding, (state: unknown) =>
     segretario.setOnboarding(onboardingSchema.nullable().parse(state))
   )

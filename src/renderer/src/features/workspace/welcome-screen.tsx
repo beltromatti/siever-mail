@@ -36,7 +36,10 @@ export function WelcomeScreen({
   }, [])
 
   return (
-    <div className={cn('bg-background h-full w-full', fadeIn && 'welcome-enter')}>
+    // Nothing here to select or type in: the whole screen is the window's handle, but its buttons.
+    <div
+      className={cn('window-drag-region bg-background h-full w-full', fadeIn && 'welcome-enter')}
+    >
       <div className="relative mx-auto h-full w-full max-w-5xl px-6 py-12">
         <div className="flex h-full items-center justify-center">
           <div
@@ -80,7 +83,7 @@ export function WelcomeScreen({
               : 'pointer-events-none translate-y-2 opacity-0'
           )}
         >
-          <div className="flex flex-col items-center gap-3">
+          <div className="window-no-drag flex flex-col items-center gap-3">
             {hasConnections ? (
               <>
                 <Button className="w-56 gap-2 rounded-lg text-sm" size="lg" onClick={onEnter}>

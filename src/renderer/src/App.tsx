@@ -313,6 +313,28 @@ function AppFrame({
   return (
     <TooltipProvider delayDuration={140} skipDelayDuration={300}>
       <div className="h-screen overflow-hidden" style={chromeInsets}>
+        <div className="h-full min-h-0" inert={Boolean(cover)}>
+          {/* Screens without panes are dragged by their top edge. */}
+          {!framed && windowControlsState.dragTopRegionEnabled && (
+            <div className="window-drag-edge" aria-hidden />
+          )}
+          {children}
+        </div>
+        {cover && (
+          <div className="fixed inset-0 z-40">
+            {/* After the workspace, so the panes' title bars beneath are no handle through it. A
+                leaf: the region is inherited, and the screen's own content would carry it over
+                its drag strip. */}
+            <div className="window-no-drag absolute inset-0 -z-10" aria-hidden />
+            {cover}
+            {/* The cover is dragged by its top edge, as the workspace by its panes' title bars:
+                last, so nothing of the screen takes it back. */}
+            {windowControlsState.dragTopRegionEnabled && (
+              <div className="window-drag-edge" aria-hidden />
+            )}
+          </div>
+        )}
+        {/* Windows' own buttons come last: no drag region laid after them takes their clicks. */}
         {windowControlsState.enabled && (
           <div className="window-no-drag fixed top-0 right-0 z-[10000] flex">
             <button
@@ -344,22 +366,6 @@ function AppFrame({
             >
               <X className="size-3.5" />
             </button>
-          </div>
-        )}
-        <div className="h-full min-h-0" inert={Boolean(cover)}>
-          {/* Screens without panes are dragged by their top edge. */}
-          {!framed && windowControlsState.dragTopRegionEnabled && (
-            <div className="window-drag-edge" aria-hidden />
-          )}
-          {children}
-        </div>
-        {cover && (
-          // After the workspace, so its no-drag takes back the panes' title bars beneath.
-          <div className="window-no-drag fixed inset-0 z-40">
-            {windowControlsState.dragTopRegionEnabled && (
-              <div className="window-drag-edge" aria-hidden />
-            )}
-            {cover}
           </div>
         )}
       </div>

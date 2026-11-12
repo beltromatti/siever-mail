@@ -11,7 +11,9 @@ import {
 import { IPC_CHANNELS } from '@shared/ipc'
 import { chordToAccelerator } from '@shared/shortcuts'
 
-const APP_NAME = 'SIEVER Mail'
+import { PRODUCT_NAME } from './app-identity'
+
+const APP_NAME = PRODUCT_NAME
 
 let getWindow: (() => BrowserWindow | null) | null = null
 let overrides: ShortcutOverrides = {}

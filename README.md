@@ -55,6 +55,8 @@ Next: the **File** app and file connections — the computer's volumes, network 
 
 SIEVER Mail runs on macOS 13 Ventura or later (Apple silicon and Intel), Windows 10 and 11 (64-bit) and Linux. Installers are published with each release on GitHub.
 
+To update, install the new release the way your system installs any app — the Windows installer, the app dragged into Applications, the new AppImage —: your data stays, and the new version takes it as it is. To remove it, go to Settings › Data (or, on Windows, the system's Apps) and choose what stays: your connections, so that a later install finds them already signed in, or nothing at all.
+
 To run it from source (Node.js 22+):
 
 ```bash

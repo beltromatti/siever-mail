@@ -5,6 +5,7 @@ import { popupPageContextMenu } from '@main/context-menu'
 import { normalizeExternalHttpUrl } from '@main/utils/external-url'
 import { diagnostics } from '@main/diagnostics/log'
 import { handleIpc, type HandleOptions } from '@main/ipc/handle'
+import { beginUninstall, uninstallOffer } from '@main/uninstall'
 import type { Workspace } from '@main/workspace'
 import type { ContextMenuItem } from '@shared/context-menu'
 import { IPC_CHANNELS } from '@shared/ipc'
@@ -327,6 +328,17 @@ export function registerMailIpc(
 
   registerDataHandler(IPC_CHANNELS.clearAllDataKeepAccounts, async () => {
     await workspace.clearAllDataKeepAccounts()
+  })
+
+  registerDataHandler(IPC_CHANNELS.uninstallOffer, async () => uninstallOffer())
+
+  // Taking SIEVER Mail away (§13.2): the clearing starts, and the app quits for it — as it always
+  // quits, finishing what it was writing.
+  registerDataHandler(IPC_CHANNELS.uninstall, async (keep: unknown) => {
+    const chosen = z.enum(['connessioni', 'niente']).parse(keep)
+    log.info('app.uninstall', { keep: chosen, by: 'user' })
+    beginUninstall(chosen)
+    setImmediate(() => app.quit())
   })
 
   registerDataHandler(

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { ArrowRight, Download, LoaderCircle, Trash2 } from 'lucide-react'
+import { ArrowRight, Download, LoaderCircle, LogOut, Trash2 } from 'lucide-react'
 
 import extensionRenderer from '@app/extension/renderer'
 import { Button } from '@renderer/components/ui/button'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import {
   ActionRow,
+  OptionsRow,
   SettingsGroup,
   SettingsNotice,
   SettingsPage
@@ -13,7 +14,13 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { DiagnosticsGroup } from '@renderer/features/settings/diagnostics-group'
 import { cn } from '@renderer/lib/utils'
-import type { DataStorageBreakdown, DataStorageKind, DataStorageSection } from '@shared/models'
+import type {
+  DataStorageBreakdown,
+  DataStorageKind,
+  DataStorageSection,
+  UninstallKeep,
+  UninstallOffer
+} from '@shared/models'
 
 const SIZE = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 1 })
 
@@ -313,7 +320,132 @@ export function DataSection({
         </Button>
       </div>
 
+      <UninstallBox busy={busy || clearingAll} confirm={confirm} />
+
       {confirmDialog}
     </SettingsPage>
+  )
+}
+
+/** What stays, in words: the same in the box and in its confirmation. */
+const STAYS: Readonly<Record<UninstallKeep, string>> = {
+  connessioni:
+    'Restano solo le connessioni, cioè le caselle e i calendari con i loro accessi: installandolo di nuovo li ritrovi già collegati, e tutto il resto riparte da capo, dalla procedura guidata.',
+  niente: 'Non resta niente di SIEVER Mail su questo computer: né dati, né accessi, né preferenze.'
+}
+
+/** How the system takes a program away, beside what SIEVER Mail does here. */
+function systemWords(offer: UninstallOffer): string {
+  switch (offer.system) {
+    case 'mac':
+      return 'Trascinarlo nel Cestino toglie solo il programma, e lascia i suoi dati: da qui se ne va con ciò che tiene.'
+    case 'windows':
+      return 'Lo stesso si fa da Impostazioni di Windows › App, che chiede la stessa cosa.'
+    case 'linux':
+      return offer.removesProgram
+        ? 'Se ne va anche il file AppImage.'
+        : 'I dati se ne vanno da qui; il programma si toglie poi con il gestore dei pacchetti.'
+  }
+}
+
+/**
+ * Taking SIEVER Mail off the computer (vision §13.2, §15.6): the user
+ * chooses what stays — the connections, or nothing — and the app quits for
+ * it. Only the installed app takes itself away.
+ */
+function UninstallBox({
+  busy,
+  confirm
+}: {
+  busy: boolean
+  confirm: ReturnType<typeof useConfirmDialog>['confirm']
+}): React.JSX.Element | null {
+  const [offer, setOffer] = useState<UninstallOffer | null>(null)
+  const [keep, setKeep] = useState<UninstallKeep>('connessioni')
+  const [leaving, setLeaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let current = true
+    window.mailApi
+      .uninstallOffer()
+      .then((found) => current && setOffer(found))
+      .catch(() => current && setOffer(null))
+    return () => {
+      current = false
+    }
+  }, [])
+
+  if (!offer) {
+    return null
+  }
+
+  const leave = async (): Promise<void> => {
+    const confirmed = await confirm({
+      title: 'Togliere SIEVER Mail da questo computer?',
+      description: `${STAYS[keep]} Ciò che sta fuori da SIEVER Mail resta com'è: la posta sui server, i calendari, i tuoi file. SIEVER Mail si chiude.`,
+      confirmLabel: 'Disinstalla',
+      destructive: true
+    })
+
+    if (!confirmed) {
+      return
+    }
+
+    setLeaving(true)
+    setError(null)
+
+    try {
+      await window.mailApi.uninstall(keep)
+    } catch (caught) {
+      setLeaving(false)
+      setError(errorText(caught) ?? 'SIEVER Mail non si è potuto togliere.')
+    }
+  }
+
+  return (
+    <div className="border-destructive/35 bg-destructive/5 flex flex-col gap-2 rounded-md border p-3">
+      <p className="eyebrow">Togli SIEVER Mail da questo computer</p>
+      {offer.available ? (
+        <>
+          <OptionsRow
+            title="Che cosa resta"
+            description={STAYS[keep]}
+            value={keep}
+            label="Che cosa resta"
+            disabled={leaving}
+            options={[
+              { value: 'connessioni', label: 'Le connessioni' },
+              { value: 'niente', label: 'Niente' }
+            ]}
+            onChange={setKeep}
+          />
+          <p className="text-muted-foreground text-[11px]">
+            Ciò che sta fuori da SIEVER Mail resta com’è: la posta sui server, i calendari, i tuoi
+            file. {systemWords(offer)}
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            className="w-fit gap-2"
+            disabled={busy || leaving}
+            onClick={() => void leave()}
+          >
+            {leaving ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : (
+              <LogOut className="size-4" />
+            )}
+            Disinstalla
+          </Button>
+          {error && <SettingsNotice tone="error">{error}</SettingsNotice>}
+        </>
+      ) : (
+        <p className="text-muted-foreground text-[11px]">
+          SIEVER Mail si toglie da qui nell’app installata: questa è una copia di sviluppo.
+        </p>
+      )}
+    </div>
   )
 }

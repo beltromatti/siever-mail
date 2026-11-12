@@ -1228,117 +1228,125 @@ export function OnboardingWizard({
   const watching = state.step === 'conoscimi' && state.conoscimiId !== null
 
   return (
-    <div className="paper flex h-full min-h-0 flex-col overflow-y-auto">
-      <div
-        className={cn(
-          'mx-auto flex w-full max-w-[720px] shrink-0 flex-col gap-8 px-6 py-10',
-          watching ? 'h-full' : 'min-h-full'
-        )}
-      >
-        <nav aria-label="Passi" className="flex items-center gap-3">
-          <CompassStar className="text-ai-star size-5 shrink-0" />
-          <ol className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px]">
-            {steps.map((step, index) => {
-              const position = steps.indexOf(state.step)
-
-              return (
-                <li
-                  key={step}
-                  className={cn(
-                    'flex items-center gap-1.5',
-                    index === position
-                      ? 'text-foreground font-semibold'
-                      : index < position
-                        ? 'text-muted-foreground'
-                        : 'text-faint-foreground'
-                  )}
-                >
-                  {index > 0 && <span className="text-faint-foreground">·</span>}
-                  {STEP_LABELS[step]}
-                </li>
-              )
-            })}
-          </ol>
-        </nav>
-
-        <article
+    <div className="paper flex h-full min-h-0 flex-col">
+      {/* The window's handle, as the workspace's title bars: a band of the page, above what
+          scrolls, so nothing to click ever passes under it. */}
+      <div className="window-drag-region h-[52px] shrink-0" aria-hidden />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div
           className={cn(
-            'letter flex flex-col rounded-[14px] px-8 py-8 sm:px-12',
-            watching ? 'min-h-[420px] flex-1' : 'min-h-[360px] shrink-0'
+            'mx-auto flex w-full max-w-[720px] shrink-0 flex-col gap-8 px-6 pb-10',
+            watching ? 'h-full' : 'min-h-full'
           )}
         >
-          {state.step === 'connessioni' && (
-            <ConnectionsStep
-              accounts={accounts}
-              calendarConnections={calendarConnections}
-              setupCase={state.case}
-              mailStates={connections}
-              removingAccountId={removingAccountId}
-              googleReady={canUseGoogle}
-              microsoftReady={canUseMicrosoft}
-              aiOn={aiOn}
-              connectCalendarOf={connectCalendarOf}
-              onConnectCalendarAsked={() => onConnectCalendarAsked?.()}
-              onRemoveMail={onRemoveAccount}
-              onAccountCreated={(account) => {
-                onAccountCreated(account)
-                onChange({ ...state, accountIds: [...new Set([...state.accountIds, account.id])] })
-              }}
-              onNext={() => next()}
-              onCancel={
-                state.case === 'nuova-connessione' && state.accountIds.length === 0
-                  ? () => onFinish(false)
-                  : null
-              }
-            />
-          )}
-          {state.step === 'segretario' && (
-            <SegretarioStep
-              segretario={segretario}
-              setupCase={state.case}
-              onEnable={enable}
-              onSkip={
-                state.case === 'primo-avvio' || state.case === 'nuova-connessione'
-                  ? () => next(false)
-                  : null
-              }
-              onCancel={
-                state.case === 'ai-prima-volta' || state.case === 'ai-riaccesa'
-                  ? () => onFinish(false)
-                  : null
-              }
-            />
-          )}
-          {state.step === 'preparazione' && (
-            <PreparationStep
-              accounts={accounts}
-              calendarConnections={calendarConnections}
-              connections={connections}
-              aiOn={aiOn}
-              onRemoveAccount={(accountId) => onRemoveAccount(accountId, [])}
-              onNext={() => next()}
-            />
-          )}
-          {state.step === 'conoscimi' && (
-            <ConoscimiStep
-              segretario={segretario}
-              state={state}
-              learning={learning}
-              onStarted={(conoscimiId) => onChange({ ...state, conoscimiId })}
-              onNext={() => next()}
-              onCancel={state.case === 'conoscimi' ? () => onFinish(true) : null}
-              onContinueWithoutAi={() => void continueWithoutAi()}
-            />
-          )}
-          {state.step === 'lettura' && (
-            <ReadingStep
-              accountIds={setupReadingAccountIds(state)}
-              onNext={() => next()}
-              onContinueWithoutAi={() => void continueWithoutAi()}
-            />
-          )}
-          {state.step === 'entra' && <EnterStep aiOn={aiOn} onEnter={() => onFinish(true)} />}
-        </article>
+          <nav aria-label="Passi" className="flex items-center gap-3">
+            <CompassStar className="text-ai-star size-5 shrink-0" />
+            <ol className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px]">
+              {steps.map((step, index) => {
+                const position = steps.indexOf(state.step)
+
+                return (
+                  <li
+                    key={step}
+                    className={cn(
+                      'flex items-center gap-1.5',
+                      index === position
+                        ? 'text-foreground font-semibold'
+                        : index < position
+                          ? 'text-muted-foreground'
+                          : 'text-faint-foreground'
+                    )}
+                  >
+                    {index > 0 && <span className="text-faint-foreground">·</span>}
+                    {STEP_LABELS[step]}
+                  </li>
+                )
+              })}
+            </ol>
+          </nav>
+
+          <article
+            className={cn(
+              'letter flex flex-col rounded-[14px] px-8 py-8 sm:px-12',
+              watching ? 'min-h-[420px] flex-1' : 'min-h-[360px] shrink-0'
+            )}
+          >
+            {state.step === 'connessioni' && (
+              <ConnectionsStep
+                accounts={accounts}
+                calendarConnections={calendarConnections}
+                setupCase={state.case}
+                mailStates={connections}
+                removingAccountId={removingAccountId}
+                googleReady={canUseGoogle}
+                microsoftReady={canUseMicrosoft}
+                aiOn={aiOn}
+                connectCalendarOf={connectCalendarOf}
+                onConnectCalendarAsked={() => onConnectCalendarAsked?.()}
+                onRemoveMail={onRemoveAccount}
+                onAccountCreated={(account) => {
+                  onAccountCreated(account)
+                  onChange({
+                    ...state,
+                    accountIds: [...new Set([...state.accountIds, account.id])]
+                  })
+                }}
+                onNext={() => next()}
+                onCancel={
+                  state.case === 'nuova-connessione' && state.accountIds.length === 0
+                    ? () => onFinish(false)
+                    : null
+                }
+              />
+            )}
+            {state.step === 'segretario' && (
+              <SegretarioStep
+                segretario={segretario}
+                setupCase={state.case}
+                onEnable={enable}
+                onSkip={
+                  state.case === 'primo-avvio' || state.case === 'nuova-connessione'
+                    ? () => next(false)
+                    : null
+                }
+                onCancel={
+                  state.case === 'ai-prima-volta' || state.case === 'ai-riaccesa'
+                    ? () => onFinish(false)
+                    : null
+                }
+              />
+            )}
+            {state.step === 'preparazione' && (
+              <PreparationStep
+                accounts={accounts}
+                calendarConnections={calendarConnections}
+                connections={connections}
+                aiOn={aiOn}
+                onRemoveAccount={(accountId) => onRemoveAccount(accountId, [])}
+                onNext={() => next()}
+              />
+            )}
+            {state.step === 'conoscimi' && (
+              <ConoscimiStep
+                segretario={segretario}
+                state={state}
+                learning={learning}
+                onStarted={(conoscimiId) => onChange({ ...state, conoscimiId })}
+                onNext={() => next()}
+                onCancel={state.case === 'conoscimi' ? () => onFinish(true) : null}
+                onContinueWithoutAi={() => void continueWithoutAi()}
+              />
+            )}
+            {state.step === 'lettura' && (
+              <ReadingStep
+                accountIds={setupReadingAccountIds(state)}
+                onNext={() => next()}
+                onContinueWithoutAi={() => void continueWithoutAi()}
+              />
+            )}
+            {state.step === 'entra' && <EnterStep aiOn={aiOn} onEnter={() => onFinish(true)} />}
+          </article>
+        </div>
       </div>
     </div>
   )

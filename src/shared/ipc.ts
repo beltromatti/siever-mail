@@ -16,6 +16,8 @@ import type {
   FoldersChangedEvent,
   MailAccountSignature,
   DataStorageBreakdown,
+  UninstallKeep,
+  UninstallOffer,
   ListMessagesOptions,
   MailAccount,
   MessagesChangedEvent,
@@ -102,6 +104,8 @@ export const IPC_CHANNELS = {
   getDataStorageBreakdown: 'data:get-storage-breakdown',
   clearAccountData: 'data:clear-account',
   clearAllDataKeepAccounts: 'data:clear-all-keep-accounts',
+  uninstallOffer: 'data:uninstall-offer',
+  uninstall: 'data:uninstall',
   openAttachment: 'attachment:open',
   saveAttachment: 'attachment:save',
   saveAllAttachments: 'attachment:save-all',
@@ -259,6 +263,9 @@ export interface DesktopMailApi {
   getDataStorageBreakdown: () => Promise<DataStorageBreakdown>
   clearAccountData: (accountId: string) => Promise<void>
   clearAllDataKeepAccounts: () => Promise<void>
+  uninstallOffer: () => Promise<UninstallOffer>
+  /** Takes SIEVER Mail off this computer, keeping what was chosen; the app quits. */
+  uninstall: (keep: UninstallKeep) => Promise<void>
   pickAttachments: () => Promise<PickedAttachment[]>
   openAttachment: (input: AttachmentRef) => Promise<OpenAttachmentResult>
   /** Resolves to the saved path, or null when the user cancelled. */
