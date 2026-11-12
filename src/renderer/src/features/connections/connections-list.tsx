@@ -5,17 +5,14 @@ import {
   Files,
   HardDrive,
   Laptop,
-  Link2,
   LoaderCircle,
   Mail,
-  Network,
-  Server,
-  ShieldCheck,
-  type LucideIcon
+  Network
 } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
+import { PROVIDER_NAMES, ProviderLogo } from '@renderer/components/ui/provider-logo'
 import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
 import { calendarStanding, mailStanding } from '@renderer/features/connections/connection-health'
 import { showConnectionRefused } from '@renderer/features/connections/connection-refused'
@@ -30,11 +27,9 @@ import { CONNECTION_FAMILIES } from '@shared/workspace'
 import { mailRefusedNotice, type AccountConnectionState, type MailAccount } from '@shared/models'
 
 import {
-  ACCESS_LABELS,
   canAddCalendar,
   canRenewConsent,
   connectionGroups,
-  type AccessKind,
   type ConnectionGroup
 } from './connection-groups'
 import { removalWords } from './connection-removal'
@@ -76,16 +71,6 @@ const MESSAGES = defineMessages({
   }
 })
 
-const ACCESS_ICONS: Readonly<Record<AccessKind, LucideIcon>> = {
-  google: Mail,
-  microsoft: Mail,
-  icloud: Cloud,
-  imap: Mail,
-  pec: ShieldCheck,
-  caldav: Server,
-  ics: Link2
-}
-
 /**
  * The user's connections, by access: each account, server or link with
  * what it brought — the mail, the calendar — how each stands, and what can
@@ -124,7 +109,7 @@ export function ConnectionsList({
 }): React.JSX.Element {
   const m = useMessages(MESSAGES)
   const places = useMessages(PLACES)
-  const accessLabels = useMessages(ACCESS_LABELS)
+  const accessLabels = useMessages(PROVIDER_NAMES)
   const { connections, setConnections } = useCalendarConnections()
   const { confirm, dialog } = useConfirmDialog()
   const [working, setWorking] = useState<string | null>(null)
@@ -211,7 +196,6 @@ export function ConnectionsList({
         </p>
       )}
       {groups.map((group) => {
-        const Icon = ACCESS_ICONS[group.kind]
         const busy =
           working === group.key || (group.mail !== null && removingAccountId === group.mail.id)
         const mail = group.mail
@@ -227,7 +211,7 @@ export function ConnectionsList({
             className="bg-card flex flex-col gap-2 rounded-[10px] border px-4 py-3"
           >
             <header className="flex items-center gap-2.5">
-              <Icon className="text-faint-foreground size-4 shrink-0" />
+              <ProviderLogo provider={group.kind} className="size-4" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] font-semibold">{group.title}</span>
                 <span className="text-muted-foreground block truncate text-[11.5px]">

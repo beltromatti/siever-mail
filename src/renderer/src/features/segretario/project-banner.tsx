@@ -421,7 +421,7 @@ export function ProjectBanner({
             className={cn(
               'text-foreground text-[14.5px] leading-[1.5]',
               !stateOpen && 'line-clamp-4',
-              (rewriting || project.statePending?.kind === 'correzione') && 'opacity-60'
+              (rewriting || project.statePending?.kind === 'correzione') && 'regenerating'
             )}
           />
           <PendingWordsLine pending={project.statePending} masculine />

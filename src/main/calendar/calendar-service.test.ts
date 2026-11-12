@@ -583,7 +583,14 @@ class Account implements CalendarProvider {
   private readonly changed = new Map<string, ProviderEvent[]>()
   private made = 0
 
-  constructor(readonly calendarIds: string[]) {}
+  /**
+   * `defaults`: each calendar's own reminders, which an event that keeps the
+   * calendar's takes where it moves — as Google does.
+   */
+  constructor(
+    readonly calendarIds: string[],
+    private readonly defaults: Readonly<Record<string, number[] | null>> | null = null
+  ) {}
 
   /** An event of a calendar, here or elsewhere: noted as changed for the next read. */
   put(event: ProviderEvent): void {
@@ -712,7 +719,13 @@ class Account implements CalendarProvider {
     this.calls.push(['move', calendarId, eventId, toCalendarId])
     const moving = this.of(calendarId, eventId)
     this.drop(calendarId, eventId)
-    moving.forEach((event) => this.put({ ...event, calendarId: toCalendarId }))
+    moving.forEach((event) =>
+      this.put({
+        ...event,
+        calendarId: toCalendarId,
+        reminders: this.defaults ? (this.defaults[toCalendarId] ?? null) : event.reminders
+      })
+    )
     return { eventId, how: 'native' }
   }
 
@@ -871,6 +884,22 @@ describe('CalendarService, an event in another calendar (§7.5)', () => {
     await calendar.update(there, { calendarKey: calendarKey('mattia@brenta.it', 'primary') })
     expect(await calendar.changesSince(latest, 100)).toEqual([])
     expect(moved.at(-1)).toEqual({ from: there, to: here })
+  })
+
+  it('keeps the reminders an event had where it moves, even to a calendar that would give it its own', async () => {
+    const account = new Account(['primary', 'vita'], { primary: [30], vita: null })
+    account.put(providerEvent('primary', 'treno', { reminders: [30] }))
+    const { calendar, key } = await withGoogle({ 'mattia@brenta.it': account })
+
+    const moved = await calendar.update(key('mattia@brenta.it', 'primary', 'treno'), {
+      calendarKey: calendarKey('mattia@brenta.it', 'vita')
+    })
+
+    expect(moved).toMatchObject({ calendarName: 'vita', reminders: [30] })
+    expect(account.calls).toEqual([
+      ['move', 'primary', 'treno', 'vita'],
+      ['update', 'vita', 'treno', ['reminders']]
+    ])
   })
 
   it('moves an instance with its whole series, every instance following to its key there', async () => {

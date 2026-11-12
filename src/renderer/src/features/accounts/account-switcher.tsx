@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ChevronDown, LoaderCircle, LogOut, Plus } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
+import { ProviderLogo } from '@renderer/components/ui/provider-logo'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,6 +12,7 @@ import {
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { accessOfMail } from '@renderer/features/connections/connection-groups'
 import { useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import { defineMessages } from '@shared/i18n'
@@ -38,19 +40,17 @@ interface AccountSwitcherProps {
 }
 
 /**
- * An account's mark: the first letter of its name, in ink on paper. One
- * letter in a square reads as a mailbox; two in a circle read as a person.
+ * A mailbox's mark: its provider's, on a tile — a square reads as a
+ * mailbox, a circle as a person. The tile holds the place empty when no
+ * mailbox is chosen.
  */
-function AccountMonogram({ account }: { account: MailAccount | null }): React.JSX.Element {
-  const letter = (account?.displayName || account?.email || '?').trim().charAt(0).toUpperCase()
-
-  return (
-    <span
-      aria-hidden
-      className="bg-foreground text-background grid size-[24px] shrink-0 place-items-center rounded-[6px] text-[12px] font-bold"
-    >
-      {letter}
+function AccountMark({ account }: { account: MailAccount | null }): React.JSX.Element {
+  return account ? (
+    <span className="bg-page grid size-[24px] shrink-0 place-items-center rounded-[6px] border">
+      <ProviderLogo provider={accessOfMail(account)} named className="size-[15px]" />
     </span>
+  ) : (
+    <span aria-hidden className="size-[24px] shrink-0 rounded-[6px] border border-dashed" />
   )
 }
 
@@ -74,7 +74,7 @@ export function AccountSwitcher({
           className="hover:bg-hover h-10 w-full justify-between gap-2 rounded-md px-2 text-left"
         >
           <div className="flex min-w-0 items-center gap-2.5">
-            <AccountMonogram account={selectedAccount} />
+            <AccountMark account={selectedAccount} />
             <span className="min-w-0">
               <span className="text-foreground block truncate text-[12.5px] font-semibold">
                 {selectedAccount ? selectedAccount.displayName : m.noAccount}
@@ -103,7 +103,7 @@ export function AccountSwitcher({
             )}
             onClick={() => onSelectAccount(account.id)}
           >
-            <AccountMonogram account={account} />
+            <AccountMark account={account} />
             <div className="min-w-0">
               <p className="truncate text-[12.5px] font-semibold">{account.displayName}</p>
               <p className="text-faint-foreground truncate text-[11px]">{account.email}</p>

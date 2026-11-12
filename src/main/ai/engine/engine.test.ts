@@ -16,6 +16,7 @@ import { memorySql } from '../testing/memory-sql'
 import {
   calendarLookScope,
   connectionHeld,
+  knownConnections,
   SegretarioEngine,
   setupHold,
   type EngineDeps
@@ -574,14 +575,24 @@ describe('What the guided setup holds back', () => {
   // What Conoscimi knows: the mailbox a1 and the calendar c1.
   const known = new Set(['a1', 'calendario:c1'])
 
-  it('holds every connection while the setup turning the AI on is before its reading', () => {
-    const hold = setupHold(setup({ case: 'ai-prima-volta', step: 'conoscimi', turnsAiOn: true }))
+  it('holds every connection the setup turning the AI on has not known yet, each let through as its own Conoscimi knows it', () => {
+    const hold = setupHold(
+      setup({ case: 'ai-prima-volta', step: 'conoscimi', turnsAiOn: true, startedAt: 1_000 })
+    )
+    // a1 known by an earlier Conoscimi; a2 and the calendar c1 by this setup's.
+    const learnt = [
+      { accountId: 'a1', finishedAt: 500 },
+      { accountId: 'a2', finishedAt: 2_000 },
+      { accountId: 'calendario:c1', finishedAt: 2_000 },
+      { accountId: 'a3', finishedAt: null }
+    ]
+    const knownNow = knownConnections(learnt, hold)
 
-    expect(hold.all).toBe(true)
-
-    for (const key of ['a1', 'a2', 'calendario:c1', 'calendario:c2']) {
-      expect(connectionHeld(hold, key, known)).toBe(true)
-    }
+    expect(hold.since).toBe(1_000)
+    expect(connectionHeld(hold, 'a1', knownNow)).toBe(true)
+    expect(connectionHeld(hold, 'a2', knownNow)).toBe(false)
+    expect(connectionHeld(hold, 'calendario:c1', knownNow)).toBe(false)
+    expect(connectionHeld(hold, 'a3', knownNow)).toBe(true)
   })
 
   it('holds what its Conoscimi has to know, mailbox or calendar, while it waits for it', () => {
@@ -590,7 +601,7 @@ describe('What the guided setup holds back', () => {
       setup({ case: 'nuova-connessione', step: 'conoscimi', accountIds: ['a2'] })
     )
 
-    expect(hold.all).toBe(false)
+    expect(hold.since).toBeNull()
     expect(connectionHeld(hold, 'a1', known)).toBe(false)
     expect(connectionHeld(hold, 'a2', known)).toBe(true)
     expect(connectionHeld(hold, 'a3', known)).toBe(true)
@@ -657,9 +668,19 @@ describe('What the guided setup keeps from starting', () => {
     expect(held?.(unit('calendario'))).toBe(true)
   })
 
-  it('holds before Conoscimi even the reading queued before the setup', async () => {
+  it('lets the day and the rest through once the setup is at «Entra»: its reading is done', async () => {
     const held = await holdingDuring(
-      setup({ case: 'ai-riaccesa', step: 'conoscimi', turnsAiOn: true })
+      setup({ case: 'primo-avvio', step: 'entra', accountIds: ['a1'] })
+    )
+
+    expect(held?.(unit('giornata', { refresh: false })) ?? false).toBe(false)
+    expect(held?.(unit('punto', { projectId: 'p1' })) ?? false).toBe(false)
+  })
+
+  it('holds before its own Conoscimi even the reading queued before the setup', async () => {
+    // Known by a Conoscimi before this setup, which began after it: not yet by this one.
+    const held = await holdingDuring(
+      setup({ case: 'ai-riaccesa', step: 'conoscimi', turnsAiOn: true, startedAt: 10 })
     )
 
     expect(held?.(unit('lettura', { accountId: 'a1', threadId: 't' }))).toBe(true)

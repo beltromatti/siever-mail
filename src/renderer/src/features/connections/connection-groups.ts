@@ -1,19 +1,9 @@
-import type { CalendarConnection } from '@shared/calendar'
-import { defineMessages } from '@shared/i18n'
+import type { Provider } from '@renderer/components/ui/provider-logo'
+import type { CalendarConnection, CalendarProviderKind } from '@shared/calendar'
 import type { MailAccount } from '@shared/models'
 
-/** Who an access is with, as the user knows it. */
-export type AccessKind = 'google' | 'microsoft' | 'icloud' | 'imap' | 'pec' | 'caldav' | 'ics'
-
-export const ACCESS_LABELS = defineMessages({
-  google: { en: 'Google', it: 'Google', de: 'Google' },
-  microsoft: { en: 'Microsoft', it: 'Microsoft', de: 'Microsoft' },
-  icloud: { en: 'iCloud', it: 'iCloud', de: 'iCloud' },
-  imap: { en: 'IMAP mail', it: 'Posta IMAP', de: 'IMAP-E-Mail' },
-  pec: { en: 'PEC', it: 'PEC', de: 'PEC' },
-  caldav: { en: 'CalDAV', it: 'CalDAV', de: 'CalDAV' },
-  ics: { en: 'Calendar from a link', it: 'Calendario da un link', de: 'Kalender über einen Link' }
-}) satisfies Record<AccessKind, unknown>
+/** Who an access is with, as the user knows it: its mark and its name are `ProviderLogo`'s. */
+export type AccessKind = Provider
 
 /**
  * One access of the user's — an account, a server, a link — with the
@@ -55,6 +45,25 @@ export function accessOfCalendar(connection: CalendarConnection): AccessKind {
   }
 
   return connection.provider
+}
+
+/**
+ * Who a calendar connection known by its id and provider is with: its
+ * access, from the connections once they are read. Until then its provider
+ * says it, but for a CalDAV server, which may be iCloud's: unknown, null.
+ */
+export function accessOfCalendarId(
+  connectionId: string,
+  provider: CalendarProviderKind,
+  connections: ReadonlyArray<CalendarConnection> | null
+): AccessKind | null {
+  const connection = connections?.find((candidate) => candidate.id === connectionId)
+
+  if (connection) {
+    return accessOfCalendar(connection)
+  }
+
+  return provider === 'caldav' ? null : provider
 }
 
 function hostOf(url: string): string {

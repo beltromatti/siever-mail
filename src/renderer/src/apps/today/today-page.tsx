@@ -490,8 +490,7 @@ export function TodayPage({
 
     load()
 
-    // The work changes the day: the lists follow, and a letter written again shows.
-    const unsubscribe = window.segretarioApi.onWorkChanged(() => {
+    const reload = (): void => {
       if (reloadTimer.current !== null) {
         window.clearTimeout(reloadTimer.current)
       }
@@ -500,11 +499,27 @@ export function TodayPage({
         reloadTimer.current = null
         load()
       }, 1200)
+    }
+
+    // The work changes the day: the lists follow, and a letter written again shows.
+    const unsubscribe = window.segretarioApi.onWorkChanged(reload)
+    // The day's run ending is no change of the work, but the letter is no longer being written:
+    // read again when the engine has fewer of them than it last said — the first time, any.
+    let dayRuns = Infinity
+    const unsubscribeEngine = window.segretarioApi.onEngineChanged((state) => {
+      const runs = (state.queued.giornata ?? 0) + (state.running.giornata ?? 0)
+
+      if (runs < dayRuns) {
+        reload()
+      }
+
+      dayRuns = runs
     })
 
     return () => {
       current = false
       unsubscribe()
+      unsubscribeEngine()
 
       if (reloadTimer.current !== null) {
         window.clearTimeout(reloadTimer.current)
@@ -646,7 +661,7 @@ export function TodayPage({
                     links={page.letterLinks}
                     className={cn(
                       'drop-cap text-foreground text-[18px] leading-[1.55]',
-                      (rewriting || page.letterPending?.kind === 'correzione') && 'opacity-60'
+                      (rewriting || page.letterPending?.kind === 'correzione') && 'regenerating'
                     )}
                   />
                   <PendingWordsLine pending={page.letterPending} />

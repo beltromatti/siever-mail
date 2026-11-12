@@ -1,22 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import {
-  ArrowLeft,
-  AtSign,
-  CalendarDays,
-  Cloud,
-  Link2,
-  LoaderCircle,
-  LogIn,
-  Mail,
-  Server,
-  type LucideIcon
-} from 'lucide-react'
+import { ArrowLeft, CalendarDays, LoaderCircle, Mail } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@renderer/components/ui/button'
 import { Checkbox } from '@renderer/components/ui/checkbox'
 import { Input } from '@renderer/components/ui/input'
 import { Label } from '@renderer/components/ui/label'
+import { ProviderLogo, type Provider } from '@renderer/components/ui/provider-logo'
 import {
   Select,
   SelectContent,
@@ -42,13 +32,14 @@ import {
 
 type Choice = 'google' | 'microsoft' | 'icloud' | 'mail' | 'caldav' | 'ics'
 
-const CHOICES: ReadonlyArray<{ id: Choice; icon: LucideIcon }> = [
-  { id: 'google', icon: Mail },
-  { id: 'microsoft', icon: Mail },
-  { id: 'icloud', icon: Cloud },
-  { id: 'mail', icon: AtSign },
-  { id: 'caldav', icon: Server },
-  { id: 'ics', icon: Link2 }
+/** Each choice with the provider it connects to: any other mailbox is one by IMAP. */
+const CHOICES: ReadonlyArray<{ id: Choice; provider: Provider }> = [
+  { id: 'google', provider: 'google' },
+  { id: 'microsoft', provider: 'microsoft' },
+  { id: 'icloud', provider: 'icloud' },
+  { id: 'mail', provider: 'imap' },
+  { id: 'caldav', provider: 'caldav' },
+  { id: 'ics', provider: 'ics' }
 ]
 
 /** Each choice by name, as the user knows who it is with. */
@@ -642,7 +633,9 @@ export function AddConnection({
               {m.providerPage(provider)}
             </p>
             <Services mail={services.mail} calendar={services.calendar} onChange={setServices} />
+            {/* The provider's sign-in button as its branding asks: its mark on a neutral key. */}
             <Button
+              variant="secondary"
               className="w-fit"
               disabled={pending || !(services.mail || services.calendar)}
               onClick={() => signIn(choice)}
@@ -650,7 +643,7 @@ export function AddConnection({
               {pending ? (
                 <LoaderCircle className="size-4 animate-spin" />
               ) : (
-                <LogIn className="size-4" />
+                <ProviderLogo provider={choice} className="size-4" />
               )}
               {m.continueWith(provider)}
             </Button>
@@ -833,7 +826,7 @@ export function AddConnection({
             >
               <ArrowLeft className="size-4" />
             </Button>
-            <chosen.icon className="text-faint-foreground size-4" />
+            <ProviderLogo provider={chosen.provider} className="size-4" />
             <span className="text-[13px] font-semibold">{titles[chosen.id]}</span>
             <span className="text-muted-foreground truncate text-[12px]">{lines[chosen.id]}</span>
           </div>
@@ -871,7 +864,7 @@ export function AddConnection({
                       'opacity-60'
                   )}
                 >
-                  <option.icon className="text-faint-foreground size-4 shrink-0" />
+                  <ProviderLogo provider={option.provider} className="size-4" />
                   <span className="min-w-0">
                     <span className="block text-[12.5px] font-semibold">{titles[option.id]}</span>
                     <span className="text-muted-foreground block truncate text-[11.5px]">

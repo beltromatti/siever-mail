@@ -407,7 +407,7 @@ export function SettingsDialog({
             ) : activeSectionId === 'segretario' ? (
               <SegretarioSection onEnableAi={onEnableAi} />
             ) : activeSectionId === 'memoria' ? (
-              <MemorySection onRedoConoscimi={onRedoConoscimi} />
+              <MemorySection accounts={accounts} onRedoConoscimi={onRedoConoscimi} />
             ) : activeSectionId === 'notifications' ? (
               <NotificationsSection accounts={accounts} aiOn={aiOn} />
             ) : activeSectionId === 'shortcuts' ? (

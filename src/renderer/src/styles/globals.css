@@ -99,6 +99,13 @@
   --shadow: 222 40% 2%;
   --specular: 0 0% 100% / 0.07;
   --scrim: 222 30% 3% / 0.55;
+  /*
+    The arrival after the guided setup (vision §12.2): a moment, not a page —
+    the same night in both palettes, its words a warm white, the star lit.
+  */
+  --arrival: 224 32% 3%;
+  --arrival-foreground: 40 22% 93%;
+  --arrival-star: 52 100% 56%;
   /* Whose what SIEVER Mail keeps is, in Impostazioni › Dati: each source, the Segretario, the rest. */
   --data-mail: 208 100% 56%;
   --data-calendar: 168 56% 44%;
@@ -240,6 +247,9 @@
   --color-flagged: hsl(var(--flagged));
   --color-warning: hsl(var(--warning));
   --color-scrim: hsl(var(--scrim));
+  --color-arrival: hsl(var(--arrival));
+  --color-arrival-foreground: hsl(var(--arrival-foreground));
+  --color-arrival-star: hsl(var(--arrival-star));
   --color-data-mail: hsl(var(--data-mail));
   --color-data-calendar: hsl(var(--data-calendar));
   --color-data-segretario: hsl(var(--data-segretario));
@@ -326,6 +336,8 @@
 */
 :root {
   --paper-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23g)' opacity='0.05'/></svg>");
+  /* The arrival's night has the dark paper's grain in both palettes: it keeps its light from banding. */
+  --arrival-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23g)' opacity='0.06'/></svg>");
 }
 
 @media (prefers-color-scheme: light) {
@@ -542,6 +554,33 @@
     background-color: hsl(var(--card));
   }
 
+  /*
+   * Words being written again — the Segretario thinking, a letter or «Il punto»
+   * rewritten, a thing being put right — breathe, slowly, between their colour
+   * and a grey (vision §13.6): neither still nor gone.
+   */
+  .regenerating {
+    animation: regenerating 2.8s ease-in-out infinite;
+  }
+
+  @keyframes regenerating {
+    0%,
+    100% {
+      opacity: 1;
+    }
+
+    50% {
+      opacity: 0.4;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .regenerating {
+      animation: none;
+      opacity: 0.6;
+    }
+  }
+
   /* The welcome screen coming back over the workspace, from the rail's mark. */
   .welcome-enter {
     animation: welcome-enter 280ms ease-out;
@@ -550,6 +589,129 @@
   @keyframes welcome-enter {
     from {
       opacity: 0;
+    }
+  }
+
+  /*
+    The arrival after the guided setup (vision §12.2). The night falls over
+    the setup, which goes out of focus under it; each line comes out of the
+    dark and goes back into it; then the night lifts, Oggi comes into focus
+    under it, and the last words pass by. The durations are the component's
+    (`PACE` in arrival.tsx); with reduced motion, plain fades, shorter.
+  */
+  .arrival-night {
+    background-color: hsl(var(--arrival));
+  }
+
+  .arrival-fall {
+    animation: arrival-fall 1100ms cubic-bezier(0.4, 0, 0.2, 1) backwards;
+  }
+
+  @keyframes arrival-fall {
+    from {
+      background-color: hsl(var(--arrival) / 0);
+      backdrop-filter: blur(0);
+    }
+
+    to {
+      backdrop-filter: blur(10px);
+    }
+  }
+
+  .arrival-lift {
+    animation: arrival-lift 1500ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+  }
+
+  @keyframes arrival-lift {
+    from {
+      backdrop-filter: blur(18px);
+    }
+
+    to {
+      background-color: hsl(var(--arrival) / 0);
+      backdrop-filter: blur(0);
+    }
+  }
+
+  /* A soft light behind the words, so the night has a depth, on its grain. */
+  .arrival-glow {
+    background-image:
+      var(--arrival-grain),
+      radial-gradient(
+        ellipse 60% 48% at 50% 47%,
+        hsl(var(--arrival-foreground) / 0.05),
+        transparent 72%
+      );
+  }
+
+  .arrival-glow-lift {
+    animation: arrival-fade-out 900ms ease-in forwards;
+  }
+
+  .arrival-line-in {
+    animation: arrival-line-in 1200ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+
+  @keyframes arrival-line-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+      filter: blur(10px);
+    }
+  }
+
+  .arrival-line-out {
+    animation: arrival-line-out 800ms cubic-bezier(0.55, 0, 0.7, 0.2) forwards;
+  }
+
+  @keyframes arrival-line-out {
+    to {
+      opacity: 0;
+      transform: translateY(-8px);
+      filter: blur(8px);
+    }
+  }
+
+  .arrival-words-lift {
+    animation: arrival-words-lift 1100ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  }
+
+  @keyframes arrival-words-lift {
+    to {
+      opacity: 0;
+      transform: scale(1.08);
+      filter: blur(14px);
+    }
+  }
+
+  @keyframes arrival-fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes arrival-fade-out {
+    to {
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .arrival-fall {
+      animation: arrival-fade-in 400ms ease-out backwards;
+    }
+
+    .arrival-line-in {
+      animation: arrival-fade-in 500ms ease-out backwards;
+    }
+
+    .arrival-line-out {
+      animation: arrival-fade-out 350ms ease-in forwards;
+    }
+
+    .arrival-lift,
+    .arrival-words-lift {
+      animation: arrival-fade-out 500ms ease-in forwards;
     }
   }
 

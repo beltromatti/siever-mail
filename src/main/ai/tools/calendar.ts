@@ -22,16 +22,17 @@ import type { EventUndo, ProposalRecord, UndoSpec } from '../registry/types'
 import { PROMPTS } from '../prompts'
 import {
   booleanArg,
+  MissingArgument,
   numberArg,
   requireString,
-  seenKey,
-  stringArg,
-  stringListArg,
-  ToolInputError,
   type RunContext,
+  seenKey,
   type SegretarioCalendarPort,
   type SegretarioTool,
+  stringArg,
+  stringListArg,
   type ToolContext,
+  ToolInputError,
   type ToolOutcome,
   UnknownHandle
 } from '../agent/tool-types'
@@ -460,7 +461,7 @@ function eventsOf(args: Record<string, unknown>): string[] {
   const handles = [...new Set(stringListArg(args, 'evento').map((handle) => handle.trim()))]
 
   if (handles.length === 0) {
-    throw new ToolInputError('Manca il parametro `evento`: un riferimento e…, o una lista.')
+    throw new MissingArgument('Manca il parametro `evento`: un riferimento e…, o una lista.')
   }
 
   return handles
@@ -587,10 +588,31 @@ function beforeChange(event: CalendarEvent, change: EventChange): EventChange {
   return before
 }
 
+/**
+ * Who organises an event, as the model can name them: a person by name and
+ * address, a calendar of Google's by its name (its address is an id nobody
+ * reads, «…@group.calendar.google.com»).
+ */
+function organizerOf(event: CalendarEvent): string {
+  const organizer = event.attendees.find((attendee) => attendee.organizer)
+  const address = organizer?.email ?? event.organizer
+  const name = organizer?.name?.trim()
+
+  if (!address) {
+    return 'un altro'
+  }
+
+  if (/@group\.(?:v\.)?calendar\.google\.com$/i.test(address)) {
+    return name ? `il calendario «${name}»` : 'un calendario condiviso'
+  }
+
+  return name && name !== address ? `${name} <${address}>` : address
+}
+
 /** An event someone else organises — an invitation — is answered, not changed or taken away. */
 function invitationRefusal(event: CalendarEvent): string | null {
   return event.organizedByUser === false
-    ? `«${event.title}» lo organizza ${event.organizer ?? 'un altro'}: all'invito si risponde (\`rispondi\`), non si cambia. Se va spostato, scrivilo a chi lo organizza.`
+    ? `«${event.title}» lo organizza ${organizerOf(event)}: all'invito si risponde (\`rispondi\`), non si cambia. Se va spostato, scrivilo a chi lo organizza.`
     : null
 }
 
@@ -641,7 +663,7 @@ function moveRefusal(
         ? `«${event.title}» è un compleanno dei contatti di Google: Google non lo lascia spostare in un altro calendario. Resta dov'è; se all'utente importa, diglielo.`
         : `«${event.title}» l'ha messo Gmail da una prenotazione o da un biglietto: Google non lo lascia spostare in un altro calendario. Resta dov'è; se all'utente importa, diglielo.`
     case 'invitation':
-      return `«${event.title}» è un invito di ${event.organizer ?? 'altri'}: si risponde, non si sposta.`
+      return `«${event.title}» è un invito di ${organizerOf(event)}: si risponde, non si sposta.`
     case 'guests':
       return `«${event.title}» ha invitati: spostarlo in «${to.name}» (${from?.connectionId === to.connectionId ? 'su Microsoft si toglie e si rimette' : 'un altro account'}) vorrebbe dire annullarlo per loro e invitarli di nuovo, e qui non si fa. Resta dov'è; se all'utente importa, diglielo.`
   }
@@ -1172,6 +1194,20 @@ interface Planned {
  * for the user (§4.7); each event is checked on its own; one line in the
  * diary, with one undo.
  */
+/** The arguments of `modifica` that say what changes. */
+const CHANGE_ARGS = [
+  'titolo',
+  'inizio',
+  'fine',
+  'tutto_il_giorno',
+  'luogo',
+  'descrizione',
+  'invitati',
+  'calendario',
+  'ripeti',
+  'promemoria'
+] as const
+
 async function changeEvents(
   context: ToolContext,
   args: Record<string, unknown>
@@ -1189,18 +1225,7 @@ async function changeEvents(
     )
   }
 
-  const said = [
-    'titolo',
-    'inizio',
-    'fine',
-    'tutto_il_giorno',
-    'luogo',
-    'descrizione',
-    'invitati',
-    'calendario',
-    'ripeti',
-    'promemoria'
-  ].some((field) => args[field] !== undefined && args[field] !== null)
+  const said = CHANGE_ARGS.some((field) => args[field] !== undefined && args[field] !== null)
 
   if (!said) {
     throw new ToolInputError(`Indica cosa cambia: ${CHANGE_FIELDS}.`)
@@ -1380,11 +1405,24 @@ async function changeEvents(
   }
 
   const left = items.filter((item) => item.refused)
+  // What changed, said for what it is where it is one thing: how it repeats, its reminders.
+  const given = CHANGE_ARGS.filter((name) => args[name] !== undefined && args[name] !== null)
+  const named =
+    given.length === 1 && given[0] === 'ripeti'
+      ? typeof args.ripeti === 'object' &&
+        String((args.ripeti as Record<string, unknown>).ogni)
+          .trim()
+          .toLowerCase() === 'mai'
+        ? m.repeatsNoLonger
+        : m.repeatsFrom
+      : given.length === 1 && given[0] === 'promemoria'
+        ? m.remindersChanged
+        : null
   const label =
     done.length === 1
       ? moved
         ? m.movedTo(target!.name, done[0].event.title)
-        : m.correctedInCalendar(done[0].event.title)
+        : (named ?? m.correctedInCalendar)(done[0].event.title)
       : moved
         ? m.movedMany(done.length, target!.name)
         : m.correctedMany(done.length)
@@ -1395,7 +1433,9 @@ async function changeEvents(
     const [only] = done
     return {
       content: `${only.line.charAt(0).toUpperCase()}${only.line.slice(1)}`,
-      summary: moved ? m.movedTo(target!.name, only.event.title) : m.corrected(only.event.title)
+      summary: moved
+        ? m.movedTo(target!.name, only.event.title)
+        : (named ?? m.corrected)(only.event.title)
     }
   }
 

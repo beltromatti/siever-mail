@@ -117,6 +117,21 @@ export const MESSAGES = defineMessages({
     it: (title: string) => `Corretto: ${title}`,
     de: (title: string) => `Korrigiert: ${title}`
   },
+  repeatsFrom: {
+    en: (title: string) => `Now repeats: ${title}`,
+    it: (title: string) => `Ora si ripete: ${title}`,
+    de: (title: string) => `Wiederholt sich jetzt: ${title}`
+  },
+  repeatsNoLonger: {
+    en: (title: string) => `No longer repeats: ${title}`,
+    it: (title: string) => `Non si ripete più: ${title}`,
+    de: (title: string) => `Wiederholt sich nicht mehr: ${title}`
+  },
+  remindersChanged: {
+    en: (title: string) => `Reminders changed: ${title}`,
+    it: (title: string) => `Promemoria cambiati: ${title}`,
+    de: (title: string) => `Erinnerungen geändert: ${title}`
+  },
   correctedInCalendar: {
     en: (title: string) => `Corrected in the calendar: ${title}`,
     it: (title: string) => `Corretto in calendario: ${title}`,

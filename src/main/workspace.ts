@@ -73,6 +73,9 @@ const BADGE_RECOUNT_MS = 60 * 60_000
 /** Changes come in bursts — a reading, a sync —: the icon is counted again once they stop. */
 const BADGE_SETTLE_MS = 800
 
+/** The longest the first introduction waits for the arrival to lift (§12.2): it is said all the same. */
+const INTRODUCTION_HELD_MS = 3 * 60_000
+
 const MESSAGES = defineMessages({
   unreadBadge: {
     en: (count: number) => (count === 1 ? '1 unread message' : `${count} unread messages`),
@@ -178,6 +181,8 @@ export class Workspace {
   /** SIEVER Mail's agent (see `src/main/ai`). */
   readonly segretario: SegretarioService
   private extension: ExtensionMain | null = null
+  /** The first setup's introduction, held while its arrival plays (§12.2); said at the latest when this fires. */
+  private introductionHeld: ReturnType<typeof setTimeout> | null = null
   private readonly databasePath: string
   private unwatchSleep: (() => void) | null = null
   private storageReady: Promise<void> | null = null
@@ -666,6 +671,30 @@ export class Workspace {
     }
 
     const aiOn = setupTurnsAiOn(setup) && this.segretarioReading
+
+    // With the AI, «Entra» leads through the arrival: the introduction waits for it to lift onto
+    // Oggi (`arrived`) — said at the latest a while after, should the page never say so.
+    if (aiOn) {
+      this.introductionHeld = setTimeout(() => this.arrived(), INTRODUCTION_HELD_MS)
+      return
+    }
+
+    this.introduce(false)
+  }
+
+  /** The arrival after the first setup is over: the introduction it held, said now. */
+  arrived(): void {
+    if (this.introductionHeld === null) {
+      return
+    }
+
+    clearTimeout(this.introductionHeld)
+    this.introductionHeld = null
+    this.introduce(true)
+  }
+
+  /** The first notification, in context: what SIEVER Mail will tell; macOS asks its permission now. */
+  private introduce(aiOn: boolean): void {
     const m = messages(MESSAGES)
     this.notifications.notify({
       family: 'app',

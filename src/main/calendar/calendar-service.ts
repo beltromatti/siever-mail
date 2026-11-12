@@ -50,6 +50,7 @@ import {
   changedFields,
   differingFields,
   eventInput,
+  sameReminders,
   SyncTokenExpired,
   type CalendarProvider,
   type EventField,
@@ -3089,6 +3090,18 @@ export class CalendarService {
 
     if (to !== undefined && to !== calendarKey(row.connectionId, row.calendarId)) {
       const moved = await this.moveEvent(row, provider, to, options)
+      const before = row.remindersJson ? (JSON.parse(row.remindersJson) as number[]) : null
+
+      // The same event there, with the reminders it had: a calendar that reminds with its own
+      // defaults (Google's) would give a moved event the defaults of where it went.
+      if (rest.reminders === undefined && before !== null) {
+        const there = await this.eventOrThrow(moved)
+
+        if (!sameReminders(before, there.reminders ?? null)) {
+          await this.updateNow(moved, { reminders: before }, { ...options, series: true })
+        }
+      }
+
       return Object.values(rest).some((value) => value !== undefined)
         ? this.updateNow(moved, rest, options)
         : this.eventOrThrow(moved)

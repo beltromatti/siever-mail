@@ -5,7 +5,6 @@ import {
   AtSign,
   Bell,
   BookOpen,
-  Brain,
   Briefcase,
   CalendarDays,
   Check,
@@ -350,13 +349,10 @@ function ThinkingLine({ tokens }: { tokens: number }): React.JSX.Element {
   const m = useMessages(MESSAGES)
 
   return (
-    <div
-      role="status"
-      className="text-faint-foreground flex items-start gap-2 text-[12px] leading-[17px]"
-    >
-      <Brain className="text-ai mt-px size-3.5 shrink-0 animate-pulse" />
+    // Words alone, breathing: a step has its icon, thinking has none.
+    <div role="status" className="text-foreground text-[12px] leading-[17px]">
       <span className="sr-only">{m.thinking(0, '')}</span>
-      <span aria-hidden className="min-w-0 tabular-nums">
+      <span aria-hidden className="regenerating tabular-nums">
         {m.thinking(tokens, tokens.toLocaleString(languageNow().formatLocale))}
       </span>
     </div>
@@ -386,8 +382,7 @@ function ThoughtLine({ ms, tokens }: { ms: number; tokens: number }): React.JSX.
   )
 
   return (
-    <div className="text-faint-foreground flex items-start gap-2 text-[12px] leading-[17px]">
-      <Brain className="mt-px size-3.5 shrink-0" />
+    <div className="text-faint-foreground text-[12px] leading-[17px]">
       {counted ? (
         <Tooltip>
           <TooltipTrigger asChild>{line}</TooltipTrigger>

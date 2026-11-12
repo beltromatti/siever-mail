@@ -284,6 +284,7 @@ const notificationsApi: NotificationsApi = {
   getStatus: async () => invoke(NOTIFICATIONS_IPC.getStatus),
   onStatusChanged: (listener) => subscribe(NOTIFICATIONS_IPC.statusChanged, listener),
   showTest: async () => invoke(NOTIFICATIONS_IPC.showTest),
+  arrived: async () => invoke(NOTIFICATIONS_IPC.arrived),
   openSystemSettings: async () => invoke(NOTIFICATIONS_IPC.openSystemSettings),
   onOpen: (listener) => subscribe(NOTIFICATIONS_IPC.open, listener),
   onBadgeChanged: (listener) => subscribe(NOTIFICATIONS_IPC.badgeChanged, listener),

@@ -25,6 +25,8 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { Arrival } from '@renderer/features/onboarding/arrival'
+import { arrivesAfter } from '@renderer/features/onboarding/arrival-script'
 import { newOnboarding, OnboardingWizard } from '@renderer/features/onboarding/onboarding-wizard'
 import {
   MailComposer,
@@ -538,9 +540,13 @@ function App(): React.JSX.Element {
   // The workspace: there with a connection, once the first setup — the one that builds it — has
   // been entered; any later setup lies over it (vision §12.2).
   const workspaceExists = hasConnections && onboarding?.case !== 'primo-avvio'
-  // The welcome or the setup lies over the workspace, which keeps working under it (vision §13.1);
-  // with no workspace, they are all there is.
-  const workspaceCovered = welcome !== null || Boolean(onboarding) || !workspaceExists
+  // The arrival after the setup's «Entra», on its way to Oggi (vision §12.2); `leaving` once
+  // something asked to be seen: it lifts at once.
+  const [arrival, setArrival] = useState<{ leaving: boolean } | null>(null)
+  // The welcome, the setup or the arrival lies over the workspace, which keeps working under it
+  // (vision §13.1); with no workspace, they are all there is.
+  const workspaceCovered =
+    welcome !== null || Boolean(onboarding) || arrival !== null || !workspaceExists
 
   // The way through the app (vision §14.4): the app in front, the welcome over it, the
   // Segretario's panel — where the user goes, never what is in it.
@@ -564,8 +570,9 @@ function App(): React.JSX.Element {
 
   /**
    * Something to be seen — a message from a notification, what the Segretario
-   * shows, a message to write —: now, past the welcome screen; with the setup
-   * in front, once it closes, as it is left only from itself (vision §12.2).
+   * shows, a message to write —: now, past the welcome screen and the
+   * arrival, which lifts over it; with the setup in front, once it closes, as
+   * it is left only from itself (vision §12.2).
    */
   const whenSetupAllows = useCallback((show: () => void): void => {
     if (setupOpenRef.current) {
@@ -573,6 +580,7 @@ function App(): React.JSX.Element {
       return
     }
 
+    setArrival((current) => current && { leaving: true })
     show()
   }, [])
 
@@ -634,8 +642,8 @@ function App(): React.JSX.Element {
     void window.mailApi.closeWindow()
   }, [])
 
-  // The failed send offered back right now, once the setup is over.
-  const failedSend = onboarding ? null : (failedSends[0] ?? null)
+  // The failed send offered back right now, once the setup — and the arrival after it — is over.
+  const failedSend = onboarding || arrival ? null : (failedSends[0] ?? null)
 
   // What the shell has open in front: the mail's keys and commands rest under it too.
   const shellModalOpen =
@@ -1737,6 +1745,20 @@ function App(): React.JSX.Element {
     )
   }
 
+  /** The setup is over — entered, or given up —: what asked to be seen meanwhile is shown now. */
+  function endSetup(entered: boolean): void {
+    saveOnboarding(null)
+    setCalendarToConnect(null)
+
+    if (entered) {
+      enterWorkspace()
+    }
+
+    const show = afterSetupRef.current
+    afterSetupRef.current = null
+    show?.()
+  }
+
   // Whether a connection turned down still is, by what the page knows of it: undefined until it
   // knows — at launch the refusals come before the states — false once put right or taken away.
   const isConnectionRefused = useCallback(
@@ -1894,46 +1916,76 @@ function App(): React.JSX.Element {
     calendar: calendarInSight ? { eventOpen: calendarInSight.event !== null } : null
   })
 
-  // Over the workspace — in its place, while there is none —: the setup, or the welcome. One tree
-  // for all, so nothing of the setup is lost when the workspace comes or goes under it.
-  const cover = onboarding ? (
-    <OnboardingWizard
-      state={onboarding}
-      accounts={accounts}
-      calendarConnections={calendarConnections}
-      connections={mail.accountConnections}
-      removingAccountId={mail.removingAccountId}
-      canUseGoogle={capabilities.googleOAuthReady}
-      canUseMicrosoft={capabilities.microsoftOAuthReady}
-      segretario={segretario}
-      aiOn={aiOn}
-      connectCalendarOf={calendarToConnect}
-      onConnectCalendarAsked={() => setCalendarToConnect(null)}
-      onAccountCreated={onAccountCreated}
-      onRemoveAccount={(accountId, calendars) => void mail.removeAccount(accountId, calendars)}
-      onChange={saveOnboarding}
-      onFinish={(entered) => {
-        saveOnboarding(null)
-        setCalendarToConnect(null)
+  // Over the workspace — in its place, while there is none —: the setup and the arrival after it,
+  // or the welcome. One tree for all, so nothing of the setup is lost when the workspace comes or
+  // goes under it, and the arrival stays as the setup ends under it.
+  const cover =
+    onboarding || arrival ? (
+      <>
+        {onboarding && (
+          <OnboardingWizard
+            state={onboarding}
+            accounts={accounts}
+            calendarConnections={calendarConnections}
+            connections={mail.accountConnections}
+            removingAccountId={mail.removingAccountId}
+            canUseGoogle={capabilities.googleOAuthReady}
+            canUseMicrosoft={capabilities.microsoftOAuthReady}
+            segretario={segretario}
+            aiOn={aiOn}
+            connectCalendarOf={calendarToConnect}
+            onConnectCalendarAsked={() => setCalendarToConnect(null)}
+            onAccountCreated={onAccountCreated}
+            onRemoveAccount={(accountId, calendars) =>
+              void mail.removeAccount(accountId, calendars)
+            }
+            onChange={saveOnboarding}
+            onFinish={(entered) => {
+              // «Entra» after Conoscimi with the AI on goes through the arrival — unless something
+              // waits to be seen, which opens now: the night falls over the setup, which ends
+              // under it (vision §12.2).
+              if (entered && arrivesAfter(onboarding, aiOn) && afterSetupRef.current === null) {
+                if (!arrival) {
+                  uiLog.info('arrival.show', { case: onboarding.case })
+                  setArrival({ leaving: false })
+                }
 
-        if (entered) {
-          enterWorkspace()
-        }
+                return
+              }
 
-        // What asked to be seen meanwhile is shown now.
-        const show = afterSetupRef.current
-        afterSetupRef.current = null
-        show?.()
-      }}
-    />
-  ) : welcome !== null || !hasConnections ? (
-    <WelcomeScreen
-      hasConnections={hasConnections}
-      fadeIn={welcome === 'rail'}
-      onEnter={enterWorkspace}
-      onSetup={startOnboarding}
-    />
-  ) : undefined
+              endSetup(entered)
+            }}
+          />
+        )}
+        {arrival && (
+          <Arrival
+            accounts={accounts}
+            aiOn={aiOn}
+            leave={arrival.leaving}
+            onNight={() => {
+              // The setup ends under the night, and the workspace — born now at the first start —
+              // is on Oggi, drawn with its letter for when the night lifts. What asked to be seen
+              // while the night fell lifts it at once.
+              const asked = afterSetupRef.current !== null
+              setActiveApp('oggi')
+              endSetup(true)
+
+              if (asked) {
+                setArrival({ leaving: true })
+              }
+            }}
+            onDone={() => setArrival(null)}
+          />
+        )}
+      </>
+    ) : welcome !== null || !hasConnections ? (
+      <WelcomeScreen
+        hasConnections={hasConnections}
+        fadeIn={welcome === 'rail'}
+        onEnter={enterWorkspace}
+        onSetup={startOnboarding}
+      />
+    ) : undefined
 
   return (
     <CommandShortcutsProvider overrides={uiPreferences.shortcutOverrides}>

@@ -10,16 +10,17 @@ import {
 import { PROMPTS } from '../prompts'
 import { RegistryRefusal } from '../registry/types'
 import {
+  MissingArgument,
   numberArg,
   objectListArg,
   requireString,
   seenKey,
   seenOf,
+  type SegretarioTool,
   stringArg,
   ToolConflict,
-  ToolInputError,
-  type SegretarioTool,
-  type ToolContext
+  type ToolContext,
+  ToolInputError
 } from '../agent/tool-types'
 import { formatDateTime } from './format'
 
@@ -221,7 +222,7 @@ export const memoryTool: SegretarioTool = {
           : []
 
       if (!rawPath && holders.length !== 1) {
-        throw new ToolInputError(
+        throw new MissingArgument(
           holders.length > 1
             ? `Manca \`percorso\`: il testo da sostituire è in ${holders.map((note) => note.path).join(', ')}.`
             : 'Manca `percorso`: la nota su cui lavorare (`leggi` senza percorso dà la mappa).'

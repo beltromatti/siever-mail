@@ -10,6 +10,8 @@ import {
   SelectValue
 } from '@renderer/components/ui/select'
 import { SettingsEmpty, SettingsLoading, SettingsNotice } from '@renderer/components/ui/settings'
+import { accessOfMail } from '@renderer/features/connections/connection-groups'
+import { ConnectionName } from '@renderer/features/connections/connection-name'
 import { RichTextEditor, type RichTextEditorHandle } from '@renderer/features/mail/rich-text-editor'
 import { messagesNow, useMessages } from '@renderer/lib/i18n'
 import { defineMessages } from '@shared/i18n'
@@ -231,7 +233,7 @@ export function SignaturesSection({
           <SelectContent>
             {accounts.map((account) => (
               <SelectItem key={account.id} value={account.id}>
-                {account.email}
+                <ConnectionName provider={accessOfMail(account)}>{account.email}</ConnectionName>
               </SelectItem>
             ))}
           </SelectContent>

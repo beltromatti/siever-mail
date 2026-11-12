@@ -13,6 +13,8 @@ import {
 import { toast } from 'sonner'
 
 import { AddConnection } from '@renderer/features/connections/add-connection'
+import { accessOfCalendar, accessOfMail } from '@renderer/features/connections/connection-groups'
+import { ConnectionName } from '@renderer/features/connections/connection-name'
 import { showConnectionRefused } from '@renderer/features/connections/connection-refused'
 import { ConnectionsList } from '@renderer/features/connections/connections-list'
 import { ActivityThread } from '@renderer/features/segretario/segretario-panel'
@@ -558,12 +560,14 @@ function PreparationStep({
     ...accounts.map((account) => ({
       key: `mail:${account.id}`,
       name: account.email,
+      provider: accessOfMail(account),
       remove: () => onRemoveAccount(account.id),
       ...preparationOf(m, account, connections[account.id], indexed.get(account.id), aiOn)
     })),
     ...calendarConnections.map((connection) => ({
       key: `calendar:${connection.id}`,
       name: m.calendarsOf(connection.label),
+      provider: accessOfCalendar(connection),
       remove: () => void removeCalendar(connection),
       ...calendarPreparationOf(m, connection)
     }))
@@ -616,7 +620,9 @@ function PreparationStep({
               )}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] font-semibold">{row.name}</span>
+              <ConnectionName provider={row.provider} className="text-[13px] font-semibold">
+                {row.name}
+              </ConnectionName>
               <span
                 className={cn(
                   'block text-[12px]',
@@ -703,6 +709,16 @@ function ConoscimiStep({
       select(state.conoscimiId)
     }
   }, [select, state.conoscimiId])
+
+  // Done: the reading starts at once, at the setup's pace — it does not wait for the user to go
+  // on to its page (§12.2), which then shows it under way. Conoscimi alone has no reading.
+  const finished = run?.status === 'done'
+
+  useEffect(() => {
+    if (finished && state.case !== 'conoscimi') {
+      void window.segretarioApi.setPreparing(true)
+    }
+  }, [finished, state.case])
 
   const start = async (): Promise<void> => {
     setStarting(true)

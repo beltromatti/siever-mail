@@ -413,6 +413,17 @@ export class ToolInputError extends Error {
 }
 
 /**
+ * An argument the call needs is not there: what a provider breaks now and
+ * then (vision §2.3), counted apart from a call refused for what it asks.
+ */
+export class MissingArgument extends ToolInputError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'MissingArgument'
+  }
+}
+
+/**
  * Refused because what the call writes changed since the run read it. The
  * run has now seen it as it is: the same call, made again, is a decision
  * taken knowingly, not a mistake repeated.
@@ -455,7 +466,7 @@ export function requireString(args: Record<string, unknown>, name: string): stri
   const value = stringArg(args, name)
 
   if (!value) {
-    throw new ToolInputError(`Manca il parametro \`${name}\`.`)
+    throw new MissingArgument(`Manca il parametro \`${name}\`.`)
   }
 
   return value

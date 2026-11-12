@@ -193,7 +193,10 @@ export function changedFields(change: EventChange): ReadonlySet<EventField> {
 }
 
 /** Two lists of reminders the same: the same minutes, however written. */
-function sameReminders(a: ReadonlyArray<number> | null, b: ReadonlyArray<number> | null): boolean {
+export function sameReminders(
+  a: ReadonlyArray<number> | null,
+  b: ReadonlyArray<number> | null
+): boolean {
   const minutes = (list: ReadonlyArray<number>): string =>
     [...new Set(list)].sort((x, y) => x - y).join(',')
   return a === null || b === null ? a === b : minutes(a) === minutes(b)

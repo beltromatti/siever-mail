@@ -321,7 +321,7 @@ export function withdrawWords(target: WorkTarget): void {
 
 /** A thing the user corrected in words shows dimmed until the Segretario has put it right. */
 export function dimmedBy(pending: PendingWords | null | undefined): string | false {
-  return pending?.kind === 'correzione' && 'opacity-60'
+  return pending?.kind === 'correzione' && 'regenerating'
 }
 
 /**

@@ -1260,6 +1260,17 @@ export class SegretarioService {
 
     if (state) {
       await this.db.store.setMeta(ONBOARDING, JSON.stringify(state))
+
+      // At «Entra» the reading is done: the day the setup promised is written while the user is
+      // still on its last page, so it is there — or nearly — when they come in (§12.2).
+      if (
+        state.step === 'entra' &&
+        before?.step !== 'entra' &&
+        setupTurnsAiOn(state) &&
+        (await this.ready())
+      ) {
+        await this.engine?.writeDayNow()
+      }
     } else {
       const finished = before
       await this.db.store.deleteMeta(ONBOARDING)

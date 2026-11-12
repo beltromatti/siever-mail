@@ -12,11 +12,21 @@ import {
   SettingsPage
 } from '@renderer/components/ui/settings'
 import { Textarea } from '@renderer/components/ui/textarea'
+import type { Provider } from '@renderer/components/ui/provider-logo'
+import { useCalendarConnections } from '@renderer/features/calendar/use-calendar'
+import { accessOfCalendar, accessOfMail } from '@renderer/features/connections/connection-groups'
+import { ConnectionName } from '@renderer/features/connections/connection-name'
 import { hourStyle, languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import { defineMessages } from '@shared/i18n'
+import type { MailAccount } from '@shared/models'
 import { PLACES } from '@shared/places'
-import type { ConnectionLearning, MemoryNote, MemoryVersion } from '@shared/segretario'
+import {
+  calendarLearningKey,
+  type ConnectionLearning,
+  type MemoryNote,
+  type MemoryVersion
+} from '@shared/segretario'
 
 const MESSAGES = defineMessages({
   historyUnreadable: {
@@ -271,14 +281,18 @@ function NoteRow({
  * again is «Dimentica tutto», in Segretario (§10, §12.1).
  */
 export function MemorySection({
+  accounts,
   onRedoConoscimi
 }: {
+  /** The mailboxes, for whom each of Conoscimi's connections is with. */
+  accounts: ReadonlyArray<MailAccount>
   /** Conoscimi runs in the guided setup, on every connection, updating what it knows. */
   onRedoConoscimi: () => void
 }): React.JSX.Element {
   const m = useMessages(MESSAGES)
   const places = useMessages(PLACES)
   const states = useMessages(LEARNING_STATE)
+  const { connections: calendars } = useCalendarConnections()
   const [learning, setLearning] = useState<ConnectionLearning[] | null>(null)
   const [notes, setNotes] = useState<MemoryNote[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -341,6 +355,18 @@ export function MemorySection({
   }
 
   const running = learning.some((connection) => connection.state === 'running')
+  // Who each connection is with; none while its connection is not read yet.
+  const providerOf = (connection: ConnectionLearning): Provider | null => {
+    if (connection.kind === 'posta') {
+      const account = accounts.find((candidate) => candidate.id === connection.key)
+      return account ? accessOfMail(account) : null
+    }
+
+    const calendar = calendars?.find(
+      (candidate) => calendarLearningKey(candidate.id) === connection.key
+    )
+    return calendar ? accessOfCalendar(calendar) : null
+  }
 
   return (
     <SettingsPage>
@@ -363,7 +389,9 @@ export function MemorySection({
         {learning.map((connection) => (
           <ActionRow
             key={connection.key}
-            title={connection.label}
+            title={
+              <ConnectionName provider={providerOf(connection)}>{connection.label}</ConnectionName>
+            }
             description={
               connection.state === 'done' && connection.finishedAt
                 ? m.doneAt(when(connection.finishedAt))

@@ -34,16 +34,17 @@ import {
 import { entryOf } from './entries'
 import { HandleRegistry } from './handles'
 import {
-  ToolConflict,
-  ToolInputError,
-  UnknownHandle,
+  MissingArgument,
   type RunContext,
   type SegretarioCalendarPort,
   type SegretarioMailPort,
   type SegretarioPagePort,
   type SegretarioTool,
   type TaskKind,
-  type ToolContext
+  ToolConflict,
+  type ToolContext,
+  ToolInputError,
+  UnknownHandle
 } from './tool-types'
 
 const log = diagnostics('segretario')
@@ -844,8 +845,9 @@ export class AgentRunner {
       }
 
       if (error instanceof ToolInputError) {
-        // Arguments missing or wrong: the model's, and how often a provider breaks them (§2.3).
-        live.stats.argsInvalid += 1
+        // Wrong or refused: the model's to put right. Only an argument missing is counted as broken:
+        // how often a provider drops one (§2.3), apart from what a tool refuses to do.
+        live.stats.argsInvalid += error instanceof MissingArgument ? 1 : 0
       } else {
         log.failed('tool.failed', error, { run: activityId, tool: tool.name })
       }

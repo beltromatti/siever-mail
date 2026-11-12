@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest'
 import type { CalendarConnection } from '@shared/calendar'
 import type { MailAccount } from '@shared/models'
 
-import { canAddCalendar, canRenewConsent, connectionGroups } from './connection-groups'
+import {
+  accessOfCalendarId,
+  canAddCalendar,
+  canRenewConsent,
+  connectionGroups
+} from './connection-groups'
 
 const mail = (id: string, email: string, change: Partial<MailAccount> = {}): MailAccount => ({
   id,
@@ -113,6 +118,22 @@ describe('connectionGroups', () => {
       ['microsoft', true],
       ['imap', false]
     ])
+  })
+})
+
+describe('accessOfCalendarId', () => {
+  it('tells iCloud from its server once the connections are read, and waits for them to', () => {
+    const connections = [
+      calendar('c', { provider: 'caldav', serverUrl: 'https://caldav.icloud.com' }),
+      calendar('d', { provider: 'caldav', serverUrl: 'https://dav.brenta.it/calendars' })
+    ]
+
+    expect(accessOfCalendarId('c', 'caldav', connections)).toBe('icloud')
+    expect(accessOfCalendarId('d', 'caldav', connections)).toBe('caldav')
+    // Not read yet: a CalDAV server may be iCloud's, the others are what their provider says.
+    expect(accessOfCalendarId('c', 'caldav', null)).toBeNull()
+    expect(accessOfCalendarId('g', 'google', null)).toBe('google')
+    expect(accessOfCalendarId('f', 'ics', connections)).toBe('ics')
   })
 })
 

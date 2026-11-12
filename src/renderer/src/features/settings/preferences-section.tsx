@@ -12,6 +12,8 @@ import {
   SettingsPage
 } from '@renderer/components/ui/settings'
 import { useCalendarList } from '@renderer/features/calendar/use-calendar'
+import { accessOfMail } from '@renderer/features/connections/connection-groups'
+import { ConnectionName } from '@renderer/features/connections/connection-name'
 import { GROUPING_OPTIONS } from '@renderer/features/mail/message-list-shared'
 import { IS_MAC } from '@renderer/lib/command-shortcuts'
 import { chooseLanguage, messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
@@ -451,7 +453,11 @@ export function PreferencesSection({
                 <SettingRow
                   key={account.id}
                   id={`preferences-unified-${account.id}`}
-                  title={account.email}
+                  title={
+                    <ConnectionName provider={accessOfMail(account)}>
+                      {account.email}
+                    </ConnectionName>
+                  }
                   description={account.displayName || undefined}
                   checked={unified?.includes(account.id) ?? false}
                   disabled={unified === null || saving || busy}

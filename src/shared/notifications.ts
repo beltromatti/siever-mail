@@ -164,7 +164,9 @@ export const NOTIFICATIONS_IPC = {
   open: 'notifications:open',
   /** The number on the icon changed: on Windows the page draws it (`setBadgeImage`). */
   badgeChanged: 'notifications:badge-changed',
-  setBadgeImage: 'notifications:set-badge-image'
+  setBadgeImage: 'notifications:set-badge-image',
+  /** The arrival after the first setup is over: the introduction it held is said (§12.2). */
+  arrived: 'notifications:arrived'
 } as const
 
 /** The number on the app's icon, and what it counts in words — for who cannot see it. */
@@ -189,6 +191,12 @@ export interface NotificationsApi {
    */
   onBadgeChanged: (listener: (badge: BadgeShown) => void) => () => void
   setBadgeImage: (dataUrl: string | null, description: string) => Promise<void>
+  /**
+   * The arrival after the first setup lifted onto Oggi (§12.2): the first
+   * notification, which says what SIEVER Mail will tell, comes now — not
+   * over the arrival, where macOS would ask its permission in the middle.
+   */
+  arrived: () => Promise<void>
 }
 
 /**

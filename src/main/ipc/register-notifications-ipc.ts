@@ -14,6 +14,7 @@ export function registerNotificationsIpc(workspace: Workspace): void {
     untimed: true
   })
   handleIpc('app', NOTIFICATIONS_IPC.openSystemSettings, () => workspace.openNotificationSettings())
+  handleIpc('app', NOTIFICATIONS_IPC.arrived, () => workspace.arrived())
   handleIpc('app', NOTIFICATIONS_IPC.setBadgeImage, (dataUrl: unknown, description: unknown) =>
     workspace.setTaskbarBadgeImage(dataUrl, description)
   )

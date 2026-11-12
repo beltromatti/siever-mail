@@ -12,6 +12,8 @@ import {
   SettingsPage
 } from '@renderer/components/ui/settings'
 import { useCalendarList } from '@renderer/features/calendar/use-calendar'
+import { accessOfMail } from '@renderer/features/connections/connection-groups'
+import { ConnectionName } from '@renderer/features/connections/connection-name'
 import { hourStyle, languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { CALENDAR_ROLES, type CalendarListEntry, type CalendarRole } from '@shared/calendar'
 import type { Messages } from '@shared/i18n'
@@ -323,7 +325,11 @@ export function NotificationsSection({
                 <SettingRow
                   key={account.id}
                   id={`notifications-account-${account.id}`}
-                  title={account.displayName || account.email}
+                  title={
+                    <ConnectionName provider={accessOfMail(account)}>
+                      {account.displayName || account.email}
+                    </ConnectionName>
+                  }
                   description={account.email}
                   checked={!muted.has(account.id)}
                   disabled={off || !preferences.mail.enabled}

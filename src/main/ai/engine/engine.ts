@@ -116,8 +116,8 @@ const PRIORITY = {
 } as const
 
 /** Background runs at once, normally and while the first reading is prepared. */
-const CONCURRENCY = 4
-const PREPARING_CONCURRENCY = 8
+const CONCURRENCY = 8
+const PREPARING_CONCURRENCY = 32
 
 /** The day's run waits for the morning: before this hour it is not yet the day. */
 const DAY_STARTS_AT_HOUR = 6
@@ -189,9 +189,11 @@ const BEFORE_READING: ReadonlyArray<OnboardingStep> = [
 
 /**
  * What the guided setup under way holds back until its reading: Conoscimi
- * comes first, so the reading starts informed. The setup that turns the AI
- * on without adding connections holds every one; any other, those its
- * Conoscimi has to know — the ones not known yet, mailboxes and calendars
+ * comes first, so the reading starts informed — each connection as soon as
+ * Conoscimi knows it, not when the user goes on to the next step (§12.2).
+ * The setup that turns the AI on without adding connections waits for its
+ * own Conoscimi on every one (`since`: what an earlier one knew does not
+ * count); any other, for the ones not known yet, mailboxes and calendars
  * alike: one added is unknown from its first instant. Conoscimi done again
  * by hand holds nothing back. Past Conoscimi — done, or gone on without —
  * nothing is held: a connection left unknown is read as far as the horizon
@@ -199,7 +201,8 @@ const BEFORE_READING: ReadonlyArray<OnboardingStep> = [
  */
 export interface SetupHold {
   holding: boolean
-  all: boolean
+  /** Known only by a Conoscimi finished from here on: this setup's. Null: by any. */
+  since: number | null
 }
 
 export function setupHold(setup: OnboardingState | null): SetupHold {
@@ -207,23 +210,36 @@ export function setupHold(setup: OnboardingState | null): SetupHold {
     setup !== null && setup.case !== 'conoscimi' && BEFORE_READING.includes(setup.step)
   return {
     holding,
-    all: holding && setupTurnsAiOn(setup) && setup.accountIds.length === 0
+    since:
+      holding && setupTurnsAiOn(setup) && setup.accountIds.length === 0 ? setup.startedAt : null
   }
 }
 
 /**
  * Whether a connection — a mailbox by its id, a calendar by its learning
- * key — waits for the setup: every one, or one not known yet.
+ * key — waits for the setup: one its Conoscimi does not know yet
+ * (`knownConnections`).
  */
 export function connectionHeld(hold: SetupHold, key: string, known: ReadonlySet<string>): boolean {
-  return hold.all || (hold.holding && !known.has(key))
+  return hold.holding && !known.has(key)
 }
 
-/** The connections Conoscimi knows: mailboxes by id, calendars by their learning key. */
-function knownConnections(
-  learnt: ReadonlyArray<{ accountId: string; finishedAt: number | null }>
+/**
+ * The connections Conoscimi knows — mailboxes by id, calendars by their
+ * learning key —, as the setup counts them: of a setup that waits for its
+ * own Conoscimi, only those it finished.
+ */
+export function knownConnections(
+  learnt: ReadonlyArray<{ accountId: string; finishedAt: number | null }>,
+  hold: SetupHold
 ): ReadonlySet<string> {
-  return new Set(learnt.filter((row) => row.finishedAt !== null).map((row) => row.accountId))
+  return new Set(
+    learnt
+      .filter(
+        (row) => row.finishedAt !== null && (hold.since === null || row.finishedAt >= hold.since)
+      )
+      .map((row) => row.accountId)
+  )
 }
 
 export interface EngineDeps {
@@ -709,7 +725,7 @@ export class SegretarioEngine {
       this.deps.calendar.connections().catch(() => []),
       this.deps.store.listLearning()
     ])
-    const known = knownConnections(learnt)
+    const known = knownConnections(learnt, hold)
     return connections.filter(
       (connection) => !connectionHeld(hold, calendarLearningKey(connection.id), known)
     )
@@ -856,13 +872,14 @@ export class SegretarioEngine {
     }
 
     const hold = setupHold(setup)
-    const turnsAiOn = setupTurnsAiOn(setup)
+    // At «Entra» its own work is done: the day it promised, and the rest, go on (§12.2).
+    const turnsAiOn = setupTurnsAiOn(setup) && setup.step !== 'entra'
 
     if (!hold.holding && !turnsAiOn) {
       return null
     }
 
-    const known = knownConnections(await this.deps.store.listLearning())
+    const known = knownConnections(await this.deps.store.listLearning(), hold)
 
     return (unit) => {
       if (unit.task === 'lettura') {
@@ -895,16 +912,14 @@ export class SegretarioEngine {
     const setup = await this.deps.onboarding()
     const hold = setupHold(setup)
     const learnt = await store.listLearning()
-    const known = knownConnections(learnt)
+    const known = knownConnections(learnt, hold)
 
     // Messages not read yet, conversation by conversation, each account as far back as it is
     // read; what came now before the backlog.
     const { sinceOf } = await this.horizons()
-    const conversations = hold.all
-      ? []
-      : (await mail.unreadConversations(sinceOf, READING_PLANNED)).filter(
-          (conversation) => !connectionHeld(hold, conversation.accountId, known)
-        )
+    const conversations = (await mail.unreadConversations(sinceOf, READING_PLANNED)).filter(
+      (conversation) => !connectionHeld(hold, conversation.accountId, known)
+    )
     const failed = await queue.failedAt(
       conversations.map(
         (conversation) => `lettura:${conversation.accountId}:${conversation.threadId}`
@@ -952,9 +967,9 @@ export class SegretarioEngine {
     // reading.
     await this.planCalendarLooks(hold)
 
-    // Turning the AI on, the rest — the day, the projects, the memory — waits for the setup to
-    // be over: it is written from what the reading found.
-    if (setup && setupTurnsAiOn(setup)) {
+    // Turning the AI on, the rest — the day, the projects, the memory — waits for the setup's
+    // reading to be over: it is written from what the reading found.
+    if (setup && setupTurnsAiOn(setup) && setup.step !== 'entra') {
       await queue.prune(7 * DAY_MS)
       this.deps.onStateChange()
       return

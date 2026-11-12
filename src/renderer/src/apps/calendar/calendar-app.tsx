@@ -5,7 +5,9 @@ import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
-import { useCalendarEvents } from '@renderer/features/calendar/use-calendar'
+import { useCalendarConnections, useCalendarEvents } from '@renderer/features/calendar/use-calendar'
+import { accessOfCalendarId } from '@renderer/features/connections/connection-groups'
+import { ConnectionName } from '@renderer/features/connections/connection-name'
 import { useCommandKeys } from '@renderer/lib/command-shortcuts'
 import { uiLog } from '@renderer/lib/diagnostics'
 import { useMessages } from '@renderer/lib/i18n'
@@ -267,16 +269,27 @@ function CalendarsList({
   onMenu: (calendar: CalendarListEntry) => void
 }): React.JSX.Element {
   const m = useMessages(MESSAGES)
+  // Who each connection is with: iCloud is told from its server, which only the connections say.
+  const { connections } = useCalendarConnections()
   const accounts = [...new Set(calendars.map((calendar) => calendar.connection))]
 
   return (
     <div className="flex flex-col gap-3">
-      {accounts.map((account) => (
-        <section key={account} aria-label={account} className="flex flex-col gap-0.5">
-          <h3 className="eyebrow truncate px-1 pb-0.5">{account}</h3>
-          {calendars
-            .filter((calendar) => calendar.connection === account)
-            .map((calendar) => (
+      {accounts.map((account) => {
+        const own = calendars.filter((calendar) => calendar.connection === account)
+
+        return (
+          <section key={account} aria-label={account} className="flex flex-col gap-0.5">
+            <h3 className="eyebrow px-1 pb-0.5">
+              <ConnectionName
+                provider={accessOfCalendarId(own[0].connectionId, own[0].provider, connections)}
+                className="gap-1.5"
+                logoClassName="size-3"
+              >
+                {account}
+              </ConnectionName>
+            </h3>
+            {own.map((calendar) => (
               <label
                 key={calendar.key}
                 onContextMenu={(event) => {
@@ -317,8 +330,9 @@ function CalendarsList({
                 )}
               </label>
             ))}
-        </section>
-      ))}
+          </section>
+        )
+      })}
     </div>
   )
 }
