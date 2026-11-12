@@ -22,8 +22,35 @@ import {
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
 import type { MailAddress } from '@shared/models'
+
+const MESSAGES = defineMessages({
+  noRecipient: { en: 'no recipient', it: 'nessun destinatario', de: 'kein Empfänger' },
+  andOthers: {
+    en: (name: string, others: number) =>
+      `${name} and ${others === 1 ? '1 other' : `${others} others`}`,
+    it: (name: string, others: number) =>
+      `${name} e ${others === 1 ? 'un altro' : `altri ${others}`}`,
+    de: (name: string, others: number) => `${name} und ${others} weitere`
+  },
+  copied: { en: 'Address copied', it: 'Indirizzo copiato', de: 'Adresse kopiert' },
+  copyFailed: { en: 'Couldn’t copy', it: 'Copia non riuscita', de: 'Kopieren fehlgeschlagen' },
+  compose: { en: 'Write a message', it: 'Scrivi un messaggio', de: 'Nachricht verfassen' },
+  search: {
+    en: 'Find their messages',
+    it: 'Cerca i suoi messaggi',
+    de: 'Nachrichten dieser Person suchen'
+  },
+  copyAddress: { en: 'Copy address', it: 'Copia indirizzo', de: 'Adresse kopieren' },
+  more: {
+    en: (count: number) => `and ${count} more`,
+    it: (count: number) => `e altri ${count}`,
+    de: (count: number) => `und ${count} weitere`
+  }
+})
 
 export interface AddressActions {
   onCompose?: (address: MailAddress) => void
@@ -43,10 +70,11 @@ export function addressDisplayName(address: MailAddress): string {
  * The count is what matters at a glance; the names are one click away.
  */
 export function summarizeAddresses(addresses: ReadonlyArray<MailAddress>): string {
+  const m = messagesNow(MESSAGES)
   const first = addresses[0]
 
   if (!first) {
-    return 'nessun destinatario'
+    return m.noRecipient
   }
 
   const others = addresses.length - 1
@@ -56,7 +84,7 @@ export function summarizeAddresses(addresses: ReadonlyArray<MailAddress>): strin
     return name
   }
 
-  return `${name} e ${others === 1 ? 'un altro' : `altri ${others}`}`
+  return m.andOthers(name, others)
 }
 
 function AddressToken({
@@ -66,23 +94,24 @@ function AddressToken({
   address: MailAddress
   actions?: AddressActions
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const name = addressDisplayName(address)
   const showsAddressSeparately = name !== address.address
 
   const copyAddress = (): void => {
     void navigator.clipboard
       .writeText(address.address)
-      .then(() => toast.success('Indirizzo copiato', { description: address.address }))
-      .catch(() => toast.error('Copia non riuscita'))
+      .then(() => toast.success(m.copied, { description: address.address }))
+      .catch(() => toast.error(m.copyFailed))
   }
 
   // The same actions on a right click, as a native menu.
   const showNativeMenu = async (): Promise<void> => {
     const chosen = await window.mailApi.showContextMenu([
-      ...(actions?.onCompose ? [{ id: 'compose', label: 'Scrivi un messaggio' }] : []),
-      ...(actions?.onSearch ? [{ id: 'search', label: 'Cerca i suoi messaggi' }] : []),
+      ...(actions?.onCompose ? [{ id: 'compose', label: m.compose }] : []),
+      ...(actions?.onSearch ? [{ id: 'search', label: m.search }] : []),
       { type: 'separator' },
-      { id: 'copy', label: 'Copia indirizzo' }
+      { id: 'copy', label: m.copyAddress }
     ])
 
     if (chosen === 'compose') {
@@ -126,18 +155,18 @@ function AddressToken({
         {actions?.onCompose && (
           <DropdownMenuItem onSelect={() => actions.onCompose?.(address)}>
             <MailPlus className="text-muted-foreground size-3.5" />
-            Scrivi un messaggio
+            {m.compose}
           </DropdownMenuItem>
         )}
         {actions?.onSearch && (
           <DropdownMenuItem onSelect={() => actions.onSearch?.(address)}>
             <Search className="text-muted-foreground size-3.5" />
-            Cerca i suoi messaggi
+            {m.search}
           </DropdownMenuItem>
         )}
         <DropdownMenuItem onSelect={copyAddress}>
           <Copy className="text-muted-foreground size-3.5" />
-          Copia indirizzo
+          {m.copyAddress}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -153,6 +182,7 @@ export function AddressTokens({
   actions?: AddressActions
   className?: string
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [expanded, setExpanded] = useState(false)
   const folds = addresses.length > FOLD_THRESHOLD && !expanded
   const visible = folds ? addresses.slice(0, FOLDED_VISIBLE_COUNT) : addresses
@@ -168,7 +198,7 @@ export function AddressTokens({
           onClick={() => setExpanded(true)}
           className="text-primary hover:text-primary/80 focus-visible:ring-ring/70 h-5 rounded px-1 text-[11px] font-medium outline-none focus-visible:ring-2"
         >
-          e altri {addresses.length - FOLDED_VISIBLE_COUNT}
+          {m.more(addresses.length - FOLDED_VISIBLE_COUNT)}
         </button>
       )}
     </span>

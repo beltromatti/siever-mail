@@ -3,10 +3,12 @@ import { createRoot } from 'react-dom/client'
 import { toast } from 'sonner'
 
 import extensionRenderer from '@app/extension/renderer'
+import { defineMessages } from '@shared/i18n'
 
 import App from './App'
 import { ErrorBoundary } from './components/error-boundary'
 import { uiLog } from './lib/diagnostics'
+import { LanguageProvider, messagesNow } from './lib/i18n'
 // The app's own faces, bundled: Mona Sans for the interface, every weight
 // and width; Newsreader for what the Segretario writes.
 import '@fontsource-variable/mona-sans/standard.css'
@@ -14,6 +16,14 @@ import '@fontsource-variable/mona-sans/standard-italic.css'
 import '@fontsource-variable/newsreader/standard.css'
 import '@fontsource-variable/newsreader/standard-italic.css'
 import './styles/globals.css'
+
+const MESSAGES = defineMessages({
+  failed: {
+    en: 'Something went wrong',
+    it: 'Qualcosa non è andato',
+    de: 'Etwas ist schiefgelaufen'
+  }
+})
 
 // Fonts an extension bundles are available to the whole app — the editor's
 // font menu shows each name in its own face.
@@ -51,7 +61,10 @@ window.addEventListener('unhandledrejection', (event) => {
   uiLog.error('promise.rejected', reason)
   // The same failure again, from every call it breaks, is said once.
   const message = reason instanceof Error ? reason.message : undefined
-  toast.error('Qualcosa non è andato', { id: `unhandled:${message ?? ''}`, description: message })
+  toast.error(messagesNow(MESSAGES).failed, {
+    id: `unhandled:${message ?? ''}`,
+    description: message
+  })
 })
 
 // What broke while drawing, as React reports it: written in the log with the component it broke
@@ -74,8 +87,10 @@ createRoot(document.getElementById('root')!, {
     })
 }).render(
   <StrictMode>
-    <ErrorBoundary whole className="paper h-screen">
-      <App />
-    </ErrorBoundary>
+    <LanguageProvider>
+      <ErrorBoundary whole className="paper h-screen">
+        <App />
+      </ErrorBoundary>
+    </LanguageProvider>
   </StrictMode>
 )

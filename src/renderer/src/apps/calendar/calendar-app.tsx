@@ -10,10 +10,13 @@ import { IconButton } from '@renderer/components/ui/icon-button'
 import { useCalendarEvents } from '@renderer/features/calendar/use-calendar'
 import { useCommandKeys } from '@renderer/lib/command-shortcuts'
 import { uiLog } from '@renderer/lib/diagnostics'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
 import type { HostCommandId } from '@shared/commands'
+import { defineMessages } from '@shared/i18n'
 import type { MessageRef } from '@shared/models'
+import { PLACES } from '@shared/places'
 import type { DayLine } from '@shared/segretario'
 import { DayLineSourceIcons, dayLineLink } from '@renderer/features/segretario/day-line-source'
 import { useOpenLink } from '@renderer/features/segretario/segretario-text'
@@ -21,7 +24,9 @@ import { useOpenLink } from '@renderer/features/segretario/segretario-text'
 import { AgendaList } from './agenda-list'
 import {
   addDays,
+  CALENDAR_VIEW_NAMES,
   CALENDAR_VIEWS,
+  dateFormat,
   eventStartDay,
   sameDay,
   startOfDay,
@@ -29,6 +34,7 @@ import {
   stepAnchor,
   viewDays,
   viewTitle,
+  weekdayNames,
   type CalendarView
 } from '@renderer/features/calendar/calendar-dates'
 import { CalendarSearch } from './calendar-search'
@@ -40,22 +46,91 @@ import { TimeGrid, type CalendarSelection } from './time-grid'
 import { calendarOf, useCalendarList, useSegretarioLayers } from './use-calendar-data'
 import { useCalendarKeys } from './use-calendar-keys'
 
+const MESSAGES = defineMessages({
+  sight: {
+    en: (calendar: string, view: CalendarView, title: string) =>
+      `${calendar}, ${view === 'settimana' ? 'week ' : view === 'agenda' ? 'agenda ' : ''}${title}`,
+    it: (calendar: string, view: CalendarView, title: string) =>
+      `${calendar}, ${view === 'settimana' ? 'settimana ' : view === 'agenda' ? 'agenda ' : ''}${title}`,
+    de: (calendar: string, view: CalendarView, title: string) =>
+      `${calendar}, ${view === 'settimana' ? 'Woche ' : view === 'agenda' ? 'Agenda ' : ''}${title}`
+  },
+  previousMonth: { en: 'Previous month', it: 'Mese prima', de: 'Vorheriger Monat' },
+  nextMonth: { en: 'Next month', it: 'Mese dopo', de: 'Nächster Monat' },
+  readOnly: { en: 'read-only', it: 'sola lettura', de: 'schreibgeschützt' },
+  moveTitle: {
+    en: (title: string) => `Move “${title}”?`,
+    it: (title: string) => `Spostare «${title}»?`,
+    de: (title: string) => `„${title}“ verschieben?`
+  },
+  guestsUpdated: {
+    en: 'The guests get the update.',
+    it: 'Gli invitati ricevono l’aggiornamento.',
+    de: 'Die Gäste erhalten die Aktualisierung.'
+  },
+  move: { en: 'Move', it: 'Sposta', de: 'Verschieben' },
+  notMoved: {
+    en: 'The event was not moved',
+    it: 'L’evento non è stato spostato',
+    de: 'Der Termin wurde nicht verschoben'
+  },
+  calendars: { en: 'Calendars', it: 'Calendari', de: 'Kalender' },
+  newEvent: { en: 'New event', it: 'Nuovo evento', de: 'Neuer Termin' },
+  noCalendar: {
+    en: 'No calendar connected.',
+    it: 'Nessun calendario collegato.',
+    de: 'Kein Kalender verbunden.'
+  },
+  connectCalendar: {
+    en: 'Connect a calendar',
+    it: 'Collega un calendario',
+    de: 'Kalender verbinden'
+  },
+  segretario: { en: 'Segretario', it: 'Il Segretario', de: 'Segretario' },
+  deadlines: { en: 'Deadlines', it: 'Scadenze', de: 'Fristen' },
+  proposedEvents: {
+    en: 'Proposed events',
+    it: 'Eventi proposti',
+    de: 'Vorgeschlagene Termine'
+  },
+  goToToday: { en: 'Go to today', it: 'Vai a oggi', de: 'Zu heute' },
+  today: { en: 'Today', it: 'Oggi', de: 'Heute' },
+  previousPeriod: {
+    en: 'Previous period',
+    it: 'Periodo precedente',
+    de: 'Vorheriger Zeitraum'
+  },
+  nextPeriod: { en: 'Next period', it: 'Periodo successivo', de: 'Nächster Zeitraum' },
+  view: { en: 'View', it: 'Vista', de: 'Ansicht' },
+  syncNow: {
+    en: 'Refresh from the calendars',
+    it: 'Aggiorna dai calendari',
+    de: 'Aus den Kalendern aktualisieren'
+  },
+  reading: {
+    en: 'Reading the calendars…',
+    it: 'Leggo i calendari…',
+    de: 'Die Kalender werden gelesen…'
+  }
+})
+
+/** Each view's switch, as its tooltip names it (and Settings › Scorciatoie its command). */
+const VIEW_TOOLTIPS = defineMessages({
+  agenda: { en: 'Agenda view', it: 'Vista Agenda', de: 'Agenda-Ansicht' },
+  day: { en: 'Day view', it: 'Vista Giorno', de: 'Tagesansicht' },
+  week: { en: 'Week view', it: 'Vista Settimana', de: 'Wochenansicht' },
+  month: { en: 'Month view', it: 'Vista Mese', de: 'Monatsansicht' }
+}) satisfies Record<keyof typeof CALENDAR_VIEW_NAMES, unknown>
+
 const VIEW_KEY = 'siever-calendar-view'
 const LAYERS_KEY = 'siever-calendar-layers'
-const MONTH_TITLE = new Intl.DateTimeFormat('it-IT', { month: 'long', year: 'numeric' })
+const MONTH_TITLE: Intl.DateTimeFormatOptions = { month: 'long', year: 'numeric' }
 
 /** What the calendar shows, for the Segretario to know what the user is looking at. */
 export interface CalendarSight {
-  /** "Calendario, settimana 9 – 15 novembre 2026". */
+  /** "Calendar, week 9–15 November 2026", as the user reads it. */
   label: string
   event: { key: string; title: string } | null
-}
-
-const SIGHT_VIEW: Readonly<Record<CalendarView, string>> = {
-  giorno: '',
-  settimana: 'settimana ',
-  mese: '',
-  agenda: 'agenda '
 }
 
 /** The command that shows each view (Settings › Scorciatoie). */
@@ -107,6 +182,7 @@ function MiniMonth({
   days: ReadonlyArray<Date>
   onPick: (day: Date) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [month, setMonth] = useState(() => new Date(anchor.getFullYear(), anchor.getMonth(), 1))
   const [shownFor, setShownFor] = useState(anchor)
 
@@ -129,18 +205,18 @@ function MiniMonth({
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between px-1">
         <span className="text-[12.5px] font-semibold first-letter:uppercase">
-          {MONTH_TITLE.format(month)}
+          {dateFormat(MONTH_TITLE).format(month)}
         </span>
         <div className="flex">
           <IconButton
-            label="Mese prima"
+            label={m.previousMonth}
             className="text-faint-foreground size-[24px]"
             onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}
           >
             <ChevronLeft className="size-3.5" />
           </IconButton>
           <IconButton
-            label="Mese dopo"
+            label={m.nextMonth}
             className="text-faint-foreground size-[24px]"
             onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}
           >
@@ -149,7 +225,7 @@ function MiniMonth({
         </div>
       </div>
       <div className="grid grid-cols-7 text-center text-[11px]">
-        {['L', 'M', 'M', 'G', 'V', 'S', 'D'].map((weekday, index) => (
+        {weekdayNames('narrow').map((weekday, index) => (
           <span key={index} className="text-faint-foreground py-0.5">
             {weekday}
           </span>
@@ -190,6 +266,7 @@ function CalendarsList({
   calendars: ReadonlyArray<CalendarListEntry>
   onSetHidden: (key: string, hidden: boolean) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const accounts = [...new Set(calendars.map((calendar) => calendar.connection))]
 
   return (
@@ -232,7 +309,7 @@ function CalendarsList({
                   {calendar.name}
                 </span>
                 {!calendar.writable && (
-                  <span className="text-faint-foreground shrink-0 text-[10.5px]">sola lettura</span>
+                  <span className="text-faint-foreground shrink-0 text-[10.5px]">{m.readOnly}</span>
                 )}
               </label>
             ))}
@@ -277,6 +354,10 @@ export function CalendarApp({
   /** Whether its keys answer: not while something of the shell is over it, a message being written. */
   keysEnabled: boolean
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const viewNames = useMessages(CALENDAR_VIEW_NAMES)
+  const viewTooltips = useMessages(VIEW_TOOLTIPS)
+  const places = useMessages(PLACES)
   const [view, setView] = useState<CalendarView>(() => stored(VIEW_KEY, 'agenda', isView))
   const [layers, setLayers] = useState(() =>
     stored(LAYERS_KEY, { due: true, proposals: true }, isLayers)
@@ -288,7 +369,8 @@ export function CalendarApp({
   const [editor, setEditor] = useState<EditorTarget | null>(null)
   const [syncing, setSyncing] = useState(false)
   const { calendars, setHidden } = useCalendarList()
-  const days = useMemo(() => viewDays(view, anchor), [view, anchor])
+  // Drawn anew each time, not kept: a week starts where the language's region says (§13.5).
+  const days = viewDays(view, anchor)
   const from = days[0]
   const to = addDays(days[days.length - 1], 1)
   const allEvents = useCalendarEvents(from.toISOString(), to.toISOString())
@@ -329,7 +411,7 @@ export function CalendarApp({
     }
   }, [view])
 
-  const sightLabel = `Calendario, ${SIGHT_VIEW[view]}${viewTitle(view, anchor)}`
+  const sightLabel = m.sight(places.calendar, view, viewTitle(view, anchor))
   const sightKey = selectedEvent?.key ?? null
   const sightTitle = selectedEvent?.title ?? null
 
@@ -356,9 +438,9 @@ export function CalendarApp({
     if (
       event.attendees.some((attendee) => !attendee.self) &&
       !(await confirm({
-        title: `Spostare «${event.title}»?`,
-        description: 'Gli invitati ricevono l’aggiornamento.',
-        confirmLabel: 'Sposta'
+        title: m.moveTitle(event.title),
+        description: m.guestsUpdated,
+        confirmLabel: m.move
       }))
     ) {
       return
@@ -371,7 +453,7 @@ export function CalendarApp({
       await window.calendarApi.update(event.key, change)
     } catch (error) {
       setMoved(null)
-      toast.error('L’evento non è stato spostato', {
+      toast.error(m.notMoved, {
         description: error instanceof Error ? error.message : undefined
       })
     }
@@ -438,13 +520,13 @@ export function CalendarApp({
   return (
     <div className="paper flex h-full min-h-0">
       <aside
-        aria-label="Calendari"
+        aria-label={m.calendars}
         className="flex w-[232px] shrink-0 flex-col gap-5 overflow-y-auto border-r px-3 pt-[var(--titlebar-band)] pb-4"
       >
-        <ActionTooltip label="Nuovo evento" commandId="calendar-new-event">
+        <ActionTooltip label={m.newEvent} commandId="calendar-new-event">
           <Button className="mt-2 w-full" onClick={newEvent} disabled={!canWrite}>
             <Plus className="size-4" />
-            Nuovo evento
+            {m.newEvent}
           </Button>
         </ActionTooltip>
         <MiniMonth anchor={anchor} days={days} onPick={(day) => setAnchor(day)} />
@@ -453,21 +535,21 @@ export function CalendarApp({
         ) : (
           calendars && (
             <div className="text-muted-foreground flex flex-col gap-2 px-1 text-[12px]">
-              <p>Nessun calendario collegato.</p>
+              <p>{m.noCalendar}</p>
               <Button
                 variant="outline"
                 size="sm"
                 className="self-start"
                 onClick={onOpenConnections}
               >
-                Collega un calendario
+                {m.connectCalendar}
               </Button>
             </div>
           )
         )}
         {aiOn && (
-          <section aria-label="Il Segretario" className="flex flex-col gap-0.5">
-            <h3 className="eyebrow px-1 pb-0.5">Il Segretario</h3>
+          <section aria-label={m.segretario} className="flex flex-col gap-0.5">
+            <h3 className="eyebrow px-1 pb-0.5">{m.segretario}</h3>
             <label className="hover:bg-hover flex cursor-pointer items-center gap-2 rounded-[6px] px-1 py-1 text-[12.5px]">
               <input
                 type="checkbox"
@@ -478,7 +560,7 @@ export function CalendarApp({
                 }
               />
               <DayLineSourceIcons className="text-ai size-3.5" />
-              Scadenze
+              {m.deadlines}
             </label>
             <label className="hover:bg-hover flex cursor-pointer items-center gap-2 rounded-[6px] px-1 py-1 text-[12.5px]">
               <input
@@ -490,7 +572,7 @@ export function CalendarApp({
                 }
               />
               <CompassStar className="text-ai-star size-3.5" />
-              Eventi proposti
+              {m.proposedEvents}
             </label>
           </section>
         )}
@@ -503,19 +585,19 @@ export function CalendarApp({
             atWindowTopRight ? 'pr-[calc(var(--titlebar-controls)+8px)]' : 'pr-3'
           )}
         >
-          <ActionTooltip label="Vai a oggi" commandId="calendar-today">
+          <ActionTooltip label={m.goToToday} commandId="calendar-today">
             <Button
               variant="outline"
               size="sm"
               className="window-no-drag"
               onClick={() => setAnchor(startOfDay(new Date()))}
             >
-              Oggi
+              {m.today}
             </Button>
           </ActionTooltip>
           <div className="window-no-drag flex">
             <IconButton
-              label="Periodo precedente"
+              label={m.previousPeriod}
               shortcutKeys={previousKeys}
               className="size-[28px]"
               onClick={() => setAnchor(stepAnchor(view, anchor, -1))}
@@ -523,7 +605,7 @@ export function CalendarApp({
               <ChevronLeft className="size-4" />
             </IconButton>
             <IconButton
-              label="Periodo successivo"
+              label={m.nextPeriod}
               shortcutKeys={nextKeys}
               className="size-[28px]"
               onClick={() => setAnchor(stepAnchor(view, anchor, 1))}
@@ -538,13 +620,13 @@ export function CalendarApp({
           <CalendarSearch calendars={calendars} inputRef={searchInputRef} onOpen={showEvent} />
           <div
             role="tablist"
-            aria-label="Vista"
+            aria-label={m.view}
             className="window-no-drag bg-hover flex rounded-[8px] p-0.5"
           >
             {CALENDAR_VIEWS.map((option) => (
               <ActionTooltip
                 key={option.value}
-                label={`Vista ${option.label}`}
+                label={viewTooltips[option.name]}
                 commandId={VIEW_COMMANDS[option.value]}
               >
                 <button
@@ -559,13 +641,13 @@ export function CalendarApp({
                       : 'text-muted-foreground hover:text-foreground'
                   )}
                 >
-                  {option.label}
+                  {viewNames[option.name]}
                 </button>
               </ActionTooltip>
             ))}
           </div>
           <IconButton
-            label="Aggiorna dai calendari"
+            label={m.syncNow}
             className="window-no-drag text-faint-foreground size-[28px]"
             disabled={syncing}
             onClick={() => {
@@ -586,7 +668,7 @@ export function CalendarApp({
             {allEvents === null ? (
               <p className="text-muted-foreground flex items-center gap-2 p-6 text-[13px]">
                 <LoaderCircle className="size-4 animate-spin" />
-                Leggo i calendari…
+                {m.reading}
               </p>
             ) : view === 'mese' ? (
               <MonthGrid

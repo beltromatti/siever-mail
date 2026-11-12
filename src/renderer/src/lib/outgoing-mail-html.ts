@@ -1,5 +1,16 @@
+import { defineMessages } from '@shared/i18n'
+
+import { messagesNow } from './i18n'
 import { buildMailFrameDocument } from './mail-html'
 import { withOffscreenFrame } from './offscreen-frame'
+
+const MESSAGES = defineMessages({
+  notPrepared: {
+    en: 'The message could not be prepared for sending.',
+    it: "Impossibile preparare il messaggio per l'invio.",
+    de: 'Die Nachricht konnte nicht für den Versand vorbereitet werden.'
+  }
+})
 
 /**
  * The HTML a message leaves with: exactly what the composer showed, with
@@ -158,7 +169,7 @@ export async function buildOutgoingMailHtml(bodyHtml: string, layoutWidth = 920)
       const view = frameDocument.defaultView
 
       if (!view) {
-        throw new Error("Impossibile preparare il messaggio per l'invio.")
+        throw new Error(messagesNow(MESSAGES).notPrepared)
       }
 
       // Images the message carries (pasted, signature logos) are measured

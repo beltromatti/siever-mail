@@ -1,8 +1,31 @@
+import { defineMessages } from '@shared/i18n'
+
+import { messages } from '../../i18n'
 import { HandleRegistry, type HandleRecord } from '../agent/handles'
 import type { Registry } from '../registry/registry'
 import { localDay } from '../tools/day'
 import { formatDateTime } from '../tools/format'
+import { userDates } from '../tools/user-dates'
 import { nowLine } from './context'
+
+/** The runs' titles, as the panel and the diary show them. */
+const TITLES = defineMessages({
+  dayUpdated: {
+    en: (at: string) => `The day, updated · ${at}`,
+    it: (at: string) => `La giornata, aggiornata · ${at}`,
+    de: (at: string) => `Der Tag, aktualisiert · ${at}`
+  },
+  day: {
+    en: (day: string) => `The day · ${day}`,
+    it: (day: string) => `La giornata · ${day}`,
+    de: (day: string) => `Der Tag · ${day}`
+  },
+  projectState: {
+    en: (title: string) => `Where it stands · ${title}`,
+    it: (title: string) => `Il punto · ${title}`,
+    de: (title: string) => `Stand der Dinge · ${title}`
+  }
+})
 
 export interface StartingData {
   title: string
@@ -34,8 +57,8 @@ export function prepareDay(options: {
 
   return {
     title: options.refresh
-      ? `La giornata, aggiornata · ${formatDateTime(now.toISOString())}`
-      : `La giornata · ${localDay(now)}`,
+      ? messages(TITLES).dayUpdated(formatDateTime(now.toISOString(), userDates().locale))
+      : messages(TITLES).day(localDay(now)),
     data: sections.join('\n\n'),
     handles: []
   }
@@ -68,7 +91,7 @@ export async function prepareProjectState(
     : ''
 
   return {
-    title: `Il punto · ${project.title}`,
+    title: messages(TITLES).projectState(project.title),
     data: `${nowLine()}\n\nIl progetto: ${handle} ${project.title}. ${written}${moved}.`,
     handles: added
   }

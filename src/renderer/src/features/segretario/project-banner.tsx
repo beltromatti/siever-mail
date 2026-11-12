@@ -24,7 +24,10 @@ import {
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { usePromptDialog } from '@renderer/components/ui/prompt-dialog'
+import { hourStyle, languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn, formatCount } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
+import { PLACES } from '@shared/places'
 import type { Commitment, Project, ProjectDetail } from '@shared/segretario'
 
 import { CommitmentList } from './commitment-row'
@@ -37,11 +40,101 @@ const MERGE_OFFERED = 30
 /** How long "Il punto" being rewritten is shown, at most, before the banner stops waiting. */
 const REWRITE_WAIT_MS = 3 * 60_000
 
-const WRITTEN_AT = new Intl.DateTimeFormat('it-IT', {
+/** Made when used: the hour is written as the region writes it now. */
+const WRITTEN_AT = (): Intl.DateTimeFormatOptions => ({
   day: 'numeric',
   month: 'short',
-  hour: '2-digit',
+  hour: hourStyle(),
   minute: '2-digit'
+})
+
+const MESSAGES = defineMessages({
+  notRewritten: {
+    en: (place: string) => `“${place}” didn’t update`,
+    it: (place: string) => `«${place}» non si aggiorna`,
+    de: (place: string) => `„${place}“ wurde nicht aktualisiert`
+  },
+  notChanged: {
+    en: 'The project didn’t change',
+    it: 'Il progetto non è cambiato',
+    de: 'Das Projekt wurde nicht geändert'
+  },
+  merged: {
+    en: (other: string, kept: string) => `“${other}” is now part of “${kept}”`,
+    it: (other: string, kept: string) => `«${other}» è ora parte di «${kept}»`,
+    de: (other: string, kept: string) => `„${other}“ ist jetzt Teil von „${kept}“`
+  },
+  notMerged: {
+    en: 'The projects weren’t merged',
+    it: 'I progetti non si sono uniti',
+    de: 'Die Projekte wurden nicht zusammengeführt'
+  },
+  sectionLabel: {
+    en: (project: string) => `Where ${project} stands`,
+    it: (project: string) => `A che punto è ${project}`,
+    de: (project: string) => `Stand der Dinge: ${project}`
+  },
+  conversation: { en: 'conversation', it: 'conversazione', de: 'Unterhaltung' },
+  conversations: { en: 'conversations', it: 'conversazioni', de: 'Unterhaltungen' },
+  written: {
+    en: (at: string) => ` · written ${at}`,
+    it: (at: string) => ` · scritto ${at}`,
+    de: (at: string) => ` · geschrieben am ${at}`
+  },
+  stale: { en: ' · needs updating', it: ' · da aggiornare', de: ' · zu aktualisieren' },
+  closed: { en: ' · completed', it: ' · concluso', de: ' · abgeschlossen' },
+  hidden: { en: ' · hidden', it: ' · nascosto', de: ' · ausgeblendet' },
+  open: {
+    en: (name: string) => `Open ${name}`,
+    it: (name: string) => `Apri ${name}`,
+    de: (name: string) => `${name} öffnen`
+  },
+  folderNotOpened: {
+    en: 'The folder didn’t open',
+    it: 'La cartella non si apre',
+    de: 'Der Ordner ließ sich nicht öffnen'
+  },
+  rewrite: {
+    en: 'Update where it stands',
+    it: 'Aggiorna il punto',
+    de: 'Stand der Dinge aktualisieren'
+  },
+  more: { en: 'More', it: 'Altro', de: 'Mehr' },
+  renameTitle: { en: 'Rename the project', it: 'Rinomina il progetto', de: 'Projekt umbenennen' },
+  renameText: {
+    en: 'The Segretario will use this name, and won’t change it on its own.',
+    it: 'Il Segretario userà questo nome, e non lo cambierà da solo.',
+    de: 'Der Segretario verwendet diesen Namen und ändert ihn nicht von sich aus.'
+  },
+  name: { en: 'Name', it: 'Nome', de: 'Name' },
+  rename: { en: 'Rename', it: 'Rinomina', de: 'Umbenennen' },
+  nameNeeded: { en: 'Give it a name.', it: 'Dai un nome.', de: 'Geben Sie einen Namen ein.' },
+  renameMenu: { en: 'Rename…', it: 'Rinomina…', de: 'Umbenennen…' },
+  mergeInto: { en: 'Merge into this one', it: 'Unisci a questo', de: 'Mit diesem zusammenführen' },
+  reopen: { en: 'Reopen', it: 'Riapri', de: 'Wieder öffnen' },
+  close: {
+    en: 'Completed: no longer in progress',
+    it: 'Concluso: non è più in corso',
+    de: 'Abgeschlossen: nicht mehr laufend'
+  },
+  show: { en: 'Show again', it: 'Mostra di nuovo', de: 'Wieder anzeigen' },
+  hide: {
+    en: 'Hide: not a project',
+    it: 'Nascondi: non è un progetto',
+    de: 'Ausblenden: kein Projekt'
+  },
+  less: { en: 'Less', it: 'Meno', de: 'Weniger' },
+  readAll: { en: 'Read more', it: 'Leggi tutto', de: 'Alles lesen' },
+  rereading: {
+    en: 'Rereading the conversations…',
+    it: 'Rileggo le conversazioni…',
+    de: 'Ich lese die Unterhaltungen erneut…'
+  },
+  noConversations: {
+    en: 'No conversations yet: when one arrives, I’ll put it here.',
+    it: 'Nessuna conversazione, per ora: quando ne arriva una, la metto qui.',
+    de: 'Noch keine Unterhaltung: Sobald eine eintrifft, lege ich sie hier ab.'
+  }
 })
 
 /** "…/Clienti/Casa al mare" as it reads: its last place. */
@@ -72,6 +165,8 @@ export function ProjectBanner({
   /** The project went into another, or this one took others: the list follows the one kept. */
   onMerged: (keptId: string) => void
 }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [rewritingSince, setRewritingSince] = useState<number | null>(null)
   const [stateOpen, setStateOpen] = useState(false)
@@ -85,7 +180,7 @@ export function ProjectBanner({
       await window.segretarioApi.refreshProject(projectId)
     } catch (error) {
       setRewritingSince(null)
-      toast.error('«Il punto» non si aggiorna', {
+      toast.error(messagesNow(MESSAGES).notRewritten(messagesNow(PLACES).whereItStands), {
         description: error instanceof Error ? error.message : undefined
       })
     }
@@ -170,7 +265,7 @@ export function ProjectBanner({
       await window.segretarioApi.updateProject(project.id, change)
       setProject(await window.segretarioApi.getProject(project.id))
     } catch (error) {
-      toast.error('Il progetto non è cambiato', {
+      toast.error(messagesNow(MESSAGES).notChanged, {
         description: error instanceof Error ? error.message : undefined
       })
     }
@@ -179,10 +274,10 @@ export function ProjectBanner({
   const merge = async (other: Project): Promise<void> => {
     try {
       const kept = await window.segretarioApi.mergeProjects(project.id, [other.id])
-      toast(`«${other.title}» è ora parte di «${project.title}»`)
+      toast(messagesNow(MESSAGES).merged(other.title, project.title))
       onMerged(kept?.id ?? project.id)
     } catch (error) {
-      toast.error('I progetti non si sono uniti', {
+      toast.error(messagesNow(MESSAGES).notMerged, {
         description: error instanceof Error ? error.message : undefined
       })
     }
@@ -190,28 +285,35 @@ export function ProjectBanner({
 
   return (
     <section
-      aria-label={`A che punto è ${project.title}`}
+      aria-label={m.sectionLabel(project.title)}
       className="border-ai-line bg-ai-soft/25 flex max-h-[55%] shrink-0 flex-col gap-2 overflow-y-auto border-b px-4 py-3 select-text"
     >
       <div className="flex items-center gap-2 text-[11.5px]">
         <CompassStar className="text-ai-star size-3.5" />
-        <span className="text-ai shrink-0 font-semibold whitespace-nowrap">Il punto</span>
+        <span className="text-ai shrink-0 font-semibold whitespace-nowrap">
+          {places.whereItStands}
+        </span>
         <span className="text-muted-foreground min-w-0 truncate">
-          {formatCount(project.conversations, 'conversazione', 'conversazioni')}
-          {project.stateAt !== null && ` · scritto ${WRITTEN_AT.format(new Date(project.stateAt))}`}
-          {project.stale && !rewriting && project.stateAt !== null && ' · da aggiornare'}
-          {project.closed && ' · concluso'}
-          {project.hidden && ' · nascosto'}
+          {formatCount(project.conversations, m.conversation, m.conversations)}
+          {project.stateAt !== null &&
+            m.written(
+              new Intl.DateTimeFormat(languageNow().formatLocale, WRITTEN_AT()).format(
+                new Date(project.stateAt)
+              )
+            )}
+          {project.stale && !rewriting && project.stateAt !== null && m.stale}
+          {project.closed && m.closed}
+          {project.hidden && m.hidden}
         </span>
         <div className="flex-1" />
         {folders.map((folder) => (
           <IconButton
             key={folder.location}
-            label={`Apri ${folder.label ?? folderName(folder.location)}`}
+            label={m.open(folder.label ?? folderName(folder.location))}
             className="text-muted-foreground size-[24px]"
             onClick={() =>
               void window.segretarioApi.openProjectFolder(project.id).catch((error: unknown) =>
-                toast.error('La cartella non si apre', {
+                toast.error(messagesNow(MESSAGES).folderNotOpened, {
                   description: error instanceof Error ? error.message : undefined
                 })
               )
@@ -222,7 +324,7 @@ export function ProjectBanner({
         ))}
         {canWrite && project.conversations > 0 && (
           <IconButton
-            label="Aggiorna il punto"
+            label={m.rewrite}
             className="text-muted-foreground size-[24px]"
             disabled={rewriting}
             onClick={() => void rewrite()}
@@ -236,7 +338,7 @@ export function ProjectBanner({
         )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <IconButton label="Altro" className="text-muted-foreground size-[24px]">
+            <IconButton label={m.more} className="text-muted-foreground size-[24px]">
               <MoreHorizontal className="size-3.5" />
             </IconButton>
           </DropdownMenuTrigger>
@@ -244,23 +346,23 @@ export function ProjectBanner({
             <DropdownMenuItem
               onSelect={() =>
                 void prompt({
-                  title: 'Rinomina il progetto',
-                  description: 'Il Segretario userà questo nome, e non lo cambierà da solo.',
-                  label: 'Nome',
+                  title: m.renameTitle,
+                  description: m.renameText,
+                  label: m.name,
                   initialValue: project.title,
-                  confirmLabel: 'Rinomina',
-                  validate: (value) => (value.trim() ? null : 'Dai un nome.')
+                  confirmLabel: m.rename,
+                  validate: (value) => (value.trim() ? null : m.nameNeeded)
                 }).then((title) => (title?.trim() ? update({ title: title.trim() }) : undefined))
               }
             >
               <PenLine className="size-3.5" />
-              Rinomina…
+              {m.renameMenu}
             </DropdownMenuItem>
             {others.length > 0 && (
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
                   <Merge className="mr-2 size-3.5" />
-                  Unisci a questo
+                  {m.mergeInto}
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent className="max-h-80 overflow-y-auto">
                   {others.map((other) => (
@@ -274,11 +376,11 @@ export function ProjectBanner({
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => void update({ closed: !project.closed })}>
               <Archive className="size-3.5" />
-              {project.closed ? 'Riapri' : 'Concluso: non è più in corso'}
+              {project.closed ? m.reopen : m.close}
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void update({ hidden: !project.hidden })}>
               <EyeOff className="size-3.5" />
-              {project.hidden ? 'Mostra di nuovo' : 'Nascondi: non è un progetto'}
+              {project.hidden ? m.show : m.hide}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -306,20 +408,18 @@ export function ProjectBanner({
               aria-expanded={stateOpen}
               className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/60 rounded-sm text-[12px] outline-none focus-visible:ring-2"
             >
-              {stateOpen ? 'Meno' : 'Leggi tutto'}
+              {stateOpen ? m.less : m.readAll}
             </button>
           )}
         </div>
       ) : rewriting ? (
         <p className="text-muted-foreground flex items-center gap-2 text-[12.5px]">
           <LoaderCircle className="text-ai size-3.5 animate-spin" />
-          Rileggo le conversazioni…
+          {m.rereading}
         </p>
       ) : (
         project.conversations === 0 && (
-          <p className="text-muted-foreground text-[12.5px]">
-            Nessuna conversazione, per ora: quando ne arriva una, la metto qui.
-          </p>
+          <p className="text-muted-foreground text-[12.5px]">{m.noConversations}</p>
         )
       )}
 

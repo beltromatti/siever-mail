@@ -67,7 +67,7 @@ describe('the calendar a mailbox can give (§11.1, §12.2)', () => {
   it('is added through the guided setup from Settings: a connection of its own', async () => {
     const onAddCalendar = vi.fn()
     list({ onAddCalendar })
-    const [google, microsoft] = await screen.findAllByRole('button', { name: 'Collega' })
+    const [google, microsoft] = await screen.findAllByRole('button', { name: 'Connect' })
 
     fireEvent.click(microsoft)
     fireEvent.click(google)
@@ -80,7 +80,7 @@ describe('the calendar a mailbox can give (§11.1, §12.2)', () => {
   it('is asked of its provider in the setup, at once for the mailbox it was opened for, once', async () => {
     const asked = vi.fn()
     list({ connectCalendarOf: 'm', onConnectCalendarAsked: asked })
-    await screen.findAllByRole('button', { name: 'Collega' })
+    await screen.findAllByRole('button', { name: 'Connect' })
     await act(async () => undefined)
 
     expect(calendarApi.connectMicrosoft).toHaveBeenCalledTimes(1)
@@ -88,7 +88,7 @@ describe('the calendar a mailbox can give (§11.1, §12.2)', () => {
     expect(asked).toHaveBeenCalledTimes(1)
 
     // In the setup, another mailbox's is asked of its own provider.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Collega' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Connect' })[0])
     await act(async () => undefined)
     expect(calendarApi.connectGoogle).toHaveBeenCalledWith('g')
     expect(calendarApi.connectMicrosoft).toHaveBeenCalledTimes(1)

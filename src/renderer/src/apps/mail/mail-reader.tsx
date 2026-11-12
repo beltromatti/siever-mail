@@ -8,13 +8,23 @@ import { MessageMarksLine } from '@renderer/features/mail/message-marks'
 import { MessageViewer } from '@renderer/features/mail/message-viewer'
 import { PecPanel } from '@renderer/features/mail/pec-panel'
 import { MessageWorkPanel } from '@renderer/features/segretario/message-work'
+import { useLanguage, useMessages } from '@renderer/lib/i18n'
 import { summaryToMessageRef } from '@renderer/lib/message-selection'
 import { cn } from '@renderer/lib/utils'
 import { isIcsAttachment } from '@shared/calendar'
 import { segretarioProjectPath } from '@shared/folders'
+import { defineMessages } from '@shared/i18n'
 import type { Commitment } from '@shared/segretario'
 
 import type { MailApp } from './use-mail-app'
+
+const MESSAGES = defineMessages({
+  selected: {
+    en: (count: string) => `${count} selected`,
+    it: (count: string) => `${count} selezionati`,
+    de: (count: string) => `${count} ausgewählt`
+  }
+})
 
 /** The messages being written, as the reading pane holds them: a tab each. */
 export interface ReaderWriting {
@@ -49,6 +59,8 @@ export function MailReader({
   onTakeUpReply: (accountId: string, messageKey: string, text: string) => Promise<void>
   writing: ReaderWriting
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const { formatLocale } = useLanguage()
   const {
     accounts,
     aiOn,
@@ -104,7 +116,7 @@ export function MailReader({
   const tabsShown = writing.tabs.length > 0
   const readingLabel =
     selection.selectedRefs.length > 1
-      ? `${selection.selectedRefs.length.toLocaleString('it-IT')} selezionati`
+      ? m.selected(selection.selectedRefs.length.toLocaleString(formatLocale))
       : messageForViewer?.subject || null
 
   const viewer = (

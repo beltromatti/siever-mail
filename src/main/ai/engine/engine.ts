@@ -13,6 +13,7 @@ import {
   type TaskKind
 } from '@shared/segretario'
 import { CALENDAR_HELD_DAYS, type CalendarEvent } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 
 import type { AgentRunner, RunResult } from '../agent/runner'
 import type { SegretarioCalendarPort, SegretarioMailPort } from '../agent/tool-types'
@@ -44,11 +45,51 @@ import {
 import { startRun, type RunStarter } from '../tasks/start-run'
 import { localDay } from '../tools/day'
 import { diagnostics } from '@main/diagnostics/log'
+import { languageState, messages } from '../../i18n'
 import type { Reachability } from './reachability'
 import { KeyRefused, Scheduler, WorkFailure, type TaskExecutor } from './scheduler'
 import { WorkQueue, type WorkUnit } from './work-queue'
 
 const log = diagnostics('segretario')
+
+/** What the user sees of the engine's work, in the interface's language. */
+const MESSAGES = defineMessages({
+  stopped: { en: 'Stopped.', it: 'Interrotto.', de: 'Unterbrochen.' },
+  unfinished: {
+    en: 'The work did not finish.',
+    it: 'Il lavoro non è finito.',
+    de: 'Die Arbeit wurde nicht abgeschlossen.'
+  },
+  waitingForNetwork: {
+    en: (at: string) => `The connection to OpenRouter isn’t answering: I’ll try again at ${at}.`,
+    it: (at: string) => `La connessione con OpenRouter non risponde: riprovo alle ${at}.`,
+    de: (at: string) =>
+      `Die Verbindung zu OpenRouter antwortet nicht: Ich versuche es um ${at} erneut.`
+  },
+  aConversation: { en: 'A conversation', it: 'Una conversazione', de: 'Eine Unterhaltung' },
+  aCalendar: { en: 'A calendar', it: 'Un calendario', de: 'Ein Kalender' },
+  /** Why a reply prepared is to be looked at again: kept with it, and shown with it. */
+  conversationMoved: {
+    en: 'the conversation has moved on',
+    it: 'la conversazione è andata avanti',
+    de: 'die Unterhaltung ist weitergegangen'
+  },
+  calendarOf: {
+    en: (calendar: string, connection: string) => `${calendar} (${connection})`,
+    it: (calendar: string, connection: string) => `${calendar} di ${connection}`,
+    de: (calendar: string, connection: string) => `${calendar} (${connection})`
+  },
+  letterMissing: {
+    en: 'Today’s letter is still missing: write it with `oggi` (`lettera`).',
+    it: 'Manca ancora la lettera di oggi: scrivila con `oggi` (`lettera`).',
+    de: 'Der heutige Brief fehlt noch: mit `oggi` (`lettera`) schreiben.'
+  },
+  stateMissing: {
+    en: 'The updated “Where it stands” is still missing: write it with `progetti` (action `punto`).',
+    it: 'Manca ancora «Il punto» aggiornato: scrivilo con `progetti` (azione `punto`).',
+    de: 'Der aktualisierte „Stand der Dinge“ fehlt noch: mit `progetti` (Aktion `punto`) schreiben.'
+  }
+})
 
 /** Mail this recent is new mail, read before the backlog; older is the backlog. */
 const NEW_MAIL_DAYS = 2
@@ -129,6 +170,7 @@ const DAY_MS = 24 * 60 * 60 * 1000
 
 /** The steps of the guided setup before its reading: until then, its connections are not read. */
 const BEFORE_READING: ReadonlyArray<OnboardingStep> = [
+  'lingua',
   'connessioni',
   'segretario',
   'preparazione',
@@ -210,7 +252,7 @@ function settle(result: RunResult): void {
   }
 
   if (result.status === 'cancelled') {
-    throw new WorkFailure('Interrotto.')
+    throw new WorkFailure(messages(MESSAGES).stopped)
   }
 
   const error = result.error
@@ -221,7 +263,7 @@ function settle(result: RunResult): void {
     throw new KeyRefused(error.message)
   }
 
-  throw new WorkFailure(error?.message ?? 'Il lavoro non è finito.')
+  throw new WorkFailure(error?.message ?? messages(MESSAGES).unfinished)
 }
 
 /** Whether a unit of work reads a conversation of these accounts — a connection just added — or of any. */
@@ -429,7 +471,11 @@ export class SegretarioEngine {
 
     return {
       waiting: network
-        ? `La connessione con OpenRouter non risponde: riprovo alle ${new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(network.until)}.`
+        ? messages(MESSAGES).waitingForNetwork(
+            new Intl.DateTimeFormat(languageState().formatLocale, { timeStyle: 'short' }).format(
+              network.until
+            )
+          )
         : null,
       reading: await this.deps.mail.readingProgress((await this.horizons()).sinceOf),
       queued,
@@ -467,7 +513,7 @@ export class SegretarioEngine {
       (unit.activityId ? (await store.getActivity(unit.activityId))?.title : null) ?? otherwise
     const failed = await Promise.all(
       failedUnits.map(async (unit) => ({
-        title: await titleOf(unit, 'Una conversazione'),
+        title: await titleOf(unit, messages(MESSAGES).aConversation),
         error: unit.lastError
       }))
     )
@@ -515,7 +561,7 @@ export class SegretarioEngine {
         ...failed,
         ...(await Promise.all(
           failedLooks.map(async (unit) => ({
-            title: await titleOf(unit, 'Un calendario'),
+            title: await titleOf(unit, messages(MESSAGES).aCalendar),
             error: unit.lastError
           }))
         ))
@@ -867,7 +913,7 @@ export class SegretarioEngine {
       const failedAt = failed.get(scopeKey)
 
       // A reply prepared before these messages no longer knows them: it is to be looked at again.
-      await registry.markRepliesStale(conversation, oldest, 'la conversazione è andata avanti')
+      await registry.markRepliesStale(conversation, oldest, messages(MESSAGES).conversationMoved)
 
       // A conversation whose reading failed waits for "Riprova" — or for what comes after.
       if (failedAt !== undefined && newest <= failedAt) {
@@ -1277,7 +1323,8 @@ export class SegretarioEngine {
     const data = prepareCalendarLook(
       items,
       calendarName ? `${calendarName} di ${connection.label}` : connection.label,
-      block.ahead
+      block.ahead,
+      calendarName ? messages(MESSAGES).calendarOf(calendarName, connection.label) : undefined
     )
     settle(
       await startRun(this.starter, {
@@ -1367,7 +1414,10 @@ export class SegretarioEngine {
                 const written = await deps.registry.day.letter(today)
                 return written && written.writtenAt >= begun
                   ? null
-                  : 'Manca ancora la lettera di oggi: scrivila con `oggi` (`lettera`).'
+                  : {
+                      forModel: 'Manca ancora la lettera di oggi: scrivila con `oggi` (`lettera`).',
+                      shown: messages(MESSAGES).letterMissing
+                    }
               },
               onCreated: (activityId) => deps.queue.attachActivity(unit.id, activityId)
             }),
@@ -1405,7 +1455,11 @@ export class SegretarioEngine {
                 const project = await deps.registry.projects.get(projectId)
                 return !project || (project.stateAt ?? 0) >= begun
                   ? null
-                  : 'Manca ancora «Il punto» aggiornato: scrivilo con `progetti` (azione `punto`).'
+                  : {
+                      forModel:
+                        'Manca ancora «Il punto» aggiornato: scrivilo con `progetti` (azione `punto`).',
+                      shown: messages(MESSAGES).stateMissing
+                    }
               },
               onCreated: (activityId) => deps.queue.attachActivity(unit.id, activityId)
             })

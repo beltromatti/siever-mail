@@ -1,4 +1,6 @@
+import { messages } from '@main/i18n'
 import { refusalOf } from '@main/services/connection-refusal'
+import { defineMessages } from '@shared/i18n'
 import type { ConnectionRefusal } from '@shared/models'
 
 /**
@@ -33,13 +35,28 @@ const CHROMIUM_CERTIFICATE =
   /\bnet::ERR_CERT(?:IFICATE)?_(?!UNABLE_TO_CHECK_REVOCATION\b|NO_REVOCATION_MECHANISM\b)[A-Z_]+/
 
 /** What the user is told of a connection turned down, where its error is not in their words. */
-const REFUSAL_PROBLEMS: Readonly<Record<ConnectionRefusal, string>> = {
-  accesso: 'Il server del calendario non accetta più l’accesso: ricollega il calendario.',
-  autorizzazione: 'L’autorizzazione a leggere il calendario non vale più: ricollegalo.',
-  certificato:
-    'Il certificato del server del calendario non è valido: SIEVER Mail non vi si collega.',
-  sparito: 'Il calendario non si trova più dove era collegato.'
-}
+const REFUSAL_PROBLEMS = defineMessages({
+  accesso: {
+    en: 'The calendar’s server no longer accepts the sign-in: reconnect the calendar.',
+    it: 'Il server del calendario non accetta più l’accesso: ricollega il calendario.',
+    de: 'Der Server des Kalenders akzeptiert die Anmeldung nicht mehr: Verbinden Sie den Kalender erneut.'
+  },
+  autorizzazione: {
+    en: 'The authorization to read the calendar is no longer valid: reconnect it.',
+    it: 'L’autorizzazione a leggere il calendario non vale più: ricollegalo.',
+    de: 'Die Berechtigung, den Kalender zu lesen, ist nicht mehr gültig: Verbinden Sie ihn erneut.'
+  },
+  certificato: {
+    en: 'The certificate of the calendar’s server isn’t valid: SIEVER Mail won’t connect to it.',
+    it: 'Il certificato del server del calendario non è valido: SIEVER Mail non vi si collega.',
+    de: 'Das Zertifikat des Kalenderservers ist nicht gültig: SIEVER Mail verbindet sich nicht damit.'
+  },
+  sparito: {
+    en: 'The calendar is no longer where it was connected.',
+    it: 'Il calendario non si trova più dove era collegato.',
+    de: 'Der Kalender ist nicht mehr dort, wo er verbunden war.'
+  }
+}) satisfies Record<ConnectionRefusal, unknown>
 
 function causeOf(error: unknown): unknown {
   return error && typeof error === 'object' ? (error as { cause?: unknown }).cause : undefined
@@ -94,7 +111,7 @@ export function refusalOfCalendar(error: unknown): CalendarRefusalFound | null {
       refusalOf(link) ?? (CHROMIUM_CERTIFICATE.test(messageOf(link)) ? 'certificato' : null)
 
     if (refusal) {
-      return { refusal, problem: REFUSAL_PROBLEMS[refusal], detail }
+      return { refusal, problem: messages(REFUSAL_PROBLEMS)[refusal], detail }
     }
   }
 

@@ -1,12 +1,28 @@
+import { defineMessages } from '@shared/i18n'
 import type { MessageRef } from '@shared/models'
 import type { ReviewRequest } from '@shared/segretario'
 
+import { messages } from '../../i18n'
 import { HandleRegistry, type HandleRecord } from '../agent/handles'
 import type { SegretarioMailPort } from '../agent/tool-types'
 import { reviewRequest } from '../review'
 import { clip, formatAddresses, formatDateTime } from '../tools/format'
 import { nowLine } from './context'
 import type { StartingData } from './day'
+
+/** The runs' titles, as the user sees them. */
+const TITLES = defineMessages({
+  review: {
+    en: (subject: string | null) => `Review · ${subject ?? 'no subject'}`,
+    it: (subject: string | null) => `Revisione · ${subject ?? 'senza oggetto'}`,
+    de: (subject: string | null) => `Überprüfung · ${subject ?? 'kein Betreff'}`
+  },
+  search: {
+    en: (question: string) => `Search · ${question}`,
+    it: (question: string) => `Ricerca · ${question}`,
+    de: (question: string) => `Suche · ${question}`
+  }
+})
 
 /** The message answered, named for the run to read: who, when, what. */
 async function answeredLine(
@@ -45,7 +61,7 @@ export async function prepareReview(
   }
 
   return {
-    title: `Revisione · ${request.subject || 'senza oggetto'}`,
+    title: messages(TITLES).review(request.subject || null),
     data: reviewRequest({
       now: nowLine(),
       from: account?.email ?? '',
@@ -67,7 +83,7 @@ export async function prepareSearch(
 ): Promise<StartingData> {
   const accounts = await deps.mail.listAccounts()
   return {
-    title: `Ricerca · ${question.trim().slice(0, 60)}`,
+    title: messages(TITLES).search(question.trim().slice(0, 60)),
     data: [
       nowLine(),
       `Gli account dell'utente: ${accounts.map((account) => account.email).join(', ')}.`,

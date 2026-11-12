@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 
 import type { HandleLink } from '@shared/segretario'
 
+import { messages } from '../../i18n'
 import { placeholders, type Sql } from '../sql'
+import { REFUSALS } from './registry.messages'
 import {
   RegistryRefusal,
   lookedAt,
@@ -218,7 +220,11 @@ export class ProjectStore {
     const name = title.trim()
 
     if (!name) {
-      throw new RegistryRefusal('Un progetto ha bisogno di un nome.')
+      throw new RegistryRefusal(
+        'Un progetto ha bisogno di un nome.',
+        undefined,
+        messages(REFUSALS).projectNeedsName
+      )
     }
 
     const existing = await this.named(name)
@@ -255,7 +261,11 @@ export class ProjectStore {
     const name = title.trim()
 
     if (!name) {
-      throw new RegistryRefusal('Un progetto ha bisogno di un nome.')
+      throw new RegistryRefusal(
+        'Un progetto ha bisogno di un nome.',
+        undefined,
+        messages(REFUSALS).projectNeedsName
+      )
     }
 
     const current = await this.require(id)
@@ -269,7 +279,8 @@ export class ProjectStore {
     if (taken && taken.id !== id) {
       throw new RegistryRefusal(
         `C'è già un progetto «${taken.title}»: se sono la stessa questione, uniscili.`,
-        taken
+        taken,
+        messages(REFUSALS).projectTaken(taken.title)
       )
     }
 
@@ -706,7 +717,11 @@ export class ProjectStore {
     const record = await this.get(id)
 
     if (!record) {
-      throw new RegistryRefusal(`Non esiste un progetto ${id}.`)
+      throw new RegistryRefusal(
+        `Non esiste un progetto ${id}.`,
+        undefined,
+        messages(REFUSALS).projectGone(id)
+      )
     }
 
     return record

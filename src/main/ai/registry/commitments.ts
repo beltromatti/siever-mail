@@ -1,4 +1,6 @@
+import { messages } from '../../i18n'
 import { placeholders, type Sql } from '../sql'
+import { REASONS, REFUSALS } from './registry.messages'
 import {
   RegistryRefusal,
   lookedAt,
@@ -140,7 +142,11 @@ function dayOrNull(value: string | null | undefined, name: string): string | nul
   }
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
-    throw new RegistryRefusal(`${name}: una data come AAAA-MM-GG.`)
+    throw new RegistryRefusal(
+      `${name}: una data come AAAA-MM-GG.`,
+      undefined,
+      messages(REFUSALS).notADate(name)
+    )
   }
 
   return value
@@ -357,7 +363,11 @@ export class CommitmentStore {
     const text = input.text.trim()
 
     if (!text) {
-      throw new RegistryRefusal('Una cosa aperta ha bisogno di un testo.')
+      throw new RegistryRefusal(
+        'Una cosa aperta ha bisogno di un testo.',
+        undefined,
+        messages(REFUSALS).itemNeedsText
+      )
     }
 
     const due = dayOrNull(input.due, 'scadenza')
@@ -514,7 +524,11 @@ export class CommitmentStore {
     const until = status === 'rinviata' ? dayOrNull(options.until, 'fino a') : null
 
     if (status === 'rinviata' && !until) {
-      throw new RegistryRefusal('Per rinviare serve il giorno in cui torna aperta (`fino_a`).')
+      throw new RegistryRefusal(
+        'Per rinviare serve il giorno in cui torna aperta (`fino_a`).',
+        undefined,
+        messages(REFUSALS).postponeNeedsDay
+      )
     }
 
     const current = await this.require(id)
@@ -582,7 +596,7 @@ export class CommitmentStore {
     for (const id of dropped) {
       results.push(
         await this.setStatus(id, 'non_serve', actor, {
-          reason: `È la stessa cosa di «${kept.text}» (#${kept.id}).`
+          reason: messages(REASONS).sameAs(kept.text, kept.id)
         })
       )
     }
@@ -621,7 +635,7 @@ export class CommitmentStore {
         record.id,
         'aperta',
         { by: 'sistema' },
-        { reason: `Rinviata fino al ${record.until}: è il giorno.` }
+        { reason: messages(REASONS).dayCame(record.until) }
       )
       woken.push(opened)
     }
@@ -684,13 +698,16 @@ export class CommitmentStore {
     if (after.revision !== current.revision) {
       throw new RegistryRefusal(
         'Dopo questa modifica la cosa è cambiata ancora: non la rimetto com’era.',
-        current
+        current,
+        messages(REFUSALS).changedSinceUndo
       )
     }
 
     if (!row.before_json) {
       // Undoing an opening: it was not needed.
-      return this.setStatus(current.id, 'non_serve', actor, { reason: 'Annullata.' })
+      return this.setStatus(current.id, 'non_serve', actor, {
+        reason: messages(REASONS).undone
+      })
     }
 
     // Kept before version 5, a snapshot named the message alone: its account is the same now.
@@ -735,7 +752,11 @@ export class CommitmentStore {
     const record = await this.get(id)
 
     if (!record) {
-      throw new RegistryRefusal(`Non esiste una cosa aperta #${id}.`)
+      throw new RegistryRefusal(
+        `Non esiste una cosa aperta #${id}.`,
+        undefined,
+        messages(REFUSALS).itemGone(id)
+      )
     }
 
     return record
@@ -810,7 +831,11 @@ export class CommitmentStore {
       }
     }
 
-    throw new RegistryRefusal(`La cosa #${id} cambia di continuo: riprova tra poco.`)
+    throw new RegistryRefusal(
+      `La cosa #${id} cambia di continuo: riprova tra poco.`,
+      undefined,
+      messages(REFUSALS).itemKeepsChanging(id)
+    )
   }
 
   /**

@@ -48,7 +48,7 @@ describe('refusalOfCalendar', () => {
   it('takes a sign-in to do again for the authorization withdrawn', () => {
     expect(refusalOfCalendar(new MicrosoftSignInNeeded())).toMatchObject({
       refusal: 'autorizzazione',
-      detail: 'Microsoft chiede di accedere di nuovo a questo account.'
+      detail: 'Microsoft asks you to sign in to this account again.'
     })
   })
 

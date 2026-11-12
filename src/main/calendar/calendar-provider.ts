@@ -1,4 +1,19 @@
+import { messages } from '@main/i18n'
 import type { CalendarEvent, CalendarResponse, EventChange, EventOrigin } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
+
+const MESSAGES = defineMessages({
+  allDayNeedsTimes: {
+    en: 'To give an all-day event a time, it needs a start and an end.',
+    it: 'Per dare un orario a un evento di tutto il giorno servono inizio e fine.',
+    de: 'Um einem ganztägigen Termin eine Uhrzeit zu geben, sind Beginn und Ende nötig.'
+  },
+  endAfterStart: {
+    en: 'The event’s end must come after its start.',
+    it: 'La fine dell’evento deve venire dopo l’inizio.',
+    de: 'Das Ende des Termins muss nach dem Beginn liegen.'
+  }
+})
 
 /** An event as a provider gives it: what the app keeps, and whether it was cancelled. */
 export type ProviderEvent = Omit<CalendarEvent, 'key' | 'connectionId' | 'calendarName'> & {
@@ -205,7 +220,7 @@ export function changedEvent(
 
   if (change.start !== undefined || change.end !== undefined || allDay !== current.allDay) {
     if (!allDay && current.allDay && !(change.start && change.end)) {
-      throw new Error('Per dare un orario a un evento di tutto il giorno servono inizio e fine.')
+      throw new Error(messages(MESSAGES).allDayNeedsTimes)
     }
 
     event.start =
@@ -224,7 +239,7 @@ export function changedEvent(
         ? event.end.slice(0, 10) <= event.start.slice(0, 10)
         : Date.parse(event.end) <= Date.parse(event.start))
     ) {
-      throw new Error('La fine dell’evento deve venire dopo l’inizio.')
+      throw new Error(messages(MESSAGES).endAfterStart)
     }
   }
 

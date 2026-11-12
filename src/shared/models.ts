@@ -1,4 +1,5 @@
 import type { FolderRole } from './folders'
+import { defineMessages, messagesIn, type Language } from './i18n'
 
 export type AccountType = 'gmail' | 'imap'
 export type AuthType = 'password' | 'oauth'
@@ -726,12 +727,28 @@ export interface ConnectionRefusedNotice {
 }
 
 /** A refusal in a line, where a connection's state is listed. */
-export const REFUSAL_LINES: Readonly<Record<ConnectionRefusal, string>> = {
-  accesso: 'Il server non accetta più l’accesso',
-  autorizzazione: 'L’accesso va rifatto',
-  certificato: 'Il certificato del server non è valido',
-  sparito: 'Non si trova più al suo indirizzo'
-}
+export const REFUSAL_LINES = defineMessages({
+  accesso: {
+    en: 'The server no longer accepts the sign-in',
+    it: 'Il server non accetta più l’accesso',
+    de: 'Der Server akzeptiert die Anmeldung nicht mehr'
+  },
+  autorizzazione: {
+    en: 'You need to sign in again',
+    it: 'L’accesso va rifatto',
+    de: 'Sie müssen sich erneut anmelden'
+  },
+  certificato: {
+    en: 'The server’s certificate isn’t valid',
+    it: 'Il certificato del server non è valido',
+    de: 'Das Zertifikat des Servers ist nicht gültig'
+  },
+  sparito: {
+    en: 'It’s no longer at its address',
+    it: 'Non si trova più al suo indirizzo',
+    de: 'Unter seiner Adresse nicht mehr zu finden'
+  }
+}) satisfies Record<ConnectionRefusal, unknown>
 
 /** A mailbox turned down, as its notice: the same from the engine and from Settings. */
 export function mailRefusedNotice(
@@ -754,38 +771,80 @@ export function mailRefusedNotice(
   }
 }
 
-/** What a refusal means and what to do, in the user's words: of a mailbox, or of a calendar. */
+/** What each refusal means and what to do, of a mailbox or of a calendar (`calendar`), by its label. */
+const REFUSAL_WORDS = defineMessages({
+  accessoTitle: {
+    en: (label: string) => `Sign-in refused · ${label}`,
+    it: (label: string) => `Accesso rifiutato · ${label}`,
+    de: (label: string) => `Anmeldung abgelehnt · ${label}`
+  },
+  accessoBody: {
+    en: (label: string, calendar: boolean) =>
+      `The server no longer accepts the sign-in to ${calendar ? `the calendar ${label}` : label} — the password changed or expired, or access was turned off. SIEVER Mail stopped trying, so the account doesn’t get locked: what’s already here stays. Reconnect it with the right sign-in, or remove it.`,
+    it: (label: string, calendar: boolean) =>
+      `Il server non accetta più l’accesso ${calendar ? `al calendario ${label}` : `a ${label}`} — la password è cambiata o scaduta, o l’accesso è stato spento. SIEVER Mail ha smesso di riprovare, per non far bloccare l’account: quello che c’è resta. Ricollega${calendar ? 'lo' : 'la'} con l’accesso giusto, o togli${calendar ? 'lo' : 'la'}.`,
+    de: (label: string, calendar: boolean) =>
+      `Der Server akzeptiert die Anmeldung ${calendar ? `beim Kalender ${label}` : `bei ${label}`} nicht mehr — das Passwort wurde geändert oder ist abgelaufen, oder der Zugang wurde abgeschaltet. SIEVER Mail versucht es nicht mehr, damit das Konto nicht gesperrt wird: Was schon da ist, bleibt. Verbinden Sie ${calendar ? 'den Kalender' : 'das Postfach'} mit der richtigen Anmeldung erneut, oder entfernen Sie ${calendar ? 'ihn' : 'es'}.`
+  },
+  autorizzazioneTitle: {
+    en: (label: string) => `Sign in again · ${label}`,
+    it: (label: string) => `Accesso da rinnovare · ${label}`,
+    de: (label: string) => `Erneut anmelden · ${label}`
+  },
+  autorizzazioneBody: {
+    en: (label: string, calendar: boolean) =>
+      `The authorization for ${calendar ? `the calendar ${label}` : label} is no longer valid: you need to sign in with the provider again. SIEVER Mail stopped trying: what’s already here stays. Reconnect it, or remove it.`,
+    it: (label: string, calendar: boolean) =>
+      `L’autorizzazione ${calendar ? `al calendario ${label}` : `a ${label}`} non vale più: va rifatto l’accesso con il fornitore. SIEVER Mail ha smesso di riprovare: quello che c’è resta. Ricollega${calendar ? 'lo' : 'la'}, o togli${calendar ? 'lo' : 'la'}.`,
+    de: (label: string, calendar: boolean) =>
+      `Die Autorisierung für ${calendar ? `den Kalender ${label}` : label} ist nicht mehr gültig: Sie müssen sich beim Anbieter erneut anmelden. SIEVER Mail versucht es nicht mehr: Was schon da ist, bleibt. Verbinden Sie ${calendar ? 'den Kalender' : 'das Postfach'} erneut, oder entfernen Sie ${calendar ? 'ihn' : 'es'}.`
+  },
+  certificatoTitle: {
+    en: (label: string) => `Untrusted server · ${label}`,
+    it: (label: string) => `Server non attendibile · ${label}`,
+    de: (label: string) => `Server nicht vertrauenswürdig · ${label}`
+  },
+  certificatoBody: {
+    en: (label: string, calendar: boolean) =>
+      `The certificate of the server of ${calendar ? `the calendar ${label}` : label} isn’t valid, and SIEVER Mail doesn’t send the password to a server it can’t verify. SIEVER Mail stopped trying: what’s already here stays. Once the server is fixed, reconnect it; or remove it.`,
+    it: (label: string, calendar: boolean) =>
+      `Il certificato del server ${calendar ? `del calendario ${label}` : `di ${label}`} non è valido, e SIEVER Mail non manda la password a un server che non può verificare. SIEVER Mail ha smesso di riprovare: quello che c’è resta. Quando il server è a posto, ricollega${calendar ? 'lo' : 'la'}; oppure togli${calendar ? 'lo' : 'la'}.`,
+    de: (label: string, calendar: boolean) =>
+      `Das Zertifikat des Servers ${calendar ? `des Kalenders ${label}` : `von ${label}`} ist nicht gültig, und SIEVER Mail sendet das Passwort nicht an einen Server, den es nicht überprüfen kann. SIEVER Mail versucht es nicht mehr: Was schon da ist, bleibt. Sobald der Server in Ordnung ist, verbinden Sie ${calendar ? 'den Kalender' : 'das Postfach'} erneut; oder entfernen Sie ${calendar ? 'ihn' : 'es'}.`
+  },
+  sparitoTitle: {
+    en: (label: string) => `Gone · ${label}`,
+    it: (label: string) => `Non c’è più · ${label}`,
+    de: (label: string) => `Nicht mehr vorhanden · ${label}`
+  },
+  sparitoBody: {
+    en: (label: string, calendar: boolean) =>
+      `${calendar ? `The calendar ${label}` : label} is no longer where it was connected — the link no longer exists, or it was removed from the server. SIEVER Mail stopped looking for it: what’s already here stays. Try again if you think it will come back, or remove it.`,
+    it: (label: string, calendar: boolean) =>
+      `${calendar ? `Il calendario ${label}` : label} non si trova più dove era collegato — il link non esiste più, o è stato tolto dal server. SIEVER Mail ha smesso di cercarlo: quello che c’è resta. Riprova se pensi che torni, oppure toglilo.`,
+    de: (label: string, calendar: boolean) =>
+      `${calendar ? `Der Kalender ${label}` : label} ist nicht mehr dort, wo die Verbindung bestand — der Link existiert nicht mehr, oder er wurde vom Server entfernt. SIEVER Mail sucht nicht mehr danach: Was schon da ist, bleibt. Versuchen Sie es erneut, wenn Sie glauben, dass es zurückkommt, oder entfernen Sie die Verbindung.`
+  }
+})
+
+/** What a refusal means and what to do, in the user's words and `language`: of a mailbox, or of a calendar. */
 export function refusalWords(
-  notice: Pick<ConnectionRefusedNotice, 'family' | 'refusal' | 'label'>
+  notice: Pick<ConnectionRefusedNotice, 'family' | 'refusal' | 'label'>,
+  language: Language
 ): { title: string; body: string } {
   const { refusal, label } = notice
   const calendar = notice.family === 'calendario'
-  const of = calendar ? `del calendario ${label}` : `di ${label}`
-  const to = calendar ? `al calendario ${label}` : `a ${label}`
-  const it = calendar ? 'lo' : 'la'
-  const stopped = 'SIEVER Mail ha smesso di riprovare: quello che c’è resta.'
+  const m = messagesIn(REFUSAL_WORDS, language)
 
   switch (refusal) {
     case 'accesso':
-      return {
-        title: `Accesso rifiutato · ${label}`,
-        body: `Il server non accetta più l’accesso ${to} — la password è cambiata o scaduta, o l’accesso è stato spento. SIEVER Mail ha smesso di riprovare, per non far bloccare l’account: quello che c’è resta. Ricollega${it} con l’accesso giusto, o togli${it}.`
-      }
+      return { title: m.accessoTitle(label), body: m.accessoBody(label, calendar) }
     case 'autorizzazione':
-      return {
-        title: `Accesso da rinnovare · ${label}`,
-        body: `L’autorizzazione ${to} non vale più: va rifatto l’accesso con il fornitore. ${stopped} Ricollega${it}, o togli${it}.`
-      }
+      return { title: m.autorizzazioneTitle(label), body: m.autorizzazioneBody(label, calendar) }
     case 'certificato':
-      return {
-        title: `Server non attendibile · ${label}`,
-        body: `Il certificato del server ${of} non è valido, e SIEVER Mail non manda la password a un server che non può verificare. ${stopped} Quando il server è a posto, ricollega${it}; oppure togli${it}.`
-      }
+      return { title: m.certificatoTitle(label), body: m.certificatoBody(label, calendar) }
     case 'sparito':
-      return {
-        title: `Non c’è più · ${label}`,
-        body: `${calendar ? `Il calendario ${label}` : label} non si trova più dove era collegato — il link non esiste più, o è stato tolto dal server. SIEVER Mail ha smesso di cercarlo: quello che c’è resta. Riprova se pensi che torni, oppure toglilo.`
-      }
+      return { title: m.sparitoTitle(label), body: m.sparitoBody(label, calendar) }
   }
 }
 

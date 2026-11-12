@@ -4,7 +4,7 @@ import { SyncTokenExpired } from './calendar-provider'
 import { refusalOfCalendar } from './calendar-refusal'
 import {
   GraphCalendarProvider,
-  MAILBOX_ZONE_NOT_GRANTED,
+  mailboxZoneNotGranted,
   eventOfGraph,
   type GraphEvent
 } from './graph-calendar'
@@ -283,7 +283,7 @@ describe('GraphCalendarProvider', () => {
 
     await expect(
       provider.changes('cal-1', { syncToken: 'https://graph.microsoft.com/v1.0/delta?token=old' })
-    ).rejects.toThrow('Microsoft ha risposto 503 (ServiceUnavailable)')
+    ).rejects.toThrow('Microsoft answered 503 (ServiceUnavailable)')
   })
 
   it('gives each instance of a series the series’ UID, the one an invitation names, from its own', async () => {
@@ -353,8 +353,8 @@ describe('GraphCalendarProvider', () => {
     expect(withdrawn).toMatchObject({ status: 401, refusal: 'autorizzazione' })
     expect(refusalOfCalendar(withdrawn)).toEqual({
       refusal: 'autorizzazione',
-      problem: 'Microsoft non accetta più l’accesso a questo calendario: ricollegalo.',
-      detail: 'Microsoft ha risposto 401 (InvalidAuthenticationToken): Lifetime validation failed'
+      problem: 'Microsoft no longer accepts the access to this calendar: reconnect it.',
+      detail: 'Microsoft answered 401 (InvalidAuthenticationToken): Lifetime validation failed'
     })
 
     const window = { fromIso: '2026-11-01T00:00:00.000Z', toIso: '2026-12-31T00:00:00.000Z' }
@@ -538,7 +538,7 @@ describe('GraphCalendarProvider', () => {
         { ...visit, start: '2026-11-20', end: '2026-11-21', allDay: true },
         null
       )
-    ).rejects.toThrow(MAILBOX_ZONE_NOT_GRANTED)
+    ).rejects.toThrow(mailboxZoneNotGranted())
     expect(asked.some((request) => request.method === 'POST')).toBe(false)
 
     expect((await provider.create('cal-1', visit, null)).eventId).toBe('AAMk-4')

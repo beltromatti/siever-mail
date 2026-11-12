@@ -2,6 +2,7 @@ import type { CalendarRole } from '@shared/calendar'
 import type { HandleLink } from '@shared/segretario'
 
 import { movedUnder } from '../../files/paths'
+import { messages } from '../../i18n'
 import { placeholders, type Sql } from '../sql'
 import { AlertStore } from './alerts'
 import { CommitmentStore } from './commitments'
@@ -12,6 +13,7 @@ import { ProjectStore } from './projects'
 import { ProposalStore } from './proposals'
 import { ReadMarks } from './read-marks'
 import { ReplyStore } from './replies'
+import { MESSAGES } from './registry.messages'
 import {
   OWED_KINDS,
   type Actor,
@@ -67,14 +69,7 @@ function lessonSource(
       : {}
 }
 
-const KIND_WORDS: Record<CommitmentKind, string> = {
-  ti_chiedono: 'ti chiedono',
-  hai_promesso: 'hai promesso',
-  aspetti: 'aspetti',
-  da_fare: 'da fare'
-}
-
-/** A calendar's role, as the diary says it (§7.4). */
+/** A calendar's role, as the Segretario is told it in a conflict (§7.4). */
 const ROLE_WORDS: Record<CalendarRole, string> = {
   tutti: 'tutti gli eventi sono tuoi',
   propri: 'solo i tuoi eventi',
@@ -88,6 +83,7 @@ const WHO_SAID: Record<ActorKind, string> = {
   sistema: 'per il sistema'
 }
 
+/** A status, as a lesson tells the Segretario the user's answer. */
 const STATUS_LABELS: Record<CommitmentStatus, string> = {
   aperta: 'Riaperta',
   fatta: 'Fatta',
@@ -171,7 +167,9 @@ export class Registry {
         {
           object: 'nota',
           action: created ? 'scritta' : 'corretta',
-          label: `${created ? 'Nota' : 'Nota corretta'}: ${record.summary}`,
+          label: created
+            ? messages(MESSAGES).noteWritten(record.summary)
+            : messages(MESSAGES).noteCorrected(record.summary),
           accountId: anchor.accountId,
           threadIds: [anchor.threadId],
           messageKeys: [anchor.messageKey],
@@ -236,7 +234,7 @@ export class Registry {
         {
           object: 'impegno',
           action: 'aperta',
-          label: `Aperta (${KIND_WORDS[record.kind]}): ${record.text}`,
+          label: messages(MESSAGES).opened(record.kind, record.text),
           ...(await this.commitmentPlace(record)),
           id: record.id,
           undo: historyId ? { kind: 'impegno', itemId: record.id, historyId } : undefined
@@ -277,7 +275,7 @@ export class Registry {
         {
           object: 'impegno',
           action: 'aggiornata',
-          label: `Precisata: ${record.text}${record.due ? ` (entro il ${record.due})` : ''}`,
+          label: messages(MESSAGES).refined(record.text, record.due),
           ...place,
           id: record.id,
           undo: { kind: 'impegno', itemId: record.id, historyId }
@@ -345,14 +343,18 @@ export class Registry {
       }
     }
 
-    const until = status === 'rinviata' && record.until ? ` fino al ${record.until}` : ''
+    const until = status === 'rinviata' && record.until ? record.until : null
     return {
       record,
       change: this.emit(
         {
           object: 'impegno',
           action: status,
-          label: `${before?.status === status ? 'Ancora aperta' : STATUS_LABELS[status]}${until}: ${record.text}`,
+          label: messages(MESSAGES).status(
+            before?.status === status ? null : status,
+            until,
+            record.text
+          ),
           ...place,
           id: record.id,
           undo: { kind: 'impegno', itemId: record.id, historyId }
@@ -378,7 +380,7 @@ export class Registry {
             {
               object: 'impegno',
               action: 'unita',
-              label: `Unita a #${keepId}: ${record.text}`,
+              label: messages(MESSAGES).mergedInto(keepId, record.text),
               ...place,
               id: record.id,
               undo: { kind: 'impegno', itemId: record.id, historyId }
@@ -404,7 +406,7 @@ export class Registry {
       {
         object: 'impegno',
         action: 'annullata',
-        label: `Annullato: ${undone.record.text}`,
+        label: messages(MESSAGES).undone(undone.record.text),
         ...place,
         id: undone.record.id
       },
@@ -425,7 +427,7 @@ export class Registry {
         {
           object: 'impegno',
           action: 'aperta',
-          label: `Di nuovo aperta: ${record.text}`,
+          label: messages(MESSAGES).openAgain(record.text),
           ...place,
           id: record.id
         },
@@ -450,7 +452,7 @@ export class Registry {
         {
           object: 'progetto',
           action: 'creato',
-          label: `Nuovo progetto: ${result.record.title}`,
+          label: messages(MESSAGES).projectCreated(result.record.title),
           accountId: null,
           threadIds: [],
           messageKeys: [],
@@ -468,7 +470,7 @@ export class Registry {
   /** Takes away a project made by mistake (the undo of its creation). */
   async removeProject(id: string, actor: Actor): Promise<ProjectRecord> {
     const record = await this.projects.remove(id)
-    this.emitProject(record, 'eliminato', `Tolto il progetto: ${record.title}`, actor)
+    this.emitProject(record, 'eliminato', messages(MESSAGES).projectRemoved(record.title), actor)
     return record
   }
 
@@ -488,7 +490,7 @@ export class Registry {
     this.emitProject(
       record,
       'rinominato',
-      `Progetto rinominato: ${before?.title ?? ''} → ${record.title}`,
+      messages(MESSAGES).projectRenamed(before?.title ?? '', record.title),
       actor,
       before && before.title !== record.title
         ? { kind: 'progetto-rinominato', projectId: id, title: before.title }
@@ -504,7 +506,7 @@ export class Registry {
     seenRevision?: number
   ): Promise<ProjectRecord> {
     const record = await this.projects.describe(id, description, actor, seenRevision)
-    this.emitProject(record, 'descritto', `Di cosa si tratta: ${record.title}`, actor)
+    this.emitProject(record, 'descritto', messages(MESSAGES).projectDescribed(record.title), actor)
     return record
   }
 
@@ -518,7 +520,7 @@ export class Registry {
     seenRevision?: number
   ): Promise<ProjectRecord> {
     const record = await this.projects.setState(id, state, links, basisAt, seenRevision)
-    this.emitProject(record, 'punto', `Il punto aggiornato: ${record.title}`, actor)
+    this.emitProject(record, 'punto', messages(MESSAGES).projectState(record.title), actor)
     return record
   }
 
@@ -542,7 +544,9 @@ export class Registry {
     this.emitProject(
       record,
       hidden ? 'nascosto' : 'mostrato',
-      `${hidden ? 'Nascosto' : 'Di nuovo visibile'}: ${record.title}`,
+      hidden
+        ? messages(MESSAGES).projectHidden(record.title)
+        : messages(MESSAGES).projectShown(record.title),
       actor,
       { kind: 'progetto-nascosto', projectId: id, hidden }
     )
@@ -559,7 +563,9 @@ export class Registry {
     this.emitProject(
       record,
       closed ? 'chiuso' : 'riaperto',
-      `${closed ? 'Concluso' : 'Riaperto'}: ${record.title}`,
+      closed
+        ? messages(MESSAGES).projectClosed(record.title)
+        : messages(MESSAGES).projectReopened(record.title),
       actor
     )
     return record
@@ -586,7 +592,10 @@ export class Registry {
       {
         object: 'progetto',
         action: 'uniti',
-        label: `Uniti in ${record.title}: ${dropped.map((project) => project.title).join(', ')}`,
+        label: messages(MESSAGES).projectsMerged(
+          record.title,
+          dropped.map((project) => project.title).join(', ')
+        ),
         accountId: null,
         threadIds: [],
         messageKeys: [],
@@ -619,7 +628,7 @@ export class Registry {
       {
         object: 'progetto',
         action: 'collegata',
-        label: `Conversazione in ${project?.title ?? 'un progetto'}`,
+        label: messages(MESSAGES).threadLinked(project?.title ?? null),
         accountId: thread.accountId,
         threadIds: [thread.threadId],
         messageKeys: [],
@@ -657,7 +666,7 @@ export class Registry {
       {
         object: 'progetto',
         action: 'tolta',
-        label: `Conversazione tolta da ${project?.title ?? 'un progetto'}`,
+        label: messages(MESSAGES).threadUnlinked(project?.title ?? null),
         accountId: thread.accountId,
         threadIds: [thread.threadId],
         messageKeys: [],
@@ -692,7 +701,10 @@ export class Registry {
       {
         object: 'progetto',
         action: 'risorsa',
-        label: `Collegata a ${project?.title ?? 'un progetto'}: ${resource.label ?? resource.location}`,
+        label: messages(MESSAGES).resourceLinked(
+          project?.title ?? null,
+          resource.label ?? resource.location
+        ),
         accountId: null,
         threadIds: [],
         messageKeys: [],
@@ -717,7 +729,7 @@ export class Registry {
       {
         object: 'progetto',
         action: 'risorsa-tolta',
-        label: `Tolta: ${removed?.label ?? location}`,
+        label: messages(MESSAGES).resourceRemoved(removed?.label ?? location),
         accountId: null,
         threadIds: [],
         messageKeys: [],
@@ -744,10 +756,7 @@ export class Registry {
         {
           object: 'risposta',
           action: created ? 'preparata' : 'riscritta',
-          label:
-            record.kind === 'sollecito'
-              ? `Sollecito ${created ? 'preparato' : 'riscritto'}`
-              : `Risposta ${created ? 'preparata' : 'riscritta'}`,
+          label: messages(MESSAGES).replySaved(record.kind, created),
           accountId: anchor.accountId,
           threadIds: [anchor.threadId],
           messageKeys: [anchor.messageKey],
@@ -790,15 +799,9 @@ export class Registry {
         object: 'risposta',
         action: status,
         label:
-          status === 'pronta'
-            ? 'Risposta confermata'
-            : status === 'da_rivedere'
-              ? `Risposta da rivedere${options.reason ? `: ${options.reason}` : ''}`
-              : status === 'scartata'
-                ? 'Risposta scartata'
-                : status === 'usata'
-                  ? 'Risposta usata'
-                  : 'Risposta superata',
+          status === 'da_rivedere'
+            ? messages(MESSAGES).replyToReview(options.reason ?? null)
+            : messages(MESSAGES).replyStatus(status),
         accountId,
         threadIds: [record.threadId],
         messageKeys: [messageKey],
@@ -824,7 +827,7 @@ export class Registry {
         {
           object: 'risposta',
           action: 'da_rivedere',
-          label: `Da rivedere: ${reason}`,
+          label: messages(MESSAGES).repliesToReview(reason),
           accountId: thread.accountId,
           threadIds: [thread.threadId],
           messageKeys: stale.map((reply) => reply.messageKey),
@@ -858,7 +861,7 @@ export class Registry {
       {
         object: 'proposta',
         action: created ? 'proposta' : 'aggiornata',
-        label: `Proposta: ${record.title}`,
+        label: messages(MESSAGES).proposed(record.title),
         accountId: record.accountId,
         threadIds: record.threadId ? [record.threadId] : [],
         messageKeys: record.messageKey ? [record.messageKey] : [],
@@ -877,7 +880,7 @@ export class Registry {
       {
         object: 'proposta',
         action: 'superata',
-        label: `Ritirata: ${record.title} (${reason})`,
+        label: messages(MESSAGES).withdrawn(record.title, reason),
         accountId: record.accountId,
         threadIds: record.threadId ? [record.threadId] : [],
         messageKeys: record.messageKey ? [record.messageKey] : [],
@@ -911,7 +914,10 @@ export class Registry {
       {
         object: 'proposta',
         action: status,
-        label: `${status === 'accettata' ? 'Accettata' : 'Scartata'}: ${record.title}`,
+        label:
+          status === 'accettata'
+            ? messages(MESSAGES).accepted(record.title)
+            : messages(MESSAGES).discarded(record.title),
         accountId: record.accountId,
         threadIds: record.threadId ? [record.threadId] : [],
         messageKeys: record.messageKey ? [record.messageKey] : [],
@@ -1137,7 +1143,7 @@ export class Registry {
           'non_serve',
           { by: 'sistema' },
           {
-            reason: 'Il messaggio da cui nasceva è stato eliminato.'
+            reason: messages(MESSAGES).messageDeleted
           }
         )
       }
@@ -1176,7 +1182,7 @@ export class Registry {
       {
         object: 'giornata',
         action: 'lettera',
-        label: 'Scritta la lettera di oggi',
+        label: messages(MESSAGES).letterWritten,
         accountId: null,
         threadIds: [],
         messageKeys: [],
@@ -1202,7 +1208,7 @@ export class Registry {
       {
         object: 'giornata',
         action: 'preparazione',
-        label: `Preparata la riunione: ${title}`,
+        label: messages(MESSAGES).meetingPrepared(title),
         accountId: null,
         threadIds: [],
         messageKeys: [],
@@ -1247,7 +1253,7 @@ export class Registry {
       {
         object: 'calendario',
         action: 'ruolo',
-        label: `${calendar.name}: ${ROLE_WORDS[role]}`,
+        label: messages(MESSAGES).calendarRole(calendar.name, role),
         accountId: null,
         threadIds: [],
         messageKeys: [],
@@ -1326,7 +1332,7 @@ export class Registry {
       {
         object: 'evento',
         action: 'tuo',
-        label: `${yours ? 'Tuo' : 'Non tuo'}: ${event.title}`,
+        label: messages(MESSAGES).eventMarked(yours, event.title),
         accountId: null,
         threadIds: [],
         messageKeys: [],

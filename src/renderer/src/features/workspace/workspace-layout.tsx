@@ -38,6 +38,16 @@ import {
   MESSAGE_TABLE_MIN_VISIBLE_ROWS,
   messageTablePaneHeight
 } from '@renderer/features/mail/message-list-metrics'
+import { useMessages } from '@renderer/lib/i18n'
+import { defineMessages } from '@shared/i18n'
+
+const MESSAGES = defineMessages({
+  resize: {
+    en: 'Resize the list and the message',
+    it: "Ridimensiona l'elenco e il messaggio",
+    de: 'Liste und Nachricht in der Größe ändern'
+  }
+})
 
 /**
  * Folder column. Wide enough for the longest real folder names with their
@@ -68,7 +78,6 @@ const EXPANDED_LIST_WIDTH = 'clamp(260px, 22%, 360px)'
 const LIST_MIN_WIDTH = 240
 const READER_MIN_WIDTH = 420
 const READER_MIN_HEIGHT = 200
-const RESIZE_LABEL = "Ridimensiona l'elenco e il messaggio"
 
 /**
  * Height of the dense table above the reading pane, expressed in rows
@@ -133,6 +142,7 @@ export function WorkspaceLayout({
   app,
   readerExpanded
 }: WorkspaceLayoutProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const assistantTrack = assistant ? ` ${ASSISTANT_WIDTH}` : ''
   // Each pane breaks on its own: the others stay, and the user goes on (§14.3).
   const sidebarPane = <ErrorBoundary>{sidebar}</ErrorBoundary>
@@ -219,7 +229,7 @@ export function WorkspaceLayout({
             defaultSize={OUTLOOK_TABLE_HEIGHT}
             minFirst={messageTablePaneHeight(MESSAGE_TABLE_MIN_DRAGGED_ROWS)}
             minSecond={READER_MIN_HEIGHT}
-            label={RESIZE_LABEL}
+            label={m.resize}
             className="flex-1"
             first={listPane}
             second={readerPane}
@@ -231,7 +241,7 @@ export function WorkspaceLayout({
             defaultSize={APPLE_LIST_WIDTH}
             minFirst={LIST_MIN_WIDTH}
             minSecond={READER_MIN_WIDTH}
-            label={RESIZE_LABEL}
+            label={m.resize}
             className="flex-1"
             first={listPane}
             second={readerPane}

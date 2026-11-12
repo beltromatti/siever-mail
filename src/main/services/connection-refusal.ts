@@ -1,4 +1,5 @@
-import type { ConnectionRefusal } from '@shared/models'
+import { currentLanguage, messages } from '@main/i18n'
+import { REFUSAL_LINES, type ConnectionRefusal } from '@shared/models'
 
 import { MicrosoftSignInNeeded } from './microsoft-oauth'
 
@@ -120,4 +121,15 @@ export function refusalNeedsConfirming(error: unknown): boolean {
 
   const answer = field(error, 'serverResponseCode')
   return !(typeof answer === 'string' && DEFINITE_IMAP_CODES.has(answer.toUpperCase()))
+}
+
+/**
+ * A refusal's line as it goes on after a colon — "stopped: the server no
+ * longer accepts the sign-in" — in the interface's language. German keeps
+ * its capitals, which its nouns and its «Sie» need.
+ */
+export function refusalClause(refusal: ConnectionRefusal): string {
+  const line = messages(REFUSAL_LINES)[refusal]
+  const language = currentLanguage()
+  return language === 'de' ? line : `${line.charAt(0).toLocaleLowerCase(language)}${line.slice(1)}`
 }

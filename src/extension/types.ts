@@ -27,6 +27,7 @@ import type { ParsedMail } from 'mailparser'
 import type { ComponentType, ReactNode } from 'react'
 
 import type { DiagnosticFields } from '@shared/diagnostics'
+import type { Language, Localized } from '@shared/i18n'
 import type { MailFontOption } from '@shared/mail-fonts'
 import type { MarkedBefore } from '@shared/message-marks'
 import type { MailMessageSummary, MessageRef, MessagesActionResult } from '@shared/models'
@@ -39,13 +40,14 @@ export interface ExtensionIdentity {
   id: string
   /** The legal name of the entity: "Acme S.r.l.". */
   name: string
-  /** What it adds to SIEVER Mail, in a sentence or two, in Italian, for the user. */
-  description: string
+  /** What it adds to SIEVER Mail, in a sentence or two, for the user: one string, or one per language. */
+  description: Localized
 }
 
 export interface TextColorOption {
   value: string
-  label: string
+  /** Its name: one string, or one per language (vision §13.5). */
+  label: Localized
 }
 
 /**
@@ -78,8 +80,9 @@ export interface ExtensionComposition {
 export interface ExtensionCommandDefinition {
   /** Namespaced by the extension's id, e.g. `acme-srl.publish`, so it never collides with the host's. */
   id: string
-  label: string
-  description: string
+  /** One string, or one per language (vision §13.5). */
+  label: Localized
+  description: Localized
   /** Platform-neutral chord, `Mod` being ⌘ on macOS and Ctrl elsewhere. */
   defaultChord: string
 }
@@ -88,6 +91,11 @@ export interface ExtensionCommandDefinition {
 export interface ExtensionShared {
   /** Who the build is for; null in the public build, which has no extension. */
   identity: ExtensionIdentity | null
+  /**
+   * The language a first start opens in for the organisation, before the
+   * guided setup asks (vision §13.5); English when not given.
+   */
+  defaultLanguage?: Language
   composition: ExtensionComposition
   commands: ReadonlyArray<ExtensionCommandDefinition>
 }
@@ -196,7 +204,12 @@ export interface ExtensionAssistantTool {
   readonly description: string
   /** JSON Schema of its arguments. */
   readonly parameters: Record<string, unknown>
-  /** The line the user sees while it runs, from its arguments. */
+  /**
+   * The line the user sees while it runs, from its arguments: in the
+   * interface's language of the moment (`messages` of the kit), as every
+   * word below the user reads — where `description` and what the model
+   * reads stay in Italian.
+   */
   running(args: Record<string, unknown>): string
   /**
    * Whether this call only reads — looks, without writing anything: it then
@@ -233,15 +246,16 @@ export interface ExtensionToolContext {
   background: boolean
   /**
    * Asks the user, on the Segretario's card, before it is done: what will
-   * happen, a line each, and the word on the button. Resolves with the
-   * answer; always false in the background.
+   * happen, a line each, and the word on the button, in the interface's
+   * language. Resolves with the answer; always false in the background.
    */
   confirm(request: { title: string; details: string[]; confirmLabel: string }): Promise<boolean>
   /**
    * Leaves the user a proposal on a message: one click away, in the
    * reader and in Oggi, and the extension's own to carry out (see
    * `ExtensionRenderer.proposalActions`). Proposing again on the same
-   * message and kind updates it.
+   * message and kind updates it. Its `title` is kept as written: in the
+   * interface's language of that moment.
    */
   propose(input: {
     kind: string
@@ -265,7 +279,7 @@ export interface ExtensionToolContext {
 export interface ExtensionToolResult {
   /** What the model reads. */
   content: string
-  /** The line the user sees: "Archiviati 3 messaggi". */
+  /** The line the user sees, in the interface's language: "Archived 3 messages". */
   summary: string
   /** It did not do what was asked: the content says why, the line shows it. */
   failed?: boolean
@@ -338,7 +352,8 @@ export interface ExtensionMarks {
    * Marks messages still where `ref` says: what the mark says (`label`),
    * where what it stands for is (`place`, a folder) and the files written
    * there. One per message and place: marking again is the same mark, as it
-   * says now. Rejects when the marks could not be kept — what they stand for
+   * says now — `label` is kept as written, in the interface's language of
+   * that moment. Rejects when the marks could not be kept — what they stand for
    * is then not done. `proposals`: the extension's proposals the user
    * followed for that message, with what they chose, accepted once it is
    * marked; `answers`: the kind of proposal the marks answer — those still
@@ -453,9 +468,9 @@ export interface ExtensionRenderer {
    * beside its tables' size and in what "Elimina tutti i dati" takes
    * (`clearData`) — e.g. "i modelli salvati". Only that: what it wrote out of
    * the app (an archive on a share) is not SIEVER Mail's, and stays where it
-   * is. Empty when nothing.
+   * is. Empty when nothing. One string, or one per language (vision §13.5).
    */
-  readonly localDataLabel: string
+  readonly localDataLabel: Localized
   /**
    * Runs one of the commands the extension declares in
    * `ExtensionShared.commands`, when its chord is pressed or it is chosen
@@ -466,11 +481,11 @@ export interface ExtensionRenderer {
   runCommand?(commandId: string, context: ExtensionCommandContext): boolean
   /**
    * The Segretario's proposals the extension acts on, by kind (the one it
-   * gave `propose`): what the button on the proposal says, and the command
-   * it runs on the message the proposal is for — whose dialog fills itself
-   * in from `selection.proposals`.
+   * gave `propose`): what the button on the proposal says — one string, or
+   * one per language —, and the command it runs on the message the proposal
+   * is for — whose dialog fills itself in from `selection.proposals`.
    */
-  readonly proposalActions?: Readonly<Record<string, { label: string; commandId: string }>>
+  readonly proposalActions?: Readonly<Record<string, { label: Localized; commandId: string }>>
   /** The icon of each of its tools (`ExtensionAssistant.tools`) where the Segretario's work is shown, by name. */
   readonly toolIcons?: Readonly<Record<string, ComponentType<{ className?: string }>>>
 }
@@ -528,9 +543,10 @@ export interface ExtensionProposal {
 
 export interface SettingsTabDescriptor {
   id: string
-  label: string
-  title: string
-  description: string
+  /** Its words: each one string, or one per language (vision §13.5). */
+  label: Localized
+  title: Localized
+  description: Localized
   /** Its icon in the list of sections; a generic one without. */
   icon?: ComponentType<{ className?: string; strokeWidth?: number }>
   render(props: SettingsTabRenderProps): ReactNode

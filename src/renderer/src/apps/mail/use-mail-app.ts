@@ -74,6 +74,7 @@ import { foldSearchText } from '@shared/search'
 import { buildMessageSections, type MessageSection } from '@renderer/lib/message-sections'
 import { commandForKeyEvent, IS_MAC } from '@renderer/lib/command-shortcuts'
 import { uiLog } from '@renderer/lib/diagnostics'
+import { languageNow, messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
 import { buildFolderTree, folderNodeLabel, type FolderTreeNode } from '@renderer/lib/folder-tree'
 import { READER_ZOOM_RESET, steppedReaderZoom } from '@renderer/lib/reader-zoom'
 import {
@@ -96,10 +97,11 @@ import {
   MESSAGE_LIST_PAGE_SIZE
 } from '@shared/models'
 import { commandChord, COMMANDS, findCommand, type HostCommandId } from '@shared/commands'
+import { localized } from '@shared/i18n'
 import type { ContextMenuItem, ContextMenuRequest } from '@shared/context-menu'
 import { replyRecipients, replyReferences } from '@shared/reply'
 import { forwardSubject, replySubject } from '@shared/subject'
-import { highlightTermsForField, parseSearchQuery } from '@shared/search'
+import { highlightTermsForField, parseSearchQuery, SEARCH_FIELD_PREFIXES } from '@shared/search'
 import type {
   AccountConnectionState,
   DraftStatus,
@@ -119,8 +121,8 @@ import type {
 } from '@shared/models'
 
 import { buildForwardQuoteHtml, buildReplyQuoteHtml } from './reply-quote'
+import { MESSAGES } from './use-mail-app.messages'
 
-const ALL_ACCOUNTS_LABEL = 'tutti gli account'
 /** The rows' work with the AI off: none. */
 const NO_ROW_WORK: ReadonlyMap<string, MessageRowWork> = new Map()
 const NO_MARKS: MessageMark[] = []
@@ -198,10 +200,9 @@ function buildAccountLabels(accounts: MailAccount[]): ReadonlyMap<string, string
   )
 }
 
+/** "a, b and c", as the interface's language joins a list. */
 function formatList(items: string[]): string {
-  return items.length <= 1
-    ? (items[0] ?? '')
-    : `${items.slice(0, -1).join(', ')} e ${items[items.length - 1]}`
+  return new Intl.ListFormat(languageNow().formatLocale, { type: 'conjunction' }).format(items)
 }
 
 /** What the shell gives the mail. */
@@ -446,6 +447,8 @@ export function useMailApp({
   shellModalOpen,
   runAppCommandRef
 }: MailHost): MailApp {
+  const m = useMessages(MESSAGES)
+  const language = useLanguage()
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
   const [folders, setFolders] = useState<MailFolder[]>([])
   const [selectedFolderPath, setSelectedFolderPath] = useState<string | null>(null)
@@ -675,7 +678,9 @@ export function useMailApp({
 
         if (withSidebarLoader) {
           setViewError(
-            caughtError instanceof Error ? caughtError.message : 'Errore nel caricamento cartelle.'
+            caughtError instanceof Error
+              ? caughtError.message
+              : messagesNow(MESSAGES).foldersNotLoaded
           )
           setFolders([])
           setSelectedFolderPath(null)
@@ -802,7 +807,9 @@ export function useMailApp({
         }
 
         setViewError(
-          caughtError instanceof Error ? caughtError.message : 'Errore nel caricamento email.'
+          caughtError instanceof Error
+            ? caughtError.message
+            : messagesNow(MESSAGES).messagesNotLoaded
         )
         setMessages([])
         setTotalMessagesInFolder(0)
@@ -854,7 +861,7 @@ export function useMailApp({
       uiLog.warn('message.read.failed', { conn: ref.accountId, ms: Date.now() - startedAt })
 
       setViewError(
-        caughtError instanceof Error ? caughtError.message : 'Errore nel caricamento messaggio.'
+        caughtError instanceof Error ? caughtError.message : messagesNow(MESSAGES).messageNotLoaded
       )
       setFailedMessageDetailKey(messageRefKey(ref))
     }
@@ -1087,14 +1094,14 @@ export function useMailApp({
       const confirmed =
         options.confirmed ||
         (await confirm({
-          title: `Scollegare ${account?.email ?? 'la casella'}?`,
+          title: messagesNow(MESSAGES).disconnectTitle(account?.email ?? null),
           ...removalWords({
             family: 'posta',
             withCalendars: calendars.length > 0,
             outgoing: await window.mailApi.outgoingCount(accountId).catch(() => 0),
             aiOn
           }),
-          confirmLabel: 'Scollega',
+          confirmLabel: messagesNow(MESSAGES).disconnect,
           destructive: true
         }))
 
@@ -1117,7 +1124,7 @@ export function useMailApp({
         setAccounts((current) => current.filter((account) => account.id !== accountId))
       } catch (caughtError) {
         setViewError(
-          caughtError instanceof Error ? caughtError.message : 'La casella non si è scollegata.'
+          caughtError instanceof Error ? caughtError.message : messagesNow(MESSAGES).notDisconnected
         )
       } finally {
         setRemovingAccountId((current) => (current === accountId ? null : current))
@@ -1165,7 +1172,7 @@ export function useMailApp({
         setViewError(
           caughtError instanceof Error
             ? caughtError.message
-            : 'Cancellazione dati account non riuscita.'
+            : messagesNow(MESSAGES).accountDataNotCleared
         )
       } finally {
         setClearingAccountDataId((current) => (current === accountId ? null : current))
@@ -1208,7 +1215,7 @@ export function useMailApp({
       setViewError(
         caughtError instanceof Error
           ? caughtError.message
-          : 'Cancellazione totale database non riuscita.'
+          : messagesNow(MESSAGES).databaseNotCleared
       )
     } finally {
       setClearingDatabaseData(false)
@@ -1637,9 +1644,11 @@ export function useMailApp({
       buildMessageSections(
         messages,
         uiPreferences.messageGrouping,
-        uiPreferences.messageListSort.field
+        uiPreferences.messageListSort.field,
+        new Date(),
+        language
       ),
-    [messages, uiPreferences.messageGrouping, uiPreferences.messageListSort.field]
+    [language, messages, uiPreferences.messageGrouping, uiPreferences.messageListSort.field]
   )
 
   const orderedMessageRefs = useMemo(() => messages.map(summaryToMessageRef), [messages])
@@ -1689,14 +1698,12 @@ export function useMailApp({
   //   1. our local DB read is in flight and we have nothing to show yet;
   //   2. the engine knows the server has messages here but the sync worker
   //      has not landed the envelopes yet — otherwise the UI would show an
-  //      empty list under a counter that says "2800 messaggi".
+  //      empty list under a counter that says "2800 messages".
   const isNarrowedView = Boolean(search.trim()) || messageFilter !== 'all'
   const isFolderAwaitingSync = !isNarrowedView && messages.length === 0 && totalMessagesInFolder > 0
   const isInitialFolderLoad = loadingMessages && !isNarrowedView && messages.length === 0
   const showMessagePanelLoader = isFolderAwaitingSync || isInitialFolderLoad
-  const messagePanelLoaderText = isFolderAwaitingSync
-    ? 'Sincronizzazione in corso…'
-    : 'Caricamento messaggi…'
+  const messagePanelLoaderText = isFolderAwaitingSync ? m.syncing : m.loadingMessages
 
   useEffect(() => {
     setSelection((current) => reconcileSelection(current, orderedMessageRefs))
@@ -2060,7 +2067,7 @@ export function useMailApp({
         setViewError(
           failedKeys.size === 1
             ? message
-            : `${message} (${failedKeys.size} messaggi restano dov'erano)`
+            : messagesNow(MESSAGES).stayedWhereTheyWere(message, failedKeys.size)
         )
       }
 
@@ -2130,7 +2137,7 @@ export function useMailApp({
 
   const shouldMarkSelectionAsRead =
     selectedSummaries.length > 0 && selectedSummaries.some((message) => !message.isRead)
-  const toggleSeenLabel = shouldMarkSelectionAsRead ? 'Segna letta' : 'Segna non letta'
+  const toggleSeenLabel = shouldMarkSelectionAsRead ? m.markRead : m.markUnread
   const selectionFlagged =
     selectedSummaries.length > 0 && selectedSummaries.every((message) => message.isFlagged)
 
@@ -2337,8 +2344,8 @@ export function useMailApp({
       setViewError(
         result.error?.trim() ||
           (keyword === '\\Seen'
-            ? 'Aggiornamento stato letto/non letto non riuscito.'
-            : 'Aggiornamento contrassegno non riuscito.')
+            ? messagesNow(MESSAGES).readNotUpdated
+            : messagesNow(MESSAGES).flagNotUpdated)
       )
     },
     [applyOptimisticFlagState, getMessageKeywordState]
@@ -2484,7 +2491,7 @@ export function useMailApp({
     await setMessagesKeyword(selection.selectedRefs, '\\Seen', targetSeenState)
   }, [keepShownReadState, selection.selectedRefs, setMessagesKeyword, shouldMarkSelectionAsRead])
 
-  /** "Segna come gestito": what the conversations of these messages ask of the user is done. */
+  /** "Mark as handled": what the conversations of these messages ask of the user is done. */
   const markHandled = useCallback(
     async (summaries: ReadonlyArray<MailMessageSummary>): Promise<void> => {
       // One message per conversation: it is the conversation that is marked, counted once.
@@ -2505,15 +2512,16 @@ export function useMailApp({
           )
         }
 
+        const words = messagesNow(MESSAGES)
         toast(
           handled === 0
-            ? 'Niente da segnare: in queste conversazioni non ti chiedono niente'
+            ? words.nothingToMark
             : handled === 1
-              ? 'Conversazione segnata come gestita'
-              : `${handled.toLocaleString('it-IT')} conversazioni segnate come gestite`
+              ? words.handledOne
+              : words.handledOther(handled.toLocaleString(languageNow().formatLocale))
         )
       } catch (error) {
-        toast.error('Non segnate come gestite', {
+        toast.error(messagesNow(MESSAGES).notHandled, {
           description: error instanceof Error ? error.message : undefined
         })
       }
@@ -2536,7 +2544,7 @@ export function useMailApp({
   )
 
   /**
-   * "Elimina", from the toolbar, the reader or the keyboard. In the Trash it
+   * "Delete", from the toolbar, the reader or the keyboard. In the Trash it
    * deletes for good, as every client does there, so it asks first.
    */
   const deleteMessages = useCallback(
@@ -2546,16 +2554,14 @@ export function useMailApp({
       }
 
       const inTrash = currentFolder?.specialUse?.toLowerCase() === '\\trash'
+      const words = messagesNow(MESSAGES)
 
       if (
         inTrash &&
         !(await confirm({
-          title:
-            refs.length === 1
-              ? 'Eliminare definitivamente il messaggio?'
-              : `Eliminare definitivamente ${refs.length} messaggi?`,
-          description: 'Sono nel Cestino: eliminati da qui non si possono più recuperare.',
-          confirmLabel: 'Elimina definitivamente',
+          title: refs.length === 1 ? words.deleteForeverOne : words.deleteForeverOther(refs.length),
+          description: words.deleteForeverText,
+          confirmLabel: words.deleteForever,
           destructive: true
         }))
       ) {
@@ -2565,7 +2571,7 @@ export function useMailApp({
       await runMessageRemovalAction(
         refs,
         (targets) => window.mailApi.deleteMessages(targets),
-        'Eliminazione email non riuscita.'
+        messagesNow(MESSAGES).notDeleted
       )
     },
     [confirm, currentFolder?.specialUse, runMessageRemovalAction]
@@ -2603,7 +2609,7 @@ export function useMailApp({
           setViewError(
             caughtError instanceof Error
               ? caughtError.message
-              : "Cartelle dell'account non disponibili."
+              : messagesNow(MESSAGES).accountFoldersUnavailable
           )
         }
       })
@@ -2666,10 +2672,11 @@ export function useMailApp({
     const involved = selectionAccountIds.map(
       (accountId) => accounts.find((account) => account.id === accountId)?.email ?? accountId
     )
+    const words = messagesNow(MESSAGES)
     const confirmed = await confirm({
-      title: 'Messaggi di account diversi',
-      description: `La selezione comprende messaggi di ${formatList(involved)}. Ogni cartella appartiene a un solo account, quindi si spostano i messaggi di un account alla volta: vuoi tenere selezionati solo quelli di ${keptAccount.email}?`,
-      confirmLabel: 'Seleziona solo quelli'
+      title: words.mixedAccountsTitle,
+      description: words.mixedAccountsText(formatList(involved), keptAccount.email),
+      confirmLabel: words.selectOnlyThose
     })
 
     if (!confirmed) {
@@ -2750,22 +2757,23 @@ export function useMailApp({
         .filter((other) => other.id !== project.id && !other.hidden)
         .sort((a, b) => (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? ''))
         .slice(0, 30)
+      const words = messagesNow(MESSAGES)
       const chosen = await window.mailApi.showContextMenu([
-        { id: 'open', label: 'Apri' },
+        { id: 'open', label: words.open },
         { type: 'separator' },
-        { id: 'rename', label: 'Rinomina…' },
+        { id: 'rename', label: words.rename },
         ...(others.length > 0
           ? [
               {
                 id: 'merge',
-                label: 'Unisci a questo',
+                label: words.mergeInto,
                 submenu: others.map((other) => ({ id: `merge:${other.id}`, label: other.title }))
               }
             ]
           : []),
         { type: 'separator' },
-        { id: 'close', label: project.closed ? 'Riapri' : 'Concluso: non è più in corso' },
-        { id: 'hide', label: 'Nascondi: non è un progetto' }
+        { id: 'close', label: project.closed ? words.reopen : words.conclude },
+        { id: 'hide', label: words.hide }
       ])
 
       if (!chosen) {
@@ -2777,12 +2785,12 @@ export function useMailApp({
           selectFolder(segretarioProjectPath(project.id))
         } else if (chosen === 'rename') {
           const title = await prompt({
-            title: 'Rinomina il progetto',
-            description: 'Il Segretario userà questo nome, e non lo cambierà da solo.',
-            label: 'Nome',
+            title: words.renameProject,
+            description: words.renameProjectText,
+            label: words.name,
             initialValue: project.title,
-            confirmLabel: 'Rinomina',
-            validate: (value) => (value.trim() ? null : 'Dai un nome.')
+            confirmLabel: words.renameConfirm,
+            validate: (value) => (value.trim() ? null : messagesNow(MESSAGES).giveName)
           })
 
           if (title?.trim()) {
@@ -2793,15 +2801,15 @@ export function useMailApp({
 
           if (other) {
             await window.segretarioApi.mergeProjects(project.id, [other.id])
-            toast(`«${other.title}» è ora parte di «${project.title}»`)
+            toast(messagesNow(MESSAGES).merged(other.title, project.title))
           }
         } else if (chosen === 'close') {
           await window.segretarioApi.updateProject(project.id, { closed: !project.closed })
         } else if (chosen === 'hide') {
           await window.segretarioApi.updateProject(project.id, { hidden: true })
-          toast(`«${project.title}» non è più tra i progetti`, {
+          toast(messagesNow(MESSAGES).hidden(project.title), {
             action: {
-              label: 'Annulla',
+              label: messagesNow(MESSAGES).undo,
               onClick: () => void window.segretarioApi.updateProject(project.id, { hidden: false })
             }
           })
@@ -2809,7 +2817,7 @@ export function useMailApp({
 
         await refreshSegretarioViews()
       } catch (error) {
-        toast.error('Il progetto non è cambiato', {
+        toast.error(messagesNow(MESSAGES).projectNotChanged, {
           description: error instanceof Error ? error.message : undefined
         })
       }
@@ -2840,7 +2848,10 @@ export function useMailApp({
             : null
       const parent =
         target.kind === 'folder'
-          ? { path: target.folder.path, name: folderDisplayName(target.folder) }
+          ? {
+              path: target.folder.path,
+              name: folderDisplayName(target.folder, languageNow().language)
+            }
           : target.kind === 'container'
             ? { path: target.path, name: target.name }
             : null
@@ -2851,11 +2862,12 @@ export function useMailApp({
             ? target.summary.unseenCount
             : 0
 
+      const words = messagesNow(MESSAGES)
       const chosen = await window.mailApi.showContextMenu([
-        ...(folderPath ? [{ id: 'open', label: 'Apri' }, { type: 'separator' } as const] : []),
+        ...(folderPath ? [{ id: 'open', label: words.open }, { type: 'separator' } as const] : []),
         ...(folderPath
           ? [
-              { id: 'read', label: 'Segna tutti come letti', enabled: unseenCount > 0 },
+              { id: 'read', label: words.markAllRead, enabled: unseenCount > 0 },
               { type: 'separator' } as const
             ]
           : []),
@@ -2864,14 +2876,14 @@ export function useMailApp({
           : [
               {
                 id: 'create',
-                label: parent ? `Nuova cartella in «${parent.name}»…` : 'Nuova cartella…'
+                label: parent ? words.newFolderIn(parent.name) : words.newFolderMenu
               }
             ]),
         ...(target.kind === 'folder'
           ? [
               {
                 id: 'rename',
-                label: 'Rinomina…',
+                label: words.rename,
                 // A folder with a role is the server's, under the name it gives it.
                 enabled: folderRole(target.folder) === null
               }
@@ -2886,7 +2898,7 @@ export function useMailApp({
           const delimiter = folders.find((folder) => folder.delimiter)?.delimiter
 
           if (delimiter && name.includes(delimiter)) {
-            return `Il nome di una cartella non può contenere «${delimiter}».`
+            return messagesNow(MESSAGES).folderNameDelimiter(delimiter)
           }
 
           const taken = folders.some((folder) => {
@@ -2899,7 +2911,7 @@ export function useMailApp({
             )
           })
 
-          return taken ? 'Esiste già una cartella con questo nome qui.' : null
+          return taken ? messagesNow(MESSAGES).folderNameTaken : null
         }
 
       try {
@@ -2924,12 +2936,12 @@ export function useMailApp({
             return
           case 'create': {
             const name = await prompt({
-              title: 'Nuova cartella',
+              title: words.newFolder,
               description: parent
-                ? `Dentro «${parent.name}».`
-                : `Nell'account ${account?.email ?? ''}.`,
-              label: 'Nome della cartella',
-              confirmLabel: 'Crea',
+                ? words.inside(parent.name)
+                : words.inAccount(account?.email ?? ''),
+              label: words.folderName,
+              confirmLabel: words.create,
               validate: validateName(parent?.path ?? null)
             })
 
@@ -2946,10 +2958,10 @@ export function useMailApp({
             const { folder } = target
             const separator = folder.delimiter ? folder.path.lastIndexOf(folder.delimiter) : -1
             const name = await prompt({
-              title: `Rinomina «${folder.name}»`,
-              label: 'Nuovo nome',
+              title: words.renameFolder(folder.name),
+              label: words.newName,
               initialValue: folder.name,
-              confirmLabel: 'Rinomina',
+              confirmLabel: words.renameConfirm,
               validate: validateName(
                 separator >= 0 ? folder.path.slice(0, separator) : null,
                 folder.path
@@ -2974,7 +2986,7 @@ export function useMailApp({
         setViewError(
           caughtError instanceof Error
             ? caughtError.message
-            : 'Operazione sulla cartella non riuscita.'
+            : messagesNow(MESSAGES).folderActionFailed
         )
       }
     },
@@ -2998,14 +3010,14 @@ export function useMailApp({
       // One the app does not keep yet comes from the server: a wait worth showing.
       let loadingToast: string | number | null = null
       const slow = window.setTimeout(() => {
-        loadingToast = toast.loading('Apertura della bozza…')
+        loadingToast = toast.loading(messagesNow(MESSAGES).openingDraft)
       }, DRAFT_OPEN_FEEDBACK_DELAY_MS)
 
       try {
         const draft = await window.mailApi.openDraftMessage(ref)
         openComposer(draftToInitialData(draft.content), { status: draft.status })
       } catch (error) {
-        toast.error('Bozza non apribile', {
+        toast.error(messagesNow(MESSAGES).draftNotOpened, {
           description: error instanceof Error ? error.message : undefined
         })
       } finally {
@@ -3194,7 +3206,9 @@ export function useMailApp({
         return await window.mailApi.getMessage(ref)
       } catch (caughtError) {
         setViewError(
-          caughtError instanceof Error ? caughtError.message : 'Errore nel caricamento messaggio.'
+          caughtError instanceof Error
+            ? caughtError.message
+            : messagesNow(MESSAGES).messageNotLoaded
         )
         return null
       }
@@ -3227,7 +3241,7 @@ export function useMailApp({
         sourceAccountId: message.accountId,
         to: recipients.to,
         cc: recipients.cc,
-        subject: replySubject(message.subject),
+        subject: replySubject(message.subject, languageNow().language),
         quoteHtml: await buildReplyQuoteHtml(message),
         inReplyTo: message.messageId,
         references: replyReferences(message),
@@ -3257,7 +3271,7 @@ export function useMailApp({
         kind: 'forward',
         accountId: message.accountId,
         sourceAccountId: message.accountId,
-        subject: forwardSubject(message.subject),
+        subject: forwardSubject(message.subject, languageNow().language),
         quoteHtml: await buildForwardQuoteHtml(message),
         original: {
           ref: summaryToMessageRef(message),
@@ -3276,7 +3290,7 @@ export function useMailApp({
         await refreshSegretarioViews()
         selectFolder(segretarioProjectPath(created.id))
       } catch (error) {
-        toast.error('Il progetto non è stato creato', {
+        toast.error(messagesNow(MESSAGES).projectNotCreated, {
           description: error instanceof Error ? error.message : undefined
         })
       }
@@ -3317,8 +3331,9 @@ export function useMailApp({
     const staying = selection.selectedRefs.filter(stays)
     const leaving = selection.selectedRefs.filter((ref) => !stays(ref))
     const sayKept = (kept: number): void => {
-      toast(kept === 1 ? 'Archiviato' : 'Archiviati', {
-        description: 'Fuori dalla Posta in arrivo; qui restano, con le loro etichette.'
+      const words = messagesNow(MESSAGES)
+      toast(kept === 1 ? words.archivedOne : words.archivedOther, {
+        description: words.archivedKept
       })
     }
 
@@ -3327,12 +3342,12 @@ export function useMailApp({
         const result = await window.mailApi.archiveMessages(staying)
 
         if (result.failed.length > 0) {
-          toast.error('Archiviazione email non riuscita.', { description: result.error })
+          toast.error(messagesNow(MESSAGES).notArchived, { description: result.error })
         } else {
           sayKept(staying.length)
         }
       } catch (error) {
-        toast.error('Archiviazione email non riuscita.', {
+        toast.error(messagesNow(MESSAGES).notArchived, {
           description: error instanceof Error ? error.message : undefined
         })
       }
@@ -3344,7 +3359,7 @@ export function useMailApp({
       const result = await runMessageRemovalAction(
         leaving,
         (refs) => window.mailApi.archiveMessages(refs),
-        'Archiviazione email non riuscita.'
+        messagesNow(MESSAGES).notArchived
       )
 
       if (result?.kept && result.kept.length > 0) {
@@ -3411,7 +3426,7 @@ export function useMailApp({
                   refs: moving,
                   destinationFolderPath: target.folderPath
                 }),
-          'Spostamento email non riuscito.'
+          messagesNow(MESSAGES).notMoved
         )
       }
     }
@@ -3434,7 +3449,7 @@ export function useMailApp({
     (destinationFolderPath: string): Promise<void> =>
       runSelectionRemovalAction(
         (refs) => window.mailApi.moveMessages({ refs, destinationFolderPath }),
-        'Spostamento email non riuscito.'
+        messagesNow(MESSAGES).notMoved
       ),
     [runSelectionRemovalAction]
   )
@@ -3451,7 +3466,9 @@ export function useMailApp({
         await moveSelectionTo(created.path)
       } catch (caughtError) {
         setViewError(
-          caughtError instanceof Error ? caughtError.message : 'Creazione cartella non riuscita.'
+          caughtError instanceof Error
+            ? caughtError.message
+            : messagesNow(MESSAGES).folderNotCreated
         )
       }
     },
@@ -3659,46 +3676,45 @@ export function useMailApp({
     const moveTree = buildFolderTree(moveAccountFolders)
     const sender = single?.from[0]
     const singleDraft = single !== null && isDraftMessage(single)
+    const words = messagesNow(MESSAGES)
 
     const chosen = await window.mailApi.showContextMenu([
       ...(single
-        ? [{ id: 'open', label: singleDraft ? 'Continua a scrivere' : 'Apri', chord: 'Enter' }]
+        ? [{ id: 'open', label: singleDraft ? words.continueWriting : words.open, chord: 'Enter' }]
         : []),
       { type: 'separator' },
       ...(single && !singleDraft
         ? [
-            { id: 'reply', label: 'Rispondi', chord: chordOf('reply') },
-            { id: 'reply-all', label: 'Rispondi a tutti', chord: chordOf('reply-all') },
-            { id: 'forward', label: 'Inoltra', chord: chordOf('forward') },
+            { id: 'reply', label: words.reply, chord: chordOf('reply') },
+            { id: 'reply-all', label: words.replyAll, chord: chordOf('reply-all') },
+            { id: 'forward', label: words.forward, chord: chordOf('forward') },
             { type: 'separator' } as const
           ]
         : []),
       {
         id: 'toggle-read',
-        label: summaries.some((message) => !message.isRead)
-          ? 'Segna come letto'
-          : 'Segna come non letto',
+        label: summaries.some((message) => !message.isRead) ? words.markAsRead : words.markAsUnread,
         chord: chordOf('toggle-read')
       },
       {
         id: 'toggle-flag',
         label:
           summaries.length > 0 && summaries.every((message) => message.isFlagged)
-            ? 'Rimuovi contrassegno'
-            : 'Contrassegna',
+            ? words.unflag
+            : words.flag,
         chord: chordOf('toggle-flag')
       },
       ...(aiOn && summaries.some((message) => rowWork.get(rowWorkKey(message))?.owed)
-        ? [{ id: 'mark-handled', label: 'Segna come gestito', chord: chordOf('mark-handled') }]
+        ? [{ id: 'mark-handled', label: words.markHandled, chord: chordOf('mark-handled') }]
         : []),
       { type: 'separator' },
-      { id: 'archive', label: 'Archivia', chord: chordOf('archive') },
+      { id: 'archive', label: words.archive, chord: chordOf('archive') },
       targetAccountIds.length === 1 && moveTree.length > 0
-        ? { id: 'move', label: 'Sposta in', submenu: moveItems(moveTree) }
-        : { id: 'move', label: 'Sposta in', enabled: false },
+        ? { id: 'move', label: words.moveTo, submenu: moveItems(moveTree) }
+        : { id: 'move', label: words.moveTo, enabled: false },
       ...COMMANDS.filter((command) => command.fromExtension).map((command) => ({
         id: `command:${command.id}`,
-        label: command.label,
+        label: localized(command.label, languageNow().language),
         chord: chordOf(command.id)
       })),
       { type: 'separator' },
@@ -3706,12 +3722,12 @@ export function useMailApp({
         ? [
             {
               id: 'sender-messages',
-              label: `Mostra i messaggi di ${single?.senderLabel || sender.address}`
+              label: words.senderMessages(single?.senderLabel || sender.address)
             },
             { type: 'separator' } as const
           ]
         : []),
-      { id: 'delete', label: 'Elimina', chord: IS_MAC ? 'Backspace' : 'Delete' }
+      { id: 'delete', label: words.delete, chord: IS_MAC ? 'Backspace' : 'Delete' }
     ])
 
     if (!chosen) {
@@ -3723,7 +3739,7 @@ export function useMailApp({
       await runMessageRemovalAction(
         targets,
         (refs) => window.mailApi.moveMessages({ refs, destinationFolderPath }),
-        'Spostamento email non riuscito.'
+        messagesNow(MESSAGES).notMoved
       )
       return
     }
@@ -3756,7 +3772,7 @@ export function useMailApp({
         return
       case 'sender-messages':
         if (sender) {
-          setSearch(`da:${sender.address}`)
+          setSearch(`${messagesNow(SEARCH_FIELD_PREFIXES).from}:${sender.address}`)
         }
         return
       case 'delete':
@@ -3782,11 +3798,12 @@ export function useMailApp({
       .askMail(question, requestId)
       .then(openAskedSearch)
       .catch((error: unknown) => {
-        // Stopped by the user: nothing to say. Else the user waits for it: "Riprova" (§14.2).
+        // Stopped by the user: nothing to say. Else the user waits for it: "Try again" (§14.2).
         if (askingRequestRef.current === requestId) {
-          toast.error('Il Segretario non ha cercato', {
+          const words = messagesNow(MESSAGES)
+          toast.error(words.segretarioDidNotSearch, {
             description: error instanceof Error ? error.message : undefined,
-            action: { label: 'Riprova', onClick: () => askSegretario(question) }
+            action: { label: words.tryAgain, onClick: () => askSegretario(question) }
           })
         }
       })
@@ -3813,7 +3830,7 @@ export function useMailApp({
     try {
       setSavedSearches(await window.segretarioApi.saveSearch(searchId))
     } catch (error) {
-      toast.error('Cartella non creata', {
+      toast.error(messagesNow(MESSAGES).searchFolderNotCreated, {
         description: error instanceof Error ? error.message : undefined
       })
     }
@@ -3841,16 +3858,16 @@ export function useMailApp({
     ? projects.find((project) => project.id === currentProjectId)
     : undefined
   const currentViewLabel = currentUnifiedRole
-    ? `${folderRoleLabel(currentUnifiedRole)} · ${ALL_ACCOUNTS_LABEL}`
+    ? `${folderRoleLabel(currentUnifiedRole, language.language)} · ${m.allMailboxes}`
     : currentSegretarioView
-      ? segretarioViewLabel(currentSegretarioView)
+      ? segretarioViewLabel(currentSegretarioView, language.language)
       : currentProjectId
-        ? (currentProject?.title ?? 'Progetto')
+        ? (currentProject?.title ?? m.project)
         : currentSearchId
-          ? (currentAsked?.summary ?? 'Ricerca del Segretario')
+          ? (currentAsked?.summary ?? m.segretarioSearch)
           : currentFolder
-            ? folderDisplayName(currentFolder)
-            : 'Conversazioni'
+            ? folderDisplayName(currentFolder, language.language)
+            : m.conversations
   // The message in the reader may not be in the list (opened from Oggi, from a notification).
   const viewerMarkMessages = useMemo(
     () =>
@@ -3873,10 +3890,13 @@ export function useMailApp({
     label:
       selection.selectedRefs.length > 1
         ? selection.selectedRefs.length > SEGRETARIO_CONTEXT_LIMIT
-          ? `I primi ${SEGRETARIO_CONTEXT_LIMIT} dei ${selection.selectedRefs.length.toLocaleString('it-IT')} messaggi selezionati`
-          : `${selection.selectedRefs.length} messaggi selezionati`
+          ? m.firstSelected(
+              SEGRETARIO_CONTEXT_LIMIT,
+              selection.selectedRefs.length.toLocaleString(language.formatLocale)
+            )
+          : m.selected(selection.selectedRefs.length)
         : messageForViewer
-          ? `«${messageForViewer.subject || 'Senza oggetto'}»${messageForViewer.from[0] ? ` — ${messageForViewer.from[0].name || messageForViewer.from[0].address}` : ''}`
+          ? `${m.quoted(messageForViewer.subject || m.noSubject)}${messageForViewer.from[0] ? ` — ${messageForViewer.from[0].name || messageForViewer.from[0].address}` : ''}`
           : currentViewLabel,
     work: viewerWork,
     messageOpen: Boolean(messageForViewer),

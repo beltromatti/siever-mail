@@ -25,18 +25,176 @@ import type { AttachmentActions } from './use-attachment-actions'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { Separator } from '@renderer/components/ui/separator'
+import { messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
 import { buildMessageFrameDocument } from '@renderer/lib/mail-html'
 import { READER_ZOOM_RESET, wheelReaderZoom } from '@renderer/lib/reader-zoom'
-import { cn, formatAddress, formatDateLabel, formatDateTimeLabel } from '@renderer/lib/utils'
+import {
+  cn,
+  formatAddress,
+  formatCount,
+  formatDateLabel,
+  formatDateTimeLabel
+} from '@renderer/lib/utils'
+import { defineMessages, type Messages } from '@shared/i18n'
 import {
   MAX_MESSAGES_PER_ACTION,
   type MailAttachment,
   type MailMessageDetail
 } from '@shared/models'
 
+const MESSAGES = defineMessages({
+  notAvailable: { en: 'N/A', it: 'N/D', de: 'k. A.' },
+  ccPeople: {
+    en: (count: number) => `Cc ${count} people`,
+    it: (count: number) => `Cc ${count} persone`,
+    de: (count: number) => `Cc ${count} Personen`
+  },
+  toWhom: {
+    en: (who: string) => `To ${who}`,
+    it: (who: string) => `A ${who}`,
+    de: (who: string) => `An ${who}`
+  },
+  noRecipient: { en: 'No recipient', it: 'Nessun destinatario', de: 'Kein Empfänger' },
+  undisclosedRecipients: {
+    en: 'Undisclosed recipients',
+    it: 'Destinatari non divulgati',
+    de: 'Nicht offengelegte Empfänger'
+  },
+  open: { en: 'Open', it: 'Apri', de: 'Öffnen' },
+  saveAs: { en: 'Save as…', it: 'Salva con nome…', de: 'Speichern unter…' },
+  saveAllAttachments: {
+    en: (count: number) => `Save all attachments (${count})`,
+    it: (count: number) => `Salva tutti gli allegati (${count})`,
+    de: (count: number) => `Alle Anhänge speichern (${count})`
+  },
+  clearSelection: { en: 'Clear selection', it: 'Annulla selezione', de: 'Auswahl aufheben' },
+  selected: {
+    en: (count: string) => `${count} selected`,
+    it: (count: string) => `${count} selezionati`,
+    de: (count: string) => `${count} ausgewählt`
+  },
+  messagesSelected: {
+    en: (count: string) => `${count} messages selected`,
+    it: (count: string) => `${count} messaggi selezionati`,
+    de: (count: string) => `${count} Nachrichten ausgewählt`
+  },
+  selectionText: {
+    en: 'The commands above archive, move, flag or delete the whole selection in one go.',
+    it: 'I comandi qui sopra archiviano, spostano, contrassegnano o eliminano tutta la selezione in un colpo solo.',
+    de: 'Die Befehle oben archivieren, verschieben, markieren oder löschen die ganze Auswahl auf einmal.'
+  },
+  loadedSelected: {
+    en: (total: string) => `The messages loaded are selected: there are ${total} here.`,
+    it: (total: string) => `Sono selezionati i messaggi caricati: qui ce ne sono ${total}.`,
+    de: (total: string) => `Ausgewählt sind die geladenen Nachrichten: Hier sind es ${total}.`
+  },
+  selectFirst: {
+    en: (count: string) => `Select the first ${count}`,
+    it: (count: string) => `Seleziona i primi ${count}`,
+    de: (count: string) => `Die ersten ${count} auswählen`
+  },
+  selectAll: {
+    en: (count: string) => `Select all ${count}`,
+    it: (count: string) => `Seleziona tutti i ${count}`,
+    de: (count: string) => `Alle ${count} auswählen`
+  },
+  noMessageSelected: {
+    en: 'No message selected',
+    it: 'Nessun messaggio selezionato',
+    de: 'Keine Nachricht ausgewählt'
+  },
+  chooseMessage: {
+    en: 'Choose a message from the list to read it.',
+    it: "Scegli un messaggio dall'elenco per leggerlo.",
+    de: 'Wählen Sie eine Nachricht aus der Liste, um sie zu lesen.'
+  },
+  resumeDraft: {
+    en: 'Pick up the draft in the editor',
+    it: 'Riprendi la bozza nell’editor',
+    de: 'Den Entwurf im Editor fortsetzen'
+  },
+  continueWriting: { en: 'Continue writing', it: 'Continua a scrivere', de: 'Weiterschreiben' },
+  replyToSender: {
+    en: 'Reply to the sender',
+    it: 'Rispondi al mittente',
+    de: 'Dem Absender antworten'
+  },
+  reply: { en: 'Reply', it: 'Rispondi', de: 'Antworten' },
+  replyToAll: {
+    en: 'Reply to all recipients',
+    it: 'Rispondi a tutti i destinatari',
+    de: 'Allen Empfängern antworten'
+  },
+  replyAll: { en: 'Reply all', it: 'Rispondi a tutti', de: 'Allen antworten' },
+  forwardWithAttachments: {
+    en: 'Forward with the attachments',
+    it: 'Inoltra con gli allegati',
+    de: 'Mit den Anhängen weiterleiten'
+  },
+  forward: { en: 'Forward', it: 'Inoltra', de: 'Weiterleiten' },
+  collapseView: {
+    en: 'Collapse message view',
+    it: 'Comprimi vista messaggio',
+    de: 'Nachrichtenansicht verkleinern'
+  },
+  expandView: {
+    en: 'Expand message view',
+    it: 'Espandi vista messaggio',
+    de: 'Nachrichtenansicht vergrößern'
+  },
+  noSubject: { en: 'No subject', it: 'Senza oggetto', de: 'Kein Betreff' },
+  zoomLabel: {
+    en: (zoom: number) => `Message zoom ${zoom}%: back to 100%`,
+    it: (zoom: number) => `Zoom del messaggio ${zoom}%: torna al 100%`,
+    de: (zoom: number) => `Nachrichtenzoom ${zoom}%: zurück auf 100%`
+  },
+  zoomTip: {
+    en: 'Message zoom · click to go back to 100%',
+    it: 'Zoom del messaggio · clic per tornare al 100%',
+    de: 'Nachrichtenzoom · klicken, um auf 100% zurückzugehen'
+  },
+  zoomKeys: {
+    en: '⌘/Ctrl + scroll wheel, or ⌘/Ctrl + and −',
+    it: '⌘/Ctrl + rotellina, oppure ⌘/Ctrl + e −',
+    de: '⌘/Ctrl + Mausrad oder ⌘/Ctrl + und −'
+  },
+  details: { en: 'Details', it: 'Dettagli', de: 'Details' },
+  from: { en: 'From', it: 'Da', de: 'Von' },
+  to: { en: 'To', it: 'A', de: 'An' },
+  cc: { en: 'Cc', it: 'Cc', de: 'Cc' },
+  bcc: { en: 'Bcc', it: 'Ccn', de: 'Bcc' },
+  date: { en: 'Date', it: 'Data', de: 'Datum' },
+  downloading: {
+    en: 'Downloading the message…',
+    it: 'Scaricamento del messaggio…',
+    de: 'Nachricht wird heruntergeladen…'
+  },
+  downloadFailed: {
+    en: 'The message could not be downloaded.',
+    it: 'Non è stato possibile scaricare il messaggio.',
+    de: 'Die Nachricht konnte nicht heruntergeladen werden.'
+  },
+  tryAgain: { en: 'Try again', it: 'Riprova', de: 'Erneut versuchen' },
+  frameTitle: {
+    en: (subject: string) => `Email content: ${subject}`,
+    it: (subject: string) => `Contenuto email: ${subject}`,
+    de: (subject: string) => `E-Mail-Inhalt: ${subject}`
+  },
+  untitledMessage: {
+    en: 'Message with no subject',
+    it: 'Messaggio senza oggetto',
+    de: 'Nachricht ohne Betreff'
+  },
+  noContent: { en: '(No content)', it: '(Nessun contenuto)', de: '(Kein Inhalt)' },
+  attachmentOne: { en: 'attachment', it: 'allegato', de: 'Anhang' },
+  attachmentOther: { en: 'attachments', it: 'allegati', de: 'Anhänge' },
+  saveAll: { en: 'Save all', it: 'Salva tutti', de: 'Alle speichern' },
+  clickToOpen: { en: 'Click to open', it: 'Clic per aprire', de: 'Zum Öffnen klicken' }
+})
+
 interface MessageViewerProps {
   message: MailMessageDetail | null
-  /** The Segretario's word on the conversation, above the message: "Il punto". */
+  /** The Segretario's word on the conversation, above the message: "Where it stands". */
   brief?: ReactNode
   /**
    * Where the body is. While it downloads, the pane already shows what the
@@ -82,7 +240,7 @@ interface MessageViewerProps {
   /** Message body zoom, in percent (see `UiPreferences.readerZoom`). */
   zoom: number
   onZoomChange: (zoom: number) => void
-  /** Whether "Dettagli" is open: one choice for every message. */
+  /** Whether "Details" is open: one choice for every message. */
   detailsOpen: boolean
   onDetailsOpenChange: (open: boolean) => void
 }
@@ -102,9 +260,12 @@ interface MessageContentFrameElement extends HTMLIFrameElement {
   __messageFrameCleanup?: () => void
 }
 
-function addressesToLabel(addresses: { name?: string; address: string }[]): string {
+function addressesToLabel(
+  m: Messages<typeof MESSAGES>,
+  addresses: { name?: string; address: string }[]
+): string {
   if (addresses.length === 0) {
-    return 'N/D'
+    return m.notAvailable
   }
 
   return addresses.map(formatAddress).join(', ')
@@ -113,27 +274,31 @@ function addressesToLabel(addresses: { name?: string; address: string }[]): stri
 /**
  * Who the message went to, in one short phrase. A message that names nobody
  * in To or Cc reached this mailbox as a blind copy or through a list, which
- * is worth saying rather than printing an empty "A" — unless it is a draft,
+ * is worth saying rather than printing an empty "To" — unless it is a draft,
  * which has nobody to go to yet.
  */
-function recipientsSummary(message: MailMessageDetail, isDraft: boolean): string {
+function recipientsSummary(
+  m: Messages<typeof MESSAGES>,
+  message: MailMessageDetail,
+  isDraft: boolean
+): string {
   const copies =
     message.cc.length === 1
-      ? `Cc ${summarizeAddresses(message.cc)}`
+      ? `${m.cc} ${summarizeAddresses(message.cc)}`
       : message.cc.length > 1
-        ? `Cc ${message.cc.length} persone`
+        ? m.ccPeople(message.cc.length)
         : null
 
   if (message.to.length > 0) {
-    const direct = `A ${summarizeAddresses(message.to)}`
+    const direct = m.toWhom(summarizeAddresses(message.to))
     return copies ? `${direct} · ${copies}` : direct
   }
 
   if (message.cc.length > 0) {
-    return `Cc ${summarizeAddresses(message.cc)}`
+    return `${m.cc} ${summarizeAddresses(message.cc)}`
   }
 
-  return isDraft ? 'Nessun destinatario' : 'Destinatari non divulgati'
+  return isDraft ? m.noRecipient : m.undisclosedRecipients
 }
 
 function DetailsLabel({
@@ -499,6 +664,8 @@ export function MessageViewer({
   detailsOpen,
   onDetailsOpenChange
 }: MessageViewerProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const { formatLocale } = useLanguage()
   // Wheel events can arrive many times a frame during a pinch; each one
   // builds on the zoom the previous one set, not on a stale render's.
   const zoomStateRef = useRef({ zoom, onZoomChange })
@@ -580,11 +747,12 @@ export function MessageViewer({
   }
 
   const showAttachmentMenu = async (attachment: MailAttachment): Promise<void> => {
+    const words = messagesNow(MESSAGES)
     const chosen = await window.mailApi.showContextMenu([
-      { id: 'open', label: 'Apri' },
-      { id: 'save', label: 'Salva con nome…' },
+      { id: 'open', label: words.open },
+      { id: 'save', label: words.saveAs },
       ...(message && message.attachments.length > 1
-        ? [{ id: 'save-all', label: `Salva tutti gli allegati (${message.attachments.length})` }]
+        ? [{ id: 'save-all', label: words.saveAllAttachments(message.attachments.length) }]
         : [])
     ])
 
@@ -628,14 +796,14 @@ export function MessageViewer({
           <>
             <div className="window-no-drag flex items-center gap-1">
               <IconButton
-                label="Annulla selezione"
+                label={m.clearSelection}
                 className="text-faint-foreground size-[28px]"
                 onClick={onClearSelection}
               >
                 <X className="size-[15px]" />
               </IconButton>
               <span className="tabular mr-2 text-[12.5px] font-semibold">
-                {selectedCount.toLocaleString('it-IT')} selezionati
+                {m.selected(selectedCount.toLocaleString(formatLocale))}
               </span>
               {extensionActions}
             </div>
@@ -647,17 +815,15 @@ export function MessageViewer({
         )}
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center p-8 text-center">
           <p className="display-title text-[18px]">
-            {selectedCount.toLocaleString('it-IT')} messaggi selezionati
+            {m.messagesSelected(selectedCount.toLocaleString(formatLocale))}
           </p>
           <p className="text-muted-foreground mt-1.5 max-w-sm text-[12.5px] leading-[1.5]">
-            I comandi qui sopra archiviano, spostano, contrassegnano o eliminano tutta la selezione
-            in un colpo solo.
+            {m.selectionText}
           </p>
           {wholeViewSelection && (
             <div className="mt-5 flex max-w-sm flex-col items-center gap-2.5">
               <p className="text-faint-foreground text-[12px]">
-                Sono selezionati i messaggi caricati: qui ce ne sono{' '}
-                {wholeViewSelection.total.toLocaleString('it-IT')}.
+                {m.loadedSelected(wholeViewSelection.total.toLocaleString(formatLocale))}
               </p>
               <Button
                 type="button"
@@ -668,8 +834,8 @@ export function MessageViewer({
               >
                 {wholeViewSelection.selecting && <LoaderCircle className="size-3.5 animate-spin" />}
                 {wholeViewSelection.total > MAX_MESSAGES_PER_ACTION
-                  ? `Seleziona i primi ${MAX_MESSAGES_PER_ACTION.toLocaleString('it-IT')}`
-                  : `Seleziona tutti i ${wholeViewSelection.total.toLocaleString('it-IT')}`}
+                  ? m.selectFirst(MAX_MESSAGES_PER_ACTION.toLocaleString(formatLocale))
+                  : m.selectAll(wholeViewSelection.total.toLocaleString(formatLocale))}
               </Button>
             </div>
           )}
@@ -687,12 +853,8 @@ export function MessageViewer({
             <LoaderCircle className="text-faint-foreground size-5 animate-spin" />
           ) : (
             <>
-              <p className="text-muted-foreground text-[13px] font-medium">
-                Nessun messaggio selezionato
-              </p>
-              <p className="text-faint-foreground mt-1 max-w-sm text-[12px]">
-                Scegli un messaggio dall&apos;elenco per leggerlo.
-              </p>
+              <p className="text-muted-foreground text-[13px] font-medium">{m.noMessageSelected}</p>
+              <p className="text-faint-foreground mt-1 max-w-sm text-[12px]">{m.chooseMessage}</p>
             </>
           )}
         </div>
@@ -707,29 +869,29 @@ export function MessageViewer({
           <div className="window-no-drag flex min-w-0 items-center gap-1">
             {extensionActions}
             {onContinueDraft ? (
-              <ActionTooltip label="Riprendi la bozza nell’editor">
+              <ActionTooltip label={m.resumeDraft}>
                 <Button variant="secondary" size="sm" onClick={onContinueDraft}>
-                  <PenLine className="size-3.5" /> Continua a scrivere
+                  <PenLine className="size-3.5" /> {m.continueWriting}
                 </Button>
               </ActionTooltip>
             ) : (
               <>
-                <ActionTooltip label="Rispondi al mittente" commandId="reply">
+                <ActionTooltip label={m.replyToSender} commandId="reply">
                   <Button variant="secondary" size="sm" onClick={onReply}>
                     <Reply className="size-3.5" />
-                    <span className="@max-[560px]/reader-header:hidden">Rispondi</span>
+                    <span className="@max-[560px]/reader-header:hidden">{m.reply}</span>
                   </Button>
                 </ActionTooltip>
-                <ActionTooltip label="Rispondi a tutti i destinatari" commandId="reply-all">
+                <ActionTooltip label={m.replyToAll} commandId="reply-all">
                   <Button variant="ghost" size="sm" onClick={onReplyAll}>
                     <ReplyAll className="size-3.5" />
-                    <span className="@max-[760px]/reader-header:hidden">Rispondi a tutti</span>
+                    <span className="@max-[760px]/reader-header:hidden">{m.replyAll}</span>
                   </Button>
                 </ActionTooltip>
-                <ActionTooltip label="Inoltra con gli allegati" commandId="forward">
+                <ActionTooltip label={m.forwardWithAttachments} commandId="forward">
                   <Button variant="ghost" size="sm" onClick={onForward}>
                     <Forward className="size-3.5" />
-                    <span className="@max-[760px]/reader-header:hidden">Inoltra</span>
+                    <span className="@max-[760px]/reader-header:hidden">{m.forward}</span>
                   </Button>
                 </ActionTooltip>
               </>
@@ -740,7 +902,7 @@ export function MessageViewer({
             <SelectionActions labelled={false} {...selectionActions} />
             <div className="bg-border mx-1 h-4 w-px" />
             <IconButton
-              label={isExpanded ? 'Comprimi vista messaggio' : 'Espandi vista messaggio'}
+              label={isExpanded ? m.collapseView : m.expandView}
               tooltipSide="left"
               className="text-faint-foreground hover:text-foreground size-[28px]"
               onClick={onToggleExpanded}
@@ -762,17 +924,17 @@ export function MessageViewer({
       */}
       <div className="flex shrink-0 flex-col gap-1.5 px-6 pt-4 pb-3">
         <h2 className="display-title min-w-0 text-[19px] leading-[1.25] [overflow-wrap:anywhere]">
-          {message.subject || 'Senza oggetto'}
+          {message.subject || m.noSubject}
         </h2>
         <div className="text-muted-foreground flex items-baseline gap-1.5 text-[12px]">
           <span className="text-foreground min-w-0 shrink truncate font-semibold">
-            {addressesToLabel(message.from)}
+            {addressesToLabel(m, message.from)}
           </span>
           <span className="text-faint-foreground shrink-0">·</span>
           {/* The first person and a count, never the whole list: the full
               list lives under Dettagli, one token per person. */}
           <span className="min-w-0 shrink truncate">
-            {recipientsSummary(message, Boolean(onContinueDraft))}
+            {recipientsSummary(m, message, Boolean(onContinueDraft))}
           </span>
           <span className="text-faint-foreground shrink-0">·</span>
           <span className="tabular shrink-0 whitespace-nowrap">
@@ -790,16 +952,16 @@ export function MessageViewer({
                 <button
                   type="button"
                   onClick={() => onZoomChange(READER_ZOOM_RESET)}
-                  aria-label={`Zoom del messaggio ${zoom}%: torna al 100%`}
+                  aria-label={m.zoomLabel(zoom)}
                   className="keycap focus-visible:ring-ring/60 tabular ml-auto inline-flex h-[18px] shrink-0 items-center rounded-[4px] px-1.5 text-[10.5px] font-semibold outline-none focus-visible:ring-2"
                 >
                   {zoom}%
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                Zoom del messaggio · clic per tornare al 100%
+                {m.zoomTip}
                 <span className="text-muted-foreground block text-[10.5px] font-normal">
-                  {'⌘/Ctrl'} + rotellina, oppure {'⌘/Ctrl'} + e −
+                  {m.zoomKeys}
                 </span>
               </TooltipContent>
             </Tooltip>
@@ -813,7 +975,7 @@ export function MessageViewer({
               zoom === READER_ZOOM_RESET && 'ml-auto'
             )}
           >
-            Dettagli
+            {m.details}
             <ChevronDown
               className={cn('size-3 transition-transform', detailsOpen && 'rotate-180')}
             />
@@ -830,27 +992,27 @@ export function MessageViewer({
             // instead of squeezing the body out of a half-height reading
             // pane.
             <div className="text-muted-foreground mb-4 grid grid-cols-[2.75rem_minmax(0,1fr)] items-baseline gap-x-2 gap-y-1.5 border-b pb-3 text-[12px]">
-              <DetailsLabel count={message.from.length}>Da</DetailsLabel>
+              <DetailsLabel count={message.from.length}>{m.from}</DetailsLabel>
               <AddressTokens addresses={message.from} actions={addressActions} />
               {message.to.length > 0 && (
                 <>
-                  <DetailsLabel count={message.to.length}>A</DetailsLabel>
+                  <DetailsLabel count={message.to.length}>{m.to}</DetailsLabel>
                   <AddressTokens addresses={message.to} actions={addressActions} />
                 </>
               )}
               {message.cc.length > 0 && (
                 <>
-                  <DetailsLabel count={message.cc.length}>Cc</DetailsLabel>
+                  <DetailsLabel count={message.cc.length}>{m.cc}</DetailsLabel>
                   <AddressTokens addresses={message.cc} actions={addressActions} />
                 </>
               )}
               {message.bcc.length > 0 && (
                 <>
-                  <DetailsLabel count={message.bcc.length}>Ccn</DetailsLabel>
+                  <DetailsLabel count={message.bcc.length}>{m.bcc}</DetailsLabel>
                   <AddressTokens addresses={message.bcc} actions={addressActions} />
                 </>
               )}
-              <span>Data</span>
+              <span>{m.date}</span>
               <span className="text-foreground min-w-0">{formatDateTimeLabel(message.date)}</span>
             </div>
           )}
@@ -863,20 +1025,20 @@ export function MessageViewer({
               role="status"
             >
               <LoaderCircle className="text-faint-foreground size-4 animate-spin" />
-              Scaricamento del messaggio…
+              {m.downloading}
             </div>
           ) : bodyStatus === 'failed' ? (
             <div className="flex flex-col items-start gap-2 py-6 text-[12.5px]">
-              <p className="text-muted-foreground">Non è stato possibile scaricare il messaggio.</p>
+              <p className="text-muted-foreground">{m.downloadFailed}</p>
               <Button type="button" variant="secondary" size="sm" onClick={onRetryBody}>
-                Riprova
+                {m.tryAgain}
               </Button>
             </div>
           ) : hasHtmlBody && message.html ? (
             <EmailHtmlFrame
               key={`${message.accountId}:${message.folderPath}:${message.uid}`}
               html={message.html}
-              title={`Contenuto email: ${message.subject || 'Messaggio senza oggetto'}`}
+              title={m.frameTitle(message.subject || m.untitledMessage)}
               zoom={zoom}
               onZoomWheel={handleZoomWheel}
             />
@@ -885,7 +1047,7 @@ export function MessageViewer({
               className="text-foreground/90 font-sans text-[13.5px] leading-[1.55] whitespace-pre-wrap"
               style={{ zoom: zoomFactor(zoom) }}
             >
-              {message.text || '(Nessun contenuto)'}
+              {message.text || m.noContent}
             </pre>
           )}
 
@@ -895,9 +1057,7 @@ export function MessageViewer({
               <div className="space-y-1.5">
                 <div className="flex h-6 items-center justify-between gap-2">
                   <h4 className="eyebrow">
-                    {message.attachments.length === 1
-                      ? '1 allegato'
-                      : `${message.attachments.length} allegati`}
+                    {formatCount(message.attachments.length, m.attachmentOne, m.attachmentOther)}
                   </h4>
                   {message.attachments.length > 1 && (
                     <Button
@@ -913,7 +1073,7 @@ export function MessageViewer({
                       ) : (
                         <Download className="size-3.5" />
                       )}
-                      Salva tutti
+                      {m.saveAll}
                     </Button>
                   )}
                 </div>
@@ -928,11 +1088,11 @@ export function MessageViewer({
                         sizeBytes={attachment.size}
                         busy={busy}
                         onOpen={() => openAttachment(attachment)}
-                        openHint="Clic per aprire"
+                        openHint={m.clickToOpen}
                         onContextMenu={() => void showAttachmentMenu(attachment)}
                         trailing={
                           <IconButton
-                            label="Salva con nome…"
+                            label={m.saveAs}
                             tooltipSide="top"
                             className="text-faint-foreground hover:text-foreground size-5"
                             disabled={busy}

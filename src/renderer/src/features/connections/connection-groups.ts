@@ -1,18 +1,19 @@
 import type { CalendarConnection } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import type { MailAccount } from '@shared/models'
 
 /** Who an access is with, as the user knows it. */
 export type AccessKind = 'google' | 'microsoft' | 'icloud' | 'imap' | 'pec' | 'caldav' | 'ics'
 
-export const ACCESS_LABELS: Readonly<Record<AccessKind, string>> = {
-  google: 'Google',
-  microsoft: 'Microsoft',
-  icloud: 'iCloud',
-  imap: 'Posta IMAP',
-  pec: 'PEC',
-  caldav: 'CalDAV',
-  ics: 'Calendario da un link'
-}
+export const ACCESS_LABELS = defineMessages({
+  google: { en: 'Google', it: 'Google', de: 'Google' },
+  microsoft: { en: 'Microsoft', it: 'Microsoft', de: 'Microsoft' },
+  icloud: { en: 'iCloud', it: 'iCloud', de: 'iCloud' },
+  imap: { en: 'IMAP mail', it: 'Posta IMAP', de: 'IMAP-E-Mail' },
+  pec: { en: 'PEC', it: 'PEC', de: 'PEC' },
+  caldav: { en: 'CalDAV', it: 'CalDAV', de: 'CalDAV' },
+  ics: { en: 'Calendar from a link', it: 'Calendario da un link', de: 'Kalender über einen Link' }
+}) satisfies Record<AccessKind, unknown>
 
 /**
  * One access of the user's — an account, a server, a link — with the

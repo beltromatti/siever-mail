@@ -10,11 +10,19 @@ import { AlertTriangle, X } from 'lucide-react'
 import extensionRenderer from '@app/extension/renderer'
 import { Dialog, DialogContent, DialogTitle } from '@renderer/components/ui/dialog'
 import { FolderPicker } from '@renderer/features/mail/folder-picker'
+import { useMessages } from '@renderer/lib/i18n'
+import { defineMessages } from '@shared/i18n'
 
 import type { MailApp } from './use-mail-app'
 
+const MESSAGES = defineMessages({
+  closeNotice: { en: 'Close notice', it: 'Chiudi avviso', de: 'Hinweis schließen' },
+  goToFolder: { en: 'Go to a folder', it: 'Vai a una cartella', de: 'Zu einem Ordner wechseln' }
+})
+
 /** What went wrong in the mail, above the panes — and above another app, wherever the user went. */
 export function MailNotice({ mail }: { mail: MailApp }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
   const { viewError, setViewError } = mail
 
   return viewError ? (
@@ -24,7 +32,7 @@ export function MailNotice({ mail }: { mail: MailApp }): React.JSX.Element | nul
       <button
         type="button"
         onClick={() => setViewError(null)}
-        aria-label="Chiudi avviso"
+        aria-label={m.closeNotice}
         className="hover:text-foreground shrink-0"
       >
         <X className="size-3.5" />
@@ -35,9 +43,10 @@ export function MailNotice({ mail }: { mail: MailApp }): React.JSX.Element | nul
 
 /**
  * The mail's dialogs, mounted whichever app is in front: its commands reach
- * them from anywhere — "Vai a una cartella", the extension's action.
+ * them from anywhere — "Go to a folder", the extension's action.
  */
 export function MailDialogs({ mail }: { mail: MailApp }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const {
     promptDialog,
     goToFolderOpen,
@@ -56,7 +65,7 @@ export function MailDialogs({ mail }: { mail: MailApp }): React.JSX.Element {
       {promptDialog}
       <Dialog open={goToFolderOpen} onOpenChange={setGoToFolderOpen}>
         <DialogContent hideClose className="w-auto gap-0 p-0" aria-describedby={undefined}>
-          <DialogTitle className="sr-only">Vai a una cartella</DialogTitle>
+          <DialogTitle className="sr-only">{m.goToFolder}</DialogTitle>
           <FolderPicker
             folders={folders}
             recentPaths={[]}

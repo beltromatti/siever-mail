@@ -4,10 +4,12 @@ import { z } from 'zod'
 import { popupPageContextMenu } from '@main/context-menu'
 import { normalizeExternalHttpUrl } from '@main/utils/external-url'
 import { diagnostics } from '@main/diagnostics/log'
+import { messages } from '@main/i18n'
 import { handleIpc, type HandleOptions } from '@main/ipc/handle'
 import { beginUninstall, uninstallOffer } from '@main/uninstall'
 import type { Workspace } from '@main/workspace'
 import type { ContextMenuItem } from '@shared/context-menu'
+import { defineMessages } from '@shared/i18n'
 import { IPC_CHANNELS } from '@shared/ipc'
 import type {
   AddImapAccountInput,
@@ -28,6 +30,14 @@ import type {
 } from '@shared/models'
 
 const log = diagnostics('mail')
+
+const MESSAGES = defineMessages({
+  enterPassword: {
+    en: 'Enter the password.',
+    it: 'Scrivi la password.',
+    de: 'Geben Sie das Passwort ein.'
+  }
+})
 
 /**
  * Whether SIEVER Mail opens as the user signs in: the system's login items,
@@ -174,7 +184,12 @@ export function registerMailIpc(
     async (accountId, password) =>
       workspace.reconnectMailAccount(
         z.string().min(1).parse(accountId),
-        z.string().min(1, 'Scrivi la password.').max(1000).optional().parse(password)
+        z
+          .string()
+          .min(1, { error: () => messages(MESSAGES).enterPassword })
+          .max(1000)
+          .optional()
+          .parse(password)
       ),
     forUser
   )

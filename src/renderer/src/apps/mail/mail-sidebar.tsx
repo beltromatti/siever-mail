@@ -4,11 +4,24 @@ import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { Button } from '@renderer/components/ui/button'
 import { AccountSwitcher } from '@renderer/features/accounts/account-switcher'
 import { FolderSidebar } from '@renderer/features/mail/folder-sidebar'
+import { useMessages } from '@renderer/lib/i18n'
 import { SEGRETARIO_VIEWS } from '@shared/folders'
+import { defineMessages } from '@shared/i18n'
 
 import type { MailApp } from './use-mail-app'
 
-/** The mail's column: "Scrivi", the account, its folders, the Segretario's views and projects. */
+const MESSAGES = defineMessages({
+  folders: { en: 'Folders', it: 'Cartelle', de: 'Ordner' },
+  newMessage: { en: 'New message', it: 'Nuovo messaggio', de: 'Neue Nachricht' },
+  write: { en: 'Write', it: 'Scrivi', de: 'Verfassen' },
+  loadingFolders: {
+    en: 'Loading folders…',
+    it: 'Caricamento cartelle…',
+    de: 'Ordner werden geladen…'
+  }
+})
+
+/** The mail's column: "Write", the account, its folders, the Segretario's views and projects. */
 export function MailSidebar({
   mail,
   showTitle,
@@ -17,9 +30,10 @@ export function MailSidebar({
   mail: MailApp
   /** The app's name in the title band, where the window draws none of its own there. */
   showTitle: boolean
-  /** "Aggiungi una connessione": the guided setup, the shell's. */
+  /** "Add a connection": the guided setup, the shell's. */
   onAddAccount: () => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const {
     accounts,
     aiOn,
@@ -42,14 +56,14 @@ export function MailSidebar({
   } = mail
   const selectedAccountRecord = accounts.find((account) => account.id === selectedAccountId)
   const selectedAccountLabel =
-    selectedAccountRecord?.displayName || selectedAccountRecord?.email || 'Cartelle'
+    selectedAccountRecord?.displayName || selectedAccountRecord?.email || m.folders
 
   return (
     <>
       <div className="window-drag-region flex h-[52px] shrink-0 items-center gap-2 pr-3 pl-[max(12px,calc(var(--titlebar-lights)-52px))]">
         {showTitle ? <span className="display-title text-[13.5px]">SIEVER Mail</span> : null}
         <div className="flex-1" />
-        <ActionTooltip label="Nuovo messaggio" commandId="compose">
+        <ActionTooltip label={m.newMessage} commandId="compose">
           <Button
             size="sm"
             className="window-no-drag"
@@ -61,7 +75,7 @@ export function MailSidebar({
             }}
           >
             <PenLine className="size-3.5" />
-            Scrivi
+            {m.write}
           </Button>
         </ActionTooltip>
       </div>
@@ -78,7 +92,7 @@ export function MailSidebar({
       <div className="min-h-0 flex-1">
         {loadingFolders ? (
           <div className="text-faint-foreground flex items-center gap-2 px-4 py-3 text-[12px]">
-            <LoaderCircle className="size-3.5 animate-spin" /> Caricamento cartelle…
+            <LoaderCircle className="size-3.5 animate-spin" /> {m.loadingFolders}
           </div>
         ) : (
           <FolderSidebar

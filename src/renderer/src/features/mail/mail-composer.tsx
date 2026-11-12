@@ -61,6 +61,7 @@ import { RichTextEditor, type RichTextEditorHandle } from '@renderer/features/ma
 import { commandForKeyEvent, useShortcutOverrides } from '@renderer/lib/command-shortcuts'
 import { uiLog } from '@renderer/lib/diagnostics'
 import { htmlToPlainText } from '@renderer/lib/email'
+import { hourStyle, messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
 import { cn, revealInFolderLabel } from '@renderer/lib/utils'
 import {
   addressKey,
@@ -69,6 +70,7 @@ import {
   parseRecipients
 } from '@shared/email-address'
 import { MAIL_COMPOSER_DEFAULT_FONT_FAMILY } from '@shared/mail-fonts'
+import { PLACES } from '@shared/places'
 import type { ComposeSpec, ComposingContext } from '@shared/segretario'
 import type {
   ComposeMailInput,
@@ -82,6 +84,10 @@ import type {
   MessageRef,
   PickedAttachment
 } from '@shared/models'
+
+import { COMPOSER_TITLES, MESSAGES } from './mail-composer.messages'
+
+export { COMPOSER_TITLES }
 
 export type ComposerKind = DraftKind
 
@@ -207,6 +213,28 @@ function addressLabel(address: MailAddress): string {
   return address.name ? `${address.name} <${address.address}>` : address.address
 }
 
+/** `text` with each of `values` in it set in bold: the addresses a sentence names. */
+function withStrong(text: string, values: ReadonlyArray<string>): React.ReactNode {
+  const parts: React.ReactNode[] = []
+  let rest = text
+
+  for (;;) {
+    const found = values
+      .filter(Boolean)
+      .map((value) => ({ value, at: rest.indexOf(value) }))
+      .filter(({ at }) => at !== -1)
+      .sort((a, b) => a.at - b.at)[0]
+
+    if (!found) {
+      parts.push(rest)
+      return parts
+    }
+
+    parts.push(rest.slice(0, found.at), <strong key={parts.length}>{found.value}</strong>)
+    rest = rest.slice(found.at + found.value.length)
+  }
+}
+
 interface ComposerFormState {
   to: MailAddress[]
   cc: MailAddress[]
@@ -233,14 +261,6 @@ const CHAT_SIGNATURE_LIMIT = 4_000
 function clip(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit)}\n[… il resto non è riportato]` : text
 }
-
-export const COMPOSER_TITLES: Readonly<Record<ComposerKind, string>> = {
-  new: 'Nuovo messaggio',
-  reply: 'Rispondi',
-  forward: 'Inoltra messaggio'
-}
-
-const SAVED_TIME_FORMAT = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
 
 function buildInitialState(initialData: ComposerInitialData): ComposerFormState {
   return {
@@ -305,33 +325,37 @@ export function draftToInitialData(content: DraftContent): ComposerInitialData {
 
 /** The line under the message that says where its draft stands. */
 function DraftStatusLine({ status }: { status: DraftStatus | null }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
+  const { formatLocale } = useLanguage()
+
   if (!status) {
     return null
   }
 
-  const savedAt = status.savedAt ? SAVED_TIME_FORMAT.format(status.savedAt) : null
+  const savedAt = status.savedAt
+    ? new Intl.DateTimeFormat(formatLocale, { hour: hourStyle(), minute: '2-digit' }).format(
+        status.savedAt
+      )
+    : null
   const { icon, text, hint, tone } =
     status.state === 'saving'
       ? {
           icon: <LoaderCircle className="size-3 animate-spin" />,
-          text: 'Salvataggio in Bozze…',
+          text: m.savingToDrafts,
           hint: null,
           tone: ''
         }
       : status.state === 'error'
         ? {
             icon: <CloudOff className="size-3" />,
-            text: 'Salvata su questo computer',
-            hint: `Non ancora in Bozze: ${status.message ?? 'il server non risponde'}. Riprovo da solo.`,
+            text: m.savedOnComputer,
+            hint: m.notInDraftsYet(status.message ?? m.serverNotAnswering),
             tone: 'text-warning'
           }
         : {
             icon: <Check className="size-3" />,
-            text: savedAt ? `Salvata in Bozze alle ${savedAt}` : 'Salvata',
-            hint:
-              status.state === 'pending'
-                ? 'Le ultime modifiche sono su questo computer e vanno in Bozze tra pochi secondi.'
-                : null,
+            text: savedAt ? m.savedInDraftsAt(savedAt) : m.saved,
+            hint: status.state === 'pending' ? m.pendingHint : null,
             tone: ''
           }
 
@@ -389,6 +413,9 @@ export function MailComposer({
   onAskSegretario,
   ref
 }: MailComposerProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const titles = useMessages(COMPOSER_TITLES)
+  const places = useMessages(PLACES)
   const { initialData } = session
   const kind = initialData.kind
   const [form, setForm] = useState<ComposerFormState>(() => buildInitialState(initialData))
@@ -466,7 +493,7 @@ export function MailComposer({
     decorationsOf(initialData.accountId)
       .then(layOut)
       .catch((error: unknown) => {
-        toast.error('Firma non disponibile', {
+        toast.error(messagesNow(MESSAGES).signatureUnavailable, {
           description: error instanceof Error ? error.message : undefined
         })
         layOut({ headerHtml: null, signatureHtml: null })
@@ -530,7 +557,7 @@ export function MailComposer({
               : item
           )
         )
-        toast.error('Allegati del messaggio originale non disponibili', {
+        toast.error(messagesNow(MESSAGES).originalAttachmentsUnavailable, {
           description: error instanceof Error ? error.message : undefined
         })
       })
@@ -577,7 +604,7 @@ export function MailComposer({
       setPersisted(true)
     } catch (error) {
       lastSavedRef.current = null
-      toast.error('Bozza non salvata', {
+      toast.error(messagesNow(MESSAGES).draftNotSaved, {
         description: error instanceof Error ? error.message : undefined
       })
     }
@@ -700,12 +727,9 @@ export function MailComposer({
     // The mailbox it was written from was removed meanwhile: it is kept only from another one.
     if (!draft) {
       const discarded = await confirm({
-        title: 'Scartare il messaggio?',
-        description:
-          accounts.length > 0
-            ? 'La casella da cui lo scrivevi non è più collegata: per tenerlo, scegli da quale inviarlo.'
-            : 'La casella da cui lo scrivevi non è più collegata, e non ce n’è un’altra da cui inviarlo.',
-        confirmLabel: 'Scarta',
+        title: m.discardTitle,
+        description: accounts.length > 0 ? m.mailboxGoneChoose : m.mailboxGoneNoOther,
+        confirmLabel: m.discard,
         destructive: true
       })
 
@@ -746,17 +770,15 @@ export function MailComposer({
     if (sourceAccount && nextAccount.id !== sourceAccount.id) {
       const isReply = kind === 'reply'
       const confirmed = await confirm({
-        title: isReply ? 'Rispondere da un’altra casella?' : 'Inoltrare da un’altra casella?',
-        description: (
-          <>
-            Il messaggio è arrivato a <strong>{sourceAccount.email}</strong>.{' '}
-            {isReply
-              ? 'Rispondendo da un’altra casella, chi ti ha scritto riceve la risposta da un indirizzo diverso da quello a cui ha scritto'
-              : 'Inoltrandolo da un’altra casella, parte da un indirizzo diverso da quello che lo ha ricevuto'}{' '}
-            e la copia inviata resta nella posta di <strong>{nextAccount.email}</strong>.
-          </>
+        title: isReply ? m.replyFromOtherTitle : m.forwardFromOtherTitle,
+        description: withStrong(
+          (isReply ? m.replyFromOtherText : m.forwardFromOtherText)(
+            sourceAccount.email,
+            nextAccount.email
+          ),
+          [sourceAccount.email, nextAccount.email]
         ),
-        confirmLabel: 'Cambia casella'
+        confirmLabel: m.changeMailbox
       })
 
       if (!confirmed) {
@@ -789,7 +811,7 @@ export function MailComposer({
 
       insertedDecorationsRef.current = next
     } catch (error) {
-      toast.error(`Firma di ${nextAccount.email} non disponibile`, {
+      toast.error(m.signatureOfUnavailable(nextAccount.email), {
         description: error instanceof Error ? error.message : undefined
       })
     }
@@ -834,7 +856,7 @@ export function MailComposer({
       disabled={!account}
       className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/70 shrink-0 rounded-sm px-1 text-[11px] outline-none focus-visible:ring-2 disabled:opacity-50"
     >
-      {certified ? 'Cc' : 'Cc/Ccn'}
+      {certified ? m.cc : m.ccBcc}
     </button>
   )
 
@@ -941,18 +963,18 @@ export function MailComposer({
       const result = await window.mailApi.openFile(path)
 
       if (result.status === 'blocked') {
-        toast(`${name} non si apre da qui`, {
-          description: 'I file che avviano programmi si aprono solo dalla loro cartella.',
+        toast(m.cannotOpenHere(name), {
+          description: m.cannotOpenHereText,
           action: reveal
         })
       } else if (result.status === 'no-application') {
-        toast(`Nessuna applicazione apre ${name}`, {
-          description: "Su questo computer non c'è un programma per questo tipo di file.",
+        toast(m.noApplication(name), {
+          description: m.noApplicationText,
           action: reveal
         })
       }
     } catch (error) {
-      toast.error(`Impossibile aprire ${name}`, {
+      toast.error(m.cannotOpen(name), {
         description: error instanceof Error ? error.message : undefined
       })
     }
@@ -962,11 +984,11 @@ export function MailComposer({
     const key = attachmentKey(attachment)
     const { path } = attachment
     const chosen = await window.mailApi.showContextMenu([
-      { id: 'open', label: 'Apri', enabled: Boolean(path) },
+      { id: 'open', label: m.open, enabled: Boolean(path) },
       { id: 'reveal', label: revealInFolderLabel(), enabled: Boolean(path) },
-      ...(attachment.failed ? [{ id: 'retry', label: 'Riprova a scaricarlo' }] : []),
+      ...(attachment.failed ? [{ id: 'retry', label: m.retryDownload }] : []),
       { type: 'separator' },
-      { id: 'remove', label: 'Rimuovi' }
+      { id: 'remove', label: m.remove }
     ])
 
     if (chosen === 'open') {
@@ -984,7 +1006,7 @@ export function MailComposer({
     try {
       addAttachments(await window.mailApi.pickAttachments())
     } catch (error) {
-      toast.error('Impossibile allegare i file', {
+      toast.error(m.cannotAttachFiles, {
         description: error instanceof Error ? error.message : undefined
       })
     }
@@ -999,7 +1021,7 @@ export function MailComposer({
     try {
       addAttachments(await window.mailApi.describeFiles(paths))
     } catch (error) {
-      toast.error('Impossibile allegare il file', {
+      toast.error(m.cannotAttachFile, {
         description: error instanceof Error ? error.message : undefined
       })
     }
@@ -1116,19 +1138,16 @@ export function MailComposer({
     setRecipientDrafts(EMPTY_RECIPIENT_DRAFTS)
 
     if (certified && recipients.bcc.length > 0) {
-      toast.error('La PEC non ammette la copia nascosta', {
-        description:
-          'Il gestore rifiuterebbe il messaggio: sposta gli indirizzi in Ccn in A o in Cc, o toglili.'
-      })
+      toast.error(m.pecNoBcc, { description: m.pecNoBccText })
       return false
     }
 
     if (invalid.length > 0) {
       toast.error(
         invalid.length === 1
-          ? `«${invalid[0].address}» non è un indirizzo valido`
-          : `${invalid.length} indirizzi non sono validi`,
-        { description: 'Correggi o togli i destinatari in rosso, poi invia.' }
+          ? m.invalidAddress(invalid[0].address)
+          : m.invalidAddresses(invalid.length),
+        { description: m.invalidAddressesText }
       )
       return false
     }
@@ -1136,11 +1155,10 @@ export function MailComposer({
     if (
       !form.subject.trim() &&
       !(await confirm({
-        title: 'Inviare senza oggetto?',
-        description:
-          'Chi riceve il messaggio non saprà di cosa tratta finché non lo apre, e cercarlo sarà più difficile.',
-        confirmLabel: 'Invia senza oggetto',
-        cancelLabel: 'Scrivi l’oggetto'
+        title: m.noSubjectTitle,
+        description: m.noSubjectText,
+        confirmLabel: m.sendWithoutSubject,
+        cancelLabel: m.writeSubject
       }))
     ) {
       window.requestAnimationFrame(() => subjectInputRef.current?.focus())
@@ -1353,7 +1371,7 @@ export function MailComposer({
   return (
     <div
       role="region"
-      aria-label={COMPOSER_TITLES[kind]}
+      aria-label={titles[kind]}
       className="page relative flex h-full min-h-0 flex-col"
       onFocus={(event) => {
         lastFocusRef.current = event.target
@@ -1413,7 +1431,7 @@ export function MailComposer({
         >
           {/* Children ignore the pointer so leaving them is not leaving the target. */}
           <Paperclip className="text-primary pointer-events-none size-6" />
-          <p className="pointer-events-none text-[13px] font-medium">Rilascia per allegare</p>
+          <p className="pointer-events-none text-[13px] font-medium">{m.dropToAttach}</p>
         </div>
       )}
 
@@ -1436,11 +1454,7 @@ export function MailComposer({
             <PopoverAnchor asChild>
               <span className="inline-flex">
                 <ActionTooltip
-                  label={
-                    reviewing
-                      ? 'Rileggo il messaggio prima che parta: invia senza aspettare'
-                      : 'Invia il messaggio'
-                  }
+                  label={reviewing ? m.rereadingSendNow : m.sendMessage}
                   commandId="send"
                   side="bottom"
                 >
@@ -1455,7 +1469,7 @@ export function MailComposer({
                     ) : (
                       <Send className="size-3.5" />
                     )}
-                    {reviewing ? 'Invia subito' : 'Invia'}
+                    {reviewing ? m.sendNow : m.send}
                   </Button>
                 </ActionTooltip>
               </span>
@@ -1467,7 +1481,7 @@ export function MailComposer({
             >
               <p className="text-ai flex items-center gap-1.5 text-[11.5px] font-semibold">
                 <CompassStar className="text-ai-star size-3.5" />
-                Prima di inviare
+                {m.beforeSending}
               </p>
               <ul className="flex flex-col gap-1.5">
                 {reviewIssues?.map((issue) => (
@@ -1478,11 +1492,11 @@ export function MailComposer({
               </ul>
               <div className="flex items-center justify-end gap-1.5">
                 <Button variant="ghost" size="sm" onClick={() => setReviewIssues(null)}>
-                  Correggi
+                  {m.correct}
                 </Button>
                 <Button size="sm" onClick={() => void handleSend({ reviewed: true })}>
                   <Send className="size-3.5" />
-                  Invia comunque
+                  {m.sendAnyway}
                 </Button>
               </div>
             </PopoverContent>
@@ -1495,7 +1509,7 @@ export function MailComposer({
             onBrowse={() => void handlePickAttachments()}
           />
           {onAskSegretario && (
-            <ActionTooltip label="Chiedi al Segretario di scriverlo con te" commandId="segretario">
+            <ActionTooltip label={m.askSegretario} commandId="segretario">
               <Button
                 variant="ghost"
                 size="sm"
@@ -1504,7 +1518,7 @@ export function MailComposer({
                 onClick={onAskSegretario}
               >
                 <CompassStar className="text-ai-star size-3.5" />
-                <span className="@max-[620px]/composer-header:hidden">Segretario</span>
+                <span className="@max-[620px]/composer-header:hidden">{places.segretario}</span>
               </Button>
             </ActionTooltip>
           )}
@@ -1515,7 +1529,7 @@ export function MailComposer({
             <DraftStatusLine status={touched || persisted ? status : null} />
           </span>
           <IconButton
-            label={touched || persisted ? 'Elimina bozza' : 'Scarta messaggio'}
+            label={touched || persisted ? m.deleteDraft : m.discardMessage}
             tooltipSide="bottom"
             className="text-muted-foreground hover:text-destructive ml-1 size-[28px]"
             onClick={discard}
@@ -1524,7 +1538,7 @@ export function MailComposer({
           </IconButton>
           <div className="bg-border mx-1 h-4 w-px" />
           <IconButton
-            label={expanded ? 'Riduci lo spazio di scrittura' : 'Scrivi a tutta finestra'}
+            label={expanded ? m.shrink : m.expand}
             tooltipSide="bottom"
             className="text-faint-foreground hover:text-foreground size-[28px]"
             onClick={onToggleExpanded}
@@ -1536,7 +1550,7 @@ export function MailComposer({
             )}
           </IconButton>
           <IconButton
-            label={touched || persisted ? 'Chiudi e tieni in Bozze' : 'Chiudi'}
+            label={touched || persisted ? m.closeKeepInDrafts : m.close}
             tooltipSide="bottom"
             className="text-faint-foreground hover:text-foreground size-[28px]"
             onClick={() => void close()}
@@ -1554,7 +1568,7 @@ export function MailComposer({
       <div className="divide-border/60 shrink-0 divide-y border-b px-3">
         {hasAccountChoice && (
           <div className="flex items-center gap-2 px-2">
-            <span className="text-muted-foreground w-14 shrink-0 text-[11px]">Da</span>
+            <span className="text-muted-foreground w-14 shrink-0 text-[11px]">{m.from}</span>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
@@ -1568,7 +1582,7 @@ export function MailComposer({
                       <span className="text-muted-foreground">&lt;{account.email}&gt;</span>
                     </span>
                   ) : (
-                    <span className="text-muted-foreground">Scegli la casella</span>
+                    <span className="text-muted-foreground">{m.chooseMailbox}</span>
                   )}
                   <ChevronDown className="text-muted-foreground size-3.5 shrink-0" />
                 </button>
@@ -1590,7 +1604,7 @@ export function MailComposer({
                       </span>
                       {candidate.id === sourceAccount?.id && (
                         <span className="text-muted-foreground shrink-0 text-[10.5px]">
-                          ha ricevuto il messaggio
+                          {m.receivedTheMessage}
                         </span>
                       )}
                     </DropdownMenuRadioItem>
@@ -1600,16 +1614,16 @@ export function MailComposer({
             </DropdownMenu>
           </div>
         )}
-        {renderRecipientField('to', 'Nome o indirizzo email', ccBccToggle)}
-        {ccBccVisible && renderRecipientField('cc', 'Copia per conoscenza')}
-        {ccBccVisible && bccShown && renderRecipientField('bcc', 'Copia nascosta')}
+        {renderRecipientField('to', m.toPlaceholder, ccBccToggle)}
+        {ccBccVisible && renderRecipientField('cc', m.ccPlaceholder)}
+        {ccBccVisible && bccShown && renderRecipientField('bcc', m.bccPlaceholder)}
 
         <div className="flex items-center gap-2 px-2">
           <label
             htmlFor={`${fieldIdPrefix}-subject`}
             className="text-muted-foreground w-14 shrink-0 text-[11px]"
           >
-            Oggetto
+            {m.subject}
           </label>
           <input
             ref={subjectInputRef}
@@ -1619,7 +1633,7 @@ export function MailComposer({
               touch()
               setForm((current) => ({ ...current, subject: event.target.value }))
             }}
-            placeholder="Inserisci oggetto"
+            placeholder={m.subjectPlaceholder}
             disabled={!account}
             className="placeholder:text-muted-foreground/70 h-8 min-w-0 flex-1 bg-transparent text-[13px] font-medium outline-none disabled:opacity-50"
           />
@@ -1642,16 +1656,16 @@ export function MailComposer({
                   onContextMenu={() => void showAttachmentMenu(attachment)}
                   openHint={
                     attachment.failed
-                      ? 'non scaricato dal messaggio originale'
+                      ? m.notDownloaded
                       : isPendingOriginal(attachment)
-                        ? 'scaricamento dal messaggio originale…'
-                        : 'Clic per aprire'
+                        ? m.downloading
+                        : m.clickToOpen
                   }
                   trailing={
                     <>
                       {attachment.failed && (
                         <IconButton
-                          label={`Riprova a scaricare ${attachment.name}`}
+                          label={m.retryDownloadOf(attachment.name)}
                           tooltipSide="top"
                           className="size-5"
                           onClick={() => retryAttachment(key)}
@@ -1660,7 +1674,7 @@ export function MailComposer({
                         </IconButton>
                       )}
                       <IconButton
-                        label={`Rimuovi ${attachment.name}`}
+                        label={m.removeNamed(attachment.name)}
                         tooltipSide="top"
                         className="size-5"
                         onClick={() => removeAttachment(key)}

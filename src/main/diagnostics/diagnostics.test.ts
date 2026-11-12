@@ -5,6 +5,10 @@ import { join } from 'node:path'
 import { unzipSync } from 'fflate'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('electron', () => ({
+  app: { getSystemLocale: () => 'it-IT', getLocaleCountryCode: () => 'IT' }
+}))
+
 import { writeDiagnosticsBundle, type BundleFile, type DiagnosticsBundleSource } from './export'
 import {
   clean,
@@ -414,7 +418,7 @@ describe('the export', () => {
     expect(bytes).toBe(readFileSync(target).length)
     expect(names).toEqual(
       [
-        'LEGGIMI.txt',
+        'README.txt',
         'estensione/acme-srl/stato.json',
         'manifesto.json',
         `registro/registro-${localDay()}.jsonl`,
@@ -433,14 +437,12 @@ describe('the export', () => {
         accounts: [{ id: 'a1', refreshToken: '[tolto]', clientSecret: '[tolto]', messages: 3 }]
       }
     })
-    expect(new TextDecoder().decode(files['LEGGIMI.txt'])).toContain(
-      'non è stata mandata a nessuno'
-    )
+    expect(new TextDecoder().decode(files['README.txt'])).toContain('it hasn’t been sent to anyone')
 
     await writeDiagnosticsBundle(target, { days: 1, segretario: true }, source(false))
     const withSegretario = Object.keys(unzipSync(readFileSync(target)))
-    expect(new TextDecoder().decode(unzipSync(readFileSync(target))['LEGGIMI.txt'])).toContain(
-      'l’esecuzione del Segretario nel periodo'
+    expect(new TextDecoder().decode(unzipSync(readFileSync(target))['README.txt'])).toContain(
+      'the Segretario’s run in the period'
     )
     expect(withSegretario).toEqual(
       expect.arrayContaining([

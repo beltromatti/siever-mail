@@ -1,5 +1,7 @@
+import { messages } from '../../i18n'
 import type { Sql } from '../sql'
 import { foldTitle } from '../registry/projects'
+import { REFUSALS } from '../registry/registry.messages'
 import { lookedAt, RegistryRefusal, type Actor } from '../registry/types'
 
 /**
@@ -68,7 +70,11 @@ export function normalizeMemoryPath(path: string): string {
     .join('/')
 
   if (!cleaned || cleaned.split('/').includes('..')) {
-    throw new RegistryRefusal(`Percorso non valido: «${path}».`)
+    throw new RegistryRefusal(
+      `Percorso non valido: «${path}».`,
+      undefined,
+      messages(REFUSALS).invalidPath(path)
+    )
   }
 
   return cleaned.endsWith('.md') ? cleaned : `${cleaned}.md`
@@ -335,7 +341,11 @@ export class Notebook {
       }
     }
 
-    throw new RegistryRefusal(`${path} cambia di continuo: riprova tra poco.`)
+    throw new RegistryRefusal(
+      `${path} cambia di continuo: riprova tra poco.`,
+      undefined,
+      messages(REFUSALS).pathKeepsChanging(path)
+    )
   }
 
   /**
@@ -385,7 +395,11 @@ export class Notebook {
       }
     }
 
-    throw new RegistryRefusal(`${path} cambia di continuo: riprova tra poco.`)
+    throw new RegistryRefusal(
+      `${path} cambia di continuo: riprova tra poco.`,
+      undefined,
+      messages(REFUSALS).pathKeepsChanging(path)
+    )
   }
 
   async delete(path: string, actor: Actor): Promise<boolean> {
@@ -404,7 +418,11 @@ export class Notebook {
     const current = await this.require(from)
 
     if (await this.read(to)) {
-      throw new RegistryRefusal(`Esiste già una nota «${to}».`)
+      throw new RegistryRefusal(
+        `Esiste già una nota «${to}».`,
+        undefined,
+        messages(REFUSALS).noteTaken(to)
+      )
     }
 
     await this.sql.run(
@@ -450,7 +468,11 @@ export class Notebook {
     )
 
     if (!version?.content) {
-      throw new RegistryRefusal(`Non trovo la versione ${revision} di ${path}.`)
+      throw new RegistryRefusal(
+        `Non trovo la versione ${revision} di ${path}.`,
+        undefined,
+        messages(REFUSALS).noVersion(revision, path)
+      )
     }
 
     const current = await this.read(path)

@@ -1,4 +1,7 @@
+import { defineMessages } from '@shared/i18n'
 import { pecLabel } from '@shared/pec'
+
+import { messages } from '../../i18n'
 import { accountOverview, type OverviewPerson } from '../mail-overview'
 import {
   folderQueryLabel,
@@ -21,8 +24,129 @@ import {
   UnknownHandle
 } from '../agent/tool-types'
 import { countOf, formatAddresses, formatDateTime, shortDate } from './format'
+import { userDates } from './user-dates'
 
 const DEFAULT_SEARCH_LIMIT = 20
+
+/** What a search looked for, where and when, as its step's line tells the user. */
+interface Searched {
+  text: string | null
+  unreadOnly: boolean
+  project: string | null
+  onServer: boolean
+  /** The folder as the user reads it. */
+  folder: string | null
+  account: string | null
+  everywhere: boolean
+  /** The first and the last day, written for the user. */
+  from: string | null
+  to: string | null
+  /** How many it found. */
+  found: number
+}
+
+/** The step's lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  overview: {
+    en: 'Looking at the mail as a whole…',
+    it: 'Guardo la posta nel suo insieme…',
+    de: 'Sehe mir die E-Mails im Überblick an…'
+  },
+  searchingFor: {
+    en: (text: string) => `Searching “${text}”…`,
+    it: (text: string) => `Cerco «${text}»…`,
+    de: (text: string) => `Suche „${text}“…`
+  },
+  searching: { en: 'Searching the mail…', it: 'Cerco nella posta…', de: 'Suche in den E-Mails…' },
+  lookedOverview: {
+    en: (account: string | null, months: number) =>
+      `Looked at the mail ${account ? `of ${account}` : 'of every account'} as a whole · last ${months === 1 ? 'month' : `${months} months`}`,
+    it: (account: string | null, months: number) =>
+      `Guardata la posta ${account ? `di ${account}` : 'di tutti gli account'} nel suo insieme · ultimi ${months === 1 ? '1 mese' : `${months} mesi`}`,
+    de: (account: string | null, months: number) =>
+      `E-Mails ${account ? `von ${account}` : 'aller Konten'} im Überblick angesehen · ${months === 1 ? 'letzter Monat' : `letzte ${months} Monate`}`
+  },
+  searched: {
+    en: (s: Searched) =>
+      [
+        'Searched',
+        s.text ? `“${s.text}”` : s.unreadOnly ? 'unread messages' : null,
+        s.project ? `in the project ${s.project}` : null,
+        s.onServer ? 'on the servers too' : null,
+        s.folder
+          ? `in ${s.folder}${s.account ? ` of ${s.account}` : ''}`
+          : s.account
+            ? `in the mail of ${s.account}`
+            : s.everywhere
+              ? 'in all the mail, Trash and Spam included'
+              : s.project
+                ? null
+                : 'in all the mail',
+        s.from && s.to
+          ? `from ${s.from} to ${s.to}`
+          : s.from
+            ? `from ${s.from}`
+            : s.to
+              ? `until ${s.to}`
+              : null
+      ]
+        .filter(Boolean)
+        .join(' ') +
+      ` · ${s.found === 0 ? 'no results' : s.found === 1 ? '1 message' : `${s.found} messages`}`,
+    it: (s: Searched) =>
+      [
+        'Cercato',
+        s.text ? `«${s.text}»` : s.unreadOnly ? 'i non letti' : null,
+        s.project ? `nel progetto ${s.project}` : null,
+        s.onServer ? 'anche nei server' : null,
+        s.folder
+          ? `in ${s.folder}${s.account ? ` di ${s.account}` : ''}`
+          : s.account
+            ? `nella posta di ${s.account}`
+            : s.everywhere
+              ? 'in tutta la posta, cestino e spam compresi'
+              : s.project
+                ? null
+                : 'in tutta la posta',
+        s.from && s.to
+          ? `dal ${s.from} al ${s.to}`
+          : s.from
+            ? `dal ${s.from}`
+            : s.to
+              ? `fino al ${s.to}`
+              : null
+      ]
+        .filter(Boolean)
+        .join(' ') +
+      ` · ${s.found === 0 ? 'nessun risultato' : s.found === 1 ? '1 messaggio' : `${s.found} messaggi`}`,
+    de: (s: Searched) =>
+      [
+        'Gesucht:',
+        s.text ? `„${s.text}“` : s.unreadOnly ? 'ungelesene Nachrichten' : null,
+        s.project ? `im Projekt ${s.project}` : null,
+        s.onServer ? 'auch auf den Servern' : null,
+        s.folder
+          ? `in ${s.folder}${s.account ? ` von ${s.account}` : ''}`
+          : s.account
+            ? `in den E-Mails von ${s.account}`
+            : s.everywhere
+              ? 'in allen E-Mails, Papierkorb und Spam eingeschlossen'
+              : s.project
+                ? null
+                : 'in allen E-Mails',
+        s.from && s.to
+          ? `vom ${s.from} bis ${s.to}`
+          : s.from
+            ? `ab ${s.from}`
+            : s.to
+              ? `bis ${s.to}`
+              : null
+      ]
+        .filter(Boolean)
+        .join(' ') +
+      ` · ${s.found === 0 ? 'keine Ergebnisse' : s.found === 1 ? '1 Nachricht' : `${s.found} Nachrichten`}`
+  }
+})
 const DEFAULT_MONTHS = 12
 const DEFAULT_PEOPLE = 20
 /** How many hits a search within a project looks through, for the project's to be among them. */
@@ -109,7 +233,7 @@ async function overview(args: Record<string, unknown>, context: ToolContext): Pr
 
   return {
     content: sections.join('\n\n'),
-    summary: `Guardata la posta ${chosen.length === 1 ? `di ${chosen[0].email}` : 'di tutti gli account'} nel suo insieme · ultimi ${countOf(months, 'mese', 'mesi')}`
+    summary: messages(STEPS).lookedOverview(chosen.length === 1 ? chosen[0].email : null, months)
   }
 }
 
@@ -134,12 +258,15 @@ export const searchMailTool: SegretarioTool = {
       limite: { type: 'integer' }
     }
   },
-  running: (args) =>
-    booleanArg(args, 'quadro')
-      ? 'Guardo la posta nel suo insieme…'
-      : stringArg(args, 'testo')
-        ? `Cerco «${stringArg(args, 'testo')}»…`
-        : 'Cerco nella posta…',
+  running: (args) => {
+    const text = stringArg(args, 'testo')
+
+    return booleanArg(args, 'quadro')
+      ? messages(STEPS).overview
+      : text
+        ? messages(STEPS).searchingFor(text)
+        : messages(STEPS).searching
+  },
   readsOnly: () => true,
   async execute(args, context) {
     if (booleanArg(args, 'quadro')) {
@@ -246,35 +373,25 @@ export const searchMailTool: SegretarioTool = {
         : ''
 
     // What was looked for, where and when, as the step's line tells it.
-    const looked = [
-      'Cercato',
-      text ? `«${text}»` : unreadOnly ? 'i non letti' : null,
-      project ? `nel progetto ${project.title}` : null,
-      onServer ? 'anche nei server' : null,
-      folder
-        ? `in ${folderQueryLabel(folder)}${account ? ` di ${account}` : ''}`
-        : account
-          ? `nella posta di ${account}`
-          : everywhere
-            ? 'in tutta la posta, cestino e spam compresi'
-            : project
-              ? null
-              : 'in tutta la posta',
-      from && to
-        ? `dal ${shortDate(from)} al ${shortDate(to)}`
-        : from
-          ? `dal ${shortDate(from)}`
-          : to
-            ? `fino al ${shortDate(to)}`
-            : null
-    ]
-      .filter(Boolean)
-      .join(' ')
+    const { locale } = userDates()
+    const looked = (found: number): string =>
+      messages(STEPS).searched({
+        text: text ?? null,
+        unreadOnly,
+        project: project?.title ?? null,
+        onServer,
+        folder: folder ? folderQueryLabel(folder) : null,
+        account: account ?? null,
+        everywhere,
+        from: from ? shortDate(from, locale) : null,
+        to: to ? shortDate(to, locale) : null,
+        found
+      })
 
     if (hits.length === 0) {
       return {
         content: `Nessun messaggio trovato.${notDownloaded}`,
-        summary: `${looked} · nessun risultato`
+        summary: looked(0)
       }
     }
 
@@ -294,7 +411,7 @@ export const searchMailTool: SegretarioTool = {
         hit.pecKind
           ? hit.pecKind === 'busta'
             ? 'PEC'
-            : `PEC: ${pecLabel(hit.pecKind).toLowerCase()}`
+            : `PEC: ${pecLabel(hit.pecKind, 'it').toLowerCase()}`
           : null,
         hit.isRead ? null : 'non letto',
         hit.hasAttachments ? 'con allegati' : null
@@ -319,7 +436,7 @@ export const searchMailTool: SegretarioTool = {
       }${
         hits.length === limit ? ' (potrebbero essercene altri: restringi o alza il limite)' : ''
       }:\n\n${lines.join('\n\n')}${notDownloaded}`,
-      summary: `${looked} · ${countOf(hits.length, 'messaggio', 'messaggi')}`,
+      summary: looked(hits.length),
       messages: hits.map((hit) => hit.ref)
     }
   }

@@ -17,7 +17,9 @@ import {
 } from '@main/services/microsoft-oauth'
 import { decryptSecret, encryptSecret } from '@main/services/secure-storage'
 import { diagnostics } from '@main/diagnostics/log'
+import { messages } from '@main/i18n'
 import type { DiagnosticActor, DiagnosticFields } from '@shared/diagnostics'
+import { defineMessages } from '@shared/i18n'
 import {
   CALENDAR_HELD_DAYS,
   CALENDAR_IPC,
@@ -69,7 +71,7 @@ import {
   ownAddresses
 } from './event-roles'
 import { GOOGLE_CALENDAR_SCOPE, GoogleCalendarProvider } from './google-calendar'
-import { GraphCalendarProvider, MAILBOX_ZONE_NOT_GRANTED } from './graph-calendar'
+import { GraphCalendarProvider, mailboxZoneNotGranted } from './graph-calendar'
 import type { ChangeByOthers } from './calendar-notifications'
 import { calendarNameOf, canonicalUid, type InvitationInstance } from './icalendar'
 import {
@@ -159,12 +161,143 @@ interface FoundChange {
 }
 
 /** Why a connection turned down stopped, as a write refused for it says. */
-const STOPPED_BECAUSE: Readonly<Record<ConnectionRefusal, string>> = {
-  accesso: 'il server ha rifiutato l’accesso',
-  autorizzazione: 'l’autorizzazione non vale più',
-  certificato: 'il certificato del server non è valido',
-  sparito: 'non si trova più dove era collegato'
-}
+const STOPPED_BECAUSE = defineMessages({
+  accesso: {
+    en: 'the server refused the sign-in',
+    it: 'il server ha rifiutato l’accesso',
+    de: 'der Server hat die Anmeldung abgelehnt'
+  },
+  autorizzazione: {
+    en: 'the authorization is no longer valid',
+    it: 'l’autorizzazione non vale più',
+    de: 'die Berechtigung ist nicht mehr gültig'
+  },
+  certificato: {
+    en: 'the server’s certificate isn’t valid',
+    it: 'il certificato del server non è valido',
+    de: 'das Zertifikat des Servers ist nicht gültig'
+  },
+  sparito: {
+    en: 'it’s no longer where it was connected',
+    it: 'non si trova più dove era collegato',
+    de: 'er ist nicht mehr dort, wo er verbunden war'
+  }
+}) satisfies Record<ConnectionRefusal, unknown>
+
+const MESSAGES = defineMessages({
+  googleForGoogle: {
+    en: 'A Google calendar connects through a Google account.',
+    it: 'Il calendario di Google si collega per un account Google.',
+    de: 'Ein Google-Kalender wird über ein Google-Konto verbunden.'
+  },
+  connectCalendarOf: {
+    en: (address: string) => `Connect the calendar of ${address}`,
+    it: (address: string) => `Collega il calendario di ${address}`,
+    de: (address: string) => `Kalender von ${address} verbinden`
+  },
+  connectGoogleCalendar: {
+    en: 'Connect a Google calendar',
+    it: 'Collega un calendario Google',
+    de: 'Einen Google-Kalender verbinden'
+  },
+  wrongGoogleAccount: {
+    en: (chosen: string, wanted: string) =>
+      `You chose ${chosen} in Google: this calendar needs ${wanted}.`,
+    it: (chosen: string, wanted: string) =>
+      `Hai scelto ${chosen} in Google: per questo calendario serve ${wanted}.`,
+    de: (chosen: string, wanted: string) =>
+      `Sie haben bei Google ${chosen} gewählt: Für diesen Kalender wird ${wanted} benötigt.`
+  },
+  wrongMicrosoftAccount: {
+    en: (chosen: string, wanted: string) =>
+      `You chose ${chosen} in Microsoft: this calendar needs ${wanted}.`,
+    it: (chosen: string, wanted: string) =>
+      `Hai scelto ${chosen} in Microsoft: per questo calendario serve ${wanted}.`,
+    de: (chosen: string, wanted: string) =>
+      `Sie haben bei Microsoft ${chosen} gewählt: Für diesen Kalender wird ${wanted} benötigt.`
+  },
+  googleNoCalendar: {
+    en: 'Google didn’t give access to the calendar: do it again, leaving the calendar checkbox selected.',
+    it: "Google non ha dato l'accesso al calendario: rifallo lasciando selezionata la casella del calendario.",
+    de: 'Google hat keinen Zugriff auf den Kalender gewährt: Wiederholen Sie den Vorgang und lassen Sie das Kästchen für den Kalender aktiviert.'
+  },
+  httpsOnly: {
+    en: 'The server’s address starts with https://.',
+    it: 'L’indirizzo del server comincia con https://.',
+    de: 'Die Adresse des Servers beginnt mit https://.'
+  },
+  addressMissing: {
+    en: 'This calendar’s address is missing: disconnect it and connect it again.',
+    it: 'Manca l’indirizzo di questo calendario: scollegalo e collegalo di nuovo.',
+    de: 'Die Adresse dieses Kalenders fehlt: Trennen Sie ihn und verbinden Sie ihn erneut.'
+  },
+  noEventCalendars: {
+    en: 'There are no event calendars on this server.',
+    it: 'Su questo server non ci sono calendari di eventi.',
+    de: 'Auf diesem Server gibt es keine Terminkalender.'
+  },
+  calendarGone: {
+    en: 'This calendar is no longer connected.',
+    it: 'Questo calendario non è più collegato.',
+    de: 'Dieser Kalender ist nicht mehr verbunden.'
+  },
+  alreadyConnected: {
+    en: 'This calendar is already connected.',
+    it: 'Questo calendario è già collegato.',
+    de: 'Dieser Kalender ist bereits verbunden.'
+  },
+  linkNotAnswering: {
+    en: (status: number) => `The calendar’s link isn’t answering (${status}).`,
+    it: (status: number) => `Il link del calendario non risponde (${status}).`,
+    de: (status: number) => `Der Link des Kalenders antwortet nicht (${status}).`
+  },
+  noIcsAtLink: {
+    en: 'There’s no calendar (.ics) at that link.',
+    it: 'A quel link non c’è un calendario (.ics).',
+    de: 'Unter diesem Link gibt es keinen Kalender (.ics).'
+  },
+  notAdded: {
+    en: (problem: string) => `${problem} SIEVER Mail didn’t add it.`,
+    it: (problem: string) => `${problem} SIEVER Mail non l’ha aggiunto.`,
+    de: (problem: string) => `${problem} SIEVER Mail hat ihn nicht hinzugefügt.`
+  },
+  stopped: {
+    en: (label: string, because: string) =>
+      `The calendar ${label} is stopped: ${because}. Reconnect it from Settings › Connections.`,
+    it: (label: string, because: string) =>
+      `Il calendario ${label} è fermo: ${because}. Ricollegalo da Impostazioni › Connessioni.`,
+    de: (label: string, because: string) =>
+      `Der Kalender ${label} ist angehalten: ${because}. Verbinden Sie ihn unter Einstellungen › Verbindungen erneut.`
+  },
+  accessMissing: {
+    en: 'Access to this calendar is missing: disconnect it and connect it again.',
+    it: 'Manca l’accesso a questo calendario: scollegalo e collegalo di nuovo.',
+    de: 'Der Zugriff auf diesen Kalender fehlt: Trennen Sie ihn und verbinden Sie ihn erneut.'
+  },
+  unreadable: {
+    en: (name: string, reason: string) => `“${name}” can’t be read: ${reason}`,
+    it: (name: string, reason: string) => `«${name}» non si legge: ${reason}`,
+    de: (name: string, reason: string) => `„${name}“ kann nicht gelesen werden: ${reason}`
+  },
+  eventGone: {
+    en: 'The event is no longer in the calendar.',
+    it: 'L’evento non c’è più nel calendario.',
+    de: 'Der Termin ist nicht mehr im Kalender.'
+  },
+  readOnly: {
+    en: (name: string) => `Events can’t be added to the calendar “${name}”.`,
+    it: (name: string) => `Nel calendario «${name}» non si possono aggiungere eventi.`,
+    de: (name: string) => `Zum Kalender „${name}“ können keine Termine hinzugefügt werden.`
+  },
+  organizedByOthers: {
+    en: (title: string, organizer: string | null) =>
+      `“${title}” is organized by ${organizer ?? 'someone else'}: you answer the invitation, you don’t change it.`,
+    it: (title: string, organizer: string | null) =>
+      `«${title}» lo organizza ${organizer ?? 'un’altra persona'}: all’invito si risponde, non si cambia.`,
+    de: (title: string, organizer: string | null) =>
+      `„${title}“ wird von ${organizer ?? 'einer anderen Person'} organisiert: Auf die Einladung wird geantwortet, sie wird nicht geändert.`
+  }
+})
 
 /** Whether two addresses are the same mailbox: the case of an address does not matter. */
 function sameAddress(a: string, b: string): boolean {
@@ -468,7 +601,7 @@ export class CalendarService {
       : undefined
 
     if (mailAccountId && account?.type !== 'gmail') {
-      throw new Error('Il calendario di Google si collega per un account Google.')
+      throw new Error(messages(MESSAGES).googleForGoogle)
     }
 
     const address =
@@ -477,13 +610,13 @@ export class CalendarService {
     const granted = await this.options.oauth.authorize(this.options.parentWindow() ?? undefined, {
       scopes: [GOOGLE_CALENDAR_SCOPE],
       loginHint: address ?? undefined,
-      title: address ? `Collega il calendario di ${address}` : 'Collega un calendario Google'
+      title: address
+        ? messages(MESSAGES).connectCalendarOf(address)
+        : messages(MESSAGES).connectGoogleCalendar
     })
 
     if (address && !sameAddress(granted.email, address)) {
-      throw new Error(
-        `Hai scelto ${granted.email} in Google: per questo calendario serve ${address}.`
-      )
+      throw new Error(messages(MESSAGES).wrongGoogleAccount(granted.email, address))
     }
 
     await this.addGoogle(granted.email, granted.refreshToken, granted.scopes)
@@ -501,9 +634,7 @@ export class CalendarService {
     scopes: ReadonlyArray<string>
   ): Promise<void> {
     if (!scopes.includes(GOOGLE_CALENDAR_SCOPE)) {
-      throw new Error(
-        "Google non ha dato l'accesso al calendario: rifallo lasciando selezionata la casella del calendario."
-      )
+      throw new Error(messages(MESSAGES).googleNoCalendar)
     }
 
     const prisma = this.requirePrisma()
@@ -557,9 +688,7 @@ export class CalendarService {
     })
 
     if (address && !sameAddress(granted.email, address)) {
-      throw new Error(
-        `Hai scelto ${granted.email} in Microsoft: per questo calendario serve ${address}.`
-      )
+      throw new Error(messages(MESSAGES).wrongMicrosoftAccount(granted.email, address))
     }
 
     await this.addMicrosoft(granted.email, granted.secret)
@@ -618,7 +747,7 @@ export class CalendarService {
       url.protocol !== 'https:' &&
       !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
     ) {
-      throw new Error('L’indirizzo del server comincia con https://.')
+      throw new Error(messages(MESSAGES).httpsOnly)
     }
 
     const known = (
@@ -658,7 +787,7 @@ export class CalendarService {
     const connection = await this.connectionOf(connectionId, 'caldav')
 
     if (!connection.serverUrl || !connection.username) {
-      throw new Error('Manca l’indirizzo di questo calendario: scollegalo e collegalo di nuovo.')
+      throw new Error(messages(MESSAGES).addressMissing)
     }
 
     await this.verifyCalDav(connectionId, connection.serverUrl, connection.username, password)
@@ -726,7 +855,7 @@ export class CalendarService {
     })
 
     if ((await probe.listCalendars()).length === 0) {
-      throw new Error('Su questo server non ci sono calendari di eventi.')
+      throw new Error(messages(MESSAGES).noEventCalendars)
     }
   }
 
@@ -740,7 +869,7 @@ export class CalendarService {
     })
 
     if (!connection || (provider && connection.provider !== provider)) {
-      throw new Error('Questo calendario non è più collegato.')
+      throw new Error(messages(MESSAGES).calendarGone)
     }
 
     return connection
@@ -809,7 +938,7 @@ export class CalendarService {
           connection.encryptedSecret && decryptSecret(connection.encryptedSecret) === url
       )
     ) {
-      throw new Error('Questo calendario è già collegato.')
+      throw new Error(messages(MESSAGES).alreadyConnected)
     }
 
     const response = await this.options.fetch(url, {
@@ -818,13 +947,13 @@ export class CalendarService {
     })
 
     if (!response.ok) {
-      throw new Error(`Il link del calendario non risponde (${response.status}).`)
+      throw new Error(messages(MESSAGES).linkNotAnswering(response.status))
     }
 
     const text = await calendarText(response)
 
     if (!/BEGIN:VCALENDAR/i.test(text)) {
-      throw new Error('A quel link non c’è un calendario (.ics).')
+      throw new Error(messages(MESSAGES).noIcsAtLink)
     }
 
     const id = randomUUID()
@@ -1035,7 +1164,7 @@ export class CalendarService {
       await this.forget(connectionId)
     }
 
-    throw new Error(known ? refused.problem : `${refused.problem} SIEVER Mail non l’ha aggiunto.`)
+    throw new Error(known ? refused.problem : messages(MESSAGES).notAdded(refused.problem))
   }
 
   /**
@@ -1071,9 +1200,7 @@ export class CalendarService {
 
     if (refused) {
       const { label } = await this.connectionOf(connectionId)
-      throw new Error(
-        `Il calendario ${label} è fermo: ${STOPPED_BECAUSE[refused.refusal]}. Ricollegalo da Impostazioni › Connessioni.`
-      )
+      throw new Error(messages(MESSAGES).stopped(label, messages(STOPPED_BECAUSE)[refused.refusal]))
     }
   }
 
@@ -1092,7 +1219,7 @@ export class CalendarService {
       const provider = await this.providerFor(connectionId)
 
       if (!provider) {
-        throw new Error('Manca l’accesso a questo calendario: scollegalo e collegalo di nuovo.')
+        throw new Error(messages(MESSAGES).accessMissing)
       }
 
       const calendars = await provider.listCalendars()
@@ -1139,7 +1266,7 @@ export class CalendarService {
       // connected again before its all-day events can be written.
       if (provider instanceof GraphCalendarProvider && !(await provider.mailboxZoneGranted())) {
         this.consentShort.add(connectionId)
-        problems.push(MAILBOX_ZONE_NOT_GRANTED)
+        problems.push(mailboxZoneNotGranted())
       } else {
         this.consentShort.delete(connectionId)
       }
@@ -1199,7 +1326,10 @@ export class CalendarService {
             err: error
           })
           problems.push(
-            `«${calendar.name}» non si legge: ${error instanceof Error ? error.message : String(error)}`
+            messages(MESSAGES).unreadable(
+              calendar.name,
+              error instanceof Error ? error.message : String(error)
+            )
           )
         }
       }
@@ -2217,7 +2347,7 @@ export class CalendarService {
         const provider = row ? await this.providerFor(row.connectionId) : null
 
         if (!row || !provider) {
-          throw new Error('L’evento non c’è più nel calendario.')
+          throw new Error(messages(MESSAGES).eventGone)
         }
 
         const series = options.series === true
@@ -2279,7 +2409,7 @@ export class CalendarService {
     )
 
     if (!calendar) {
-      throw new Error('Questo calendario non è più collegato.')
+      throw new Error(messages(MESSAGES).calendarGone)
     }
 
     await prisma.calendarCalendar.update({
@@ -2307,7 +2437,7 @@ export class CalendarService {
     )
 
     if (!calendar) {
-      throw new Error('Questo calendario non è più collegato.')
+      throw new Error(messages(MESSAGES).calendarGone)
     }
 
     await prisma.calendarCalendar.update({
@@ -2378,11 +2508,11 @@ export class CalendarService {
         const provider = calendar ? await this.providerFor(calendar.connectionId) : null
 
         if (!provider || !calendar) {
-          throw new Error('Questo calendario non è più collegato.')
+          throw new Error(messages(MESSAGES).calendarGone)
         }
 
         if (calendar.writable !== 1) {
-          throw new Error(`Nel calendario «${calendar.name}» non si possono aggiungere eventi.`)
+          throw new Error(messages(MESSAGES).readOnly(calendar.name))
         }
 
         const created = await provider.create(calendar.calendarId, event, event.origin ?? null)
@@ -2502,15 +2632,13 @@ export class CalendarService {
     const provider = row ? await this.providerFor(row.connectionId) : null
 
     if (!row || !provider) {
-      throw new Error('L’evento non c’è più nel calendario.')
+      throw new Error(messages(MESSAGES).eventGone)
     }
 
     const event = eventOfRow(row, '')
 
     if (!organizedByUser(event, (await this.userAddresses()).writing)) {
-      throw new Error(
-        `«${row.title}» lo organizza ${event.organizer ?? 'un’altra persona'}: all’invito si risponde, non si cambia.`
-      )
+      throw new Error(messages(MESSAGES).organizedByOthers(row.title, event.organizer))
     }
 
     return { row, provider }
@@ -2521,7 +2649,7 @@ export class CalendarService {
     const row = await prisma.calendarEvent.findUnique({ where: { key } })
 
     if (!row) {
-      throw new Error('L’evento non c’è più nel calendario.')
+      throw new Error(messages(MESSAGES).eventGone)
     }
 
     const [calendar, addresses] = await Promise.all([

@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 
+import { messagesNow } from '@renderer/lib/i18n'
 import type { CalendarConnection, CalendarEvent, CalendarListEntry } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
+
+const MESSAGES = defineMessages({
+  eventsUnreadable: {
+    en: 'The events cannot be read',
+    it: 'Gli eventi non si leggono',
+    de: 'Die Termine lassen sich nicht lesen'
+  }
+})
 
 /**
  * The accounts' calendars and how each stands, kept as they change. Calendars
@@ -84,7 +94,7 @@ export function useCalendarEvents(fromIso: string, toIso: string): CalendarEvent
         .catch(
           (error: unknown) =>
             current &&
-            toast.error('Gli eventi non si leggono', {
+            toast.error(messagesNow(MESSAGES).eventsUnreadable, {
               id: 'calendar-events',
               description: error instanceof Error ? error.message : undefined
             })

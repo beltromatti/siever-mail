@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { ActivityEvent, ActivityVisibility } from '@shared/segretario'
 
-import type { AgentRunner, RunResult } from '../agent/runner'
+import type { AgentRunner, RunResult, StillMissing } from '../agent/runner'
 import type { ContextPayload, UserPayload } from '../agent/conversation'
 import { entryOf } from '../agent/entries'
 import type { RunContext, TaskKind } from '../agent/tool-types'
@@ -36,7 +36,7 @@ export async function startRun(
     origin?: 'segretario'
     workId?: string | null
     scope?: unknown
-    missing?: (run: RunContext) => Promise<string | null>
+    missing?: (run: RunContext) => Promise<StillMissing | null>
     signal?: AbortSignal
     /** Called with the activity as soon as it exists, before it runs. */
     onCreated?: (activityId: string) => void | Promise<void>

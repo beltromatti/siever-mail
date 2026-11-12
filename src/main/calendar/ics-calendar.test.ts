@@ -85,8 +85,8 @@ describe('IcsCalendarProvider', () => {
         .catch((error: unknown) => error)
       expect(refusalOfCalendar(gone)).toEqual({
         refusal: 'sparito',
-        problem: 'Il calendario non è più a quel link.',
-        detail: `Il calendario non è più a quel link. (HTTP ${status})`
+        problem: 'The calendar is no longer at that link.',
+        detail: `The calendar is no longer at that link. (HTTP ${status})`
       })
     }
 

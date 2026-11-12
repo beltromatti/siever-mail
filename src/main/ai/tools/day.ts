@@ -1,6 +1,8 @@
+import { defineMessages } from '@shared/i18n'
 import { foldSearchText } from '@shared/search'
 import { unlinked } from '@shared/segretario-links'
 
+import { messages } from '../../i18n'
 import { linksIn } from '../agent/entries'
 import { PROMPTS } from '../prompts'
 import { RevisionConflict } from '../registry/types'
@@ -21,6 +23,39 @@ import { countOf, formatDateTime } from './format'
 export function localDay(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
+
+/** The steps' lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  readingLetter: {
+    en: 'Looking at today’s letter…',
+    it: 'Guardo la lettera di oggi…',
+    de: 'Sehe mir den heutigen Brief an…'
+  },
+  writingDay: { en: 'Writing the day…', it: 'Scrivo la giornata…', de: 'Schreibe den Tag…' },
+  readLetter: {
+    en: 'Looked at today’s letter',
+    it: 'Guardata la lettera di oggi',
+    de: 'Heutigen Brief angesehen'
+  },
+  wroteDay: { en: 'Wrote the day', it: 'Scritta la giornata', de: 'Den Tag geschrieben' },
+  rereading: { en: 'Rereading…', it: 'Rileggo…', de: 'Lese noch einmal…' },
+  allGood: {
+    en: 'Reread: all good',
+    it: 'Riletto: tutto a posto',
+    de: 'Nochmals gelesen: alles in Ordnung'
+  },
+  warnings: {
+    en: (count: number) => `Reread: ${count === 1 ? '1 warning' : `${count} warnings`}`,
+    it: (count: number) => `Riletto: ${count === 1 ? '1 avviso' : `${count} avvisi`}`,
+    de: (count: number) => `Nochmals gelesen: ${count === 1 ? '1 Hinweis' : `${count} Hinweise`}`
+  },
+  rereadingWork: {
+    en: 'Rereading what I did…',
+    it: 'Rileggo cosa ho fatto…',
+    de: 'Lese nach, was ich getan habe…'
+  },
+  readJournal: { en: 'Reread the activity', it: 'Riletto il diario', de: 'Verlauf nachgelesen' }
+})
 
 const TASK_WORDS: Record<string, string> = {
   richiesta: 'richiesta dell’utente',
@@ -57,7 +92,7 @@ export const todayTool: SegretarioTool = {
     }
   },
   running: (args) =>
-    args.lettera === undefined ? 'Guardo la lettera di oggi…' : 'Scrivo la giornata…',
+    args.lettera === undefined ? messages(STEPS).readingLetter : messages(STEPS).writingDay,
   readsOnly: (args) => args.lettera === undefined,
   async execute(args, context) {
     const day = localDay()
@@ -72,7 +107,7 @@ export const todayTool: SegretarioTool = {
         content: current
           ? `La lettera di oggi, scritta alle ${new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(new Date(current.writtenAt))}:\n${unlinked(current.text)}`
           : "Oggi non c'è ancora una lettera.",
-        summary: 'Guardata la lettera di oggi'
+        summary: messages(STEPS).readLetter
       }
     }
 
@@ -110,7 +145,10 @@ export const todayTool: SegretarioTool = {
       throw error
     }
 
-    return { content: 'La lettera di oggi è in cima a Oggi.', summary: 'Scritta la giornata' }
+    return {
+      content: 'La lettera di oggi è in cima a Oggi.',
+      summary: messages(STEPS).wroteDay
+    }
   }
 }
 
@@ -123,7 +161,7 @@ export const reviewTool: SegretarioTool = {
     properties: { avvisi: { type: 'array', items: { type: 'string' } } },
     required: ['avvisi']
   },
-  running: () => 'Rileggo…',
+  running: () => messages(STEPS).rereading,
   async execute(args, context) {
     if (context.run.task !== 'revisione') {
       throw new ToolInputError(
@@ -142,9 +180,7 @@ export const reviewTool: SegretarioTool = {
           ? 'Nessun avviso: il messaggio parte.'
           : 'Avvisi mostrati all’utente.',
       summary:
-        warnings.length === 0
-          ? 'Riletto: tutto a posto'
-          : `Riletto: ${countOf(warnings.length, 'avviso', 'avvisi')}`
+        warnings.length === 0 ? messages(STEPS).allGood : messages(STEPS).warnings(warnings.length)
     }
   }
 }
@@ -163,7 +199,7 @@ export const journalTool: SegretarioTool = {
       cerca: { type: 'string' }
     }
   },
-  running: () => 'Rileggo cosa ho fatto…',
+  running: () => messages(STEPS).rereadingWork,
   readsOnly: () => true,
   async execute(args, context) {
     const days = Math.min(30, Math.max(1, numberArg(args, 'giorni') ?? 3))
@@ -207,7 +243,7 @@ export const journalTool: SegretarioTool = {
                 ? `\n(Ce n'è altro più indietro: restringi con \`cerca\` o con meno \`giorni\`.)`
                 : ''
             }`,
-      summary: 'Riletto il diario'
+      summary: messages(STEPS).readJournal
     }
   }
 }

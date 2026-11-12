@@ -72,7 +72,7 @@ describe('the Segretario’s notifications', () => {
     await vi.waitFor(() => expect(shown).toHaveLength(1))
 
     expect(shown[0]).toMatchObject({
-      title: 'Il Segretario ha finito',
+      title: 'The Segretario has finished',
       body: 'Ho trovato tre offerte da settembre.',
       when: 'away',
       target: { kind: 'activity', activityId: 'r1' }

@@ -1,17 +1,36 @@
 import { useEffect, useRef, useState } from 'react'
 
+import { languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages, type Messages } from '@shared/i18n'
+import { PLACES } from '@shared/places'
 import type { CommitmentKind, MessageRowWork } from '@shared/segretario'
 
 /** A thing open, by its kind, as a label before its words. */
-export const COMMITMENT_LABELS: Readonly<Record<CommitmentKind, string>> = {
-  ti_chiedono: 'Ti chiedono',
-  hai_promesso: 'Hai promesso',
-  aspetti: 'Aspetti',
-  da_fare: 'Da fare'
-}
+export const COMMITMENT_LABELS = defineMessages({
+  ti_chiedono: { en: 'Asked of you', it: 'Ti chiedono', de: 'An Sie gerichtet' },
+  hai_promesso: { en: 'You promised', it: 'Hai promesso', de: 'Von Ihnen zugesagt' },
+  aspetti: { en: 'You’re waiting', it: 'Aspetti', de: 'Sie warten' },
+  da_fare: { en: 'To do', it: 'Da fare', de: 'Zu tun' }
+}) satisfies Record<CommitmentKind, unknown>
 
-const SHORT_DAY = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
+const MESSAGES = defineMessages({
+  overdue: {
+    en: (day: string) => `was due ${day}`,
+    it: (day: string) => `scaduto il ${day}`,
+    de: (day: string) => `überfällig seit ${day}`
+  },
+  today: { en: 'today', it: 'oggi', de: 'heute' },
+  tomorrow: { en: 'tomorrow', it: 'domani', de: 'morgen' },
+  by: {
+    en: (day: string) => `by ${day}`,
+    it: (day: string) => `entro ${day}`,
+    de: (day: string) => `bis ${day}`
+  },
+  readyReply: { en: 'Ready reply', it: 'Risposta pronta', de: 'Fertige Antwort' }
+})
+
+const SHORT_DAY: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' }
 
 /** A day AAAA-MM-GG at its local midnight. */
 function dayDate(day: string): Date {
@@ -25,15 +44,18 @@ export function daysFromToday(day: string, today = new Date()): number {
   return Math.round((dayDate(day).getTime() - start.getTime()) / (24 * 60 * 60 * 1000))
 }
 
-/** A deadline as a person says it: "oggi", "domani", "entro 30 ott", "scaduto il 2 ott". */
+/** A deadline as a person says it: "today", "tomorrow", "by Oct 30", "was due Oct 2". */
 export function dueLabel(due: string, today = new Date()): string {
+  const m = messagesNow(MESSAGES)
   const days = daysFromToday(due, today)
+  const day = (): string =>
+    new Intl.DateTimeFormat(languageNow().formatLocale, SHORT_DAY).format(dayDate(due))
 
   if (days < 0) {
-    return `scaduto il ${SHORT_DAY.format(dayDate(due))}`
+    return m.overdue(day())
   }
 
-  return days === 0 ? 'oggi' : days === 1 ? 'domani' : `entro ${SHORT_DAY.format(dayDate(due))}`
+  return days === 0 ? m.today : days === 1 ? m.tomorrow : m.by(day())
 }
 
 export function rowWorkKey(message: { accountId: string; messageKey: string }): string {
@@ -41,21 +63,24 @@ export function rowWorkKey(message: { accountId: string; messageKey: string }): 
 }
 
 /** What a row says is expected now, in a word or two: what is owed, a reply ready, an answer awaited. */
-function expected(work: Pick<MessageRowWork, 'owed' | 'reply' | 'awaited'>): string | null {
+function expected(
+  work: Pick<MessageRowWork, 'owed' | 'reply' | 'awaited'>,
+  kinds: Messages<typeof COMMITMENT_LABELS>
+): string | null {
   if (work.owed) {
-    return COMMITMENT_LABELS[work.owed.kind]
+    return kinds[work.owed.kind]
   }
 
   if (work.reply === 'pronta') {
-    return 'Risposta pronta'
+    return messagesNow(MESSAGES).readyReply
   }
 
-  return work.awaited ? 'In attesa' : null
+  return work.awaited ? messagesNow(PLACES).waiting : null
 }
 
 /** Whether the Segretario has a word for a message's row; without one the row shows the preview. */
 export function hasWorkLine(work: MessageRowWork): boolean {
-  return work.note !== null || expected(work) !== null
+  return work.note !== null || expected(work, messagesNow(COMMITMENT_LABELS)) !== null
 }
 
 /**
@@ -70,7 +95,8 @@ export function WorkLine({
   work: MessageRowWork
   className?: string
 }): React.JSX.Element {
-  const label = expected(work)
+  // Read here, so a row kept by its list redraws in the interface's language.
+  const label = expected(work, useMessages(COMMITMENT_LABELS))
   const due = work.owed?.due ?? null
   const urgent = work.note?.priority === 'alta' || (due !== null && daysFromToday(due) <= 0)
   const note = work.note

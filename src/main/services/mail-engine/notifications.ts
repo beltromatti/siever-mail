@@ -1,7 +1,9 @@
 import { Notification } from 'electron'
 
+import { messages } from '@main/i18n'
 import type { NotificationCenter, NotificationInput } from '@main/notifications/center'
 import { folderRole } from '@shared/folders'
+import { defineMessages } from '@shared/i18n'
 import type { MailFolder, MailMessageSummary, MessageRef } from '@shared/models'
 
 /** The longest a new message waits for its reading before it is told as it is. */
@@ -15,8 +17,34 @@ const SUBJECT_MAX_LENGTH = 80
 const DEDUPE_TTL_MS = 10 * 60 * 1000
 /** A copy of a message told is not told again so long after: past any wait for its reading. */
 const COPY_TTL_MS = 60 * 60 * 1000
-/** Senders a notification of several messages names before "e altri N". */
+/** Senders a notification of several messages names before "and N others". */
 const NAMED_SENDERS = 2
+
+const MESSAGES = defineMessages({
+  unknownSender: { en: 'Unknown sender', it: 'Mittente sconosciuto', de: 'Unbekannter Absender' },
+  andOthers: {
+    en: (named: string, others: number) =>
+      `${named} and ${others === 1 ? '1 other' : `${others} others`}`,
+    it: (named: string, others: number) =>
+      `${named} e ${others === 1 ? 'un altro' : `altri ${others}`}`,
+    de: (named: string, others: number) =>
+      `${named} und ${others === 1 ? '1 weitere Person' : `${others} weitere`}`
+  },
+  noSubject: { en: '(no subject)', it: '(nessun oggetto)', de: '(kein Betreff)' },
+  newEmail: { en: 'New email', it: 'Nuova email', de: 'Neue E-Mail' },
+  newEmails: {
+    en: (count: number) => `${count} new emails`,
+    it: (count: number) => `${count} nuove email`,
+    de: (count: number) => `${count} neue E-Mails`
+  },
+  markRead: { en: 'Mark as read', it: 'Segna come letta', de: 'Als gelesen markieren' },
+  archive: { en: 'Archive', it: 'Archivia', de: 'Archivieren' },
+  from: {
+    en: (senders: string) => `From ${senders}`,
+    it: (senders: string) => `Da ${senders}`,
+    de: (senders: string) => `Von ${senders}`
+  }
+})
 
 /** What a notification's buttons do, on the message it tells. */
 export interface NotificationMessageActions {
@@ -57,16 +85,16 @@ function trimText(value: string, maxLength: number): string {
 }
 
 function senderLabel(message: MailMessageSummary): string {
-  return message.senderLabel || 'Mittente sconosciuto'
+  return message.senderLabel || messages(MESSAGES).unknownSender
 }
 
-/** "Mario Rossi, Anna Bianchi e altri 3": the people a batch is from, each once. */
-function senderList(messages: ReadonlyArray<MailMessageSummary>): string {
-  const senders = [...new Set([...messages].reverse().map(senderLabel))]
+/** "Mario Rossi, Anna Bianchi and 3 others": the people a batch is from, each once. */
+function senderList(batch: ReadonlyArray<MailMessageSummary>): string {
+  const senders = [...new Set([...batch].reverse().map(senderLabel))]
   const named = senders.slice(0, NAMED_SENDERS).join(', ')
   const others = senders.length - NAMED_SENDERS
 
-  return others <= 0 ? named : `${named} e ${others === 1 ? 'un altro' : `altri ${others}`}`
+  return others <= 0 ? named : messages(MESSAGES).andOthers(named, others)
 }
 
 /** A message told, with what the Segretario wrote of it when it said to tell it. */
@@ -450,11 +478,12 @@ export class MailNotifications {
       return
     }
 
-    const messages = told.map(({ message }) => message)
+    const toldMessages = told.map(({ message }) => message)
+    const m = messages(MESSAGES)
     const single = told.length === 1
     const flagged = told.some(({ summary }) => summary !== undefined)
     const key = single ? singleKey(latest.message) : `mail:${account.id}:batch:${now}`
-    const subject = trimText(latest.message.subject || '(nessun oggetto)', SUBJECT_MAX_LENGTH)
+    const subject = trimText(latest.message.subject || m.noSubject, SUBJECT_MAX_LENGTH)
     const input: NotificationInput = single
       ? {
           family: 'mail',
@@ -463,14 +492,14 @@ export class MailNotifications {
           title: senderLabel(latest.message),
           subtitle: subject,
           body: trimText(latest.summary ?? latest.message.preview, PREVIEW_MAX_LENGTH),
-          concealed: { title: 'Nuova email', body: account.email },
+          concealed: { title: m.newEmail, body: account.email },
           target: { kind: 'message', ref: refOf(latest.message) },
           actions: [
             {
-              label: 'Segna come letta',
+              label: m.markRead,
               run: () => this.deps.actions.markRead(refOf(latest.message))
             },
-            { label: 'Archivia', run: () => this.deps.actions.archive(refOf(latest.message)) }
+            { label: m.archive, run: () => this.deps.actions.archive(refOf(latest.message)) }
           ],
           when: 'always',
           group: { id: account.id, title: account.email }
@@ -480,10 +509,10 @@ export class MailNotifications {
           family: 'mail',
           kind: 'mail.batch',
           key,
-          title: `${told.length} nuove email`,
+          title: m.newEmails(told.length),
           subtitle: account.email,
-          body: `Da ${senderList(messages)}`,
-          concealed: { title: `${told.length} nuove email`, body: account.email },
+          body: m.from(senderList(toldMessages)),
+          concealed: { title: m.newEmails(told.length), body: account.email },
           target: { kind: 'message', ref: refOf(latest.message) },
           when: 'always',
           group: { id: account.id, title: account.email }
@@ -493,11 +522,11 @@ export class MailNotifications {
       return
     }
 
-    for (const message of messages) {
+    for (const message of toldMessages) {
       this.toldCopies.set(copyKey(message), now)
     }
 
-    const keys = new Set(messages.map(messageKey))
+    const keys = new Set(toldMessages.map(messageKey))
     this.messagesByKey.set(key, keys)
 
     for (const message of keys) {

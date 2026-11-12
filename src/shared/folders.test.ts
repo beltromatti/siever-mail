@@ -32,10 +32,15 @@ describe('folderRole', () => {
 })
 
 describe('folderDisplayName', () => {
-  it('names a folder by its role in Italian, and any other by its own name', () => {
-    expect(folderDisplayName(folder('INBOX'))).toBe('Posta in arrivo')
-    expect(folderDisplayName(folder('Sent Items', '\\Sent', 'Sent Items'))).toBe('Posta inviata')
-    expect(folderDisplayName(folder('INBOX.Fatture', undefined, 'Fatture'))).toBe('Fatture')
+  it('names a folder by its role in the language asked, and any other by its own name', () => {
+    expect(folderDisplayName(folder('INBOX'), 'it')).toBe('Posta in arrivo')
+    expect(folderDisplayName(folder('INBOX'), 'en')).toBe('Inbox')
+    expect(folderDisplayName(folder('Posta inviata', '\\Sent', 'Posta inviata'), 'en')).toBe('Sent')
+    expect(folderDisplayName(folder('Sent Items', '\\Sent', 'Sent Items'), 'it')).toBe(
+      'Posta inviata'
+    )
+    expect(folderDisplayName(folder('Trash', '\\Trash'), 'de')).toBe('Papierkorb')
+    expect(folderDisplayName(folder('INBOX.Fatture', undefined, 'Fatture'), 'de')).toBe('Fatture')
   })
 })
 

@@ -8,6 +8,7 @@ import { CALENDAR_IPC, type CalendarApi } from '@shared/calendar'
 import { DIAGNOSTICS_IPC, type DiagnosticsApi } from '@shared/diagnostics'
 import { NOTIFICATIONS_IPC, type NotificationsApi } from '@shared/notifications'
 import { FILES_IPC, type FilesApi } from '@shared/files'
+import { LANGUAGE_IPC, type LanguageApi, type LanguageState } from '@shared/i18n'
 import { SEGRETARIO_IPC, type SegretarioApi } from '@shared/segretario'
 
 const REMOTE_METHOD_ERROR_PREFIX =
@@ -287,6 +288,15 @@ const diagnosticsApi: DiagnosticsApi = {
   openFolder: async () => invoke(DIAGNOSTICS_IPC.openFolder)
 }
 
+// The interface's language, known before the page draws: asked once, synchronously, so the first
+// paint is already in it (vision §13.5).
+const languageApi: LanguageApi = {
+  initial: ipcRenderer.sendSync(LANGUAGE_IPC.initial) as LanguageState,
+  set: async (language) => invoke(LANGUAGE_IPC.set, language),
+  onChanged: (listener) => subscribe(LANGUAGE_IPC.changed, listener),
+  systemLanguage: async () => invoke(LANGUAGE_IPC.system)
+}
+
 // The extension's bridge, over its own channels (under its id), apart from the host's APIs:
 // `window.extensionApi`. The public build has no extension, and no such bridge.
 const extensionIdentity = extensionShared.identity
@@ -304,6 +314,7 @@ if (process.contextIsolated) {
   contextBridge.exposeInMainWorld('filesApi', filesApi)
   contextBridge.exposeInMainWorld('diagnosticsApi', diagnosticsApi)
   contextBridge.exposeInMainWorld('notificationsApi', notificationsApi)
+  contextBridge.exposeInMainWorld('languageApi', languageApi)
 
   if (extensionApi) {
     contextBridge.exposeInMainWorld('extensionApi', extensionApi)
@@ -321,6 +332,8 @@ if (process.contextIsolated) {
   window.diagnosticsApi = diagnosticsApi
   // @ts-expect-error context isolation disabled by external override
   window.notificationsApi = notificationsApi
+  // @ts-expect-error context isolation disabled by external override
+  window.languageApi = languageApi
   // @ts-expect-error context isolation disabled by external override
   window.extensionApi = extensionApi
 }

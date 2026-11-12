@@ -304,12 +304,18 @@ export type UndoSpec =
   /** A calendar's role it decided: undone, the user's word keeps the one before. */
   | { kind: 'calendario-ruolo'; calendarKey: string; before: CalendarRole }
 
-/** A change was refused: the conflict or the rule, said so the model can act on it. */
+/**
+ * A change was refused: the conflict or the rule, said so the model can act
+ * on it — in its Italian — and, where the user's own act can meet it, said
+ * to the user too (`shown`, in the interface's language).
+ */
 export class RegistryRefusal extends Error {
   constructor(
     message: string,
     /** The object as it is now, for the caller to look at again. */
-    readonly current?: unknown
+    readonly current?: unknown,
+    /** The refusal as the user reads it, when it is not the model's alone. */
+    readonly shown?: string
   ) {
     super(message)
     this.name = 'RegistryRefusal'

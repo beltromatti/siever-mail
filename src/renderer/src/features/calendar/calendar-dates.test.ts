@@ -1,16 +1,61 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { inTopBand, layoutDay, shiftSpan, startOfWeek, viewDays, viewTitle } from './calendar-dates'
+import type { LanguageState } from '@shared/i18n'
+
+import {
+  inTopBand,
+  layoutDay,
+  shiftSpan,
+  startOfWeek,
+  viewDays,
+  viewTitle,
+  weekdayNames
+} from './calendar-dates'
+
+const language = vi.hoisted(() => ({
+  state: { language: 'en', formatLocale: 'en' } as LanguageState
+}))
+
+vi.mock('@renderer/lib/i18n', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@renderer/lib/i18n')>()),
+  languageNow: () => language.state
+}))
 
 describe('calendar dates', () => {
-  it('starts weeks on Monday and gives a month six weeks', () => {
+  afterEach(() => {
+    language.state = { language: 'en', formatLocale: 'en' }
+  })
+
+  it('starts weeks where the region does and gives a month six weeks', () => {
     // Thursday 5 November 2026.
     const anchor = new Date(2026, 10, 5, 10)
 
+    // English alone is written as in the United States: weeks from Sunday.
+    expect(startOfWeek(anchor)).toEqual(new Date(2026, 10, 1))
+    expect(viewDays('mese', anchor)[0]).toEqual(new Date(2026, 10, 1))
+    expect(viewDays('mese', anchor)).toHaveLength(42)
+    // Intl sets a range's dash between thin spaces where the days have spaces of their own.
+    expect(viewTitle('settimana', anchor)).toBe('November 1\u2009–\u20097, 2026')
+    expect(weekdayNames('short')).toEqual(['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])
+
+    // In English on an Italian computer, and in Italian: from Monday.
+    language.state = { language: 'en', formatLocale: 'en-IT' }
+    expect(startOfWeek(anchor)).toEqual(new Date(2026, 10, 2))
+    expect(viewTitle('settimana', anchor)).toBe('2–8 November 2026')
+
+    language.state = { language: 'it', formatLocale: 'it-IT' }
     expect(startOfWeek(anchor)).toEqual(new Date(2026, 10, 2))
     expect(viewDays('mese', anchor)[0]).toEqual(new Date(2026, 9, 26))
     expect(viewDays('mese', anchor)).toHaveLength(42)
-    expect(viewTitle('settimana', anchor)).toBe('2 – 8 novembre 2026')
+    expect(viewTitle('settimana', anchor)).toBe('2–8 novembre 2026')
+    expect(viewTitle('settimana', new Date(2026, 9, 29))).toBe(
+      '26 ottobre\u2009–\u20091 novembre 2026'
+    )
+    expect(weekdayNames('narrow')).toEqual(['L', 'M', 'M', 'G', 'V', 'S', 'D'])
+
+    language.state = { language: 'de', formatLocale: 'de-DE' }
+    expect(viewTitle('settimana', anchor)).toBe('2.–8. November 2026')
+    expect(viewTitle('giorno', anchor)).toBe('Donnerstag, 5. November 2026')
   })
 
   it('puts overlapping events side by side, the others full width', () => {

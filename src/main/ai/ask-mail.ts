@@ -1,3 +1,23 @@
+import { defineMessages } from '@shared/i18n'
+
+import { messages } from '../i18n'
+
+/** The periods from today, as the line under a list says them. */
+const PERIODS = defineMessages({
+  today: { en: 'today', it: 'oggi', de: 'heute' },
+  yesterday: { en: 'yesterday', it: 'ieri', de: 'gestern' },
+  thisWeek: { en: 'this week', it: 'questa settimana', de: 'diese Woche' },
+  lastWeek: { en: 'last week', it: 'la settimana scorsa', de: 'letzte Woche' },
+  thisMonth: { en: 'this month', it: 'questo mese', de: 'diesen Monat' },
+  lastMonth: { en: 'last month', it: 'il mese scorso', de: 'letzten Monat' },
+  lastDays: {
+    en: (days: number | null) => (days === 1 ? 'in the last day' : `in the last ${days} days`),
+    it: (days: number | null) =>
+      days === 1 ? "nell'ultimo giorno" : `negli ultimi ${days} giorni`,
+    de: (days: number | null) => (days === 1 ? 'am letzten Tag' : `in den letzten ${days} Tagen`)
+  }
+})
+
 /**
  * A period said from today — "questa settimana", "negli ultimi 10 giorni" —
  * kept as said, so a search kept as a folder moves with the days.
@@ -72,22 +92,24 @@ export function searchPeriod(
   }
 }
 
-/** A period from today in words, for the line that says how a list searches. */
+/** A period from today in words, for the line that says how a list searches: the user reads it. */
 export function periodWords(period: NonNullable<AskedSearch['period']>): string {
+  const m = messages(PERIODS)
+
   switch (period.kind) {
     case 'oggi':
-      return 'oggi'
+      return m.today
     case 'ieri':
-      return 'ieri'
+      return m.yesterday
     case 'questa_settimana':
-      return 'questa settimana'
+      return m.thisWeek
     case 'settimana_scorsa':
-      return 'la settimana scorsa'
+      return m.lastWeek
     case 'questo_mese':
-      return 'questo mese'
+      return m.thisMonth
     case 'mese_scorso':
-      return 'il mese scorso'
+      return m.lastMonth
     case 'ultimi_giorni':
-      return period.days === 1 ? "nell'ultimo giorno" : `negli ultimi ${period.days} giorni`
+      return m.lastDays(period.days)
   }
 }

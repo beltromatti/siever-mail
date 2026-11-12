@@ -10,14 +10,58 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
+import { hourStyle, languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { formatByteSize } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
 import type { MailAttachment, RecentFile } from '@shared/models'
 
 import { AttachmentIcon } from './attachment-chip'
 
-const TIME_FORMAT = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
-const WEEKDAY_FORMAT = new Intl.DateTimeFormat('it-IT', { weekday: 'long' })
-const DATE_FORMAT = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
+const MESSAGES = defineMessages({
+  todayAt: {
+    en: (time: string) => `today at ${time}`,
+    it: (time: string) => `oggi alle ${time}`,
+    de: (time: string) => `heute um ${time}`
+  },
+  yesterdayAt: {
+    en: (time: string) => `yesterday at ${time}`,
+    it: (time: string) => `ieri alle ${time}`,
+    de: (time: string) => `gestern um ${time}`
+  },
+  attach: { en: 'Attach', it: 'Allega', de: 'Anhängen' },
+  fromOriginal: {
+    en: 'From the original message',
+    it: 'Dal messaggio originale',
+    de: 'Aus der ursprünglichen Nachricht'
+  },
+  attachAll: {
+    en: (count: number) => `Attach all ${count}`,
+    it: (count: number) => `Allega tutti e ${count}`,
+    de: (count: number) => `Alle ${count} anhängen`
+  },
+  recentFiles: { en: 'Recent files', it: 'File recenti', de: 'Zuletzt verwendete Dateien' },
+  searching: {
+    en: 'Looking for recent files…',
+    it: 'Ricerca dei file recenti…',
+    de: 'Zuletzt verwendete Dateien werden gesucht…'
+  },
+  noRecent: {
+    en: 'No recent files. The files you open, send or save show up here.',
+    it: 'Nessun file recente. I file che apri, invii o salvi compaiono qui.',
+    de: 'Keine zuletzt verwendeten Dateien. Dateien, die Sie öffnen, senden oder speichern, erscheinen hier.'
+  },
+  inFolder: {
+    en: (folder: string) => `in ${folder}`,
+    it: (folder: string) => `in ${folder}`,
+    de: (folder: string) => `in ${folder}`
+  },
+  browse: {
+    en: 'Browse this computer…',
+    it: 'Sfoglia questo computer…',
+    de: 'Diesen Computer durchsuchen…'
+  }
+})
+
 const DAY_MS = 24 * 60 * 60 * 1000
 /**
  * A newer list that arrives within this long of the menu opening replaces
@@ -31,19 +75,26 @@ function startOfDay(time: number): number {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
 }
 
-/** "oggi alle 15:32", "ieri alle 9:05", "lunedì", "12 set". */
+/** "today at 15:32", "yesterday at 9:05", "Monday", "12 Sept". */
 function formatUsedAt(usedAt: number, now = Date.now()): string {
+  const m = messagesNow(MESSAGES)
+  const { formatLocale } = languageNow()
   const days = Math.round((startOfDay(now) - startOfDay(usedAt)) / DAY_MS)
+  const time = (): string =>
+    new Intl.DateTimeFormat(formatLocale, { hour: hourStyle(), minute: '2-digit' }).format(usedAt)
 
   if (days <= 0) {
-    return `oggi alle ${TIME_FORMAT.format(usedAt)}`
+    return m.todayAt(time())
   }
 
   if (days === 1) {
-    return `ieri alle ${TIME_FORMAT.format(usedAt)}`
+    return m.yesterdayAt(time())
   }
 
-  return days < 7 ? WEEKDAY_FORMAT.format(usedAt) : DATE_FORMAT.format(usedAt)
+  return new Intl.DateTimeFormat(
+    formatLocale,
+    days < 7 ? { weekday: 'long' } : { day: 'numeric', month: 'short' }
+  ).format(usedAt)
 }
 
 export interface AttachMenuProps {
@@ -80,6 +131,7 @@ export function AttachMenu({
   onAttachPaths,
   onBrowse
 }: AttachMenuProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [recentFiles, setRecentFiles] = useState<RecentFile[] | null>(null)
   /** When the menu opened, or null while it is closed. */
   const openedAtRef = useRef<number | null>(null)
@@ -133,7 +185,7 @@ export function AttachMenu({
           disabled={disabled}
         >
           <Paperclip className="size-3.5" />
-          Allega
+          {m.attach}
           <ChevronDown className="text-muted-foreground size-3" />
         </Button>
       </DropdownMenuTrigger>
@@ -141,7 +193,7 @@ export function AttachMenu({
         {originals.length > 0 && onAttachOriginals && (
           <>
             <DropdownMenuLabel className="text-muted-foreground text-[11px] font-medium">
-              Dal messaggio originale
+              {m.fromOriginal}
             </DropdownMenuLabel>
             {originals.map((attachment) => (
               <DropdownMenuItem
@@ -167,7 +219,7 @@ export function AttachMenu({
                 onSelect={() => onAttachOriginals(originals.map((attachment) => attachment.id))}
               >
                 <Paperclip className="text-muted-foreground size-3.5" />
-                Allega tutti e {originals.length}
+                {m.attachAll(originals.length)}
               </DropdownMenuItem>
             )}
             <DropdownMenuSeparator />
@@ -175,18 +227,16 @@ export function AttachMenu({
         )}
 
         <DropdownMenuLabel className="text-muted-foreground text-[11px] font-medium">
-          File recenti
+          {m.recentFiles}
         </DropdownMenuLabel>
 
         {recentFiles === null ? (
           <div className="text-muted-foreground flex items-center gap-2 px-2 py-2 text-[12px]">
             <LoaderCircle className="size-3.5 animate-spin" />
-            Ricerca dei file recenti…
+            {m.searching}
           </div>
         ) : recentFiles.length === 0 ? (
-          <p className="text-muted-foreground px-2 py-2 text-[12px]">
-            Nessun file recente. I file che apri, invii o salvi compaiono qui.
-          </p>
+          <p className="text-muted-foreground px-2 py-2 text-[12px]">{m.noRecent}</p>
         ) : (
           recentFiles.map((file) => (
             <DropdownMenuItem
@@ -202,7 +252,8 @@ export function AttachMenu({
               <span className="flex min-w-0 flex-col">
                 <span className="truncate text-[12px] font-medium">{file.name}</span>
                 <span className="text-muted-foreground truncate text-[10.5px]">
-                  {file.activity} · {formatUsedAt(file.usedAt)} · in {folderName(file.folder)}
+                  {file.activity} · {formatUsedAt(file.usedAt)} ·{' '}
+                  {m.inFolder(folderName(file.folder))}
                 </span>
               </span>
             </DropdownMenuItem>
@@ -212,7 +263,7 @@ export function AttachMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem className="gap-2" onSelect={onBrowse}>
           <FolderOpen className="text-muted-foreground size-3.5" />
-          Sfoglia questo computer…
+          {m.browse}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

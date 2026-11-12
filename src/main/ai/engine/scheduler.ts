@@ -1,8 +1,16 @@
+import { defineMessages } from '@shared/i18n'
+
 import { diagnostics } from '@main/diagnostics/log'
+import { messages } from '../../i18n'
 import type { Reachability } from './reachability'
 import type { WorkQueue, WorkUnit } from './work-queue'
 
 const log = diagnostics('segretario')
+
+/** Why a unit stopped, kept with it: what a failed one shows the user. */
+const MESSAGES = defineMessages({
+  stopped: { en: 'Stopped.', it: 'Interrotto.', de: 'Unterbrochen.' }
+})
 
 /** Work at this priority or later is the backlog: it never takes the last free place. */
 export const BACKLOG_PRIORITY = 50
@@ -403,7 +411,7 @@ export class Scheduler {
       // Stopped by a quit, the sleep, the user, or put aside: a quit, the sleep or a put aside
       // leaves it to wait again, the user cancels it.
       if (this.stopped || running.stoppedBy === 'sleep' || running.stoppedBy === 'again') {
-        await this.queue.fail(unit.id, 'Interrotto.', { retry: true })
+        await this.queue.fail(unit.id, messages(MESSAGES).stopped, { retry: true })
       } else {
         await this.queue.cancel(unit.id)
       }

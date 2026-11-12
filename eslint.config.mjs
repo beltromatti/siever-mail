@@ -5,6 +5,8 @@ import eslintPluginReact from 'eslint-plugin-react'
 import eslintPluginReactHooks from 'eslint-plugin-react-hooks'
 import eslintPluginReactRefresh from 'eslint-plugin-react-refresh'
 
+import noRawUiText from './eslint/no-raw-ui-text.mjs'
+
 export default defineConfig(
   {
     ignores: [
@@ -44,6 +46,13 @@ export default defineConfig(
     }
   },
   {
+    // Every word of the interface in every language (vision §13.5): the page's and an extension's.
+    files: ['src/renderer/src/**/*.tsx', 'extension/renderer/**/*.tsx'],
+    ignores: ['**/*.test.tsx'],
+    plugins: { siever: { rules: { 'no-raw-ui-text': noRawUiText } } },
+    rules: { 'siever/no-raw-ui-text': 'error' }
+  },
+  {
     // An extension reaches the host only through its contract and kit (`src/extension/`),
     // the interface's components and the shared model: the rest of the host may change under it.
     files: ['extension/**/*.{ts,tsx}'],
@@ -70,7 +79,7 @@ export default defineConfig(
     // Plain-JS tooling: audit helpers and Playwright e2e drivers. They are
     // scripts, not application modules, so the TypeScript-oriented rules the
     // app holds itself to do not apply.
-    files: ['scripts/**/*.mjs', 'extension/scripts/**/*.mjs', '*.mjs'],
+    files: ['scripts/**/*.mjs', 'extension/scripts/**/*.mjs', 'eslint/**/*.mjs', '*.mjs'],
     rules: {
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/no-unused-expressions': 'off'

@@ -264,7 +264,8 @@ describe('AgentRunner', () => {
       activityId: await start(),
       task: 'richiesta',
       background: true,
-      missing: async () => (written ? null : 'Scrivi la nota.')
+      missing: async () =>
+        written ? null : { forModel: 'Scrivi la nota.', shown: 'Writing the note.' }
     })
 
     expect(result.status).toBe('done')
@@ -276,7 +277,7 @@ describe('AgentRunner', () => {
       activityId: await start('b'),
       task: 'richiesta',
       background: true,
-      missing: async () => 'Scrivi la nota.'
+      missing: async () => ({ forModel: 'Scrivi la nota.', shown: 'Writing the note.' })
     })
 
     expect((stopped.error as SegretarioError).code).toBe('stuck')

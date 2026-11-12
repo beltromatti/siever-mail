@@ -24,7 +24,7 @@ describe('searchPeriod', () => {
       from: '2026-10-19',
       to: '2026-10-28'
     })
-    expect(periodWords({ kind: 'ultimi_giorni', days: 10 })).toBe('negli ultimi 10 giorni')
+    expect(periodWords({ kind: 'ultimi_giorni', days: 10 })).toBe('in the last 10 days')
   })
 
   it('keeps fixed dates, and takes a search kept before periods existed', () => {

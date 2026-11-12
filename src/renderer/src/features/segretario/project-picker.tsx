@@ -2,9 +2,31 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Check, FolderPlus, Search } from 'lucide-react'
 
 import { Popover, PopoverContent, PopoverTrigger } from '@renderer/components/ui/popover'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
 import type { Project } from '@shared/segretario'
 import { foldSearchText } from '@shared/search'
+
+const MESSAGES = defineMessages({
+  here: { en: 'Here', it: 'Qui', de: 'Hier' },
+  active: { en: 'In progress', it: 'In corso', de: 'Laufend' },
+  closed: { en: 'Completed', it: 'Conclusi', de: 'Abgeschlossen' },
+  search: { en: 'Find a project…', it: 'Cerca un progetto…', de: 'Projekt suchen…' },
+  searchLabel: { en: 'Find a project', it: 'Cerca un progetto', de: 'Projekt suchen' },
+  noResults: { en: 'No results.', it: 'Nessun risultato.', de: 'Keine Ergebnisse.' },
+  noProjects: {
+    en: 'No projects yet: the Segretario recognizes them as it reads the mail. Type a name to create one.',
+    it: 'Nessun progetto, per ora: il Segretario li riconosce leggendo la posta. Scrivi un nome per crearne uno.',
+    de: 'Noch keine Projekte: Der Segretario erkennt sie beim Lesen der E-Mails. Geben Sie einen Namen ein, um eines zu erstellen.'
+  },
+  create: {
+    en: (title: string) => `Create “${title}”`,
+    it: (title: string) => `Crea «${title}»`,
+    de: (title: string) => `„${title}“ erstellen`
+  },
+  remove: { en: 'remove', it: 'togli', de: 'entfernen' }
+})
 
 /** With nothing typed, how many of the quieter projects follow those in corso. */
 const QUIET_SHOWN = 40
@@ -38,6 +60,7 @@ export function ProjectPicker({
   onToggle,
   onCreate
 }: ProjectPickerProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -75,24 +98,24 @@ export function ProjectPicker({
     return [
       ...(mine.length > 0
         ? [
-            { kind: 'heading' as const, key: 'heading:mine', label: 'Qui' },
+            { kind: 'heading' as const, key: 'heading:mine', label: m.here },
             ...mine.map((project) => entry(project, 'mine'))
           ]
         : []),
       ...(active.length > 0
         ? [
-            { kind: 'heading' as const, key: 'heading:active', label: 'In corso' },
+            { kind: 'heading' as const, key: 'heading:active', label: m.active },
             ...active.map((project) => entry(project, 'active'))
           ]
         : []),
       ...(closed.length > 0
         ? [
-            { kind: 'heading' as const, key: 'heading:closed', label: 'Conclusi' },
+            { kind: 'heading' as const, key: 'heading:closed', label: m.closed },
             ...closed.map((project) => entry(project, 'closed'))
           ]
         : [])
     ]
-  }, [linkedIds, onCreate, projects, query])
+  }, [linkedIds, m, onCreate, projects, query])
 
   const choosable = useMemo(
     () => entries.flatMap((entry, index) => (entry.kind === 'heading' ? [] : [index])),
@@ -140,8 +163,8 @@ export function ProjectPicker({
               choose(entries[activeEntryIndex])
             }
           }}
-          placeholder="Cerca un progetto…"
-          aria-label="Cerca un progetto"
+          placeholder={m.search}
+          aria-label={m.searchLabel}
           spellCheck={false}
           autoComplete="off"
           className="bg-background/60 border-border/70 focus-visible:ring-ring/60 h-7 w-full rounded-md border pr-2 pl-7 text-[12px] outline-none focus-visible:ring-2"
@@ -156,9 +179,7 @@ export function ProjectPicker({
       >
         {entries.length === 0 && (
           <p className="text-muted-foreground px-2 py-3 text-center text-[11.5px]">
-            {query.trim()
-              ? 'Nessun risultato.'
-              : 'Nessun progetto, per ora: il Segretario li riconosce leggendo la posta. Scrivi un nome per crearne uno.'}
+            {query.trim() ? m.noResults : m.noProjects}
           </p>
         )}
         {entries.map((entry, index) => {
@@ -200,7 +221,7 @@ export function ProjectPicker({
               {entry.kind === 'create' ? (
                 <>
                   <FolderPlus className="size-3.5 shrink-0" />
-                  <span className="min-w-0 truncate">Crea «{entry.title}»</span>
+                  <span className="min-w-0 truncate">{m.create(entry.title)}</span>
                 </>
               ) : (
                 <>
@@ -209,7 +230,7 @@ export function ProjectPicker({
                   </span>
                   <span className="min-w-0 flex-1 truncate">{entry.project.title}</span>
                   {entry.linked && active ? (
-                    <span className="text-muted-foreground shrink-0 text-[10.5px]">togli</span>
+                    <span className="text-muted-foreground shrink-0 text-[10.5px]">{m.remove}</span>
                   ) : (
                     entry.project.conversations > 0 && (
                       <span className="text-faint-foreground shrink-0 text-[10.5px] tabular-nums">

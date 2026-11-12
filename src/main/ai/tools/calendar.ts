@@ -8,6 +8,7 @@ import {
 
 import { unlinked } from '@shared/segretario-links'
 
+import { messages } from '../../i18n'
 import { foldTitle } from '../registry/projects'
 import type { ProposalRecord, UndoSpec } from '../registry/types'
 
@@ -25,7 +26,9 @@ import {
   UnknownHandle
 } from '../agent/tool-types'
 import { resolveMessage } from './anchors'
+import { MESSAGES } from './calendar.messages'
 import { countOf, eventWhen } from './format'
+import { userDates } from './user-dates'
 
 /** Without dates, the agenda listed: today and the week after. */
 const DEFAULT_DAYS = 8
@@ -104,6 +107,35 @@ function changeLines(event: CalendarEvent, change: EventChange): string[] {
   if (change.description !== undefined) lines.push('Cambia la descrizione.')
   if (change.attendees !== undefined) {
     lines.push(`Invitati: ${change.attendees.length > 0 ? change.attendees.join(', ') : 'nessuno'}`)
+  }
+
+  return lines
+}
+
+/** The same, as the user reads it — on the confirmation, under a proposal — in their language. */
+function shownChangeLines(event: CalendarEvent, change: EventChange): string[] {
+  const m = messages(MESSAGES)
+  const dates = userDates()
+  const lines: string[] = []
+
+  if (change.title !== undefined) lines.push(m.titleWas(change.title, event.title))
+  if (change.start !== undefined || change.end !== undefined || change.allDay !== undefined) {
+    lines.push(
+      m.whenWas(
+        eventWhen(
+          change.start ?? event.start,
+          change.end ?? event.end,
+          change.allDay ?? event.allDay,
+          dates
+        ),
+        eventWhen(event.start, event.end, event.allDay, dates)
+      )
+    )
+  }
+  if (change.location !== undefined) lines.push(m.whereNow(change.location ?? null))
+  if (change.description !== undefined) lines.push(m.descriptionChanges)
+  if (change.attendees !== undefined) {
+    lines.push(m.guestsNow(change.attendees.length > 0 ? change.attendees.join(', ') : null))
   }
 
   return lines
@@ -618,7 +650,7 @@ async function listEvents(
 
   return {
     content: lines.join('\n\n'),
-    summary: `Guardato il calendario · ${countOf(events.length, 'evento', 'eventi')}`
+    summary: messages(MESSAGES).looked(events.length)
   }
 }
 
@@ -651,19 +683,23 @@ export const calendarTool: SegretarioTool = {
     },
     required: ['azione']
   },
-  running: (args) =>
-    ({
-      cerca: stringArg(args, 'parole')
-        ? `Cerco «${stringArg(args, 'parole')}» nel calendario…`
-        : 'Cerco nel calendario…',
-      crea: 'Metto in calendario…',
-      modifica: 'Correggo l’evento…',
-      elimina: 'Tolgo l’evento…',
-      rispondi: 'Preparo la risposta all’invito…',
-      ritira: 'Ritiro una proposta…',
-      proponi: 'Preparo la proposta…',
-      liberi: 'Cerco gli orari liberi…'
-    })[String(args.azione)] ?? 'Guardo il calendario…',
+  running: (args) => {
+    const m = messages(MESSAGES)
+    const words = stringArg(args, 'parole')
+
+    return (
+      {
+        cerca: words ? m.searchingFor(words) : m.searching,
+        crea: m.creating,
+        modifica: m.editing,
+        elimina: m.removing,
+        rispondi: m.answering,
+        ritira: m.withdrawing,
+        proponi: m.proposing,
+        liberi: m.freeSlots
+      }[String(args.azione)] ?? m.looking
+    )
+  },
   readsOnly: (args) => ['elenco', 'cerca', 'liberi'].includes(String(args.azione)),
   async execute(args, context): Promise<ToolOutcome> {
     const action = requireString(args, 'azione') as (typeof ACTIONS)[number]
@@ -693,7 +729,7 @@ export const calendarTool: SegretarioTool = {
         if (events.length === 0) {
           return {
             content: `Nessun evento con «${words}»${period}. Ogni parola si cerca nel titolo, nel luogo, nella descrizione, tra gli invitati (nomi e indirizzi) e nel nome del calendario, e devono esserci tutte: prova con meno parole o con altre — il cognome, la località, una parola del titolo${period ? ', o senza `da` e `a`' : ''}. ${heldWords()}: di un appuntamento più vecchio può dire la posta (\`cerca_posta\`).`,
-            summary: `Cercato «${words}» nel calendario · nessun evento`
+            summary: messages(MESSAGES).searched(words, 0)
           }
         }
 
@@ -717,7 +753,7 @@ export const calendarTool: SegretarioTool = {
           ]
             .filter(Boolean)
             .join('\n\n'),
-          summary: `Cercato «${words}» nel calendario · ${countOf(events.length, 'evento', 'eventi')}`
+          summary: messages(MESSAGES).searched(words, events.length)
         }
       }
       case 'liberi': {
@@ -742,7 +778,7 @@ export const calendarTool: SegretarioTool = {
                       `- ${DAY.format(slot.start)} ${TIME.format(slot.start)}–${TIME.format(slot.end)}`
                   )
                   .join('\n')}`,
-          summary: `Cercati gli orari liberi · ${slots.length}`
+          summary: messages(MESSAGES).foundFree(slots.length)
         }
       }
       case 'crea': {
@@ -776,21 +812,22 @@ export const calendarTool: SegretarioTool = {
         }
 
         if (attendees.length > 0) {
+          const m = messages(MESSAGES)
           const { approved } = await context.requestApproval({
             kind: 'action',
-            title: `Nuovo evento: ${event.title}`,
+            title: m.newEvent(event.title),
             details: [
-              `Quando: ${eventWhen(event.start, event.end, allDay)}`,
-              ...(event.location ? [`Dove: ${event.location}`] : []),
-              `Invitati: ${attendees.join(', ')} (ricevono l'invito)`
+              m.when(eventWhen(event.start, event.end, allDay, userDates())),
+              ...(event.location ? [m.where(event.location)] : []),
+              m.invited(attendees.join(', '))
             ],
-            confirmLabel: 'Crea e invita'
+            confirmLabel: m.createAndInvite
           })
 
           if (!approved) {
             return {
               content: "L'utente non l'ha confermato: niente evento.",
-              summary: 'Evento non creato'
+              summary: messages(MESSAGES).notCreated
             }
           }
         }
@@ -801,18 +838,18 @@ export const calendarTool: SegretarioTool = {
           if (there) {
             return {
               content: `C'è già: ${eventLine(there, context)} — stesso orario, titolo simile. Se è un altro evento, dagli un titolo che lo distingua.`,
-              summary: `Già in calendario: ${there.title}`
+              summary: messages(MESSAGES).alreadyThere(there.title)
             }
           }
 
           const created = await context.calendar.create(event)
-          recordChange(context, 'creato', `In calendario: ${created.title}`, created, {
+          recordChange(context, 'creato', messages(MESSAGES).created(created.title), created, {
             kind: 'evento-creato',
             eventKey: created.key
           })
           return {
             content: `Creato: ${eventLine(created, context)}`,
-            summary: `In calendario: ${created.title}`
+            summary: messages(MESSAGES).created(created.title)
           }
         })
       }
@@ -840,32 +877,40 @@ export const calendarTool: SegretarioTool = {
             )
           }
 
+          const m = messages(MESSAGES)
           const { approved } = await context.requestApproval({
             kind: 'action',
-            title: `Modifica: ${current.title}`,
+            title: m.change(current.title),
             details: [
-              ...changeLines(current, change),
-              invited.length > 0
-                ? 'Gli invitati ricevono l’invito o l’aggiornamento.'
-                : 'Gli invitati ricevono l’aggiornamento.'
+              ...shownChangeLines(current, change),
+              invited.length > 0 ? m.guestsInvitedOrUpdated : m.guestsUpdated
             ],
-            confirmLabel: 'Modifica'
+            confirmLabel: m.changeLabel
           })
 
           if (!approved) {
-            return { content: "L'utente non l'ha confermato.", summary: 'Evento non modificato' }
+            return {
+              content: "L'utente non l'ha confermato.",
+              summary: messages(MESSAGES).notChanged
+            }
           }
         }
 
         const updated = await context.calendar.update(key, change)
-        recordChange(context, 'modificato', `Corretto in calendario: ${updated.title}`, updated, {
-          kind: 'evento-modificato',
-          eventKey: key,
-          before: beforeChange(current, change)
-        })
+        recordChange(
+          context,
+          'modificato',
+          messages(MESSAGES).correctedInCalendar(updated.title),
+          updated,
+          {
+            kind: 'evento-modificato',
+            eventKey: key,
+            before: beforeChange(current, change)
+          }
+        )
         return {
           content: `Aggiornato: ${eventLine(updated, context)}`,
-          summary: `Corretto: ${updated.title}`
+          summary: messages(MESSAGES).corrected(updated.title)
         }
       }
       case 'elimina': {
@@ -873,7 +918,7 @@ export const calendarTool: SegretarioTool = {
         const current = await context.calendar.event(key)
 
         if (!current) {
-          return { content: "L'evento non c'era più.", summary: 'Evento già tolto' }
+          return { content: "L'evento non c'era più.", summary: messages(MESSAGES).alreadyGone }
         }
 
         refuseInvitation(current)
@@ -885,20 +930,24 @@ export const calendarTool: SegretarioTool = {
         }
 
         if (!context.run.background) {
+          const m = messages(MESSAGES)
           const { approved } = await context.requestApproval({
             kind: 'action',
-            title: `Elimina: ${current.title}`,
-            details: hasGuests(current) ? ['Gli invitati ricevono la cancellazione.'] : [],
-            confirmLabel: 'Elimina'
+            title: m.delete(current.title),
+            details: hasGuests(current) ? [m.guestsCancelled] : [],
+            confirmLabel: m.deleteLabel
           })
 
           if (!approved) {
-            return { content: "L'utente non l'ha confermato.", summary: 'Evento non eliminato' }
+            return {
+              content: "L'utente non l'ha confermato.",
+              summary: messages(MESSAGES).notRemoved
+            }
           }
         }
 
         await context.calendar.remove(key)
-        recordChange(context, 'eliminato', `Tolto dal calendario: ${current.title}`, current, {
+        recordChange(context, 'eliminato', messages(MESSAGES).removed(current.title), current, {
           kind: 'evento-eliminato',
           event: {
             calendarKey: calendarKey(current.connectionId, current.calendarId),
@@ -916,7 +965,7 @@ export const calendarTool: SegretarioTool = {
         })
         return {
           content: `Tolto «${current.title}».`,
-          summary: `Tolto dal calendario: ${current.title}`
+          summary: messages(MESSAGES).removed(current.title)
         }
       }
       case 'rispondi': {
@@ -930,21 +979,25 @@ export const calendarTool: SegretarioTool = {
         }
 
         const current = await context.calendar.event(key)
+        const m = messages(MESSAGES)
         const { approved } = await context.requestApproval({
           kind: 'action',
-          title: `${RESPONSE_WORDS[response] === 'partecipa' ? 'Partecipi' : 'Rispondi'}: ${current?.title ?? 'invito'}`,
-          details: [`Risposta: ${RESPONSE_WORDS[response]}`, "L'organizzatore riceve la risposta."],
-          confirmLabel: 'Rispondi'
+          title: m.respond(response, current?.title ?? null),
+          details: [m.answer(response), m.organizerTold],
+          confirmLabel: m.replyLabel
         })
 
         if (!approved) {
-          return { content: "L'utente non l'ha confermato.", summary: 'Invito non risposto' }
+          return {
+            content: "L'utente non l'ha confermato.",
+            summary: messages(MESSAGES).notAnswered
+          }
         }
 
         const answered = await context.calendar.respond(key, response)
         return {
           content: `Risposto: ${eventLine(answered, context)}`,
-          summary: `Risposto all'invito: ${answered.title}`
+          summary: messages(MESSAGES).answered(answered.title)
         }
       }
       case 'proponi': {
@@ -984,7 +1037,7 @@ export const calendarTool: SegretarioTool = {
             const proposal = await context.registry.propose(
               {
                 kind: 'evento',
-                title: `Rispondi «${RESPONSE_WORDS[response]}»: ${current.title}`,
+                title: messages(MESSAGES).proposeAnswer(response, current.title),
                 payload: { ...shown, response },
                 ...from,
                 replaces: waiting?.id ?? null,
@@ -994,7 +1047,7 @@ export const calendarTool: SegretarioTool = {
             )
             return {
               content: `Proposta all'utente: ${proposal.title}. La vede in Oggi e nel calendario e risponde con un clic.`,
-              summary: `Proposto di rispondere: ${current.title}`
+              summary: messages(MESSAGES).proposedAnswer(current.title)
             }
           }
 
@@ -1011,7 +1064,7 @@ export const calendarTool: SegretarioTool = {
           const proposal = await context.registry.propose(
             {
               kind: 'evento',
-              title: `Modifica: ${current.title}`,
+              title: messages(MESSAGES).change(current.title),
               payload: {
                 ...shown,
                 title: change.title ?? current.title,
@@ -1020,7 +1073,7 @@ export const calendarTool: SegretarioTool = {
                 allDay: change.allDay ?? current.allDay,
                 location: change.location !== undefined ? change.location : current.location,
                 change,
-                changes: changeLines(current, change)
+                changes: shownChangeLines(current, change)
               },
               ...from,
               replaces: waiting?.id ?? null,
@@ -1030,7 +1083,7 @@ export const calendarTool: SegretarioTool = {
           )
           return {
             content: `Proposta all'utente: ${proposal.title} (${changeLines(current, change).join('; ')}). La vede in Oggi e nel calendario e la applica con un clic.`,
-            summary: `Proposta una modifica: ${current.title}`
+            summary: messages(MESSAGES).proposedChange(current.title)
           }
         }
 
@@ -1046,7 +1099,7 @@ export const calendarTool: SegretarioTool = {
           if (there) {
             return {
               content: `È già in calendario: ${eventLine(there, context)} — non serve proporlo.`,
-              summary: `Già in calendario: ${there.title}`
+              summary: messages(MESSAGES).alreadyThere(there.title)
             }
           }
 
@@ -1066,14 +1119,14 @@ export const calendarTool: SegretarioTool = {
           if (waiting) {
             return {
               content: `La proposta c'è già e aspetta l'utente: ${proposalLine(waiting).slice(2)}.`,
-              summary: `Già proposto: ${title}`
+              summary: messages(MESSAGES).alreadyProposed(title)
             }
           }
 
           const proposal = await context.registry.propose(
             {
               kind: 'evento',
-              title: `Evento: ${title}`,
+              title: messages(MESSAGES).proposeEvent(title),
               payload: {
                 title,
                 start,
@@ -1092,7 +1145,7 @@ export const calendarTool: SegretarioTool = {
           )
           return {
             content: `Proposta all'utente: ${proposal.title}. La vede in Oggi e nel calendario e la crea con un clic.`,
-            summary: `Proposto: ${title}`
+            summary: messages(MESSAGES).proposed(title)
           }
         })
       }
@@ -1126,7 +1179,7 @@ export const calendarTool: SegretarioTool = {
         )
         return {
           content: `Ritirata: ${proposalLine(withdrawn).slice(2)}.`,
-          summary: `Ritirata la proposta: ${String(withdrawn.payload.title ?? withdrawn.title)}`
+          summary: messages(MESSAGES).withdrew(String(withdrawn.payload.title ?? withdrawn.title))
         }
       }
       default:

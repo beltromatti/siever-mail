@@ -1,6 +1,8 @@
 import type { MessageRef } from '@shared/models'
+import { defineMessages } from '@shared/i18n'
 import type { ComposeSpec } from '@shared/segretario'
 
+import { messages } from '../../i18n'
 import { PROMPTS } from '../prompts'
 import { comparableText } from './format'
 import {
@@ -13,6 +15,63 @@ import {
   type ToolContext,
   UnknownHandle
 } from '../agent/tool-types'
+
+/** The steps' lines and the confirmation's title, as the user sees them. */
+const STEPS = defineMessages({
+  writingInMessage: {
+    en: 'Writing in the message…',
+    it: 'Scrivo nel messaggio…',
+    de: 'Schreibe in die Nachricht…'
+  },
+  writingDraft: { en: 'Writing the draft…', it: 'Scrivo la bozza…', de: 'Schreibe den Entwurf…' },
+  rewrotePassage: {
+    en: 'Rewrote the passage',
+    it: 'Riscritto il passaggio',
+    de: 'Abschnitt neu geschrieben'
+  },
+  wroteInMessage: {
+    en: 'Wrote in the message',
+    it: 'Scritto nel messaggio',
+    de: 'In die Nachricht geschrieben'
+  },
+  preparedDraft: {
+    en: 'Prepared a draft',
+    it: 'Preparata una bozza',
+    de: 'Einen Entwurf vorbereitet'
+  },
+  waitingToSend: {
+    en: 'Waiting for your confirmation to send…',
+    it: 'Aspetto la conferma per inviare…',
+    de: 'Warte auf Ihre Bestätigung zum Senden…'
+  },
+  draftGone: {
+    en: 'Draft no longer available',
+    it: 'Bozza non più disponibile',
+    de: 'Entwurf nicht mehr verfügbar'
+  },
+  sendTo: {
+    en: (recipients: string) => `Send to ${recipients}`,
+    it: (recipients: string) => `Invio a ${recipients}`,
+    de: (recipients: string) => `Senden an ${recipients}`
+  },
+  notConfirmed: {
+    en: 'Not sent: you did not confirm',
+    it: 'Non inviato: non hai confermato',
+    de: 'Nicht gesendet: Sie haben nicht bestätigt'
+  },
+  sendFailed: { en: 'Sending failed', it: 'Invio non riuscito', de: 'Senden fehlgeschlagen' },
+  queued: {
+    en: (subject: string | null) => `In the Outbox · “${subject ?? 'No subject'}”`,
+    it: (subject: string | null) => `In uscita · «${subject ?? 'Senza oggetto'}»`,
+    de: (subject: string | null) => `Im Postausgang · „${subject ?? 'Kein Betreff'}“`
+  },
+  sent: {
+    en: (subject: string | null) => `Sent with your confirmation · “${subject ?? 'No subject'}”`,
+    it: (subject: string | null) => `Inviato con la tua conferma · «${subject ?? 'Senza oggetto'}»`,
+    de: (subject: string | null) =>
+      `Mit Ihrer Bestätigung gesendet · „${subject ?? 'Kein Betreff'}“`
+  }
+})
 
 /**
  * A draft as a whole — its words, who it goes to, its subject and files —
@@ -164,7 +223,7 @@ export const writeDraftTool: SegretarioTool = {
     },
     required: ['testo']
   },
-  running: (args) => (args.bozza ? 'Scrivo nel messaggio…' : 'Scrivo la bozza…'),
+  running: (args) => (args.bozza ? messages(STEPS).writingInMessage : messages(STEPS).writingDraft),
   async execute(args, context) {
     const text = requireString(args, 'testo')
 
@@ -291,10 +350,10 @@ export const writeDraftTool: SegretarioTool = {
         ? `Il passaggio selezionato è riscritto nella bozza ${handle}, davanti all'utente.`
         : `Bozza ${handle} scritta${envelope}. È aperta davanti all'utente e in Bozze; per inviarla usa invia_bozza.`,
       summary: selection
-        ? 'Riscritto il passaggio'
+        ? messages(STEPS).rewrotePassage
         : draftRef
-          ? 'Scritto nel messaggio'
-          : 'Preparata una bozza'
+          ? messages(STEPS).wroteInMessage
+          : messages(STEPS).preparedDraft
     }
   }
 }
@@ -307,7 +366,7 @@ export const sendDraftTool: SegretarioTool = {
     properties: { bozza: { type: 'string' } },
     required: ['bozza']
   },
-  running: () => 'Aspetto la conferma per inviare…',
+  running: () => messages(STEPS).waitingToSend,
   async execute(args, context) {
     requireInteractive(context, 'inviare', 'prepara la risposta: la manderà l’utente.')
     const draftId = await draftIdOf(context, requireString(args, 'bozza'))
@@ -316,7 +375,7 @@ export const sendDraftTool: SegretarioTool = {
     if (!draft) {
       return {
         content: "La bozza non c'è più: l'utente l'ha già inviata o scartata.",
-        summary: 'Bozza non più disponibile',
+        summary: messages(STEPS).draftGone,
         failed: true
       }
     }
@@ -329,21 +388,21 @@ export const sendDraftTool: SegretarioTool = {
 
     const { approved, outcome } = await context.requestApproval({
       kind: 'send',
-      title: `Invio a ${draft.to.join(', ') || draft.cc.join(', ')}`,
+      title: messages(STEPS).sendTo(draft.to.join(', ') || draft.cc.join(', ')),
       draft: { draftId, ...draft }
     })
 
     if (!approved) {
       return {
         content: "L'utente ha preferito non inviarla per ora. La bozza resta in Bozze.",
-        summary: 'Non inviato: non hai confermato'
+        summary: messages(STEPS).notConfirmed
       }
     }
 
     if (outcome && !outcome.sent) {
       return {
         content: `L'invio non è riuscito: ${outcome.error}. La bozza è in Bozze come era.`,
-        summary: 'Invio non riuscito',
+        summary: messages(STEPS).sendFailed,
         failed: true
       }
     }
@@ -352,13 +411,13 @@ export const sendDraftTool: SegretarioTool = {
       return {
         content:
           'Il server della posta ora non si raggiunge: il messaggio è in uscita e parte da solo appena risponde.',
-        summary: `In uscita · «${draft.subject || 'Senza oggetto'}»`
+        summary: messages(STEPS).queued(draft.subject || null)
       }
     }
 
     return {
       content: 'Inviato.',
-      summary: `Inviato con la tua conferma · «${draft.subject || 'Senza oggetto'}»`
+      summary: messages(STEPS).sent(draft.subject || null)
     }
   }
 }

@@ -1,7 +1,18 @@
 import { Stamp } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
+import { useLanguage, useMessages } from '@renderer/lib/i18n'
+import { defineMessages } from '@shared/i18n'
 import type { MessageMark } from '@shared/message-marks'
+
+const MESSAGES = defineMessages({
+  inPlace: {
+    en: (place: string) => ` in ${place}`,
+    it: (place: string) => ` in ${place}`,
+    de: (place: string) => ` in ${place}`
+  },
+  show: { en: 'Show', it: 'Mostra', de: 'Zeigen' }
+})
 
 /** A message's marks are kept by its account and key. */
 export function markKey(message: { accountId: string; messageKey: string }): string {
@@ -79,8 +90,6 @@ export function useMessageMarks(
   return marks
 }
 
-const SHORT_DAY = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
-
 /** "…/Clienti/Casa al mare/Corrispondenza" as it reads: its last few places. */
 function placeWords(place: string): string {
   return place.split(/[\\/]/).filter(Boolean).slice(-3).join(' › ')
@@ -95,9 +104,14 @@ export function MessageMarksLine({
 }: {
   marks: ReadonlyArray<MessageMark>
 }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
+  const { formatLocale } = useLanguage()
+
   if (marks.length === 0) {
     return null
   }
+
+  const shortDay = new Intl.DateTimeFormat(formatLocale, { day: 'numeric', month: 'short' })
 
   return (
     <div className="mb-3 flex flex-col gap-1">
@@ -109,7 +123,7 @@ export function MessageMarksLine({
           <Stamp className="text-faint-foreground size-3.5 shrink-0" />
           <span className="min-w-0 truncate" title={place ?? label}>
             <span className="text-foreground font-semibold">{label}</span>
-            {place && ` in ${placeWords(place)}`} · {SHORT_DAY.format(new Date(markedAt))}
+            {place && m.inPlace(placeWords(place))} · {shortDay.format(new Date(markedAt))}
           </span>
           {place && (
             <button
@@ -117,7 +131,7 @@ export function MessageMarksLine({
               onClick={() => void window.mailApi.revealFile(place)}
               className="hover:text-foreground focus-visible:ring-ring/60 shrink-0 rounded-sm outline-none focus-visible:ring-2"
             >
-              Mostra
+              {m.show}
             </button>
           )}
         </div>

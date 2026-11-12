@@ -11,25 +11,79 @@ import {
   SelectTrigger,
   SelectValue
 } from '@renderer/components/ui/select'
+import { languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { DIAGNOSTICS_EXPORT_DAYS, type DiagnosticsInfo } from '@shared/diagnostics'
+import { defineMessages } from '@shared/i18n'
 
-const PERIOD_LABELS: Record<(typeof DIAGNOSTICS_EXPORT_DAYS)[number], string> = {
-  1: 'Ultimo giorno',
-  7: 'Ultima settimana',
-  21: 'Ultime tre settimane'
-}
+const MESSAGES = defineMessages({
+  exported: { en: 'Diagnostics exported', it: 'Diagnostica esportata', de: 'Diagnose exportiert' },
+  exportedText: {
+    en: (file: string, size: string) =>
+      `${file} · ${size}: it’s in the folder that opened, ready to attach.`,
+    it: (file: string, size: string) =>
+      `${file} · ${size}: è nella cartella che si è aperta, pronta da allegare.`,
+    de: (file: string, size: string) =>
+      `${file} · ${size}: Sie liegt im geöffneten Ordner, bereit zum Anhängen.`
+  },
+  notExported: {
+    en: 'Diagnostics not exported',
+    it: 'Diagnostica non esportata',
+    de: 'Diagnose nicht exportiert'
+  },
+  folderNotOpened: {
+    en: 'The folder did not open',
+    it: 'La cartella non si è aperta',
+    de: 'Der Ordner ließ sich nicht öffnen'
+  },
+  title: { en: 'Diagnostics', it: 'Diagnostica', de: 'Diagnose' },
+  text: {
+    en: (ai: boolean) =>
+      `SIEVER Mail keeps a log on this computer of what happens: the errors, how the connections are doing, what is done in the app${ai ? ' and the Segretario’s work' : ''}. It sends it to no one: for a report, you export it and attach it yourself.`,
+    it: (ai: boolean) =>
+      `SIEVER Mail tiene su questo computer un registro di ciò che succede: gli errori, come stanno le connessioni, ciò che si fa nell’app${ai ? ' e il lavoro del Segretario' : ''}. Non lo manda a nessuno: per una segnalazione lo esporti e lo alleghi tu.`,
+    de: (ai: boolean) =>
+      `SIEVER Mail führt auf diesem Computer ein Protokoll dessen, was geschieht: die Fehler, wie es um die Verbindungen steht, was in der App getan wird${ai ? ', und die Arbeit des Segretario' : ''}. Es wird an niemanden gesendet: Für eine Meldung exportieren Sie es und hängen es selbst an.`
+  },
+  kept: {
+    en: (since: string, size: string, days: number) =>
+      `Since ${since} · ${size} · kept ${days} days`,
+    it: (since: string, size: string, days: number) =>
+      `Dal ${since} · ${size} · tenuto ${days} giorni`,
+    de: (since: string, size: string, days: number) =>
+      `Seit ${since} · ${size} · ${days} Tage aufbewahrt`
+  },
+  period: { en: 'Period to export', it: 'Periodo da esportare', de: 'Zu exportierender Zeitraum' },
+  export: { en: 'Export…', it: 'Esporta…', de: 'Exportieren…' },
+  openFolder: { en: 'Open the folder', it: 'Apri la cartella', de: 'Ordner öffnen' },
+  withSegretario: {
+    en: 'With the Segretario’s work',
+    it: 'Con il lavoro del Segretario',
+    de: 'Mit der Arbeit des Segretario'
+  },
+  withSegretarioText: {
+    en: 'Its sessions in full and its memory: they help understand what it did, and contain the text of the emails, events and files it read.',
+    it: 'Le sue sessioni per intero e la sua memoria: servono a capire ciò che ha fatto, e contengono il testo delle mail, degli eventi e dei file che ha letto.',
+    de: 'Seine Sitzungen vollständig und sein Gedächtnis: Sie helfen zu verstehen, was er getan hat, und enthalten den Text der E-Mails, Termine und Dateien, die er gelesen hat.'
+  }
+})
 
-/** A day kept (AAAA-MM-GG) in words: «3 novembre». */
+const PERIOD_LABELS = defineMessages({
+  1: { en: 'Last day', it: 'Ultimo giorno', de: 'Letzter Tag' },
+  7: { en: 'Last week', it: 'Ultima settimana', de: 'Letzte Woche' },
+  21: { en: 'Last three weeks', it: 'Ultime tre settimane', de: 'Letzte drei Wochen' }
+}) satisfies Record<(typeof DIAGNOSTICS_EXPORT_DAYS)[number], unknown>
+
+/** A day kept (YYYY-MM-DD) in words: “3 November”. */
 function sinceWords(day: string): string {
   const [year, month, date] = day.split('-').map(Number)
-  return new Date(year, month - 1, date).toLocaleDateString('it-IT', {
+  return new Date(year, month - 1, date).toLocaleDateString(languageNow().formatLocale, {
     day: 'numeric',
     month: 'long'
   })
 }
 
 function formatSize(bytes: number): string {
-  const size = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 1 })
+  const size = new Intl.NumberFormat(languageNow().formatLocale, { maximumFractionDigits: 1 })
   return bytes < 1024 * 1024
     ? `${size.format(Math.max(1, Math.round(bytes / 1024)))} KB`
     : `${size.format(bytes / 1024 / 1024)} MB`
@@ -42,6 +96,8 @@ function formatSize(bytes: number): string {
  * in full (only with the AI on: off, nothing of the Segretario shows).
  */
 export function DiagnosticsGroup({ aiOn }: { aiOn: boolean }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const periods = useMessages(PERIOD_LABELS)
   const [info, setInfo] = useState<DiagnosticsInfo | null>(null)
   const [days, setDays] = useState<(typeof DIAGNOSTICS_EXPORT_DAYS)[number]>(7)
   const [withSegretario, setWithSegretario] = useState(true)
@@ -70,12 +126,16 @@ export function DiagnosticsGroup({ aiOn }: { aiOn: boolean }): React.JSX.Element
       })
 
       if (exported) {
-        toast.success('Diagnostica esportata', {
-          description: `${exported.path.split(/[\\/]/).pop()} · ${formatSize(exported.bytes)}: è nella cartella che si è aperta, pronta da allegare.`
+        const words = messagesNow(MESSAGES)
+        toast.success(words.exported, {
+          description: words.exportedText(
+            exported.path.split(/[\\/]/).pop() ?? '',
+            formatSize(exported.bytes)
+          )
         })
       }
     } catch (error) {
-      toast.error('Diagnostica non esportata', {
+      toast.error(messagesNow(MESSAGES).notExported, {
         description: error instanceof Error ? error.message : undefined
       })
     } finally {
@@ -85,7 +145,7 @@ export function DiagnosticsGroup({ aiOn }: { aiOn: boolean }): React.JSX.Element
 
   const openFolder = (): void => {
     void window.diagnosticsApi.openFolder().catch((error: unknown) =>
-      toast.error('La cartella non si è aperta', {
+      toast.error(messagesNow(MESSAGES).folderNotOpened, {
         description: error instanceof Error ? error.message : undefined
       })
     )
@@ -94,16 +154,11 @@ export function DiagnosticsGroup({ aiOn }: { aiOn: boolean }): React.JSX.Element
   return (
     <div className="settings-group space-y-3">
       <div>
-        <p className="eyebrow">Diagnostica</p>
-        <p className="text-muted-foreground mt-1 text-[11px]">
-          SIEVER Mail tiene su questo computer un registro di ciò che succede: gli errori, come
-          stanno le connessioni, ciò che si fa nell’app
-          {aiOn ? ' e il lavoro del Segretario' : ''}. Non lo manda a nessuno: per una segnalazione
-          lo esporti e lo alleghi tu.
-        </p>
+        <p className="eyebrow">{m.title}</p>
+        <p className="text-muted-foreground mt-1 text-[11px]">{m.text(aiOn)}</p>
         {info?.since && (
           <p className="text-muted-foreground mt-1 text-[11px]">
-            Dal {sinceWords(info.since)} · {formatSize(info.bytes)} · tenuto {info.keptDays} giorni
+            {m.kept(sinceWords(info.since), formatSize(info.bytes), info.keptDays)}
           </p>
         )}
       </div>
@@ -116,13 +171,13 @@ export function DiagnosticsGroup({ aiOn }: { aiOn: boolean }): React.JSX.Element
           }
           disabled={exporting}
         >
-          <SelectTrigger className="w-[190px]" aria-label="Periodo da esportare">
+          <SelectTrigger className="w-[190px]" aria-label={m.period}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             {DIAGNOSTICS_EXPORT_DAYS.map((option) => (
               <SelectItem key={option} value={String(option)}>
-                {PERIOD_LABELS[option]}
+                {periods[option]}
               </SelectItem>
             ))}
           </SelectContent>
@@ -140,11 +195,11 @@ export function DiagnosticsGroup({ aiOn }: { aiOn: boolean }): React.JSX.Element
           ) : (
             <FileArchive className="size-3.5" />
           )}
-          Esporta…
+          {m.export}
         </Button>
         <Button type="button" variant="ghost" size="sm" className="gap-1.5" onClick={openFolder}>
           <FolderOpen className="size-3.5" />
-          Apri la cartella
+          {m.openFolder}
         </Button>
       </div>
 
@@ -158,11 +213,8 @@ export function DiagnosticsGroup({ aiOn }: { aiOn: boolean }): React.JSX.Element
             onCheckedChange={(checked) => setWithSegretario(checked === true)}
           />
           <span className="text-[12px]">
-            Con il lavoro del Segretario
-            <span className="text-muted-foreground block text-[11px]">
-              Le sue sessioni per intero e la sua memoria: servono a capire ciò che ha fatto, e
-              contengono il testo delle mail, degli eventi e dei file che ha letto.
-            </span>
+            {m.withSegretario}
+            <span className="text-muted-foreground block text-[11px]">{m.withSegretarioText}</span>
           </span>
         </label>
       )}

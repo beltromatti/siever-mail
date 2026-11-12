@@ -3,12 +3,40 @@ import { FolderPlus, Search } from 'lucide-react'
 
 import { Popover, PopoverContent, PopoverTrigger } from '@renderer/components/ui/popover'
 import { buildFolderTree, flattenFolderTree, folderNodeLabel } from '@renderer/lib/folder-tree'
+import { useLanguage, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import { folderDisplayName, folderRole } from '@shared/folders'
+import { defineMessages, type Language } from '@shared/i18n'
 import type { MailFolder } from '@shared/models'
 import { foldSearchText } from '@shared/search'
 
 import { folderIcon } from './folder-icons'
+
+const MESSAGES = defineMessages({
+  recent: { en: 'Recent', it: 'Recenti', de: 'Zuletzt verwendet' },
+  allFolders: { en: 'All folders', it: 'Tutte le cartelle', de: 'Alle Ordner' },
+  searchFolder: { en: 'Search for a folder', it: 'Cerca una cartella', de: 'Ordner suchen' },
+  searchFolderPlaceholder: {
+    en: 'Search for a folder…',
+    it: 'Cerca una cartella…',
+    de: 'Ordner suchen…'
+  },
+  noFolder: {
+    en: 'No folder with this name.',
+    it: 'Nessuna cartella con questo nome.',
+    de: 'Kein Ordner mit diesem Namen.'
+  },
+  createAndMove: {
+    en: (name: string) => `Create “${name}” and move here`,
+    it: (name: string) => `Crea «${name}» e sposta qui`,
+    de: (name: string) => `„${name}“ erstellen und hierher verschieben`
+  },
+  alreadyHere: {
+    en: 'The messages are already here',
+    it: 'I messaggi sono già qui',
+    de: 'Die Nachrichten sind bereits hier'
+  }
+})
 
 type PickerEntry =
   | {
@@ -36,7 +64,11 @@ export interface FolderPickerProps {
 }
 
 /** "Clienti/2024/Fatture" as it reads: "Clienti › 2024". */
-function parentHint(folder: MailFolder, folders: ReadonlyArray<MailFolder>): string | undefined {
+function parentHint(
+  folder: MailFolder,
+  folders: ReadonlyArray<MailFolder>,
+  language: Language
+): string | undefined {
   if (!folder.delimiter) {
     return undefined
   }
@@ -45,7 +77,7 @@ function parentHint(folder: MailFolder, folders: ReadonlyArray<MailFolder>): str
   const names = parts.map((_, index) => {
     const path = parts.slice(0, index + 1).join(folder.delimiter)
     const parent = folders.find((candidate) => candidate.path === path)
-    return parent ? folderDisplayName(parent) : parts[index]
+    return parent ? folderDisplayName(parent, language) : parts[index]
   })
 
   return names.length > 0 ? names.join(' › ') : undefined
@@ -56,7 +88,7 @@ function parentHint(folder: MailFolder, folders: ReadonlyArray<MailFolder>): str
  * nothing typed it lists the account's recent destinations, then every
  * folder as the sidebar nests them; typing narrows that to the folders whose
  * name or place matches, case and accents aside, and offers to create the
- * folder when none has the name. Arrows move, Invio moves the messages.
+ * folder when none has the name. Arrows move, Enter moves the messages.
  */
 export function FolderPicker({
   folders,
@@ -65,6 +97,8 @@ export function FolderPicker({
   onPick,
   onCreate
 }: FolderPickerProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const { language } = useLanguage()
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -81,7 +115,7 @@ export function FolderPicker({
     ): PickerEntry => ({
       kind: 'folder',
       key: `${section}:${folder.path}`,
-      label: folderDisplayName(folder),
+      label: folderDisplayName(folder, language),
       hint,
       depth,
       folder,
@@ -90,14 +124,16 @@ export function FolderPicker({
 
     if (folded) {
       const matches = folders.filter((folder) =>
-        foldSearchText(`${folderDisplayName(folder)} ${folder.path}`).includes(folded)
+        foldSearchText(`${folderDisplayName(folder, language)} ${folder.path}`).includes(folded)
       )
       const exactName = folders.some(
-        (folder) => foldSearchText(folderDisplayName(folder)) === folded
+        (folder) => foldSearchText(folderDisplayName(folder, language)) === folded
       )
 
       return [
-        ...matches.map((folder) => folderEntry(folder, 0, 'match', parentHint(folder, folders))),
+        ...matches.map((folder) =>
+          folderEntry(folder, 0, 'match', parentHint(folder, folders, language))
+        ),
         ...(onCreate && !exactName
           ? [{ kind: 'create' as const, key: 'create', name: query.trim() }]
           : [])
@@ -114,25 +150,27 @@ export function FolderPicker({
     return [
       ...(recent.length > 0
         ? [
-            { kind: 'heading' as const, key: 'heading:recent', label: 'Recenti' },
-            ...recent.map((folder) => folderEntry(folder, 0, 'recent', parentHint(folder, folders)))
+            { kind: 'heading' as const, key: 'heading:recent', label: m.recent },
+            ...recent.map((folder) =>
+              folderEntry(folder, 0, 'recent', parentHint(folder, folders, language))
+            )
           ]
         : []),
-      { kind: 'heading' as const, key: 'heading:all', label: 'Tutte le cartelle' },
+      { kind: 'heading' as const, key: 'heading:all', label: m.allFolders },
       ...flattenFolderTree(buildFolderTree([...folders])).map(({ node, depth }) =>
         node.folder
           ? folderEntry(node.folder, depth, 'tree')
           : {
               kind: 'folder' as const,
               key: `tree:${node.path}`,
-              label: folderNodeLabel(node),
+              label: folderNodeLabel(node, language),
               depth,
               folder: null,
               disabled: true
             }
       )
     ]
-  }, [excludedPath, folders, onCreate, query, recentPaths])
+  }, [excludedPath, folders, language, m, onCreate, query, recentPaths])
 
   // Only folders that take messages, and the "create" line, are reached by the arrows.
   const choosable = useMemo(
@@ -184,8 +222,8 @@ export function FolderPicker({
               choose(entries[activeEntryIndex] as PickerEntry | undefined)
             }
           }}
-          placeholder="Cerca una cartella…"
-          aria-label="Cerca una cartella"
+          placeholder={m.searchFolderPlaceholder}
+          aria-label={m.searchFolder}
           spellCheck={false}
           autoComplete="off"
           className="bg-background/60 border-border/70 focus-visible:ring-ring/60 h-7 w-full rounded-md border pr-2 pl-7 text-[12px] outline-none focus-visible:ring-2"
@@ -194,9 +232,7 @@ export function FolderPicker({
 
       <div ref={listRef} role="listbox" className="max-h-80 overflow-y-auto p-1">
         {entries.length === 0 && (
-          <p className="text-muted-foreground px-2 py-3 text-center text-[11.5px]">
-            Nessuna cartella con questo nome.
-          </p>
+          <p className="text-muted-foreground px-2 py-3 text-center text-[11.5px]">{m.noFolder}</p>
         )}
         {entries.map((entry, index) => {
           if (entry.kind === 'heading') {
@@ -228,7 +264,7 @@ export function FolderPicker({
                 )}
               >
                 <FolderPlus className="size-3.5 shrink-0" />
-                <span className="min-w-0 truncate">Crea «{entry.name}» e sposta qui</span>
+                <span className="min-w-0 truncate">{m.createAndMove(entry.name)}</span>
               </button>
             )
           }
@@ -250,7 +286,7 @@ export function FolderPicker({
                 }
               }}
               onClick={() => choose(entry)}
-              title={entry.folder?.path === excludedPath ? 'I messaggi sono già qui' : undefined}
+              title={entry.folder?.path === excludedPath ? m.alreadyHere : undefined}
               className={cn(
                 'flex h-7 w-full items-center gap-2 rounded-sm pr-2 text-left text-[12px]',
                 active && 'bg-secondary',
@@ -273,7 +309,7 @@ export function FolderPicker({
   )
 }
 
-/** "Sposta" as a popover under its button: the picker, open as long as it is being used. */
+/** "Move" as a popover under its button: the picker, open as long as it is being used. */
 export function FolderPickerPopover({
   open,
   onOpenChange,

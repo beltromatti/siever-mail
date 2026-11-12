@@ -20,7 +20,10 @@ import {
   SettingsPage
 } from '@renderer/components/ui/settings'
 import { Switch } from '@renderer/components/ui/switch'
+import { hourStyle, languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import type { Messages } from '@shared/i18n'
+import { PLACES } from '@shared/places'
 import {
   OPENROUTER_CREDITS_URL,
   OPENROUTER_KEYS_URL,
@@ -31,36 +34,39 @@ import {
   type SegretarioStatus
 } from '@shared/segretario'
 
-const DOLLARS = new Intl.NumberFormat('it-IT', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2
-})
+import { KEY_STATE, LIMIT_RESET, MESSAGES } from './segretario-section.messages'
 
-const CHECKED_AT = new Intl.DateTimeFormat('it-IT', {
-  day: 'numeric',
-  month: 'short',
-  hour: '2-digit',
-  minute: '2-digit'
-})
+/** What an OpenRouter key looks like: the same in every language. */
+const KEY_PLACEHOLDER = 'sk-or-v1-…'
 
-const LIMIT_RESET: Readonly<Record<string, string>> = {
-  daily: 'al giorno',
-  weekly: 'alla settimana',
-  monthly: 'al mese'
+/** Each state of the key's dot. */
+const KEY_TONE: Readonly<Record<SegretarioKeyState, string>> = {
+  missing: 'bg-faint-foreground',
+  ready: 'bg-status-online',
+  invalid: 'bg-destructive',
+  exhausted: 'bg-urgent',
+  unchecked: 'bg-warning'
 }
 
-const KEY_STATE: Readonly<Record<SegretarioKeyState, { label: string; tone: string }>> = {
-  missing: { label: 'Nessuna chiave', tone: 'bg-faint-foreground' },
-  ready: { label: 'Collegata', tone: 'bg-status-online' },
-  invalid: { label: 'Non valida', tone: 'bg-destructive' },
-  exhausted: { label: 'Credito esaurito', tone: 'bg-urgent' },
-  unchecked: { label: 'Non verificata', tone: 'bg-warning' }
+/** An amount in dollars, as the region writes money; a fraction of a cent, said so. */
+function dollars(m: Messages<typeof MESSAGES>, amount: number): string {
+  const format = new Intl.NumberFormat(languageNow().formatLocale, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })
+  return amount > 0 && amount < 0.01 ? m.lessThan(format.format(0.01)) : format.format(amount)
 }
 
-function dollars(amount: number): string {
-  return amount > 0 && amount < 0.01 ? `meno di ${DOLLARS.format(0.01)}` : DOLLARS.format(amount)
+/** When the key was last checked: the day and the time, as the region writes them. */
+function checkedWords(at: number): string {
+  return new Intl.DateTimeFormat(languageNow().formatLocale, {
+    day: 'numeric',
+    month: 'short',
+    hour: hourStyle(),
+    minute: '2-digit'
+  }).format(at)
 }
 
 function errorText(error: unknown): string | undefined {
@@ -86,6 +92,10 @@ export function SegretarioSection({
   /** Turning the AI on goes through the guided setup: Conoscimi, then the reading. */
   onEnableAi: () => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
+  const keyStates = useMessages(KEY_STATE)
+  const limitResets: Readonly<Record<string, string | undefined>> = useMessages(LIMIT_RESET)
   const [status, setStatus] = useState<SegretarioStatus | null>(null)
   const [spending, setSpending] = useState<SegretarioSpending | null>(null)
   const [preferences, setPreferences] = useState<SegretarioPreferences | null>(null)
@@ -120,7 +130,7 @@ export function SegretarioSection({
       })
       .catch((error: unknown) => {
         if (current) {
-          setLoadError(errorText(error) ?? 'Impossibile leggere le impostazioni del Segretario.')
+          setLoadError(errorText(error) ?? messagesNow(MESSAGES).unreadable)
         }
       })
 
@@ -149,12 +159,12 @@ export function SegretarioSection({
       setReplacing(false)
 
       if (saved.keyState === 'unchecked') {
-        toast.warning('Chiave salvata, ma non verificata', {
+        toast.warning(messagesNow(MESSAGES).keyUnchecked, {
           description: saved.problem ?? undefined
         })
       }
     } catch (error) {
-      setKeyError(errorText(error) ?? 'La chiave non è stata salvata.')
+      setKeyError(errorText(error) ?? messagesNow(MESSAGES).keyNotSaved)
     } finally {
       setBusy(null)
     }
@@ -168,7 +178,7 @@ export function SegretarioSection({
     try {
       setPreferences(await window.segretarioApi.setPreferences({ ...preferences, ...patch }))
     } catch (error) {
-      toast.error('Impostazione non salvata', { description: errorText(error) })
+      toast.error(messagesNow(MESSAGES).notSaved, { description: errorText(error) })
     }
   }
 
@@ -183,7 +193,7 @@ export function SegretarioSection({
       setStatus(checked)
       setSpending(latestSpending)
     } catch (error) {
-      toast.error('Verifica non riuscita', { description: errorText(error) })
+      toast.error(messagesNow(MESSAGES).checkFailed, { description: errorText(error) })
     } finally {
       setBusy(null)
     }
@@ -191,11 +201,10 @@ export function SegretarioSection({
 
   const removeKey = async (): Promise<void> => {
     const confirmed = await confirm({
-      title: 'Togliere la chiave OpenRouter?',
-      description:
-        'Il Segretario si spegne: per riaccenderlo, la procedura guidata ti chiederà una chiave. Ciò che ha imparato e il lavoro fatto restano.',
-      confirmLabel: 'Togli la chiave',
-      cancelLabel: 'Annulla',
+      title: m.removeKeyTitle,
+      description: m.removeKeyText,
+      confirmLabel: m.removeKey,
+      cancelLabel: m.cancel,
       destructive: true
     })
 
@@ -210,7 +219,7 @@ export function SegretarioSection({
       setKeepsAnything(await window.segretarioApi.keepsAnything())
       setReplacing(false)
     } catch (error) {
-      toast.error('Chiave non tolta', { description: errorText(error) })
+      toast.error(messagesNow(MESSAGES).keyNotRemoved, { description: errorText(error) })
     } finally {
       setBusy(null)
     }
@@ -218,11 +227,10 @@ export function SegretarioSection({
 
   const forgetAll = async (): Promise<void> => {
     const confirmed = await confirm({
-      title: 'Far dimenticare tutto al Segretario?',
-      description:
-        'Si cancellano la memoria, le note, le cose aperte, i progetti, le risposte pronte, il diario, le spese e la chiave, e le funzioni AI si spengono: come se non fossero mai state accese. La posta, i calendari e i file restano come sono.',
-      confirmLabel: 'Dimentica tutto',
-      cancelLabel: 'Annulla',
+      title: m.forgetTitle,
+      description: m.forgetConfirmText,
+      confirmLabel: places.forgetEverything,
+      cancelLabel: m.cancel,
       destructive: true
     })
 
@@ -244,9 +252,9 @@ export function SegretarioSection({
       setSpending(nextSpending)
       setKeepsAnything(false)
       setReplacing(false)
-      toast('Il Segretario ha dimenticato tutto.')
+      toast(messagesNow(MESSAGES).forgotten)
     } catch (error) {
-      toast.error('Non è andata', { description: errorText(error) })
+      toast.error(messagesNow(MESSAGES).failed, { description: errorText(error) })
     } finally {
       setBusy(null)
     }
@@ -261,11 +269,11 @@ export function SegretarioSection({
   }
 
   if (!status) {
-    return <SettingsLoading>Caricamento delle impostazioni…</SettingsLoading>
+    return <SettingsLoading>{m.loading}</SettingsLoading>
   }
 
   const hasKey = status.keyState !== 'missing'
-  const state = KEY_STATE[status.keyState]
+  const state = { label: keyStates[status.keyState], tone: KEY_TONE[status.keyState] }
   const credit = status.credit
 
   // On is the switch up and a key given (§12.1): without the key, turning it on asks for one.
@@ -286,20 +294,16 @@ export function SegretarioSection({
           strokeWidth={1.6}
         />
         <span className="min-w-0 flex-1">
-          <span className="display-title block text-[15px]">
-            {on ? 'Il Segretario lavora per te' : 'Il Segretario è spento'}
-          </span>
+          <span className="display-title block text-[15px]">{on ? m.on : m.off}</span>
           <span className="text-muted-foreground mt-0.5 block text-[11.5px] leading-[1.45]">
-            {on
-              ? 'Segue la posta e i calendari mentre cambiano, tiene il conto di ciò che ti chiedono, che hai promesso e che aspetti, e prepara risposte e incontri.'
-              : 'SIEVER Mail è un insieme di app, senza intelligenza. Accendilo: una procedura guidata lo collega e gli fa conoscere il tuo lavoro.'}
+            {on ? m.onText : m.offText}
           </span>
         </span>
         <Switch
           id="segretario-enabled"
           checked={on}
           disabled={busy !== null || !preferences}
-          aria-label="Segretario acceso"
+          aria-label={m.switchLabel}
           onCheckedChange={(enabled) =>
             enabled ? onEnableAi() : void changePreferences({ enabled })
           }
@@ -313,10 +317,7 @@ export function SegretarioSection({
       )}
 
       {hasKey && (
-        <SettingsGroup
-          title="Chiave OpenRouter"
-          description="Il Segretario lavora con un modello che usi dal tuo account OpenRouter: paghi solo quello che fa, senza abbonamenti. La chiave resta su questo computer, cifrata."
-        >
+        <SettingsGroup title={m.key} description={m.keyText}>
           <div className="flex flex-col gap-1.5 text-[12px]">
             <div className="flex items-center gap-2">
               <span className={cn('size-2 shrink-0 rounded-full', state.tone)} />
@@ -333,27 +334,25 @@ export function SegretarioSection({
             )}
             {credit && (
               <p>
-                Credito disponibile:{' '}
-                <span className="tabular font-medium">{dollars(credit.available)}</span>
+                {m.credit}{' '}
+                <span className="tabular font-medium">{dollars(m, credit.available)}</span>
                 {credit.keyLimit !== null && (
                   <span className="text-muted-foreground">
-                    {' '}
-                    · limite della chiave {dollars(credit.keyLimit)}
-                    {credit.keyLimitReset && LIMIT_RESET[credit.keyLimitReset]
-                      ? ` ${LIMIT_RESET[credit.keyLimitReset]}`
+                    {' · '}
+                    {m.keyLimit(dollars(m, credit.keyLimit))}
+                    {credit.keyLimitReset && limitResets[credit.keyLimitReset]
+                      ? ` ${limitResets[credit.keyLimitReset]}`
                       : ''}
                   </span>
                 )}
               </p>
             )}
             {status.modelName && (
-              <p className="text-muted-foreground">
-                Modello: {status.modelName} — SIEVER Mail passa da solo alla versione più recente.
-              </p>
+              <p className="text-muted-foreground">{m.model(status.modelName)}</p>
             )}
             {status.checkedAt && (
               <p className="text-faint-foreground text-[11px]">
-                Verificata {CHECKED_AT.format(status.checkedAt)}
+                {m.checkedAt(checkedWords(status.checkedAt))}
               </p>
             )}
           </div>
@@ -371,8 +370,8 @@ export function SegretarioSection({
                   type="password"
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="sk-or-v1-…"
-                  aria-label="Chiave OpenRouter"
+                  placeholder={KEY_PLACEHOLDER}
+                  aria-label={m.key}
                   value={keyInput}
                   onChange={(event) => {
                     setKeyInput(event.target.value)
@@ -387,7 +386,7 @@ export function SegretarioSection({
                   ) : (
                     <KeyRound className="size-3.5" />
                   )}
-                  Collega
+                  {m.connect}
                 </Button>
                 {replacing && (
                   <Button
@@ -401,7 +400,7 @@ export function SegretarioSection({
                       setKeyError(null)
                     }}
                   >
-                    Annulla
+                    {m.cancel}
                   </Button>
                 )}
               </div>
@@ -409,14 +408,13 @@ export function SegretarioSection({
                 <p className="text-destructive-soft-foreground text-[12px]">{keyError}</p>
               )}
               <p className="text-muted-foreground text-[11px]">
-                Non hai una chiave? Crea un account su OpenRouter, aggiungi qualche dollaro di
-                credito e genera una chiave.{' '}
+                {m.noKey}{' '}
                 <button
                   type="button"
                   className="text-foreground inline-flex items-center gap-1 underline underline-offset-2"
                   onClick={() => openExternal(OPENROUTER_KEYS_URL)}
                 >
-                  Apri openrouter.ai
+                  {m.openOpenRouter}
                   <ExternalLink className="size-3" />
                 </button>
               </p>
@@ -435,7 +433,7 @@ export function SegretarioSection({
                 ) : (
                   <RefreshCw className="size-3.5" />
                 )}
-                Verifica di nuovo
+                {m.checkAgain}
               </Button>
               <Button
                 type="button"
@@ -445,7 +443,7 @@ export function SegretarioSection({
                 onClick={() => setReplacing(true)}
               >
                 <KeyRound className="size-3.5" />
-                Sostituisci
+                {m.replace}
               </Button>
               <Button
                 type="button"
@@ -454,7 +452,7 @@ export function SegretarioSection({
                 onClick={() => openExternal(OPENROUTER_CREDITS_URL)}
               >
                 <ExternalLink className="size-3.5" />
-                Ricarica il credito
+                {m.topUp}
               </Button>
               <Button
                 type="button"
@@ -469,7 +467,7 @@ export function SegretarioSection({
                 ) : (
                   <Trash2 className="size-3.5" />
                 )}
-                Togli
+                {m.remove}
               </Button>
             </div>
           )}
@@ -478,15 +476,17 @@ export function SegretarioSection({
 
       {spending && (on || hasKey || spending.thisMonth > 0 || spending.byFunction.length > 0) && (
         <div className="settings-group flex flex-col gap-2">
-          <p className="eyebrow">Spesa</p>
+          <p className="eyebrow">{m.spending}</p>
           <div className="flex gap-8 text-[12px]">
             <p>
-              <span className="text-muted-foreground block text-[11px]">Oggi</span>
-              <span className="tabular text-[15px] font-medium">{dollars(spending.today)}</span>
+              <span className="text-muted-foreground block text-[11px]">{m.today}</span>
+              <span className="tabular text-[15px] font-medium">{dollars(m, spending.today)}</span>
             </p>
             <p>
-              <span className="text-muted-foreground block text-[11px]">Questo mese</span>
-              <span className="tabular text-[15px] font-medium">{dollars(spending.thisMonth)}</span>
+              <span className="text-muted-foreground block text-[11px]">{m.thisMonth}</span>
+              <span className="tabular text-[15px] font-medium">
+                {dollars(m, spending.thisMonth)}
+              </span>
             </p>
           </div>
           {spending.byFunction.length > 0 && (
@@ -494,37 +494,24 @@ export function SegretarioSection({
               {spending.byFunction.slice(0, 8).map((entry) => (
                 <li key={entry.purpose} className="flex justify-between gap-3">
                   <span className="min-w-0 truncate">{entry.label}</span>
-                  <span className="tabular shrink-0">{dollars(entry.cost)}</span>
+                  <span className="tabular shrink-0">{dollars(m, entry.cost)}</span>
                 </li>
               ))}
             </ul>
           )}
-          <p className="text-muted-foreground text-[11px]">
-            Quello che OpenRouter ha addebitato per il lavoro del Segretario su questo computer; per
-            funzione, negli ultimi trenta giorni.
-          </p>
+          <p className="text-muted-foreground text-[11px]">{m.spendingText}</p>
         </div>
       )}
 
       <div className="settings-group flex flex-col gap-2">
-        <p className="eyebrow">Riservatezza</p>
-        <p className="text-[12px] leading-[1.5]">
-          Il Segretario manda al modello solo quello che gli serve per il lavoro che sta facendo, e
-          solo a fornitori che non conservano i dati e non li usano per addestrare i modelli (Zero
-          Data Retention). La posta, i file e quello che impara di te restano su questo computer.
-          Legge i tuoi file senza mai modificarli, e nessun messaggio parte senza la tua conferma.
-        </p>
+        <p className="eyebrow">{m.privacy}</p>
+        <p className="text-[12px] leading-[1.5]">{m.privacyText}</p>
       </div>
 
       {(hasKey || keepsAnything) && (
         <div className="border-destructive/35 bg-destructive/5 flex flex-col gap-2 rounded-md border p-3">
-          <p className="eyebrow">Dimentica tutto</p>
-          <p className="text-muted-foreground text-[11.5px] leading-[1.5]">
-            Come se il Segretario non fosse mai stato acceso: si cancellano ciò che sa e ciò che ha
-            fatto — memoria, note, cose aperte, progetti, risposte pronte, diario e spese — e la
-            chiave. Riacceso, riparte dalla procedura guidata. La posta, i calendari e i file
-            restano come sono.
-          </p>
+          <p className="eyebrow">{places.forgetEverything}</p>
+          <p className="text-muted-foreground text-[11.5px] leading-[1.5]">{m.forgetText}</p>
           <Button
             type="button"
             variant="outline"
@@ -538,7 +525,7 @@ export function SegretarioSection({
             ) : (
               <Trash2 className="size-3.5" />
             )}
-            Dimentica tutto
+            {places.forgetEverything}
           </Button>
         </div>
       )}

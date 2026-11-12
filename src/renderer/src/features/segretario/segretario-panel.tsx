@@ -38,7 +38,10 @@ import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { ShortcutKeys } from '@renderer/components/ui/shortcut-keys'
 import { useCommandKeys } from '@renderer/lib/command-shortcuts'
+import { hourStyle, languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages, type Messages } from '@shared/i18n'
+import { PLACES } from '@shared/places'
 import {
   TASK_LABELS,
   type ActivityEntry,
@@ -51,6 +54,104 @@ import {
 
 import { SegretarioText } from './segretario-text'
 import type { SegretarioState } from './use-segretario'
+
+const MESSAGES = defineMessages({
+  toConfirm: { en: 'To confirm', it: 'Da confermare', de: 'Zu bestätigen' },
+  to: { en: 'To', it: 'A', de: 'An' },
+  cc: { en: 'Cc', it: 'Cc', de: 'Cc' },
+  noSubject: { en: 'No subject', it: 'Senza oggetto', de: 'Kein Betreff' },
+  dontSend: { en: 'Don’t send', it: 'Non inviare', de: 'Nicht senden' },
+  cancel: { en: 'Cancel', it: 'Annulla', de: 'Abbrechen' },
+  open: { en: 'Open', it: 'Apri', de: 'Öffnen' },
+  send: { en: 'Send', it: 'Invia', de: 'Senden' },
+  confirm: { en: 'Confirm', it: 'Conferma', de: 'Bestätigen' },
+  whatIChanged: { en: 'What I changed', it: 'Cosa ho cambiato', de: 'Was ich geändert habe' },
+  undone: { en: 'undone', it: 'annullato', de: 'rückgängig gemacht' },
+  notUndone: {
+    en: 'It couldn’t be undone.',
+    it: 'Non si è annullata.',
+    de: 'Ließ sich nicht rückgängig machen.'
+  },
+  undo: { en: 'Undo', it: 'Annulla', de: 'Rückgängig' },
+  today: { en: 'Today', it: 'Oggi', de: 'Heute' },
+  yesterday: { en: 'Yesterday', it: 'Ieri', de: 'Gestern' },
+  openingDiary: {
+    en: 'Opening the activity…',
+    it: 'Apro il diario…',
+    de: 'Der Verlauf wird geöffnet…'
+  },
+  emptyDiary: {
+    en: 'Here you’ll find what I do on my own: reading the mail as it arrives, writing up the day, updating the projects. I haven’t done any work yet.',
+    it: 'Qui trovi quello che faccio da solo: leggere la posta che arriva, scrivere la giornata, aggiornare i progetti. Per ora non ho ancora lavorato.',
+    de: 'Hier finden Sie, was ich selbstständig erledige: die eingehende Post lesen, den Tag zusammenfassen, die Projekte aktualisieren. Bisher habe ich noch nicht gearbeitet.'
+  },
+  compaction: {
+    en: 'I summarized the work so far, to keep it better in mind.',
+    it: 'Ho riassunto il lavoro fatto finora, per tenerlo a mente meglio.',
+    de: 'Ich habe die bisherige Arbeit zusammengefasst, um sie besser im Blick zu behalten.'
+  },
+  retry: { en: 'Try again', it: 'Riprova', de: 'Erneut versuchen' },
+  introduction: {
+    en: 'I’m your Segretario. I read the mail as it arrives and keep track of what’s left to do; ask me to search, sum up a matter, prepare a reply in your style, tidy up or set up a meeting.',
+    it: 'Sono il tuo segretario. Leggo la posta mentre arriva e tengo il conto di quello che resta da fare; chiedimi di cercare, riassumere una questione, preparare una risposta nel tuo stile, mettere in ordine o fissare un appuntamento.',
+    de: 'Ich bin Ihr Segretario. Ich lese die Post, sobald sie eintrifft, und behalte im Blick, was noch zu tun ist; bitten Sie mich, etwas zu suchen, eine Angelegenheit zusammenzufassen, eine Antwort in Ihrem Stil vorzubereiten, Ordnung zu schaffen oder einen Termin anzusetzen.'
+  },
+  notResumed: {
+    en: 'I couldn’t pick it up again.',
+    it: 'Non sono riuscito a riprendere.',
+    de: 'Ich konnte nicht weitermachen.'
+  },
+  notStarted: {
+    en: 'I couldn’t get started.',
+    it: 'Non sono riuscito a cominciare.',
+    de: 'Ich konnte nicht beginnen.'
+  },
+  closeDiary: { en: 'Close the activity', it: 'Chiudi il diario', de: 'Verlauf schließen' },
+  openDiary: {
+    en: 'Activity: the work done on my own',
+    it: 'Diario: il lavoro fatto da solo',
+    de: 'Verlauf: selbstständig erledigte Arbeit'
+  },
+  newTask: { en: 'New task', it: 'Nuovo lavoro', de: 'Neue Aufgabe' },
+  close: { en: 'Close', it: 'Chiudi', de: 'Schließen' },
+  tasks: {
+    en: 'The Segretario’s tasks',
+    it: 'Lavori del Segretario',
+    de: 'Aufgaben des Segretario'
+  },
+  detach: { en: 'Don’t send along', it: 'Non mandare insieme', de: 'Nicht mitsenden' },
+  replyOrAsk: {
+    en: 'Reply or ask something else…',
+    it: 'Rispondi o chiedi altro…',
+    de: 'Antworten oder etwas anderes fragen…'
+  },
+  askAboutRun: {
+    en: 'Ask me about this task…',
+    it: 'Chiedimi di questo lavoro…',
+    de: 'Fragen Sie mich zu dieser Aufgabe…'
+  },
+  askOrHandOver: {
+    en: 'Ask, or hand over a task…',
+    it: 'Chiedi o affida un lavoro…',
+    de: 'Fragen oder eine Aufgabe übergeben…'
+  },
+  keys: {
+    en: 'Enter to send · ⇧ Enter for a new line',
+    it: 'Invio per mandare · ⇧ Invio per andare a capo',
+    de: 'Eingabe zum Senden · ⇧ Eingabe für neue Zeile'
+  },
+  stop: { en: 'Stop', it: 'Ferma', de: 'Anhalten' },
+  sendRequest: { en: 'Send', it: 'Manda', de: 'Senden' }
+})
+
+/** A piece of work's state, as its row says it. */
+const STATUS_LABELS = defineMessages({
+  running: { en: 'Working', it: 'Al lavoro', de: 'Arbeitet' },
+  waiting: { en: 'Waiting for you', it: 'Ti aspetta', de: 'Wartet auf Sie' },
+  done: { en: 'Done', it: 'Fatto', de: 'Erledigt' },
+  failed: { en: 'Failed', it: 'Non riuscito', de: 'Fehlgeschlagen' },
+  cancelled: { en: 'Stopped', it: 'Fermato', de: 'Angehalten' }
+}) satisfies Record<ActivityStatus, unknown>
 
 /** What the user is looking at, as the input shows it before it is sent along. */
 export interface SegretarioContextChip {
@@ -93,11 +194,13 @@ const NO_HANDLES: ReadonlyMap<string, HandleLink> = new Map()
 const EMPTY_CONTEXT: SegretarioContext = { messages: [], accountId: null, folderLabel: null }
 
 function StatusMark({ status }: { status: ActivityStatus }): React.JSX.Element {
+  const labels = useMessages(STATUS_LABELS)
+
   switch (status) {
     case 'running':
       return <LoaderCircle className="text-ai size-3.5 animate-spin" />
     case 'waiting':
-      return <span className="bg-urgent size-[7px] rounded-full" aria-label="Ti aspetta" />
+      return <span className="bg-urgent size-[7px] rounded-full" aria-label={labels.waiting} />
     case 'done':
       return <Check className="text-faint-foreground size-3.5" />
     case 'failed':
@@ -105,14 +208,6 @@ function StatusMark({ status }: { status: ActivityStatus }): React.JSX.Element {
     case 'cancelled':
       return <Square className="text-faint-foreground size-3" />
   }
-}
-
-const STATUS_LABEL: Readonly<Record<ActivityStatus, string>> = {
-  running: 'Al lavoro',
-  waiting: 'Ti aspetta',
-  done: 'Fatto',
-  failed: 'Non riuscito',
-  cancelled: 'Fermato'
 }
 
 function ActivityRow({
@@ -124,6 +219,8 @@ function ActivityRow({
   selected: boolean
   onSelect: () => void
 }): React.JSX.Element {
+  const labels = useMessages(STATUS_LABELS)
+
   return (
     <button
       type="button"
@@ -150,7 +247,7 @@ function ActivityRow({
           activity.status === 'waiting' ? 'text-urgent font-semibold' : 'text-faint-foreground'
         )}
       >
-        {STATUS_LABEL[activity.status]}
+        {labels[activity.status]}
       </span>
     </button>
   )
@@ -189,6 +286,7 @@ function ApprovalCard({
   onDecide: (approved: boolean) => void
   onOpenDraft: (draftId: string) => void
 }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
   const [deciding, setDeciding] = useState(false)
   const draft = approval.draft
 
@@ -202,7 +300,7 @@ function ApprovalCard({
       <div className="flex items-center gap-2 border-b px-3 py-2 text-[12px]">
         <span className="bg-urgent size-[6px] rounded-full" />
         <span className="text-foreground shrink-0 font-semibold whitespace-nowrap">
-          Da confermare
+          {m.toConfirm}
         </span>
         <span className="text-faint-foreground min-w-0 truncate">{approval.title}</span>
       </div>
@@ -210,16 +308,14 @@ function ApprovalCard({
         <div className="space-y-1.5 px-3 py-2.5">
           <div className="text-muted-foreground space-y-0.5 text-[11.5px]">
             <p className="truncate">
-              <span className="text-faint-foreground">A</span> {draft.to.join(', ') || '—'}
+              <span className="text-faint-foreground">{m.to}</span> {draft.to.join(', ') || '—'}
             </p>
             {draft.cc.length > 0 && (
               <p className="truncate">
-                <span className="text-faint-foreground">Cc</span> {draft.cc.join(', ')}
+                <span className="text-faint-foreground">{m.cc}</span> {draft.cc.join(', ')}
               </p>
             )}
-            <p className="text-foreground truncate font-semibold">
-              {draft.subject || 'Senza oggetto'}
-            </p>
+            <p className="text-foreground truncate font-semibold">{draft.subject || m.noSubject}</p>
           </div>
           <div className="max-h-48 overflow-y-auto">
             <SegretarioText
@@ -256,7 +352,7 @@ function ApprovalCard({
             onDecide(false)
           }}
         >
-          {approval.kind === 'send' ? 'Non inviare' : 'Annulla'}
+          {approval.kind === 'send' ? m.dontSend : m.cancel}
         </Button>
         {draft && (
           <Button
@@ -265,7 +361,7 @@ function ApprovalCard({
             disabled={deciding}
             onClick={() => onOpenDraft(draft.draftId)}
           >
-            Apri
+            {m.open}
           </Button>
         )}
         <Button
@@ -284,7 +380,7 @@ function ApprovalCard({
           ) : (
             <Check className="size-3.5" />
           )}
-          {approval.kind === 'send' ? 'Invia' : (approval.confirmLabel ?? 'Conferma')}
+          {approval.kind === 'send' ? m.send : (approval.confirmLabel ?? m.confirm)}
         </Button>
       </div>
     </div>
@@ -299,6 +395,7 @@ function ChangesBlock({
   activityId: string
   entry: Extract<ActivityEntry, { kind: 'changes' }>
 }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
   const [undoing, setUndoing] = useState<number | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
 
@@ -308,7 +405,7 @@ function ChangesBlock({
 
   return (
     <div className="border-ai-line flex flex-col gap-1 border-l-2 pl-3">
-      <p className="text-ai text-[11.5px] font-semibold">Cosa ho cambiato</p>
+      <p className="text-ai text-[11.5px] font-semibold">{m.whatIChanged}</p>
       <ul className="flex flex-col gap-0.5">
         {entry.changes.map((change, index) => (
           <li key={index} className="flex items-baseline gap-2 text-[12px] leading-[1.45]">
@@ -321,7 +418,7 @@ function ChangesBlock({
               {change.label}
             </span>
             {change.undone ? (
-              <span className="text-faint-foreground shrink-0 text-[11px]">annullato</span>
+              <span className="text-faint-foreground shrink-0 text-[11px]">{m.undone}</span>
             ) : (
               change.undoable && (
                 <button
@@ -333,13 +430,15 @@ function ChangesBlock({
                     void window.segretarioApi
                       .undoChange(activityId, entry.id, index)
                       .catch((error: unknown) =>
-                        setProblem(error instanceof Error ? error.message : 'Non si è annullata.')
+                        setProblem(
+                          error instanceof Error ? error.message : messagesNow(MESSAGES).notUndone
+                        )
                       )
                       .finally(() => setUndoing(null))
                   }}
                   className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/60 shrink-0 rounded-sm text-[11.5px] font-semibold outline-none focus-visible:ring-2 disabled:opacity-50"
                 >
-                  {undoing === index ? <LoaderCircle className="size-3 animate-spin" /> : 'Annulla'}
+                  {undoing === index ? <LoaderCircle className="size-3 animate-spin" /> : m.undo}
                 </button>
               )
             )}
@@ -351,24 +450,26 @@ function ChangesBlock({
   )
 }
 
-const DIARY_DAY = new Intl.DateTimeFormat('it-IT', {
-  weekday: 'long',
-  day: 'numeric',
-  month: 'long'
-})
-const DIARY_TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
+const DIARY_DAY: Intl.DateTimeFormatOptions = { weekday: 'long', day: 'numeric', month: 'long' }
+/** Made when used: the hour is written as the region writes it now. */
+const DIARY_TIME = (): Intl.DateTimeFormatOptions => ({ hour: hourStyle(), minute: '2-digit' })
 
-/** "Oggi", "Ieri", or the day: what a group of the diary is headed by. */
-function diaryDayLabel(at: number, now = new Date()): string {
+/** "Today", "Yesterday", or the day: what a group of the diary is headed by. */
+function diaryDayLabel(
+  at: number,
+  m: Messages<typeof MESSAGES>,
+  days: Intl.DateTimeFormat,
+  now = new Date()
+): string {
   const day = new Date(at)
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const startOfDay = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime()
 
   if (startOfDay === start) {
-    return 'Oggi'
+    return m.today
   }
 
-  return startOfDay === start - 24 * 60 * 60 * 1000 ? 'Ieri' : DIARY_DAY.format(day)
+  return startOfDay === start - 24 * 60 * 60 * 1000 ? m.yesterday : days.format(day)
 }
 
 /**
@@ -384,13 +485,15 @@ function DiaryView({
   diary: ReadonlyArray<ActivitySummary> | null
   onSelect: (id: string) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const taskNames = useMessages(TASK_LABELS)
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
 
   if (!diary) {
     return (
       <div className="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-[12.5px]">
         <LoaderCircle className="size-4 animate-spin" />
-        Apro il diario…
+        {m.openingDiary}
       </div>
     )
   }
@@ -398,16 +501,18 @@ function DiaryView({
   if (diary.length === 0) {
     return (
       <p className="voice text-muted-foreground flex-1 px-5 pt-6 text-[15px] leading-[1.45]">
-        Qui trovi quello che faccio da solo: leggere la posta che arriva, scrivere la giornata,
-        aggiornare i progetti. Per ora non ho ancora lavorato.
+        {m.emptyDiary}
       </p>
     )
   }
 
+  const { formatLocale } = languageNow()
+  const dayFormat = new Intl.DateTimeFormat(formatLocale, DIARY_DAY)
+  const timeFormat = new Intl.DateTimeFormat(formatLocale, DIARY_TIME())
   const days = new Map<string, Map<string, ActivitySummary[]>>()
 
   for (const activity of diary) {
-    const day = diaryDayLabel(activity.createdAt)
+    const day = diaryDayLabel(activity.createdAt, m, dayFormat)
     const tasks = days.get(day) ?? new Map<string, ActivitySummary[]>()
     tasks.set(activity.task, [...(tasks.get(activity.task) ?? []), activity])
     days.set(day, tasks)
@@ -446,7 +551,7 @@ function DiaryView({
                         expanded && 'rotate-90'
                       )}
                     />
-                    <span className="min-w-0 flex-1 truncate">{TASK_LABELS[task]}</span>
+                    <span className="min-w-0 flex-1 truncate">{taskNames[task]}</span>
                     <span className="text-faint-foreground tabular-nums">{runs.length}</span>
                   </button>
                 )}
@@ -466,7 +571,7 @@ function DiaryView({
                       </span>
                       <span className="min-w-0 flex-1 truncate">{run.title}</span>
                       <span className="text-faint-foreground shrink-0 text-[11px] tabular-nums">
-                        {DIARY_TIME.format(run.createdAt)}
+                        {timeFormat.format(run.createdAt)}
                       </span>
                     </button>
                   ))}
@@ -494,6 +599,7 @@ export function ActivityThread({
   /** The work on screen stopped short and the user waits for it: "Riprova", by its error. */
   onRetry?: () => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
   const entries = state.entries ?? []
@@ -578,7 +684,7 @@ export function ActivityThread({
             case 'compaction':
               return (
                 <p key={entry.id} className="text-faint-foreground text-center text-[11.5px]">
-                  Ho riassunto il lavoro fatto finora, per tenerlo a mente meglio.
+                  {m.compaction}
                 </p>
               )
             case 'error':
@@ -591,7 +697,7 @@ export function ActivityThread({
                   {onRetry && index === lastError && (
                     <Button variant="outline" size="sm" className="ml-5.5" onClick={onRetry}>
                       <RotateCcw className="size-3.5" />
-                      Riprova
+                      {m.retry}
                     </Button>
                   )}
                 </div>
@@ -618,13 +724,11 @@ function Introduction({
   onSuggest: (text: string) => void
   suggestions: ReadonlyArray<string>
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+
   return (
     <div className="flex min-h-0 flex-1 flex-col justify-end gap-4 overflow-y-auto px-5 pb-4">
-      <p className="voice text-foreground text-[17px] leading-[1.45]">
-        Sono il tuo segretario. Leggo la posta mentre arriva e tengo il conto di quello che resta da
-        fare; chiedimi di cercare, riassumere una questione, preparare una risposta nel tuo stile,
-        mettere in ordine o fissare un appuntamento.
-      </p>
+      <p className="voice text-foreground text-[17px] leading-[1.45]">{m.introduction}</p>
       <div className="flex flex-col items-start gap-1.5">
         {suggestions.map((suggestion) => (
           <button
@@ -669,6 +773,9 @@ export function SegretarioPanel({
   onApprove: (activityId: string, approval: ApprovalRequest, approved: boolean) => void
   onOpenDraft: (draftId: string) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
+  const statusLabels = useMessages(STATUS_LABELS)
   const [text, setText] = useState('')
   const [contextDetached, setContextDetached] = useState(false)
   const [sending, setSending] = useState(false)
@@ -706,7 +813,7 @@ export function SegretarioPanel({
     try {
       await state.retry(id)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Non sono riuscito a riprendere.')
+      setError(caught instanceof Error ? caught.message : messagesNow(MESSAGES).notResumed)
     }
   }
 
@@ -729,7 +836,7 @@ export function SegretarioPanel({
       setShowDiary(false)
       setText('')
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Non sono riuscito a cominciare.')
+      setError(caught instanceof Error ? caught.message : messagesNow(MESSAGES).notStarted)
     } finally {
       setSending(false)
     }
@@ -737,7 +844,7 @@ export function SegretarioPanel({
 
   return (
     <aside
-      aria-label="Segretario"
+      aria-label={places.segretario}
       data-segretario-panel
       className="paper flex h-full min-h-0 w-full min-w-0 flex-col border-l"
     >
@@ -748,12 +855,12 @@ export function SegretarioPanel({
         )}
       >
         <CompassStar className="text-ai-star size-[18px]" />
-        <h2 className="display-title text-[15px]">Segretario</h2>
+        <h2 className="display-title text-[15px]">{places.segretario}</h2>
         {panelKeys && <ShortcutKeys keys={panelKeys} className="ml-1" />}
         <div className="flex-1" />
         <div className="window-no-drag flex items-center gap-0.5">
           <IconButton
-            label={showDiary ? 'Chiudi il diario' : 'Diario: il lavoro fatto da solo'}
+            label={showDiary ? m.closeDiary : m.openDiary}
             className={cn('size-[28px]', showDiary ? 'text-foreground' : 'text-faint-foreground')}
             onClick={() => {
               if (!showDiary) {
@@ -766,7 +873,7 @@ export function SegretarioPanel({
             <BookOpen className="size-4" />
           </IconButton>
           <IconButton
-            label="Nuovo lavoro"
+            label={m.newTask}
             className="text-faint-foreground size-[28px]"
             onClick={() => {
               setShowDiary(false)
@@ -776,7 +883,7 @@ export function SegretarioPanel({
             <Plus className="size-4" />
           </IconButton>
           <IconButton
-            label="Chiudi"
+            label={m.close}
             className="text-faint-foreground size-[28px]"
             onClick={onClose}
           >
@@ -787,7 +894,7 @@ export function SegretarioPanel({
 
       {state.activities.length > 0 && (
         <nav
-          aria-label="Lavori del Segretario"
+          aria-label={m.tasks}
           className="flex max-h-[152px] shrink-0 flex-col gap-0.5 overflow-y-auto border-b p-2"
         >
           {state.activities.map((activity) => (
@@ -849,7 +956,7 @@ export function SegretarioPanel({
                 <span className="truncate">{contextChip.label}</span>
                 <button
                   type="button"
-                  aria-label="Non mandare insieme"
+                  aria-label={m.detach}
                   onClick={() => setContextDetached(true)}
                   className="hover:text-foreground shrink-0"
                 >
@@ -868,13 +975,7 @@ export function SegretarioPanel({
                   void submit(text)
                 }
               }}
-              placeholder={
-                selected
-                  ? 'Rispondi o chiedi altro…'
-                  : onDiaryRun
-                    ? 'Chiedimi di questo lavoro…'
-                    : 'Chiedi o affida un lavoro…'
-              }
+              placeholder={selected ? m.replyOrAsk : onDiaryRun ? m.askAboutRun : m.askOrHandOver}
               className="placeholder:text-faint-foreground block w-full resize-none bg-transparent px-1 py-1 text-[13px] leading-[1.45] outline-none"
             />
             <div className="flex items-center justify-between gap-2 pt-1">
@@ -882,8 +983,8 @@ export function SegretarioPanel({
                 {working
                   ? selected!.status === 'running' && state.waiting
                     ? state.waiting
-                    : STATUS_LABEL[selected!.status]
-                  : 'Invio per mandare · ⇧ Invio per andare a capo'}
+                    : statusLabels[selected!.status]
+                  : m.keys}
               </span>
               {working ? (
                 <Button
@@ -892,11 +993,11 @@ export function SegretarioPanel({
                   onClick={() => selected && state.cancel(selected.id)}
                 >
                   <Square className="size-3" />
-                  Ferma
+                  {m.stop}
                 </Button>
               ) : (
                 <IconButton
-                  label="Manda"
+                  label={m.sendRequest}
                   tooltipSide="top"
                   variant="default"
                   className="size-[28px] rounded-full"

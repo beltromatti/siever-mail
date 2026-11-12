@@ -2,7 +2,13 @@ import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 
+import { useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
+
+const MESSAGES = defineMessages({
+  close: { en: 'Close', it: 'Chiudi', de: 'Schließen' }
+})
 
 const Dialog = DialogPrimitive.Root
 const DialogTrigger = DialogPrimitive.Trigger
@@ -208,6 +214,7 @@ const DialogContent = React.forwardRef<
     },
     forwardedRef
   ) => {
+    const m = useMessages(MESSAGES)
     const { offset, isDragging, panelRef, onHandlePointerDown, resetOffset } =
       useDialogDrag(draggable)
 
@@ -315,7 +322,7 @@ const DialogContent = React.forwardRef<
               className="text-faint-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring/65 absolute top-3.5 right-3.5 z-20 grid size-6 place-items-center rounded-[6px] transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
             >
               <X className="size-3.5" />
-              <span className="sr-only">Chiudi</span>
+              <span className="sr-only">{m.close}</span>
             </DialogPrimitive.Close>
           )}
         </DialogPrimitive.Content>

@@ -3,8 +3,31 @@ import { LogIn, Plus } from 'lucide-react'
 
 import appLogo from '@renderer/assets/logo.png'
 import { Button } from '@renderer/components/ui/button'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn, formatAppVersion } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
 import type { OnboardingCase } from '@shared/segretario'
+
+const MESSAGES = defineMessages({
+  logo: { en: 'SIEVER Mail logo', it: 'Logo SIEVER Mail', de: 'SIEVER-Mail-Logo' },
+  tagline: {
+    en: 'Your personal operating system',
+    it: 'Il tuo sistema operativo personale',
+    de: 'Ihr persönliches Betriebssystem'
+  },
+  enter: { en: 'Enter', it: 'Entra', de: 'Öffnen' },
+  addConnection: {
+    en: 'Add a connection',
+    it: 'Aggiungi una connessione',
+    de: 'Verbindung hinzufügen'
+  },
+  start: { en: 'Get started', it: 'Inizia', de: 'Los geht’s' },
+  version: {
+    en: (version: string) => `Version ${version}`,
+    it: (version: string) => `Versione ${version}`,
+    de: (version: string) => `Version ${version}`
+  }
+})
 
 /**
  * The screen the app opens on: the mark, the name coming out of it, then the
@@ -23,6 +46,7 @@ export function WelcomeScreen({
   onEnter: () => void
   onSetup: (setupCase: OnboardingCase) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [step, setStep] = useState<'logo' | 'text' | 'button'>('logo')
 
   useEffect(() => {
@@ -50,7 +74,7 @@ export function WelcomeScreen({
           >
             <img
               src={appLogo}
-              alt="Logo SIEVER Mail"
+              alt={m.logo}
               className="size-[5.5rem] shrink-0 select-none lg:size-[6.5rem]"
               draggable={false}
             />
@@ -68,7 +92,7 @@ export function WelcomeScreen({
               >
                 SIEVER Mail
                 <span className="text-muted-foreground mt-2 block font-serif text-2xl leading-tight font-normal tracking-normal whitespace-nowrap italic">
-                  Il tuo sistema operativo personale
+                  {m.tagline}
                 </span>
               </h1>
             </div>
@@ -88,7 +112,7 @@ export function WelcomeScreen({
               <>
                 <Button className="w-56 gap-2 rounded-lg text-sm" size="lg" onClick={onEnter}>
                   <LogIn className="size-4" />
-                  Entra
+                  {m.enter}
                 </Button>
                 <Button
                   variant="secondary"
@@ -97,7 +121,7 @@ export function WelcomeScreen({
                   onClick={() => onSetup('nuova-connessione')}
                 >
                   <Plus className="size-4" />
-                  Aggiungi una connessione
+                  {m.addConnection}
                 </Button>
               </>
             ) : (
@@ -107,11 +131,11 @@ export function WelcomeScreen({
                 onClick={() => onSetup('primo-avvio')}
               >
                 <LogIn className="size-4" />
-                Inizia
+                {m.start}
               </Button>
             )}
             <p className="text-muted-foreground pt-1 text-xs tracking-[0.14em] uppercase">
-              Versione {formatAppVersion(__APP_VERSION__)}
+              {m.version(formatAppVersion(__APP_VERSION__))}
             </p>
           </div>
         </div>

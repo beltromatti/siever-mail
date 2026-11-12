@@ -39,7 +39,6 @@ import {
 import squireScriptUrl from 'squire-rte/dist/squire.js?url'
 
 import extensionShared from '@app/extension/shared'
-import type { TextColorOption } from '@app/extension/types'
 import { Button } from '@renderer/components/ui/button'
 import {
   DropdownMenuCheckboxItem,
@@ -54,8 +53,10 @@ import {
 } from '@renderer/components/ui/dropdown-menu'
 import { Input } from '@renderer/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
 import { READER_ZOOM_RESET, wheelReaderZoom } from '@renderer/lib/reader-zoom'
 import { buildMailFrameDocument, sanitizeMailHtmlToFragment } from '@renderer/lib/mail-html'
+import { localized, type Localized } from '@shared/i18n'
 import {
   areMailFontFamiliesEquivalent,
   findMailFontOption,
@@ -65,6 +66,8 @@ import {
   normalizeMailFontFamilyValue
 } from '@shared/mail-fonts'
 import { cn } from '@renderer/lib/utils'
+
+import { COLOR_NAMES, MESSAGES } from './rich-text-editor.messages'
 
 /**
  * What the host can do with the body from outside it. The body is the
@@ -312,42 +315,48 @@ const EDITOR_LINE_HEIGHT_OPTIONS = [
   { value: '3', label: '3.00' }
 ] as const
 
+/** A colour the picker offers: the extension's named once for every language, the app's in each. */
+interface ColorOption {
+  value: string
+  label: Localized
+}
+
 // An extension's own colours come first (see `ExtensionComposition`).
-const TEXT_COLOR_OPTIONS: ReadonlyArray<TextColorOption> = [
+const TEXT_COLOR_OPTIONS: ReadonlyArray<ColorOption> = [
   ...extensionShared.composition.textColors,
-  { value: '#1f2937', label: 'Antracite' },
-  { value: '#374151', label: 'Ardesia' },
-  { value: '#6b7280', label: 'Grigio' },
-  { value: '#9ca3af', label: 'Argento' },
-  { value: '#f9fafb', label: 'Ghiaccio' },
-  { value: '#b91c1c', label: 'Rosso' },
-  { value: '#dc2626', label: 'Scarlatto' },
-  { value: '#ea580c', label: 'Arancione' },
-  { value: '#d97706', label: 'Ambra' },
-  { value: '#ca8a04', label: 'Ocra' },
-  { value: '#eab308', label: 'Giallo' },
-  { value: '#84cc16', label: 'Lime' },
-  { value: '#16a34a', label: 'Verde' },
-  { value: '#059669', label: 'Smeraldo' },
-  { value: '#0f766e', label: 'Petrolio' },
-  { value: '#06b6d4', label: 'Ciano' },
-  { value: '#0284c7', label: 'Azzurro' },
-  { value: '#2563eb', label: 'Blu' },
-  { value: '#4f46e5', label: 'Indaco' },
-  { value: '#c026d3', label: 'Magenta' },
-  { value: '#ec4899', label: 'Rosa' }
+  { value: '#1f2937', label: COLOR_NAMES.charcoal },
+  { value: '#374151', label: COLOR_NAMES.slate },
+  { value: '#6b7280', label: COLOR_NAMES.gray },
+  { value: '#9ca3af', label: COLOR_NAMES.silver },
+  { value: '#f9fafb', label: COLOR_NAMES.ice },
+  { value: '#b91c1c', label: COLOR_NAMES.red },
+  { value: '#dc2626', label: COLOR_NAMES.scarlet },
+  { value: '#ea580c', label: COLOR_NAMES.orange },
+  { value: '#d97706', label: COLOR_NAMES.amber },
+  { value: '#ca8a04', label: COLOR_NAMES.ochre },
+  { value: '#eab308', label: COLOR_NAMES.yellow },
+  { value: '#84cc16', label: COLOR_NAMES.lime },
+  { value: '#16a34a', label: COLOR_NAMES.green },
+  { value: '#059669', label: COLOR_NAMES.emerald },
+  { value: '#0f766e', label: COLOR_NAMES.teal },
+  { value: '#06b6d4', label: COLOR_NAMES.cyan },
+  { value: '#0284c7', label: COLOR_NAMES.skyBlue },
+  { value: '#2563eb', label: COLOR_NAMES.blue },
+  { value: '#4f46e5', label: COLOR_NAMES.indigo },
+  { value: '#c026d3', label: COLOR_NAMES.magenta },
+  { value: '#ec4899', label: COLOR_NAMES.pink }
 ]
 
-const TEXT_HIGHLIGHT_OPTIONS = [
-  { value: '#fef08a', label: 'Giallo' },
-  { value: '#fdba74', label: 'Pesca' },
-  { value: '#fca5a5', label: 'Corallo' },
-  { value: '#86efac', label: 'Verde' },
-  { value: '#93c5fd', label: 'Azzurro' },
-  { value: '#c4b5fd', label: 'Lilla' }
-] as const
+const TEXT_HIGHLIGHT_OPTIONS: ReadonlyArray<ColorOption> = [
+  { value: '#fef08a', label: COLOR_NAMES.yellow },
+  { value: '#fdba74', label: COLOR_NAMES.peach },
+  { value: '#fca5a5', label: COLOR_NAMES.coral },
+  { value: '#86efac', label: COLOR_NAMES.green },
+  { value: '#93c5fd', label: COLOR_NAMES.skyBlue },
+  { value: '#c4b5fd', label: COLOR_NAMES.lilac }
+]
 
-/** A command's name with the chord that runs it: "Grassetto (⌘B)", "Grassetto (Ctrl+B)". */
+/** A command's name with the chord that runs it: "Bold (⌘B)", "Bold (Ctrl+B)". */
 function withChord(label: string, key: string): string {
   const chord = navigator.platform.includes('Mac')
     ? `⌘${key.replace('Shift+', '⇧')}`
@@ -374,12 +383,13 @@ function TableGridPicker({
 }: {
   onPick: (rows: number, columns: number) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [hover, setHover] = useState({ rows: 0, columns: 0 })
 
   return (
     <div className="p-1.5">
       <p className="text-muted-foreground mb-1.5 text-[11px]">
-        {hover.rows > 0 ? `Tabella ${hover.columns} × ${hover.rows}` : 'Inserisci una tabella'}
+        {hover.rows > 0 ? m.tableSize(hover.columns, hover.rows) : m.insertTable}
       </p>
       <div
         className="grid gap-[3px]"
@@ -395,7 +405,7 @@ function TableGridPicker({
             <button
               key={index}
               type="button"
-              aria-label={`Tabella di ${columns} colonne e ${rows} righe`}
+              aria-label={m.tableOf(columns, rows)}
               onMouseEnter={() => setHover({ rows, columns })}
               onFocus={() => setHover({ rows, columns })}
               onMouseDown={(event) => event.preventDefault()}
@@ -823,10 +833,10 @@ function isSafeLinkHref(value: string): boolean {
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
-    reader.onerror = () => reject(new Error(`Impossibile leggere il file: ${file.name}`))
+    reader.onerror = () => reject(new Error(messagesNow(MESSAGES).cannotReadFile(file.name)))
     reader.onload = () => {
       if (typeof reader.result !== 'string') {
-        reject(new Error(`Formato media non valido: ${file.name}`))
+        reject(new Error(messagesNow(MESSAGES).invalidMedia(file.name)))
         return
       }
       resolve(reader.result)
@@ -2080,7 +2090,7 @@ function applyLineHeight(editor: SquireInstance, lineHeight: string): void {
 export function RichTextEditor({
   handleRef,
   initialHtml,
-  placeholder = "Scrivi il contenuto dell'email...",
+  placeholder,
   disabled = false,
   variant = 'boxed',
   expandToContainer,
@@ -2092,6 +2102,8 @@ export function RichTextEditor({
   onInput,
   onReady
 }: RichTextEditorProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const { language } = useLanguage()
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const [fontFamilyMenuOpen, setFontFamilyMenuOpen] = useState(false)
   const [fontSizeMenuOpen, setFontSizeMenuOpen] = useState(false)
@@ -2136,7 +2148,7 @@ export function RichTextEditor({
   const { editor } = useSquireInstance({
     iframeRef,
     initialHtml,
-    placeholder,
+    placeholder: placeholder ?? m.bodyPlaceholder,
     defaultFontFamily: normalizedDefaultFontFamily,
     disabled,
     zoom,
@@ -2494,7 +2506,7 @@ export function RichTextEditor({
       return
     }
     if (!isSafeLinkHref(normalized)) {
-      setLinkError('Protocollo link non supportato.')
+      setLinkError(messagesNow(MESSAGES).unsupportedLink)
       return
     }
     editor.focus()
@@ -2526,7 +2538,7 @@ export function RichTextEditor({
           file.type.toLowerCase() !== 'image/svg+xml'
       )
       if (valid.length === 0) {
-        setMediaError('Seleziona un file immagine valido (PNG, JPG, GIF, WEBP).')
+        setMediaError(messagesNow(MESSAGES).chooseImage)
         return
       }
       setMediaError(null)
@@ -2534,12 +2546,11 @@ export function RichTextEditor({
       for (const file of valid) {
         try {
           const dataUrl = await fileToDataUrl(file)
-          editor.insertImage(dataUrl, {
-            alt: file.name || 'Immagine',
-            title: file.name || 'Immagine'
-          })
+          // Written into the message: in the language it is written in.
+          const name = file.name || messagesNow(MESSAGES).image
+          editor.insertImage(dataUrl, { alt: name, title: name })
         } catch {
-          setMediaError(`Impossibile inserire ${file.name}.`)
+          setMediaError(messagesNow(MESSAGES).cannotInsert(file.name))
         }
       }
     },
@@ -2583,7 +2594,7 @@ export function RichTextEditor({
   const activeFontOption = findMailFontOption(active.fontFamily)
   const activeUnknownFontFamilyLabel = getDisplayMailFontFamily(active.fontFamily)
   const fontFamilyTriggerLabel =
-    activeFontOption?.label || (active.fontFamily ? 'Altro...' : 'Font')
+    activeFontOption?.label || (active.fontFamily ? m.otherFont : m.font)
 
   // The toolbar is always rendered, even before Squire finishes booting —
   // this avoids a UX flash where buttons appear/disappear during init. The
@@ -2601,7 +2612,7 @@ export function RichTextEditor({
       active: active.isBold,
       disabled: toolButtonDisabled,
       action: toggleBold,
-      title: withChord('Grassetto', 'B')
+      title: withChord(m.bold, 'B')
     },
     {
       id: 'italic',
@@ -2609,7 +2620,7 @@ export function RichTextEditor({
       active: active.isItalic,
       disabled: toolButtonDisabled,
       action: toggleItalic,
-      title: withChord('Corsivo', 'I')
+      title: withChord(m.italic, 'I')
     },
     {
       id: 'underline',
@@ -2617,7 +2628,7 @@ export function RichTextEditor({
       active: active.isUnderline,
       disabled: toolButtonDisabled,
       action: toggleUnderline,
-      title: withChord('Sottolineato', 'U')
+      title: withChord(m.underline, 'U')
     },
     {
       id: 'strike',
@@ -2625,7 +2636,7 @@ export function RichTextEditor({
       active: active.isStrike,
       disabled: toolButtonDisabled,
       action: toggleStrike,
-      title: withChord('Barrato', 'Shift+7')
+      title: withChord(m.strikethrough, 'Shift+7')
     },
     {
       id: 'subscript',
@@ -2633,7 +2644,7 @@ export function RichTextEditor({
       active: active.isSub,
       disabled: toolButtonDisabled,
       action: toggleSubscript,
-      title: 'Pedice'
+      title: m.subscript
     },
     {
       id: 'superscript',
@@ -2641,7 +2652,7 @@ export function RichTextEditor({
       active: active.isSup,
       disabled: toolButtonDisabled,
       action: toggleSuperscript,
-      title: 'Apice'
+      title: m.superscript
     }
   ]
   const listButtons: ToolbarButton[] = [
@@ -2651,7 +2662,7 @@ export function RichTextEditor({
       active: active.isUL,
       disabled: toolButtonDisabled,
       action: toggleBulletList,
-      title: withChord('Elenco puntato', 'Shift+8')
+      title: withChord(m.bulletList, 'Shift+8')
     },
     {
       id: 'ordered-list',
@@ -2659,7 +2670,7 @@ export function RichTextEditor({
       active: active.isOL,
       disabled: toolButtonDisabled,
       action: toggleOrderedList,
-      title: withChord('Elenco numerato', 'Shift+9')
+      title: withChord(m.numberedList, 'Shift+9')
     }
   ]
   const indentQuoteButtons: ToolbarButton[] = [
@@ -2669,7 +2680,7 @@ export function RichTextEditor({
       active: false,
       disabled: toolButtonDisabled,
       action: decreaseIndent,
-      title: withChord('Riduci rientro', '[')
+      title: withChord(m.outdent, '[')
     },
     {
       id: 'indent',
@@ -2677,7 +2688,7 @@ export function RichTextEditor({
       active: false,
       disabled: toolButtonDisabled,
       action: increaseIndent,
-      title: withChord('Aumenta rientro', ']')
+      title: withChord(m.indent, ']')
     },
     {
       id: 'blockquote',
@@ -2685,7 +2696,7 @@ export function RichTextEditor({
       active: active.isQuote,
       disabled: toolButtonDisabled,
       action: toggleBlockquote,
-      title: 'Citazione'
+      title: m.quote
     }
   ]
 
@@ -2745,29 +2756,29 @@ export function RichTextEditor({
         <>
           <DropdownMenuSeparator />
           <DropdownMenuItem className="text-xs" onSelect={() => tableOperation('row-above')}>
-            Inserisci una riga sopra
+            {m.insertRowAbove}
           </DropdownMenuItem>
           <DropdownMenuItem className="text-xs" onSelect={() => tableOperation('row-below')}>
-            Inserisci una riga sotto
+            {m.insertRowBelow}
           </DropdownMenuItem>
           <DropdownMenuItem className="text-xs" onSelect={() => tableOperation('column-left')}>
-            Inserisci una colonna a sinistra
+            {m.insertColumnLeft}
           </DropdownMenuItem>
           <DropdownMenuItem className="text-xs" onSelect={() => tableOperation('column-right')}>
-            Inserisci una colonna a destra
+            {m.insertColumnRight}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem className="text-xs" onSelect={() => tableOperation('delete-row')}>
-            Elimina la riga
+            {m.deleteRow}
           </DropdownMenuItem>
           <DropdownMenuItem className="text-xs" onSelect={() => tableOperation('delete-column')}>
-            Elimina la colonna
+            {m.deleteColumn}
           </DropdownMenuItem>
           <DropdownMenuItem
             className="text-destructive-soft-foreground text-xs"
             onSelect={() => tableOperation('delete-table')}
           >
-            Elimina la tabella
+            {m.deleteTable}
           </DropdownMenuItem>
         </>
       )}
@@ -2784,19 +2795,19 @@ export function RichTextEditor({
             className="gap-2 text-xs"
             onSelect={toggleStrike}
           >
-            Barrato
+            {m.strikethrough}
           </DropdownMenuCheckboxItem>
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger className="text-xs">Stile del paragrafo</DropdownMenuSubTrigger>
+            <DropdownMenuSubTrigger className="text-xs">{m.paragraphStyle}</DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="min-w-[10rem] p-1">
               {[
-                { level: null, label: 'Paragrafo' },
-                { level: 1, label: 'Titolo 1' },
-                { level: 2, label: 'Titolo 2' },
-                { level: 3, label: 'Titolo 3' }
+                { level: null, label: m.paragraph },
+                { level: 1, label: m.heading(1) },
+                { level: 2, label: m.heading(2) },
+                { level: 3, label: m.heading(3) }
               ].map((option) => (
                 <DropdownMenuCheckboxItem
-                  key={option.label}
+                  key={option.level ?? 'paragraph'}
                   checked={activeHeadingLevel === option.level}
                   className="text-xs"
                   onSelect={() => setHeadingLevel(option.level as 1 | 2 | 3 | null)}
@@ -2807,13 +2818,13 @@ export function RichTextEditor({
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger className="text-xs">Allineamento</DropdownMenuSubTrigger>
+            <DropdownMenuSubTrigger className="text-xs">{m.alignment}</DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="min-w-[10rem] p-1">
               {[
-                { value: 'left', label: 'A sinistra' },
-                { value: 'center', label: 'Al centro' },
-                { value: 'right', label: 'A destra' },
-                { value: 'justify', label: 'Giustificato' }
+                { value: 'left', label: m.left },
+                { value: 'center', label: m.center },
+                { value: 'right', label: m.right },
+                { value: 'justify', label: m.justified }
               ].map((option) => (
                 <DropdownMenuCheckboxItem
                   key={option.value}
@@ -2831,24 +2842,24 @@ export function RichTextEditor({
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuItem className="text-xs" onSelect={decreaseIndent}>
-            Riduci rientro
+            {m.outdent}
           </DropdownMenuItem>
           <DropdownMenuItem className="text-xs" onSelect={increaseIndent}>
-            Aumenta rientro
+            {m.indent}
           </DropdownMenuItem>
           <DropdownMenuCheckboxItem
             checked={active.isQuote}
             className="text-xs"
             onSelect={toggleBlockquote}
           >
-            Citazione
+            {m.quote}
           </DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem className="text-xs" onSelect={openMediaPicker}>
-            Inserisci un’immagine…
+            {m.insertImage}
           </DropdownMenuItem>
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger className="text-xs">Tabella</DropdownMenuSubTrigger>
+            <DropdownMenuSubTrigger className="text-xs">{m.table}</DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="p-1">{tableMenuItems}</DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuItem
@@ -2856,7 +2867,7 @@ export function RichTextEditor({
             disabled={active.isEmpty}
             onSelect={clearFormatting}
           >
-            Rimuovi formattazione
+            {m.clearFormatting}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
         </>
@@ -2867,7 +2878,7 @@ export function RichTextEditor({
           disabled={!undoState.canRedo}
           onSelect={() => runWithFocus((e) => e.redo())}
         >
-          {withChord('Ripeti', 'Shift+Z')}
+          {withChord(m.redo, 'Shift+Z')}
         </DropdownMenuItem>
       )}
       <DropdownMenuCheckboxItem
@@ -2875,17 +2886,17 @@ export function RichTextEditor({
         className="text-xs"
         onSelect={toggleSubscript}
       >
-        {withChord('Pedice', 'Shift+5')}
+        {withChord(m.subscript, 'Shift+5')}
       </DropdownMenuCheckboxItem>
       <DropdownMenuCheckboxItem
         checked={active.isSup}
         className="text-xs"
         onSelect={toggleSuperscript}
       >
-        {withChord('Apice', 'Shift+6')}
+        {withChord(m.superscript, 'Shift+6')}
       </DropdownMenuCheckboxItem>
       <DropdownMenuSub>
-        <DropdownMenuSubTrigger className="text-xs">Interlinea</DropdownMenuSubTrigger>
+        <DropdownMenuSubTrigger className="text-xs">{m.lineSpacing}</DropdownMenuSubTrigger>
         <DropdownMenuSubContent className="min-w-[5rem] p-1">
           {EDITOR_LINE_HEIGHT_OPTIONS.map((option) => {
             const checked =
@@ -2913,7 +2924,7 @@ export function RichTextEditor({
         className="text-xs"
         onSelect={() => runWithFocus((e) => e.insertHTML('<hr><div><br></div>'))}
       >
-        Linea orizzontale
+        {m.horizontalLine}
       </DropdownMenuItem>
     </>
   )
@@ -2954,7 +2965,7 @@ export function RichTextEditor({
         >
           {renderToolbarButton(
             'undo',
-            withChord('Annulla', 'Z'),
+            withChord(m.undo, 'Z'),
             <Button
               type="button"
               variant="ghost"
@@ -2962,7 +2973,7 @@ export function RichTextEditor({
               className="size-8"
               onClick={() => runWithFocus((e) => e.undo())}
               onMouseDown={(event) => event.preventDefault()}
-              aria-label="Annulla"
+              aria-label={m.undo}
               disabled={toolButtonDisabled || !undoState.canUndo}
             >
               <Undo2 className="size-4" />
@@ -2971,7 +2982,7 @@ export function RichTextEditor({
           {!compact &&
             renderToolbarButton(
               'redo',
-              withChord('Ripeti', 'Shift+Z'),
+              withChord(m.redo, 'Shift+Z'),
               <Button
                 type="button"
                 variant="ghost"
@@ -2979,7 +2990,7 @@ export function RichTextEditor({
                 className="size-8"
                 onClick={() => runWithFocus((e) => e.redo())}
                 onMouseDown={(event) => event.preventDefault()}
-                aria-label="Ripeti"
+                aria-label={m.redo}
                 disabled={toolButtonDisabled || !undoState.canRedo}
               >
                 <Redo2 className="size-4" />
@@ -2988,7 +2999,7 @@ export function RichTextEditor({
           {!compact && <ToolbarSeparator />}
           {renderToolbarButton(
             'font-family',
-            'Font',
+            m.font,
             <PopoverPrimitive.Root
               open={fontFamilyMenuOpen}
               onOpenChange={setFontFamilyMenuOpen}
@@ -3004,7 +3015,7 @@ export function RichTextEditor({
                     wide ? 'max-w-[10rem]' : 'max-w-[6.5rem]'
                   )}
                   onMouseDown={(event) => event.preventDefault()}
-                  aria-label="Font"
+                  aria-label={m.font}
                   disabled={disabled || !editor}
                 >
                   <span className="truncate">{fontFamilyTriggerLabel}</span>
@@ -3021,7 +3032,7 @@ export function RichTextEditor({
                 >
                   {active.fontFamily && !activeFontOption ? (
                     <div className="text-muted-foreground px-2 py-1.5 text-xs opacity-50">
-                      Altro: {activeUnknownFontFamilyLabel || 'font originale'}
+                      {m.otherFontNamed(activeUnknownFontFamilyLabel || m.originalFont)}
                     </div>
                   ) : null}
                   {MAIL_FONT_OPTIONS.map((option) => {
@@ -3053,7 +3064,7 @@ export function RichTextEditor({
 
           {renderToolbarButton(
             'font-size',
-            'Dimensione testo',
+            m.textSize,
             <PopoverPrimitive.Root
               open={fontSizeMenuOpen}
               onOpenChange={setFontSizeMenuOpen}
@@ -3117,7 +3128,7 @@ export function RichTextEditor({
                     }}
                     className="hover:bg-secondary/60 h-8 w-full border-transparent bg-transparent px-1 text-center text-xs font-medium focus-visible:bg-transparent"
                     inputMode="numeric"
-                    aria-label="Dimensione testo in pixel"
+                    aria-label={m.textSizeInPixels}
                     disabled={disabled || !editor}
                   />
                 </div>
@@ -3191,7 +3202,7 @@ export function RichTextEditor({
             })}
           {renderToolbarButton(
             'text-color',
-            'Colore testo',
+            m.textColor,
             <PopoverPrimitive.Root
               open={colorMenuOpen}
               onOpenChange={setColorMenuOpen}
@@ -3208,7 +3219,7 @@ export function RichTextEditor({
                   )}
                   onMouseDown={(event) => event.preventDefault()}
                   disabled={disabled || !editor}
-                  aria-label="Colore testo"
+                  aria-label={m.textColor}
                 >
                   <span
                     className="border-border/80 size-4 rounded-full border"
@@ -3242,7 +3253,7 @@ export function RichTextEditor({
                           <span className="bg-mail-editor-foreground absolute inset-1 rounded-full" />
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="top">Predefinito</TooltipContent>
+                      <TooltipContent side="top">{m.defaultColor}</TooltipContent>
                     </Tooltip>
                     {TEXT_COLOR_OPTIONS.map((option) => (
                       <Tooltip key={option.value}>
@@ -3258,7 +3269,9 @@ export function RichTextEditor({
                             }}
                           />
                         </TooltipTrigger>
-                        <TooltipContent side="top">{option.label}</TooltipContent>
+                        <TooltipContent side="top">
+                          {localized(option.label, language)}
+                        </TooltipContent>
                       </Tooltip>
                     ))}
                     <Tooltip>
@@ -3273,7 +3286,7 @@ export function RichTextEditor({
                           <Palette className="text-foreground/85 size-4" />
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="top">Colore personalizzato</TooltipContent>
+                      <TooltipContent side="top">{m.customColor}</TooltipContent>
                     </Tooltip>
                     <input
                       ref={customColorInputRef}
@@ -3295,7 +3308,7 @@ export function RichTextEditor({
 
           {renderToolbarButton(
             'text-highlight',
-            'Colore sfondo testo',
+            m.highlightColor,
             <PopoverPrimitive.Root
               open={highlightMenuOpen}
               onOpenChange={setHighlightMenuOpen}
@@ -3312,7 +3325,7 @@ export function RichTextEditor({
                   )}
                   onMouseDown={(event) => event.preventDefault()}
                   disabled={disabled || !editor}
-                  aria-label="Colore sfondo testo"
+                  aria-label={m.highlightColor}
                 >
                   <Highlighter className="text-foreground/85 size-4" />
                   <span
@@ -3346,7 +3359,7 @@ export function RichTextEditor({
                           <span className="bg-destructive absolute top-3 left-1 h-0.5 w-5 rotate-45 rounded-full" />
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="top">Nessuna evidenziazione</TooltipContent>
+                      <TooltipContent side="top">{m.noHighlight}</TooltipContent>
                     </Tooltip>
                     {TEXT_HIGHLIGHT_OPTIONS.map((option) => (
                       <Tooltip key={option.value}>
@@ -3362,7 +3375,9 @@ export function RichTextEditor({
                             }}
                           />
                         </TooltipTrigger>
-                        <TooltipContent side="top">{option.label}</TooltipContent>
+                        <TooltipContent side="top">
+                          {localized(option.label, language)}
+                        </TooltipContent>
                       </Tooltip>
                     ))}
                     <Tooltip>
@@ -3377,7 +3392,7 @@ export function RichTextEditor({
                           <Palette className="text-foreground/85 size-4" />
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="top">Colore personalizzato</TooltipContent>
+                      <TooltipContent side="top">{m.customColor}</TooltipContent>
                     </Tooltip>
                     <input
                       ref={customHighlightInputRef}
@@ -3401,7 +3416,7 @@ export function RichTextEditor({
           {wide &&
             renderToolbarButton(
               'heading',
-              'Titoli',
+              m.headings,
               <DropdownMenu open={headingMenuOpen} onOpenChange={setHeadingMenuOpen} modal={false}>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -3410,7 +3425,7 @@ export function RichTextEditor({
                     size="icon"
                     className="size-8"
                     onMouseDown={(event) => event.preventDefault()}
-                    aria-label="Titoli"
+                    aria-label={m.headings}
                     disabled={disabled || !editor}
                   >
                     <HeadingTriggerIcon className="size-4" />
@@ -3421,15 +3436,15 @@ export function RichTextEditor({
                   onCloseAutoFocus={(event) => event.preventDefault()}
                 >
                   {[
-                    { level: null, label: 'Paragrafo', icon: Pilcrow },
-                    { level: 1, label: 'Titolo 1', icon: Heading1 },
-                    { level: 2, label: 'Titolo 2', icon: Heading2 },
-                    { level: 3, label: 'Titolo 3', icon: Heading3 }
+                    { level: null, label: m.paragraph, icon: Pilcrow },
+                    { level: 1, label: m.heading(1), icon: Heading1 },
+                    { level: 2, label: m.heading(2), icon: Heading2 },
+                    { level: 3, label: m.heading(3), icon: Heading3 }
                   ].map((option) => {
                     const Icon = option.icon
                     return (
                       <DropdownMenuCheckboxItem
-                        key={option.label}
+                        key={option.level ?? 'paragraph'}
                         checked={activeHeadingLevel === option.level}
                         className="gap-2 text-xs"
                         onSelect={(event) => {
@@ -3488,7 +3503,7 @@ export function RichTextEditor({
           {wide &&
             renderToolbarButton(
               'alignment',
-              'Allineamento',
+              m.alignment,
               <DropdownMenu
                 open={alignmentMenuOpen}
                 onOpenChange={setAlignmentMenuOpen}
@@ -3501,7 +3516,7 @@ export function RichTextEditor({
                     size="icon"
                     className="size-8"
                     onMouseDown={(event) => event.preventDefault()}
-                    aria-label="Allineamento"
+                    aria-label={m.alignment}
                     disabled={disabled || !editor}
                   >
                     <AlignmentTriggerIcon className="size-4" />
@@ -3512,10 +3527,10 @@ export function RichTextEditor({
                   onCloseAutoFocus={(event) => event.preventDefault()}
                 >
                   {[
-                    { value: 'left', label: 'Allinea a sinistra', icon: AlignLeft },
-                    { value: 'center', label: 'Centra', icon: AlignCenter },
-                    { value: 'right', label: 'Allinea a destra', icon: AlignRight },
-                    { value: 'justify', label: 'Giustifica', icon: AlignJustify }
+                    { value: 'left', label: m.alignLeft, icon: AlignLeft },
+                    { value: 'center', label: m.alignCenter, icon: AlignCenter },
+                    { value: 'right', label: m.alignRight, icon: AlignRight },
+                    { value: 'justify', label: m.justify, icon: AlignJustify }
                   ].map((option) => {
                     const Icon = option.icon
                     return (
@@ -3544,7 +3559,7 @@ export function RichTextEditor({
           {!compact && <ToolbarSeparator />}
           {renderToolbarButton(
             'link',
-            withChord('Link', 'K'),
+            withChord(m.link, 'K'),
             <Button
               type="button"
               variant={active.isLink ? 'secondary' : 'ghost'}
@@ -3552,7 +3567,7 @@ export function RichTextEditor({
               className="size-8"
               onClick={openLinkEditor}
               onMouseDown={(event) => event.preventDefault()}
-              aria-label="Link"
+              aria-label={m.link}
               disabled={disabled || !editor}
             >
               <Link2 className="size-4" />
@@ -3562,7 +3577,7 @@ export function RichTextEditor({
           {wide &&
             renderToolbarButton(
               'inline-media',
-              'Inserisci media nel contenuto',
+              m.insertMedia,
               <Button
                 type="button"
                 variant="ghost"
@@ -3570,7 +3585,7 @@ export function RichTextEditor({
                 className="size-8"
                 onClick={openMediaPicker}
                 onMouseDown={(event) => event.preventDefault()}
-                aria-label="Inserisci media nel contenuto"
+                aria-label={m.insertMedia}
                 disabled={disabled || !editor}
               >
                 <ImagePlus className="size-4" />
@@ -3579,7 +3594,7 @@ export function RichTextEditor({
           {wide &&
             renderToolbarButton(
               'table',
-              'Tabella',
+              m.table,
               <DropdownMenu open={tableMenuOpen} onOpenChange={setTableMenuOpen} modal={false}>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -3588,7 +3603,7 @@ export function RichTextEditor({
                     size="icon"
                     className="size-8"
                     onMouseDown={(event) => event.preventDefault()}
-                    aria-label="Tabella"
+                    aria-label={m.table}
                     disabled={toolButtonDisabled}
                   >
                     <TableIcon className="size-4" />
@@ -3605,7 +3620,7 @@ export function RichTextEditor({
           {wide &&
             renderToolbarButton(
               'clear-formatting',
-              'Rimuovi formattazione',
+              m.clearFormatting,
               <Button
                 type="button"
                 variant="ghost"
@@ -3613,7 +3628,7 @@ export function RichTextEditor({
                 className="size-8"
                 onClick={clearFormatting}
                 onMouseDown={(event) => event.preventDefault()}
-                aria-label="Rimuovi formattazione"
+                aria-label={m.clearFormatting}
                 disabled={disabled || !editor || active.isEmpty}
               >
                 <RemoveFormatting className="size-4" />
@@ -3621,7 +3636,7 @@ export function RichTextEditor({
             )}
           {renderToolbarButton(
             'more',
-            'Altro',
+            m.more,
             <DropdownMenu open={moreMenuOpen} onOpenChange={setMoreMenuOpen} modal={false}>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -3630,7 +3645,7 @@ export function RichTextEditor({
                   size="icon"
                   className="size-8"
                   onMouseDown={(event) => event.preventDefault()}
-                  aria-label="Altri comandi di formattazione"
+                  aria-label={m.moreCommands}
                   disabled={toolButtonDisabled}
                 >
                   <MoreHorizontal className="size-4" />
@@ -3690,7 +3705,7 @@ export function RichTextEditor({
                 closeLinkEditor()
               }
             }}
-            placeholder="https://esempio.com o nome@dominio.com"
+            placeholder={m.linkPlaceholder}
             disabled={disabled}
             className="h-9 min-w-52 grow"
           />
@@ -3701,7 +3716,7 @@ export function RichTextEditor({
             onClick={applyLink}
             disabled={disabled}
           >
-            Applica
+            {m.apply}
           </Button>
           <Button
             type="button"
@@ -3711,7 +3726,7 @@ export function RichTextEditor({
             onClick={removeLink}
             disabled={disabled || !active.isLink}
           >
-            Rimuovi link
+            {m.removeLink}
           </Button>
           {linkError && <p className="text-destructive w-full text-xs">{linkError}</p>}
         </div>
@@ -3725,7 +3740,7 @@ export function RichTextEditor({
       >
         <iframe
           ref={iframeRef}
-          title="Editor email"
+          title={m.frameTitle}
           className="block size-full border-0 bg-transparent"
           // We intentionally do not sandbox the iframe: Squire's runtime needs
           // to execute inside the iframe (selection / clipboard / mutation

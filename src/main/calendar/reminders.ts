@@ -5,6 +5,10 @@
  * has no hour to be on time for. One the user declined, none.
  */
 
+import { defineMessages, hourStyleFor } from '@shared/i18n'
+
+import { languageState, messages } from '../i18n'
+
 /** An event's start and end as instants: an all-day one's by local midnight. */
 export function instantsOf(event: { start: string; end: string; allDay: boolean }): {
   startsAt: number
@@ -73,8 +77,65 @@ export function remindersOf(
     .sort((a, b) => a.at - b.at)
 }
 
-const TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
-const DAY = new Intl.DateTimeFormat('it-IT', { weekday: 'long', day: 'numeric', month: 'long' })
+/** The words of a reminder's time, in the interface's language. */
+const MESSAGES = defineMessages({
+  today: { en: 'today', it: 'oggi', de: 'heute' },
+  tomorrow: { en: 'tomorrow', it: 'domani', de: 'morgen' },
+  yesterday: { en: 'yesterday', it: 'ieri', de: 'gestern' },
+  minutes: {
+    en: (count: number) => (count === 1 ? '1 minute' : `${count} minutes`),
+    it: (count: number) => (count === 1 ? '1 minuto' : `${count} minuti`),
+    de: (count: number) => (count === 1 ? '1 Minute' : `${count} Minuten`)
+  },
+  hours: {
+    en: (count: number) => (count === 1 ? '1 hour' : `${count} hours`),
+    it: (count: number) => (count === 1 ? '1 ora' : `${count} ore`),
+    de: (count: number) => (count === 1 ? '1 Stunde' : `${count} Stunden`)
+  },
+  hoursAndMinutes: {
+    en: (hours: string, minutes: string) => `${hours} and ${minutes}`,
+    it: (hours: string, minutes: string) => `${hours} e ${minutes}`,
+    de: (hours: string, minutes: string) => `${hours} und ${minutes}`
+  },
+  allDay: {
+    en: (day: string) => `${day}, all day`,
+    it: (day: string) => `${day}, tutto il giorno`,
+    de: (day: string) => `${day}, ganztägig`
+  },
+  now: {
+    en: (time: string) => `Now · ${time}`,
+    it: (time: string) => `Adesso · ${time}`,
+    de: (time: string) => `Jetzt · ${time}`
+  },
+  inDuration: {
+    en: (duration: string, time: string) => `In ${duration} · ${time}`,
+    it: (duration: string, time: string) => `Fra ${duration} · ${time}`,
+    de: (duration: string, time: string) => `In ${duration} · ${time}`
+  },
+  dayAt: {
+    en: (day: string, time: string) => `${day} at ${time}`,
+    it: (day: string, time: string) => `${day} alle ${time}`,
+    de: (day: string, time: string) => `${day} um ${time}`
+  }
+})
+
+/** The formats of the interface's language now, made once per locale. */
+const FORMATS = new Map<string, { time: Intl.DateTimeFormat; day: Intl.DateTimeFormat }>()
+
+function formats(): { time: Intl.DateTimeFormat; day: Intl.DateTimeFormat } {
+  const locale = languageState().formatLocale
+  let made = FORMATS.get(locale)
+
+  if (!made) {
+    made = {
+      time: new Intl.DateTimeFormat(locale, { hour: hourStyleFor(locale), minute: '2-digit' }),
+      day: new Intl.DateTimeFormat(locale, { weekday: 'long', day: 'numeric', month: 'long' })
+    }
+    FORMATS.set(locale, made)
+  }
+
+  return made
+}
 
 function startOfDay(at: number): number {
   const day = new Date(at)
@@ -82,60 +143,72 @@ function startOfDay(at: number): number {
   return day.getTime()
 }
 
-/** «oggi», «domani», or the day in words: «giovedì 14 novembre». */
-export function dayWords(at: number, now: number): string {
-  const days = Math.round((startOfDay(at) - startOfDay(now)) / 86_400_000)
-  return days === 0 ? 'oggi' : days === 1 ? 'domani' : days === -1 ? 'ieri' : DAY.format(at)
+function capitalized(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`
 }
 
-/** «1 ora e 30 minuti», «10 minuti», «1 minuto». */
+/** «today», «tomorrow», or the day in words: «Thursday, 14 November». */
+export function dayWords(at: number, now: number): string {
+  const m = messages(MESSAGES)
+  const days = Math.round((startOfDay(at) - startOfDay(now)) / 86_400_000)
+  return days === 0
+    ? m.today
+    : days === 1
+      ? m.tomorrow
+      : days === -1
+        ? m.yesterday
+        : formats().day.format(at)
+}
+
+/** «1 hour and 30 minutes», «10 minutes», «1 minute». */
 function durationWords(ms: number): string {
+  const m = messages(MESSAGES)
   const minutes = Math.max(1, Math.round(ms / 60_000))
   const hours = Math.floor(minutes / 60)
   const rest = minutes % 60
-  const minuteWords = (count: number): string => (count === 1 ? '1 minuto' : `${count} minuti`)
 
   if (hours === 0) {
-    return minuteWords(minutes)
+    return m.minutes(minutes)
   }
 
-  const hourWords = hours === 1 ? '1 ora' : `${hours} ore`
-  return rest === 0 ? hourWords : `${hourWords} e ${minuteWords(rest)}`
+  return rest === 0 ? m.hours(hours) : m.hoursAndMinutes(m.hours(hours), m.minutes(rest))
 }
 
 /**
- * When an event starts, as a reminder says it: «Fra 10 minuti · 15:00»,
- * «Adesso · 15:00», «Domani alle 9:00» — for an all-day one, its day.
+ * When an event starts, as a reminder says it: «In 10 minutes · 15:00»,
+ * «Now · 15:00», «Tomorrow at 09:00» — for an all-day one, its day.
  */
 export function startWords(event: Pick<RemindedEvent, 'allDay' | 'startsAt'>, now: number): string {
-  const day = dayWords(event.startsAt, now)
+  const m = messages(MESSAGES)
+  const day = capitalized(dayWords(event.startsAt, now))
 
   if (event.allDay) {
-    return `${day.charAt(0).toUpperCase()}${day.slice(1)}, tutto il giorno`
+    return m.allDay(day)
   }
 
-  const time = TIME.format(event.startsAt)
+  const time = formats().time.format(event.startsAt)
   const ahead = event.startsAt - now
 
   if (ahead < 60_000) {
-    return `Adesso · ${time}`
+    return m.now(time)
   }
 
   if (ahead <= 12 * 3_600_000) {
-    return `Fra ${durationWords(ahead)} · ${time}`
+    return m.inDuration(durationWords(ahead), time)
   }
 
-  return `${day.charAt(0).toUpperCase()}${day.slice(1)} alle ${time}`
+  return m.dayAt(day, time)
 }
 
-/** When an event is, in a line: «giovedì 14 novembre, 10:00–11:00», «oggi, tutto il giorno». */
+/** When an event is, in a line: «Thursday, 14 November, 10:00–11:00», «today, all day». */
 export function whenWords(
   event: Pick<RemindedEvent, 'allDay' | 'startsAt' | 'endsAt'>,
   now: number
 ): string {
   const day = dayWords(event.startsAt, now)
+  const { time } = formats()
 
   return event.allDay
-    ? `${day}, tutto il giorno`
-    : `${day}, ${TIME.format(event.startsAt)}–${TIME.format(event.endsAt)}`
+    ? messages(MESSAGES).allDay(day)
+    : `${day}, ${time.format(event.startsAt)}–${time.format(event.endsAt)}`
 }

@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto'
 
+import { messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
+
 import { SyncTokenExpired, type CalendarProvider, type ProviderEvent } from './calendar-provider'
 import { CalendarRequestError } from './calendar-refusal'
 import { occurrencesOf } from './icalendar'
@@ -10,11 +13,49 @@ export const FEED_CALENDAR_ID = 'feed'
 const MAX_FEED_BYTES = 20 * 1024 * 1024
 const FETCH_TIMEOUT_MS = 30_000
 
+const MESSAGES = defineMessages({
+  tooLarge: {
+    en: 'The calendar file is too large.',
+    it: 'Il file del calendario è troppo grande.',
+    de: 'Die Kalenderdatei ist zu groß.'
+  },
+  linkScheme: {
+    en: 'A calendar’s link starts with https:// or webcal://.',
+    it: 'Il link di un calendario comincia con https:// o webcal://.',
+    de: 'Der Link eines Kalenders beginnt mit https:// oder webcal://.'
+  },
+  noAnswer: {
+    en: 'The calendar didn’t answer.',
+    it: 'Il calendario non ha risposto.',
+    de: 'Der Kalender hat nicht geantwortet.'
+  },
+  gone: {
+    en: 'The calendar is no longer at that link.',
+    it: 'Il calendario non è più a quel link.',
+    de: 'Der Kalender ist nicht mehr unter diesem Link.'
+  },
+  serverAnswered: {
+    en: (status: number) => `The calendar’s server answered ${status}.`,
+    it: (status: number) => `Il server del calendario ha risposto ${status}.`,
+    de: (status: number) => `Der Server des Kalenders hat mit ${status} geantwortet.`
+  },
+  noIcs: {
+    en: 'There’s no calendar (.ics) at that link.',
+    it: 'A quel link non c’è un calendario (.ics).',
+    de: 'Unter diesem Link gibt es keinen Kalender (.ics).'
+  },
+  readOnly: {
+    en: 'A calendar from a link can only be read.',
+    it: 'Un calendario da un link si legge soltanto.',
+    de: 'Ein Kalender aus einem Link kann nur gelesen werden.'
+  }
+})
+
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>
 
 /** A calendar file's text, read while it stays within a calendar's weight. */
 export async function calendarText(response: Response): Promise<string> {
-  const tooLarge = (): Error => new Error('Il file del calendario è troppo grande.')
+  const tooLarge = (): Error => new Error(messages(MESSAGES).tooLarge)
 
   if (Number(response.headers.get('content-length') ?? 0) > MAX_FEED_BYTES) {
     throw tooLarge()
@@ -50,7 +91,7 @@ export function feedUrl(link: string): string {
   )
 
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new Error('Il link di un calendario comincia con https:// o webcal://.')
+    throw new Error(messages(MESSAGES).linkScheme)
   }
 
   return url.toString()
@@ -123,7 +164,7 @@ export class IcsCalendarProvider implements CalendarProvider {
     this.read = null
 
     if (!read) {
-      throw new Error('Il calendario non ha risposto.')
+      throw new Error(messages(MESSAGES).noAnswer)
     }
 
     const events = occurrencesOf(read.text, {
@@ -177,9 +218,7 @@ export class IcsCalendarProvider implements CalendarProvider {
     if (!response.ok) {
       const gone = response.status === 404 || response.status === 410
       throw new CalendarRequestError(
-        gone
-          ? 'Il calendario non è più a quel link.'
-          : `Il server del calendario ha risposto ${response.status}.`,
+        gone ? messages(MESSAGES).gone : messages(MESSAGES).serverAnswered(response.status),
         { status: response.status, refusal: gone ? 'sparito' : null }
       )
     }
@@ -187,7 +226,7 @@ export class IcsCalendarProvider implements CalendarProvider {
     const text = await calendarText(response)
 
     if (!/BEGIN:VCALENDAR/i.test(text)) {
-      throw new Error('A quel link non c’è un calendario (.ics).')
+      throw new Error(messages(MESSAGES).noIcs)
     }
 
     const etag = response.headers.get('etag')
@@ -219,5 +258,5 @@ export class IcsCalendarProvider implements CalendarProvider {
 }
 
 function readOnly(): Error {
-  return new Error('Un calendario da un link si legge soltanto.')
+  return new Error(messages(MESSAGES).readOnly)
 }

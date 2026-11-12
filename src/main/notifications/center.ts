@@ -5,6 +5,8 @@ import { z } from 'zod'
 
 import { APP_ID } from '@main/app-identity'
 import { diagnostics } from '@main/diagnostics/log'
+import { messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
 import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   NOTIFICATIONS_IPC,
@@ -17,6 +19,34 @@ import {
 } from '@shared/notifications'
 
 const log = diagnostics('app')
+
+const MESSAGES = defineMessages({
+  testTitle: {
+    en: 'Notifications work',
+    it: 'Le notifiche funzionano',
+    de: 'Benachrichtigungen funktionieren'
+  },
+  testBody: {
+    en: 'When something can’t wait, SIEVER Mail lets you know like this.',
+    it: 'Quando qualcosa non può aspettare, SIEVER Mail ti avvisa così.',
+    de: 'Wenn etwas nicht warten kann, meldet sich SIEVER Mail so bei Ihnen.'
+  },
+  desktopSettings: {
+    en: 'On this system, notifications are set in the desktop’s settings.',
+    it: 'Su questo sistema le notifiche si regolano dalle impostazioni del desktop.',
+    de: 'Auf diesem System werden Benachrichtigungen in den Einstellungen der Desktopumgebung geregelt.'
+  },
+  macNotAllowed: {
+    en: 'SIEVER Mail’s notifications aren’t allowed in System Settings › Notifications.',
+    it: 'Le notifiche di SIEVER Mail non sono consentite in Impostazioni di Sistema › Notifiche.',
+    de: 'Die Benachrichtigungen von SIEVER Mail sind in Systemeinstellungen › Mitteilungen nicht erlaubt.'
+  },
+  windowsNotAllowed: {
+    en: 'Windows settings don’t allow SIEVER Mail’s notifications.',
+    it: 'Le impostazioni di Windows non consentono le notifiche di SIEVER Mail.',
+    de: 'Die Windows-Einstellungen erlauben die Benachrichtigungen von SIEVER Mail nicht.'
+  }
+})
 
 /** The preferences as the page sends them: every field, well formed. */
 export const notificationPreferencesSchema = z
@@ -242,9 +272,10 @@ export class NotificationCenter {
       return this.status()
     }
 
+    const m = messages(MESSAGES)
     const notification = new Notification({
-      title: 'Le notifiche funzionano',
-      body: 'Quando qualcosa non può aspettare, SIEVER Mail ti avvisa così.',
+      title: m.testTitle,
+      body: m.testBody,
       silent: !this.current.sound
     })
     await this.present(
@@ -267,7 +298,7 @@ export class NotificationCenter {
     const page = SYSTEM_SETTINGS[process.platform]
 
     if (!page) {
-      throw new Error('Su questo sistema le notifiche si regolano dalle impostazioni del desktop.')
+      throw new Error(messages(MESSAGES).desktopSettings)
     }
 
     await shell.openExternal(page)
@@ -413,11 +444,11 @@ export class NotificationCenter {
  */
 function failureReason(error: string): string {
   if (/UNErrorDomain error 1\b/.test(error)) {
-    return 'Le notifiche di SIEVER Mail non sono consentite in Impostazioni di Sistema › Notifiche.'
+    return messages(MESSAGES).macNotAllowed
   }
 
   if (/Settings prevent the notification/i.test(error)) {
-    return 'Le impostazioni di Windows non consentono le notifiche di SIEVER Mail.'
+    return messages(MESSAGES).windowsNotAllowed
   }
 
   return error

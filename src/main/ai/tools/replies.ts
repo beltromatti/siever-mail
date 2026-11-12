@@ -1,3 +1,6 @@
+import { defineMessages } from '@shared/i18n'
+
+import { messages } from '../../i18n'
 import { PROMPTS } from '../prompts'
 import { RegistryRefusal, RevisionConflict, type ReplyKind } from '../registry/types'
 import {
@@ -11,6 +14,41 @@ import {
   type ToolContext
 } from '../agent/tool-types'
 import { resolveSentOrReceived } from './anchors'
+
+/** The steps' lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  looking: {
+    en: 'Looking at the ready replies…',
+    it: 'Guardo le risposte preparate…',
+    de: 'Sehe mir die fertigen Antworten an…'
+  },
+  preparingFollowUp: {
+    en: 'Preparing the follow-up…',
+    it: 'Preparo il sollecito…',
+    de: 'Bereite das Nachfassen vor…'
+  },
+  preparingReply: {
+    en: 'Preparing the reply…',
+    it: 'Preparo la risposta…',
+    de: 'Bereite die Antwort vor…'
+  },
+  updating: {
+    en: 'Updating the ready reply…',
+    it: 'Aggiorno la risposta preparata…',
+    de: 'Aktualisiere die fertige Antwort…'
+  },
+  looked: {
+    en: 'Looked at the ready replies',
+    it: 'Guardate le risposte preparate',
+    de: 'Fertige Antworten angesehen'
+  },
+  confirmed: { en: 'Reply confirmed', it: 'Risposta confermata', de: 'Antwort bestätigt' },
+  removed: {
+    en: 'Ready reply removed',
+    it: 'Risposta preparata tolta',
+    de: 'Fertige Antwort entfernt'
+  }
+})
 
 /** The replies and reminders prepared and not yet taken up, each on its message. */
 async function listReplies(context: ToolContext): Promise<string> {
@@ -78,18 +116,18 @@ export const replyTool: SegretarioTool = {
   },
   running: (args) =>
     args.azione === 'elenco'
-      ? 'Guardo le risposte preparate…'
+      ? messages(STEPS).looking
       : args.azione === 'prepara'
         ? args.tipo === 'sollecito'
-          ? 'Preparo il sollecito…'
-          : 'Preparo la risposta…'
-        : 'Aggiorno la risposta preparata…',
+          ? messages(STEPS).preparingFollowUp
+          : messages(STEPS).preparingReply
+        : messages(STEPS).updating,
   readsOnly: (args) => args.azione === 'elenco',
   async execute(args, context) {
     const action = requireString(args, 'azione')
 
     if (action === 'elenco') {
-      return { content: await listReplies(context), summary: 'Guardate le risposte preparate' }
+      return { content: await listReplies(context), summary: messages(STEPS).looked }
     }
 
     const handle = requireString(args, 'messaggio')
@@ -128,7 +166,10 @@ export const replyTool: SegretarioTool = {
           }
 
           context.run.seen.set(key, record.revision)
-          return { content: 'Confermata: è ancora quella giusta.', summary: 'Risposta confermata' }
+          return {
+            content: 'Confermata: è ancora quella giusta.',
+            summary: messages(STEPS).confirmed
+          }
         }
         case 'scarta': {
           // The user throws a reply away; the Segretario finds it overtaken.
@@ -145,7 +186,10 @@ export const replyTool: SegretarioTool = {
           }
 
           context.run.seen.set(key, record.revision)
-          return { content: 'Tolta: non è più da offrire.', summary: 'Risposta preparata tolta' }
+          return {
+            content: 'Tolta: non è più da offrire.',
+            summary: messages(STEPS).removed
+          }
         }
         default:
           throw new ToolInputError('`azione` è elenco, prepara, conferma o scarta.')

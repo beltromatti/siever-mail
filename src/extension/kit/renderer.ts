@@ -9,3 +9,9 @@ export { useCommandKeys } from '@renderer/lib/command-shortcuts'
 export { diagnosticsFor } from '@renderer/lib/diagnostics'
 export { summaryToMessageRef } from '@renderer/lib/message-selection'
 export { cn } from '@renderer/lib/utils'
+/**
+ * The interface's language (vision §13.5): an extension writes its words with
+ * `defineMessages` (`@shared/i18n`) and reads them as the app does.
+ */
+export { hourStyle, languageNow, messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
+export { formatCount, revealInFolderLabel } from '@renderer/lib/utils'

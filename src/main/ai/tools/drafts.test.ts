@@ -71,7 +71,7 @@ describe('scrivi_bozza', () => {
       undefined
     )
     expect(recorded).toHaveBeenCalledWith(expect.objectContaining({ draftId: 'd1' }))
-    expect(result.summary).toBe('Scritto nel messaggio')
+    expect(result.summary).toBe('Wrote in the message')
   })
 
   it('rewrites the passage selected alone, and learns nothing from a passage', async () => {

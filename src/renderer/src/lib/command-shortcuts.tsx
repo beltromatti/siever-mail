@@ -1,5 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react'
 
+import { useLanguage } from '@renderer/lib/i18n'
 import {
   commandChord,
   COMMANDS,
@@ -43,8 +44,9 @@ export function useShortcutOverrides(): ShortcutOverrides {
 /** The key caps a command answers to now, or null for an unknown command. */
 export function useCommandKeys(commandId: string): string[] | null {
   const overrides = useShortcutOverrides()
+  const { language } = useLanguage()
   const command = findCommand(commandId)
-  return command ? formatChordKeys(commandChord(command, overrides), IS_MAC) : null
+  return command ? formatChordKeys(commandChord(command, overrides), IS_MAC, language) : null
 }
 
 /** The command of `scope` a key press asks for, if any. */

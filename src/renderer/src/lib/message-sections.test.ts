@@ -66,7 +66,7 @@ describe('buildMessageSections', () => {
     expect(sections[0].messages).toHaveLength(2)
   })
 
-  it('buckets by Oggi / Ieri / settimana / mese / mese-anno', () => {
+  it('buckets by today / yesterday / week / month / month and year', () => {
     const sections = buildMessageSections(
       [
         message({ uid: 1, date: '2026-09-10T09:00:00.000Z' }),
@@ -81,11 +81,11 @@ describe('buildMessageSections', () => {
     )
 
     expect(sections.map((section) => section.label)).toEqual([
-      'Oggi',
-      'Ieri',
-      'Questa settimana',
-      'Questo mese',
-      'Luglio 2026'
+      'Today',
+      'Yesterday',
+      'This week',
+      'This month',
+      'July 2026'
     ])
   })
 
@@ -96,7 +96,7 @@ describe('buildMessageSections', () => {
       'date',
       NOW
     )
-    expect(sections[0].label).toBe('Oggi')
+    expect(sections[0].label).toBe('Today')
   })
 
   it('keeps consecutive same-day messages in one section', () => {

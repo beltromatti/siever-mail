@@ -63,12 +63,104 @@ import { appDiagnosticState } from '@main/diagnostics/app-state'
 import type { BundleFile, DiagnosticsBundleSource } from '@main/diagnostics/export'
 import { diagnostics, diagnosticsFolder } from '@main/diagnostics/log'
 import { diagnosticState, provideDiagnosticState } from '@main/diagnostics/state'
+import { defineMessages } from '@shared/i18n'
+
+import { currentLanguage, messages } from './i18n'
 
 const log = diagnostics('app')
 /** The icon's count is counted again at least this often: the day turns, things fall due. */
 const BADGE_RECOUNT_MS = 60 * 60_000
 /** Changes come in bursts — a reading, a sync —: the icon is counted again once they stop. */
 const BADGE_SETTLE_MS = 800
+
+const MESSAGES = defineMessages({
+  unreadBadge: {
+    en: (count: number) => (count === 1 ? '1 unread message' : `${count} unread messages`),
+    it: (count: number) => (count === 1 ? '1 messaggio non letto' : `${count} messaggi non letti`),
+    de: (count: number) =>
+      count === 1 ? '1 ungelesene Nachricht' : `${count} ungelesene Nachrichten`
+  },
+  dueBadge: {
+    en: (count: number) =>
+      count === 1 ? '1 thing waiting for you today' : `${count} things waiting for you today`,
+    it: (count: number) =>
+      count === 1 ? '1 cosa ti aspetta oggi' : `${count} cose ti aspettano oggi`,
+    de: (count: number) =>
+      count === 1 ? 'Heute wartet 1 Sache auf Sie' : `Heute warten ${count} Dinge auf Sie`
+  },
+  readyTitle: {
+    en: 'SIEVER Mail is ready',
+    it: 'SIEVER Mail è pronta',
+    de: 'SIEVER Mail ist bereit'
+  },
+  readyBodyAi: {
+    en: 'It will alert you here only to what can’t wait: the mail that matters, your appointments, the Segretario when you need it.',
+    it: 'Ti avviserà qui solo di ciò che non può aspettare: la posta che conta, i tuoi appuntamenti, il Segretario quando ti serve.',
+    de: 'Hier erfahren Sie nur, was nicht warten kann: wichtige E-Mails, Ihre Termine, den Segretario, wenn Sie ihn brauchen.'
+  },
+  readyBody: {
+    en: 'It will alert you here to new mail and your appointments.',
+    it: 'Ti avviserà qui della posta nuova e dei tuoi appuntamenti.',
+    de: 'Hier erfahren Sie von neuen E-Mails und Ihren Terminen.'
+  },
+  markNotRecorded: {
+    en: (reason: string) => `The mark on the message couldn’t be recorded. ${reason}`,
+    it: (reason: string) => `Il segno sul messaggio non si è potuto registrare. ${reason}`,
+    de: (reason: string) =>
+      `Die Markierung an der Nachricht konnte nicht gespeichert werden. ${reason}`
+  },
+  marksNotRead: {
+    en: (reason: string) => `The marks already left on messages can’t be read right now. ${reason}`,
+    it: (reason: string) =>
+      `I segni già lasciati sui messaggi non si possono leggere ora. ${reason}`,
+    de: (reason: string) =>
+      `Die bereits gesetzten Markierungen an Nachrichten können gerade nicht gelesen werden. ${reason}`
+  },
+  connectGoogleBoth: {
+    en: 'Connect Google mail and calendar',
+    it: 'Collega la posta e il calendario di Google',
+    de: 'E-Mail und Kalender von Google verbinden'
+  },
+  connectGmail: { en: 'Connect Gmail', it: 'Collega Gmail', de: 'Gmail verbinden' },
+  reconnectAccount: {
+    en: (email: string) => `Reconnect ${email}`,
+    it: (email: string) => `Ricollega ${email}`,
+    de: (email: string) => `${email} erneut verbinden`
+  },
+  googleNoMail: {
+    en: 'Google didn’t give access to the mail: do it again, leaving the mail checkbox selected.',
+    it: "Google non ha dato l'accesso alla posta: rifallo lasciando selezionata la casella della posta.",
+    de: 'Google hat keinen Zugriff auf die E-Mails gewährt: Wiederholen Sie den Vorgang und lassen Sie das Kästchen für E-Mails aktiviert.'
+  },
+  mailAlreadyConnected: {
+    en: (email: string) => `The mail of ${email} is already connected.`,
+    it: (email: string) => `La posta di ${email} è già collegata.`,
+    de: (email: string) => `Die E-Mails von ${email} sind bereits verbunden.`
+  },
+  calendarNotConnected: {
+    en: 'The calendar didn’t connect.',
+    it: 'Il calendario non si è collegato.',
+    de: 'Der Kalender wurde nicht verbunden.'
+  },
+  microsoftOff: {
+    en: 'Signing in with Microsoft isn’t available in this version of SIEVER Mail.',
+    it: "L'accesso con Microsoft non è attivo in questa versione di SIEVER Mail.",
+    de: 'Die Anmeldung mit Microsoft ist in dieser Version von SIEVER Mail nicht verfügbar.'
+  },
+  mailboxGone: {
+    en: 'This mailbox is no longer connected.',
+    it: 'Questa casella non è più collegata.',
+    de: 'Dieses Postfach ist nicht mehr verbunden.'
+  },
+  otherAccount: {
+    en: (used: string, wanted: string) =>
+      `You signed in as ${used}, not ${wanted}: do it again with ${wanted}.`,
+    it: (used: string, wanted: string) =>
+      `Hai fatto l'accesso con ${used}, non con ${wanted}: rifallo con ${wanted}.`,
+    de: (used: string, wanted: string) =>
+      `Sie haben sich mit ${used} angemeldet, nicht mit ${wanted}: Melden Sie sich erneut mit ${wanted} an.`
+  }
+})
 
 /**
  * The root of the main process. It owns what every app shares — the
@@ -520,7 +612,7 @@ export class Workspace {
   private async badgeCount(): Promise<BadgeShown> {
     const unread = (count: number): BadgeShown => ({
       count,
-      description: count === 1 ? '1 messaggio non letto' : `${count} messaggi non letti`
+      description: messages(MESSAGES).unreadBadge(count)
     })
 
     switch (this.notifications.preferences.badge) {
@@ -535,7 +627,7 @@ export class Workspace {
           ? unread(this.inboxUnread)
           : {
               count: due,
-              description: due === 1 ? '1 cosa ti aspetta oggi' : `${due} cose ti aspettano oggi`
+              description: messages(MESSAGES).dueBadge(due)
             }
       }
     }
@@ -569,14 +661,13 @@ export class Workspace {
     }
 
     const aiOn = setupTurnsAiOn(setup) && this.segretarioReading
+    const m = messages(MESSAGES)
     this.notifications.notify({
       family: 'app',
       kind: 'app.introduction',
       key: 'app:introduction',
-      title: 'SIEVER Mail è pronta',
-      body: aiOn
-        ? 'Ti avviserà qui solo di ciò che non può aspettare: la posta che conta, i tuoi appuntamenti, il Segretario quando ti serve.'
-        : 'Ti avviserà qui della posta nuova e dei tuoi appuntamenti.',
+      title: m.readyTitle,
+      body: aiOn ? m.readyBodyAi : m.readyBody,
       target: { kind: 'window' },
       when: 'always'
     })
@@ -635,7 +726,9 @@ export class Workspace {
           } catch (error) {
             log.error("An extension's marks could not be kept", error)
             throw new Error(
-              `Il segno sul messaggio non si è potuto registrare. ${error instanceof Error ? error.message : String(error)}`,
+              messages(MESSAGES).markNotRecorded(
+                error instanceof Error ? error.message : String(error)
+              ),
               { cause: error }
             )
           }
@@ -663,7 +756,9 @@ export class Workspace {
           } catch (error) {
             log.error("An extension's marks could not be read", error)
             throw new Error(
-              `I segni già lasciati sui messaggi non si possono leggere ora. ${error instanceof Error ? error.message : String(error)}`,
+              messages(MESSAGES).marksNotRead(
+                error instanceof Error ? error.message : String(error)
+              ),
               { cause: error }
             )
           }
@@ -714,13 +809,13 @@ export class Workspace {
 
     const oauthResult = await this.googleOAuthService.authorize(parentWindow, {
       scopes: options.calendar ? [GOOGLE_MAIL_SCOPE, GOOGLE_CALENDAR_SCOPE] : [GOOGLE_MAIL_SCOPE],
-      title: options.calendar ? 'Collega la posta e il calendario di Google' : 'Collega Gmail'
+      title: options.calendar
+        ? messages(MESSAGES).connectGoogleBoth
+        : messages(MESSAGES).connectGmail
     })
 
     if (!oauthResult.scopes.includes(GOOGLE_MAIL_SCOPE)) {
-      throw new Error(
-        "Google non ha dato l'accesso alla posta: rifallo lasciando selezionata la casella della posta."
-      )
+      throw new Error(messages(MESSAGES).googleNoMail)
     }
 
     const known = (await this.database.getAccounts()).find(
@@ -730,7 +825,7 @@ export class Workspace {
 
     if (known) {
       if (!withCalendar) {
-        throw new Error(`La posta di ${known.email} è già collegata.`)
+        throw new Error(messages(MESSAGES).mailAlreadyConnected(known.email))
       }
 
       await this.calendar.addGoogle(oauthResult.email, oauthResult.refreshToken, oauthResult.scopes)
@@ -763,7 +858,7 @@ export class Workspace {
       return null
     } catch (error) {
       log.failed('calendar.not-connected', error, { conn: account.id })
-      return error instanceof Error ? error.message : 'Il calendario non si è collegato.'
+      return error instanceof Error ? error.message : messages(MESSAGES).calendarNotConnected
     }
   }
 
@@ -774,7 +869,7 @@ export class Workspace {
    */
   async addMicrosoftAccount(options: { calendar: boolean }): Promise<AddedAccount> {
     if (!this.microsoftOAuthService.isConfigured()) {
-      throw new Error("L'accesso con Microsoft non è attivo in questa versione di SIEVER Mail.")
+      throw new Error(messages(MESSAGES).microsoftOff)
     }
 
     // Only the scopes of what is turned on: a mailbox alone does not ask for the calendar.
@@ -788,7 +883,7 @@ export class Workspace {
 
     if (known) {
       if (!options.calendar) {
-        throw new Error(`La posta di ${known.email} è già collegata.`)
+        throw new Error(messages(MESSAGES).mailAlreadyConnected(known.email))
       }
 
       await this.calendar.addMicrosoft(granted.email, granted.secret)
@@ -821,7 +916,7 @@ export class Workspace {
     })
     getAppWindow()?.webContents.send(IPC_CHANNELS.connectionRefused, notice)
     // In the window its notice says it; away from it, the system does too (§14.1).
-    const { title, body } = refusalWords(notice)
+    const { title, body } = refusalWords(notice, currentLanguage())
     this.notifications.notify({
       family: 'app',
       kind: 'app.connection-refused',
@@ -866,14 +961,12 @@ export class Workspace {
     )
 
     if (!account) {
-      throw new Error('Questa casella non è più collegata.')
+      throw new Error(messages(MESSAGES).mailboxGone)
     }
 
     const sameAccount = (email: string): void => {
       if (email.toLowerCase() !== account.email.toLowerCase()) {
-        throw new Error(
-          `Hai fatto l'accesso con ${email}, non con ${account.email}: rifallo con ${account.email}.`
-        )
+        throw new Error(messages(MESSAGES).otherAccount(email, account.email))
       }
     }
 
@@ -889,7 +982,7 @@ export class Workspace {
       const granted = await this.googleOAuthService.authorize(getAppWindow() ?? undefined, {
         scopes: [GOOGLE_MAIL_SCOPE],
         loginHint: account.email,
-        title: `Ricollega ${account.email}`
+        title: messages(MESSAGES).reconnectAccount(account.email)
       })
       sameAccount(granted.email)
       await this.mail.replaceAuthorization(accountId, granted.refreshToken)

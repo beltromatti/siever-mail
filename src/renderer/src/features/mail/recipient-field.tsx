@@ -3,6 +3,7 @@ import { CircleAlert, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import {
   addressKey,
@@ -11,15 +12,67 @@ import {
   mergeRecipients,
   parseRecipients
 } from '@shared/email-address'
+import { defineMessages } from '@shared/i18n'
 import type { MailAddress, MailContactSuggestion } from '@shared/models'
 
 export type RecipientFieldKey = 'to' | 'cc' | 'bcc'
 
-export const RECIPIENT_FIELD_LABELS: Readonly<Record<RecipientFieldKey, string>> = {
-  to: 'A',
-  cc: 'Cc',
-  bcc: 'Ccn'
-}
+export const RECIPIENT_FIELD_LABELS = defineMessages({
+  to: { en: 'To', it: 'A', de: 'An' },
+  cc: { en: 'Cc', it: 'Cc', de: 'Cc' },
+  bcc: { en: 'Bcc', it: 'Ccn', de: 'Bcc' }
+}) satisfies Record<RecipientFieldKey, unknown>
+
+const MESSAGES = defineMessages({
+  forgotten: {
+    en: 'It won’t be suggested again',
+    it: 'Non verrà più suggerito',
+    de: 'Wird nicht mehr vorgeschlagen'
+  },
+  forgottenText: {
+    en: (email: string) => `${email} comes back among the suggestions if you write to them.`,
+    it: (email: string) => `${email} torna tra i suggerimenti se gli scrivi.`,
+    de: (email: string) =>
+      `${email} erscheint wieder in den Vorschlägen, wenn Sie dorthin schreiben.`
+  },
+  notForgotten: {
+    en: 'Suggestion not removed',
+    it: 'Suggerimento non rimosso',
+    de: 'Vorschlag nicht entfernt'
+  },
+  copied: { en: 'Address copied', it: 'Indirizzo copiato', de: 'Adresse kopiert' },
+  copyFailed: { en: 'Couldn’t copy', it: 'Copia non riuscita', de: 'Kopieren fehlgeschlagen' },
+  edit: { en: 'Edit', it: 'Modifica', de: 'Bearbeiten' },
+  copyAddress: { en: 'Copy address', it: 'Copia indirizzo', de: 'Adresse kopieren' },
+  moveTo: {
+    en: (field: string) => `Move to ${field}`,
+    it: (field: string) => `Sposta in ${field}`,
+    de: (field: string) => `Nach ${field} verschieben`
+  },
+  remove: { en: 'Remove', it: 'Rimuovi', de: 'Entfernen' },
+  invalidLabel: {
+    en: (address: string) => `${address}, invalid address`,
+    it: (address: string) => `${address}, indirizzo non valido`,
+    de: (address: string) => `${address}, ungültige Adresse`
+  },
+  removeNamed: {
+    en: (name: string) => `Remove ${name}`,
+    it: (name: string) => `Rimuovi ${name}`,
+    de: (name: string) => `${name} entfernen`
+  },
+  invalid: { en: 'Invalid address', it: 'Indirizzo non valido', de: 'Ungültige Adresse' },
+  doubleClickToCorrect: {
+    en: 'Double-click to correct it',
+    it: 'Doppio clic per correggerlo',
+    de: 'Zum Korrigieren doppelklicken'
+  },
+  dontSuggestNamed: {
+    en: (email: string) => `Don’t suggest ${email} again`,
+    it: (email: string) => `Non suggerire più ${email}`,
+    de: (email: string) => `${email} nicht mehr vorschlagen`
+  },
+  dontSuggest: { en: 'Don’t suggest again', it: 'Non suggerire più', de: 'Nicht mehr vorschlagen' }
+})
 
 /** A recipient dragged from one field to another. */
 const RECIPIENT_DRAG_TYPE = 'application/x-siever-recipient'
@@ -119,6 +172,8 @@ export function RecipientField({
   inputRef,
   trailing
 }: RecipientFieldProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const labels = useMessages(RECIPIENT_FIELD_LABELS)
   const [focused, setFocused] = useState(false)
   const [result, setResult] = useState<SuggestionResult>(NO_SUGGESTIONS)
   const [highlighted, setHighlighted] = useState(-1)
@@ -132,7 +187,7 @@ export function RecipientField({
 
   const query = draft.trim()
   const listOpen = focused && query.length > 0 && result.suggestions.length > 0
-  const label = RECIPIENT_FIELD_LABELS[field]
+  const label = labels[field]
 
   useEffect(() => {
     if (!focused || !query) {
@@ -310,13 +365,9 @@ export function RecipientField({
     setHighlighted((index) => Math.min(index, suggestions.length - 1))
     window.mailApi
       .forgetContact(suggestion.email)
-      .then(() =>
-        toast.success('Non verrà più suggerito', {
-          description: `${suggestion.email} torna tra i suggerimenti se gli scrivi.`
-        })
-      )
+      .then(() => toast.success(m.forgotten, { description: m.forgottenText(suggestion.email) }))
       .catch((error: unknown) =>
-        toast.error('Suggerimento non rimosso', {
+        toast.error(m.notForgotten, {
           description: error instanceof Error ? error.message : undefined
         })
       )
@@ -418,26 +469,26 @@ export function RecipientField({
   const copyAddress = (recipient: MailAddress): void => {
     void navigator.clipboard
       .writeText(recipient.address)
-      .then(() => toast.success('Indirizzo copiato', { description: recipient.address }))
-      .catch(() => toast.error('Copia non riuscita'))
+      .then(() => toast.success(m.copied, { description: recipient.address }))
+      .catch(() => toast.error(m.copyFailed))
   }
 
   const openChipMenu = async (index: number): Promise<void> => {
     const recipient = recipients[index]
     const chosen = await window.mailApi.showContextMenu([
-      { id: 'edit', label: 'Modifica' },
-      { id: 'copy', label: 'Copia indirizzo', enabled: isValidEmailAddress(recipient.address) },
+      { id: 'edit', label: m.edit },
+      { id: 'copy', label: m.copyAddress, enabled: isValidEmailAddress(recipient.address) },
       ...(moveTargets.length > 0
         ? [
             { type: 'separator' as const },
             ...moveTargets.map((target) => ({
               id: `move:${target}`,
-              label: `Sposta in ${RECIPIENT_FIELD_LABELS[target]}`
+              label: m.moveTo(labels[target])
             }))
           ]
         : []),
       { type: 'separator' },
-      { id: 'remove', label: 'Rimuovi' }
+      { id: 'remove', label: m.remove }
     ])
 
     if (chosen === 'edit') {
@@ -520,7 +571,7 @@ export function RecipientField({
                     aria-label={
                       valid
                         ? `${name ? `${name}, ` : ''}${recipient.address}`
-                        : `${recipient.address}, indirizzo non valido`
+                        : m.invalidLabel(recipient.address)
                     }
                     draggable={!disabled}
                     onDragStart={(event) => {
@@ -550,7 +601,7 @@ export function RecipientField({
                     <button
                       type="button"
                       tabIndex={-1}
-                      aria-label={`Rimuovi ${name || recipient.address}`}
+                      aria-label={m.removeNamed(name || recipient.address)}
                       disabled={disabled}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={(event) => {
@@ -568,9 +619,9 @@ export function RecipientField({
                     recipient.address
                   ) : (
                     <>
-                      Indirizzo non valido
+                      {m.invalid}
                       <span className="text-muted-foreground block text-[10.5px] font-normal">
-                        Doppio clic per correggerlo
+                        {m.doubleClickToCorrect}
                       </span>
                     </>
                   )}
@@ -656,7 +707,7 @@ export function RecipientField({
                     <button
                       type="button"
                       tabIndex={-1}
-                      aria-label={`Non suggerire più ${suggestion.email}`}
+                      aria-label={m.dontSuggestNamed(suggestion.email)}
                       onClick={(event) => {
                         event.stopPropagation()
                         forget(suggestion)
@@ -669,7 +720,7 @@ export function RecipientField({
                       <X className="size-3" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="right">Non suggerire più</TooltipContent>
+                  <TooltipContent side="right">{m.dontSuggest}</TooltipContent>
                 </Tooltip>
               </div>
             ))}

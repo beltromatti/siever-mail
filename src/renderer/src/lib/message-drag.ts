@@ -1,3 +1,13 @@
+import { defineMessages } from '@shared/i18n'
+
+import { messagesNow } from './i18n'
+import { formatCount } from './utils'
+
+const MESSAGES = defineMessages({
+  message: { en: 'message', it: 'messaggio', de: 'Nachricht' },
+  messages: { en: 'messages', it: 'messaggi', de: 'Nachrichten' }
+})
+
 /**
  * Messages dragged from the list onto a folder. The data rides on the drag
  * under a type of the app's own, so nothing else — a file from the desktop,
@@ -12,7 +22,8 @@ export function startMessageDrag(dataTransfer: DataTransfer, count: number, payl
 
   // The browser photographs the element as it is now, so it can go at once.
   const label = document.createElement('div')
-  label.textContent = count === 1 ? '1 messaggio' : `${count.toLocaleString('it-IT')} messaggi`
+  const m = messagesNow(MESSAGES)
+  label.textContent = formatCount(count, m.message, m.messages)
   label.style.cssText = [
     'position:fixed',
     'top:-200px',

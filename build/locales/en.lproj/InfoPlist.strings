@@ -1,0 +1,5 @@
+/* What macOS says when SIEVER Mail first reaches each place, in English. */
+"NSDesktopFolderUsageDescription" = "SIEVER Mail reads and attaches the files you keep on the Desktop, and saves attachments there.";
+"NSDocumentsFolderUsageDescription" = "SIEVER Mail reads and attaches the files in your Documents folder, and saves attachments there.";
+"NSDownloadsFolderUsageDescription" = "SIEVER Mail reads and attaches the files in your Downloads folder, and saves attachments there.";
+"NSNetworkVolumesUsageDescription" = "SIEVER Mail reads and attaches the files in network folders, and saves there what you ask it to.";

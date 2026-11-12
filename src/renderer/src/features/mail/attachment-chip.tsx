@@ -14,7 +14,17 @@ import {
 import * as React from 'react'
 
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn, formatByteSize } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
+
+const MESSAGES = defineMessages({
+  open: {
+    en: (fileName: string) => `Open ${fileName}`,
+    it: (fileName: string) => `Apri ${fileName}`,
+    de: (fileName: string) => `${fileName} öffnen`
+  }
+})
 
 /**
  * Extension groups, in the order a business user meets them. Matching on the
@@ -95,6 +105,7 @@ export function AttachmentChip({
   onContextMenu,
   className
 }: AttachmentChipProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const size = formatByteSize(sizeBytes)
   const interactive = Boolean(onOpen)
 
@@ -144,7 +155,7 @@ export function AttachmentChip({
               type="button"
               onClick={onOpen}
               disabled={busy}
-              aria-label={`Apri ${fileName}`}
+              aria-label={m.open(fileName)}
               className="focus-visible:ring-ring/70 flex min-w-0 cursor-pointer items-center rounded-sm outline-none focus-visible:ring-2 disabled:cursor-default"
             >
               {body}

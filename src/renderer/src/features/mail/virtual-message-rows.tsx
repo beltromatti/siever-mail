@@ -11,10 +11,16 @@ import { defaultRangeExtractor, useVirtualizer, type Range } from '@tanstack/rea
 
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Spinner } from '@renderer/components/ui/spinner'
+import { useMessages } from '@renderer/lib/i18n'
 import type { MessageSection } from '@renderer/lib/message-sections'
 import { messageRefKey, summaryToMessageRef } from '@renderer/lib/message-selection'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
 import type { MailMessageSummary } from '@shared/models'
+
+const MESSAGES = defineMessages({
+  loading: { en: 'Loading…', it: 'Caricamento…', de: 'Wird geladen…' }
+})
 
 /** How close to the end of what is loaded the next page is asked for, in rows. */
 const LOAD_AHEAD_ROWS = 30
@@ -76,6 +82,7 @@ export function VirtualMessageRows({
   renderHeading,
   renderRow
 }: VirtualMessageRowsProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const [collapsedSectionKeys, setCollapsedSectionKeys] = useState<ReadonlySet<string>>(
     () => new Set()
@@ -369,7 +376,7 @@ export function VirtualMessageRows({
             invert ? 'top-2' : 'bottom-2'
           )}
         >
-          <Spinner className="size-3" /> Caricamento…
+          <Spinner className="size-3" /> {m.loading}
         </div>
       )}
     </div>

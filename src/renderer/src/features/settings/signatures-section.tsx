@@ -11,7 +11,62 @@ import {
 } from '@renderer/components/ui/select'
 import { SettingsEmpty, SettingsLoading, SettingsNotice } from '@renderer/components/ui/settings'
 import { RichTextEditor, type RichTextEditorHandle } from '@renderer/features/mail/rich-text-editor'
+import { messagesNow, useMessages } from '@renderer/lib/i18n'
+import { defineMessages } from '@shared/i18n'
 import type { MailAccount, MailAccountSignature } from '@shared/models'
+
+const MESSAGES = defineMessages({
+  letterhead: { en: 'Letterhead', it: 'Intestazione', de: 'Briefkopf' },
+  letterheadHint: {
+    en: 'At the top of every message from this mailbox, replies and forwards included: the name, a logo, a line. You write below it.',
+    it: 'In cima a ogni messaggio di questa casella, risposte e inoltri compresi: il nome, un logo, una riga. Scrivi sotto di lei.',
+    de: 'Oben in jeder Nachricht aus diesem Postfach, Antworten und Weiterleitungen eingeschlossen: der Name, ein Logo, eine Zeile. Sie schreiben darunter.'
+  },
+  letterheadPlaceholder: {
+    en: 'No letterhead: write it here, if you want one.',
+    it: 'Nessuna intestazione: scrivila qui, se la vuoi.',
+    de: 'Kein Briefkopf: Schreiben Sie ihn hier, wenn Sie einen möchten.'
+  },
+  signature: { en: 'Signature', it: 'Firma', de: 'Signatur' },
+  signatureHint: {
+    en: 'At the end of what you write, above the message you reply to. The empty lines at the top are the ones you write on, with their style.',
+    it: 'In fondo a ciò che scrivi, sopra il messaggio a cui rispondi. Le righe vuote in cima sono quelle su cui scrivi, con il loro stile.',
+    de: 'Am Ende dessen, was Sie schreiben, über der Nachricht, auf die Sie antworten. Die leeren Zeilen oben sind die, auf denen Sie schreiben, mit ihrem Stil.'
+  },
+  signaturePlaceholder: {
+    en: 'No signature: write it here.',
+    it: 'Nessuna firma: scrivila qui.',
+    de: 'Keine Signatur: Schreiben Sie sie hier.'
+  },
+  unreadable: {
+    en: 'The signatures can’t be read.',
+    it: 'Le firme non si leggono.',
+    de: 'Die Signaturen lassen sich nicht lesen.'
+  },
+  saved: {
+    en: 'Saved: they apply from the next messages.',
+    it: 'Salvate: valgono dai prossimi messaggi.',
+    de: 'Gespeichert: Sie gelten ab den nächsten Nachrichten.'
+  },
+  notSaved: {
+    en: 'They were not saved.',
+    it: 'Non sono state salvate.',
+    de: 'Sie wurden nicht gespeichert.'
+  },
+  noAccounts: {
+    en: 'Connect a mailbox to write its letterhead and signature.',
+    it: 'Collega una casella di posta per scriverne intestazione e firma.',
+    de: 'Verbinden Sie ein Postfach, um seinen Briefkopf und seine Signatur zu schreiben.'
+  },
+  loading: {
+    en: 'Loading the signatures…',
+    it: 'Caricamento delle firme…',
+    de: 'Signaturen werden geladen…'
+  },
+  mailbox: { en: 'Mailbox', it: 'Casella', de: 'Postfach' },
+  chooseMailbox: { en: 'Choose the mailbox', it: 'Scegli la casella', de: 'Postfach wählen' },
+  save: { en: 'Save', it: 'Salva', de: 'Speichern' }
+})
 
 /** A letterhead or signature as it would show: empty when nothing in it would. */
 function visibleHtml(value: string | null | undefined): string {
@@ -40,19 +95,16 @@ function errorText(error: unknown, fallback: string): string {
 
 type Part = 'headerHtml' | 'html'
 
-const PARTS: ReadonlyArray<{ key: Part; title: string; hint: string; placeholder: string }> = [
+type Words = keyof typeof MESSAGES
+
+const PARTS: ReadonlyArray<{ key: Part; title: Words; hint: Words; placeholder: Words }> = [
   {
     key: 'headerHtml',
-    title: 'Intestazione',
-    hint: 'In cima a ogni messaggio di questa casella, risposte e inoltri compresi: il nome, un logo, una riga. Scrivi sotto di lei.',
-    placeholder: 'Nessuna intestazione: scrivila qui, se la vuoi.'
+    title: 'letterhead',
+    hint: 'letterheadHint',
+    placeholder: 'letterheadPlaceholder'
   },
-  {
-    key: 'html',
-    title: 'Firma',
-    hint: 'In fondo a ciò che scrivi, sopra il messaggio a cui rispondi. Le righe vuote in cima sono quelle su cui scrivi, con il loro stile.',
-    placeholder: 'Nessuna firma: scrivila qui.'
-  }
+  { key: 'html', title: 'signature', hint: 'signatureHint', placeholder: 'signaturePlaceholder' }
 ]
 
 /**
@@ -71,6 +123,7 @@ export function SignaturesSection({
   /** A connection is being removed or emptied: nothing is saved meanwhile. */
   busy: boolean
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [saved, setSaved] = useState<Record<string, MailAccountSignature> | null>(null)
   const [chosen, setChosen] = useState<string | null>(null)
   const [changed, setChanged] = useState(false)
@@ -93,7 +146,7 @@ export function SignaturesSection({
       })
       .catch((caught: unknown) => {
         if (current) {
-          setError(errorText(caught, 'Le firme non si leggono.'))
+          setError(errorText(caught, messagesNow(MESSAGES).unreadable))
         }
       })
 
@@ -137,9 +190,9 @@ export function SignaturesSection({
       })
       setSaved((current) => ({ ...current, [accountId]: next }))
       setChanged(false)
-      setStatus('Salvate: valgono dai prossimi messaggi.')
+      setStatus(m.saved)
     } catch (caught) {
-      setError(errorText(caught, 'Non sono state salvate.'))
+      setError(errorText(caught, m.notSaved))
     } finally {
       setSaving(false)
     }
@@ -148,15 +201,13 @@ export function SignaturesSection({
   if (accounts.length === 0) {
     return (
       <div className="mt-4">
-        <SettingsEmpty>
-          Collega una casella di posta per scriverne intestazione e firma.
-        </SettingsEmpty>
+        <SettingsEmpty>{m.noAccounts}</SettingsEmpty>
       </div>
     )
   }
 
   if (saved === null && !error) {
-    return <SettingsLoading>Caricamento delle firme…</SettingsLoading>
+    return <SettingsLoading>{m.loading}</SettingsLoading>
   }
 
   return (
@@ -174,8 +225,8 @@ export function SignaturesSection({
           }}
           disabled={busy || saving}
         >
-          <SelectTrigger className="min-w-60 flex-1" aria-label="Casella">
-            <SelectValue placeholder="Scegli la casella" />
+          <SelectTrigger className="min-w-60 flex-1" aria-label={m.mailbox}>
+            <SelectValue placeholder={m.chooseMailbox} />
           </SelectTrigger>
           <SelectContent>
             {accounts.map((account) => (
@@ -197,15 +248,15 @@ export function SignaturesSection({
           ) : (
             <Save className="size-3.5" />
           )}
-          Salva
+          {m.save}
         </Button>
       </div>
 
       {PARTS.map((part) => (
         <section key={part.key} className="flex min-h-[11rem] flex-1 flex-col gap-1.5">
           <div>
-            <p className="eyebrow">{part.title}</p>
-            <p className="text-muted-foreground text-[11.5px] leading-[1.45]">{part.hint}</p>
+            <p className="eyebrow">{m[part.title]}</p>
+            <p className="text-muted-foreground text-[11.5px] leading-[1.45]">{m[part.hint]}</p>
           </div>
           <div className="min-h-0 flex-1">
             {accountId && saved !== null && (
@@ -213,7 +264,7 @@ export function SignaturesSection({
                 // A mailbox's own editors: the history of one is not another's.
                 key={`${accountId}:${part.key}`}
                 initialHtml={stored?.[part.key] ?? ''}
-                placeholder={part.placeholder}
+                placeholder={m[part.placeholder]}
                 disabled={busy}
                 expandToContainer
                 onReady={(editor) => {

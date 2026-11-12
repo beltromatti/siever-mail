@@ -106,7 +106,7 @@ describe.skipIf(!server)('CalDavCalendarProvider (a real server)', () => {
 
     if (!schedules) {
       await expect(first.create(calendar.calendarId, visit, origin)).rejects.toThrow(
-        /non manda gli inviti/
+        /doesn’t send invitations/
       )
     }
 
@@ -192,7 +192,7 @@ describe.skipIf(!server)('CalDavCalendarProvider (a real server)', () => {
     } else {
       await expect(
         first.respond(calendar.calendarId, series[0].eventId, 'accepted', true)
-      ).rejects.toThrow(/non avvisa l’organizzatore/)
+      ).rejects.toThrow(/doesn’t notify the organizer/)
     }
 
     // Deleted by another client: its events go at the next sync.

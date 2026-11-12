@@ -4,8 +4,38 @@
  * `gmail_quote` block. The mail's own replies and the Segretario's drafts
  * (see `composerDataFor` in `App`) quote the same way.
  */
+import { hourStyle, languageNow, messagesNow } from '@renderer/lib/i18n'
 import { inlineMessageStyles } from '@renderer/lib/inline-message-styles'
+import { defineMessages } from '@shared/i18n'
 import type { MailMessageDetail } from '@shared/models'
+
+/**
+ * Words that go out with the message, in the interface's language when it
+ * is written — as every client writes its own.
+ */
+const MESSAGES = defineMessages({
+  unknownSender: {
+    en: 'Unknown sender',
+    it: 'Mittente sconosciuto',
+    de: 'Unbekannter Absender'
+  },
+  attribution: {
+    en: (date: string, sender: string) => `On ${date}, ${sender} wrote:`,
+    it: (date: string, sender: string) => `Il giorno ${date} ${sender} ha scritto:`,
+    de: (date: string, sender: string) => `Am ${date} schrieb ${sender}:`
+  },
+  forwardedMessage: {
+    en: '---------- Forwarded message ---------',
+    it: '---------- Messaggio inoltrato ----------',
+    de: '---------- Weitergeleitete Nachricht ----------'
+  },
+  from: { en: 'From', it: 'Da', de: 'Von' },
+  date: { en: 'Date', it: 'Data', de: 'Datum' },
+  subject: { en: 'Subject', it: 'Oggetto', de: 'Betreff' },
+  to: { en: 'To', it: 'A', de: 'An' },
+  cc: { en: 'Cc', it: 'Cc', de: 'Cc' },
+  notAvailable: { en: 'n/a', it: 'N/D', de: 'k. A.' }
+})
 
 const GMAIL_QUOTE_BLOCK_STYLE = 'margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex'
 
@@ -47,12 +77,12 @@ function formatQuotedDate(dateIso: string): string {
     return dateIso
   }
 
-  return new Intl.DateTimeFormat('it-IT', {
+  return new Intl.DateTimeFormat(languageNow().formatLocale, {
     weekday: 'short',
     day: '2-digit',
     month: 'short',
     year: 'numeric',
-    hour: '2-digit',
+    hour: hourStyle(),
     minute: '2-digit'
   }).format(date)
 }
@@ -67,19 +97,25 @@ async function quotedMessageBody(message: MailMessageDetail): Promise<string> {
 }
 
 export async function buildReplyQuoteHtml(message: MailMessageDetail): Promise<string> {
+  const m = messagesNow(MESSAGES)
   const sender = message.from[0]
-  const senderLabel = sender ? formatQuotedAddress(sender) : 'Mittente sconosciuto'
-  const attributionLine = `Il giorno ${formatQuotedDate(message.date)} ${senderLabel} ha scritto:`
+  const senderLabel = sender ? formatQuotedAddress(sender) : escapeHtml(m.unknownSender)
+  const attributionLine = m.attribution(escapeHtml(formatQuotedDate(message.date)), senderLabel)
   const quotedBody = await quotedMessageBody(message)
 
   return `<div class="gmail_quote"><div dir="ltr" class="gmail_attr">${attributionLine}<br></div><blockquote class="gmail_quote" type="cite" style="${GMAIL_QUOTE_BLOCK_STYLE}">${quotedBody}</blockquote></div>`
 }
 
 export async function buildForwardQuoteHtml(message: MailMessageDetail): Promise<string> {
+  // Read before the wait: the words of the moment the forward was asked for.
+  const m = messagesNow(MESSAGES)
+  const date = escapeHtml(formatQuotedDate(message.date))
   const quotedBody = await quotedMessageBody(message)
-  const fromHeader = message.from.length > 0 ? formatQuotedAddressList(message.from) : 'N/D'
-  const toHeader = message.to.length > 0 ? formatQuotedAddressList(message.to) : 'N/D'
-  const ccHeader = message.cc.length > 0 ? `<br>Cc: ${formatQuotedAddressList(message.cc)}` : ''
+  const notAvailable = escapeHtml(m.notAvailable)
+  const fromHeader = message.from.length > 0 ? formatQuotedAddressList(message.from) : notAvailable
+  const toHeader = message.to.length > 0 ? formatQuotedAddressList(message.to) : notAvailable
+  const ccHeader =
+    message.cc.length > 0 ? `<br>${m.cc}: ${formatQuotedAddressList(message.cc)}` : ''
 
-  return `<div class="gmail_quote"><div dir="ltr" class="gmail_attr">---------- Messaggio inoltrato ----------<br>Da: ${fromHeader}<br>Data: ${escapeHtml(formatQuotedDate(message.date))}<br>Oggetto: ${escapeHtml(message.subject)}<br>A: ${toHeader}${ccHeader}<br></div><blockquote class="gmail_quote" type="cite" style="${GMAIL_QUOTE_BLOCK_STYLE}">${quotedBody}</blockquote></div>`
+  return `<div class="gmail_quote"><div dir="ltr" class="gmail_attr">${m.forwardedMessage}<br>${m.from}: ${fromHeader}<br>${m.date}: ${date}<br>${m.subject}: ${escapeHtml(message.subject)}<br>${m.to}: ${toHeader}${ccHeader}<br></div><blockquote class="gmail_quote" type="cite" style="${GMAIL_QUOTE_BLOCK_STYLE}">${quotedBody}</blockquote></div>`
 }

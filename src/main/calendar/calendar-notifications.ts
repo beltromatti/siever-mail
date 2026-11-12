@@ -1,8 +1,10 @@
 import { diagnostics } from '@main/diagnostics/log'
 import type { NotificationCenter } from '@main/notifications/center'
 import type { CalendarEvent } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import type { NotificationTarget } from '@shared/notifications'
 
+import { messages } from '../i18n'
 import { remindersOf, startWords, whenWords, type RemindedEvent, type Reminder } from './reminders'
 
 const log = diagnostics('calendar')
@@ -15,7 +17,7 @@ const LATE_MS = 12 * 3_600_000
 const REPLAN_MS = 60 * 60_000
 /** Changes to the events come in bursts, as a sync goes: planned again once they stop. */
 const SETTLE_MS = 2_000
-/** «Fra 5 minuti»: the reminder again, so much later. */
+/** «In 5 minutes»: the reminder again, so much later. */
 const SNOOZE_MS = 5 * 60_000
 /** A reminder due as its event starts is still given just after: the timer is never to the millisecond. */
 const STARTED_GRACE_MS = 2 * 60_000
@@ -27,6 +29,79 @@ const CHANGES_ONE_BY_ONE = 2
 const LOOK_WAIT_MS = 10 * 60_000
 
 const REMINDER_PREFIX = 'calendar:reminder:'
+
+const MESSAGES = defineMessages({
+  eventsChanged: {
+    en: (count: number) => `${count} events changed`,
+    it: (count: number) => `${count} eventi cambiati`,
+    de: (count: number) => `${count} Termine geändert`
+  },
+  cancelled: {
+    en: (title: string) => `Cancelled: ${title}`,
+    it: (title: string) => `Annullato: ${title}`,
+    de: (title: string) => `Abgesagt: ${title}`
+  },
+  invitation: {
+    en: (title: string) => `Invitation: ${title}`,
+    it: (title: string) => `Invito: ${title}`,
+    de: (title: string) => `Einladung: ${title}`
+  },
+  newEvent: {
+    en: (title: string) => `New event: ${title}`,
+    it: (title: string) => `Nuovo evento: ${title}`,
+    de: (title: string) => `Neuer Termin: ${title}`
+  },
+  moved: {
+    en: (title: string) => `Moved: ${title}`,
+    it: (title: string) => `Spostato: ${title}`,
+    de: (title: string) => `Verschoben: ${title}`
+  },
+  placeChanged: {
+    en: (title: string) => `Place changed: ${title}`,
+    it: (title: string) => `Cambiato il luogo: ${title}`,
+    de: (title: string) => `Ort geändert: ${title}`
+  },
+  wasAt: {
+    en: (when: string) => `Was ${when}`,
+    it: (when: string) => `Era ${when}`,
+    de: (when: string) => `Vorher: ${when}`
+  },
+  placeWas: {
+    en: (before: string | null, now: string | null) =>
+      `Was ${before ?? 'no place'}, now ${now ?? 'no place'}`,
+    it: (before: string | null, now: string | null) =>
+      `Era ${before ?? 'senza luogo'}, ora ${now ?? 'senza luogo'}`,
+    de: (before: string | null, now: string | null) =>
+      `Vorher ${before ?? 'ohne Ort'}, jetzt ${now ?? 'ohne Ort'}`
+  },
+  from: {
+    en: (who: string) => `From ${who}`,
+    it: (who: string) => `Da ${who}`,
+    de: (who: string) => `Von ${who}`
+  },
+  moreOfSeries: {
+    en: (count: number) =>
+      count === 1 ? 'and 1 more time in the series' : `and ${count} more times in the series`,
+    it: (count: number) =>
+      count === 1 ? 'e un’altra volta della serie' : `e altre ${count} volte della serie`,
+    de: (count: number) =>
+      count === 1 ? 'und 1 weiteres Mal in der Serie' : `und ${count} weitere Male in der Serie`
+  },
+  calendar: { en: 'Calendar', it: 'Calendario', de: 'Kalender' },
+  eventChanged: {
+    en: 'An event changed',
+    it: 'Un evento è cambiato',
+    de: 'Ein Termin wurde geändert'
+  },
+  segretarioAlert: {
+    en: 'The Segretario has something to tell you about an event',
+    it: 'Il Segretario ha qualcosa da dirti su un evento',
+    de: 'Der Segretario hat Ihnen etwas zu einem Termin zu sagen'
+  },
+  reminder: { en: 'Reminder', it: 'Promemoria', de: 'Erinnerung' },
+  join: { en: 'Join', it: 'Partecipa', de: 'Teilnehmen' },
+  snooze: { en: 'In 5 minutes', it: 'Fra 5 minuti', de: 'In 5 Minuten' }
+})
 
 /** A novelty of an event of the user's that someone else has in hand, as the sync found it (`CalendarService`). */
 export interface ChangeByOthers {
@@ -53,7 +128,7 @@ export class CalendarNotifications {
   private settleTimer: NodeJS.Timeout | null = null
   private planning: Promise<void> | null = null
   private planAgain = false
-  /** Reminders put off with «Fra 5 minuti», by event key: when they are due. */
+  /** Reminders put off with «In 5 minutes», by event key: when they are due. */
   private readonly snoozed = new Map<string, number>()
   /** The reminders on screen, by notification key: their event as it was reminded of. */
   private readonly shown = new Map<string, { eventKey: string; startsAt: number; endsAt: number }>()
@@ -166,6 +241,7 @@ export class CalendarNotifications {
     }
 
     const now = Date.now()
+    const m = messages(MESSAGES)
     // Where a change opens: the event, or — gone — its day.
     const targetOf = (change: ChangeByOthers): NotificationTarget =>
       change.kind === 'annullato'
@@ -177,13 +253,13 @@ export class CalendarNotifications {
         family: 'calendar',
         kind: 'calendar.changes',
         key: `calendar:changes:${calendar}:${now}`,
-        title: `${changes.length} eventi cambiati`,
+        title: m.eventsChanged(changes.length),
         subtitle: calendar,
         body: changes
           .slice(0, 3)
           .map((change) => change.event.title)
           .join(', '),
-        concealed: { title: `${changes.length} eventi cambiati`, body: calendar },
+        concealed: { title: m.eventsChanged(changes.length), body: calendar },
         target: targetOf(changes[0]),
         when: 'always'
       })
@@ -196,19 +272,21 @@ export class CalendarNotifications {
         before !== null && (before.startsAt !== event.startsAt || before.endsAt !== event.endsAt)
       const title =
         change.kind === 'annullato'
-          ? `Annullato: ${event.title}`
+          ? m.cancelled(event.title)
           : change.kind === 'nuovo'
-            ? `${event.myResponse === 'needsAction' ? 'Invito' : 'Nuovo evento'}: ${event.title}`
+            ? event.myResponse === 'needsAction'
+              ? m.invitation(event.title)
+              : m.newEvent(event.title)
             : moved
-              ? `Spostato: ${event.title}`
-              : `Cambiato il luogo: ${event.title}`
+              ? m.moved(event.title)
+              : m.placeChanged(event.title)
       const body = [
         change.kind === 'cambiato' && before
           ? moved
-            ? `Era ${whenWords(before, now)}`
-            : `Era ${before.location ?? 'senza luogo'}, ora ${event.location ?? 'senza luogo'}`
-          : [change.by ? `Da ${change.by}` : null, event.location].filter(Boolean).join(' · '),
-        change.instances > 1 ? `e altre ${change.instances - 1} volte della serie` : null
+            ? m.wasAt(whenWords(before, now))
+            : m.placeWas(before.location, event.location)
+          : [change.by ? m.from(change.by) : null, event.location].filter(Boolean).join(' · '),
+        change.instances > 1 ? m.moreOfSeries(change.instances - 1) : null
       ]
         .filter(Boolean)
         .join(' · ')
@@ -220,7 +298,7 @@ export class CalendarNotifications {
         title,
         subtitle: whenWords(event, now),
         body,
-        concealed: { title: 'Calendario', body: 'Un evento è cambiato' },
+        concealed: { title: m.calendar, body: m.eventChanged },
         target: targetOf(change),
         when: 'always'
       })
@@ -252,7 +330,10 @@ export class CalendarNotifications {
       title: event.title,
       subtitle: whenWords(event, Date.now()),
       body: text,
-      concealed: { title: 'Calendario', body: 'Il Segretario ha qualcosa da dirti su un evento' },
+      concealed: {
+        title: messages(MESSAGES).calendar,
+        body: messages(MESSAGES).segretarioAlert
+      },
       // An event gone opens on its day: there is nothing else left to open.
       target: gone
         ? { kind: 'day', day: new Date(event.startsAt).toISOString() }
@@ -368,6 +449,7 @@ export class CalendarNotifications {
 
   private async remind(event: RemindedEvent): Promise<void> {
     const now = Date.now()
+    const m = messages(MESSAGES)
     const key = `${REMINDER_PREFIX}${event.key}`
     const preparation = await this.deps.preparation(event.key).catch(() => null)
     const when = startWords(event, now)
@@ -379,14 +461,14 @@ export class CalendarNotifications {
       title: event.title,
       subtitle: when,
       body: [preparation, event.location].filter(Boolean).join(' · ') || event.calendarName,
-      concealed: { title: 'Promemoria', body: when },
+      concealed: { title: m.reminder, body: when },
       target: { kind: 'event', eventKey: event.key },
       actions: [
-        ...(meetLink ? [{ label: 'Partecipa', run: () => this.deps.openExternal(meetLink) }] : []),
+        ...(meetLink ? [{ label: m.join, run: () => this.deps.openExternal(meetLink) }] : []),
         ...(event.startsAt - now > SNOOZE_MS
           ? [
               {
-                label: 'Fra 5 minuti',
+                label: m.snooze,
                 run: () => {
                   this.snoozed.set(event.key, Date.now() + SNOOZE_MS)
                   this.plan()

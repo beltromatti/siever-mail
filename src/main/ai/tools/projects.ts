@@ -1,5 +1,8 @@
 import { isAbsolute } from 'node:path'
 
+import { defineMessages } from '@shared/i18n'
+
+import { messages } from '../../i18n'
 import { canonicalPath } from '../../services/network-volumes'
 import { searchMail, searchScope } from '../mail-search'
 import { linksIn } from '../agent/entries'
@@ -26,6 +29,142 @@ import {
 import { resolveEvent, resolveMessage } from './anchors'
 import { projectLine } from './describe'
 import { countOf } from './format'
+
+/** A language's words for what a link or an unlink touched. */
+interface LinkedWords {
+  and: string
+  conversation: readonly [string, string]
+  event: readonly [string, string]
+}
+
+/** What a link or an unlink touched, in words: conversations and events, those given. */
+function linkedWords(
+  words: LinkedWords,
+  conversations: number | null,
+  events: number | null
+): string {
+  const count = (value: number, [one, many]: readonly [string, string]): string =>
+    `${value} ${value === 1 ? one : many}`
+
+  return [
+    conversations === null ? null : count(conversations, words.conversation),
+    events === null ? null : count(events, words.event)
+  ]
+    .filter(Boolean)
+    .join(` ${words.and} `)
+}
+
+const LINKED_EN: LinkedWords = {
+  and: 'and',
+  conversation: ['conversation', 'conversations'],
+  event: ['event', 'events']
+}
+const LINKED_IT: LinkedWords = {
+  and: 'e',
+  conversation: ['conversazione', 'conversazioni'],
+  event: ['evento', 'eventi']
+}
+const LINKED_DE: LinkedWords = {
+  and: 'und',
+  conversation: ['Unterhaltung', 'Unterhaltungen'],
+  event: ['Termin', 'Termine']
+}
+
+/** The step's lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  looking: {
+    en: 'Looking at the projects…',
+    it: 'Guardo i progetti…',
+    de: 'Sehe mir die Projekte an…'
+  },
+  updating: {
+    en: 'Updating the projects…',
+    it: 'Aggiorno i progetti…',
+    de: 'Aktualisiere die Projekte…'
+  },
+  searched: {
+    en: (query: string) => `Searched “${query}” among the projects`,
+    it: (query: string) => `Cercato «${query}» tra i progetti`,
+    de: (query: string) => `„${query}“ in den Projekten gesucht`
+  },
+  looked: { en: 'Looked at the projects', it: 'Guardati i progetti', de: 'Projekte angesehen' },
+  created: {
+    en: (title: string) => `New project: ${title}`,
+    it: (title: string) => `Nuovo progetto: ${title}`,
+    de: (title: string) => `Neues Projekt: ${title}`
+  },
+  existing: {
+    en: (title: string) => `Project: ${title}`,
+    it: (title: string) => `Progetto: ${title}`,
+    de: (title: string) => `Projekt: ${title}`
+  },
+  linked: {
+    en: (project: string | null, conversations: number | null, events: number | null) =>
+      `In ${project ?? 'a project'}: ${linkedWords(LINKED_EN, conversations, events)}`,
+    it: (project: string | null, conversations: number | null, events: number | null) =>
+      `In ${project ?? 'un progetto'}: ${linkedWords(LINKED_IT, conversations, events)}`,
+    de: (project: string | null, conversations: number | null, events: number | null) =>
+      `In ${project ?? 'einem Projekt'}: ${linkedWords(LINKED_DE, conversations, events)}`
+  },
+  unlinked: {
+    en: (project: string | null, conversations: number | null, events: number | null) =>
+      `Removed from ${project ?? 'a project'}: ${linkedWords(LINKED_EN, conversations, events)}`,
+    it: (project: string | null, conversations: number | null, events: number | null) =>
+      `Tolti da ${project ?? 'un progetto'}: ${linkedWords(LINKED_IT, conversations, events)}`,
+    de: (project: string | null, conversations: number | null, events: number | null) =>
+      `Aus ${project ?? 'einem Projekt'} entfernt: ${linkedWords(LINKED_DE, conversations, events)}`
+  },
+  renamed: {
+    en: (title: string) => `Project renamed: ${title}`,
+    it: (title: string) => `Progetto rinominato: ${title}`,
+    de: (title: string) => `Projekt umbenannt: ${title}`
+  },
+  described: {
+    en: (title: string) => `What it is about: ${title}`,
+    it: (title: string) => `Di cosa si tratta: ${title}`,
+    de: (title: string) => `Worum es geht: ${title}`
+  },
+  state: {
+    en: (title: string) => `Where it stands: ${title}`,
+    it: (title: string) => `Il punto: ${title}`,
+    de: (title: string) => `Stand der Dinge: ${title}`
+  },
+  merged: {
+    en: (title: string) => `Projects merged into ${title}`,
+    it: (title: string) => `Progetti uniti in ${title}`,
+    de: (title: string) => `Projekte in ${title} zusammengeführt`
+  },
+  hidden: {
+    en: (title: string) => `Hidden: ${title}`,
+    it: (title: string) => `Nascosto: ${title}`,
+    de: (title: string) => `Ausgeblendet: ${title}`
+  },
+  shown: {
+    en: (title: string) => `Shown: ${title}`,
+    it: (title: string) => `Mostrato: ${title}`,
+    de: (title: string) => `Eingeblendet: ${title}`
+  },
+  closed: {
+    en: (title: string) => `Concluded: ${title}`,
+    it: (title: string) => `Concluso: ${title}`,
+    de: (title: string) => `Abgeschlossen: ${title}`
+  },
+  reopened: {
+    en: (title: string) => `Reopened: ${title}`,
+    it: (title: string) => `Riaperto: ${title}`,
+    de: (title: string) => `Wieder geöffnet: ${title}`
+  },
+  resourceRemoved: {
+    en: 'Removed a resource from the project',
+    it: 'Tolta una risorsa dal progetto',
+    de: 'Eine Ressource aus dem Projekt entfernt'
+  },
+  folderLinked: {
+    en: 'Linked a folder to the project',
+    it: 'Collegata una cartella al progetto',
+    de: 'Einen Ordner mit dem Projekt verknüpft'
+  }
+})
 
 const ACTIONS = [
   'elenco',
@@ -208,8 +347,8 @@ export const projectsTool: SegretarioTool = {
   },
   running: (args) =>
     args.azione === 'elenco' || args.azione === 'cerca'
-      ? 'Guardo i progetti…'
-      : 'Aggiorno i progetti…',
+      ? messages(STEPS).looking
+      : messages(STEPS).updating,
   readsOnly: (args) => ['elenco', 'cerca'].includes(String(args.azione)),
   async execute(args, context) {
     const action = requireString(args, 'azione') as (typeof ACTIONS)[number]
@@ -249,7 +388,7 @@ export const projectsTool: SegretarioTool = {
                 : `${countOf(projects.length, 'progetto', 'progetti')}, i più mossi di recente per primi:\n${projects
                     .map((project) => projectLine(context, project))
                     .join('\n')}`,
-            summary: query ? `Cercato «${query}» tra i progetti` : 'Guardati i progetti'
+            summary: query ? messages(STEPS).searched(query) : messages(STEPS).looked
           }
         }
         case 'crea': {
@@ -304,7 +443,9 @@ export const projectsTool: SegretarioTool = {
 
           return {
             content: `${created ? 'Creato' : 'Esisteva già'} ${handle} ${record.title}${aside ? ` — è ${aside}: \`riapri\` o \`mostra\` solo se la questione è ripresa davvero` : ''}${linked > 0 ? `, con ${countOf(linked, 'conversazione', 'conversazioni')}` : ''}.`,
-            summary: `${created ? 'Nuovo progetto' : 'Progetto'}: ${record.title}`
+            summary: created
+              ? messages(STEPS).created(record.title)
+              : messages(STEPS).existing(record.title)
           }
         }
         case 'collega':
@@ -371,7 +512,11 @@ export const projectsTool: SegretarioTool = {
             content: `${action === 'collega' ? 'Messi' : 'Tolti'}: ${what}${
               refused.length > 0 ? `. Non fatte: ${[...new Set(refused)].join(' ')}` : '.'
             }`,
-            summary: `${action === 'collega' ? 'In' : 'Tolti da'} ${project?.title ?? 'un progetto'}: ${what}`
+            summary: messages(STEPS)[action === 'collega' ? 'linked' : 'unlinked'](
+              project?.title ?? null,
+              threads.length > 0 ? done : null,
+              events.length > 0 ? events.length : null
+            )
           }
         }
         case 'rinomina': {
@@ -385,7 +530,7 @@ export const projectsTool: SegretarioTool = {
           saw(context, record)
           return {
             content: `Ora si chiama «${record.title}».`,
-            summary: `Progetto rinominato: ${record.title}`
+            summary: messages(STEPS).renamed(record.title)
           }
         }
         case 'descrivi': {
@@ -399,7 +544,7 @@ export const projectsTool: SegretarioTool = {
           saw(context, record)
           return {
             content: `Descrizione di ${record.title} aggiornata.`,
-            summary: `Di cosa si tratta: ${record.title}`
+            summary: messages(STEPS).described(record.title)
           }
         }
         case 'punto': {
@@ -420,7 +565,7 @@ export const projectsTool: SegretarioTool = {
           saw(context, record)
           return {
             content: `Il punto di ${record.title} aggiornato.`,
-            summary: `Il punto: ${record.title}`
+            summary: messages(STEPS).state(record.title)
           }
         }
         case 'unisci': {
@@ -454,7 +599,7 @@ export const projectsTool: SegretarioTool = {
           const record = await context.registry.mergeProjects(keepId, others, actor)
           return {
             content: `Uniti in «${record.title}».`,
-            summary: `Progetti uniti in ${record.title}`
+            summary: messages(STEPS).merged(record.title)
           }
         }
         case 'nascondi':
@@ -469,7 +614,7 @@ export const projectsTool: SegretarioTool = {
           saw(context, record)
           return {
             content: `${record.title} ${action === 'nascondi' ? 'nascosto' : 'di nuovo visibile'}.`,
-            summary: `${action === 'nascondi' ? 'Nascosto' : 'Mostrato'}: ${record.title}`
+            summary: messages(STEPS)[action === 'nascondi' ? 'hidden' : 'shown'](record.title)
           }
         }
         case 'concludi':
@@ -484,7 +629,7 @@ export const projectsTool: SegretarioTool = {
           saw(context, record)
           return {
             content: `${record.title} ${action === 'concludi' ? 'concluso' : 'riaperto'}.`,
-            summary: `${action === 'concludi' ? 'Concluso' : 'Riaperto'}: ${record.title}`
+            summary: messages(STEPS)[action === 'concludi' ? 'closed' : 'reopened'](record.title)
           }
         }
         case 'risorsa': {
@@ -503,7 +648,7 @@ export const projectsTool: SegretarioTool = {
 
           if (booleanArg(args, 'togli')) {
             await context.registry.removeProjectResource(projectId, folder, actor)
-            return { content: `Tolta ${folder}.`, summary: `Tolta una risorsa dal progetto` }
+            return { content: `Tolta ${folder}.`, summary: messages(STEPS).resourceRemoved }
           }
 
           await context.registry.addProjectResource(
@@ -515,7 +660,7 @@ export const projectsTool: SegretarioTool = {
             },
             actor
           )
-          return { content: `Collegata ${folder}.`, summary: `Collegata una cartella al progetto` }
+          return { content: `Collegata ${folder}.`, summary: messages(STEPS).folderLinked }
         }
         default:
           throw new ToolInputError(`\`azione\` è una di: ${ACTIONS.join(', ')}.`)

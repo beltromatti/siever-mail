@@ -1,3 +1,6 @@
+import { defineMessages } from '@shared/i18n'
+
+import { messages } from '../../i18n'
 import type { CommitmentKind, CommitmentOrigin, CommitmentRecord } from '../registry/types'
 import { RegistryRefusal, RevisionConflict } from '../registry/types'
 import { PROMPTS } from '../prompts'
@@ -18,6 +21,33 @@ import { evidenceOf, resolveEvent, resolveSentOrReceived } from './anchors'
 import { commitmentLine, rememberCommitments } from './describe'
 import { countOf, shortDate } from './format'
 import { projectOf } from './projects'
+
+/** The step's lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  running: {
+    en: 'Updating the open items…',
+    it: 'Aggiorno le cose aperte…',
+    de: 'Aktualisiere die offenen Punkte…'
+  },
+  changed: {
+    en: (changed: number, failures: number) =>
+      `Open items: ${changed === 1 ? '1 change' : `${changed} changes`}${failures > 0 ? ` · ${failures} not done` : ''}`,
+    it: (changed: number, failures: number) =>
+      `Cose aperte: ${changed === 1 ? '1 modifica' : `${changed} modifiche`}${failures > 0 ? ` · ${failures} non fatte` : ''}`,
+    de: (changed: number, failures: number) =>
+      `Offene Punkte: ${changed === 1 ? '1 Änderung' : `${changed} Änderungen`}${failures > 0 ? ` · ${failures} nicht erledigt` : ''}`
+  },
+  failed: {
+    en: (failures: number) => `Open items: ${failures} not done`,
+    it: (failures: number) => `Cose aperte: ${failures} non fatte`,
+    de: (failures: number) => `Offene Punkte: ${failures} nicht erledigt`
+  },
+  looked: {
+    en: 'Looked at the open items',
+    it: 'Guardate le cose aperte',
+    de: 'Offene Punkte angesehen'
+  }
+})
 
 const KINDS: ReadonlyArray<CommitmentKind> = ['ti_chiedono', 'hai_promesso', 'aspetti', 'da_fare']
 /** A note's nature where a commitment's kind is meant: the two words are near, the meaning the same. */
@@ -539,7 +569,7 @@ export const commitmentsTool: SegretarioTool = {
     },
     required: ['operazioni']
   },
-  running: () => 'Aggiorno le cose aperte…',
+  running: () => messages(STEPS).running,
   readsOnly: (args) =>
     Array.isArray(args.operazioni) &&
     args.operazioni.every(
@@ -590,10 +620,10 @@ export const commitmentsTool: SegretarioTool = {
       content: lines.join('\n'),
       summary:
         changed > 0
-          ? `Cose aperte: ${countOf(changed, 'modifica', 'modifiche')}${failures > 0 ? ` · ${failures} non fatte` : ''}`
+          ? messages(STEPS).changed(changed, failures)
           : failures > 0
-            ? `Cose aperte: ${failures} non fatte`
-            : 'Guardate le cose aperte',
+            ? messages(STEPS).failed(failures)
+            : messages(STEPS).looked,
       failed: failures === operations.length && conflicts === 0
     }
   }

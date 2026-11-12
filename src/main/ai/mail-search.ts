@@ -10,6 +10,7 @@ import {
 } from '@shared/folders'
 import type { MailAccount, MailAddress, MailFolder, MessageRef, PecKind } from '@shared/models'
 
+import { currentLanguage } from '../i18n'
 import { buildMessageSearchWhere } from '../services/database'
 import { fullTextMatchExpression, numberWords, queryNumbers } from '../services/full-text-query'
 
@@ -65,7 +66,7 @@ const ROLE_WORDS: Readonly<Record<string, FolderRole>> = {
 /** A folder as the agent named it, as the user reads it: "arrivo" is Posta in arrivo. */
 export function folderQueryLabel(folder: string): string {
   const role = ROLE_WORDS[folder.trim().toLowerCase()]
-  return role ? folderRoleLabel(role) : folder.trim()
+  return role ? folderRoleLabel(role, currentLanguage()) : folder.trim()
 }
 
 export interface SearchScope {
@@ -110,7 +111,7 @@ export function searchScope(
           (folder) =>
             folder.path.toLowerCase() === folderQuery ||
             folder.name.toLowerCase() === folderQuery ||
-            folderDisplayName(folder).toLowerCase() === folderQuery
+            folderDisplayName(folder, 'it').toLowerCase() === folderQuery
         )
         .map((folder) => folder.path)
     } else {
@@ -298,7 +299,7 @@ function hitOf(scope: SearchScope, row: HitRow): AgentSearchHit {
     to: parseAddresses(row.toJson),
     cc: parseAddresses(row.ccJson),
     date: row.dateIso,
-    folderLabel: folder ? folderDisplayName(folder) : row.folderPath,
+    folderLabel: folder ? folderDisplayName(folder, 'it') : row.folderPath,
     accountEmail: scope.accountEmails.get(row.accountId) ?? '',
     isRead: Boolean(Number(row.isRead)),
     hasAttachments: Boolean(Number(row.hasAttachments)),

@@ -2,10 +2,25 @@ import { Archive, Flag, FolderInput, MailOpen, Trash2 } from 'lucide-react'
 
 import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { Button } from '@renderer/components/ui/button'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
 import type { MailFolder } from '@shared/models'
 
 import { FolderPickerPopover } from './folder-picker'
+
+const MESSAGES = defineMessages({
+  unflag: { en: 'Remove flag', it: 'Rimuovi contrassegno', de: 'Markierung entfernen' },
+  flag: { en: 'Flag', it: 'Contrassegna', de: 'Markieren' },
+  move: { en: 'Move', it: 'Sposta', de: 'Verschieben' },
+  archive: { en: 'Archive', it: 'Archivia', de: 'Archivieren' },
+  moveToFolder: {
+    en: 'Move to a folder',
+    it: 'Sposta in una cartella',
+    de: 'In einen Ordner verschieben'
+  },
+  delete: { en: 'Delete', it: 'Elimina', de: 'Löschen' }
+})
 
 export interface SelectionActionsProps {
   /** Where "Sposta" can put the selection: the folders of its account. */
@@ -43,7 +58,8 @@ export function SelectionActions({
   labelled,
   ...props
 }: SelectionActionsProps & { labelled: boolean }): React.JSX.Element {
-  const flagLabel = props.selectionFlagged ? 'Rimuovi contrassegno' : 'Contrassegna'
+  const m = useMessages(MESSAGES)
+  const flagLabel = props.selectionFlagged ? m.unflag : m.flag
   const buttonClass = cn('gap-1.5', labelled ? 'h-[28px] px-2' : 'size-[28px] px-0')
   const moveTrigger = (
     <Button
@@ -51,31 +67,31 @@ export function SelectionActions({
       size="sm"
       className={buttonClass}
       disabled={!props.onMoveAcrossAccounts && props.moveFolders.length === 0}
-      aria-label="Sposta"
+      aria-label={m.move}
       onClick={props.onMoveAcrossAccounts}
     >
       <FolderInput className="size-[15px]" />
-      {labelled && 'Sposta'}
+      {labelled && m.move}
     </Button>
   )
 
   return (
     <div className="flex items-center gap-0.5">
-      <ActionTooltip label="Archivia" commandId="archive">
+      <ActionTooltip label={m.archive} commandId="archive">
         <Button
           variant="ghost"
           size="sm"
           className={buttonClass}
           onClick={props.onArchive}
-          aria-label="Archivia"
+          aria-label={m.archive}
         >
           <Archive className="size-[15px]" />
-          {labelled && 'Archivia'}
+          {labelled && m.archive}
         </Button>
       </ActionTooltip>
 
       {props.onMoveAcrossAccounts ? (
-        <ActionTooltip label="Sposta in una cartella" commandId="move">
+        <ActionTooltip label={m.moveToFolder} commandId="move">
           {moveTrigger}
         </ActionTooltip>
       ) : (
@@ -95,7 +111,7 @@ export function SelectionActions({
             props.onCreateFolderAndMove(name)
           }}
           wrapTrigger={(trigger) => (
-            <ActionTooltip label="Sposta in una cartella" commandId="move">
+            <ActionTooltip label={m.moveToFolder} commandId="move">
               {trigger}
             </ActionTooltip>
           )}
@@ -129,16 +145,16 @@ export function SelectionActions({
         </Button>
       </ActionTooltip>
 
-      <ActionTooltip label="Elimina">
+      <ActionTooltip label={m.delete}>
         <Button
           variant="ghost"
           size="sm"
           className={cn(buttonClass, 'hover:text-destructive')}
           onClick={props.onDelete}
-          aria-label="Elimina"
+          aria-label={m.delete}
         >
           <Trash2 className="size-[15px]" />
-          {labelled && 'Elimina'}
+          {labelled && m.delete}
         </Button>
       </ActionTooltip>
     </div>

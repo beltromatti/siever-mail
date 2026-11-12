@@ -1,3 +1,6 @@
+import { defineMessages } from '@shared/i18n'
+
+import { messages } from '../../i18n'
 import {
   LONG_NOTE_CHARS,
   memoryHeadline,
@@ -19,6 +22,71 @@ import {
   type ToolContext
 } from '../agent/tool-types'
 import { formatDateTime } from './format'
+
+/** The step's lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  reading: { en: 'Rereading my memory…', it: 'Rileggo la memoria…', de: 'Lese das Gedächtnis…' },
+  updating: {
+    en: 'Updating my memory…',
+    it: 'Aggiorno la memoria…',
+    de: 'Aktualisiere das Gedächtnis…'
+  },
+  searched: {
+    en: (words: string) => `Searched “${words}” in my memory`,
+    it: (words: string) => `Cercato «${words}» nella memoria`,
+    de: (words: string) => `„${words}“ im Gedächtnis gesucht`
+  },
+  index: {
+    en: 'Reread the memory’s index',
+    it: 'Riletto l’indice della memoria',
+    de: 'Inhaltsverzeichnis des Gedächtnisses gelesen'
+  },
+  folder: {
+    en: (path: string) => `Looked at the folder ${path}`,
+    it: (path: string) => `Guardata la cartella ${path}`,
+    de: (path: string) => `Ordner ${path} angesehen`
+  },
+  read: {
+    en: (path: string) => `Reread ${path}`,
+    it: (path: string) => `Riletto ${path}`,
+    de: (path: string) => `${path} gelesen`
+  },
+  updated: {
+    en: (path: string) => `Updated the note ${path}`,
+    it: (path: string) => `Aggiornata la nota ${path}`,
+    de: (path: string) => `Notiz ${path} aktualisiert`
+  },
+  created: {
+    en: (path: string) => `Created the note ${path}`,
+    it: (path: string) => `Creata la nota ${path}`,
+    de: (path: string) => `Notiz ${path} erstellt`
+  },
+  rewritten: {
+    en: (path: string) => `Rewrote the note ${path}`,
+    it: (path: string) => `Riscritta la nota ${path}`,
+    de: (path: string) => `Notiz ${path} neu geschrieben`
+  },
+  deleted: {
+    en: (path: string) => `Deleted the note ${path}`,
+    it: (path: string) => `Eliminata la nota ${path}`,
+    de: (path: string) => `Notiz ${path} gelöscht`
+  },
+  renamed: {
+    en: (path: string) => `Renamed ${path}`,
+    it: (path: string) => `Rinominata ${path}`,
+    de: (path: string) => `${path} umbenannt`
+  },
+  history: {
+    en: (path: string) => `Looked at the history of ${path}`,
+    it: (path: string) => `Guardata la storia di ${path}`,
+    de: (path: string) => `Verlauf von ${path} angesehen`
+  },
+  restored: {
+    en: (path: string) => `Restored ${path}`,
+    it: (path: string) => `Ripristinata ${path}`,
+    de: (path: string) => `${path} wiederhergestellt`
+  }
+})
 
 const COMMANDS = [
   'leggi',
@@ -109,8 +177,8 @@ export const memoryTool: SegretarioTool = {
   },
   running: (args) =>
     args.comando === 'leggi' || args.comando === 'cerca' || args.comando === 'storia'
-      ? 'Rileggo la memoria…'
-      : 'Aggiorno la memoria…',
+      ? messages(STEPS).reading
+      : messages(STEPS).updating,
   readsOnly: (args) => ['leggi', 'cerca', 'storia'].includes(String(args.comando)),
   async execute(args, context) {
     const command = requireString(args, 'comando') as (typeof COMMANDS)[number]
@@ -126,14 +194,14 @@ export const memoryTool: SegretarioTool = {
             hits.length === 0
               ? `Nessuna riga con «${words}» nella memoria.`
               : hits.map((hit) => `${hit.path}:${hit.line}  ${hit.text}`).join('\n'),
-          summary: `Cercato «${words}» nella memoria`
+          summary: messages(STEPS).searched(words)
         }
       }
 
       const rawPath = stringArg(args, 'percorso')
 
       if (command === 'leggi' && !rawPath) {
-        return { content: await notebook.index(), summary: 'Riletto l’indice della memoria' }
+        return { content: await notebook.index(), summary: messages(STEPS).index }
       }
 
       // A folder: its notes, each with its first line.
@@ -141,7 +209,7 @@ export const memoryTool: SegretarioTool = {
         const listing = await notebook.folder(rawPath)
 
         if (listing !== null) {
-          return { content: listing, summary: `Guardata la cartella ${rawPath}` }
+          return { content: listing, summary: messages(STEPS).folder(rawPath) }
         }
       }
 
@@ -176,7 +244,7 @@ export const memoryTool: SegretarioTool = {
               from: numberArg(args, 'da_riga'),
               to: numberArg(args, 'a_riga')
             }),
-            summary: `Riletto ${path}`
+            summary: messages(STEPS).read(path)
           }
         }
         case 'modifica': {
@@ -189,7 +257,7 @@ export const memoryTool: SegretarioTool = {
           remember(context, document)
           return {
             content: `${path} aggiornata (versione ${document.revision}).${lengthWord(document)}`,
-            summary: `Aggiornata la nota ${path}`
+            summary: messages(STEPS).updated(path)
           }
         }
         case 'inserisci': {
@@ -204,7 +272,7 @@ export const memoryTool: SegretarioTool = {
           remember(context, document)
           return {
             content: `Testo inserito in ${path}.${lengthWord(document)}`,
-            summary: `Aggiornata la nota ${path}`
+            summary: messages(STEPS).updated(path)
           }
         }
         case 'scrivi': {
@@ -217,7 +285,7 @@ export const memoryTool: SegretarioTool = {
 
           return {
             content: `${created ? `Nota ${path} creata.` : `Nota ${path} riscritta.`}${lengthWord(document)}`,
-            summary: `${created ? 'Creata' : 'Riscritta'} la nota ${path}`
+            summary: created ? messages(STEPS).created(path) : messages(STEPS).rewritten(path)
           }
         }
         case 'elimina': {
@@ -226,14 +294,17 @@ export const memoryTool: SegretarioTool = {
             content: deleted
               ? `Nota ${path} eliminata (resta nella sua storia).`
               : `La nota ${path} non c'era.`,
-            summary: `Eliminata la nota ${path}`
+            summary: messages(STEPS).deleted(path)
           }
         }
         case 'rinomina': {
           const target = normalizeMemoryPath(requireString(args, 'nuovo_percorso'))
           const document = await notebook.rename(path, target, actor)
           remember(context, document)
-          return { content: `Nota ${path} rinominata in ${target}.`, summary: `Rinominata ${path}` }
+          return {
+            content: `Nota ${path} rinominata in ${target}.`,
+            summary: messages(STEPS).renamed(path)
+          }
         }
         case 'storia': {
           const versions = await notebook.history(path)
@@ -253,7 +324,7 @@ export const memoryTool: SegretarioTool = {
                         }${version.content ? ` · ${memoryHeadline(version.content)}` : ''}`
                     )
                     .join('\n'),
-            summary: `Guardata la storia di ${path}`
+            summary: messages(STEPS).history(path)
           }
         }
         case 'ripristina': {
@@ -267,7 +338,7 @@ export const memoryTool: SegretarioTool = {
           remember(context, document)
           return {
             content: `${path} riportata alla versione ${version}.`,
-            summary: `Ripristinata ${path}`
+            summary: messages(STEPS).restored(path)
           }
         }
         default:

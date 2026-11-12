@@ -1,6 +1,17 @@
 import type { MessageStructureObject } from 'imapflow'
 
+import { messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
+
 import { isCertificationPart } from './pec'
+
+const MESSAGES = defineMessages({
+  partHeaderMissing: {
+    en: (part: string) => `The server didn’t send the header of part ${part}.`,
+    it: (part: string) => `Il server non ha inviato l'intestazione della parte ${part}.`,
+    de: (part: string) => `Der Server hat den Header von Teil ${part} nicht gesendet.`
+  }
+})
 
 /**
  * A large message is read without its attachments. Fifteen megabytes of
@@ -156,7 +167,7 @@ export function buildPartialSource(
       const childHeader = parts.get(partHeaderKey(part))
 
       if (!childHeader) {
-        throw new Error(`Il server non ha inviato l'intestazione della parte ${part}.`)
+        throw new Error(messages(MESSAGES).partHeaderMissing(part))
       }
 
       chunks.push(Buffer.from(`--${boundary}\r\n`), headerBlock(childHeader))

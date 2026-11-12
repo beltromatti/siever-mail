@@ -1,0 +1,5 @@
+/* What macOS says when SIEVER Mail first reaches each place, in Italian. */
+"NSDesktopFolderUsageDescription" = "SIEVER Mail legge e allega i file che tieni sulla Scrivania, e vi salva gli allegati.";
+"NSDocumentsFolderUsageDescription" = "SIEVER Mail legge e allega i file della cartella Documenti, e vi salva gli allegati.";
+"NSDownloadsFolderUsageDescription" = "SIEVER Mail legge e allega i file della cartella Download, e vi salva gli allegati.";
+"NSNetworkVolumesUsageDescription" = "SIEVER Mail legge e allega i file delle cartelle di rete, e vi salva ciò che gli chiedi.";

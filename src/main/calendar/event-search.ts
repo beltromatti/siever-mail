@@ -1,3 +1,4 @@
+import { currentLanguage } from '@main/i18n'
 import type { CalendarAttendee } from '@shared/calendar'
 import { foldSearchText } from '@shared/search'
 
@@ -83,8 +84,10 @@ export function findEvents(
       (!query.calendarKeys || query.calendarKeys.has(event.calendarKey)) &&
       query.words.every((word, at) => event.text.includes(word) || named[at].has(event.calendarKey))
   )
+  // Titles in the order of the interface's language.
+  const collator = new Intl.Collator(currentLanguage())
   const byTitle = (a: IndexedEvent, b: IndexedEvent): number =>
-    a.title.localeCompare(b.title, 'it') || a.key.localeCompare(b.key)
+    collator.compare(a.title, b.title) || a.key.localeCompare(b.key)
   const upcoming = found
     .filter((event) => event.endsAt > now)
     .sort((a, b) => a.startsAt - b.startsAt || byTitle(a, b))

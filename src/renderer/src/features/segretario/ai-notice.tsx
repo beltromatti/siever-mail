@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 
 import { ConfirmDialog } from '@renderer/components/ui/confirm-dialog'
+import { useLanguage, useMessages } from '@renderer/lib/i18n'
+import { defineMessages } from '@shared/i18n'
 import {
   noticeWords,
   OPENROUTER_CREDITS_URL,
@@ -8,6 +10,18 @@ import {
   OPENROUTER_MODELS_URL,
   type SegretarioNotice
 } from '@shared/segretario'
+
+const MESSAGES = defineMessages({
+  openKeys: { en: 'Open OpenRouter', it: 'Apri OpenRouter', de: 'OpenRouter öffnen' },
+  openModels: { en: 'Open the models', it: 'Apri i modelli', de: 'Modelle öffnen' },
+  topUp: {
+    en: 'Top up on OpenRouter',
+    it: 'Ricarica su OpenRouter',
+    de: 'Bei OpenRouter aufladen'
+  },
+  understood: { en: 'Got it', it: 'Ho capito', de: 'Verstanden' },
+  later: { en: 'Later', it: 'Più tardi', de: 'Später' }
+})
 
 /**
  * What SIEVER Mail has to tell the user about the AI, as a popup: the
@@ -23,6 +37,8 @@ export function AiNotice({
   /** Shown or gone: the app's keys rest while it asks for an answer. */
   onOpenChange: (open: boolean) => void
 }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
+  const language = useLanguage()
   const [notice, setNotice] = useState<SegretarioNotice | null>(null)
 
   useEffect(() => {
@@ -48,7 +64,7 @@ export function AiNotice({
     return null
   }
 
-  const { title, body } = noticeWords(notice)
+  const { title, body } = noticeWords(notice, language)
   const off =
     notice.kind === 'credito-finito' ||
     notice.kind === 'chiave-rifiutata' ||
@@ -56,10 +72,10 @@ export function AiNotice({
   // Where to put it right: the keys, the models, the credit.
   const where =
     notice.kind === 'chiave-rifiutata'
-      ? { label: 'Apri OpenRouter', url: OPENROUTER_KEYS_URL }
+      ? { label: m.openKeys, url: OPENROUTER_KEYS_URL }
       : notice.kind === 'modello-non-disponibile'
-        ? { label: 'Apri i modelli', url: OPENROUTER_MODELS_URL }
-        : { label: 'Ricarica su OpenRouter', url: OPENROUTER_CREDITS_URL }
+        ? { label: m.openModels, url: OPENROUTER_MODELS_URL }
+        : { label: m.topUp, url: OPENROUTER_CREDITS_URL }
   const seen = (): void => {
     setNotice(null)
     void window.segretarioApi.dismissNotice()
@@ -71,7 +87,7 @@ export function AiNotice({
       title={title}
       description={body}
       confirmLabel={where.label}
-      cancelLabel={off ? 'Ho capito' : 'Più tardi'}
+      cancelLabel={off ? m.understood : m.later}
       onConfirm={() => {
         void window.mailApi.openExternalUrl(where.url)
         seen()

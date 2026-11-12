@@ -96,7 +96,7 @@ describe('the notifications of new mail', () => {
     vi.runAllTimers()
 
     expect(shown).toHaveLength(1)
-    expect(shown[0].options.title).toBe('2 nuove email')
+    expect(shown[0].options.title).toBe('2 new emails')
   })
 
   it('gives a single message its sender, subject and buttons', () => {
@@ -107,8 +107,8 @@ describe('the notifications of new mail', () => {
       title: 'Mittente 7',
       groupId: 'a1',
       actions: [
-        { type: 'button', text: 'Segna come letta' },
-        { type: 'button', text: 'Archivia' }
+        { type: 'button', text: 'Mark as read' },
+        { type: 'button', text: 'Archive' }
       ]
     })
     expect(`${shown[0].options.subtitle ?? ''}${shown[0].options.body}`).toContain('Oggetto 7')
@@ -140,7 +140,7 @@ describe('the notifications of new mail', () => {
     vi.runAllTimers()
 
     expect(shown[0].options).toMatchObject({
-      title: 'Nuova email',
+      title: 'New email',
       body: 'anna@example.it',
       silent: true
     })
@@ -182,7 +182,7 @@ describe('the notifications of new mail', () => {
 
     vi.advanceTimersByTime(20_000)
     expect(shown).toHaveLength(1)
-    expect(shown[0].options.title).toBe('3 nuove email')
+    expect(shown[0].options.title).toBe('3 new emails')
   })
 
   it('tells a message once, whatever mailboxes it came to', () => {
@@ -211,7 +211,7 @@ describe('the notifications of new mail', () => {
     launched.enqueue(ACCOUNT, [message(12, { date: before })], INBOX, false)
     vi.advanceTimersByTime(20_000)
     expect(shown).toHaveLength(1)
-    expect(shown[0].options.title).toBe('2 nuove email')
+    expect(shown[0].options.title).toBe('2 new emails')
     launched.dispose()
   })
 
@@ -312,7 +312,7 @@ describe('the notifications of new mail', () => {
       mail.withdraw([{ accountId: 'a1', folderPath: 'INBOX', uid: 2 }])
 
       expect(shown.map(({ options, closed }) => [options.title, closed])).toEqual([
-        ['2 nuove email', true],
+        ['2 new emails', true],
         ['Mittente 1', false]
       ])
     })
@@ -374,7 +374,7 @@ describe('the notifications of new mail', () => {
       expect(shown).toHaveLength(1)
 
       vi.advanceTimersByTime(20_000)
-      expect(shown.map(({ options }) => options.title)).toEqual(['Mittente 1', '2 nuove email'])
+      expect(shown.map(({ options }) => options.title)).toEqual(['Mittente 1', '2 new emails'])
     })
 
     it('takes away what it told once it is read, and tells nothing of what waited', () => {

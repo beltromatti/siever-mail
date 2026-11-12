@@ -1,8 +1,25 @@
+import { defineMessages } from '@shared/i18n'
 import type { HandleLink } from '@shared/segretario'
 import { unlinked } from '@shared/segretario-links'
 
+import { messages } from '../../i18n'
 import type { Sql } from '../sql'
 import { lookedAt, RevisionConflict } from './types'
+
+/** A write that never settles: the step that tried it fails, and its line says why. */
+const ERRORS = defineMessages({
+  letterRestless: {
+    en: (day: string) => `The letter of ${day} can’t be written: it keeps changing.`,
+    it: (day: string) => `La lettera del ${day} non si scrive: cambia di continuo.`,
+    de: (day: string) => `Der Brief vom ${day} lässt sich nicht schreiben: Er ändert sich ständig.`
+  },
+  prepRestless: {
+    en: (eventKey: string) => `The briefing for ${eventKey} can’t be written: it keeps changing.`,
+    it: (eventKey: string) => `La preparazione di ${eventKey} non si scrive: cambia di continuo.`,
+    de: (eventKey: string) =>
+      `Die Vorbereitung für ${eventKey} lässt sich nicht schreiben: Sie ändert sich ständig.`
+  }
+})
 
 export interface DayLetter {
   day: string
@@ -97,7 +114,7 @@ export class DayStore {
       }
     }
 
-    throw new Error(`La lettera del ${day} non si scrive: cambia di continuo.`)
+    throw new Error(messages(ERRORS).letterRestless(day))
   }
 
   async prep(eventKey: string): Promise<MeetingPrep | null> {
@@ -196,7 +213,7 @@ export class DayStore {
       }
     }
 
-    throw new Error(`La preparazione di ${eventKey} non si scrive: cambia di continuo.`)
+    throw new Error(messages(ERRORS).prepRestless(eventKey))
   }
 
   async clear(): Promise<void> {

@@ -4,11 +4,42 @@ import { z } from 'zod'
 import type { SegretarioService } from '@main/ai/segretario-service'
 import { reachablePath } from '@main/services/network-volumes'
 import { diagnostics } from '@main/diagnostics/log'
+import { messages } from '@main/i18n'
 import { handleIpc, type HandleOptions } from '@main/ipc/handle'
 import type { DiagnosticFields } from '@shared/diagnostics'
+import { defineMessages } from '@shared/i18n'
 import { SEGRETARIO_IPC, type OnboardingState } from '@shared/segretario'
 
 const log = diagnostics('segretario')
+
+const MESSAGES = defineMessages({
+  dateFormat: {
+    en: 'A date as YYYY-MM-DD.',
+    it: 'Una data AAAA-MM-GG.',
+    de: 'Ein Datum im Format JJJJ-MM-TT.'
+  },
+  writeWhatToDo: {
+    en: 'Write what needs doing.',
+    it: 'Scrivi cosa c’è da fare.',
+    de: 'Schreiben Sie, was zu tun ist.'
+  },
+  giveName: { en: 'Give it a name.', it: 'Dai un nome.', de: 'Geben Sie einen Namen ein.' },
+  writeToSegretario: {
+    en: 'Write something to the Segretario.',
+    it: 'Scrivi qualcosa al Segretario.',
+    de: 'Schreiben Sie dem Segretario etwas.'
+  },
+  writeWhatYouSeek: {
+    en: 'Write what you’re looking for.',
+    it: 'Scrivi cosa cerchi.',
+    de: 'Schreiben Sie, was Sie suchen.'
+  },
+  folderNotOpened: {
+    en: (reason: string) => `The folder can’t be opened: ${reason}`,
+    it: (reason: string) => `La cartella non si apre: ${reason}`,
+    de: (reason: string) => `Der Ordner lässt sich nicht öffnen: ${reason}`
+  }
+})
 
 /**
  * What the user does with the Segretario's work, written once done (§14.4):
@@ -96,11 +127,21 @@ const commitmentFromSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('user') }).strict()
 ])
 const threadSchema = z.object({ accountId: idSchema, threadId: z.string().min(1).max(1000) })
-const daySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Una data AAAA-MM-GG.')
+const daySchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, { error: () => messages(MESSAGES).dateFormat })
 const commitmentIdSchema = z.number().int().positive()
 const commitmentKindSchema = z.enum(['ti_chiedono', 'hai_promesso', 'aspetti', 'da_fare'])
-const commitmentTextSchema = z.string().trim().min(1, 'Scrivi cosa c’è da fare.').max(500)
-const projectTitleSchema = z.string().trim().min(1, 'Dai un nome.').max(120)
+const commitmentTextSchema = z
+  .string()
+  .trim()
+  .min(1, { error: () => messages(MESSAGES).writeWhatToDo })
+  .max(500)
+const projectTitleSchema = z
+  .string()
+  .trim()
+  .min(1, { error: () => messages(MESSAGES).giveName })
+  .max(120)
 
 const commitmentStatusSchema = z.enum(['aperta', 'fatta', 'non_serve', 'rinviata'])
 const statusOptionsSchema = z
@@ -138,7 +179,11 @@ const composeResultSchema = z.union([
   z.object({ error: z.string().max(2000) })
 ])
 
-const textSchema = z.string().trim().min(1, 'Scrivi qualcosa al Segretario.').max(20_000)
+const textSchema = z
+  .string()
+  .trim()
+  .min(1, { error: () => messages(MESSAGES).writeToSegretario })
+  .max(20_000)
 
 // The page sends the setup whole and `strict` refuses a field it does not know: the fields
 // are the shared type's, every one, which the compiler checks.
@@ -151,7 +196,15 @@ const onboardingSchema = z
       'ai-riaccesa',
       'conoscimi'
     ]),
-    step: z.enum(['connessioni', 'segretario', 'preparazione', 'conoscimi', 'lettura', 'entra']),
+    step: z.enum([
+      'lingua',
+      'connessioni',
+      'segretario',
+      'preparazione',
+      'conoscimi',
+      'lettura',
+      'entra'
+    ]),
     accountIds: z.array(z.string().min(1).max(100)).max(100),
     conoscimiId: z.string().min(1).max(100).nullable(),
     startedAt: z.number().int().nonnegative(),
@@ -356,7 +409,12 @@ export function registerSegretarioIpc(
     SEGRETARIO_IPC.askMail,
     (question: unknown, requestId: unknown) =>
       segretario.askMail(
-        z.string().trim().min(2, 'Scrivi cosa cerchi.').max(1000).parse(question),
+        z
+          .string()
+          .trim()
+          .min(2, { error: () => messages(MESSAGES).writeWhatYouSeek })
+          .max(1000)
+          .parse(question),
         requestIdSchema.parse(requestId)
       ),
     forModel
@@ -410,7 +468,7 @@ export function registerSegretarioIpc(
     const failure = await shell.openPath(folderPath)
 
     if (failure) {
-      throw new Error(`La cartella non si apre: ${failure}`)
+      throw new Error(messages(MESSAGES).folderNotOpened(failure))
     }
   })
 

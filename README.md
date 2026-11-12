@@ -13,21 +13,21 @@
 
 ## A personal operating system for work
 
-You have a lot to keep track of: messages, meetings, documents, people, many matters at once. SIEVER Mail brings them together in one place — **Posta**, **Calendario** and, soon, **File**, apps at par, each with its own connections — and gives you a **Segretario**: one assistant that reads, follows and prepares your work across all of them, so that nothing slips and your head stays free for what only you can do.
+You have a lot to keep track of: messages, meetings, documents, people, many matters at once. SIEVER Mail brings them together in one place — **Mail**, **Calendar** and, soon, **Files**, apps at par, each with its own connections — and gives you a **Segretario**: one assistant that reads, follows and prepares your work across all of them, so that nothing slips and your head stays free for what only you can do.
 
 Without AI, SIEVER Mail is a set of fast, honest apps for mail and calendars. With AI on, it becomes intelligent.
 
 ## What it does for you
 
-**Your day, already sorted.** Each morning **Oggi** opens on a short letter about your day: what matters most and why, who is waiting for you, what is due this week, the meetings ahead. Below it, everything still open — what you were asked, what you promised, what you are waiting for, what you have to do — wherever it came from: a message, an event, or a word you said.
+**Your day, already sorted.** Each morning **Today** opens on a short letter about your day: what matters most and why, who is waiting for you, what is due this week, the meetings ahead. Below it, everything still open — what you were asked, what you promised, what you are waiting for, what you have to do — wherever it came from: a message, an event, or a word you said.
 
-**A secretary that knows your work.** It reads every message as it arrives and writes a line beside it: what it wants from you, and how much it matters. It looks at your calendar as events appear and change. It gathers conversations, events and folders into your **projects** — named the way you name them — and keeps "Il punto" of each: where things stand, in a few lines.
+**A secretary that knows your work.** It reads every message as it arrives and writes a line beside it: what it wants from you, and how much it matters. It looks at your calendar as events appear and change. It gathers conversations, events and folders into your **projects** — named the way you name them — and keeps "Where it stands" for each, in a few lines.
 
 **Work done before you ask.** Replies to what matters, written in your style and waiting in the reader. Reminders for what is late. A briefing before each meeting. A last look at every message as you send it: the attachment you mention, the question left unanswered, the weekday that does not match the date.
 
 **Interrupted only when it can't wait.** A message someone needs answered today, a meeting about to start with what to bring, a change of plan by others: those reach your desktop, in a line that says enough. The rest waits for you where you'll look. Your events remind you when their calendar says, or when you choose — yours only, even in a calendar the whole office shares.
 
-**It learns you, and you can read what it knows.** In _Conoscimi_ it gets to know your connections while you watch; then it learns from how you correct it. Everything it remembers is a note you can read, correct or restore — and, in one click, you can make it forget everything, as if it had never been on.
+**It learns you, and you can read what it knows.** In _Get to know me_ it gets to know your connections while you watch; then it learns from how you correct it. Everything it remembers is a note you can read, correct or restore — and, in one click, you can make it forget everything, as if it had never been on.
 
 **On its own, it only proposes.** Nothing reaches anyone without you: it does not send, invite or move your mail by itself — it leaves you a proposal, one click away. A diary shows everything it did, each change with its undo.
 
@@ -36,6 +36,8 @@ Without AI, SIEVER Mail is a set of fast, honest apps for mail and calendars. Wi
 **Every source, connected properly.** Google, Microsoft 365 and Outlook.com, iCloud, any IMAP mailbox, certified mail (PEC) read for what it is; calendars from Google, Microsoft, any CalDAV server or a published link. One dot tells you how all of them stand.
 
 **A client that is fast where it is felt.** Messages open at once; the list is endless and smooth; search covers the full text of every message. You write where you read, a tab for each message, with the tools of a word processor — tables included — and a letterhead and a signature for each mailbox; drafts are never lost and live in your server's Drafts; a message arrives exactly as you wrote it; every command has a shortcut you can change.
+
+**In your language.** SIEVER Mail speaks English, Italian and German: you choose at the first start, and change it any time in Settings. Dates and numbers are written the way your computer's region writes them, and the Segretario writes to you in your own language — even if it is not the app's.
 
 **Private by construction.** Your data stays on your computer, in a local database; passwords and tokens in the system keychain. The AI runs on your own [OpenRouter](https://openrouter.ai/) key, only through providers that keep no data, and you always see what it costs. No telemetry, no tracking: even the diagnostic log stays on your computer, and leaves it only when you export it to send it.
 
@@ -49,7 +51,7 @@ When an organisation wants it shaped around the way it works — its conventions
 
 Where SIEVER Mail is going, and why it works the way it does: **[docs/vision.md](docs/vision.md)** (in Italian).
 
-Next: the **File** app and file connections — the computer's volumes, network shares, Google Drive, OneDrive and SharePoint, Dropbox, iCloud Drive —, then **Progetti** and **Contatti**, a new name, and languages beyond Italian.
+Next: the **Files** app and file connections — the computer's volumes, network shares, Google Drive, OneDrive and SharePoint, Dropbox, iCloud Drive —, then **Projects** and **Contacts**, a new name, and more languages.
 
 ## Get it
 

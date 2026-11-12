@@ -21,6 +21,10 @@
 import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { defineMessages } from '@shared/i18n'
+
+import { messages } from '../i18n'
+
 export const SEGRETARIO_MODEL = '~deepseek/deepseek-flash-latest'
 
 export const PROVIDER_POLICY = {
@@ -32,6 +36,88 @@ export const PROVIDER_POLICY = {
 } as const
 
 const API_BASE = 'https://openrouter.ai/api/v1'
+
+/** The errors of the service, as the user reads them: in the interface's language. */
+const ERRORS = defineMessages({
+  noCredit: {
+    en: 'Your OpenRouter credit has run out, or the key has reached its spending limit. Top up your credit on openrouter.ai.',
+    it: 'Il credito OpenRouter è finito, o la chiave ha raggiunto il suo limite di spesa. Ricarica il credito su openrouter.ai.',
+    de: 'Ihr OpenRouter-Guthaben ist aufgebraucht, oder der Schlüssel hat sein Ausgabenlimit erreicht. Laden Sie Ihr Guthaben auf openrouter.ai auf.'
+  },
+  invalidKey: {
+    en: 'OpenRouter doesn’t recognise the key: it’s wrong or has been revoked. Enter a valid one in Settings → Segretario.',
+    it: 'OpenRouter non riconosce la chiave: è sbagliata o è stata revocata. Inseriscine una valida in Impostazioni → Segretario.',
+    de: 'OpenRouter erkennt den Schlüssel nicht: Er ist falsch oder wurde widerrufen. Geben Sie unter Einstellungen → Segretario einen gültigen ein.'
+  },
+  inFlight: {
+    en: 'OpenRouter has too many requests in progress on this key: I’ll try again shortly.',
+    it: 'OpenRouter ha troppe richieste in corso su questa chiave: riprovo tra poco.',
+    de: 'OpenRouter hat zu viele laufende Anfragen für diesen Schlüssel: Ich versuche es gleich erneut.'
+  },
+  blocked: {
+    en: (detail: string | null) =>
+      detail ? `OpenRouter blocked the request: ${detail}` : 'OpenRouter blocked the request.',
+    it: (detail: string | null) =>
+      detail
+        ? `OpenRouter ha bloccato la richiesta: ${detail}`
+        : 'OpenRouter ha bloccato la richiesta.',
+    de: (detail: string | null) =>
+      detail
+        ? `OpenRouter hat die Anfrage blockiert: ${detail}`
+        : 'OpenRouter hat die Anfrage blockiert.'
+  },
+  noProvider: {
+    en: (detail: string) => `No provider of the model accepts this request: ${detail}`,
+    it: (detail: string) => `Nessun fornitore del modello accetta questa richiesta: ${detail}`,
+    de: (detail: string) => `Kein Anbieter des Modells nimmt diese Anfrage an: ${detail}`
+  },
+  modelUnavailable: {
+    en: 'The Segretario’s model isn’t available on OpenRouter, or no provider serves it without keeping the data.',
+    it: 'Il modello del Segretario non è disponibile su OpenRouter, o nessun fornitore lo serve senza tenere i dati.',
+    de: 'Das Modell des Segretario ist auf OpenRouter nicht verfügbar, oder kein Anbieter stellt es bereit, ohne die Daten zu speichern.'
+  },
+  tooSlow: {
+    en: 'The model took too long to answer.',
+    it: 'Il modello ha impiegato troppo a rispondere.',
+    de: 'Das Modell hat zu lange für die Antwort gebraucht.'
+  },
+  tooManyRequests: {
+    en: 'OpenRouter is receiving too many requests: I’ll try again shortly.',
+    it: 'OpenRouter sta ricevendo troppe richieste: riprovo tra poco.',
+    de: 'OpenRouter erhält zu viele Anfragen: Ich versuche es gleich erneut.'
+  },
+  serviceUnavailable: {
+    en: 'The model’s service isn’t available right now.',
+    it: 'Il servizio del modello non è disponibile in questo momento.',
+    de: 'Der Dienst des Modells ist im Moment nicht verfügbar.'
+  },
+  notAnswering: {
+    en: 'OpenRouter isn’t answering as it should.',
+    it: 'OpenRouter non risponde come dovrebbe.',
+    de: 'OpenRouter antwortet nicht wie erwartet.'
+  },
+  notAccepted: {
+    en: (detail: string) => `Request not accepted by OpenRouter: ${detail}`,
+    it: (detail: string) => `Richiesta non accettata da OpenRouter: ${detail}`,
+    de: (detail: string) => `Anfrage von OpenRouter nicht angenommen: ${detail}`
+  },
+  status: {
+    en: (status: number) => `Error ${status} from OpenRouter.`,
+    it: (status: number) => `Errore ${status} da OpenRouter.`,
+    de: (status: number) => `Fehler ${status} von OpenRouter.`
+  },
+  stopped: { en: 'Stopped.', it: 'Interrotto.', de: 'Unterbrochen.' },
+  network: {
+    en: 'I can’t reach OpenRouter: check your internet connection.',
+    it: 'Non riesco a raggiungere OpenRouter: controlla la connessione a internet.',
+    de: 'OpenRouter ist nicht erreichbar: Prüfen Sie Ihre Internetverbindung.'
+  },
+  stoppedAnswering: {
+    en: 'The model stopped answering.',
+    it: 'Il modello ha smesso di rispondere.',
+    de: 'Das Modell antwortet nicht mehr.'
+  }
+})
 
 /** Who is calling, for OpenRouter's app attribution. */
 const ATTRIBUTION_HEADERS = {
@@ -206,73 +292,40 @@ export function errorFromResponse(
   const retryAfterMs = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) * 1000 : null
   const metadata = (body?.error?.metadata ?? {}) as { limit_source?: unknown }
   const limit = typeof metadata.limit_source === 'string' ? metadata.limit_source : null
-  const noCredit = new SegretarioError(
-    'no-credit',
-    'Il credito OpenRouter è finito, o la chiave ha raggiunto il suo limite di spesa. Ricarica il credito su openrouter.ai.'
-  )
+  const m = messages(ERRORS)
+  const noCredit = new SegretarioError('no-credit', m.noCredit)
 
   switch (status) {
     case 401:
-      return new SegretarioError(
-        'invalid-key',
-        'OpenRouter non riconosce la chiave: è sbagliata o è stata revocata. Inseriscine una valida in Impostazioni → Segretario.'
-      )
+      return new SegretarioError('invalid-key', m.invalidKey)
     case 402:
       // Too much spent at once, with a time to come back: a wait, not the credit run out.
       return retryAfterMs !== null || limit === 'openrouter_in_flight_budget'
-        ? new SegretarioError(
-            'rate-limited',
-            'OpenRouter ha troppe richieste in corso su questa chiave: riprovo tra poco.',
-            retryAfterMs
-          )
+        ? new SegretarioError('rate-limited', m.inFlight, retryAfterMs)
         : noCredit
     case 403:
       // A budget spent refuses every request; a moderation flag or a guardrail, this one.
       return limit && SPENDING_LIMITS.has(limit)
         ? noCredit
-        : new SegretarioError(
-            'blocked',
-            detail
-              ? `OpenRouter ha bloccato la richiesta: ${detail}`
-              : 'OpenRouter ha bloccato la richiesta.'
-          )
+        : new SegretarioError('blocked', m.blocked(detail || null))
     case 404:
       // No provider for what this request needs — an image, a tool — is this request's; none for
       // the model at all, as the routing asks, is every request's.
       return detail && NEEDS_A_CAPABILITY.test(detail)
-        ? new SegretarioError(
-            'bad-request',
-            `Nessun fornitore del modello accetta questa richiesta: ${detail}`
-          )
-        : new SegretarioError(
-            'model-unavailable',
-            'Il modello del Segretario non è disponibile su OpenRouter, o nessun fornitore lo serve senza tenere i dati.'
-          )
+        ? new SegretarioError('bad-request', m.noProvider(detail))
+        : new SegretarioError('model-unavailable', m.modelUnavailable)
     case 408:
     case 504:
-      return new SegretarioError('timeout', 'Il modello ha impiegato troppo a rispondere.')
+      return new SegretarioError('timeout', m.tooSlow)
     case 429:
-      return new SegretarioError(
-        'rate-limited',
-        'OpenRouter sta ricevendo troppe richieste: riprovo tra poco.',
-        retryAfterMs
-      )
+      return new SegretarioError('rate-limited', m.tooManyRequests, retryAfterMs)
     case 502:
     case 503:
-      return new SegretarioError(
-        'unavailable',
-        'Il servizio del modello non è disponibile in questo momento.',
-        retryAfterMs
-      )
+      return new SegretarioError('unavailable', m.serviceUnavailable, retryAfterMs)
     default:
       return status >= 500
-        ? new SegretarioError('unavailable', 'OpenRouter non risponde come dovrebbe.', retryAfterMs)
-        : new SegretarioError(
-            'bad-request',
-            detail
-              ? `Richiesta non accettata da OpenRouter: ${detail}`
-              : `Errore ${status} da OpenRouter.`
-          )
+        ? new SegretarioError('unavailable', m.notAnswering, retryAfterMs)
+        : new SegretarioError('bad-request', detail ? m.notAccepted(detail) : m.status(status))
   }
 }
 
@@ -282,13 +335,10 @@ function networkError(error: unknown): SegretarioError {
   }
 
   if (error instanceof Error && error.name === 'AbortError') {
-    return new SegretarioError('cancelled', 'Interrotto.')
+    return new SegretarioError('cancelled', messages(ERRORS).stopped)
   }
 
-  return new SegretarioError(
-    'network',
-    'Non riesco a raggiungere OpenRouter: controlla la connessione a internet.'
-  )
+  return new SegretarioError('network', messages(ERRORS).network)
 }
 
 async function readErrorBody(
@@ -738,7 +788,7 @@ export async function* sseData(
   const nextChunk = (): Promise<ReadableStreamReadResult<Uint8Array>> =>
     new Promise((resolve, reject) => {
       const timer = setTimeout(
-        () => reject(new SegretarioError('timeout', 'Il modello ha smesso di rispondere.')),
+        () => reject(new SegretarioError('timeout', messages(ERRORS).stoppedAnswering)),
         STREAM_IDLE_TIMEOUT_MS
       )
 
@@ -757,7 +807,7 @@ export async function* sseData(
   try {
     for (;;) {
       if (signal?.aborted) {
-        throw new SegretarioError('cancelled', 'Interrotto.')
+        throw new SegretarioError('cancelled', messages(ERRORS).stopped)
       }
 
       const { done, value } = await nextChunk()
@@ -889,7 +939,7 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
       'abort',
       () => {
         clearTimeout(timer)
-        reject(new SegretarioError('cancelled', 'Interrotto.'))
+        reject(new SegretarioError('cancelled', messages(ERRORS).stopped))
       },
       { once: true }
     )

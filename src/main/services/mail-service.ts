@@ -11,6 +11,7 @@ import { z } from 'zod'
 
 import type { DiscoveredMailSettings } from '@shared/connections'
 import { diagnostics } from '@main/diagnostics/log'
+import { messages } from '@main/i18n'
 import type {
   AccountConnectionState,
   ConnectionRefusal,
@@ -66,7 +67,6 @@ import {
 } from '@shared/folders'
 import {
   mailRefusedNotice,
-  REFUSAL_LINES,
   MAX_MESSAGES_PER_ACTION,
   MESSAGE_LIST_PAGE_SIZE,
   READER_ZOOM_MAX,
@@ -97,7 +97,8 @@ import type { AppDatabase, MessageListView } from './database'
 import { resolveUniqueFilePath, sanitizePathSegment } from './file-utils'
 import type { GoogleAuthResult, GoogleOAuthService } from './google-oauth'
 import { discoverMailSettings } from './mail-discovery'
-import { refusalOf, serverWords } from './connection-refusal'
+import { refusalClause, refusalOf, serverWords } from './connection-refusal'
+import { INVITATION_ANSWERS, MESSAGES } from './mail-service.messages'
 import { MailTokenBroker } from './mail-tokens'
 import {
   MICROSOFT_MAIL_SCOPES,
@@ -146,7 +147,7 @@ const recipientSchema = z.object({
     .string()
     .trim()
     .refine(isValidEmailAddress, {
-      error: (issue) => `«${String(issue.input)}» non è un indirizzo email valido.`
+      error: (issue) => messages(MESSAGES).invalidAddress(String(issue.input))
     })
 })
 
@@ -170,7 +171,7 @@ const composeSchema = z
     )
   })
   .refine((payload) => payload.to.length + payload.cc.length + payload.bcc.length > 0, {
-    error: 'Aggiungi almeno un destinatario.'
+    error: () => messages(MESSAGES).addRecipient
   })
 
 const messageRefSchema = z.object({
@@ -215,9 +216,6 @@ const messageAttachmentsRefSchema = z.object({
 })
 const filePathsSchema = z.array(z.string().min(1)).max(200)
 
-/** What the "Allega" menu calls the files it remembers from each place. */
-const SENT_ATTACHMENT_ACTIVITY = 'Allegato a un messaggio'
-const SAVED_ATTACHMENT_ACTIVITY = 'Salvato da un messaggio'
 const RECENT_FILES_OFFERED = 8
 const activeMailboxContextSchema = z.object({
   accountId: z.string().trim().min(1),
@@ -383,7 +381,7 @@ function fetchNotFollowing(url: string, init: { signal?: AbortSignal | null }): 
     const request = net.request({ url, redirect: 'manual', cache: 'no-store' })
     const abort = (): void => {
       request.abort()
-      reject(init.signal?.reason ?? new Error('Interrotto.'))
+      reject(init.signal?.reason ?? new Error(messages(MESSAGES).interrupted))
     }
 
     if (init.signal?.aborted) {
@@ -443,12 +441,21 @@ function serverAnswers(host: string, port: number, secure: boolean): Promise<boo
 }
 
 /** How an answer to an invitation is said, in its subject and in its line, as calendars say it. */
-const INVITATION_ANSWERS: Readonly<
-  Record<Exclude<CalendarResponse, 'needsAction'>, { subject: string; body: string }>
-> = {
-  accepted: { subject: 'Accettato', body: 'ha accettato' },
-  tentative: { subject: 'Accettato provvisoriamente', body: 'ha accettato provvisoriamente' },
-  declined: { subject: 'Rifiutato', body: 'ha rifiutato' }
+function invitationAnswer(
+  response: Exclude<CalendarResponse, 'needsAction'>,
+  name: string,
+  summary: string
+): { subject: string; body: string } {
+  const m = messages(INVITATION_ANSWERS)
+
+  switch (response) {
+    case 'accepted':
+      return { subject: m.acceptedSubject, body: m.acceptedBody(name, summary) }
+    case 'tentative':
+      return { subject: m.tentativeSubject, body: m.tentativeBody(name, summary) }
+    case 'declined':
+      return { subject: m.declinedSubject, body: m.declinedBody(name, summary) }
+  }
 }
 
 /** A mailbox signed in with Microsoft: IMAP with OAuth, not Gmail. */
@@ -710,7 +717,7 @@ export class MailService {
         let message = await this.database.getMessage(ref)
 
         if (!message) {
-          throw new Error('Il messaggio non è più in questa cartella.')
+          throw new Error(messages(MESSAGES).messageNotInFolder)
         }
 
         let body = await this.database.getStoredBody(ref.accountId, message.messageKey)
@@ -745,7 +752,7 @@ export class MailService {
         )
 
         if (!fetched) {
-          throw new Error('Allegato non disponibile per questo messaggio.')
+          throw new Error(messages(MESSAGES).attachmentUnavailable)
         }
 
         return { data: fetched.content, contentType: attachment.contentType }
@@ -884,7 +891,7 @@ export class MailService {
     const stored = await this.database.getStoredAccountById(accountId)
 
     if (!stored || stored.authType !== 'password') {
-      throw new Error('Questa casella non si collega con una password.')
+      throw new Error(messages(MESSAGES).notPasswordMailbox)
     }
 
     await verifyImapAccount({
@@ -903,9 +910,7 @@ export class MailService {
       const cause = error instanceof Error ? error.cause : undefined
 
       if (refusalOf(cause) === 'accesso' || (cause as { code?: unknown })?.code === 'EAUTH') {
-        throw new Error(
-          `Il server non accetta questa password per ${stored.email}: controllala e riprova.`
-        )
+        throw new Error(messages(MESSAGES).passwordRefused(stored.email))
       }
 
       throw error
@@ -923,7 +928,7 @@ export class MailService {
     const stored = await this.database.getStoredAccountById(accountId)
 
     if (!stored || stored.authType !== 'oauth') {
-      throw new Error('Questa casella non si collega con un fornitore.')
+      throw new Error(messages(MESSAGES).notProviderMailbox)
     }
 
     const kept = await this.tryWithToken(stored, secret)
@@ -1024,8 +1029,8 @@ export class MailService {
         if (refusalOf(cause) === 'accesso') {
           throw new Error(
             mailbox.type === 'gmail'
-              ? `Google ha dato il consenso, ma la casella ${mailbox.username} non si apre via IMAP: controlla che l’IMAP sia attivo nelle impostazioni di Gmail, poi riprova. Il server ha detto: ${serverWords(cause)}`
-              : `Microsoft ha dato il consenso, ma la casella ${mailbox.username} non si apre via IMAP: per un account di lavoro può averlo spento l’amministratore. Il server ha detto: ${serverWords(cause)}`,
+              ? messages(MESSAGES).googleImapOff(mailbox.username, serverWords(cause))
+              : messages(MESSAGES).microsoftImapOff(mailbox.username, serverWords(cause)),
             { cause }
           )
         }
@@ -1760,14 +1765,12 @@ export class MailService {
     const payload = composeSchema.parse(input)
     const stored = await this.database.getStoredAccountById(payload.accountId)
     if (!stored) {
-      throw new Error('Account non trovato.')
+      throw new Error(messages(MESSAGES).accountNotFound)
     }
 
     if (payload.draftId) {
       if (this.leavingOutbox.has(payload.draftId)) {
-        throw new Error(
-          'Questo messaggio sta partendo dalla posta in uscita: guarda in Posta inviata tra un momento.'
-        )
+        throw new Error(messages(MESSAGES).leavingOutbox)
       }
 
       await this.database.removeOutgoing({ draftId: payload.draftId })
@@ -1777,9 +1780,7 @@ export class MailService {
     const refusal = this.engine.accountRefusal(payload.accountId)
 
     if (refusal) {
-      throw new Error(
-        `La casella ${stored.email} è ferma: ${REFUSAL_LINES[refusal].toLowerCase()}. Ricollegala da Impostazioni › Connessioni, poi invia.`
-      )
+      throw new Error(messages(MESSAGES).mailboxStopped(stored.email, refusalClause(refusal)))
     }
 
     // Certified mail (PEC) takes no Bcc: its provider would refuse the whole message.
@@ -1789,9 +1790,7 @@ export class MailService {
         (account) => account.id === payload.accountId && account.pec
       )
     ) {
-      throw new Error(
-        'La PEC non ammette la copia nascosta: il gestore rifiuterebbe il messaggio. Sposta gli indirizzi della Ccn in A o in Cc, o toglili.'
-      )
+      throw new Error(messages(MESSAGES).pecNoBcc)
     }
 
     // A file attached a while ago may be gone by now; say which, rather than
@@ -1828,7 +1827,9 @@ export class MailService {
       // Broken off while it went: it may have arrived — said, before the user sends it again.
       if (failure === 'uncertain') {
         throw new Error(
-          `L’invio si è interrotto mentre partiva: il messaggio potrebbe essere arrivato. Controlla in Posta inviata prima di rimandarlo. (${error instanceof Error ? error.message : String(error)})`,
+          messages(MESSAGES).sendingBrokenOff(
+            error instanceof Error ? error.message : String(error)
+          ),
           { cause: error }
         )
       }
@@ -1863,7 +1864,7 @@ export class MailService {
       .catch((error: unknown) => log.error('Counting the recipients failed', error))
     await this.recordRecentFiles(
       payload.attachments.map((attachment) => attachment.path),
-      SENT_ATTACHMENT_ACTIVITY
+      messages(MESSAGES).attachedToMessage
     )
   }
 
@@ -1904,17 +1905,15 @@ export class MailService {
         const account = { ...stored, secret: decryptSecret(stored.encryptedSecret) }
         const failed = (message: string, why: string): void => {
           log.warn('outbox.failed', { conn: entry.accountId, why })
+          const m = messages(MESSAGES)
           // The user thinks it went: away from the window, the system tells them (§13.3).
           this.notifications.notify({
             family: 'app',
             kind: 'app.outbox-failed',
             key: `app:outbox:${entry.id}`,
-            title: 'Messaggio non partito',
+            title: m.notSentTitle,
             body: message,
-            concealed: {
-              title: 'Messaggio non partito',
-              body: 'Un messaggio in uscita non è partito: è in Bozze.'
-            },
+            concealed: { title: m.notSentTitle, body: m.notSentConcealed },
             target: entry.draftId ? { kind: 'draft', draftId: entry.draftId } : { kind: 'window' },
             when: 'away'
           })
@@ -1940,10 +1939,7 @@ export class MailService {
 
           if (filesGone) {
             await this.database.removeOutgoing({ id: entry.id })
-            failed(
-              `«${payload.subject || 'Senza oggetto'}» non è partito: ${filesGone}`,
-              'files-gone'
-            )
+            failed(messages(MESSAGES).notSent(payload.subject, filesGone), 'files-gone')
             continue
           }
 
@@ -1959,8 +1955,11 @@ export class MailService {
             await this.database.removeOutgoing({ id: entry.id })
             failed(
               failure === 'uncertain'
-                ? `L’invio di «${payload.subject || 'senza oggetto'}» si è interrotto mentre partiva: potrebbe essere arrivato. Controlla in Posta inviata prima di rimandarlo; la bozza è in Bozze.`
-                : `«${payload.subject || 'Senza oggetto'}» non è partito: ${error instanceof Error ? error.message : String(error)}`,
+                ? messages(MESSAGES).outboxBrokenOff(payload.subject)
+                : messages(MESSAGES).notSent(
+                    payload.subject,
+                    error instanceof Error ? error.message : String(error)
+                  ),
               failure
             )
             continue
@@ -2067,9 +2066,7 @@ export class MailService {
 
       if (!response.ok) {
         throw Object.assign(
-          new Error(
-            `Microsoft non ha inviato il messaggio (${response.status}): ${await response.text()}`
-          ),
+          new Error(messages(MESSAGES).microsoftNotSent(response.status, await response.text())),
           { status: response.status }
         )
       }
@@ -2236,8 +2233,8 @@ export class MailService {
 
   async pickAttachments(parentWindow?: BrowserWindow): Promise<PickedAttachment[]> {
     const options = {
-      title: 'Allega file',
-      buttonLabel: 'Allega',
+      title: messages(MESSAGES).attachFiles,
+      buttonLabel: messages(MESSAGES).attach,
       properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'>
     }
     const result = parentWindow
@@ -2260,7 +2257,7 @@ export class MailService {
     const listed = message.attachments.find((attachment) => attachment.id === attachmentId)
 
     if (!listed) {
-      throw new Error('Allegato non disponibile per questo messaggio.')
+      throw new Error(messages(MESSAGES).attachmentUnavailable)
     }
 
     if (isExecutableAttachment(listed.fileName)) {
@@ -2286,7 +2283,7 @@ export class MailService {
     )
 
     if (unknown) {
-      throw new Error('Allegato non disponibile per questo messaggio.')
+      throw new Error(messages(MESSAGES).attachmentUnavailable)
     }
 
     return this.copyAttachments(ref, message, attachmentIds, 'compose')
@@ -2338,7 +2335,10 @@ export class MailService {
       for (const [position, attachment] of downloaded.entries()) {
         const { directory } = missing[position]
         const digest = sha256(attachment.content)
-        const target = join(directory, sanitizePathSegment(attachment.fileName, 'allegato'))
+        const target = join(
+          directory,
+          sanitizePathSegment(attachment.fileName, messages(MESSAGES).attachmentFileName)
+        )
         const existingDigest = await fileSha256(target)
         let filePath = target
 
@@ -2379,13 +2379,14 @@ export class MailService {
     const listed = message.attachments.find((attachment) => attachment.id === attachmentId)
 
     if (!listed) {
-      throw new Error('Allegato non disponibile per questo messaggio.')
+      throw new Error(messages(MESSAGES).attachmentUnavailable)
     }
 
+    const m = messages(MESSAGES)
     const options = {
-      title: 'Salva allegato',
-      buttonLabel: 'Salva',
-      defaultPath: sanitizePathSegment(listed.fileName, 'allegato')
+      title: m.saveAttachment,
+      buttonLabel: m.save,
+      defaultPath: sanitizePathSegment(listed.fileName, m.attachmentFileName)
     }
     const choice = parentWindow
       ? await dialog.showSaveDialog(parentWindow, options)
@@ -2402,7 +2403,7 @@ export class MailService {
     )
     await writeFile(choice.filePath, attachment.content)
     await markFromInternet(choice.filePath)
-    await this.recordRecentFiles([choice.filePath], SAVED_ATTACHMENT_ACTIVITY)
+    await this.recordRecentFiles([choice.filePath], messages(MESSAGES).savedFromMessage)
 
     return choice.filePath
   }
@@ -2420,8 +2421,8 @@ export class MailService {
     const message = await this.requireMessage(ref)
 
     const options = {
-      title: 'Salva tutti gli allegati',
-      buttonLabel: 'Salva qui',
+      title: messages(MESSAGES).saveAllAttachments,
+      buttonLabel: messages(MESSAGES).saveHere,
       properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>
     }
     const choice = parentWindow
@@ -2446,14 +2447,14 @@ export class MailService {
     for (const attachment of attachments) {
       const filePath = await resolveUniqueFilePath(
         directory,
-        sanitizePathSegment(attachment.fileName, 'allegato')
+        sanitizePathSegment(attachment.fileName, messages(MESSAGES).attachmentFileName)
       )
       await writeFile(filePath, attachment.content)
       await markFromInternet(filePath)
       filePaths.push(filePath)
     }
 
-    await this.recordRecentFiles(filePaths, SAVED_ATTACHMENT_ACTIVITY)
+    await this.recordRecentFiles(filePaths, messages(MESSAGES).savedFromMessage)
     return { directory, filePaths }
   }
 
@@ -2519,7 +2520,7 @@ export class MailService {
         const identity = identities.get(refKey(entry.ref))
 
         if (!identity) {
-          throw new Error('Il messaggio non è più nella sua cartella: si è spostato nel frattempo.')
+          throw new Error(messages(MESSAGES).messageMoved)
         }
 
         return {
@@ -2659,11 +2660,11 @@ export class MailService {
         const stats = await stat(filePath).catch(() => null)
 
         if (!stats) {
-          throw new Error(`${basename(filePath)} non è più disponibile.`)
+          throw new Error(messages(MESSAGES).fileGone(basename(filePath)))
         }
 
         if (!stats.isFile()) {
-          throw new Error(`${basename(filePath)} è una cartella: si possono allegare solo file.`)
+          throw new Error(messages(MESSAGES).folderNotFile(basename(filePath)))
         }
 
         return { path: filePath, name: basename(filePath), size: stats.size }
@@ -2705,7 +2706,7 @@ export class MailService {
     const stored = await this.database.getStoredAccountById(ref.accountId)
 
     if (!text || !stored) {
-      throw new Error('L’invito non c’è più.')
+      throw new Error(messages(MESSAGES).invitationGone)
     }
 
     const account = { ...stored, secret: decryptSecret(stored.encryptedSecret) }
@@ -2715,7 +2716,7 @@ export class MailService {
       { addresses, address: account.email, name: account.displayName },
       response
     )
-    const said = INVITATION_ANSWERS[response]
+    const said = invitationAnswer(response, account.displayName, reply.summary)
 
     await this.deliver(account, {
       from: { name: account.displayName, address: account.email },
@@ -2723,7 +2724,7 @@ export class MailService {
       cc: [],
       bcc: [],
       subject: `${said.subject}: ${reply.summary}`,
-      text: `${account.displayName} ${said.body} l’invito «${reply.summary}».`,
+      text: said.body,
       html: '',
       attachments: [],
       icalEvent: { method: 'REPLY', content: reply.ics }
@@ -2778,13 +2779,13 @@ export class MailService {
   private async ensureAccountExists(accountId: string): Promise<MailAccount> {
     // A mailbox being removed takes no more work: what asks now would find it half gone.
     if (this.leaving.has(accountId)) {
-      throw new Error('Questa casella si sta scollegando.')
+      throw new Error(messages(MESSAGES).mailboxLeaving)
     }
 
     const account = await this.database.getStoredAccountById(accountId)
 
     if (!account) {
-      throw new Error('Questa casella non è più collegata.')
+      throw new Error(messages(MESSAGES).mailboxGone)
     }
 
     return account

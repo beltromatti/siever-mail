@@ -6,11 +6,42 @@ import appMark from '@renderer/assets/logo-128.png'
 import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { useLanguage, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
+import { PLACES } from '@shared/places'
 
 import type { ConnectionsStatus } from '@renderer/features/connections/connection-health'
 import { HealthDot } from '@renderer/features/connections/health-dot'
 import { AppEdition } from '@renderer/features/workspace/app-edition'
+
+const MESSAGES = defineMessages({
+  apps: { en: 'Apps', it: 'Sezioni', de: 'Bereiche' },
+  welcome: { en: 'Welcome screen', it: 'Schermata iniziale', de: 'Startbildschirm' },
+  clickTo: {
+    en: (place: string) => `Click: ${place}`,
+    it: (place: string) => `Clic: ${place}`,
+    de: (place: string) => `Klick: ${place}`
+  },
+  welcomePlace: { en: 'welcome screen', it: 'schermata iniziale', de: 'Startbildschirm' },
+  comingSoon: { en: 'coming soon', it: 'in arrivo', de: 'demnächst' },
+  writing: {
+    en: (count: number) =>
+      count === 1 ? 'one message being written' : `${count} messages being written`,
+    it: (count: number) =>
+      count === 1 ? 'un messaggio in scrittura' : `${count} messaggi in scrittura`,
+    de: (count: number) =>
+      count === 1 ? 'eine Nachricht in Arbeit' : `${count} Nachrichten in Arbeit`
+  },
+  indexing: {
+    en: (indexed: string, total: string) => `Reading the mail for search: ${indexed} of ${total}`,
+    it: (indexed: string, total: string) =>
+      `Lettura della posta per la ricerca: ${indexed} di ${total}`,
+    de: (indexed: string, total: string) =>
+      `E-Mails werden für die Suche gelesen: ${indexed} von ${total}`
+  },
+  openSettings: { en: 'Open settings', it: 'Apri impostazioni', de: 'Einstellungen öffnen' }
+})
 
 export interface RailItem {
   id: string
@@ -56,16 +87,20 @@ export function AppRail({
   /** Settings › Connessioni, where a connection is put right. */
   onOpenConnections: () => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
+  const { formatLocale } = useLanguage()
+
   return (
     <nav
-      aria-label="Sezioni"
+      aria-label={m.apps}
       className="window-drag-region flex h-full w-[52px] flex-col items-center border-r pt-[var(--titlebar-band)] pb-3"
     >
       <Tooltip>
         <TooltipTrigger asChild>
           <button
             type="button"
-            aria-label="Schermata iniziale"
+            aria-label={m.welcome}
             onClick={onOpenWelcome}
             className="window-no-drag group focus-visible:ring-ring/60 relative mt-0.5 mb-3 grid size-9 shrink-0 place-items-center rounded-full outline-none focus-visible:ring-2"
           >
@@ -83,7 +118,7 @@ export function AppRail({
             extensionClassName="text-muted-foreground font-normal"
           />
           <span className="text-faint-foreground mt-1.5 block font-normal">
-            Clic: schermata iniziale
+            {m.clickTo(m.welcomePlace)}
           </span>
         </TooltipContent>
       </Tooltip>
@@ -125,13 +160,12 @@ export function AppRail({
                 <TooltipContent side="right">
                   {item.label}
                   {item.soon && (
-                    <span className="text-muted-foreground font-normal"> · in arrivo</span>
+                    <span className="text-muted-foreground font-normal"> · {m.comingSoon}</span>
                   )}
                   {Boolean(item.writing) && (
                     <span className="text-muted-foreground font-normal">
                       {' '}
-                      · {item.writing === 1 ? 'un messaggio' : `${item.writing} messaggi`} in
-                      scrittura
+                      · {m.writing(item.writing ?? 0)}
                     </span>
                   )}
                 </TooltipContent>
@@ -145,10 +179,10 @@ export function AppRail({
 
       <div className="window-no-drag flex flex-col items-center gap-1">
         {segretario && (
-          <ActionTooltip label="Segretario" commandId="segretario" side="right">
+          <ActionTooltip label={places.segretario} commandId="segretario" side="right">
             <button
               type="button"
-              aria-label="Segretario"
+              aria-label={places.segretario}
               aria-pressed={segretario.open}
               onClick={segretario.onToggle}
               className={cn(
@@ -197,9 +231,10 @@ export function AppRail({
               {connections.indexing && (
                 <span className="mt-2 block font-normal">
                   <span className="text-muted-foreground block">
-                    Lettura della posta per la ricerca:{' '}
-                    {connections.indexing.indexed.toLocaleString('it-IT')} di{' '}
-                    {connections.indexing.total.toLocaleString('it-IT')}
+                    {m.indexing(
+                      connections.indexing.indexed.toLocaleString(formatLocale),
+                      connections.indexing.total.toLocaleString(formatLocale)
+                    )}
                   </span>
                   <span className="bg-hover mt-1 block h-1 overflow-hidden rounded-full">
                     <span
@@ -212,16 +247,16 @@ export function AppRail({
                 </span>
               )}
               <span className="text-faint-foreground mt-2 block font-normal">
-                Clic: Impostazioni › Connessioni
+                {m.clickTo(`${places.settings} › ${places.connections}`)}
               </span>
             </TooltipContent>
           </Tooltip>
         )}
 
-        <ActionTooltip label="Impostazioni" commandId="settings" side="right">
+        <ActionTooltip label={places.settings} commandId="settings" side="right">
           <button
             type="button"
-            aria-label="Apri impostazioni"
+            aria-label={m.openSettings}
             onClick={onOpenSettings}
             className="text-faint-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring/60 grid size-9 place-items-center rounded-[9px] transition-colors outline-none focus-visible:ring-2"
           >

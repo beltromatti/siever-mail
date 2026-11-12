@@ -20,9 +20,12 @@ import { useCalendarConnections } from '@renderer/features/calendar/use-calendar
 import { calendarStanding, mailStanding } from '@renderer/features/connections/connection-health'
 import { showConnectionRefused } from '@renderer/features/connections/connection-refused'
 import { HealthDot } from '@renderer/features/connections/health-dot'
+import { messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import { calendarRefusedNotice, type CalendarConnection } from '@shared/calendar'
 import type { FileSource } from '@shared/files'
+import { defineMessages, localized } from '@shared/i18n'
+import { PLACES } from '@shared/places'
 import { CONNECTION_FAMILIES } from '@shared/workspace'
 import { mailRefusedNotice, type AccountConnectionState, type MailAccount } from '@shared/models'
 
@@ -35,6 +38,43 @@ import {
   type ConnectionGroup
 } from './connection-groups'
 import { removalWords } from './connection-removal'
+
+const MESSAGES = defineMessages({
+  failed: { en: 'It didn’t work.', it: 'Non è andata.', de: 'Das hat nicht geklappt.' },
+  disconnectCalendar: {
+    en: (label: string) => `Disconnect the calendar of ${label}?`,
+    it: (label: string) => `Scollegare il calendario di ${label}?`,
+    de: (label: string) => `Kalender von ${label} trennen?`
+  },
+  disconnect: { en: 'Disconnect', it: 'Scollega', de: 'Trennen' },
+  none: {
+    en: 'No connections yet.',
+    it: 'Nessuna connessione, per ora.',
+    de: 'Noch keine Verbindungen.'
+  },
+  reconnect: { en: 'Reconnect', it: 'Ricollega', de: 'Erneut verbinden' },
+  remove: { en: 'Remove', it: 'Togli', de: 'Entfernen' },
+  notConnected: { en: 'not connected', it: 'non collegato', de: 'nicht verbunden' },
+  connect: { en: 'Connect', it: 'Collega', de: 'Verbinden' },
+  filesLine: {
+    en: 'The computer and connected volumes, read-only',
+    it: 'Il computer e i volumi collegati, in sola lettura',
+    de: 'Der Computer und angeschlossene Laufwerke, nur lesend'
+  },
+  yourFolders: { en: 'your folders', it: 'le tue cartelle', de: 'Ihre Ordner' },
+  networkVolume: { en: 'network volume', it: 'volume di rete', de: 'Netzlaufwerk' },
+  volume: { en: 'volume', it: 'volume', de: 'Laufwerk' },
+  notMounted: {
+    en: 'network volume, not mounted now',
+    it: 'volume di rete, non montato ora',
+    de: 'Netzlaufwerk, derzeit nicht eingebunden'
+  },
+  comingSoon: {
+    en: (drives: string) => `Coming soon: ${drives}`,
+    it: (drives: string) => `In arrivo: ${drives}`,
+    de: (drives: string) => `Demnächst: ${drives}`
+  }
+})
 
 const ACCESS_ICONS: Readonly<Record<AccessKind, LucideIcon>> = {
   google: Mail,
@@ -82,6 +122,9 @@ export function ConnectionsList({
   connectCalendarOf?: string | null
   onConnectCalendarAsked?: () => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
+  const accessLabels = useMessages(ACCESS_LABELS)
   const { connections, setConnections } = useCalendarConnections()
   const { confirm, dialog } = useConfirmDialog()
   const [working, setWorking] = useState<string | null>(null)
@@ -101,7 +144,7 @@ export function ConnectionsList({
     } catch (error) {
       setProblems((current) => ({
         ...current,
-        [key]: error instanceof Error ? error.message : 'Non è andata.'
+        [key]: error instanceof Error ? error.message : messagesNow(MESSAGES).failed
       }))
     } finally {
       setWorking(null)
@@ -149,9 +192,9 @@ export function ConnectionsList({
     calendar: CalendarConnection
   ): Promise<void> => {
     const confirmed = await confirm({
-      title: `Scollegare il calendario di ${calendar.label}?`,
+      title: messagesNow(MESSAGES).disconnectCalendar(calendar.label),
       ...removalWords({ family: 'calendario', aiOn }),
-      confirmLabel: 'Scollega',
+      confirmLabel: messagesNow(MESSAGES).disconnect,
       destructive: true
     })
 
@@ -164,7 +207,7 @@ export function ConnectionsList({
     <div className="flex flex-col gap-2">
       {groups.length === 0 && (
         <p className="text-muted-foreground rounded-[10px] border border-dashed px-4 py-3 text-[12.5px]">
-          Nessuna connessione, per ora.
+          {m.none}
         </p>
       )}
       {groups.map((group) => {
@@ -188,7 +231,7 @@ export function ConnectionsList({
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] font-semibold">{group.title}</span>
                 <span className="text-muted-foreground block truncate text-[11.5px]">
-                  {ACCESS_LABELS[group.kind]}
+                  {accessLabels[group.kind]}
                   {group.mail && group.mail.displayName !== group.mail.email
                     ? ` · ${group.mail.displayName}`
                     : ''}
@@ -209,7 +252,7 @@ export function ConnectionsList({
                   }
                 }}
               >
-                Scollega
+                {m.disconnect}
               </Button>
             </header>
 
@@ -217,7 +260,7 @@ export function ConnectionsList({
               {group.mail && status && (
                 <li className="flex min-w-0 items-center gap-2">
                   <Mail className="text-faint-foreground size-3.5 shrink-0" />
-                  <span className="font-medium">Posta</span>
+                  <span className="font-medium">{places.mail}</span>
                   <HealthDot health={status.health} className="size-[6px]" />
                   <span
                     className={cn(
@@ -243,7 +286,7 @@ export function ConnectionsList({
                         )
                       }
                     >
-                      Ricollega
+                      {m.reconnect}
                     </Button>
                   )}
                 </li>
@@ -253,7 +296,7 @@ export function ConnectionsList({
                 return (
                   <li key={calendar.id} className="flex min-w-0 items-center gap-2">
                     <CalendarDays className="text-faint-foreground size-3.5 shrink-0" />
-                    <span className="font-medium">Calendario</span>
+                    <span className="font-medium">{places.calendar}</span>
                     <HealthDot health={standing.health} className="size-[6px]" />
                     <span
                       className={cn(
@@ -281,7 +324,7 @@ export function ConnectionsList({
                             : void run(group.key, () => window.calendarApi.reconnect(calendar.id))
                         }
                       >
-                        Ricollega
+                        {m.reconnect}
                       </Button>
                     )}
                     {group.mail && (
@@ -293,7 +336,7 @@ export function ConnectionsList({
                         disabled={busy}
                         onClick={() => void disconnectCalendar(group, calendar)}
                       >
-                        Togli
+                        {m.remove}
                       </Button>
                     )}
                   </li>
@@ -302,9 +345,9 @@ export function ConnectionsList({
               {canAddCalendar(group) && (
                 <li className="flex min-w-0 items-center gap-2">
                   <CalendarDays className="text-faint-foreground size-3.5 shrink-0" />
-                  <span className="font-medium">Calendario</span>
+                  <span className="font-medium">{places.calendar}</span>
                   <span className="text-muted-foreground min-w-0 flex-1 truncate">
-                    non collegato
+                    {m.notConnected}
                   </span>
                   <Button
                     type="button"
@@ -314,7 +357,7 @@ export function ConnectionsList({
                     disabled={busy || !providerReady(group)}
                     onClick={() => connectCalendar(group)}
                   >
-                    Collega
+                    {m.connect}
                   </Button>
                 </li>
               )}
@@ -337,8 +380,13 @@ export function ConnectionsList({
  * come. Said without the Segretario, who may be off.
  */
 function FileSourcesCard(): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
   const [sources, setSources] = useState<ReadonlyArray<FileSource> | null>(null)
-  const drives = CONNECTION_FAMILIES.find((family) => family.id === 'files')?.providers.slice(2)
+  const { language } = useLanguage()
+  const drives = CONNECTION_FAMILIES.find((family) => family.id === 'files')
+    ?.providers.slice(2)
+    .map((drive) => localized(drive, language))
 
   useEffect(() => {
     let current = true
@@ -353,16 +401,14 @@ function FileSourcesCard(): React.JSX.Element {
 
   return (
     <section
-      aria-label="File"
+      aria-label={places.files}
       className="bg-card flex flex-col gap-2 rounded-[10px] border px-4 py-3"
     >
       <header className="flex items-center gap-2.5">
         <Files className="text-faint-foreground size-4 shrink-0" />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-semibold">File</span>
-          <span className="text-muted-foreground block truncate text-[11.5px]">
-            Il computer e i volumi collegati, in sola lettura
-          </span>
+          <span className="block truncate text-[13px] font-semibold">{places.files}</span>
+          <span className="text-muted-foreground block truncate text-[11.5px]">{m.filesLine}</span>
         </span>
       </header>
       <ul className="flex flex-col gap-1 pl-6.5 text-[12px]">
@@ -375,12 +421,12 @@ function FileSourcesCard(): React.JSX.Element {
               <span className="font-medium">{source.label}</span>
               <span className="text-muted-foreground min-w-0 flex-1 truncate" title={source.path}>
                 {source.kind === 'computer'
-                  ? 'le tue cartelle'
+                  ? m.yourFolders
                   : source.mounted
                     ? source.kind === 'rete'
-                      ? 'volume di rete'
-                      : 'volume'
-                    : 'volume di rete, non montato ora'}
+                      ? m.networkVolume
+                      : m.volume
+                    : m.notMounted}
               </span>
             </li>
           )
@@ -388,7 +434,7 @@ function FileSourcesCard(): React.JSX.Element {
         {drives && drives.length > 0 && (
           <li className="text-muted-foreground flex min-w-0 items-center gap-2">
             <Cloud className="text-faint-foreground size-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">In arrivo: {drives.join(', ')}</span>
+            <span className="min-w-0 flex-1 truncate">{m.comingSoon(drives.join(', '))}</span>
           </li>
         )}
       </ul>

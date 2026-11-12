@@ -14,6 +14,17 @@
 import type { Attachment, ParsedMail } from 'mailparser'
 import { simpleParser } from 'mailparser'
 
+import { messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
+
+const MESSAGES = defineMessages({
+  unnamedAttachment: {
+    en: (position: number) => `attachment-${position}`,
+    it: (position: number) => `allegato-${position}`,
+    de: (position: number) => `Anhang-${position}`
+  }
+})
+
 /**
  * Options every full-message parse in the app shares.
  *
@@ -60,7 +71,7 @@ export interface ClassifiedAttachment {
  * disk.
  */
 export function attachmentFileName(attachment: Attachment, index: number): string {
-  return attachment.filename || `allegato-${index + 1}`
+  return attachment.filename || messages(MESSAGES).unnamedAttachment(index + 1)
 }
 
 export interface PartitionedMessageAttachments {

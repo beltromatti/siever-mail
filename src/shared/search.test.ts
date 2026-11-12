@@ -44,15 +44,22 @@ describe('parseSearchQuery', () => {
     ])
   })
 
-  it('scopes a term to the sender with da: / from: / mittente:', () => {
-    for (const prefix of ['da', 'from', 'mittente']) {
+  it('scopes a term to the sender in every language at once', () => {
+    for (const prefix of ['da', 'from', 'von', 'mittente', 'sender', 'absender', 'From', 'VON']) {
       expect(flatten(`${prefix}:rossi`)).toEqual([[{ value: 'rossi', scope: 'from' }]])
     }
   })
 
-  it('scopes recipients and subject', () => {
-    expect(flatten('a:bianchi')).toEqual([[{ value: 'bianchi', scope: 'to' }]])
-    expect(flatten('oggetto:sopralluogo')).toEqual([[{ value: 'sopralluogo', scope: 'subject' }]])
+  it('scopes recipients and subject in every language at once', () => {
+    for (const prefix of ['a', 'to', 'an', 'destinatario', 'recipient', 'empfänger']) {
+      expect(flatten(`${prefix}:bianchi`)).toEqual([[{ value: 'bianchi', scope: 'to' }]])
+    }
+
+    for (const prefix of ['oggetto', 'subject', 'betreff', 'Betreff']) {
+      expect(flatten(`${prefix}:sopralluogo`)).toEqual([
+        [{ value: 'sopralluogo', scope: 'subject' }]
+      ])
+    }
   })
 
   it('accepts a quoted phrase after a field prefix', () => {

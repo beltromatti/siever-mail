@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 
 import { DAVClient, type DAVCalendar, type DAVObject } from 'tsdav'
 
+import { currentLanguage, messages } from '@main/i18n'
 import type { CalendarResponse, EventOrigin } from '@shared/calendar'
+import { defineMessages, type Language } from '@shared/i18n'
 
 import type {
   CalendarProvider,
@@ -81,7 +83,7 @@ function privileges(calendar: DAVCalendar): string[] {
 function nameOf(calendar: DAVCalendar): string {
   return typeof calendar.displayName === 'string' && calendar.displayName.trim()
     ? calendar.displayName.trim()
-    : 'Calendario'
+    : messages(MESSAGES).calendar
 }
 
 /** A server's colour (`#RRGGBB`, often `#RRGGBBAA`) as the app keeps it. */
@@ -105,12 +107,91 @@ export function davFeatures(header: string | null): Set<string> {
   )
 }
 
-const UNSCHEDULED_GUESTS =
-  'Questo server di calendario non manda gli inviti: un evento con invitati mettilo in un calendario che li manda (Google, Microsoft, iCloud), o crealo senza invitati.'
-const UNSCHEDULED_CHANGE =
-  'Questo server di calendario non avvisa gli invitati: un evento con invitati si cambia, o si elimina, dal programma che li avvisa.'
-const UNSCHEDULED_ANSWER =
-  'Questo server di calendario non avvisa l’organizzatore: rispondi dall’invito che hai ricevuto per mail.'
+/** The languages a server is asked to answer in: the interface's first, then English. */
+const ACCEPT_LANGUAGE: Readonly<Record<Language, string>> = {
+  en: 'en-US,en;q=0.9',
+  it: 'it-IT,it;q=0.9,en;q=0.8',
+  de: 'de-DE,de;q=0.9,en;q=0.8'
+}
+
+const MESSAGES = defineMessages({
+  calendar: { en: 'Calendar', it: 'Calendario', de: 'Kalender' },
+  unscheduledGuests: {
+    en: 'This calendar server doesn’t send invitations: put an event with invitees in a calendar that sends them (Google, Microsoft, iCloud), or create it without invitees.',
+    it: 'Questo server di calendario non manda gli inviti: un evento con invitati mettilo in un calendario che li manda (Google, Microsoft, iCloud), o crealo senza invitati.',
+    de: 'Dieser Kalenderserver versendet keine Einladungen: Legen Sie einen Termin mit Eingeladenen in einem Kalender an, der sie versendet (Google, Microsoft, iCloud), oder erstellen Sie ihn ohne Eingeladene.'
+  },
+  unscheduledChange: {
+    en: 'This calendar server doesn’t notify invitees: an event with invitees is changed, or deleted, from the program that notifies them.',
+    it: 'Questo server di calendario non avvisa gli invitati: un evento con invitati si cambia, o si elimina, dal programma che li avvisa.',
+    de: 'Dieser Kalenderserver benachrichtigt keine Eingeladenen: Ein Termin mit Eingeladenen wird in dem Programm geändert oder gelöscht, das sie benachrichtigt.'
+  },
+  unscheduledAnswer: {
+    en: 'This calendar server doesn’t notify the organizer: answer from the invitation you received by email.',
+    it: 'Questo server di calendario non avvisa l’organizzatore: rispondi dall’invito che hai ricevuto per mail.',
+    de: 'Dieser Kalenderserver benachrichtigt den Organisator nicht: Antworten Sie über die Einladung, die Sie per E-Mail erhalten haben.'
+  },
+  accessRefused: {
+    en: 'The calendar’s server no longer accepts the sign-in: reconnect the calendar.',
+    it: 'Il server del calendario non accetta più l’accesso: ricollega il calendario.',
+    de: 'Der Server des Kalenders akzeptiert die Anmeldung nicht mehr: Verbinden Sie den Kalender erneut.'
+  },
+  notAllowed: {
+    en: (what: string) => `${what}: the server doesn’t allow it.`,
+    it: (what: string) => `${what}: il server non lo permette.`,
+    de: (what: string) => `${what}: Der Server erlaubt es nicht.`
+  },
+  serverAnswered: {
+    en: (what: string, status: number) => `${what}: the server answered ${status}.`,
+    it: (what: string, status: number) => `${what}: il server ha risposto ${status}.`,
+    de: (what: string, status: number) => `${what}: Der Server hat mit ${status} geantwortet.`
+  },
+  credentialsRefused: {
+    en: 'The calendar’s server didn’t accept the username and password.',
+    it: 'Il server del calendario non ha accettato nome utente e password.',
+    de: 'Der Server des Kalenders hat Benutzername und Passwort nicht akzeptiert.'
+  },
+  noLongerAllowed: {
+    en: 'The server no longer gives access to these calendars.',
+    it: 'Il server non dà più l’accesso a questi calendari.',
+    de: 'Der Server gewährt keinen Zugriff mehr auf diese Kalender.'
+  },
+  calendarsMoved: {
+    en: 'The calendars are no longer at that server address.',
+    it: 'I calendari non sono più a quell’indirizzo del server.',
+    de: 'Die Kalender sind nicht mehr unter dieser Serveradresse.'
+  },
+  schedulingUnknown: {
+    en: 'The calendar’s server didn’t say whether it sends invitations',
+    it: 'Il server del calendario non ha detto se manda gli inviti',
+    de: 'Der Server des Kalenders hat nicht mitgeteilt, ob er Einladungen versendet'
+  },
+  calendarGone: {
+    en: 'This calendar is no longer on the server.',
+    it: 'Questo calendario non è più sul server.',
+    de: 'Dieser Kalender ist nicht mehr auf dem Server.'
+  },
+  eventGone: {
+    en: 'The event is no longer on the server.',
+    it: 'L’evento non c’è più sul server.',
+    de: 'Der Termin ist nicht mehr auf dem Server.'
+  },
+  eventNotSaved: {
+    en: 'The event wasn’t saved',
+    it: 'L’evento non è stato salvato',
+    de: 'Der Termin wurde nicht gespeichert'
+  },
+  eventNotCreated: {
+    en: 'The event wasn’t created',
+    it: 'L’evento non è stato creato',
+    de: 'Der Termin wurde nicht erstellt'
+  },
+  eventNotDeleted: {
+    en: 'The event wasn’t deleted',
+    it: 'L’evento non è stato eliminato',
+    de: 'Der Termin wurde nicht gelöscht'
+  }
+})
 
 /**
  * A request about one calendar or one event that the server answered with
@@ -122,12 +203,13 @@ async function davError(
   response: Pick<Response, 'status'>,
   what: string
 ): Promise<CalendarRequestError> {
+  const m = messages(MESSAGES)
   return new CalendarRequestError(
     response.status === 401
-      ? 'Il server del calendario non accetta più l’accesso: ricollega il calendario.'
+      ? m.accessRefused
       : response.status === 403
-        ? `${what}: il server non lo permette.`
-        : `${what}: il server ha risposto ${response.status}.`,
+        ? m.notAllowed(what)
+        : m.serverAnswered(what, response.status),
     { status: response.status }
   )
 }
@@ -159,19 +241,20 @@ function accountError(error: unknown): unknown {
 
   switch (status) {
     case 401:
-      return new CalendarRequestError(
-        'Il server del calendario non ha accettato nome utente e password.',
-        { status, refusal: 'accesso', cause: error }
-      )
+      return new CalendarRequestError(messages(MESSAGES).credentialsRefused, {
+        status,
+        refusal: 'accesso',
+        cause: error
+      })
     case 403:
-      return new CalendarRequestError('Il server non dà più l’accesso a questi calendari.', {
+      return new CalendarRequestError(messages(MESSAGES).noLongerAllowed, {
         status,
         refusal: 'accesso',
         cause: error
       })
     case 404:
     case 410:
-      return new CalendarRequestError('I calendari non sono più a quell’indirizzo del server.', {
+      return new CalendarRequestError(messages(MESSAGES).calendarsMoved, {
         status,
         refusal: 'sparito',
         cause: error
@@ -218,9 +301,10 @@ export class CalDavCalendarProvider implements CalendarProvider {
           authMethod: 'Basic',
           defaultAccountType: 'caldav',
           fetch: this.options.fetch as typeof globalThis.fetch,
-          // A concrete language: iCloud answers 500 to the "*" Node sends; and no answer from the browser's cache.
+          // A concrete language — the interface's —: iCloud answers 500 to the "*" Node sends; and no
+          // answer from the browser's cache.
           fetchOptions: {
-            headers: { 'Accept-Language': 'it-IT,it;q=0.9,en;q=0.8' },
+            headers: { 'Accept-Language': ACCEPT_LANGUAGE[currentLanguage()] },
             cache: 'no-store'
           }
         })
@@ -299,7 +383,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
       [401, 403, 429].includes(answer.status) ||
       (answer.status >= 500 && answer.status !== 501)
     ) {
-      throw await davError(answer, 'Il server del calendario non ha detto se manda gli inviti')
+      throw await davError(answer, messages(MESSAGES).schedulingUnknown)
     }
 
     // A server that does not answer OPTIONS does not say it schedules.
@@ -312,7 +396,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
       (await this.fetchCalendars()).find((candidate) => candidate.url === calendarId)
 
     if (!calendar) {
-      throw new Error('Questo calendario non è più sul server.')
+      throw new Error(messages(MESSAGES).calendarGone)
     }
 
     return calendar
@@ -509,7 +593,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
     })
 
     if (!object || typeof object.data !== 'string') {
-      throw new Error('L’evento non c’è più sul server.')
+      throw new Error(messages(MESSAGES).eventGone)
     }
 
     const stored = { url: object.url, etag: object.etag ?? null, data: object.data }
@@ -556,7 +640,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
       }
 
       if (!response.ok) {
-        throw await davError(response, 'L’evento non è stato salvato')
+        throw await davError(response, messages(MESSAGES).eventNotSaved)
       }
 
       return this.written(calendarId, url, response, data)
@@ -571,7 +655,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
     const occurrence = occurrenceIn(object.data, recurrenceId, await this.addresses())
 
     if (!occurrence) {
-      throw new Error('L’evento non c’è più sul server.')
+      throw new Error(messages(MESSAGES).eventGone)
     }
 
     return this.eventOf(calendarId, object.url, occurrence)
@@ -588,7 +672,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
     origin: EventOrigin | null
   ): Promise<ProviderEvent> {
     if (event.attendees.length > 0 && !(await this.schedules(calendarId))) {
-      throw new Error(UNSCHEDULED_GUESTS)
+      throw new Error(messages(MESSAGES).unscheduledGuests)
     }
 
     const client = await this.dav()
@@ -601,7 +685,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
     })
 
     if (!response.ok) {
-      throw await davError(response, 'L’evento non è stato creato')
+      throw await davError(response, messages(MESSAGES).eventNotCreated)
     }
 
     const url = new URL(
@@ -619,7 +703,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
     fields: ReadonlySet<EventField>
   ): Promise<ProviderEvent> {
     if (notify && !(await this.schedules(calendarId))) {
-      throw new Error(UNSCHEDULED_CHANGE)
+      throw new Error(messages(MESSAGES).unscheduledChange)
     }
 
     const { url, recurrenceId } = splitEventId(eventId)
@@ -633,7 +717,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
 
   async remove(calendarId: string, eventId: string, notify: boolean): Promise<void> {
     if (notify && !(await this.schedules(calendarId))) {
-      throw new Error(UNSCHEDULED_CHANGE)
+      throw new Error(messages(MESSAGES).unscheduledChange)
     }
 
     const { url, recurrenceId } = splitEventId(eventId)
@@ -658,7 +742,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
       }
 
       if (!response.ok && response.status !== 404) {
-        throw await davError(response, 'L’evento non è stato eliminato')
+        throw await davError(response, messages(MESSAGES).eventNotDeleted)
       }
 
       await this.options.store.remove([url])
@@ -673,7 +757,7 @@ export class CalDavCalendarProvider implements CalendarProvider {
     series: boolean
   ): Promise<ProviderEvent> {
     if (!(await this.schedules(calendarId))) {
-      throw new Error(UNSCHEDULED_ANSWER)
+      throw new Error(messages(MESSAGES).unscheduledAnswer)
     }
 
     const { url, recurrenceId } = splitEventId(eventId)

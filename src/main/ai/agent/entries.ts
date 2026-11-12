@@ -1,6 +1,8 @@
+import { defineMessages } from '@shared/i18n'
 import { linkedHandles } from '@shared/segretario-links'
 import type { ActivityEntry, HandleLink } from '@shared/segretario'
 
+import { messages } from '../../i18n'
 import type { StoredEvent } from '../ai-store'
 import type {
   ApprovalPayload,
@@ -11,6 +13,11 @@ import type {
   UserPayload
 } from './conversation'
 import type { HandleRecord, HandleRegistry } from './handles'
+
+const MESSAGES = defineMessages({
+  /** A request with no words to name it by, until it has its title. */
+  newWork: { en: 'New task', it: 'Nuovo lavoro', de: 'Neue Aufgabe' }
+})
 
 /** The names an event gave, as the page links them. */
 export function handleLinks(records: ReadonlyArray<HandleRecord> | undefined): HandleLink[] {
@@ -139,5 +146,5 @@ export function entryOf(event: StoredEvent): ActivityEntry | null {
 /** A first line of a request, as an activity's title until it has one. */
 export function firstLine(text: string): string {
   const line = text.trim().split('\n')[0] ?? ''
-  return line.length > 60 ? `${line.slice(0, 57)}…` : line || 'Nuovo lavoro'
+  return line.length > 60 ? `${line.slice(0, 57)}…` : line || messages(MESSAGES).newWork
 }

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 
+import { messages } from '../../i18n'
 import { placeholders, type Sql } from '../sql'
+import { REFUSALS } from './registry.messages'
 import {
   RegistryRefusal,
   type Actor,
@@ -148,11 +150,19 @@ export class ProposalStore {
     const record = await this.get(id)
 
     if (!record) {
-      throw new RegistryRefusal('Questa proposta non c’è più.')
+      throw new RegistryRefusal(
+        'Questa proposta non c’è più.',
+        undefined,
+        messages(REFUSALS).proposalGone
+      )
     }
 
     if (changed === 0 && record.status !== status) {
-      throw new RegistryRefusal('Questa proposta è già stata decisa.', record)
+      throw new RegistryRefusal(
+        'Questa proposta è già stata decisa.',
+        record,
+        messages(REFUSALS).proposalDecided
+      )
     }
 
     return record

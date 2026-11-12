@@ -6,26 +6,135 @@ import type { MessageListViewProps } from '@renderer/features/mail/message-list-
 import { MessageTable } from '@renderer/features/mail/message-table'
 import { ProjectBanner } from '@renderer/features/segretario/project-banner'
 import { SearchBanner } from '@renderer/features/segretario/search-banner'
+import { useLanguage, useMessages } from '@renderer/lib/i18n'
 import { formatCount } from '@renderer/lib/utils'
 import { folderRoleLabel, segretarioProjectPath } from '@shared/folders'
+import { defineMessages } from '@shared/i18n'
 import type { Commitment } from '@shared/segretario'
 
 import type { MailApp } from './use-mail-app'
 
-/**
- * Where a search that found nothing looked, in so many words — the answer
- * to "is that all, or were there more to load?".
- */
-function searchedScopeLine(count: number, viewLabel: string, withServer: boolean): string {
-  const where =
-    count === 1
-      ? `nell'unico messaggio di «${viewLabel}»`
-      : `in tutti i ${count.toLocaleString('it-IT')} messaggi di «${viewLabel}»`
-
-  return withServer
-    ? `Cercato ${where}: mittente, destinatari, oggetto e testo.`
-    : `Cercato ${where} scaricati su questo computer: la ricerca nel testo sul server non è riuscita.`
-}
+const MESSAGES = defineMessages({
+  messageOne: { en: 'message', it: 'messaggio', de: 'Nachricht' },
+  messageOther: { en: 'messages', it: 'messaggi', de: 'Nachrichten' },
+  unreadOne: { en: 'unread message', it: 'messaggio non letto', de: 'ungelesene Nachricht' },
+  unreadOther: { en: 'unread messages', it: 'messaggi non letti', de: 'ungelesene Nachrichten' },
+  flaggedOne: { en: 'flagged message', it: 'messaggio contrassegnato', de: 'markierte Nachricht' },
+  flaggedOther: {
+    en: 'flagged messages',
+    it: 'messaggi contrassegnati',
+    de: 'markierte Nachrichten'
+  },
+  activeOne: { en: 'active message', it: 'messaggio attivo', de: 'aktive Nachricht' },
+  activeOther: { en: 'active messages', it: 'messaggi attivi', de: 'aktive Nachrichten' },
+  resultOne: { en: 'result', it: 'risultato', de: 'Ergebnis' },
+  resultOther: { en: 'results', it: 'risultati', de: 'Ergebnisse' },
+  searchingText: {
+    en: ' · also searching the text…',
+    it: ' · cerco anche nel testo…',
+    de: ' · durchsuche auch den Text…'
+  },
+  searchingFor: {
+    en: (query: string) => `Searching for “${query}”…`,
+    it: (query: string) => `Cerco «${query}»…`,
+    de: (query: string) => `Suche nach „${query}“…`
+  },
+  searchingServer: {
+    en: (view: string) =>
+      `Nothing among the senders, recipients, subjects and previews of “${view}”: searching the full text of the messages on the server.`,
+    it: (view: string) =>
+      `Nessun riscontro tra mittenti, destinatari, oggetti e anteprime di «${view}»: sto cercando nel testo completo dei messaggi sul server.`,
+    de: (view: string) =>
+      `Keine Treffer bei Absendern, Empfängern, Betreffzeilen und Vorschauen in „${view}“: Ich durchsuche den vollständigen Text der Nachrichten auf dem Server.`
+  },
+  notFound: {
+    en: (query: string) => `No messages found for “${query}”`,
+    it: (query: string) => `Nessun messaggio trovato per «${query}»`,
+    de: (query: string) => `Keine Nachrichten für „${query}“ gefunden`
+  },
+  /**
+   * Where a search that found nothing looked, in so many words — the answer
+   * to "is that all, or were there more to load?".
+   */
+  searched: {
+    en: (count: number, total: string, view: string, withServer: boolean) => {
+      const where =
+        count === 1 ? `the only message in “${view}”` : `all ${total} messages in “${view}”`
+      return withServer
+        ? `Searched ${where}: sender, recipients, subject and text.`
+        : `Searched ${where} downloaded to this computer: searching the text on the server didn’t work.`
+    },
+    it: (count: number, total: string, view: string, withServer: boolean) => {
+      const where =
+        count === 1
+          ? `nell'unico messaggio di «${view}»`
+          : `in tutti i ${total} messaggi di «${view}»`
+      return withServer
+        ? `Cercato ${where}: mittente, destinatari, oggetto e testo.`
+        : `Cercato ${where} scaricati su questo computer: la ricerca nel testo sul server non è riuscita.`
+    },
+    de: (count: number, total: string, view: string, withServer: boolean) => {
+      const where =
+        count === 1
+          ? `Die einzige Nachricht in „${view}“`
+          : `Alle ${total} Nachrichten in „${view}“`
+      return withServer
+        ? `${where} durchsucht: Absender, Empfänger, Betreff und Text.`
+        : `${where} auf diesem Computer durchsucht: Die Suche im Text auf dem Server ist fehlgeschlagen.`
+    }
+  },
+  onlyUnread: {
+    en: 'Only among unread messages: the filter at the top is on.',
+    it: 'Solo tra i messaggi non letti: il filtro in alto è attivo.',
+    de: 'Nur unter ungelesenen Nachrichten: Der Filter oben ist aktiv.'
+  },
+  onlyFlagged: {
+    en: 'Only among flagged messages: the filter at the top is on.',
+    it: 'Solo tra i messaggi contrassegnati: il filtro in alto è attivo.',
+    de: 'Nur unter markierten Nachrichten: Der Filter oben ist aktiv.'
+  },
+  onlyActive: {
+    en: 'Only among active messages: the filter at the top is on.',
+    it: 'Solo tra i messaggi attivi: il filtro in alto è attivo.',
+    de: 'Nur unter aktiven Nachrichten: Der Filter oben ist aktiv.'
+  },
+  notYetSynced: {
+    en: (count: number, total: string) =>
+      count === 1
+        ? 'One message of the folder is still on its way from the server and is not included.'
+        : `${total} messages of the folder are still on their way from the server and are not included.`,
+    it: (count: number, total: string) =>
+      count === 1
+        ? 'Un messaggio della cartella è ancora in arrivo dal server e non è compreso.'
+        : `${total} messaggi della cartella sono ancora in arrivo dal server e non sono compresi.`,
+    de: (count: number, total: string) =>
+      count === 1
+        ? 'Eine Nachricht des Ordners ist noch unterwegs vom Server und nicht enthalten.'
+        : `${total} Nachrichten des Ordners sind noch unterwegs vom Server und nicht enthalten.`
+  },
+  exitSearch: { en: 'Exit search', it: 'Esci dalla ricerca', de: 'Suche beenden' },
+  noneUnread: {
+    en: (view: string) => `No unread messages in “${view}”`,
+    it: (view: string) => `Nessun messaggio non letto in «${view}»`,
+    de: (view: string) => `Keine ungelesene Nachricht in „${view}“`
+  },
+  noneFlagged: {
+    en: (view: string) => `No flagged messages in “${view}”`,
+    it: (view: string) => `Nessun messaggio contrassegnato in «${view}»`,
+    de: (view: string) => `Keine markierte Nachricht in „${view}“`
+  },
+  noneActive: {
+    en: (view: string) => `No active messages in “${view}”`,
+    it: (view: string) => `Nessun messaggio attivo in «${view}»`,
+    de: (view: string) => `Keine aktive Nachricht in „${view}“`
+  },
+  showAll: { en: 'Show all', it: 'Mostra tutti', de: 'Alle anzeigen' },
+  noMessagesIn: {
+    en: (view: string) => `No messages in “${view}”`,
+    it: (view: string) => `Nessun messaggio in «${view}»`,
+    de: (view: string) => `Keine Nachrichten in „${view}“`
+  }
+})
 
 /**
  * The list of the view open, as the layout preference draws it — the rows
@@ -44,11 +153,13 @@ export function MailMessageList({
   onRowActivated?: () => void
   /** The Segretario's column takes the window's right edge. */
   segretarioOpen: boolean
-  /** The Segretario can work: a project's "Il punto" can be written again. */
+  /** The Segretario can work: a project's "Where it stands" can be written again. */
   canWrite: boolean
   /** Asks the Segretario, in its panel, for a reminder to whoever is awaited. */
   onRemind: (commitment: Commitment) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const { language, formatLocale } = useLanguage()
   const {
     aiOn,
     uiPreferences,
@@ -107,15 +218,22 @@ export function MailMessageList({
   } = mail
   const filterNouns =
     messageFilter === 'unread'
-      ? (['messaggio non letto', 'messaggi non letti'] as const)
+      ? ([m.unreadOne, m.unreadOther] as const)
       : messageFilter === 'flagged'
-        ? (['messaggio contrassegnato', 'messaggi contrassegnati'] as const)
+        ? ([m.flaggedOne, m.flaggedOther] as const)
         : messageFilter === 'active'
-          ? (['messaggio attivo', 'messaggi attivi'] as const)
-          : (['messaggio', 'messaggi'] as const)
+          ? ([m.activeOne, m.activeOther] as const)
+          : ([m.messageOne, m.messageOther] as const)
+  // What the filter at the top leaves out, said when the list comes out empty.
+  const filtered =
+    messageFilter === 'unread'
+      ? { onlyAmong: m.onlyUnread, none: m.noneUnread }
+      : messageFilter === 'flagged'
+        ? { onlyAmong: m.onlyFlagged, none: m.noneFlagged }
+        : { onlyAmong: m.onlyActive, none: m.noneActive }
   const listCountLabel = activeSearchQuery
-    ? formatCount(totalMessagesInFolder, 'risultato', 'risultati') +
-      (serverSearchStatus === 'searching' ? ' · cerco anche nel testo…' : '')
+    ? formatCount(totalMessagesInFolder, m.resultOne, m.resultOther) +
+      (serverSearchStatus === 'searching' ? m.searchingText : '')
     : formatCount(totalMessagesInFolder, filterNouns[0], filterNouns[1])
   const notYetSynced = Math.max(0, listCounts.serverCount - listCounts.cachedCount)
   const listEmptyState: MessageListEmptyState | null = loadingMessages
@@ -124,41 +242,34 @@ export function MailMessageList({
       ? serverSearchStatus === 'searching'
         ? {
             kind: 'search',
-            title: `Cerco «${activeSearchQuery}»…`,
-            lines: [
-              `Nessun riscontro tra mittenti, destinatari, oggetti e anteprime di «${currentViewLabel}»: sto cercando nel testo completo dei messaggi sul server.`
-            ]
+            title: m.searchingFor(activeSearchQuery),
+            lines: [m.searchingServer(currentViewLabel)]
           }
         : {
             kind: 'search',
-            title: `Nessun messaggio trovato per «${activeSearchQuery}»`,
+            title: m.notFound(activeSearchQuery),
             lines: [
-              searchedScopeLine(
+              m.searched(
                 listCounts.cachedCount,
+                listCounts.cachedCount.toLocaleString(formatLocale),
                 currentViewLabel,
                 serverSearchStatus === 'done'
               ),
-              ...(messageFilter !== 'all'
-                ? [`Solo tra i ${filterNouns[1]}: il filtro in alto è attivo.`]
-                : []),
+              ...(messageFilter !== 'all' ? [filtered.onlyAmong] : []),
               ...(notYetSynced > 0
-                ? [
-                    notYetSynced === 1
-                      ? 'Un messaggio della cartella è ancora in arrivo dal server e non è compreso.'
-                      : `${notYetSynced.toLocaleString('it-IT')} messaggi della cartella sono ancora in arrivo dal server e non sono compresi.`
-                  ]
+                ? [m.notYetSynced(notYetSynced, notYetSynced.toLocaleString(formatLocale))]
                 : [])
             ],
-            action: { label: 'Esci dalla ricerca', onClick: clearSearch }
+            action: { label: m.exitSearch, onClick: clearSearch }
           }
       : messageFilter !== 'all'
         ? {
             kind: 'filter',
-            title: `Nessun ${filterNouns[0]} in «${currentViewLabel}»`,
+            title: filtered.none(currentViewLabel),
             lines: [],
-            action: { label: 'Mostra tutti', onClick: () => setMessageFilter('all') }
+            action: { label: m.showAll, onClick: () => setMessageFilter('all') }
           }
-        : { kind: 'folder', title: `Nessun messaggio in «${currentViewLabel}»`, lines: [] }
+        : { kind: 'folder', title: m.noMessagesIn(currentViewLabel), lines: [] }
 
   const listViewProps: MessageListViewProps = {
     title: currentViewLabel,
@@ -190,7 +301,9 @@ export function MailMessageList({
     search,
     onSearchChange: setSearch,
     searchInputRef,
-    searchScopeLabel: currentUnifiedRole ? folderRoleLabel(currentUnifiedRole) : currentViewLabel,
+    searchScopeLabel: currentUnifiedRole
+      ? folderRoleLabel(currentUnifiedRole, language)
+      : currentViewLabel,
     filter: messageFilter,
     onFilterChange: setMessageFilter,
     showActiveFilter: aiOn,
@@ -239,8 +352,8 @@ export function MailMessageList({
       <p className="text-muted-foreground text-xs">{messagePanelLoaderText}</p>
     </div>
   ) : // The expanded reader turns the list into a 260-360px spine in both
-  // layouts, and a five-column table cannot live there: it kept Da, A and
-  // a sliver of Oggetto and dropped the date. The expanded view is meant to
+  // layouts, and a five-column table cannot live there: it kept From, To and
+  // a sliver of Subject and dropped the date. The expanded view is meant to
   // be the same screen whichever layout you came from, so it always uses
   // the stacked rows that were designed for a narrow column.
   uiPreferences.layoutMode === 'outlook' && !isMessageExpanded ? (

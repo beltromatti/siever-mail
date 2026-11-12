@@ -1,4 +1,5 @@
 import type { NotificationCenter } from '@main/notifications/center'
+import { defineMessages } from '@shared/i18n'
 import {
   setupReadingAccountIds,
   type ActivityStatus,
@@ -6,7 +7,75 @@ import {
   type OnboardingState
 } from '@shared/segretario'
 
+import { messages } from '../i18n'
 import { localDay } from './tools/day'
+
+/** What the notifications say, in the interface's language as they are made. */
+const MESSAGES = defineMessages({
+  waiting: {
+    en: 'The Segretario is waiting for your confirmation',
+    it: 'Il Segretario aspetta la tua conferma',
+    de: 'Der Segretario wartet auf Ihre Bestätigung'
+  },
+  inPanel: {
+    en: 'You’ll find it in its panel.',
+    it: 'La trovi nel suo pannello.',
+    de: 'Sie finden sie in seinem Panel.'
+  },
+  finished: {
+    en: 'The Segretario has finished',
+    it: 'Il Segretario ha finito',
+    de: 'Der Segretario ist fertig'
+  },
+  failed: {
+    en: 'The Segretario couldn’t do it',
+    it: 'Il Segretario non è riuscito',
+    de: 'Der Segretario hat es nicht geschafft'
+  },
+  answerInPanel: {
+    en: 'The answer is in its panel.',
+    it: 'La risposta è nel suo pannello.',
+    de: 'Die Antwort finden Sie in seinem Panel.'
+  },
+  retryInPanel: {
+    en: 'You can try again from its panel.',
+    it: 'Puoi riprovare dal suo pannello.',
+    de: 'Sie können es in seinem Panel erneut versuchen.'
+  },
+  panel: { en: 'In its panel.', it: 'Nel suo pannello.', de: 'In seinem Panel.' },
+  knewYou: {
+    en: 'The Segretario got to know you',
+    it: 'Il Segretario ti ha conosciuto',
+    de: 'Der Segretario hat Sie kennengelernt'
+  },
+  conoscimiStopped: {
+    en: 'Get to know me stopped',
+    it: 'Conoscimi si è fermato',
+    de: 'Lerne mich kennen wurde angehalten'
+  },
+  backToSetup: {
+    en: 'Go back to SIEVER Mail to continue setting up.',
+    it: 'Torna a SIEVER Mail per continuare la preparazione.',
+    de: 'Kehren Sie zu SIEVER Mail zurück, um die Einrichtung fortzusetzen.'
+  },
+  backToRetry: {
+    en: 'Go back to SIEVER Mail: you can try again, or go on without AI.',
+    it: 'Torna a SIEVER Mail: puoi riprovare, o continuare senza AI.',
+    de: 'Kehren Sie zu SIEVER Mail zurück: Sie können es erneut versuchen oder ohne KI fortfahren.'
+  },
+  ready: {
+    en: 'SIEVER Mail is ready',
+    it: 'SIEVER Mail è pronta',
+    de: 'SIEVER Mail ist bereit'
+  },
+  readyBody: {
+    en: 'The Segretario has caught up with your mail and your calendar: come in.',
+    it: 'Il Segretario è al passo con la tua posta e il tuo calendario: entra.',
+    de: 'Der Segretario ist mit Ihren E-Mails und Ihrem Kalender auf dem Laufenden: Los geht’s.'
+  },
+  yourDay: { en: 'Your day', it: 'La tua giornata', de: 'Ihr Tag' },
+  dayReady: { en: 'It’s ready in Today.', it: 'È pronta in Oggi.', de: 'Er steht in Heute bereit.' }
+})
 
 /** How long the line taken from the Segretario's words may be. */
 const LINE_MAX = 180
@@ -95,16 +164,14 @@ export class SegretarioNotifications {
       return
     }
 
+    const m = messages(MESSAGES)
     this.deps.center.notify({
       family: 'segretario',
       kind: 'segretario.waiting',
       key: `segretario:waiting:${activity.id}`,
-      title: 'Il Segretario aspetta la tua conferma',
+      title: m.waiting,
       body: activity.title,
-      concealed: {
-        title: 'Il Segretario aspetta la tua conferma',
-        body: 'La trovi nel suo pannello.'
-      },
+      concealed: { title: m.waiting, body: m.inPanel },
       target: { kind: 'activity', activityId: activity.id },
       when: 'away'
     })
@@ -132,22 +199,16 @@ export class SegretarioNotifications {
 
     const done = activity.status === 'done'
     const answer = done ? await this.deps.lastAnswer(activity.id) : null
+    const m = messages(MESSAGES)
 
     this.deps.center.notify({
       family: 'segretario',
       kind: 'segretario.finished',
       key: `segretario:done:${activity.id}`,
-      title: done ? 'Il Segretario ha finito' : 'Il Segretario non è riuscito',
+      title: done ? m.finished : m.failed,
       subtitle: activity.title,
-      body: answer
-        ? plainLine(answer)
-        : done
-          ? 'La risposta è nel suo pannello.'
-          : 'Puoi riprovare dal suo pannello.',
-      concealed: {
-        title: done ? 'Il Segretario ha finito' : 'Il Segretario non è riuscito',
-        body: 'Nel suo pannello.'
-      },
+      body: answer ? plainLine(answer) : done ? m.answerInPanel : m.retryInPanel,
+      concealed: { title: done ? m.finished : m.failed, body: m.panel },
       target: { kind: 'activity', activityId: activity.id },
       when: 'away'
     })
@@ -160,14 +221,13 @@ export class SegretarioNotifications {
     }
 
     const done = activity.status === 'done'
+    const m = messages(MESSAGES)
     this.deps.center.notify({
       family: 'segretario',
       kind: 'segretario.conoscimi',
       key: `segretario:conoscimi:${activity.id}`,
-      title: done ? 'Il Segretario ti ha conosciuto' : 'Conoscimi si è fermato',
-      body: done
-        ? 'Torna a SIEVER Mail per continuare la preparazione.'
-        : 'Torna a SIEVER Mail: puoi riprovare, o continuare senza AI.',
+      title: done ? m.knewYou : m.conoscimiStopped,
+      body: done ? m.backToSetup : m.backToRetry,
       target: { kind: 'window' },
       when: 'away'
     })
@@ -193,8 +253,8 @@ export class SegretarioNotifications {
       family: 'segretario',
       kind: 'segretario.setup-ready',
       key: `segretario:setup:${setup.startedAt}`,
-      title: 'SIEVER Mail è pronta',
-      body: 'Il Segretario è al passo con la tua posta e il tuo calendario: entra.',
+      title: messages(MESSAGES).ready,
+      body: messages(MESSAGES).readyBody,
       target: { kind: 'window' },
       when: 'away'
     })
@@ -221,9 +281,9 @@ export class SegretarioNotifications {
       family: 'segretario',
       kind: 'segretario.day',
       key: `segretario:day:${day}`,
-      title: 'La tua giornata',
+      title: messages(MESSAGES).yourDay,
       body: plainLine(letter, 240),
-      concealed: { title: 'La tua giornata', body: 'È pronta in Oggi.' },
+      concealed: { title: messages(MESSAGES).yourDay, body: messages(MESSAGES).dayReady },
       target: { kind: 'today' },
       when: 'away'
     })

@@ -2,32 +2,73 @@ import { useEffect, useState } from 'react'
 import { CalendarDays, Check, LoaderCircle } from 'lucide-react'
 
 import { Button } from '@renderer/components/ui/button'
+import { hourStyle, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarResponse, MessageInvitation } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import type { MessageRef } from '@shared/models'
 
+import { dateFormat } from './calendar-dates'
 import { RESPONSE_LABELS } from './event-line'
 
-const WHEN = new Intl.DateTimeFormat('it-IT', {
+const MESSAGES = defineMessages({
+  invitation: { en: 'Invitation', it: 'Invito', de: 'Einladung' },
+  failed: { en: 'That didn’t work.', it: 'Non è andata.', de: 'Das hat nicht geklappt.' },
+  cancelled: {
+    en: 'The organizer cancelled the event.',
+    it: 'L’evento è stato annullato dall’organizzatore.',
+    de: 'Der Termin wurde vom Organisator abgesagt.'
+  },
+  mailed: {
+    en: (organizer: string | null) => `Reply sent by email to ${organizer}.`,
+    it: (organizer: string | null) => `Risposta mandata per mail a ${organizer}.`,
+    de: (organizer: string | null) => `Antwort per E-Mail an ${organizer} gesendet.`
+  },
+  answerByMail: {
+    en: (organizer: string | null) =>
+      `No connected calendar answers for you: the reply goes by email to ${organizer}.`,
+    it: (organizer: string | null) =>
+      `Nessun calendario collegato risponde per te: la risposta va per mail a ${organizer}.`,
+    de: (organizer: string | null) =>
+      `Kein verbundener Kalender antwortet für Sie: Die Antwort geht per E-Mail an ${organizer}.`
+  },
+  notYetInCalendar: {
+    en: 'It’s not in the calendar yet: it shows at the next update.',
+    it: 'Non è ancora nel calendario: compare al prossimo aggiornamento.',
+    de: 'Er ist noch nicht im Kalender: Er erscheint bei der nächsten Aktualisierung.'
+  },
+  connectCalendar: {
+    en: 'Connect a calendar to see it here.',
+    it: 'Collega un calendario per vederlo qui.',
+    de: 'Verbinden Sie einen Kalender, um ihn hier zu sehen.'
+  }
+})
+
+/** The three answers, as the buttons say them. */
+const ANSWER_LABELS = defineMessages({
+  accepted: { en: 'Going', it: 'Partecipo', de: 'Zusagen' },
+  tentative: { en: 'Maybe', it: 'Forse', de: 'Vielleicht' },
+  declined: { en: 'Not going', it: 'Non partecipo', de: 'Absagen' }
+}) satisfies Record<Exclude<CalendarResponse, 'needsAction'>, unknown>
+
+/** Made when used: the hour is written as the region writes it now. */
+const WHEN = (): Intl.DateTimeFormatOptions => ({
   weekday: 'long',
   day: 'numeric',
   month: 'long',
-  hour: '2-digit',
+  hour: hourStyle(),
   minute: '2-digit'
 })
-const WHEN_DAY = new Intl.DateTimeFormat('it-IT', {
+const WHEN_DAY: Intl.DateTimeFormatOptions = {
   weekday: 'long',
   day: 'numeric',
   month: 'long'
-})
+}
 
-const ANSWERS: ReadonlyArray<{
-  response: Exclude<CalendarResponse, 'needsAction'>
-  label: string
-}> = [
-  { response: 'accepted', label: 'Partecipo' },
-  { response: 'tentative', label: 'Forse' },
-  { response: 'declined', label: 'Non partecipo' }
+const ANSWERS: ReadonlyArray<Exclude<CalendarResponse, 'needsAction'>> = [
+  'accepted',
+  'tentative',
+  'declined'
 ]
 
 /**
@@ -42,6 +83,8 @@ export function InvitationCard({
 }: {
   messageRef: MessageRef
 }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
+  const responses = useMessages(RESPONSE_LABELS)
   const [invitation, setInvitation] = useState<MessageInvitation | null>(null)
   const [answering, setAnswering] = useState<CalendarResponse | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
@@ -79,7 +122,7 @@ export function InvitationCard({
     setProblem(null)
     void send()
       .catch((error: unknown) =>
-        setProblem(error instanceof Error ? error.message : 'Non è andata.')
+        setProblem(error instanceof Error ? error.message : messagesNow(MESSAGES).failed)
       )
       .finally(() => setAnswering(null))
   }
@@ -87,11 +130,11 @@ export function InvitationCard({
   const event = invitation.event
   const timing = event ?? invitation.when
   const cancelled = invitation.method === 'CANCEL'
-  const title = event?.title ?? invitation.summary ?? 'Invito'
+  const title = event?.title ?? invitation.summary ?? m.invitation
 
   return (
     <section
-      aria-label="Invito"
+      aria-label={m.invitation}
       className="sheet mb-4 flex flex-col gap-2 rounded-[10px] px-3.5 py-3 text-[12.5px]"
     >
       <div className="flex items-center gap-2">
@@ -104,20 +147,20 @@ export function InvitationCard({
               event.myResponse === 'needsAction' ? 'text-urgent' : 'text-muted-foreground'
             )}
           >
-            {RESPONSE_LABELS[event.myResponse]}
+            {responses[event.myResponse]}
           </span>
         )}
       </div>
       {timing && (
         <p className="text-muted-foreground first-letter:uppercase">
           {timing.allDay
-            ? WHEN_DAY.format(new Date(`${timing.start}T00:00`))
-            : WHEN.format(new Date(timing.start))}
+            ? dateFormat(WHEN_DAY).format(new Date(`${timing.start}T00:00`))
+            : dateFormat(WHEN()).format(new Date(timing.start))}
           {timing.location && ` · ${timing.location}`}
         </p>
       )}
       {cancelled ? (
-        <p className="text-muted-foreground">L’evento è stato annullato dall’organizzatore.</p>
+        <p className="text-muted-foreground">{m.cancelled}</p>
       ) : event && event.myResponse !== null ? (
         <Answers
           given={event.myResponse}
@@ -145,16 +188,12 @@ export function InvitationCard({
             }
           />
           <p className="text-muted-foreground text-[11.5px]">
-            {mailed
-              ? `Risposta mandata per mail a ${invitation.organizer}.`
-              : `Nessun calendario collegato risponde per te: la risposta va per mail a ${invitation.organizer}.`}
+            {mailed ? m.mailed(invitation.organizer) : m.answerByMail(invitation.organizer)}
           </p>
         </>
       ) : event ? null : (
         <p className="text-muted-foreground">
-          {invitation.calendarConnected
-            ? 'Non è ancora nel calendario: compare al prossimo aggiornamento.'
-            : 'Collega un calendario per vederlo qui.'}
+          {invitation.calendarConnected ? m.notYetInCalendar : m.connectCalendar}
         </p>
       )}
       {problem && <p className="text-destructive-soft-foreground text-[11.5px]">{problem}</p>}
@@ -172,9 +211,11 @@ function Answers({
   answering: CalendarResponse | null
   onAnswer: (response: Exclude<CalendarResponse, 'needsAction'>) => void
 }): React.JSX.Element {
+  const labels = useMessages(ANSWER_LABELS)
+
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {ANSWERS.map(({ response, label }) => (
+      {ANSWERS.map((response) => (
         <Button
           key={response}
           size="sm"
@@ -187,7 +228,7 @@ function Answers({
           ) : (
             given === response && <Check className="size-3.5" />
           )}
-          {label}
+          {labels[response]}
         </Button>
       ))}
     </div>

@@ -23,6 +23,7 @@ import {
 } from '@renderer/components/ui/dropdown-menu'
 import { Button } from '@renderer/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
 import { cn, formatCount } from '@renderer/lib/utils'
 import type { MessageSection } from '@renderer/lib/message-sections'
 import {
@@ -46,8 +47,100 @@ import {
   type MessageListSortField,
   type PecMessage
 } from '@shared/models'
+import { defineMessages, type Message, type Messages } from '@shared/i18n'
 import { isPecFailure, pecLabel } from '@shared/pec'
 import { findHighlightRanges, type SearchHighlightField } from '@shared/search'
+
+const MESSAGES = defineMessages({
+  unread: { en: 'Unread', it: 'Non letta', de: 'Ungelesen' },
+  unflag: { en: 'Remove flag', it: 'Rimuovi contrassegno', de: 'Markierung entfernen' },
+  flagMessage: { en: 'Flag message', it: 'Contrassegna messaggio', de: 'Nachricht markieren' },
+  certifiedMail: { en: 'Certified email', it: 'Posta certificata', de: 'Zertifizierte E-Mail' },
+  certifiedAnomaly: {
+    en: 'Certified email · anomaly: the provider could not certify it',
+    it: 'Posta certificata · anomalia: il gestore non ha potuto certificarlo',
+    de: 'Zertifizierte E-Mail · Anomalie: Der Anbieter konnte sie nicht zertifizieren'
+  },
+  pecReceipt: {
+    en: (label: string) => `PEC receipt · ${label}`,
+    it: (label: string) => `Ricevuta PEC · ${label}`,
+    de: (label: string) => `PEC-Quittung · ${label}`
+  },
+  hasAttachments: { en: 'Has attachments', it: 'Contiene allegati', de: 'Enthält Anhänge' },
+  expand: {
+    en: (label: string) => `Expand ${label}`,
+    it: (label: string) => `Espandi ${label}`,
+    de: (label: string) => `${label} aufklappen`
+  },
+  collapse: {
+    en: (label: string) => `Collapse ${label}`,
+    it: (label: string) => `Comprimi ${label}`,
+    de: (label: string) => `${label} zuklappen`
+  },
+  selectSection: {
+    en: (label: string) => `Select all messages in ${label}`,
+    it: (label: string) => `Seleziona tutti i messaggi di ${label}`,
+    de: (label: string) => `Alle Nachrichten in ${label} auswählen`
+  },
+  unreadOne: { en: 'unread', it: 'non letto', de: 'ungelesen' },
+  unreadOther: { en: 'unread', it: 'non letti', de: 'ungelesen' },
+  resultsFor: { en: 'Results for', it: 'Risultati per', de: 'Ergebnisse für' },
+  quoted: {
+    en: (text: string) => `“${text}”`,
+    it: (text: string) => `«${text}»`,
+    de: (text: string) => `„${text}“`
+  },
+  exitSearch: { en: 'Exit search', it: 'Esci dalla ricerca', de: 'Suche beenden' },
+  exitSearchKey: {
+    en: 'Exit search (Esc)',
+    it: 'Esci dalla ricerca (Esc)',
+    de: 'Suche beenden (Esc)'
+  },
+  date: { en: 'Date', it: 'Data', de: 'Datum' },
+  newestFirst: { en: 'Newest first', it: 'Più recenti prima', de: 'Neueste zuerst' },
+  oldestFirst: { en: 'Oldest first', it: 'Più vecchie prima', de: 'Älteste zuerst' },
+  sender: { en: 'Sender', it: 'Mittente', de: 'Absender' },
+  subject: { en: 'Subject', it: 'Oggetto', de: 'Betreff' },
+  size: { en: 'Size', it: 'Dimensione', de: 'Größe' },
+  largestFirst: { en: 'Largest first', it: 'Più grandi prima', de: 'Größte zuerst' },
+  smallestFirst: { en: 'Smallest first', it: 'Più piccole prima', de: 'Kleinste zuerst' },
+  clearSelection: { en: 'Clear selection', it: 'Annulla selezione', de: 'Auswahl aufheben' },
+  selectAllMessages: {
+    en: 'Select all messages',
+    it: 'Seleziona tutti i messaggi',
+    de: 'Alle Nachrichten auswählen'
+  },
+  selectAllKeys: {
+    en: 'Select all (⌘/Ctrl + A)',
+    it: 'Seleziona tutto (⌘/Ctrl + A)',
+    de: 'Alles auswählen (⌘/Ctrl + A)'
+  },
+  groupingLabel: {
+    en: (label: string) => `Grouping: ${label}`,
+    it: (label: string) => `Raggruppamento: ${label}`,
+    de: (label: string) => `Gruppierung: ${label}`
+  },
+  groupingTip: {
+    en: (label: string) => `Group: ${label}`,
+    it: (label: string) => `Raggruppa: ${label}`,
+    de: (label: string) => `Gruppieren: ${label}`
+  },
+  groupBy: { en: 'Group by', it: 'Raggruppa per', de: 'Gruppieren nach' },
+  sortLabel: {
+    en: (field: string, direction: string) => `Sort order: ${field} · ${direction}`,
+    it: (field: string, direction: string) => `Ordinamento: ${field} · ${direction}`,
+    de: (field: string, direction: string) => `Sortierung: ${field} · ${direction}`
+  },
+  sortTip: {
+    en: (field: string, direction: string) => `Sort: ${field} · ${direction}`,
+    it: (field: string, direction: string) => `Ordina: ${field} · ${direction}`,
+    de: (field: string, direction: string) => `Sortieren: ${field} · ${direction}`
+  },
+  sortBy: { en: 'Sort by', it: 'Ordina per', de: 'Sortieren nach' },
+  direction: { en: 'Direction', it: 'Direzione', de: 'Richtung' },
+  noRecipient: { en: 'No recipient', it: 'Nessun destinatario', de: 'Kein Empfänger' },
+  unknownSender: { en: 'Unknown sender', it: 'Mittente sconosciuto', de: 'Unbekannter Absender' }
+})
 
 /**
  * Search terms to paint, per field. Scoped queries (`da:rossi`) only
@@ -117,10 +210,12 @@ export function HighlightedText({
  * single scannable column.
  */
 export function UnreadDot({ unread }: { unread: boolean }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+
   return (
     <span className="flex w-3.5 shrink-0 justify-center pt-[6px]" aria-hidden={!unread}>
       {unread && <span className="bg-unread size-[7px] rounded-full" />}
-      {unread && <span className="sr-only">Non letta</span>}
+      {unread && <span className="sr-only">{m.unread}</span>}
     </span>
   )
 }
@@ -139,7 +234,8 @@ export function FlagToggle({
   onToggle: () => void
   className?: string
 }): React.JSX.Element {
-  const label = flagged ? 'Rimuovi contrassegno' : 'Contrassegna messaggio'
+  const m = useMessages(MESSAGES)
+  const label = flagged ? m.unflag : m.flagMessage
 
   return (
     <Tooltip>
@@ -209,10 +305,12 @@ export function MarkTag({ label }: { label: string }): React.JSX.Element {
 /**
  * What a certified message (PEC) is, on its row: "PEC" for one the
  * provider carried; for a receipt, what it says of the message sent —
- * "Consegnata", "Non consegnata", in red when it went wrong.
+ * "Delivered", "Not delivered", in red when it went wrong.
  */
 export function PecTag({ pec }: { pec: PecMessage }): React.JSX.Element {
-  const label = pecLabel(pec.kind)
+  const m = useMessages(MESSAGES)
+  const { language } = useLanguage()
+  const label = pecLabel(pec.kind, language)
 
   return (
     <span
@@ -226,10 +324,10 @@ export function PecTag({ pec }: { pec: PecMessage }): React.JSX.Element {
       )}
       title={
         pec.kind === 'busta'
-          ? 'Posta certificata'
+          ? m.certifiedMail
           : pec.kind === 'anomalia'
-            ? 'Posta certificata · anomalia: il gestore non ha potuto certificarlo'
-            : `Ricevuta PEC · ${label}`
+            ? m.certifiedAnomaly
+            : m.pecReceipt(label)
       }
     >
       {label}
@@ -262,10 +360,12 @@ export function AccountTag({
 }
 
 export function AttachmentMark({ present }: { present: boolean }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+
   return (
     <span className="flex w-4 shrink-0 justify-center" aria-hidden={!present}>
       {present && <Paperclip className="text-faint-foreground size-3.5" />}
-      {present && <span className="sr-only">Contiene allegati</span>}
+      {present && <span className="sr-only">{m.hasAttachments}</span>}
     </span>
   )
 }
@@ -290,6 +390,9 @@ export function MessageSectionHeading({
   onSelectSection: () => void
   dense?: boolean
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const toggleLabel = collapsed ? m.expand(section.label) : m.collapse(section.label)
+
   return (
     <div
       className={cn(
@@ -303,7 +406,7 @@ export function MessageSectionHeading({
             type="button"
             onClick={onToggleCollapsed}
             aria-expanded={!collapsed}
-            aria-label={collapsed ? `Espandi ${section.label}` : `Comprimi ${section.label}`}
+            aria-label={toggleLabel}
             className="text-faint-foreground hover:text-foreground focus-visible:ring-ring/60 inline-flex size-4 shrink-0 items-center justify-center rounded-sm outline-none focus-visible:ring-2"
           >
             {collapsed ? (
@@ -313,21 +416,19 @@ export function MessageSectionHeading({
             )}
           </button>
         </TooltipTrigger>
-        <TooltipContent side="right">
-          {collapsed ? `Espandi ${section.label}` : `Comprimi ${section.label}`}
-        </TooltipContent>
+        <TooltipContent side="right">{toggleLabel}</TooltipContent>
       </Tooltip>
 
       <button
         type="button"
         onClick={onSelectSection}
-        aria-label={`Seleziona tutti i messaggi di ${section.label}`}
+        aria-label={m.selectSection(section.label)}
         className="focus-visible:ring-ring/70 flex min-w-0 flex-1 items-baseline gap-2 rounded-sm text-left outline-none focus-visible:ring-2"
       >
         <span
           className={cn(
             'truncate text-[11px] font-[650]',
-            // Date buckets ("Oggi", "Questa settimana") suit small caps.
+            // Date buckets ("Today", "This week") suit small caps.
             // Names do not: "MARIO ROSSI" shouts, and the sender's own
             // capitalisation carries information.
             section.kind === 'date' ? 'tracking-[0.06em] uppercase' : 'tracking-normal',
@@ -339,7 +440,7 @@ export function MessageSectionHeading({
         <span className="text-faint-foreground tabular shrink-0 text-[10.5px]">
           {section.messages.length}
           {section.unreadCount > 0
-            ? ` · ${formatCount(section.unreadCount, 'non letto', 'non letti')}`
+            ? ` · ${formatCount(section.unreadCount, m.unreadOne, m.unreadOther)}`
             : ''}
         </span>
       </button>
@@ -366,6 +467,8 @@ export function MessageListTitle({
   onClearSearch: () => void
   className?: string
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+
   if (!searchQuery) {
     return <h2 className={cn('truncate font-semibold', className)}>{title}</h2>
   }
@@ -373,20 +476,20 @@ export function MessageListTitle({
   return (
     <div className="flex min-w-0 items-center gap-1">
       <h2 className={cn('min-w-0 truncate font-semibold', className)} title={searchQuery}>
-        Risultati per <span className="text-muted-foreground">«{searchQuery}»</span>
+        {m.resultsFor} <span className="text-muted-foreground">{m.quoted(searchQuery)}</span>
       </h2>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
             type="button"
             onClick={onClearSearch}
-            aria-label="Esci dalla ricerca"
+            aria-label={m.exitSearch}
             className="window-no-drag text-faint-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring/60 inline-flex size-5 shrink-0 items-center justify-center rounded-[4px] transition-colors outline-none focus-visible:ring-2"
           >
             <X className="size-3.5" />
           </button>
         </TooltipTrigger>
-        <TooltipContent side="bottom">Esci dalla ricerca (Esc)</TooltipContent>
+        <TooltipContent side="bottom">{m.exitSearchKey}</TooltipContent>
       </Tooltip>
     </div>
   )
@@ -400,33 +503,52 @@ interface SortFieldOption {
   descLabel: string
 }
 
-export const SORT_FIELD_OPTIONS: readonly SortFieldOption[] = [
-  {
-    field: 'date',
-    label: 'Data',
-    icon: Calendar,
-    descLabel: 'Più recenti prima',
-    ascLabel: 'Più vecchie prima'
-  },
-  { field: 'sender', label: 'Mittente', icon: User, descLabel: 'Z → A', ascLabel: 'A → Z' },
-  { field: 'subject', label: 'Oggetto', icon: Tag, descLabel: 'Z → A', ascLabel: 'A → Z' },
-  {
-    field: 'size',
-    label: 'Dimensione',
-    icon: HardDrive,
-    descLabel: 'Più grandi prima',
-    ascLabel: 'Più piccole prima'
-  }
-]
+function sortFieldOptions(m: Messages<typeof MESSAGES>): readonly SortFieldOption[] {
+  return [
+    {
+      field: 'date',
+      label: m.date,
+      icon: Calendar,
+      descLabel: m.newestFirst,
+      ascLabel: m.oldestFirst
+    },
+    { field: 'sender', label: m.sender, icon: User, descLabel: 'Z → A', ascLabel: 'A → Z' },
+    { field: 'subject', label: m.subject, icon: Tag, descLabel: 'Z → A', ascLabel: 'A → Z' },
+    {
+      field: 'size',
+      label: m.size,
+      icon: HardDrive,
+      descLabel: m.largestFirst,
+      ascLabel: m.smallestFirst
+    }
+  ]
+}
 
+/** The list's groupings, in every language: read with the interface's (`label[language]`). */
 export const GROUPING_OPTIONS: ReadonlyArray<{
   mode: MessageGroupingMode
-  label: string
-  hint: string
+  label: Message<string>
+  hint: Message<string>
 }> = [
-  { mode: 'auto', label: 'Automatico', hint: "Segue l'ordinamento" },
-  { mode: 'sender', label: 'Mittente', hint: 'Una sezione per mittente' },
-  { mode: 'none', label: 'Nessuno', hint: 'Elenco continuo' }
+  {
+    mode: 'auto',
+    label: { en: 'Automatic', it: 'Automatico', de: 'Automatisch' },
+    hint: { en: 'Follows the sort order', it: "Segue l'ordinamento", de: 'Folgt der Sortierung' }
+  },
+  {
+    mode: 'sender',
+    label: { en: 'Sender', it: 'Mittente', de: 'Absender' },
+    hint: {
+      en: 'One section per sender',
+      it: 'Una sezione per mittente',
+      de: 'Ein Abschnitt pro Absender'
+    }
+  },
+  {
+    mode: 'none',
+    label: { en: 'None', it: 'Nessuno', de: 'Keine' },
+    hint: { en: 'One continuous list', it: 'Elenco continuo', de: 'Durchgehende Liste' }
+  }
 ]
 
 export interface MessageListControlsProps {
@@ -451,12 +573,16 @@ export function MessageListControls({
   onSelectAll,
   canSelectAll
 }: MessageListControlsProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const { language } = useLanguage()
+  const sortOptions = sortFieldOptions(m)
   const activeSortOption =
-    SORT_FIELD_OPTIONS.find((option) => option.field === sort.field) ?? SORT_FIELD_OPTIONS[0]
+    sortOptions.find((option) => option.field === sort.field) ?? sortOptions[0]
   const activeDirectionLabel =
     sort.direction === 'asc' ? activeSortOption.ascLabel : activeSortOption.descLabel
-  const activeGroupingOption =
+  const activeGroupingLabel = (
     GROUPING_OPTIONS.find((option) => option.mode === grouping) ?? GROUPING_OPTIONS[0]
+  ).label[language]
 
   return (
     <div className="flex shrink-0 items-center gap-0.5">
@@ -468,12 +594,12 @@ export function MessageListControls({
               size="icon"
               className="text-faint-foreground hover:text-foreground size-7"
               onClick={onClearSelection}
-              aria-label="Annulla selezione"
+              aria-label={m.clearSelection}
             >
               <X className="size-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Annulla selezione</TooltipContent>
+          <TooltipContent side="bottom">{m.clearSelection}</TooltipContent>
         </Tooltip>
       )}
 
@@ -485,12 +611,12 @@ export function MessageListControls({
               size="icon"
               className="text-faint-foreground hover:text-foreground size-7"
               onClick={onSelectAll}
-              aria-label="Seleziona tutti i messaggi"
+              aria-label={m.selectAllMessages}
             >
               <Check className="size-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Seleziona tutto ({'⌘/Ctrl'} + A)</TooltipContent>
+          <TooltipContent side="bottom">{m.selectAllKeys}</TooltipContent>
         </Tooltip>
       )}
 
@@ -505,16 +631,16 @@ export function MessageListControls({
                   'size-7',
                   grouping === 'none' ? 'text-faint-foreground' : 'text-foreground'
                 )}
-                aria-label={`Raggruppamento: ${activeGroupingOption.label}`}
+                aria-label={m.groupingLabel(activeGroupingLabel)}
               >
                 <Layers className="size-3.5" />
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{`Raggruppa: ${activeGroupingOption.label}`}</TooltipContent>
+          <TooltipContent side="bottom">{m.groupingTip(activeGroupingLabel)}</TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="end" className="w-52">
-          <DropdownMenuLabel>Raggruppa per</DropdownMenuLabel>
+          <DropdownMenuLabel>{m.groupBy}</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={grouping}
             onValueChange={(next) => onGroupingChange(next as MessageGroupingMode)}
@@ -522,8 +648,8 @@ export function MessageListControls({
             {GROUPING_OPTIONS.map((option) => (
               <DropdownMenuRadioItem key={option.mode} value={option.mode} className="gap-2">
                 <span className="flex flex-col">
-                  <span>{option.label}</span>
-                  <span className="text-muted-foreground text-[10px]">{option.hint}</span>
+                  <span>{option.label[language]}</span>
+                  <span className="text-muted-foreground text-[10px]">{option.hint[language]}</span>
                 </span>
               </DropdownMenuRadioItem>
             ))}
@@ -539,16 +665,18 @@ export function MessageListControls({
                 variant="ghost"
                 size="icon"
                 className="text-faint-foreground hover:text-foreground size-7"
-                aria-label={`Ordinamento: ${activeSortOption.label} · ${activeDirectionLabel}`}
+                aria-label={m.sortLabel(activeSortOption.label, activeDirectionLabel)}
               >
                 <ArrowUpDown className="size-3.5" />
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{`Ordina: ${activeSortOption.label} · ${activeDirectionLabel}`}</TooltipContent>
+          <TooltipContent side="bottom">
+            {m.sortTip(activeSortOption.label, activeDirectionLabel)}
+          </TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="end" className="w-52">
-          <DropdownMenuLabel>Ordina per</DropdownMenuLabel>
+          <DropdownMenuLabel>{m.sortBy}</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={sort.field}
             onValueChange={(nextField) =>
@@ -558,7 +686,7 @@ export function MessageListControls({
               })
             }
           >
-            {SORT_FIELD_OPTIONS.map((option) => {
+            {sortOptions.map((option) => {
               const Icon = option.icon
               return (
                 <DropdownMenuRadioItem key={option.field} value={option.field} className="gap-2">
@@ -569,7 +697,7 @@ export function MessageListControls({
             })}
           </DropdownMenuRadioGroup>
           <DropdownMenuSeparator />
-          <DropdownMenuLabel>Direzione</DropdownMenuLabel>
+          <DropdownMenuLabel>{m.direction}</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={sort.direction}
             onValueChange={(nextDirection) =>
@@ -606,10 +734,10 @@ export function primaryAddressLabel(message: MailMessageSummary, mode: PrimaryAd
   if (mode === 'recipient') {
     return message.to.length + message.cc.length > 0
       ? recipientsLabel(message)
-      : 'Nessun destinatario'
+      : messagesNow(MESSAGES).noRecipient
   }
 
-  return message.senderLabel || 'Mittente sconosciuto'
+  return message.senderLabel || messagesNow(MESSAGES).unknownSender
 }
 
 /**
@@ -627,7 +755,7 @@ export function avatarLabel(message: MailMessageSummary, mode: PrimaryAddressMod
 }
 
 /**
- * The "A" column: the first person the message names and how many others it
+ * The "To" column: the first person the message names and how many others it
  * reached. Copies count — a message sent to one person with four hundred in
  * Cc is not a message to one person.
  */

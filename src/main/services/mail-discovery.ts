@@ -1,7 +1,9 @@
 import { XMLParser } from 'fast-xml-parser'
 import { getDomain } from 'tldts'
 
+import { messages } from '@main/i18n'
 import type { DiscoveredMailSettings, MailServerSettings } from '@shared/connections'
+import { defineMessages } from '@shared/i18n'
 
 /**
  * Finding a mailbox's servers from its address, as Thunderbird does:
@@ -29,9 +31,48 @@ const HTTP_TIMEOUT_MS = 8_000
 const MAX_CONFIG_BYTES = 256 * 1024
 const MAX_REDIRECTS = 5
 
-type Known = Omit<DiscoveredMailSettings, 'source' | 'username'> & {
+/** What the user should know to sign in to a provider, said in the interface's language. */
+const NOTES = defineMessages({
+  arubaPec: {
+    en: 'With two-step verification on, you need a “password for mail programs”, created in the mailbox’s management.',
+    it: 'Con la verifica in due passaggi attiva serve una «password per programmi di posta», da creare nella gestione della casella.',
+    de: 'Bei aktivierter Bestätigung in zwei Schritten benötigen Sie ein „Passwort für E-Mail-Programme“, das Sie in der Postfachverwaltung erstellen.'
+  },
+  legalmail: {
+    en: 'The username is the InfoCert User ID, not the address.',
+    it: 'Il nome utente è lo User ID di InfoCert, non l’indirizzo.',
+    de: 'Der Benutzername ist die InfoCert User ID, nicht die Adresse.'
+  },
+  postecertifica: {
+    en: 'The password for mail programs is generated in the Postecertifica dashboard.',
+    it: 'La password per i programmi di posta si genera nella dashboard di Postecertifica.',
+    de: 'Das Passwort für E-Mail-Programme wird im Dashboard von Postecertifica erzeugt.'
+  },
+  timPec: {
+    en: 'The username is “PEC address*webmail user”, with the secondary password from devicepassword.pectim.it.',
+    it: 'Il nome utente è «indirizzo PEC*utente della webmail», con la password secondaria di devicepassword.pectim.it.',
+    de: 'Der Benutzername lautet „PEC-Adresse*Webmail-Benutzer“, mit dem Zweitpasswort von devicepassword.pectim.it.'
+  },
+  yahoo: {
+    en: 'Yahoo asks for an app password, generated in the account’s security settings.',
+    it: 'Yahoo chiede una password per app, da generare nella sicurezza dell’account.',
+    de: 'Yahoo verlangt ein App-Passwort, das Sie in den Sicherheitseinstellungen des Kontos erzeugen.'
+  }
+})
+
+const MESSAGES = defineMessages({
+  notAnAddress: {
+    en: 'This doesn’t look like an email address.',
+    it: 'Questo non sembra un indirizzo email.',
+    de: 'Das sieht nicht nach einer E-Mail-Adresse aus.'
+  }
+})
+
+type Known = Omit<DiscoveredMailSettings, 'source' | 'username' | 'note'> & {
   /** The user name, when it is not the address; empty: the user writes it. */
   username?: ''
+  /** What the user should know to sign in, said when it is found. */
+  note: keyof typeof NOTES | null
 }
 
 const ssl = (host: string, port: number): MailServerSettings => ({ host, port, secure: true })
@@ -78,14 +119,14 @@ const ARUBA_PEC = known(
   ssl('smtps.pec.aruba.it', 465),
   {
     pec: true,
-    note: 'Con la verifica in due passaggi attiva serve una «password per programmi di posta», da creare nella gestione della casella.'
+    note: 'arubaPec'
   }
 )
 const LEGALMAIL = known(
   'Legalmail (InfoCert)',
   ssl('mbox.cert.legalmail.it', 993),
   ssl('sendm.cert.legalmail.it', 465),
-  { pec: true, username: '', note: 'Il nome utente è lo User ID di InfoCert, non l’indirizzo.' }
+  { pec: true, username: '', note: 'legalmail' }
 )
 const POSTECERTIFICA = known(
   'Postecertifica (Poste Italiane)',
@@ -93,7 +134,7 @@ const POSTECERTIFICA = known(
   ssl('mail.postecertifica.it', 465),
   {
     pec: true,
-    note: 'La password per i programmi di posta si genera nella dashboard di Postecertifica.'
+    note: 'postecertifica'
   }
 )
 const REGISTER_PEC = known(
@@ -121,7 +162,7 @@ const LIBERO_PEC = known(
 const TIM_PEC = known('PEC TIM', ssl('imap.pectim.it', 993), ssl('smtp.pectim.it', 465), {
   pec: true,
   username: '',
-  note: 'Il nome utente è «indirizzo PEC*utente della webmail», con la password secondaria di devicepassword.pectim.it.'
+  note: 'timPec'
 })
 const ARUBA_HOSTED = known('Aruba', ssl('imaps.aruba.it', 993), ssl('smtps.aruba.it', 465))
 const REGISTER_HOSTED = known(
@@ -142,7 +183,7 @@ const BY_DOMAIN: ReadonlyArray<[ReadonlyArray<string>, Known]> = [
     ['yahoo.com', 'yahoo.it', 'ymail.com', 'rocketmail.com'],
     known('Yahoo', ssl('imap.mail.yahoo.com', 993), ssl('smtp.mail.yahoo.com', 465), {
       appPassword: true,
-      note: 'Yahoo chiede una password per app, da generare nella sicurezza dell’account.'
+      note: 'yahoo'
     })
   ],
   [
@@ -236,8 +277,13 @@ function settingsOf(
   source: DiscoveredMailSettings['source'],
   address: string
 ): DiscoveredMailSettings {
-  const { username, ...rest } = entry
-  return { ...rest, source, username: username ?? address }
+  const { username, note, ...rest } = entry
+  return {
+    ...rest,
+    source,
+    username: username ?? address,
+    note: note ? messages(NOTES)[note] : null
+  }
 }
 
 /** Who keeps the servers, by their names: a provider with its own way in. */
@@ -559,7 +605,7 @@ export async function discoverMailSettings(
   const domain = at > 0 ? hostnameOf(address.slice(at + 1)) : null
 
   if (!domain?.includes('.')) {
-    throw new Error('Questo non sembra un indirizzo email.')
+    throw new Error(messages(MESSAGES).notAnAddress)
   }
 
   const byDomain = BY_DOMAIN.find(([domains]) => domains.includes(domain))?.[1]

@@ -15,7 +15,9 @@ import {
 } from '@renderer/lib/message-selection'
 import { threadKey } from '@renderer/features/segretario/conversation-projects'
 import { hasWorkLine, rowWorkKey, WorkLine } from '@renderer/features/segretario/row-work'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn, formatDateLabel } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
 import type { MailMessageSummary } from '@shared/models'
 
 import type { MessageListViewProps } from './message-list-view'
@@ -36,11 +38,20 @@ import { MessageListHeader } from './message-list-header'
 import { MessageListEmpty } from './message-list-empty'
 import { VirtualMessageRows } from './virtual-message-rows'
 
+const MESSAGES = defineMessages({
+  loadingPreview: {
+    en: 'Loading preview…',
+    it: 'Caricamento anteprima…',
+    de: 'Vorschau wird geladen…'
+  }
+})
+
 /** A row as tall as it renders at the default text size; each row is measured. */
 const MESSAGE_ROW_HEIGHT_ESTIMATE_PX = 71
 const SECTION_HEADING_HEIGHT_PX = 30
 
 export function MessageList(props: MessageListViewProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const {
     messages,
     rowWork,
@@ -205,7 +216,7 @@ export function MessageList(props: MessageListViewProps): React.JSX.Element {
                     </p>
                   ) : (
                     <p className="text-faint-foreground/60 mt-px min-w-0 truncate text-[12px] leading-4">
-                      Caricamento anteprima…
+                      {m.loadingPreview}
                     </p>
                   )}
                 </div>

@@ -5,7 +5,10 @@ import { toast } from 'sonner'
 import extensionRenderer from '@app/extension/renderer'
 import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
+import { hourStyle, languageNow, messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages, localized } from '@shared/i18n'
+import { PLACES } from '@shared/places'
 import type { Commitment, MessageWork, Project, Proposal } from '@shared/segretario'
 import type { MessageRef } from '@shared/models'
 
@@ -14,13 +17,104 @@ import { ProjectPickerPopover } from './project-picker'
 import { eventProposalWords } from './proposal-words'
 import { COMMITMENT_LABELS, dueLabel } from './row-work'
 
-const PRIORITY_LABELS = { alta: 'Importante', media: null, bassa: 'Può aspettare' } as const
-const SHORT_DAY = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
-const WHEN = new Intl.DateTimeFormat('it-IT', {
+const MESSAGES = defineMessages({
+  important: { en: 'Important', it: 'Importante', de: 'Wichtig' },
+  canWait: { en: 'Can wait', it: 'Può aspettare', de: 'Kann warten' },
+  notAdded: {
+    en: 'Not added to the project',
+    it: 'Non è entrata nel progetto',
+    de: 'Nicht zum Projekt hinzugefügt'
+  },
+  notRemoved: {
+    en: 'Not removed from the project',
+    it: 'Non è uscita dal progetto',
+    de: 'Nicht aus dem Projekt entfernt'
+  },
+  open: {
+    en: (name: string) => `Open ${name}`,
+    it: (name: string) => `Apri ${name}`,
+    de: (name: string) => `${name} öffnen`
+  },
+  noProject: { en: 'In no project', it: 'In nessun progetto', de: 'In keinem Projekt' },
+  notCreated: {
+    en: 'The project wasn’t created',
+    it: 'Il progetto non è stato creato',
+    de: 'Das Projekt wurde nicht erstellt'
+  },
+  changeProjects: { en: 'Change projects', it: 'Cambia i progetti', de: 'Projekte ändern' },
+  putInProject: {
+    en: 'Put in a project',
+    it: 'Metti in un progetto',
+    de: 'Einem Projekt zuordnen'
+  },
+  change: { en: 'Change', it: 'Cambia', de: 'Ändern' },
+  choose: { en: 'Choose', it: 'Scegli', de: 'Auswählen' },
+  allDay: {
+    en: (day: string) => `${day}, all day`,
+    it: (day: string) => `${day}, tutto il giorno`,
+    de: (day: string) => `${day}, ganztägig`
+  },
+  notDone: { en: 'It wasn’t done', it: 'Non è stato fatto', de: 'Wurde nicht ausgeführt' },
+  notSetAside: { en: 'It wasn’t removed', it: 'Non è stata tolta', de: 'Wurde nicht entfernt' },
+  proposal: { en: 'Proposal', it: 'Proposta', de: 'Vorschlag' },
+  quoted: {
+    en: (text: string) => `“${text}”`,
+    it: (text: string) => `«${text}»`,
+    de: (text: string) => `„${text}“`
+  },
+  invites: {
+    en: (who: string) => ` · invites ${who}`,
+    it: (who: string) => ` · invita ${who}`,
+    de: (who: string) => ` · lädt ${who} ein`
+  },
+  ignore: { en: 'Ignore', it: 'Ignora', de: 'Ignorieren' },
+  sectionLabel: {
+    en: 'Where it stands, from the Segretario',
+    it: 'Il punto del Segretario',
+    de: 'Stand der Dinge vom Segretario'
+  },
+  notHandled: {
+    en: 'Not marked as handled',
+    it: 'Non segnata come gestita',
+    de: 'Nicht als bearbeitet markiert'
+  },
+  markHandled: {
+    en: 'Mark as handled',
+    it: 'Segna come gestito',
+    de: 'Als bearbeitet markieren'
+  },
+  twin: {
+    en: (account: string) =>
+      `Also arrived at ${account}: the note is the same, and its open items are followed there.`,
+    it: (account: string) =>
+      `Arrivata anche a ${account}: la nota è la stessa, le cose aperte sono seguite lì.`,
+    de: (account: string) =>
+      `Auch an ${account} eingegangen: Die Notiz ist dieselbe, die offenen Punkte werden dort verfolgt.`
+  },
+  anotherAccount: {
+    en: 'another of your accounts',
+    it: 'un altro tuo account',
+    de: 'ein anderes Ihrer Konten'
+  },
+  followUpReady: { en: 'Follow-up ready', it: 'Sollecito pronto', de: 'Nachfassen vorbereitet' },
+  replyReady: { en: 'Ready reply', it: 'Risposta pronta', de: 'Fertige Antwort' },
+  toReview: { en: 'to review', it: 'da rivedere', de: 'zu überprüfen' },
+  useFollowUp: {
+    en: 'Use this follow-up',
+    it: 'Usa questo sollecito',
+    de: 'Dieses Nachfassen verwenden'
+  },
+  useReply: { en: 'Use this reply', it: 'Usa questa risposta', de: 'Diese Antwort verwenden' },
+  discard: { en: 'Discard', it: 'Scarta', de: 'Verwerfen' }
+})
+
+const SHORT_DAY: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' }
+/** Made when used: the hour is written as the region writes it now. */
+const WHEN = (): Intl.DateTimeFormatOptions => ({
   weekday: 'short',
   day: 'numeric',
   month: 'short',
-  hour: '2-digit',
+  hour: hourStyle(),
   minute: '2-digit'
 })
 
@@ -38,13 +132,14 @@ function ProjectsLine({
   projects: ReadonlyArray<Project>
   onOpenProject: (projectId: string) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [picking, setPicking] = useState(false)
 
   const set = async (projectId: string, link: boolean): Promise<void> => {
     try {
       await window.segretarioApi.setConversationProject({ accountId, threadId }, projectId, link)
     } catch (error) {
-      toast.error(link ? 'Non è entrata nel progetto' : 'Non è uscita dal progetto', {
+      toast.error(link ? messagesNow(MESSAGES).notAdded : messagesNow(MESSAGES).notRemoved, {
         description: error instanceof Error ? error.message : undefined
       })
     }
@@ -59,7 +154,7 @@ function ProjectsLine({
             <button
               type="button"
               onClick={() => onOpenProject(project.id)}
-              title={`Apri ${project.title}`}
+              title={m.open(project.title)}
               className="text-foreground focus-visible:ring-ring/60 min-w-0 truncate rounded-sm font-semibold outline-none hover:underline focus-visible:ring-2"
             >
               {project.title}
@@ -68,7 +163,7 @@ function ProjectsLine({
           </span>
         ))
       ) : (
-        <span className="text-muted-foreground">In nessun progetto</span>
+        <span className="text-muted-foreground">{m.noProject}</span>
       )}
       <ProjectPickerPopover
         open={picking}
@@ -85,7 +180,7 @@ function ProjectsLine({
             .createProject(title)
             .then((created) => set(created.id, true))
             .catch((error: unknown) =>
-              toast.error('Il progetto non è stato creato', {
+              toast.error(messagesNow(MESSAGES).notCreated, {
                 description: error instanceof Error ? error.message : undefined
               })
             )
@@ -93,10 +188,10 @@ function ProjectsLine({
         trigger={
           <button
             type="button"
-            aria-label={linked.length > 0 ? 'Cambia i progetti' : 'Metti in un progetto'}
+            aria-label={linked.length > 0 ? m.changeProjects : m.putInProject}
             className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/60 inline-flex shrink-0 items-center gap-0.5 rounded-sm outline-none focus-visible:ring-2"
           >
-            {linked.length > 0 ? 'Cambia' : 'Scegli'}
+            {linked.length > 0 ? m.change : m.choose}
             <ChevronDown className="size-3" />
           </button>
         }
@@ -105,16 +200,23 @@ function ProjectsLine({
   )
 }
 
-/** When a proposed event is, as a line: "gio 6 nov, 10:00" or the day for one all day. */
+/** When a proposed event is, as a line: "Thu, Nov 6, 10:00" or the day for one all day. */
 function eventWhen(payload: Record<string, unknown>): string {
   const start = String(payload.start ?? '')
+  const { formatLocale } = languageNow()
 
   if (payload.allDay) {
-    return `${SHORT_DAY.format(new Date(`${start.slice(0, 10)}T00:00`))}, tutto il giorno`
+    return messagesNow(MESSAGES).allDay(
+      new Intl.DateTimeFormat(formatLocale, SHORT_DAY).format(
+        new Date(`${start.slice(0, 10)}T00:00`)
+      )
+    )
   }
 
   const date = new Date(start)
-  return Number.isNaN(date.getTime()) ? start : WHEN.format(date)
+  return Number.isNaN(date.getTime())
+    ? start
+    : new Intl.DateTimeFormat(formatLocale, WHEN()).format(date)
 }
 
 /**
@@ -133,6 +235,8 @@ export function ProposalCard({
   /** Away from its message (Oggi), the card says which one it is, and opens it. */
   onOpenSource?: (ref: MessageRef) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const { language } = useLanguage()
   const [busy, setBusy] = useState(false)
   const event = proposal.kind === 'evento'
   const words = event ? eventProposalWords(proposal) : null
@@ -152,7 +256,7 @@ export function ProposalCard({
           toast(words.done, { description: String(proposal.payload.title ?? '') })
       )
       .catch((error: unknown) =>
-        toast.error(accepted ? 'Non è stato fatto' : 'Non è stata tolta', {
+        toast.error(accepted ? messagesNow(MESSAGES).notDone : messagesNow(MESSAGES).notSetAside, {
           description: error instanceof Error ? error.message : undefined
         })
       )
@@ -161,7 +265,7 @@ export function ProposalCard({
 
   return (
     <div className="bg-ai-soft/45 flex flex-col gap-1.5 rounded-[8px] px-3 py-2.5">
-      <p className="text-ai text-[11.5px] font-semibold">{words?.heading ?? 'Proposta'}</p>
+      <p className="text-ai text-[11.5px] font-semibold">{words?.heading ?? m.proposal}</p>
       <p className="text-foreground text-[13px] leading-[1.45]">
         {event ? String(proposal.payload.title ?? proposal.title) : proposal.title}
       </p>
@@ -172,7 +276,7 @@ export function ProposalCard({
           className="text-muted-foreground focus-visible:ring-ring/60 -mx-1 min-w-0 truncate rounded-sm px-1 text-left text-[12px] leading-[1.45] outline-none hover:underline focus-visible:ring-2"
         >
           {proposal.source.from}
-          {proposal.source.subject && ` · «${proposal.source.subject}»`}
+          {proposal.source.subject && ` · ${m.quoted(proposal.source.subject)}`}
         </button>
       )}
       {words && words.changes.length > 0 ? (
@@ -187,7 +291,7 @@ export function ProposalCard({
             {eventWhen(proposal.payload)}
             {proposal.payload.location ? ` · ${String(proposal.payload.location)}` : ''}
             {attendees.length > 0 && !proposal.payload.eventKey
-              ? ` · invita ${attendees.join(', ')}`
+              ? m.invites(attendees.join(', '))
               : ''}
           </p>
         )
@@ -201,11 +305,11 @@ export function ProposalCard({
         )}
         {action && onAct && (
           <Button size="sm" variant="brand" disabled={busy} onClick={() => onAct(proposal)}>
-            {action.label}
+            {localized(action.label, language)}
           </Button>
         )}
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => decide(false)}>
-          Ignora
+          {m.ignore}
         </Button>
       </div>
     </div>
@@ -243,6 +347,9 @@ export function MessageWorkPanel({
   /** Carries out what an extension proposes on this message. */
   onActOnProposal: (proposal: Proposal) => void
 }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
+  const kinds = useMessages(COMMITMENT_LABELS)
   const [work, setWork] = useState<MessageWork | null>(null)
   const [takingUp, setTakingUp] = useState(false)
 
@@ -302,18 +409,19 @@ export function MessageWorkPanel({
     return <div className="mb-3">{facts}</div>
   }
 
-  const priority = note ? PRIORITY_LABELS[note.priority] : null
+  const priority =
+    note?.priority === 'alta' ? m.important : note?.priority === 'bassa' ? m.canWait : null
   const reply = work.reply
 
   return (
     <section
-      aria-label="Il punto del Segretario"
+      aria-label={m.sectionLabel}
       className="border-ai-line mb-4 flex flex-col gap-2 border-l-2 py-0.5 pl-3.5"
     >
       {facts}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px]">
         <CompassStar className="text-ai-star size-3.5" />
-        <span className="text-ai font-semibold">Il punto</span>
+        <span className="text-ai font-semibold">{places.whereItStands}</span>
         {(owed || awaited) && (
           <span
             className={cn(
@@ -321,7 +429,7 @@ export function MessageWorkPanel({
               note?.priority === 'alta' ? 'text-urgent' : 'text-foreground'
             )}
           >
-            {owed ? COMMITMENT_LABELS[owed.kind] : 'In attesa'}
+            {owed ? kinds[owed.kind] : places.waiting}
             {owed?.due && ` · ${dueLabel(owed.due)}`}
           </span>
         )}
@@ -334,32 +442,32 @@ export function MessageWorkPanel({
               void window.segretarioApi
                 .markHandled([{ accountId, messageKey }])
                 .catch((error: unknown) =>
-                  toast.error('Non segnata come gestita', {
+                  toast.error(messagesNow(MESSAGES).notHandled, {
                     description: error instanceof Error ? error.message : undefined
                   })
                 )
             }
             className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/60 rounded-sm outline-none focus-visible:ring-2"
           >
-            Segna come gestito
+            {m.markHandled}
           </button>
         )}
       </div>
       {note && <p className="voice text-foreground text-[15px] leading-[1.45]">{note.summary}</p>}
       {note?.twinAccountId && (
         <p className="text-muted-foreground text-[11.5px]">
-          Arrivata anche a {accountEmail(note.twinAccountId) ?? 'un altro tuo account'}: la nota è
-          la stessa, le cose aperte sono seguite lì.
+          {m.twin(accountEmail(note.twinAccountId) ?? m.anotherAccount)}
         </p>
       )}
       {reply && (
         <div className="bg-ai-soft/45 flex flex-col gap-2 rounded-[8px] px-3 py-2.5">
           <p className="text-ai text-[11.5px] font-semibold">
-            {reply.kind === 'sollecito' ? 'Sollecito pronto' : 'Risposta pronta'}
+            {reply.kind === 'sollecito' ? m.followUpReady : m.replyReady}
             {reply.status === 'da_rivedere' && (
               <span className="text-urgent">
                 {' '}
-                · da rivedere{reply.staleReason ? `: ${reply.staleReason}` : ''}
+                · {m.toReview}
+                {reply.staleReason ? `: ${reply.staleReason}` : ''}
               </span>
             )}
           </p>
@@ -381,7 +489,7 @@ export function MessageWorkPanel({
               }}
             >
               <PenLine className="size-3.5" />
-              {reply.kind === 'sollecito' ? 'Usa questo sollecito' : 'Usa questa risposta'}
+              {reply.kind === 'sollecito' ? m.useFollowUp : m.useReply}
             </Button>
             <Button
               variant="ghost"
@@ -391,7 +499,7 @@ export function MessageWorkPanel({
                 void window.segretarioApi.discardReply(reply.accountId, reply.messageKey)
               }
             >
-              Scarta
+              {m.discard}
             </Button>
           </div>
         </div>

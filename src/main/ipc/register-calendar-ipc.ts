@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import type { CalendarService } from '@main/calendar/calendar-service'
+import { messages } from '@main/i18n'
 import { handleIpc, type HandleOptions } from '@main/ipc/handle'
 import {
   CALENDAR_IPC,
@@ -8,7 +9,30 @@ import {
   type CalendarResponse,
   type MessageInvitation
 } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import type { MessageRef } from '@shared/models'
+
+const MESSAGES = defineMessages({
+  invalidDate: { en: 'Not a valid date.', it: 'Data non valida.', de: 'Kein gültiges Datum.' },
+  giveTitle: {
+    en: 'Give the event a title.',
+    it: 'Dai un titolo all’evento.',
+    de: 'Geben Sie dem Termin einen Titel.'
+  },
+  invalidAttendee: {
+    en: 'An invitee doesn’t have a valid address.',
+    it: 'Un invitato non ha un indirizzo valido.',
+    de: 'Eine eingeladene Person hat keine gültige Adresse.'
+  },
+  enterPassword: {
+    en: 'Enter the password.',
+    it: 'Scrivi la password.',
+    de: 'Geben Sie das Passwort ein.'
+  }
+})
+
+/** Said when the input is checked, in the interface's language then. */
+const invalidDate = { error: () => messages(MESSAGES).invalidDate }
 
 const idSchema = z.string().min(1).max(200)
 const messageRefSchema = z.object({
@@ -16,7 +40,7 @@ const messageRefSchema = z.object({
   folderPath: z.string().min(1),
   uid: z.number().int().nonnegative()
 })
-const isoSchema = z.string().refine((value) => !Number.isNaN(Date.parse(value)), 'Data non valida.')
+const isoSchema = z.string().refine((value) => !Number.isNaN(Date.parse(value)), invalidDate)
 const responseSchema = z.enum(['accepted', 'tentative', 'declined'])
 const keySchema = z.string().min(1).max(2000)
 /** An instant with its time, or — all day — a day, AAAA-MM-GG. */
@@ -25,11 +49,20 @@ const whenSchema = z
   .max(40)
   .refine(
     (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isNaN(Date.parse(value)),
-    'Data non valida.'
+    invalidDate
   )
-const titleSchema = z.string().trim().min(1, 'Dai un titolo all’evento.').max(500)
+const titleSchema = z
+  .string()
+  .trim()
+  .min(1, { error: () => messages(MESSAGES).giveTitle })
+  .max(500)
 const attendeesSchema = z
-  .array(z.string().trim().email('Un invitato non ha un indirizzo valido.'))
+  .array(
+    z
+      .string()
+      .trim()
+      .email({ error: () => messages(MESSAGES).invalidAttendee })
+  )
   .max(200)
 const newEventSchema = z
   .object({
@@ -120,7 +153,12 @@ export function registerCalendarIpc(
     (connectionId: unknown, password: unknown) =>
       calendar.reconnect(
         idSchema.parse(connectionId),
-        z.string().min(1, 'Scrivi la password.').max(1000).optional().parse(password)
+        z
+          .string()
+          .min(1, { error: () => messages(MESSAGES).enterPassword })
+          .max(1000)
+          .optional()
+          .parse(password)
       ),
     forUser
   )

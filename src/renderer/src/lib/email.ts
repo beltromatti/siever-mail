@@ -1,3 +1,5 @@
+import { languageNow } from './i18n'
+
 export function htmlToPlainText(html: string): string {
   return html
     .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
@@ -34,7 +36,7 @@ export function initialsFromName(value: string): string {
     .filter((letter): letter is string => Boolean(letter))
     .slice(0, 2)
     .join('')
-    .toLocaleUpperCase('it-IT')
+    .toLocaleUpperCase(languageNow().formatLocale)
 
   return initials || '?'
 }

@@ -1,6 +1,9 @@
 import type { CalendarConnection } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
+import { PLACES } from '@shared/places'
 import { calendarLearningKey } from '@shared/segretario'
 
+import { messages } from '../../i18n'
 import { HandleRegistry, type HandleRecord } from '../agent/handles'
 import type { SegretarioCalendarPort, SegretarioMailPort } from '../agent/tool-types'
 import type { AiStore } from '../ai-store'
@@ -8,6 +11,11 @@ import type { Registry } from '../registry/registry'
 import { formatAddresses, formatDateTime, shortDate } from '../tools/format'
 import { nowLine } from './context'
 import type { StartingData } from './day'
+
+/** The runs' titles, as the user sees them. */
+const TITLES = defineMessages({
+  reflection: { en: 'Reflection', it: 'Riflessione', de: 'Reflexion' }
+})
 
 const NATURE_WORDS: Record<string, string> = {
   da_rispondere: 'da rispondere',
@@ -121,8 +129,8 @@ export async function prepareConoscimi(
 
   return {
     title: everything
-      ? 'Conoscimi'
-      : `Conoscimi · ${[...now.map((account) => account.email), ...calendarsNow.map((connection) => connection.label)].join(', ')}`,
+      ? messages(PLACES).conoscimi
+      : `${messages(PLACES).conoscimi} · ${[...now.map((account) => account.email), ...calendarsNow.map((connection) => connection.label)].join(', ')}`,
     data: [
       nowLine(),
       `## Da conoscere ora\n\n${[
@@ -258,7 +266,7 @@ export async function prepareReflection(deps: {
   }
 
   return {
-    title: 'Riflessione',
+    title: messages(TITLES).reflection,
     data: `${nowLine()}\n\n${parts.join('\n\n')}`,
     handles: added,
     seen: new Map(),
@@ -318,7 +326,7 @@ export async function prepareKeepingUp(
   }
 
   return {
-    title: 'Al passo',
+    title: messages(PLACES).alPasso,
     data: `${nowLine()}\n\nLe note dal ${formatDateTime(new Date(sinceMs).toISOString())}:\n\n${sections.join('\n\n')}`,
     handles: added,
     seen: new Map()

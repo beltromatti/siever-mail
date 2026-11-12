@@ -1,6 +1,7 @@
 import type { ParsedMail } from 'mailparser'
 
-import { EMPTY_SUBJECT_LABEL } from '@shared/subject'
+import { currentLanguage } from '@main/i18n'
+import { emptySubjectLabel } from '@shared/subject'
 
 export const PREVIEW_MAX_LENGTH = 200
 
@@ -417,7 +418,7 @@ function removeLeadingSubject(body: string, subject: string): string {
 }
 
 function finalizePreview(candidate: string, subject: string): string {
-  const fallbackSubject = subject.trim() || EMPTY_SUBJECT_LABEL
+  const fallbackSubject = subject.trim() || emptySubjectLabel(currentLanguage())
 
   if (!candidate) {
     return fallbackSubject

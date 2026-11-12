@@ -2,6 +2,10 @@
 
 Oggi è {{data}} ({{fuso}}). L'ora esatta è in testa a ciò che ricevi e a ogni parola dell'utente.
 
+## La lingua
+
+{{lingua}}
+
 ## Le connessioni dell'utente
 
 {{connessioni}}

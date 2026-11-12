@@ -1,13 +1,16 @@
 import { folderDisplayName } from '@shared/folders'
+import type { Language } from '@shared/i18n'
 import type { MailFolder } from '@shared/models'
+
+import { languageNow } from './i18n'
 
 /**
  * One account's folders as the mailbox holds them: a tree, the way Outlook
  * and Apple Mail show it, instead of one flat run where two "bollette" in
  * different places could not be told apart.
  *
- *   • The folders with a role — Posta in arrivo, Inviata, Bozze, Archivio,
- *     Spam, Cestino… — come first, in that order, wherever the server keeps
+ *   • The folders with a role — Inbox, Sent, Drafts, Archive, Spam,
+ *     Trash… — come first, in that order, wherever the server keeps
  *     them: Gmail files them under "[Gmail]", a container no one needs to
  *     see, and many servers under INBOX.
  *   • Every other folder sits under its parent, as the server nests it,
@@ -44,7 +47,10 @@ function roleRank(folder: MailFolder | null): number {
 function compareNodes(left: FolderTreeNode, right: FolderTreeNode): number {
   return (
     roleRank(left.folder) - roleRank(right.folder) ||
-    left.name.localeCompare(right.name, 'it', { sensitivity: 'base', numeric: true })
+    left.name.localeCompare(right.name, languageNow().formatLocale, {
+      sensitivity: 'base',
+      numeric: true
+    })
   )
 }
 
@@ -120,6 +126,9 @@ export function flattenFolderTree(
 }
 
 /** What a node is called: its folder as the app names folders, or a container's own name. */
-export function folderNodeLabel(node: FolderTreeNode): string {
-  return node.folder ? folderDisplayName(node.folder) : node.name
+export function folderNodeLabel(
+  node: FolderTreeNode,
+  language: Language = languageNow().language
+): string {
+  return node.folder ? folderDisplayName(node.folder, language) : node.name
 }

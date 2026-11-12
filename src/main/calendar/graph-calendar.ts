@@ -1,7 +1,9 @@
 import { Marked } from 'marked'
 import { NodeHtmlMarkdown } from 'node-html-markdown'
 
+import { messages } from '@main/i18n'
 import type { CalendarAttendee, CalendarResponse, EventOrigin } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 
 import {
   SyncTokenExpired,
@@ -23,9 +25,43 @@ const MEETING_LINK =
   /https:\/\/(?:teams\.microsoft\.com|teams\.live\.com|meet\.google\.com|[\w.-]*zoom\.us|[\w.-]*webex\.com)\/[^\s"<>)]+/i
 const MAX_RETRY_WAIT_MS = 30_000
 
+const MESSAGES = defineMessages({
+  mailboxZoneNotGranted: {
+    en: 'To write all-day events, Microsoft must give SIEVER Mail the mailbox’s time zone: reconnect the calendar.',
+    it: 'Per scrivere gli eventi di tutto il giorno Microsoft deve dare a SIEVER Mail il fuso orario della casella: ricollega il calendario.',
+    de: 'Um ganztägige Termine zu speichern, muss Microsoft SIEVER Mail die Zeitzone des Postfachs mitteilen: Verbinden Sie den Kalender erneut.'
+  },
+  untitled: { en: '(untitled)', it: '(senza titolo)', de: '(ohne Titel)' },
+  noMailboxZone: {
+    en: 'Microsoft didn’t say the mailbox’s time zone.',
+    it: 'Microsoft non ha detto il fuso orario della casella.',
+    de: 'Microsoft hat die Zeitzone des Postfachs nicht mitgeteilt.'
+  },
+  calendar: { en: 'Calendar', it: 'Calendario', de: 'Kalender' },
+  someoneElses: {
+    en: 'This is someone else’s calendar: answer the invitation from yours.',
+    it: 'Questo è il calendario di un’altra persona: rispondi all’invito dal tuo.',
+    de: 'Dies ist der Kalender einer anderen Person: Beantworten Sie die Einladung aus Ihrem eigenen.'
+  },
+  answered: {
+    en: (status: number, code: string | null, message: string | null) =>
+      `Microsoft answered ${status}${code ? ` (${code})` : ''}${message ? `: ${message}` : ''}`,
+    it: (status: number, code: string | null, message: string | null) =>
+      `Microsoft ha risposto ${status}${code ? ` (${code})` : ''}${message ? `: ${message}` : ''}`,
+    de: (status: number, code: string | null, message: string | null) =>
+      `Microsoft hat mit ${status}${code ? ` (${code})` : ''} geantwortet${message ? `: ${message}` : ''}`
+  },
+  accessRefused: {
+    en: 'Microsoft no longer accepts the access to this calendar: reconnect it.',
+    it: 'Microsoft non accetta più l’accesso a questo calendario: ricollegalo.',
+    de: 'Microsoft akzeptiert den Zugriff auf diesen Kalender nicht mehr: Verbinden Sie ihn erneut.'
+  }
+})
+
 /** What the user is told where an all-day event waits for the mailbox's time zone. */
-export const MAILBOX_ZONE_NOT_GRANTED =
-  'Per scrivere gli eventi di tutto il giorno Microsoft deve dare a SIEVER Mail il fuso orario della casella: ricollega il calendario.'
+export function mailboxZoneNotGranted(): string {
+  return messages(MESSAGES).mailboxZoneNotGranted
+}
 
 interface GraphDateTime {
   dateTime: string
@@ -152,7 +188,7 @@ export function eventOfGraph(
     eventId: item.id,
     iCalUid: item.iCalUId ? canonicalUid(item.iCalUId) : null,
     seriesId: item.seriesMasterId ?? null,
-    title: item.subject?.trim() || '(senza titolo)',
+    title: item.subject?.trim() || messages(MESSAGES).untitled,
     start: allDay ? dayOf(start) : new Date(startsAt).toISOString(),
     end: allDay ? dayOf(end) : new Date(Math.max(endsAt, startsAt)).toISOString(),
     allDay,
@@ -355,7 +391,7 @@ export class GraphCalendarProvider implements CalendarProvider {
 
     // Without it an all-day event would be written on the wrong days east or west of UTC.
     if (!token) {
-      throw new Error(MAILBOX_ZONE_NOT_GRANTED)
+      throw new Error(mailboxZoneNotGranted())
     }
 
     const { value } = await this.json<{ value?: string | null }>('/me/mailboxSettings/timeZone', {
@@ -363,7 +399,7 @@ export class GraphCalendarProvider implements CalendarProvider {
     })
 
     if (!value) {
-      throw new Error('Microsoft non ha detto il fuso orario della casella.')
+      throw new Error(messages(MESSAGES).noMailboxZone)
     }
 
     return value
@@ -452,7 +488,7 @@ export class GraphCalendarProvider implements CalendarProvider {
 
     return calendars.map((calendar) => ({
       calendarId: calendar.id,
-      name: calendar.name?.trim() || 'Calendario',
+      name: calendar.name?.trim() || messages(MESSAGES).calendar,
       primary: calendar.isDefaultCalendar === true,
       writable: calendar.canEdit !== false,
       color: /^#[0-9a-f]{6}$/i.test(calendar.hexColor ?? '')
@@ -603,7 +639,7 @@ export class GraphCalendarProvider implements CalendarProvider {
 
     // In a calendar someone shares, the answer would be its owner's.
     if (!own) {
-      throw new Error('Questo è il calendario di un’altra persona: rispondi all’invito dal tuo.')
+      throw new Error(messages(MESSAGES).someoneElses)
     }
 
     // The whole series answered: the instance stands for it.
@@ -637,14 +673,17 @@ async function graphError(response: Response): Promise<CalendarRequestError> {
   const body = (await response.json().catch(() => null)) as {
     error?: { code?: string; message?: string }
   } | null
-  const said = `Microsoft ha risposto ${response.status}${body?.error?.code ? ` (${body.error.code})` : ''}${
-    body?.error?.message ? `: ${body.error.message}` : ''
-  }`
+  const said = messages(MESSAGES).answered(
+    response.status,
+    body?.error?.code || null,
+    body?.error?.message || null
+  )
 
   return response.status === 401
-    ? new CalendarRequestError(
-        'Microsoft non accetta più l’accesso a questo calendario: ricollegalo.',
-        { status: 401, refusal: 'autorizzazione', cause: new Error(said) }
-      )
+    ? new CalendarRequestError(messages(MESSAGES).accessRefused, {
+        status: 401,
+        refusal: 'autorizzazione',
+        cause: new Error(said)
+      })
     : new CalendarRequestError(said, { status: response.status })
 }

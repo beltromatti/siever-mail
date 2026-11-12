@@ -1,54 +1,87 @@
+import { hourStyleFor } from '@shared/i18n'
 import type { MailAddress } from '@shared/models'
 
-const DATE_TIME = new Intl.DateTimeFormat('it-IT', {
+/**
+ * How the tools write dates: in Italian for the model, which reads them —
+ * the default —, or in the interface's language for the lines the user
+ * sees (`userDates` in `./user-dates`).
+ */
+export interface DateWords {
+  locale: string
+  /** An event of all day: "tutto il giorno". */
+  allDay: string
+}
+
+export const MODEL_DATES: DateWords = { locale: 'it-IT', allDay: 'tutto il giorno' }
+
+const formats = new Map<string, Intl.DateTimeFormat>()
+
+/** A date format, made once for each locale and kept. */
+function dateFormat(locale: string, wanted: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  // The hour as the region writes it: "07:30" on a 24-hour clock, "7:30 AM" on a 12-hour one.
+  const options = wanted.hour === '2-digit' ? { ...wanted, hour: hourStyleFor(locale) } : wanted
+  const key = `${locale}\u0000${JSON.stringify(options)}`
+  let format = formats.get(key)
+
+  if (!format) {
+    format = new Intl.DateTimeFormat(locale, options)
+    formats.set(key, format)
+  }
+
+  return format
+}
+
+const DATE_TIME: Intl.DateTimeFormatOptions = {
   weekday: 'short',
   day: '2-digit',
   month: '2-digit',
   year: 'numeric',
   hour: '2-digit',
   minute: '2-digit'
-})
-
-const EVENT_DAY = new Intl.DateTimeFormat('it-IT', {
-  weekday: 'short',
-  day: 'numeric',
-  month: 'short'
-})
-const EVENT_TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
+}
+const EVENT_DAY: Intl.DateTimeFormatOptions = { weekday: 'short', day: 'numeric', month: 'short' }
+const EVENT_TIME: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' }
 
 /**
  * When an event is, in the user's words and time — "ven 6 nov 15:00–16:00",
  * "gio 12 nov – ven 13 nov, tutto il giorno" —, its last day said when it
  * is not its first. An event of all day ends at the midnight after it.
  */
-export function eventWhen(start: string, end: string, allDay: boolean): string {
+export function eventWhen(
+  start: string,
+  end: string,
+  allDay: boolean,
+  words: DateWords = MODEL_DATES
+): string {
+  const day = dateFormat(words.locale, EVENT_DAY)
+  const time = dateFormat(words.locale, EVENT_TIME)
   const from = allDay ? new Date(`${start.slice(0, 10)}T00:00`) : new Date(start)
   const to = allDay ? new Date(new Date(`${end.slice(0, 10)}T00:00`).getTime() - 1) : new Date(end)
 
   // What is no date stays as it was written.
   if (Number.isNaN(from.getTime())) {
-    return allDay ? `${start}, tutto il giorno` : start
+    return allDay ? `${start}, ${words.allDay}` : start
   }
 
   if (allDay) {
     return Number.isNaN(to.getTime()) || from.toDateString() === to.toDateString() || to < from
-      ? `${EVENT_DAY.format(from)}, tutto il giorno`
-      : `${EVENT_DAY.format(from)} – ${EVENT_DAY.format(to)}, tutto il giorno`
+      ? `${day.format(from)}, ${words.allDay}`
+      : `${day.format(from)} – ${day.format(to)}, ${words.allDay}`
   }
 
   if (Number.isNaN(to.getTime()) || to < from) {
-    return `${EVENT_DAY.format(from)} ${EVENT_TIME.format(from)}`
+    return `${day.format(from)} ${time.format(from)}`
   }
 
   return from.toDateString() === to.toDateString()
-    ? `${EVENT_DAY.format(from)} ${EVENT_TIME.format(from)}–${EVENT_TIME.format(to)}`
-    : `${EVENT_DAY.format(from)} ${EVENT_TIME.format(from)} – ${EVENT_DAY.format(to)} ${EVENT_TIME.format(to)}`
+    ? `${day.format(from)} ${time.format(from)}–${time.format(to)}`
+    : `${day.format(from)} ${time.format(from)} – ${day.format(to)} ${time.format(to)}`
 }
 
 /** A date as the Segretario reads it: "lun 26/10/2026, 10:42", in the user's time. */
-export function formatDateTime(iso: string): string {
+export function formatDateTime(iso: string, locale = MODEL_DATES.locale): string {
   const date = new Date(iso)
-  return Number.isNaN(date.valueOf()) ? iso : DATE_TIME.format(date)
+  return Number.isNaN(date.valueOf()) ? iso : dateFormat(locale, DATE_TIME).format(date)
 }
 
 export function formatAddress(address: MailAddress): string {
@@ -120,7 +153,7 @@ export function countOf(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`
 }
 
-const SHORT_DATE = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
+const SHORT_DATE: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' }
 const DAY = new Intl.DateTimeFormat('it-IT', {
   weekday: 'short',
   day: '2-digit',
@@ -129,10 +162,10 @@ const DAY = new Intl.DateTimeFormat('it-IT', {
 })
 
 /** A day — AAAA-MM-GG, or an instant on its local day — as a short date; what is no date stays as it is. */
-export function shortDate(value: string): string {
+export function shortDate(value: string, locale = MODEL_DATES.locale): string {
   const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim())
   const date = day ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])) : new Date(value)
-  return Number.isNaN(date.getTime()) ? value : SHORT_DATE.format(date)
+  return Number.isNaN(date.getTime()) ? value : dateFormat(locale, SHORT_DATE).format(date)
 }
 
 /**

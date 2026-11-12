@@ -37,6 +37,13 @@ nsis:
   perMachine: false
   allowElevation: true
   allowToChangeInstallationDirectory: false
+  # The installer and the uninstaller speak the app's languages: the one Windows speaks, when it
+  # is one of them, else English. installer.nsh has its own words in each.
+  multiLanguageInstaller: true
+  installerLanguages:
+    - en_US
+    - it_IT
+    - de_DE
   include: build/installer.nsh
 mac:
   # The mac signing/notarization toggles default to OFF here and are
@@ -59,12 +66,22 @@ mac:
   # by the system instead of getting an app that does not start.
   minimumSystemVersion: '13.0'
   # What the system says when SIEVER Mail first reaches each place: the
-  # folders its files are read from, attached from and saved to.
+  # folders its files are read from, attached from and saved to. In English
+  # here; in each of the app's languages in build/locales/<language>.lproj,
+  # which macOS reads in the language the user has for the app. A mapping,
+  # merged into Info.plist as it is: a list would nest each under "0", "1"…,
+  # where macOS never finds them.
   extendInfo:
-    - NSDesktopFolderUsageDescription: SIEVER Mail legge e allega i file che tieni sulla Scrivania, e vi salva gli allegati.
-    - NSDocumentsFolderUsageDescription: SIEVER Mail legge e allega i file della cartella Documenti, e vi salva gli allegati.
-    - NSDownloadsFolderUsageDescription: SIEVER Mail legge e allega i file della cartella Download, e vi salva gli allegati.
-    - NSNetworkVolumesUsageDescription: SIEVER Mail legge e allega i file delle cartelle di rete, e vi salva ciò che gli chiedi.
+    NSDesktopFolderUsageDescription: SIEVER Mail reads and attaches the files you keep on the Desktop, and saves attachments there.
+    NSDocumentsFolderUsageDescription: SIEVER Mail reads and attaches the files in your Documents folder, and saves attachments there.
+    NSDownloadsFolderUsageDescription: SIEVER Mail reads and attaches the files in your Downloads folder, and saves attachments there.
+    NSNetworkVolumesUsageDescription: SIEVER Mail reads and attaches the files in network folders, and saves there what you ask it to.
+  # Beside Electron's own in Contents/Resources/<language>.lproj, before the app is signed.
+  extraResources:
+    - from: build/locales
+      to: .
+      filter:
+        - '*.lproj/InfoPlist.strings'
   notarize: false
 dmg:
   artifactName: ${name}-${version}.${ext}

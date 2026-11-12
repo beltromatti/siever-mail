@@ -12,7 +12,9 @@ import {
   SettingsPage
 } from '@renderer/components/ui/settings'
 import { useCalendarList } from '@renderer/features/calendar/use-calendar'
+import { hourStyle, languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { CALENDAR_ROLES, type CalendarListEntry, type CalendarRole } from '@shared/calendar'
+import type { Messages } from '@shared/i18n'
 import type { MailAccount } from '@shared/models'
 import {
   REMINDER_LEADS,
@@ -20,46 +22,39 @@ import {
   type NotificationPreferences,
   type NotificationStatus
 } from '@shared/notifications'
+import { PLACES } from '@shared/places'
 
-const TIME_FORMAT = new Intl.DateTimeFormat('it-IT', {
-  day: 'numeric',
-  month: 'short',
-  hour: '2-digit',
-  minute: '2-digit'
-})
+import { BADGE_WORDS, MESSAGES, ROLE_WORDS } from './notifications-section.messages'
 
-/** Where the icon carrying the count sits, as each system calls it. */
-function iconPlace(platform = navigator.platform): string {
-  if (/mac/i.test(platform)) {
-    return "sull'icona nel Dock"
-  }
-
-  return /win/i.test(platform) ? "sull'icona nella barra delle applicazioni" : "sull'icona dell'app"
+/** When a notification was shown: the day and the time, as the region writes them. */
+function timeWords(at: number): string {
+  return new Intl.DateTimeFormat(languageNow().formatLocale, {
+    day: 'numeric',
+    month: 'short',
+    hour: hourStyle(),
+    minute: '2-digit'
+  }).format(at)
 }
 
-function leadWords(lead: number | null): string {
+/** Where the icon carrying the count sits, as each system calls it. */
+function iconPlace(m: Messages<typeof MESSAGES>, platform = navigator.platform): string {
+  if (/mac/i.test(platform)) {
+    return m.onDockIcon
+  }
+
+  return /win/i.test(platform) ? m.onTaskbarIcon : m.onAppIcon
+}
+
+function leadWords(m: Messages<typeof MESSAGES>, lead: number | null): string {
   if (lead === null) {
-    return 'Nessun promemoria'
+    return m.noReminder
   }
 
   if (lead === 0) {
-    return "All'inizio"
+    return m.atStart
   }
 
-  return lead === 60 ? '1 ora prima' : `${lead} minuti prima`
-}
-
-/** Whose a calendar's events are (§7.4), as the user chooses it. */
-const ROLE_WORDS: Record<CalendarRole, string> = {
-  tutti: 'Tutti gli eventi',
-  propri: 'Solo i tuoi',
-  nessuno: 'Nessuno'
-}
-
-const BADGE_WORDS: Record<BadgeCount, string> = {
-  work: 'Ciò che ti aspetta oggi',
-  unread: 'I messaggi non letti in Posta in arrivo',
-  none: 'Nessun numero'
+  return lead === 60 ? m.hourBefore : m.minutesBefore(lead)
 }
 
 function errorText(error: unknown): string | undefined {
@@ -78,19 +73,20 @@ function RoleChosen({
   disabled: boolean
   onRestore: () => void
 }): React.JSX.Element {
-  const where = `${calendar.connection}${calendar.primary ? ' · il principale' : ''}${calendar.hidden ? ' · nascosto nel Calendario' : ''}`
+  const m = useMessages(MESSAGES)
+  const where = `${calendar.connection}${calendar.primary ? ` · ${m.principal}` : ''}${calendar.hidden ? ` · ${m.hiddenInCalendar}` : ''}`
 
   if (calendar.roleBy === 'utente') {
     return (
       <>
-        {where} · scelto da te ·{' '}
+        {where} · {m.chosenByYou} ·{' '}
         <button
           type="button"
           className="hover:text-foreground underline underline-offset-2 disabled:no-underline"
           disabled={disabled}
           onClick={onRestore}
         >
-          {aiOn ? 'lascia decidere al Segretario' : 'torna a com’era'}
+          {aiOn ? m.letSegretarioDecide : m.restore}
         </button>
       </>
     )
@@ -99,7 +95,7 @@ function RoleChosen({
   if (calendar.roleBy === 'segretario') {
     return (
       <>
-        {where} · deciso dal Segretario
+        {where} · {m.decidedBySegretario}
         {calendar.roleReason ? `: ${calendar.roleReason}` : ''}
       </>
     )
@@ -124,6 +120,10 @@ export function NotificationsSection({
   accounts: ReadonlyArray<MailAccount>
   aiOn: boolean
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
+  const roles = useMessages(ROLE_WORDS)
+  const badges = useMessages(BADGE_WORDS)
   const [preferences, setPreferences] = useState<NotificationPreferences | null>(null)
   const [status, setStatus] = useState<NotificationStatus | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -143,7 +143,7 @@ export function NotificationsSection({
       })
       .catch((error: unknown) => {
         if (current) {
-          setLoadError(errorText(error) ?? 'Impossibile leggere le impostazioni delle notifiche.')
+          setLoadError(errorText(error) ?? messagesNow(MESSAGES).unreadable)
         }
       })
 
@@ -171,7 +171,7 @@ export function NotificationsSection({
       setPreferences(await window.notificationsApi.setPreferences(next))
     } catch (error) {
       setPreferences(previous)
-      toast.error('Impostazione non salvata', { description: errorText(error) })
+      toast.error(messagesNow(MESSAGES).notSaved, { description: errorText(error) })
     } finally {
       setSaving(false)
     }
@@ -183,7 +183,7 @@ export function NotificationsSection({
     try {
       setStatus(await window.notificationsApi.showTest())
     } catch (error) {
-      toast.error('Notifica di prova non inviata', { description: errorText(error) })
+      toast.error(messagesNow(MESSAGES).testNotSent, { description: errorText(error) })
     } finally {
       setTesting(false)
     }
@@ -195,18 +195,18 @@ export function NotificationsSection({
     try {
       setCalendars(await window.calendarApi.setCalendarRole(key, role))
     } catch (error) {
-      toast.error('Impostazione non salvata', { description: errorText(error) })
+      toast.error(messagesNow(MESSAGES).notSaved, { description: errorText(error) })
     } finally {
       setSaving(false)
     }
   }
 
   const openSystemSettings = (): void => {
-    window.notificationsApi
-      .openSystemSettings()
-      .catch((error: unknown) =>
-        toast.error('Impostazioni di sistema non aperte', { description: errorText(error) })
-      )
+    window.notificationsApi.openSystemSettings().catch((error: unknown) =>
+      toast.error(messagesNow(MESSAGES).systemSettingsNotOpened, {
+        description: errorText(error)
+      })
+    )
   }
 
   if (loadError) {
@@ -218,7 +218,7 @@ export function NotificationsSection({
   }
 
   if (!preferences || !status) {
-    return <SettingsLoading>Caricamento delle impostazioni…</SettingsLoading>
+    return <SettingsLoading>{m.loading}</SettingsLoading>
   }
 
   const delivery = status.delivery
@@ -227,27 +227,24 @@ export function NotificationsSection({
 
   return (
     <SettingsPage>
-      <Group
-        title="SIEVER Mail"
-        description="Una notifica interrompe ciò che stai facendo: arriva solo quando saperlo adesso, e non alla prossima occhiata, cambia ciò che fai. Il resto ti aspetta dove lo trovi."
-      >
+      <Group title="SIEVER Mail" description={m.appText}>
         {!status.supported ? (
           <div className="text-muted-foreground rounded-md border border-dashed px-3 py-2 text-[12px]">
-            Questo sistema non mostra notifiche sul desktop.
+            {m.unsupported}
           </div>
         ) : (
           <>
             <SettingRow
               id="notifications-enabled"
-              title="Notifiche sul desktop"
+              title={m.desktop}
               checked={preferences.enabled}
               disabled={saving}
               onCheckedChange={(enabled) => void update((current) => ({ ...current, enabled }))}
             />
             <SettingRow
               id="notifications-preview"
-              title="Mostra il contenuto"
-              description={`Chi scrive, l'oggetto, il titolo degli eventi${aiOn ? ', le parole del Segretario' : ''}. Senza, dicono solo che cosa è arrivato.`}
+              title={m.preview}
+              description={m.previewText(aiOn)}
               checked={preferences.showPreview}
               disabled={off}
               onCheckedChange={(showPreview) =>
@@ -256,26 +253,22 @@ export function NotificationsSection({
             />
             <SettingRow
               id="notifications-sound"
-              title="Suono"
+              title={m.sound}
               checked={preferences.sound}
               disabled={off}
               onCheckedChange={(sound) => void update((current) => ({ ...current, sound }))}
             />
-            <p className="text-muted-foreground text-[11px]">
-              Gli avvisi di SIEVER Mail{aiOn ? ' — le funzioni AI spente, ' : ' — '}una connessione
-              ferma, un messaggio che non è partito — arrivano sempre quando non sei davanti alla
-              finestra: senza di te non si rimettono a posto.
-            </p>
+            <p className="text-muted-foreground text-[11px]">{m.alertsText(aiOn)}</p>
           </>
         )}
       </Group>
 
       {status.supported && aiOn && (
-        <Group title="Segretario">
+        <Group title={places.segretario}>
           <SettingRow
             id="notifications-needs-you"
-            title="Quando ti serve"
-            description="Quando aspetta una tua conferma, o ha finito ciò che gli hai chiesto mentre eri altrove."
+            title={m.needsYou}
+            description={m.needsYouText}
             checked={preferences.segretario.needsYou}
             disabled={off}
             onCheckedChange={(needsYou) =>
@@ -287,8 +280,8 @@ export function NotificationsSection({
           />
           <SettingRow
             id="notifications-day"
-            title="La tua giornata"
-            description="Al mattino, la prima volta che è pronta: com'è la giornata, senza aprire SIEVER Mail."
+            title={m.day}
+            description={m.dayText}
             checked={preferences.segretario.day}
             disabled={off}
             onCheckedChange={(day) =>
@@ -299,11 +292,11 @@ export function NotificationsSection({
       )}
 
       {status.supported && accounts.length > 0 && (
-        <Group title="Posta">
+        <Group title={places.mail}>
           <SettingRow
             id="notifications-mail"
-            title="Posta nuova"
-            description="I messaggi non letti che arrivano in Posta in arrivo, con Segna come letta e Archivia. Spariscono da soli quando li leggi, anche da un altro dispositivo."
+            title={m.newMail}
+            description={m.newMailText}
             checked={preferences.mail.enabled}
             disabled={off}
             onCheckedChange={(enabled) =>
@@ -313,8 +306,8 @@ export function NotificationsSection({
           {aiOn && (
             <SettingRow
               id="notifications-flagged"
-              title="Solo ciò che il Segretario ti segnala"
-              description="Mentre legge la posta, ti avvisa solo dei messaggi che devi sapere adesso, dicendoti cosa vogliono. Gli altri li trovi nella posta, senza interruzioni."
+              title={m.onlyFlagged}
+              description={m.onlyFlaggedMailText}
               checked={preferences.mail.onlyFlagged}
               disabled={off || !preferences.mail.enabled}
               onCheckedChange={(onlyFlagged) =>
@@ -325,7 +318,7 @@ export function NotificationsSection({
 
           {accounts.length > 1 && (
             <div className="flex flex-col gap-2">
-              <p className="text-muted-foreground mt-1 text-[11px]">Le caselle di cui avvisarti:</p>
+              <p className="text-muted-foreground mt-1 text-[11px]">{m.mailboxes}</p>
               {accounts.map((account) => (
                 <SettingRow
                   key={account.id}
@@ -353,13 +346,13 @@ export function NotificationsSection({
       )}
 
       {calendars && calendars.length > 0 && (
-        <Group title="Calendario">
+        <Group title={places.calendar}>
           {status.supported && (
             <>
               <SettingRow
                 id="notifications-reminders"
-                title="Promemoria"
-                description="Prima dei tuoi eventi, ai tempi che ognuno ha nel suo calendario. Mai per un invito che hai rifiutato."
+                title={m.reminders}
+                description={m.remindersText}
                 checked={preferences.calendar.reminders}
                 disabled={off}
                 onCheckedChange={(reminders) =>
@@ -370,12 +363,12 @@ export function NotificationsSection({
                 }
               />
               <ChoiceRow
-                title="Agli eventi senza un promemoria loro"
-                description="Non a quelli di tutto il giorno, come i compleanni."
+                title={m.defaultLead}
+                description={m.defaultLeadText}
                 value={String(preferences.calendar.defaultLead)}
                 options={REMINDER_LEADS.map(String)}
-                words={(lead) => leadWords(lead === 'null' ? null : Number(lead))}
-                label="Promemoria predefinito"
+                words={(lead) => leadWords(m, lead === 'null' ? null : Number(lead))}
+                label={m.defaultLeadLabel}
                 disabled={off || !preferences.calendar.reminders}
                 onChange={(lead) =>
                   void update((current) => ({
@@ -389,8 +382,8 @@ export function NotificationsSection({
               />
               <SettingRow
                 id="notifications-calendar-changes"
-                title="Inviti e cambiamenti"
-                description="Un evento tuo che ha in mano qualcun altro: un invito, uno spostato o annullato da chi lo organizza, uno messo nel tuo calendario da un altro. Ciò che arriva anche per posta te lo dice la posta."
+                title={m.changes}
+                description={m.changesText}
                 checked={preferences.calendar.changes}
                 disabled={off}
                 onCheckedChange={(changes) =>
@@ -403,8 +396,8 @@ export function NotificationsSection({
               {aiOn && (
                 <SettingRow
                   id="notifications-calendar-flagged"
-                  title="Solo ciò che il Segretario ti segnala"
-                  description="Mentre guarda il calendario, ti avvisa solo dei cambiamenti che devi sapere adesso, dicendoti perché. Se non li ha guardati entro dieci minuti, arrivano come sono."
+                  title={m.onlyFlagged}
+                  description={m.onlyFlaggedCalendarText}
                   checked={preferences.calendar.onlyFlagged}
                   disabled={off || !preferences.calendar.changes}
                   onCheckedChange={(onlyFlagged) =>
@@ -421,11 +414,7 @@ export function NotificationsSection({
           {(calendars.length > 1 || calendars.some((calendar) => !calendar.primary)) && (
             <div className="flex flex-col gap-2">
               <p className="text-muted-foreground mt-1 text-[11px]">
-                Quali eventi sono tuoi: ti ricordano, te ne arrivano le novità
-                {aiOn ? ' e Oggi li mostra nella tua giornata' : ''}. In un calendario condiviso o
-                di altri, «solo i tuoi» sono quelli a cui sei invitato, che organizzi o che hai
-                creato tu
-                {aiOn ? ', e quelli che il Segretario riconosce tuoi' : ''}.
+                {m.whoseText(aiOn, places.today)}
               </p>
               {calendars.map((calendar) => (
                 <ChoiceRow
@@ -453,8 +442,8 @@ export function NotificationsSection({
                   }
                   value={calendar.role}
                   options={CALENDAR_ROLES}
-                  words={(role) => ROLE_WORDS[role]}
-                  label={`Quali eventi di ${calendar.name} sono tuoi`}
+                  words={(role) => roles[role]}
+                  label={m.whoseLabel(calendar.name)}
                   width="w-40"
                   disabled={saving}
                   onChange={(role) => void setRole(calendar.key, role)}
@@ -466,24 +455,20 @@ export function NotificationsSection({
       )}
 
       {status.supported && (
-        <Group
-          title="Permesso del sistema"
-          description="È il sistema a decidere se mostrare le notifiche di SIEVER Mail, e con quale stile. Con «Non disturbare» o una modalità Full immersion attiva le trattiene finché non la disattivi."
-        >
+        <Group title={m.permission} description={m.permissionText}>
           {delivery.state === 'failed' ? (
             <div className="text-destructive-soft-foreground border-destructive/35 bg-destructive/10 flex items-start gap-2 rounded-md border px-3 py-2 text-[12px]">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
               <span className="min-w-0">
-                Il sistema non ha mostrato l&apos;ultima notifica ({TIME_FORMAT.format(delivery.at)}
-                ). Consenti le notifiche di SIEVER Mail nelle impostazioni di sistema.
+                {m.deliveryFailed(timeWords(delivery.at))}
                 <span className="block text-[11px] opacity-80">{delivery.reason}</span>
               </span>
             </div>
           ) : (
             <p className="text-[12px]">
               {delivery.state === 'shown'
-                ? `Ultima notifica mostrata ${TIME_FORMAT.format(delivery.at)}. Se non l'hai vista, il sistema l'ha trattenuta.`
-                : 'Nessuna notifica mostrata da quando hai aperto SIEVER Mail.'}
+                ? m.deliveryShown(timeWords(delivery.at))
+                : m.deliveryNone}
             </p>
           )}
 
@@ -501,7 +486,7 @@ export function NotificationsSection({
               ) : (
                 <BellRing className="size-3.5" />
               )}
-              Invia una notifica di prova
+              {m.sendTest}
             </Button>
             {status.canOpenSystemSettings && (
               <Button
@@ -512,7 +497,7 @@ export function NotificationsSection({
                 onClick={openSystemSettings}
               >
                 <ExternalLink className="size-3.5" />
-                Apri le impostazioni di sistema
+                {m.openSystemSettings}
               </Button>
             )}
           </div>
@@ -520,17 +505,17 @@ export function NotificationsSection({
       )}
 
       <Group
-        title="Icona dell'app"
-        description={`Il numero ${iconPlace()}${/mac/i.test(navigator.platform) ? ': su macOS compare solo se le notifiche di SIEVER Mail sono consentite' : ''}.`}
+        title={m.appIcon}
+        description={m.appIconText(iconPlace(m), /mac/i.test(navigator.platform))}
       >
         {aiOn ? (
           <ChoiceRow
-            title="Che cosa conta"
-            description="Ciò che ti aspetta oggi: le cose aperte che toccano a te, in scadenza oggi o già scadute."
+            title={m.counts}
+            description={m.countsText}
             value={preferences.badge}
             options={Object.keys(BADGE_WORDS) as BadgeCount[]}
-            words={(badge) => BADGE_WORDS[badge]}
-            label="Il numero sull'icona"
+            words={(badge) => badges[badge]}
+            label={m.countsLabel}
             width="w-60"
             disabled={saving}
             onChange={(badge) => void update((current) => ({ ...current, badge }))}
@@ -538,8 +523,8 @@ export function NotificationsSection({
         ) : (
           <SettingRow
             id="notifications-badge"
-            title="I messaggi non letti in Posta in arrivo"
-            description="Di tutte le caselle."
+            title={badges.unread}
+            description={m.allMailboxes}
             checked={preferences.badge !== 'none'}
             disabled={saving}
             onCheckedChange={(shown) =>

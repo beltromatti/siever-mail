@@ -21,46 +21,143 @@ import { IconButton } from '@renderer/components/ui/icon-button'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { RESPONSE_LABELS } from '@renderer/features/calendar/event-line'
 import { useCommandKeys } from '@renderer/lib/command-shortcuts'
+import { hourStyle, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry, CalendarResponse } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import type { MessageRef } from '@shared/models'
 import type { LinkedText } from '@shared/segretario'
 import { eventProposalWords } from '@renderer/features/segretario/proposal-words'
 import { LinkedWords } from '@renderer/features/segretario/segretario-text'
 
-import { addDays, dayOfKey } from '@renderer/features/calendar/calendar-dates'
+import { addDays, dateFormat, dayOfKey } from '@renderer/features/calendar/calendar-dates'
 import { dotStyle } from './event-style'
 import { EventWorkSection } from './event-work'
 import type { ProposedEvent } from './use-calendar-data'
 
-const DAY = new Intl.DateTimeFormat('it-IT', { weekday: 'long', day: 'numeric', month: 'long' })
-const TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
+const MESSAGES = defineMessages({
+  allDay: {
+    en: (day: string) => `${day}, all day`,
+    it: (day: string) => `${day}, tutto il giorno`,
+    de: (day: string) => `${day}, ganztägig`
+  },
+  fromTo: {
+    en: (from: string, to: string) => `from ${from} to ${to}`,
+    it: (from: string, to: string) => `da ${from} a ${to}`,
+    de: (from: string, to: string) => `von ${from} bis ${to}`
+  },
+  messageGone: {
+    en: 'The message is no longer in the mail',
+    it: 'Il messaggio non è più nella posta',
+    de: 'Die Nachricht ist nicht mehr im Postfach'
+  },
+  failed: { en: 'That didn’t work', it: 'Non è andata', de: 'Das hat nicht geklappt' },
+  close: { en: 'Close', it: 'Chiudi', de: 'Schließen' },
+  proposed: {
+    en: 'Proposed by the Segretario: you decide whether to put it in the calendar.',
+    it: 'Proposto dal Segretario: decidi tu se metterlo in calendario.',
+    de: 'Vom Segretario vorgeschlagen: Sie entscheiden, ob er in den Kalender kommt.'
+  },
+  joinCall: { en: 'Join the call', it: 'Entra nella call', de: 'Dem Anruf beitreten' },
+  invitationFrom: {
+    en: (organizer: string) => `Invitation from ${organizer}`,
+    it: (organizer: string) => `Invito di ${organizer}`,
+    de: (organizer: string) => `Einladung von ${organizer}`
+  },
+  invited: { en: 'You’re invited', it: 'Sei invitato', de: 'Sie sind eingeladen' },
+  replySent: { en: 'Reply sent', it: 'Risposta mandata', de: 'Antwort gesendet' },
+  guests: {
+    en: (count: number) => (count === 1 ? 'One guest' : `${count} guests`),
+    it: (count: number) => (count === 1 ? 'Un invitato' : `${count} invitati`),
+    de: (count: number) => (count === 1 ? 'Ein Gast' : `${count} Gäste`)
+  },
+  prepare: { en: 'To prepare', it: 'Per prepararti', de: 'Zur Vorbereitung' },
+  putBySegretario: {
+    en: 'Put in the calendar by the Segretario',
+    it: 'Messo in calendario dal Segretario',
+    de: 'Vom Segretario in den Kalender eingetragen'
+  },
+  openSource: {
+    en: 'Open the email it comes from',
+    it: 'Apri la mail da cui viene',
+    de: 'E-Mail öffnen, aus der er stammt'
+  },
+  ignore: { en: 'Ignore', it: 'Ignora', de: 'Ignorieren' },
+  edit: { en: 'Edit', it: 'Modifica', de: 'Bearbeiten' },
+  deleteTitle: {
+    en: (title: string) => `Delete “${title}”?`,
+    it: (title: string) => `Eliminare «${title}»?`,
+    de: (title: string) => `„${title}“ löschen?`
+  },
+  deleteGuests: {
+    en: 'The guests get the cancellation.',
+    it: 'Gli invitati ricevono la cancellazione.',
+    de: 'Die Gäste erhalten die Absage.'
+  },
+  deleteAlone: {
+    en: 'It comes off the calendar.',
+    it: 'Lo togli dal calendario.',
+    de: 'Er wird aus dem Kalender entfernt.'
+  },
+  delete: { en: 'Delete', it: 'Elimina', de: 'Löschen' },
+  deleted: { en: 'Event deleted', it: 'Evento eliminato', de: 'Termin gelöscht' },
+  openInProvider: {
+    en: 'Open in the provider’s calendar',
+    it: 'Apri nel calendario del fornitore',
+    de: 'Im Kalender des Anbieters öffnen'
+  }
+})
 
-/** When an event is, in words: "giovedì 5 novembre, 9:00–10:30", or its days for one all day. */
+/** The answers the panel gives, as its buttons say them. */
+const ANSWER_LABELS = defineMessages({
+  accepted: { en: 'Yes', it: 'Partecipo', de: 'Zusagen' },
+  tentative: { en: 'Maybe', it: 'Forse', de: 'Vielleicht' },
+  declined: { en: 'No', it: 'No', de: 'Absagen' }
+}) satisfies Record<Exclude<CalendarResponse, 'needsAction'>, unknown>
+
+/** Each guest's answer, beside their name. */
+const GUEST_RESPONSES = defineMessages({
+  accepted: { en: 'going', it: 'partecipi', de: 'zugesagt' },
+  tentative: { en: 'maybe', it: 'forse', de: 'vielleicht' },
+  declined: { en: 'not going', it: 'non partecipi', de: 'abgesagt' },
+  needsAction: { en: 'no reply yet', it: 'da rispondere', de: 'noch keine Antwort' }
+}) satisfies Record<CalendarResponse, unknown>
+
+const DAY: Intl.DateTimeFormatOptions = { weekday: 'long', day: 'numeric', month: 'long' }
+/** Made when used: the hour is written as the region writes it now. */
+const TIME = (): Intl.DateTimeFormatOptions => ({ hour: hourStyle(), minute: '2-digit' })
+
+/** When an event is, in words: "Thursday 5 November, 9:00–10:30", or its days for one all day. */
 export function whenWords(event: Pick<CalendarEvent, 'start' | 'end' | 'allDay'>): string {
+  const m = messagesNow(MESSAGES)
+  const day = dateFormat(DAY)
+
   if (event.allDay) {
     const first = dayOfKey(event.start.slice(0, 10))
     const last = addDays(dayOfKey(event.end.slice(0, 10)), -1)
     return last.getTime() <= first.getTime()
-      ? `${DAY.format(first)}, tutto il giorno`
-      : `da ${DAY.format(first)} a ${DAY.format(last)}`
+      ? m.allDay(day.format(first))
+      : m.fromTo(day.format(first), day.format(last))
   }
 
+  const time = dateFormat(TIME())
   const start = new Date(event.start)
   const end = new Date(event.end)
   return start.toDateString() === end.toDateString()
-    ? `${DAY.format(start)}, ${TIME.format(start)}–${TIME.format(end)}`
-    : `da ${DAY.format(start)} ${TIME.format(start)} a ${DAY.format(end)} ${TIME.format(end)}`
+    ? `${day.format(start)}, ${time.format(start)}–${time.format(end)}`
+    : m.fromTo(
+        `${day.format(start)} ${time.format(start)}`,
+        `${day.format(end)} ${time.format(end)}`
+      )
 }
 
 const RESPONSES: ReadonlyArray<{
   value: Exclude<CalendarResponse, 'needsAction'>
-  label: string
   icon: typeof Check
 }> = [
-  { value: 'accepted', label: 'Partecipo', icon: Check },
-  { value: 'tentative', label: 'Forse', icon: HelpCircle },
-  { value: 'declined', label: 'No', icon: X }
+  { value: 'accepted', icon: Check },
+  { value: 'tentative', icon: HelpCircle },
+  { value: 'declined', icon: X }
 ]
 
 /** Opens the message something came from, when it is still in the mail. */
@@ -75,7 +172,7 @@ async function openSource(
   if (ref) {
     onOpenMessage(ref)
   } else {
-    toast.error('Il messaggio non è più nella posta')
+    toast.error(messagesNow(MESSAGES).messageGone)
   }
 }
 
@@ -132,6 +229,10 @@ export function EventPanel({
   onClose: () => void
   onOpenMessage: (ref: MessageRef) => void
 }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
+  const answers = useMessages(ANSWER_LABELS)
+  const responses = useMessages(RESPONSE_LABELS)
+  const guestResponses = useMessages(GUEST_RESPONSES)
   const [working, setWorking] = useState<string | null>(null)
   const { confirm, dialog } = useConfirmDialog()
   const prep = useEventPrep(aiOn && event ? event.key : null)
@@ -151,7 +252,7 @@ export function EventPanel({
         toast(done)
       }
     } catch (error) {
-      toast.error('Non è andata', {
+      toast.error(m.failed, {
         description: error instanceof Error ? error.message : undefined
       })
     } finally {
@@ -203,7 +304,7 @@ export function EventPanel({
           {title}
         </h2>
         <IconButton
-          label="Chiudi"
+          label={m.close}
           shortcutKeys={closeKeys}
           className="text-faint-foreground size-[26px] shrink-0"
           onClick={onClose}
@@ -228,7 +329,7 @@ export function EventPanel({
         {proposed && (
           <p className="text-ai flex items-center gap-2 text-[12px] font-semibold">
             <CompassStar className="text-ai-star size-3.5" />
-            Proposto dal Segretario: decidi tu se metterlo in calendario.
+            {m.proposed}
           </p>
         )}
 
@@ -247,18 +348,18 @@ export function EventPanel({
             onClick={() => event.meetLink && void window.mailApi.openExternalUrl(event.meetLink)}
           >
             <Video className="size-3.5" />
-            Entra nella call
+            {m.joinCall}
           </Button>
         )}
 
         {event && event.myResponse !== null && (
           <div className="flex flex-col gap-1.5">
             <p className="text-muted-foreground text-[12px]">
-              {event.organizer ? `Invito di ${event.organizer}` : 'Sei invitato'} ·{' '}
+              {event.organizer ? m.invitationFrom(event.organizer) : m.invited} ·{' '}
               <span
                 className={cn(event.myResponse === 'needsAction' && 'text-urgent font-semibold')}
               >
-                {RESPONSE_LABELS[event.myResponse]}
+                {responses[event.myResponse]}
               </span>
             </p>
             <div className="flex gap-1.5">
@@ -275,7 +376,7 @@ export function EventPanel({
                       void run(
                         response.value,
                         () => window.calendarApi.respond(event.key, response.value),
-                        'Risposta mandata'
+                        m.replySent
                       )
                     }
                   >
@@ -284,7 +385,7 @@ export function EventPanel({
                     ) : (
                       <Icon className="size-3.5" />
                     )}
-                    {response.label}
+                    {answers[response.value]}
                   </Button>
                 )
               })}
@@ -296,7 +397,7 @@ export function EventPanel({
           <div className="flex flex-col gap-1">
             <p className="text-muted-foreground flex items-center gap-2 text-[12px]">
               <Users className="size-3.5" />
-              {attendees.length === 1 ? 'Un invitato' : `${attendees.length} invitati`}
+              {m.guests(attendees.length)}
             </p>
             <ul className="flex flex-col gap-0.5 pl-5.5 text-[12.5px]">
               {attendees.map((attendee) => (
@@ -313,7 +414,7 @@ export function EventPanel({
                             : 'text-faint-foreground'
                       )}
                     >
-                      {RESPONSE_LABELS[attendee.response].toLowerCase()}
+                      {guestResponses[attendee.response]}
                     </span>
                   )}
                 </li>
@@ -340,7 +441,7 @@ export function EventPanel({
           <div className="flex flex-col gap-1.5">
             <p className="text-ai flex items-center gap-1.5 text-[12px] font-semibold">
               <CompassStar className="text-ai-star size-3.5" />
-              Per prepararti
+              {m.prepare}
             </p>
             <LinkedWords
               text={prep.text}
@@ -356,7 +457,7 @@ export function EventPanel({
           <div className="bg-ai-soft/45 flex flex-col gap-1.5 rounded-[8px] px-3 py-2">
             <p className="text-ai flex items-center gap-1.5 text-[12px] font-semibold">
               <CompassStar className="text-ai-star size-3.5" />
-              Messo in calendario dal Segretario
+              {m.putBySegretario}
             </p>
             {event.origin.messageKey && (
               <button
@@ -367,7 +468,7 @@ export function EventPanel({
                 className="text-foreground focus-visible:ring-ring/60 flex items-center gap-1.5 self-start rounded-sm text-[12px] outline-none hover:underline focus-visible:ring-2"
               >
                 <Mail className="size-3.5" />
-                Apri la mail da cui viene
+                {m.openSource}
               </button>
             )}
           </div>
@@ -386,7 +487,7 @@ export function EventPanel({
             className="text-foreground focus-visible:ring-ring/60 flex items-center gap-1.5 self-start rounded-sm text-[12px] outline-none hover:underline focus-visible:ring-2"
           >
             <Mail className="size-3.5" />
-            Apri la mail da cui viene
+            {m.openSource}
           </button>
         )}
       </div>
@@ -433,7 +534,7 @@ export function EventPanel({
                 ).then(onClose)
               }
             >
-              Ignora
+              {m.ignore}
             </Button>
           </>
         ) : (
@@ -449,7 +550,7 @@ export function EventPanel({
                     onClick={() => onEdit(event)}
                   >
                     <PenLine className="size-3.5" />
-                    Modifica
+                    {m.edit}
                   </Button>
                   <Button
                     variant="ghost"
@@ -458,12 +559,9 @@ export function EventPanel({
                     disabled={working !== null}
                     onClick={() =>
                       void confirm({
-                        title: `Eliminare «${event.title}»?`,
-                        description:
-                          attendees.length > 0
-                            ? 'Gli invitati ricevono la cancellazione.'
-                            : 'Lo togli dal calendario.',
-                        confirmLabel: 'Elimina',
+                        title: m.deleteTitle(event.title),
+                        description: attendees.length > 0 ? m.deleteGuests : m.deleteAlone,
+                        confirmLabel: m.delete,
                         destructive: true
                       }).then(
                         (confirmed) =>
@@ -471,20 +569,20 @@ export function EventPanel({
                           void run(
                             'remove',
                             () => window.calendarApi.remove(event.key),
-                            'Evento eliminato'
+                            m.deleted
                           ).then(onClose)
                       )
                     }
                   >
                     <Trash2 className="size-3.5" />
-                    Elimina
+                    {m.delete}
                   </Button>
                 </>
               )}
               <div className="flex-1" />
               {event.htmlLink && (
                 <IconButton
-                  label="Apri nel calendario del fornitore"
+                  label={m.openInProvider}
                   className="text-faint-foreground size-[28px]"
                   onClick={() =>
                     event.htmlLink && void window.mailApi.openExternalUrl(event.htmlLink)

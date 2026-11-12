@@ -11,9 +11,42 @@ import {
   DialogTitle
 } from '@renderer/components/ui/dialog'
 import { Input } from '@renderer/components/ui/input'
+import { messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
+import { defineMessages } from '@shared/i18n'
 import { refusalWords, type ConnectionRefusedNotice } from '@shared/models'
 
 import { removalWords } from './connection-removal'
+
+const MESSAGES = defineMessages({
+  notReconnected: {
+    en: 'It didn’t reconnect.',
+    it: 'Non si è ricollegata.',
+    de: 'Die Verbindung wurde nicht wiederhergestellt.'
+  },
+  removeTitle: {
+    en: (calendar: boolean, label: string) =>
+      `Remove the ${calendar ? 'calendar' : 'mailbox'} ${label}?`,
+    it: (calendar: boolean, label: string) =>
+      `Togliere ${calendar ? 'il calendario' : 'la casella'} ${label}?`,
+    de: (calendar: boolean, label: string) =>
+      `${calendar ? 'Kalender' : 'Postfach'} ${label} entfernen?`
+  },
+  serverSaid: {
+    en: (detail: string) => `The server said: ${detail}`,
+    it: (detail: string) => `Il server ha detto: ${detail}`,
+    de: (detail: string) => `Der Server meldete: ${detail}`
+  },
+  password: {
+    en: (label: string) => `The password for ${label}`,
+    it: (label: string) => `La password di ${label}`,
+    de: (label: string) => `Das Passwort für ${label}`
+  },
+  cancel: { en: 'Cancel', it: 'Annulla', de: 'Abbrechen' },
+  remove: { en: 'Remove', it: 'Togli', de: 'Entfernen' },
+  later: { en: 'Later', it: 'Più tardi', de: 'Später' },
+  reconnect: { en: 'Reconnect', it: 'Ricollega', de: 'Erneut verbinden' },
+  retry: { en: 'Try again', it: 'Riprova', de: 'Erneut versuchen' }
+})
 
 /**
  * The refusals waiting for an answer, kept outside the screens: the window
@@ -96,6 +129,8 @@ export function ConnectionRefusedDialog({
   /** A refusal on screen, or gone: the shell's shortcuts keep quiet behind it. */
   onOpenChange: (open: boolean) => void
 }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
+  const { language } = useLanguage()
   const waiting = useSyncExternalStore(subscribe, () => queue)
   const [password, setPassword] = useState('')
   const [working, setWorking] = useState(false)
@@ -127,7 +162,7 @@ export function ConnectionRefusedDialog({
     return null
   }
 
-  const { title, body } = refusalWords(notice)
+  const { title, body } = refusalWords(notice, language)
   const removal = removing
     ? removalWords({ family: notice.family, outgoing: removing.outgoing, aiOn })
     : null
@@ -146,7 +181,7 @@ export function ConnectionRefusedDialog({
       await onReconnect(notice, asksPassword ? password : undefined)
       settle(notice)
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : 'Non si è ricollegata.')
+      setProblem(error instanceof Error ? error.message : messagesNow(MESSAGES).notReconnected)
     } finally {
       setWorking(false)
     }
@@ -170,17 +205,13 @@ export function ConnectionRefusedDialog({
         onPointerDownOutside={(event) => event.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>
-            {removal
-              ? `Togliere ${calendar ? 'il calendario' : 'la casella'} ${notice.label}?`
-              : title}
-          </DialogTitle>
+          <DialogTitle>{removal ? m.removeTitle(calendar, notice.label) : title}</DialogTitle>
           <DialogDescription>{removal ? removal.description : body}</DialogDescription>
         </DialogHeader>
         {removal?.details}
         {!removal && notice.detail && (
           <p className="text-muted-foreground bg-hover rounded-md px-2.5 py-2 text-[12px] break-words">
-            Il server ha detto: {notice.detail}
+            {m.serverSaid(notice.detail)}
           </p>
         )}
         {!removal && asksPassword && (
@@ -199,7 +230,7 @@ export function ConnectionRefusedDialog({
               value={password}
               disabled={working}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder={`La password di ${notice.label}`}
+              placeholder={m.password(notice.label)}
               autoComplete="current-password"
             />
           </form>
@@ -209,7 +240,7 @@ export function ConnectionRefusedDialog({
           {removal ? (
             <>
               <Button type="button" variant="ghost" onClick={() => setRemoving(null)}>
-                Annulla
+                {m.cancel}
               </Button>
               <Button
                 type="button"
@@ -219,7 +250,7 @@ export function ConnectionRefusedDialog({
                   onRemove(notice)
                 }}
               >
-                Togli
+                {m.remove}
               </Button>
             </>
           ) : (
@@ -231,7 +262,7 @@ export function ConnectionRefusedDialog({
                 disabled={working && !signsInAgain}
                 onClick={later}
               >
-                Più tardi
+                {m.later}
               </Button>
               <Button
                 type="button"
@@ -245,7 +276,7 @@ export function ConnectionRefusedDialog({
                   ).then((outgoing) => setRemoving({ outgoing }))
                 }
               >
-                Togli
+                {m.remove}
               </Button>
               <Button
                 type="button"
@@ -253,7 +284,7 @@ export function ConnectionRefusedDialog({
                 onClick={() => void reconnect()}
               >
                 {working && <LoaderCircle className="size-4 animate-spin" />}
-                {signsInAgain || asksPassword ? 'Ricollega' : 'Riprova'}
+                {signsInAgain || asksPassword ? m.reconnect : m.retry}
               </Button>
             </>
           )}

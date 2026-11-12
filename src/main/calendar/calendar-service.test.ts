@@ -198,13 +198,13 @@ describe('CalendarService, a connection turned down', () => {
         id: added.id,
         label: 'Calcetto',
         refusal: 'sparito',
-        detail: 'Il calendario non è più a quel link. (HTTP 404)',
+        detail: 'The calendar is no longer at that link. (HTTP 404)',
         signIn: 'none'
       }
     ])
     expect((await calendar.listConnections())[0]).toMatchObject({
       refused: 'sparito',
-      problem: 'Il calendario non è più a quel link.'
+      problem: 'The calendar is no longer at that link.'
     })
     // What it kept stays.
     expect(
@@ -227,7 +227,7 @@ describe('CalendarService, a connection turned down', () => {
         attendees: []
       })
     ).rejects.toThrow(
-      'Il calendario Calcetto è fermo: non si trova più dove era collegato. Ricollegalo da Impostazioni › Connessioni.'
+      'The calendar Calcetto is stopped: it’s no longer where it was connected. Reconnect it from Settings › Connections.'
     )
 
     // Back at its link, it waits for the user to try it again.
@@ -255,7 +255,7 @@ describe('CalendarService, a connection turned down', () => {
     await calendar.syncAll()
     expect((await calendar.listConnections())[0]).toMatchObject({
       refused: null,
-      problem: '«Calcetto» non si legge: Il server del calendario ha risposto 503.'
+      problem: '“Calcetto” can’t be read: The calendar’s server answered 503.'
     })
 
     const read = server.asked()
@@ -276,7 +276,7 @@ describe('CalendarService, a connection turned down', () => {
     })
 
     await expect(calendar.addIcs('https://fubles.example/feed.ics', null)).rejects.toThrow(
-      'Il calendario non è più a quel link. SIEVER Mail non l’ha aggiunto.'
+      'The calendar is no longer at that link. SIEVER Mail didn’t add it.'
     )
     expect(await calendar.listConnections()).toEqual([])
     expect(told).toEqual([])
@@ -373,14 +373,14 @@ describe('CalendarService, a CalDAV password the server no longer takes', () => 
     expect(server.asked()).toBe(asked)
 
     await expect(calendar.reconnect(added.id, 'sbagliata')).rejects.toThrow(
-      'Il server del calendario non ha accettato nome utente e password.'
+      'The calendar’s server didn’t accept the username and password.'
     )
     expect((await calendar.listConnections())[0].refused).toBe('accesso')
 
     // Tried again as it is, the old password is turned down again: said to the user who asked,
     // where they asked — not once more in a window of its own.
     await expect(calendar.reconnect(added.id)).rejects.toThrow(
-      'Il server del calendario non ha accettato nome utente e password.'
+      'The calendar’s server didn’t accept the username and password.'
     )
     expect((await calendar.listConnections())[0].refused).toBe('accesso')
     expect(told).toHaveLength(1)

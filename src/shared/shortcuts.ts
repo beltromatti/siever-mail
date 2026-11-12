@@ -13,6 +13,8 @@
  * into ®, `event.key` is not the key the user pressed.
  */
 
+import { defineMessages, messagesIn, type Language } from './i18n'
+
 /**
  * Where a shortcut works: the main window, a message being written, or the
  * Calendario while it is in front and no field has the keyboard.
@@ -224,7 +226,11 @@ function keyEventCode(event: ShortcutKeyEvent): string {
  * a modifier this platform does not use for shortcuts, or a complete chord
  * in storage form (not yet validated).
  */
-export function readShortcutEvent(event: ShortcutKeyEvent, isMac: boolean): ShortcutReading {
+export function readShortcutEvent(
+  event: ShortcutKeyEvent,
+  isMac: boolean,
+  language: Language
+): ShortcutReading {
   // macOS shortcuts use ⌘; its Control key is a separate modifier we do not
   // bind. On Windows and Linux the Windows/Super key belongs to the OS.
   const foreignModifier = isMac ? event.ctrlKey : event.metaKey
@@ -241,7 +247,7 @@ export function readShortcutEvent(event: ShortcutKeyEvent, isMac: boolean): Shor
   }
 
   if (MODIFIER_CODES.has(event.code)) {
-    return { kind: 'modifiers-only', keys: modifierKeyLabels(parts, isMac) }
+    return { kind: 'modifiers-only', keys: modifierKeyLabels(parts, isMac, language) }
   }
 
   return { kind: 'combo', value: serializeChord(parts) }
@@ -285,18 +291,35 @@ const PUNCTUATION_LABELS: Readonly<Record<string, string>> = {
   Backquote: '`'
 }
 
-const NAMED_KEY_LABELS: Readonly<Record<string, { mac: string; other: string }>> = {
-  Enter: { mac: '↩', other: 'Invio' },
-  Escape: { mac: 'Esc', other: 'Esc' },
-  Backspace: { mac: '⌫', other: 'Backspace' },
-  Delete: { mac: '⌦', other: 'Canc' },
+/**
+ * The keys whose cap reads a word off macOS, as each language's keyboards
+ * print them ("Strg", "Entf" on a German one); macOS draws symbols.
+ */
+export const KEY_CAPS = defineMessages({
+  ctrl: { en: 'Ctrl', it: 'Ctrl', de: 'Strg' },
+  alt: { en: 'Alt', it: 'Alt', de: 'Alt' },
+  shift: { en: 'Shift', it: 'Shift', de: 'Umschalt' },
+  enter: { en: 'Enter', it: 'Invio', de: 'Eingabe' },
+  escape: { en: 'Esc', it: 'Esc', de: 'Esc' },
+  backspace: { en: 'Backspace', it: 'Backspace', de: 'Rücktaste' },
+  delete: { en: 'Delete', it: 'Canc', de: 'Entf' }
+})
+
+/** The named keys: macOS's symbol, and elsewhere a symbol or the cap's word (`KEY_CAPS`). */
+const NAMED_KEY_LABELS: Readonly<
+  Record<string, { mac: string; other: string | { cap: keyof typeof KEY_CAPS } }>
+> = {
+  Enter: { mac: '↩', other: { cap: 'enter' } },
+  Escape: { mac: 'Esc', other: { cap: 'escape' } },
+  Backspace: { mac: '⌫', other: { cap: 'backspace' } },
+  Delete: { mac: '⌦', other: { cap: 'delete' } },
   ArrowUp: { mac: '↑', other: '↑' },
   ArrowDown: { mac: '↓', other: '↓' },
   ArrowLeft: { mac: '←', other: '←' },
   ArrowRight: { mac: '→', other: '→' }
 }
 
-function keyCodeLabel(code: string, isMac: boolean): string {
+function keyCodeLabel(code: string, isMac: boolean, language: Language): string {
   if (code.startsWith('Key')) {
     return code.slice(3)
   }
@@ -308,25 +331,33 @@ function keyCodeLabel(code: string, isMac: boolean): string {
   const named = NAMED_KEY_LABELS[code]
 
   if (named) {
-    return isMac ? named.mac : named.other
+    return isMac
+      ? named.mac
+      : typeof named.other === 'string'
+        ? named.other
+        : messagesIn(KEY_CAPS, language)[named.other.cap]
   }
 
   return PUNCTUATION_LABELS[code] ?? code
 }
 
-function modifierKeyLabels(parts: ChordParts, isMac: boolean): string[] {
+function modifierKeyLabels(parts: ChordParts, isMac: boolean, language: Language): string[] {
+  const caps = messagesIn(KEY_CAPS, language)
+
   // Each platform's own order: macOS prints ⌥⇧⌘, Windows prints Ctrl+Alt+Shift.
   return isMac
     ? [parts.alt && '⌥', parts.shift && '⇧', parts.mod && '⌘'].filter((k): k is string => !!k)
-    : [parts.mod && 'Ctrl', parts.alt && 'Alt', parts.shift && 'Shift'].filter(
+    : [parts.mod && caps.ctrl, parts.alt && caps.alt, parts.shift && caps.shift].filter(
         (k): k is string => !!k
       )
 }
 
-/** Key caps to draw for a chord, in the platform's own vocabulary. */
-export function formatChordKeys(value: string, isMac: boolean): string[] {
+/** Key caps to draw for a chord, in the platform's own vocabulary and the keyboard's language. */
+export function formatChordKeys(value: string, isMac: boolean, language: Language): string[] {
   const parts = parseChord(value)
-  return parts ? [...modifierKeyLabels(parts, isMac), keyCodeLabel(parts.code, isMac)] : []
+  return parts
+    ? [...modifierKeyLabels(parts, isMac, language), keyCodeLabel(parts.code, isMac, language)]
+    : []
 }
 
 const ACCELERATOR_KEYS: Readonly<Record<string, string>> = {
@@ -348,7 +379,9 @@ export function chordToAccelerator(value: string): string | null {
     return null
   }
 
-  const key = ACCELERATOR_KEYS[parts.code] ?? keyCodeLabel(parts.code, false)
+  // The named keys have the accelerator's own names; the rest — letters, digits, punctuation —
+  // read the same in every language.
+  const key = ACCELERATOR_KEYS[parts.code] ?? keyCodeLabel(parts.code, false, 'en')
 
   return [parts.mod && 'CommandOrControl', parts.alt && 'Alt', parts.shift && 'Shift', key]
     .filter(Boolean)

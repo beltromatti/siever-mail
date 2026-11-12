@@ -103,7 +103,7 @@ describe('CalDavCalendarProvider.schedules', () => {
 
     expect(calendar.calendarId).toBe(CALENDAR)
     expect(await provider.schedules(CALENDAR)).toBe(true)
-    expect(asked[0].get('accept-language')).toMatch(/^it-IT/)
+    expect(asked[0].get('accept-language')).toMatch(/^en-US/)
     expect(asked[0].get('authorization')).toMatch(/^Basic /)
   })
 
@@ -121,7 +121,7 @@ describe('CalDavCalendarProvider.schedules', () => {
     await provider.listCalendars()
 
     await expect(provider.schedules(CALENDAR)).rejects.toThrow(
-      'Il server del calendario non ha detto se manda gli inviti: il server ha risposto 500.'
+      'The calendar’s server didn’t say whether it sends invitations: the server answered 500.'
     )
     expect(await provider.schedules(CALENDAR)).toBe(true)
 
@@ -167,7 +167,7 @@ describe('CalDavCalendarProvider, turned down', () => {
 
     expect(refusalOfCalendar(refused)).toMatchObject({
       refusal: 'accesso',
-      problem: 'Il server del calendario non ha accettato nome utente e password.',
+      problem: 'The calendar’s server didn’t accept the username and password.',
       detail: expect.stringMatching(/^Invalid credentials/)
     })
   })
@@ -195,7 +195,7 @@ describe('CalDavCalendarProvider, turned down', () => {
 
     expect(refusalOfCalendar(gone)).toMatchObject({
       refusal: 'sparito',
-      problem: 'I calendari non sono più a quell’indirizzo del server.'
+      problem: 'The calendars are no longer at that server address.'
     })
   })
 
@@ -206,7 +206,7 @@ describe('CalDavCalendarProvider, turned down', () => {
     const denied = await provider.schedules(CALENDAR).catch((error: unknown) => error)
     expect(denied).toMatchObject({
       message:
-        'Il server del calendario non ha detto se manda gli inviti: il server non lo permette.',
+        'The calendar’s server didn’t say whether it sends invitations: the server doesn’t allow it.',
       status: 403,
       refusal: null
     })

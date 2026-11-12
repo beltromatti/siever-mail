@@ -2,6 +2,8 @@ import { BrowserWindow, net, powerMonitor } from 'electron'
 import type { SearchObject } from 'imapflow'
 
 import { diagnostics } from '@main/diagnostics/log'
+import { messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
 import { IPC_CHANNELS } from '@shared/ipc'
 import type {
   AccountConnectionState,
@@ -33,6 +35,29 @@ import type { AccountWithSecret } from './mail-transport'
 import { MailNotifications } from './notifications'
 
 const log = diagnostics('mail')
+
+const MESSAGES = defineMessages({
+  mailboxGone: {
+    en: 'This mailbox is no longer connected.',
+    it: 'Questa casella non è più collegata.',
+    de: 'Dieses Postfach ist nicht mehr verbunden.'
+  },
+  accountUnavailable: {
+    en: 'Account not available.',
+    it: 'Account non disponibile.',
+    de: 'Konto nicht verfügbar.'
+  },
+  oneAccountPerFolder: {
+    en: 'Each folder belongs to one account only: the messages of other accounts weren’t moved.',
+    it: 'Ogni cartella appartiene a un solo account: i messaggi di altri account non sono stati spostati.',
+    de: 'Jeder Ordner gehört zu genau einem Konto: Die Nachrichten anderer Konten wurden nicht verschoben.'
+  },
+  downloadFailed: {
+    en: 'Downloading the messages didn’t succeed.',
+    it: 'Download dei messaggi non riuscito.',
+    de: 'Das Herunterladen der Nachrichten ist fehlgeschlagen.'
+  }
+})
 
 export interface MailEngineDependencies {
   database: AppDatabase
@@ -180,7 +205,7 @@ export class MailEngine {
     const connection = this.connections.get(accountId)
 
     if (!stored || !connection) {
-      throw new Error('Questa casella non è più collegata.')
+      throw new Error(messages(MESSAGES).mailboxGone)
     }
 
     await connection.reconnect({ ...stored, secret: decryptSecret(stored.encryptedSecret) })
@@ -201,7 +226,7 @@ export class MailEngine {
       connection = this.connections.get(accountId)
     }
     if (!connection) {
-      throw new Error('Account non disponibile.')
+      throw new Error(messages(MESSAGES).accountUnavailable)
     }
     return connection
   }
@@ -348,9 +373,7 @@ export class MailEngine {
       ? result
       : {
           failed: [...result.failed, ...foreign],
-          error:
-            result.error ??
-            'Ogni cartella appartiene a un solo account: i messaggi di altri account non sono stati spostati.'
+          error: result.error ?? messages(MESSAGES).oneAccountPerFolder
         }
   }
 
@@ -502,7 +525,7 @@ export class MailEngine {
         const message =
           error instanceof Error && error.message.trim()
             ? error.message
-            : 'Download dei messaggi non riuscito.'
+            : messages(MESSAGES).downloadFailed
         unread.push(...group.filter((ref) => !handed.has(ref.uid)).map((ref) => ({ ref, message })))
       }
     }

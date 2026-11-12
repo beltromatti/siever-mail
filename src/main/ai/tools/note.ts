@@ -1,5 +1,7 @@
 import { calendarKey, seriesKey } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 
+import { messages } from '../../i18n'
 import { linksIn } from '../agent/entries'
 import { PROMPTS } from '../prompts'
 import { RegistryRefusal, RevisionConflict } from '../registry/types'
@@ -20,6 +22,26 @@ import {
 import { resolveSentOrReceived } from './anchors'
 import { eventLine } from './calendar'
 import { dayArg } from './commitments'
+
+/** The step's lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  noting: { en: 'Taking a note…', it: 'Annoto…', de: 'Notiere…' },
+  whose: {
+    en: 'Checking whose event it is…',
+    it: 'Guardo di chi è l’evento…',
+    de: 'Prüfe, wem der Termin gehört…'
+  },
+  preparing: {
+    en: 'Preparing the meeting…',
+    it: 'Preparo la riunione…',
+    de: 'Bereite das Meeting vor…'
+  },
+  prepared: {
+    en: 'Prepared a meeting',
+    it: 'Preparata una riunione',
+    de: 'Ein Meeting vorbereitet'
+  }
+})
 
 const NATURES: ReadonlyArray<NoteNature> = [
   'da_rispondere',
@@ -327,7 +349,7 @@ async function noteOfEvent(
       )
       context.run.seen.set(seen, prep.writtenAt)
       lines.push(`Preparazione di «${event.title}» salvata: la trova sotto l'evento.`)
-      labels.push('Preparata una riunione')
+      labels.push(messages(STEPS).prepared)
     })
   }
 
@@ -359,11 +381,13 @@ export const noteTool: SegretarioTool = {
     }
   },
   running: (args) => {
+    const m = messages(STEPS)
+
     if (!stringArg(args, 'evento')) {
-      return 'Annoto…'
+      return m.noting
     }
 
-    return given(args, 'tuo') ? 'Guardo di chi è l’evento…' : 'Preparo la riunione…'
+    return given(args, 'tuo') ? m.whose : m.preparing
   },
   async execute(args, context) {
     const message = stringArg(args, 'messaggio')

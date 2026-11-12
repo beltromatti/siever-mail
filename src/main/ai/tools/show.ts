@@ -1,3 +1,6 @@
+import { defineMessages } from '@shared/i18n'
+
+import { messages } from '../../i18n'
 import { PROMPTS } from '../prompts'
 import { RELATIVE_PERIODS, type AskedSearch, type RelativePeriod } from '../ask-mail'
 import {
@@ -12,6 +15,33 @@ import {
 import { clip } from './format'
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/
+
+/** The step's lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  running: { en: 'Showing you…', it: 'Te lo mostro…', de: 'Zeige es Ihnen…' },
+  search: {
+    en: (title: string) => `Search: ${title}`,
+    it: (title: string) => `Ricerca: ${title}`,
+    de: (title: string) => `Suche: ${title}`
+  },
+  shownSearch: {
+    en: (title: string) => `Showed the search “${title}”`,
+    it: (title: string) => `Mostrata la ricerca «${title}»`,
+    de: (title: string) => `Suche „${title}“ angezeigt`
+  },
+  openedMessage: { en: 'Opened the message', it: 'Aperto il messaggio', de: 'Nachricht geöffnet' },
+  openedDraft: { en: 'Opened the draft', it: 'Aperta la bozza', de: 'Entwurf geöffnet' },
+  opened: {
+    en: (title: string) => `Opened ${title}`,
+    it: (title: string) => `Aperto ${title}`,
+    de: (title: string) => `${title} geöffnet`
+  },
+  openedDay: {
+    en: (day: string) => `Opened ${day} in the calendar`,
+    it: (day: string) => `Aperto il ${day} nel calendario`,
+    de: (day: string) => `${day} im Kalender geöffnet`
+  }
+})
 
 /** A search as the list runs it — again each time, when it is kept as a folder. */
 function searchOf(query: Record<string, unknown>): AskedSearch {
@@ -77,7 +107,7 @@ export const showTool: SegretarioTool = {
       }
     }
   },
-  running: () => 'Te lo mostro…',
+  running: () => messages(STEPS).running,
   async execute(args, context) {
     const search = args.ricerca
 
@@ -95,7 +125,7 @@ export const showTool: SegretarioTool = {
         context.run.results.search = asked
         return {
           content: 'La ricerca è pronta: la lista si apre per l’utente.',
-          summary: `Ricerca: ${asked.summary}`
+          summary: messages(STEPS).search(asked.summary)
         }
       }
 
@@ -107,7 +137,7 @@ export const showTool: SegretarioTool = {
       const found = await context.page.showSearch(asked, asked.summary)
       return {
         content: `Lista aperta: ${found} messaggi.`,
-        summary: `Mostrata la ricerca «${asked.summary}»`
+        summary: messages(STEPS).shownSearch(asked.summary)
       }
     }
 
@@ -132,7 +162,7 @@ export const showTool: SegretarioTool = {
       context.page.show({ kind: 'message', ref: message.ref })
       return {
         content: 'Aperto nel lettore.',
-        summary: 'Aperto il messaggio',
+        summary: messages(STEPS).openedMessage,
         messages: [message.ref]
       }
     }
@@ -145,7 +175,7 @@ export const showTool: SegretarioTool = {
       }
 
       context.page.show({ kind: 'draft', draftId })
-      return { content: 'Bozza aperta.', summary: 'Aperta la bozza' }
+      return { content: 'Bozza aperta.', summary: messages(STEPS).openedDraft }
     }
 
     if (projectHandle) {
@@ -156,7 +186,7 @@ export const showTool: SegretarioTool = {
       }
 
       context.page.show({ kind: 'project', projectId: project.projectId })
-      return { content: 'Progetto aperto.', summary: `Aperto ${project.title}` }
+      return { content: 'Progetto aperto.', summary: messages(STEPS).opened(project.title) }
     }
 
     if (eventHandle) {
@@ -169,7 +199,10 @@ export const showTool: SegretarioTool = {
       }
 
       context.page.show({ kind: 'event', eventKey: event.eventKey })
-      return { content: 'Evento aperto nel calendario.', summary: `Aperto ${event.title}` }
+      return {
+        content: 'Evento aperto nel calendario.',
+        summary: messages(STEPS).opened(event.title)
+      }
     }
 
     if (day) {
@@ -180,7 +213,7 @@ export const showTool: SegretarioTool = {
       context.page.show({ kind: 'day', day })
       return {
         content: 'Giorno aperto nel calendario.',
-        summary: `Aperto il ${day} nel calendario`
+        summary: messages(STEPS).openedDay(day)
       }
     }
 

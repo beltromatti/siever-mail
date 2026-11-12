@@ -1,3 +1,5 @@
+import { defineMessages, LANGUAGES } from './i18n'
+
 /**
  * Search-query grammar shared between the renderer (highlight matched
  * substrings in the list view) and the main process (translate the same
@@ -11,9 +13,11 @@
  *     immediately after into a single alternation
  *   • a double-quoted run becomes a single term whose value is the
  *     literal substring (no further OR/AND parsing inside the quotes)
- *   • a term may be scoped to one field with an `xxx:` prefix — `da:`,
- *     `a:` and `oggetto:` (plus the English `from:` / `to:` / `subject:`).
- *     Unscoped terms still match across every indexed field.
+ *   • a term may be scoped to one field with an `xxx:` prefix, in any of
+ *     the app's languages whatever the interface's — `from:` / `to:` /
+ *     `subject:`, `da:` / `a:` / `oggetto:`, `von:` / `an:` / `betreff:`,
+ *     and the longer `sender:`, `mittente:`, `absender:`… Unscoped terms
+ *     still match across every indexed field.
  *
  * Field scoping is what makes "show me only this sender's mail" work:
  * typing a name unscoped matches it in Cc lines and message bodies too,
@@ -70,20 +74,32 @@ export interface ParsedSearchQuery {
 const OR_KEYWORD_PATTERN = /^or$/i
 
 /**
- * Recognised field prefixes. Italian first — the app's UI language — with
- * the English equivalents accepted as aliases because they are what most
- * people have muscle memory for from Gmail and Outlook.
+ * The field prefixes as the interface writes them, in its language — in
+ * its hints, and in a search it fills in for the user ("from:" a sender).
  */
-const FIELD_SCOPE_PREFIXES: ReadonlyArray<{ prefix: string; scope: SearchFieldScope }> = [
-  { prefix: 'da', scope: 'from' },
-  { prefix: 'from', scope: 'from' },
-  { prefix: 'mittente', scope: 'from' },
-  { prefix: 'a', scope: 'to' },
-  { prefix: 'to', scope: 'to' },
-  { prefix: 'destinatario', scope: 'to' },
-  { prefix: 'oggetto', scope: 'subject' },
-  { prefix: 'subject', scope: 'subject' }
-]
+export const SEARCH_FIELD_PREFIXES = defineMessages({
+  from: { en: 'from', it: 'da', de: 'von' },
+  to: { en: 'to', it: 'a', de: 'an' },
+  subject: { en: 'subject', it: 'oggetto', de: 'betreff' }
+}) satisfies Record<Exclude<SearchFieldScope, 'any'>, unknown>
+
+/**
+ * Recognised field prefixes: those of every language at once, so a search
+ * typed in any of them works whatever the interface's language — and what
+ * most people have muscle memory for from Gmail and Outlook works too —
+ * with the longer words for the sender and the recipients.
+ */
+const FIELD_SCOPE_PREFIXES: ReadonlyMap<string, SearchFieldScope> = new Map([
+  ...(['from', 'to', 'subject'] as const).flatMap((scope) =>
+    LANGUAGES.map((language) => [SEARCH_FIELD_PREFIXES[scope][language], scope] as const)
+  ),
+  ['sender', 'from'],
+  ['mittente', 'from'],
+  ['absender', 'from'],
+  ['recipient', 'to'],
+  ['destinatario', 'to'],
+  ['empfänger', 'to']
+])
 
 /** Which highlight fields a given scope is allowed to paint. */
 const SCOPE_TO_HIGHLIGHT_FIELDS: Record<SearchFieldScope, ReadonlyArray<SearchHighlightField>> = {
@@ -112,14 +128,13 @@ function splitFieldScope(rawValue: string): { scope: SearchFieldScope; value: st
     return { scope: 'any', value: rawValue }
   }
 
-  const candidatePrefix = rawValue.slice(0, separatorIndex).toLowerCase()
-  const match = FIELD_SCOPE_PREFIXES.find((entry) => entry.prefix === candidatePrefix)
+  const scope = FIELD_SCOPE_PREFIXES.get(rawValue.slice(0, separatorIndex).toLowerCase())
 
-  if (!match) {
+  if (!scope) {
     return { scope: 'any', value: rawValue }
   }
 
-  return { scope: match.scope, value: rawValue.slice(separatorIndex + 1) }
+  return { scope, value: rawValue.slice(separatorIndex + 1) }
 }
 
 /**

@@ -5,6 +5,8 @@ import { BrowserWindow } from 'electron'
 import { google } from 'googleapis'
 
 import type { RuntimeConfig } from '@main/config/env'
+import { currentLanguage, messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
 
 export interface GoogleAuthResult {
   email: string
@@ -19,13 +21,41 @@ const IDENTITY_SCOPES = ['openid', 'email', 'profile']
 export const GOOGLE_MAIL_SCOPE = 'https://mail.google.com/'
 const MAIL_SCOPES = [GOOGLE_MAIL_SCOPE, ...IDENTITY_SCOPES]
 
-function callbackResponseHtml(success: boolean): string {
-  const title = success ? 'Accesso completato' : 'Accesso non riuscito'
-  const body = success
-    ? 'Puoi chiudere questa finestra e tornare a SIEVER Mail.'
-    : 'Autorizzazione annullata o non valida. Puoi chiudere questa finestra.'
+const MESSAGES = defineMessages({
+  signedIn: { en: 'Signed in', it: 'Accesso completato', de: 'Angemeldet' },
+  signedInBody: {
+    en: 'You can close this window and go back to SIEVER Mail.',
+    it: 'Puoi chiudere questa finestra e tornare a SIEVER Mail.',
+    de: 'Sie können dieses Fenster schließen und zu SIEVER Mail zurückkehren.'
+  },
+  signInFailed: {
+    en: 'Sign-in didn’t succeed',
+    it: 'Accesso non riuscito',
+    de: 'Anmeldung fehlgeschlagen'
+  },
+  signInFailedBody: {
+    en: 'Authorization cancelled or not valid. You can close this window.',
+    it: 'Autorizzazione annullata o non valida. Puoi chiudere questa finestra.',
+    de: 'Autorisierung abgebrochen oder ungültig. Sie können dieses Fenster schließen.'
+  },
+  cancelled: {
+    en: 'Signing in to Google was cancelled.',
+    it: 'Accesso a Google annullato.',
+    de: 'Die Anmeldung bei Google wurde abgebrochen.'
+  },
+  signInWithGoogle: {
+    en: 'Sign in with Google',
+    it: 'Accedi con Google',
+    de: 'Mit Google anmelden'
+  }
+})
 
-  return `<!doctype html><html><head><meta charset="utf-8" /><title>${title}</title></head><body style="font-family:system-ui;padding:24px;background:#101421;color:#f1f5f9"><h2>${title}</h2><p>${body}</p></body></html>`
+function callbackResponseHtml(success: boolean): string {
+  const m = messages(MESSAGES)
+  const title = success ? m.signedIn : m.signInFailed
+  const body = success ? m.signedInBody : m.signInFailedBody
+
+  return `<!doctype html><html lang="${currentLanguage()}"><head><meta charset="utf-8" /><title>${title}</title></head><body style="font-family:system-ui;padding:24px;background:#101421;color:#f1f5f9"><h2>${title}</h2><p>${body}</p></body></html>`
 }
 
 export class GoogleOAuthService {
@@ -123,7 +153,7 @@ export class GoogleOAuthService {
     })
 
     const authWindow = new BrowserWindow({
-      title: request.title ?? 'Accedi con Google',
+      title: request.title ?? messages(MESSAGES).signInWithGoogle,
       width: 560,
       height: 760,
       parent: parentWindow,
@@ -137,7 +167,7 @@ export class GoogleOAuthService {
     })
 
     const cancelPromise = new Promise<never>((_, reject) => {
-      authWindow.on('closed', () => reject(new Error('Google OAuth flow cancelled by user.')))
+      authWindow.on('closed', () => reject(new Error(messages(MESSAGES).cancelled)))
     })
 
     try {

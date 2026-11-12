@@ -1,3 +1,6 @@
+import { defineMessages } from '@shared/i18n'
+
+import { messages } from '../../i18n'
 import { PROMPTS } from '../prompts'
 import {
   lookingKey,
@@ -9,6 +12,27 @@ import {
   type ToolOutcome
 } from '../agent/tool-types'
 import { resolveEvent, resolveSentOrReceived } from './anchors'
+
+/** The step's lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  running: { en: 'Alerting you…', it: 'Avviso l’utente…', de: 'Sie werden benachrichtigt…' },
+  told: { en: 'Alerted you', it: 'Avvisato l’utente', de: 'Sie benachrichtigt' },
+  mailOff: {
+    en: 'Alert not sent: mail notifications are off, or set to all as they arrive',
+    it: 'Avviso non mandato: notifiche della posta spente, o tutte com’è',
+    de: 'Hinweis nicht gesendet: E-Mail-Mitteilungen sind aus oder kommen alle ungefiltert'
+  },
+  notWaiting: {
+    en: 'Alert not sent: the message is not waiting for a notification',
+    it: 'Avviso non mandato: il messaggio non aspetta una notifica',
+    de: 'Hinweis nicht gesendet: Die Nachricht wartet auf keine Mitteilung'
+  },
+  calendarOff: {
+    en: 'Alert not sent: calendar updates are off, or set to all as they arrive',
+    it: 'Avviso non mandato: novità del calendario spente, o tutte com’è',
+    de: 'Hinweis nicht gesendet: Kalenderneuigkeiten sind aus oder kommen alle ungefiltert'
+  }
+})
 
 /** Who tells: the run that looks at the arrival or the change; with the user there, it says it. */
 function notTheirs(context: ToolContext, what: string): ToolInputError {
@@ -64,7 +88,7 @@ async function alertOfMessage(
   if (result === 'told') {
     return {
       content: `Avvisato l'utente: «${line}».`,
-      summary: 'Avvisato l’utente',
+      summary: messages(STEPS).told,
       messages: [message.ref]
     }
   }
@@ -73,11 +97,11 @@ async function alertOfMessage(
     ? {
         content:
           "I tuoi avvisi della posta non gli arrivano — notifiche spente o casella silenziata, o le vuole tutte com'è —: lo vedrà da sé.",
-        summary: 'Avviso non mandato: notifiche della posta spente, o tutte com’è'
+        summary: messages(STEPS).mailOff
       }
     : {
         content: `Di ${handle} non parte una notifica: non è tra i messaggi appena arrivati nella Posta in arrivo che aspettano — l'utente l'ha già aperto, oppure è arrivato in un'altra cartella o da tempo. Lo trova nella posta.`,
-        summary: 'Avviso non mandato: il messaggio non aspetta una notifica'
+        summary: messages(STEPS).notWaiting
       }
 }
 
@@ -118,13 +142,13 @@ async function alertOfEvent(
   if (result === 'told') {
     return {
       content: `Avvisato l'utente di «${event.title}»: «${line}».`,
-      summary: 'Avvisato l’utente'
+      summary: messages(STEPS).told
     }
   }
 
   return {
     content: `I tuoi avvisi del calendario non gli arrivano — ha spento le novità, o le vuole tutte com'è —: «${event.title}» lo vedrà da sé.`,
-    summary: 'Avviso non mandato: novità del calendario spente, o tutte com’è'
+    summary: messages(STEPS).calendarOff
   }
 }
 
@@ -146,7 +170,7 @@ export const alertTool: SegretarioTool = {
     },
     required: ['riga']
   },
-  running: () => 'Avviso l’utente…',
+  running: () => messages(STEPS).running,
   async execute(args, context) {
     const message = stringArg(args, 'messaggio')
     const event = stringArg(args, 'evento')

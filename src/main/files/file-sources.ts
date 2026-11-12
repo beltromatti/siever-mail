@@ -2,7 +2,9 @@ import { readdir, realpath, stat } from 'node:fs/promises'
 import { homedir, userInfo } from 'node:os'
 import { basename, join } from 'node:path'
 
+import { currentLanguage, messages } from '@main/i18n'
 import type { FileSource } from '@shared/files'
+import { defineMessages, type Language } from '@shared/i18n'
 
 import { mountedShareMountPoints, unmountedShareMountPoints } from '../services/network-volumes'
 
@@ -11,7 +13,22 @@ const SOURCES_FRESH_MS = 30_000
 /** A Windows drive that does not answer by then is left out: a mapped share gone away can take many seconds. */
 const DRIVE_ANSWER_MS = 1_500
 
-let recent: { at: number; sources: Promise<FileSource[]> } | null = null
+const MESSAGES = defineMessages({
+  thisComputer: { en: 'This computer', it: 'Questo computer', de: 'Dieser Computer' },
+  networkDrive: {
+    en: (letter: string) => `Network drive ${letter}`,
+    it: (letter: string) => `Unità di rete ${letter}`,
+    de: (letter: string) => `Netzlaufwerk ${letter}`
+  },
+  disk: {
+    en: (letter: string) => `Disk ${letter}`,
+    it: (letter: string) => `Disco ${letter}`,
+    de: (letter: string) => `Laufwerk ${letter}`
+  }
+})
+
+/** The sources read lately, in the language their names were given in. */
+let recent: { at: number; language: Language; sources: Promise<FileSource[]> } | null = null
 
 /**
  * The File sources of this computer: the user's folders, then each volume
@@ -20,8 +37,12 @@ let recent: { at: number; sources: Promise<FileSource[]> } | null = null
  * The startup disk is the computer itself, not a volume of its own.
  */
 export function fileSources(): Promise<FileSource[]> {
-  if (!recent || Date.now() - recent.at > SOURCES_FRESH_MS) {
-    recent = { at: Date.now(), sources: readFileSources() }
+  if (
+    !recent ||
+    Date.now() - recent.at > SOURCES_FRESH_MS ||
+    recent.language !== currentLanguage()
+  ) {
+    recent = { at: Date.now(), language: currentLanguage(), sources: readFileSources() }
   }
 
   return recent.sources
@@ -37,7 +58,7 @@ async function readFileSources(): Promise<FileSource[]> {
   ])
 
   return [
-    { kind: 'computer', label: 'Questo computer', path: homedir(), mounted: true },
+    { kind: 'computer', label: messages(MESSAGES).thisComputer, path: homedir(), mounted: true },
     ...mounted.map((path): FileSource => ({
       kind: network.has(path) ? 'rete' : 'volume',
       label: volumeLabel(path, network.has(path)),
@@ -57,8 +78,11 @@ async function readFileSources(): Promise<FileSource[]> {
 
 /** A volume as the user knows it: its name, or the drive's letter on Windows. */
 function volumeLabel(path: string, network: boolean): string {
+  const letter = path.slice(0, 2)
   return process.platform === 'win32'
-    ? `${network ? 'Unità di rete' : 'Disco'} ${path.slice(0, 2)}`
+    ? network
+      ? messages(MESSAGES).networkDrive(letter)
+      : messages(MESSAGES).disk(letter)
     : basename(path) || path
 }
 

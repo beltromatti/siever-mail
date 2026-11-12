@@ -11,8 +11,22 @@ import {
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
 import type { MailAccount } from '@shared/models'
+
+const MESSAGES = defineMessages({
+  noAccount: { en: 'No account', it: 'Nessun account', de: 'Kein Konto' },
+  connected: { en: 'Connected accounts', it: 'Account collegati', de: 'Verbundene Konten' },
+  disconnectAccount: {
+    en: (email: string) => `Disconnect account ${email}`,
+    it: (email: string) => `Disconnetti account ${email}`,
+    de: (email: string) => `Konto ${email} trennen`
+  },
+  disconnect: { en: 'Disconnect account', it: 'Disconnetti account', de: 'Konto trennen' },
+  add: { en: 'Add account', it: 'Aggiungi account', de: 'Konto hinzufügen' }
+})
 
 interface AccountSwitcherProps {
   accounts: MailAccount[]
@@ -48,6 +62,7 @@ export function AccountSwitcher({
   removingAccountId,
   onAddAccount
 }: AccountSwitcherProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) || null
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -62,7 +77,7 @@ export function AccountSwitcher({
             <AccountMonogram account={selectedAccount} />
             <span className="min-w-0">
               <span className="text-foreground block truncate text-[12.5px] font-semibold">
-                {selectedAccount ? selectedAccount.displayName : 'Nessun account'}
+                {selectedAccount ? selectedAccount.displayName : m.noAccount}
               </span>
               {selectedAccount && (
                 <span className="text-faint-foreground block truncate text-[11px] leading-tight font-normal">
@@ -76,7 +91,7 @@ export function AccountSwitcher({
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="start" className="w-[320px]">
-        <DropdownMenuLabel>Account collegati</DropdownMenuLabel>
+        <DropdownMenuLabel>{m.connected}</DropdownMenuLabel>
         <DropdownMenuSeparator />
 
         {accounts.map((account) => (
@@ -99,7 +114,7 @@ export function AccountSwitcher({
                   <button
                     type="button"
                     className="text-faint-foreground hover:text-destructive focus-visible:ring-ring ml-auto inline-flex size-6 shrink-0 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:outline-none"
-                    aria-label={`Disconnetti account ${account.email}`}
+                    aria-label={m.disconnectAccount(account.email)}
                     disabled={Boolean(removingAccountId)}
                     onClick={(event) => {
                       // Not a pick of the account: the row must not select it.
@@ -117,7 +132,7 @@ export function AccountSwitcher({
                     )}
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="right">Disconnetti account</TooltipContent>
+                <TooltipContent side="right">{m.disconnect}</TooltipContent>
               </Tooltip>
             )}
           </DropdownMenuItem>
@@ -128,7 +143,7 @@ export function AccountSwitcher({
             <DropdownMenuSeparator />
             <DropdownMenuItem className="cursor-pointer gap-2 px-3 py-2" onClick={onAddAccount}>
               <Plus className="size-4" />
-              Aggiungi account
+              {m.add}
             </DropdownMenuItem>
           </>
         )}

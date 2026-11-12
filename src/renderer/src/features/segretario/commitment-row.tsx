@@ -12,16 +12,131 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@renderer/components/ui/dropdown-menu'
+import { languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
-import type { Commitment, CommitmentStatus } from '@shared/segretario'
+import { defineMessages, type Messages } from '@shared/i18n'
+import type { Commitment, CommitmentStatus, WorkActor } from '@shared/segretario'
 
-import { COMMITMENT_LABELS, dueLabel } from './row-work'
+import { COMMITMENT_LABELS, daysFromToday, dueLabel } from './row-work'
 
-const SHORT_DAY = new Intl.DateTimeFormat('it-IT', {
-  weekday: 'short',
-  day: 'numeric',
-  month: 'short'
+const MESSAGES = defineMessages({
+  tomorrow: { en: 'Tomorrow', it: 'Domani', de: 'Morgen' },
+  friday: { en: 'Friday', it: 'Venerdì', de: 'Freitag' },
+  nextMonday: { en: 'Next Monday', it: 'Lunedì prossimo', de: 'Nächster Montag' },
+  inAWeek: { en: 'In a week', it: 'Tra una settimana', de: 'In einer Woche' },
+  inAMonth: { en: 'In a month', it: 'Tra un mese', de: 'In einem Monat' },
+  done: {
+    en: (by: WorkActor): string =>
+      by === 'utente' ? 'Done by you' : by === 'segretario' ? 'Done by the Segretario' : 'Done',
+    it: (by: WorkActor): string =>
+      `Fatta${by === 'utente' ? ' da te' : by === 'segretario' ? ' dal Segretario' : ''}`,
+    de: (by: WorkActor): string =>
+      by === 'utente'
+        ? 'Von Ihnen erledigt'
+        : by === 'segretario'
+          ? 'Vom Segretario erledigt'
+          : 'Erledigt'
+  },
+  arrived: {
+    en: (by: WorkActor): string =>
+      by === 'utente'
+        ? 'Arrived, marked by you'
+        : by === 'segretario'
+          ? 'Arrived, marked by the Segretario'
+          : 'Arrived',
+    it: (by: WorkActor): string =>
+      `Arrivato${by === 'utente' ? ' da te' : by === 'segretario' ? ' dal Segretario' : ''}`,
+    de: (by: WorkActor): string =>
+      by === 'utente'
+        ? 'Eingetroffen, von Ihnen markiert'
+        : by === 'segretario'
+          ? 'Eingetroffen, vom Segretario markiert'
+          : 'Eingetroffen'
+  },
+  notNeededBy: {
+    en: (by: WorkActor): string =>
+      by === 'utente'
+        ? 'Not needed, marked by you'
+        : by === 'segretario'
+          ? 'Not needed, marked by the Segretario'
+          : 'Not needed',
+    it: (by: WorkActor): string =>
+      `Non serve${by === 'utente' ? ' da te' : by === 'segretario' ? ' dal Segretario' : ''}`,
+    de: (by: WorkActor): string =>
+      by === 'utente'
+        ? 'Nicht nötig, von Ihnen markiert'
+        : by === 'segretario'
+          ? 'Nicht nötig, vom Segretario markiert'
+          : 'Nicht nötig'
+  },
+  postponedTo: {
+    en: (day: string) => `Postponed to ${day}`,
+    it: (day: string) => `Rinviata a ${day}`,
+    de: (day: string) => `Verschoben auf ${day}`
+  },
+  postponed: { en: 'Postponed', it: 'Rinviata', de: 'Verschoben' },
+  notUndone: {
+    en: 'Can’t be undone',
+    it: 'Non si annulla',
+    de: 'Lässt sich nicht rückgängig machen'
+  },
+  markedDone: { en: 'Marked as done', it: 'Segnata come fatta', de: 'Als erledigt markiert' },
+  markedNotNeeded: {
+    en: 'Marked as not needed',
+    it: 'Segnata come non necessaria',
+    de: 'Als nicht nötig markiert'
+  },
+  markedArrived: {
+    en: 'Marked as arrived',
+    it: 'Segnato come arrivato',
+    de: 'Als eingetroffen markiert'
+  },
+  undo: { en: 'Undo', it: 'Annulla', de: 'Rückgängig' },
+  notChanged: { en: 'Not changed', it: 'Non è cambiata', de: 'Nicht geändert' },
+  markArrived: {
+    en: (text: string) => `Mark as arrived: ${text}`,
+    it: (text: string) => `Segna come arrivato: ${text}`,
+    de: (text: string) => `Als eingetroffen markieren: ${text}`
+  },
+  markDone: {
+    en: (text: string) => `Mark as done: ${text}`,
+    it: (text: string) => `Segna come fatta: ${text}`,
+    de: (text: string) => `Als erledigt markieren: ${text}`
+  },
+  reopenItem: {
+    en: (text: string) => `Reopen: ${text}`,
+    it: (text: string) => `Riapri: ${text}`,
+    de: (text: string) => `Wieder öffnen: ${text}`
+  },
+  arrivedTitle: { en: 'Arrived', it: 'Arrivato', de: 'Eingetroffen' },
+  doneTitle: { en: 'Done', it: 'Fatta', de: 'Erledigt' },
+  reopen: { en: 'Reopen', it: 'Riapri', de: 'Wieder öffnen' },
+  correct: { en: 'Edit', it: 'Correggi', de: 'Korrigieren' },
+  stillOpen: { en: 'Still open', it: 'È ancora aperta', de: 'Noch offen' },
+  hasArrived: { en: 'It arrived', it: 'È arrivato', de: 'Ist eingetroffen' },
+  isDone: { en: 'It’s done', it: 'È fatta', de: 'Ist erledigt' },
+  notNeeded: { en: 'Not needed', it: 'Non serve', de: 'Nicht nötig' },
+  more: {
+    en: (text: string) => `More: ${text}`,
+    it: (text: string) => `Altro: ${text}`,
+    de: (text: string) => `Mehr: ${text}`
+  },
+  followUp: { en: 'Follow up…', it: 'Sollecita…', de: 'Nachfassen…' },
+  postpone: { en: 'Postpone', it: 'Rinvia', de: 'Verschieben' },
+  deadline: { en: 'Deadline', it: 'Scadenza', de: 'Frist' },
+  today: { en: 'Today', it: 'Oggi', de: 'Heute' },
+  noDeadline: { en: 'No deadline', it: 'Senza scadenza', de: 'Keine Frist' },
+  hide: { en: 'Hide', it: 'Nascondi', de: 'Ausblenden' },
+  doneLately: { en: 'Done lately', it: 'Fatte di recente', de: 'Kürzlich erledigt' }
 })
+
+const SHORT_DAY: Intl.DateTimeFormatOptions = { weekday: 'short', day: 'numeric', month: 'short' }
+
+function shortDay(day: string): string {
+  return new Intl.DateTimeFormat(languageNow().formatLocale, SHORT_DAY).format(
+    new Date(`${day}T00:00`)
+  )
+}
 
 /** A day AAAA-MM-GG, local. */
 function isoDay(date: Date): string {
@@ -40,63 +155,54 @@ function nextWeekday(weekday: number, from = new Date()): string {
 
 /**
  * The days a thing can be put off to, or given as its deadline, as a person
- * says them — each day once: on a Thursday, "Venerdì" is tomorrow.
+ * says them — each day once: on a Thursday, "Friday" is tomorrow.
  */
-function dayChoices(): Array<{ label: string; day: string }> {
+function dayChoices(m: Messages<typeof MESSAGES>): Array<{ label: string; day: string }> {
   const seen = new Set<string>()
 
   return [
-    { label: 'Domani', day: inDays(1) },
-    { label: 'Venerdì', day: nextWeekday(5) },
-    { label: 'Lunedì prossimo', day: nextWeekday(1) },
-    { label: 'Tra una settimana', day: inDays(7) },
-    { label: 'Tra un mese', day: inDays(30) }
+    { label: m.tomorrow, day: inDays(1) },
+    { label: m.friday, day: nextWeekday(5) },
+    { label: m.nextMonday, day: nextWeekday(1) },
+    { label: m.inAWeek, day: inDays(7) },
+    { label: m.inAMonth, day: inDays(30) }
   ]
     .filter((choice) => !seen.has(choice.day) && Boolean(seen.add(choice.day)))
-    .map((choice) => ({
-      ...choice,
-      label: `${choice.label} · ${SHORT_DAY.format(new Date(`${choice.day}T00:00`))}`
-    }))
+    .map((choice) => ({ ...choice, label: `${choice.label} · ${shortDay(choice.day)}` }))
 }
 
-/** "da te", "dal Segretario": who settled it, when it was not the app itself. */
-function byWhom(commitment: Commitment): string {
-  return commitment.setBy === 'utente'
-    ? ' da te'
-    : commitment.setBy === 'segretario'
-      ? ' dal Segretario'
-      : ''
-}
+/** What became of a thing no longer open, in a few words — and by whom, when not the app itself. */
+function settledLine(commitment: Commitment, m: Messages<typeof MESSAGES>): string | null {
+  const reason = commitment.reason ? ` · ${commitment.reason}` : ''
 
-/** What became of a thing no longer open, in a few words. */
-function settledLine(commitment: Commitment): string | null {
   switch (commitment.status) {
     case 'fatta':
-      return `${commitment.kind === 'aspetti' ? 'Arrivato' : 'Fatta'}${byWhom(commitment)}${commitment.reason ? ` · ${commitment.reason}` : ''}`
+      return `${(commitment.kind === 'aspetti' ? m.arrived : m.done)(commitment.setBy)}${reason}`
     case 'non_serve':
-      return `Non serve${byWhom(commitment)}${commitment.reason ? ` · ${commitment.reason}` : ''}`
+      return `${m.notNeededBy(commitment.setBy)}${reason}`
     case 'rinviata':
-      return commitment.until
-        ? `Rinviata a ${SHORT_DAY.format(new Date(`${commitment.until}T00:00`))}`
-        : 'Rinviata'
+      return commitment.until ? m.postponedTo(shortDay(commitment.until)) : m.postponed
     case 'aperta':
       return null
   }
 }
 
-/** "Annulla" on a tick: the thing as it was, and what the tick taught taken back; said when it cannot. */
+/** "Undo" on a tick: the thing as it was, and what the tick taught taken back; said when it cannot. */
 export function undoTick(id: number): void {
   void window.segretarioApi.undoCommitmentStatus(id).catch((error: unknown) =>
-    toast.error('Non si annulla', {
+    toast.error(messagesNow(MESSAGES).notUndone, {
       description: error instanceof Error ? error.message : undefined
     })
   )
 }
 
-const UNDO_WORDS: Readonly<Record<Exclude<CommitmentStatus, 'aperta'>, string>> = {
-  fatta: 'Segnata come fatta',
-  non_serve: 'Segnata come non necessaria',
-  rinviata: 'Rinviata'
+function undoWords(status: Exclude<CommitmentStatus, 'aperta'>): string {
+  const m = messagesNow(MESSAGES)
+  return status === 'fatta'
+    ? m.markedDone
+    : status === 'non_serve'
+      ? m.markedNotNeeded
+      : m.postponed
 }
 
 async function setStatus(
@@ -110,19 +216,19 @@ async function setStatus(
     if (status !== 'aperta') {
       toast(
         commitment.kind === 'aspetti' && status === 'fatta'
-          ? 'Segnato come arrivato'
-          : UNDO_WORDS[status],
+          ? messagesNow(MESSAGES).markedArrived
+          : undoWords(status),
         {
           description: commitment.text,
           action: {
-            label: 'Annulla',
+            label: messagesNow(MESSAGES).undo,
             onClick: () => undoTick(commitment.id)
           }
         }
       )
     }
   } catch (error) {
-    toast.error('Non è cambiata', {
+    toast.error(messagesNow(MESSAGES).notChanged, {
       description: error instanceof Error ? error.message : undefined
     })
   }
@@ -135,7 +241,7 @@ async function edit(
   try {
     await window.segretarioApi.editCommitment(commitment.id, changes)
   } catch (error) {
-    toast.error('Non è cambiata', {
+    toast.error(messagesNow(MESSAGES).notChanged, {
       description: error instanceof Error ? error.message : undefined
     })
   }
@@ -158,12 +264,14 @@ export function CommitmentRow({
   onRemind?: (commitment: Commitment) => void
   className?: string
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const kinds = useMessages(COMMITMENT_LABELS)
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(commitment.text)
   const open = commitment.status === 'aperta'
   const awaited = commitment.kind === 'aspetti'
-  const settled = settledLine(commitment)
-  const late = open && commitment.due !== null && dueLabel(commitment.due).startsWith('scaduto')
+  const settled = settledLine(commitment, m)
+  const late = open && commitment.due !== null && daysFromToday(commitment.due) < 0
 
   const save = (): void => {
     setEditing(false)
@@ -188,10 +296,10 @@ export function CommitmentRow({
         onClick={() => void setStatus(commitment, open ? 'fatta' : 'aperta')}
         aria-label={
           open
-            ? `${awaited ? 'Segna come arrivato' : 'Segna come fatta'}: ${commitment.text}`
-            : `Riapri: ${commitment.text}`
+            ? (awaited ? m.markArrived : m.markDone)(commitment.text)
+            : m.reopenItem(commitment.text)
         }
-        title={open ? (awaited ? 'Arrivato' : 'Fatta') : 'Riapri'}
+        title={open ? (awaited ? m.arrivedTitle : m.doneTitle) : m.reopen}
         className={cn(
           'focus-visible:ring-ring/60 mt-[2px] grid size-[14px] shrink-0 place-items-center rounded-[4px] outline-none focus-visible:ring-2',
           open
@@ -217,12 +325,12 @@ export function CommitmentRow({
                 setEditing(false)
               }
             }}
-            aria-label="Correggi"
+            aria-label={m.correct}
             className="border-input bg-background focus-visible:ring-ring/60 w-full rounded-[4px] border px-1.5 py-0.5 text-[12.5px] outline-none focus-visible:ring-2"
           />
         ) : (
           <span className={cn('min-w-0', !open && 'text-faint-foreground')}>
-            <span className="text-muted-foreground">{COMMITMENT_LABELS[commitment.kind]}:</span>{' '}
+            <span className="text-muted-foreground">{kinds[commitment.kind]}:</span>{' '}
             <span className={cn(!open && commitment.status !== 'rinviata' && 'line-through')}>
               {commitment.text}
             </span>
@@ -245,21 +353,21 @@ export function CommitmentRow({
               onClick={() => void setStatus(commitment, 'aperta')}
               className="text-foreground focus-visible:ring-ring/60 rounded-sm font-semibold outline-none hover:underline focus-visible:ring-2"
             >
-              È ancora aperta
+              {m.stillOpen}
             </button>
             <button
               type="button"
               onClick={() => void setStatus(commitment, 'fatta')}
               className="text-foreground focus-visible:ring-ring/60 rounded-sm font-semibold outline-none hover:underline focus-visible:ring-2"
             >
-              {awaited ? 'È arrivato' : 'È fatta'}
+              {awaited ? m.hasArrived : m.isDone}
             </button>
             <button
               type="button"
               onClick={() => void setStatus(commitment, 'non_serve')}
               className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/60 rounded-sm outline-none focus-visible:ring-2"
             >
-              Non serve
+              {m.notNeeded}
             </button>
           </div>
         )}
@@ -296,6 +404,7 @@ export function CommitmentMenu({
   onCorrect?: () => void
   className?: string
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const open = commitment.status === 'aperta'
   const awaited = commitment.kind === 'aspetti'
 
@@ -304,7 +413,7 @@ export function CommitmentMenu({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`Altro: ${commitment.text}`}
+          aria-label={m.more(commitment.text)}
           className={cn(
             'text-faint-foreground hover:text-foreground focus-visible:ring-ring/60 data-[state=open]:text-foreground shrink-0 rounded-sm outline-none focus-visible:opacity-100 focus-visible:ring-2 data-[state=open]:opacity-100',
             className
@@ -317,15 +426,17 @@ export function CommitmentMenu({
         {open ? (
           <>
             {awaited && onRemind && (
-              <DropdownMenuItem onSelect={() => onRemind(commitment)}>Sollecita…</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onRemind(commitment)}>
+                {m.followUp}
+              </DropdownMenuItem>
             )}
             <DropdownMenuItem onSelect={() => void setStatus(commitment, 'non_serve')}>
-              Non serve
+              {m.notNeeded}
             </DropdownMenuItem>
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Rinvia</DropdownMenuSubTrigger>
+              <DropdownMenuSubTrigger>{m.postpone}</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                {dayChoices().map((choice) => (
+                {dayChoices(m).map((choice) => (
                   <DropdownMenuItem
                     key={choice.day}
                     onSelect={() => void setStatus(commitment, 'rinviata', { until: choice.day })}
@@ -336,12 +447,12 @@ export function CommitmentMenu({
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Scadenza</DropdownMenuSubTrigger>
+              <DropdownMenuSubTrigger>{m.deadline}</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 <DropdownMenuItem onSelect={() => void edit(commitment, { due: inDays(0) })}>
-                  Oggi
+                  {m.today}
                 </DropdownMenuItem>
-                {dayChoices().map((choice) => (
+                {dayChoices(m).map((choice) => (
                   <DropdownMenuItem
                     key={choice.day}
                     onSelect={() => void edit(commitment, { due: choice.day })}
@@ -353,7 +464,7 @@ export function CommitmentMenu({
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onSelect={() => void edit(commitment, { due: null })}>
-                      Senza scadenza
+                      {m.noDeadline}
                     </DropdownMenuItem>
                   </>
                 )}
@@ -362,13 +473,13 @@ export function CommitmentMenu({
             {onCorrect && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={onCorrect}>Correggi</DropdownMenuItem>
+                <DropdownMenuItem onSelect={onCorrect}>{m.correct}</DropdownMenuItem>
               </>
             )}
           </>
         ) : (
           <DropdownMenuItem onSelect={() => void setStatus(commitment, 'aperta')}>
-            Riapri
+            {m.reopen}
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>
@@ -386,6 +497,7 @@ export function CommitmentList({
   onRemind?: (commitment: Commitment) => void
   className?: string
 }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
   const [showSettled, setShowSettled] = useState(false)
   const open = commitments.filter((commitment) => commitment.status === 'aperta')
   const settled = commitments.filter((commitment) => commitment.status !== 'aperta')
@@ -410,7 +522,7 @@ export function CommitmentList({
             onClick={() => setShowSettled((shown) => !shown)}
             className="text-faint-foreground hover:text-muted-foreground focus-visible:ring-ring/60 self-start rounded-sm text-[11.5px] outline-none focus-visible:ring-2"
           >
-            {showSettled ? 'Nascondi' : 'Fatte di recente'} ({settled.length})
+            {showSettled ? m.hide : m.doneLately} ({settled.length})
           </button>
           {showSettled && (
             <ul className="flex flex-col gap-1">

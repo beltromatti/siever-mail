@@ -2,8 +2,10 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 
 import { CompassStar } from '@renderer/components/ui/compass-star'
+import { hourStyle, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import type { DayLine } from '@shared/segretario'
 import {
   DayLineSourceIcon,
@@ -13,6 +15,7 @@ import {
 
 import {
   addDays,
+  dateFormat,
   dayKey,
   eventSpan,
   inTopBand,
@@ -41,8 +44,27 @@ const BAND_SHOWN = 3
  */
 const SAME_GUTTER = 'overflow-y-hidden [scrollbar-gutter:stable]'
 
-const WEEKDAY = new Intl.DateTimeFormat('it-IT', { weekday: 'short' })
-const TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
+const MESSAGES = defineMessages({
+  allDay: { en: 'all day', it: 'tutto il giorno', de: 'ganztägig' },
+  showLess: { en: 'Show less', it: 'Mostra meno', de: 'Weniger anzeigen' },
+  showAll: { en: 'Show all', it: 'Mostra tutto', de: 'Alle anzeigen' },
+  more: {
+    en: (count: number) => (count === 1 ? 'one more' : `${count} more`),
+    it: (count: number) => (count === 1 ? 'un altro' : `altri ${count}`),
+    de: (count: number) => (count === 1 ? 'ein weiterer' : `${count} weitere`)
+  }
+})
+
+const WEEKDAY: Intl.DateTimeFormatOptions = { weekday: 'short' }
+/** Made when used: the hour is written as the region writes it now. */
+const TIME = (): Intl.DateTimeFormatOptions => ({ hour: hourStyle(), minute: '2-digit' })
+
+/** An hour on the grid's edge, as the region's clock says it: "09:00", or "9 AM". */
+function hourLabel(hour: number): string {
+  const { hourCycle } = dateFormat({ hour: 'numeric' }).resolvedOptions()
+  const twelveHour = hourCycle === 'h11' || hourCycle === 'h12'
+  return dateFormat(twelveHour ? { hour: 'numeric' } : TIME()).format(new Date(2000, 0, 1, hour))
+}
 
 /** What is selected on the calendar: an event, or a proposal of one. */
 export type CalendarSelection =
@@ -136,6 +158,8 @@ export function TimeGrid({
   onMove: (event: CalendarEvent, start: number, end: number) => void
   onOpenLine: (line: DayLine) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const time = dateFormat(TIME())
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const gridRef = useRef<HTMLDivElement | null>(null)
   const [move, setMove] = useState<Move | null>(null)
@@ -351,7 +375,9 @@ export function TimeGrid({
               key={dayKey(day)}
               className="flex items-baseline justify-center gap-1.5 border-l py-2 text-[12px]"
             >
-              <span className="text-muted-foreground uppercase">{WEEKDAY.format(day)}</span>
+              <span className="text-muted-foreground uppercase">
+                {dateFormat(WEEKDAY).format(day)}
+              </span>
               <span
                 className={cn(
                   'grid size-6 place-items-center rounded-full text-[13px] font-semibold tabular-nums',
@@ -374,11 +400,11 @@ export function TimeGrid({
         style={{ gridTemplateColumns: columns }}
       >
         <div className="text-faint-foreground flex flex-col items-end gap-1 px-2 py-1.5 text-right text-[10.5px]">
-          tutto il giorno
+          {m.allDay}
           {bandOverflows && (
             <button
               type="button"
-              aria-label={bandOpen ? 'Mostra meno' : 'Mostra tutto'}
+              aria-label={bandOpen ? m.showLess : m.showAll}
               aria-expanded={bandOpen}
               onClick={() => setBandOpen((open) => !open)}
               className="hover:bg-hover hover:text-foreground focus-visible:ring-ring/60 grid size-5 place-items-center rounded-[4px] outline-none focus-visible:ring-2"
@@ -404,9 +430,7 @@ export function TimeGrid({
                 onClick={() => setBandOpen(true)}
                 className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/60 self-start rounded-sm px-1.5 text-[11px] outline-none focus-visible:ring-2"
               >
-                {entries.length - BAND_SHOWN === 1
-                  ? 'un altro'
-                  : `altri ${entries.length - BAND_SHOWN}`}
+                {m.more(entries.length - BAND_SHOWN)}
               </button>
             )}
           </div>
@@ -426,7 +450,7 @@ export function TimeGrid({
                 className="text-faint-foreground absolute right-2 -translate-y-1/2 text-[10.5px] tabular-nums"
                 style={{ top: hour * HOUR_PX }}
               >
-                {hour === 0 ? '' : `${String(hour).padStart(2, '0')}:00`}
+                {hour === 0 ? '' : hourLabel(hour)}
               </span>
             ))}
           </div>
@@ -531,7 +555,7 @@ export function TimeGrid({
                       )}
                       {height > 30 && (
                         <span className="text-muted-foreground truncate text-[10.5px] tabular-nums">
-                          {TIME.format(item.start)}–{TIME.format(item.end)}
+                          {time.format(item.start)}–{time.format(item.end)}
                         </span>
                       )}
                     </button>
@@ -568,7 +592,7 @@ export function TimeGrid({
                   >
                     <span className="truncate font-semibold">{movedHere.item.title}</span>
                     <span className="text-muted-foreground truncate text-[10.5px] tabular-nums">
-                      {TIME.format(movedHere.start)}–{TIME.format(movedHere.end)}
+                      {time.format(movedHere.start)}–{time.format(movedHere.end)}
                     </span>
                   </div>
                 )}

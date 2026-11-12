@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
 
 import type { DiagnosticFields } from '@shared/diagnostics'
+import { defineMessages } from '@shared/i18n'
 import type { ActivityEvent, ActivityStatus, SendOutcome } from '@shared/segretario'
 
 import { diagnostics } from '@main/diagnostics/log'
+import { messages } from '../../i18n'
 import type { AiStore, StoredEvent } from '../ai-store'
 import type { Reachability } from '../engine/reachability'
 import type { Notebook } from '../memory/notebook'
@@ -45,6 +47,69 @@ import {
 } from './tool-types'
 
 const log = diagnostics('segretario')
+
+/** A step that failed: why, and whether that was said to the model alone, in its Italian. */
+interface StepFailure {
+  detail: string
+  forModel: boolean
+}
+
+/** What the user sees of a run's steps and of its end, in the interface's language. */
+const MESSAGES = defineMessages({
+  alreadyWorking: {
+    en: 'I’m already working on this.',
+    it: 'Sto già lavorando su questo.',
+    de: 'Ich arbeite bereits daran.'
+  },
+  somethingWrong: {
+    en: 'Something went wrong while I was working.',
+    it: 'Qualcosa è andato storto mentre lavoravo.',
+    de: 'Bei der Arbeit ist etwas schiefgegangen.'
+  },
+  stopped: { en: 'Stopped', it: 'Interrotto', de: 'Unterbrochen' },
+  stoppedError: { en: 'Stopped.', it: 'Interrotto.', de: 'Unterbrochen.' },
+  invalidArguments: {
+    en: 'Invalid arguments',
+    it: 'Argomenti non validi',
+    de: 'Ungültige Argumente'
+  },
+  unknownTool: {
+    en: (name: string) => `Unknown tool: ${name}`,
+    it: (name: string) => `Strumento sconosciuto: ${name}`,
+    de: (name: string) => `Unbekanntes Werkzeug: ${name}`
+  },
+  triedAlready: {
+    en: 'Already tried this way',
+    it: 'Già provato così',
+    de: 'Schon so versucht'
+  },
+  /**
+   * A step that failed, with why — unless why was said to the model, in its
+   * Italian (a `ToolInputError`): the Italian interface shows it, the others not.
+   */
+  failed: {
+    en: ({ detail, forModel }: StepFailure) => (forModel ? 'Failed' : `Failed: ${detail}`),
+    it: ({ detail }: StepFailure) => `Non riuscito: ${detail}`,
+    de: ({ detail, forModel }: StepFailure) =>
+      forModel ? 'Fehlgeschlagen' : `Fehlgeschlagen: ${detail}`
+  },
+  stuck: {
+    en: (turns: number) => `I stopped: for ${turns} steps in a row I couldn’t move forward.`,
+    it: (turns: number) =>
+      `Mi sono fermato: da ${turns} passaggi di fila non riuscivo ad andare avanti.`,
+    de: (turns: number) => `Ich habe angehalten: ${turns} Schritte in Folge kam ich nicht weiter.`
+  }
+})
+
+/**
+ * What a run's task still asks for, when the model stops short of it: told
+ * to the model, and shown as the run's own line in the panel.
+ */
+export interface StillMissing {
+  forModel: string
+  /** In the interface's language. */
+  shown: string
+}
 
 /** A turn's answer, counted into how the run went. */
 function countTurn(stats: RunStats, result: ChatResult): void {
@@ -136,7 +201,7 @@ export interface RunOptions {
    * What the task must leave and has not, when the model stops: a line to
    * tell it, or null when the work is complete.
    */
-  missing?: (run: RunContext) => Promise<string | null>
+  missing?: (run: RunContext) => Promise<StillMissing | null>
   /** Stops the run from outside: the scheduler, the user. */
   signal?: AbortSignal
   /** The revisions of what the run's starting data showed it. */
@@ -278,7 +343,7 @@ export class AgentRunner {
     // One run at a time writes an activity's log: a second — "Riprova" pressed twice, a message
     // on top of it — would write into the same conversation.
     if (this.live.has(id)) {
-      throw new SegretarioError('cancelled', 'Sto già lavorando su questo.')
+      throw new SegretarioError('cancelled', messages(MESSAGES).alreadyWorking)
     }
 
     const controller = new AbortController()
@@ -411,8 +476,8 @@ export class AgentRunner {
           stalled += 1
           this.stopIfStuck(stalled)
           const nudge = await store.appendEvent<UserPayload>(id, 'user', {
-            text: missing,
-            forModel: missing,
+            text: missing.shown,
+            forModel: missing.forModel,
             handles: [],
             origin: 'segretario'
           })
@@ -440,8 +505,7 @@ export class AgentRunner {
         ended = 'cancelled'
       } else {
         const message =
-          error?.message ??
-          (raw instanceof Error ? raw.message : 'Qualcosa è andato storto mentre lavoravo.')
+          error?.message ?? (raw instanceof Error ? raw.message : messages(MESSAGES).somethingWrong)
 
         if (!error) {
           log.failed('run.failed', raw, { run: id, task: options.task })
@@ -456,7 +520,7 @@ export class AgentRunner {
       }
     } finally {
       for (const approval of live.approvals.values()) {
-        approval.reject(new SegretarioError('cancelled', 'Interrotto.'))
+        approval.reject(new SegretarioError('cancelled', messages(MESSAGES).stoppedError))
       }
 
       if (options.conversation) {
@@ -602,7 +666,9 @@ export class AgentRunner {
       live.failedCalls.set(signature, 'other')
       await finish({
         status: 'error',
-        summary: tool ? 'Argomenti non validi' : `Strumento sconosciuto: ${call.function.name}`,
+        summary: tool
+          ? messages(MESSAGES).invalidArguments
+          : messages(MESSAGES).unknownTool(call.function.name),
         result: again
           ? 'Hai già fatto esattamente questa chiamata e non è riuscita: non ripeterla uguale.'
           : (argsProblem ??
@@ -614,7 +680,7 @@ export class AgentRunner {
     if (live.failedCalls.has(signature)) {
       await finish({
         status: 'error',
-        summary: 'Già provato così',
+        summary: messages(MESSAGES).triedAlready,
         result:
           "Hai già fatto esattamente questa chiamata e non è riuscita: non ripeterla uguale. Rileggi l'errore e rifalla diversa, o lascia stare."
       })
@@ -660,7 +726,11 @@ export class AgentRunner {
       return !outcome.failed
     } catch (error) {
       if (error instanceof SegretarioError && error.code === 'cancelled') {
-        await finish({ status: 'error', summary: 'Interrotto', result: 'Interrotto.' })
+        await finish({
+          status: 'error',
+          summary: messages(MESSAGES).stopped,
+          result: 'Interrotto.'
+        })
         throw error
       }
 
@@ -680,7 +750,10 @@ export class AgentRunner {
 
       await finish({
         status: 'error',
-        summary: `Non riuscito: ${message.slice(0, 120)}`,
+        summary: messages(MESSAGES).failed({
+          detail: message.slice(0, 120),
+          forModel: error instanceof ToolInputError
+        }),
         result: `Errore: ${message}`,
         handles: context.newHandles
       })
@@ -691,10 +764,7 @@ export class AgentRunner {
   /** A run that got nowhere for too many turns in a row stops: it fails, and says so. */
   private stopIfStuck(stalled: number): void {
     if (stalled >= TURNS_WITHOUT_PROGRESS) {
-      throw new SegretarioError(
-        'stuck',
-        `Mi sono fermato: da ${TURNS_WITHOUT_PROGRESS} passaggi di fila non riuscivo ad andare avanti.`
-      )
+      throw new SegretarioError('stuck', messages(MESSAGES).stuck(TURNS_WITHOUT_PROGRESS))
     }
   }
 
@@ -762,7 +832,7 @@ export class AgentRunner {
           live.approvals.set(payload.approvalId, { eventId: event.id, payload, resolve, reject })
           live.controller.signal.addEventListener(
             'abort',
-            () => reject(new SegretarioError('cancelled', 'Interrotto.')),
+            () => reject(new SegretarioError('cancelled', messages(MESSAGES).stoppedError)),
             { once: true }
           )
         }

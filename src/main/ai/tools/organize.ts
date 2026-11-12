@@ -1,3 +1,6 @@
+import { defineMessages } from '@shared/i18n'
+
+import { messages } from '../../i18n'
 import { PROMPTS } from '../prompts'
 import {
   requireInteractive,
@@ -29,6 +32,54 @@ const ACTION_LINES: Readonly<Record<(typeof ORGANIZE_ACTIONS)[number], string>> 
   cestina: 'Spostati nel cestino'
 }
 
+/** The step's lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  running: { en: 'Tidying up…', it: 'Metto in ordine…', de: 'Räume auf…' },
+  archivia: {
+    en: (count: number) => `Archived ${count === 1 ? '1 message' : `${count} messages`}`,
+    it: (count: number) => `Archiviati ${count === 1 ? '1 messaggio' : `${count} messaggi`}`,
+    de: (count: number) => `${count === 1 ? '1 Nachricht' : `${count} Nachrichten`} archiviert`
+  },
+  sposta: {
+    en: (count: number) => `Moved ${count === 1 ? '1 message' : `${count} messages`}`,
+    it: (count: number) => `Spostati ${count === 1 ? '1 messaggio' : `${count} messaggi`}`,
+    de: (count: number) => `${count === 1 ? '1 Nachricht' : `${count} Nachrichten`} verschoben`
+  },
+  contrassegna: {
+    en: (count: number) => `Flagged ${count === 1 ? '1 message' : `${count} messages`}`,
+    it: (count: number) => `Contrassegnati ${count === 1 ? '1 messaggio' : `${count} messaggi`}`,
+    de: (count: number) => `${count === 1 ? '1 Nachricht' : `${count} Nachrichten`} markiert`
+  },
+  togli_contrassegno: {
+    en: (count: number) => `Unflagged ${count === 1 ? '1 message' : `${count} messages`}`,
+    it: (count: number) =>
+      `Tolto il contrassegno a ${count === 1 ? '1 messaggio' : `${count} messaggi`}`,
+    de: (count: number) =>
+      `Markierung von ${count === 1 ? '1 Nachricht' : `${count} Nachrichten`} entfernt`
+  },
+  segna_letto: {
+    en: (count: number) => `Marked ${count === 1 ? '1 message' : `${count} messages`} as read`,
+    it: (count: number) =>
+      `Segnati come letti ${count === 1 ? '1 messaggio' : `${count} messaggi`}`,
+    de: (count: number) =>
+      `${count === 1 ? '1 Nachricht' : `${count} Nachrichten`} als gelesen markiert`
+  },
+  segna_non_letto: {
+    en: (count: number) => `Marked ${count === 1 ? '1 message' : `${count} messages`} as unread`,
+    it: (count: number) =>
+      `Segnati come non letti ${count === 1 ? '1 messaggio' : `${count} messaggi`}`,
+    de: (count: number) =>
+      `${count === 1 ? '1 Nachricht' : `${count} Nachrichten`} als ungelesen markiert`
+  },
+  cestina: {
+    en: (count: number) => `Moved ${count === 1 ? '1 message' : `${count} messages`} to the Trash`,
+    it: (count: number) =>
+      `Spostati nel cestino ${count === 1 ? '1 messaggio' : `${count} messaggi`}`,
+    de: (count: number) =>
+      `${count === 1 ? '1 Nachricht' : `${count} Nachrichten`} in den Papierkorb verschoben`
+  }
+})
+
 /**
  * Puts mail in order as the user's own clicks would — the same operations,
  * with the same undo. Only with the user at the screen: moving mail is
@@ -46,7 +97,7 @@ export const organizeTool: SegretarioTool = {
     },
     required: ['messaggi', 'azione']
   },
-  running: () => 'Metto in ordine…',
+  running: () => messages(STEPS).running,
   async execute(args, context) {
     requireInteractive(
       context,
@@ -128,7 +179,7 @@ export const organizeTool: SegretarioTool = {
         failed === 0
           ? `${ACTION_LINES[action]} ${countOf(done, 'messaggio', 'messaggi')}.`
           : `${ACTION_LINES[action]} ${countOf(done, 'messaggio', 'messaggi')}; ${failed} non riusciti${result.error ? `: ${result.error}` : '.'}`,
-      summary: `${ACTION_LINES[action]} ${countOf(done, 'messaggio', 'messaggi')}`,
+      summary: messages(STEPS)[action](done),
       messages: refs,
       failed: done === 0
     }

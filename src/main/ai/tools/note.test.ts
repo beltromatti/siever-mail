@@ -219,7 +219,7 @@ describe('nota and avvisa', () => {
         { messaggio: 'm1', riga: '  Il DDT  non torna. ' },
         reading
       )
-      expect(told.summary).toBe('Avvisato l’utente')
+      expect(told.summary).toBe('Alerted you')
       expect(mailAlerts).toEqual([['m:ddt', 'Il DDT non torna.']])
       expect(await alertsOfMessage()).toEqual(['Il DDT non torna.'])
 

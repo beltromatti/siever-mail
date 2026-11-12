@@ -3,6 +3,9 @@ import { extname } from 'node:path'
 import { strFromU8, unzipSync } from 'fflate'
 import { NodeHtmlMarkdown } from 'node-html-markdown'
 
+import { defineMessages } from '@shared/i18n'
+
+import { messages } from '../i18n'
 import { parseMessageSource } from '../services/mail-engine/message-parts'
 import {
   decodeText,
@@ -14,6 +17,15 @@ import {
   zipListing
 } from './document-formats'
 import { renderPdfPages } from './pdf-pages'
+
+/** A failure of the reading, which the step's line shows the user. */
+const ERRORS = defineMessages({
+  pageNotDrawn: {
+    en: (page: number) => `Page ${page} of the PDF wasn’t drawn.`,
+    it: (page: number) => `La pagina ${page} del PDF non è stata disegnata.`,
+    de: (page: number) => `Seite ${page} der PDF wurde nicht gezeichnet.`
+  }
+})
 
 /**
  * What a document says, for the Segretario to read: an attachment, a file
@@ -393,7 +405,7 @@ async function extractPdf(
       const dataUrl = drawn.get(page)
 
       if (!dataUrl) {
-        throw new Error(`La pagina ${page} del PDF non è stata disegnata.`)
+        throw new Error(messages(ERRORS).pageNotDrawn(page))
       }
 
       return { page, text: pageText, dataUrl }

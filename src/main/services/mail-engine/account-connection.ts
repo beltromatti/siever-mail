@@ -16,6 +16,7 @@ import {
 import type { ParsedMail } from 'mailparser'
 
 import { diagnostics } from '@main/diagnostics/log'
+import { currentLanguage, messages } from '@main/i18n'
 import {
   REFUSAL_LINES,
   type AccountConnectionState,
@@ -31,10 +32,16 @@ import {
 import { folderForRole, folderRoleLabel, type FolderRole } from '@shared/folders'
 import { deriveSenderKey, deriveSenderName } from '@shared/sender'
 
-import { refusalNeedsConfirming, refusalOf, serverWords } from '../connection-refusal'
+import {
+  refusalClause,
+  refusalNeedsConfirming,
+  refusalOf,
+  serverWords
+} from '../connection-refusal'
 import type { AppDatabase, FolderSyncState, LeftOutMessages } from '../database'
 import type { MailTokens } from '../mail-tokens'
 
+import { MESSAGES } from './account-connection.messages'
 import { keptRefs, planArchive } from './archive-plan'
 import {
   fetchedIdentityClaim,
@@ -93,10 +100,6 @@ const log = diagnostics('mail')
 // single IMAP FETCH because each envelope is tiny — used only for the initial
 // bulk sync where we want the list to populate as fast as possible and defer
 // the preview to a follow-up hydration pass.
-/** The folder archiving creates on a server that has none. */
-const ARCHIVE_FOLDER_NAME = 'Archivio'
-/** The Bozze created for an account without one; servers know the name as \Drafts. */
-const DRAFTS_FOLDER_NAME = 'Bozze'
 
 const BOOTSTRAP_ENVELOPE_BATCH_SIZE = 1000
 // The first batch of a first sync is the first screen of the list: small,
@@ -674,7 +677,7 @@ export class AccountConnection extends EventEmitter {
   async stop(): Promise<void> {
     this.shuttingDown = true
     this.running = false
-    this.settleReconnecting(new Error('Questa casella non è più collegata.'))
+    this.settleReconnecting(new Error(messages(MESSAGES).mailboxGone))
     // The loop may be parked between attempts; let it see `running` is off.
     this.wakeRetry?.()
     const indexerStopped = this.indexer.stop()
@@ -1093,7 +1096,7 @@ export class AccountConnection extends EventEmitter {
     ).get(ref.uid)
 
     if (!head?.envelope || !head.bodyStructure || !head.headers) {
-      throw new Error('Messaggio non disponibile sul server.')
+      throw new Error(messages(MESSAGES).messageUnavailable)
     }
 
     const plan = planPartialBody(head.bodyStructure)
@@ -1110,7 +1113,7 @@ export class AccountConnection extends EventEmitter {
     ).get(ref.uid)?.bodyParts
 
     if (!parts) {
-      throw new Error('Messaggio non disponibile sul server.')
+      throw new Error(messages(MESSAGES).messageUnavailable)
     }
 
     const parsed = await parseMessageSource(
@@ -1262,7 +1265,7 @@ export class AccountConnection extends EventEmitter {
             : await client.messageFlagsRemove(range, [keyword], { uid: true })
 
           if (!stored) {
-            throw new Error('Il server non ha aggiornato i messaggi.')
+            throw new Error(messages(MESSAGES).messagesNotUpdated)
           }
         }
       } finally {
@@ -1430,14 +1433,16 @@ export class AccountConnection extends EventEmitter {
   ): Promise<{ folderPath: string; uid: number | null }> {
     const drafts =
       folderForRole(await this.database.listFolders(this.account.id), '\\Drafts') ??
-      (await this.createFolder(DRAFTS_FOLDER_NAME, null))
+      // Named in the interface's language, as the big clients name theirs: servers know the name
+      // as \Drafts in any of them.
+      (await this.createFolder(folderRoleLabel('\\Drafts', currentLanguage()), null))
 
     const saved = await this.runUserOperation(async () => {
       const client = this.requirePrimary()
       const appended = await client.append(drafts.path, raw, ['\\Draft', '\\Seen'], new Date())
 
       if (!appended) {
-        throw new Error('Il server non ha salvato la bozza.')
+        throw new Error(messages(MESSAGES).draftNotSaved)
       }
 
       let uid = appended.uid ?? null
@@ -1624,9 +1629,7 @@ export class AccountConnection extends EventEmitter {
       this.incrementalSyncFolder(folderPath, 'background')
 
       if (kept.length > 0) {
-        throw new Error(
-          'Segnati come eliminati: il server li toglierà quando la cartella verrà ripulita. Un altro programma vi ha segnato come eliminati anche altri messaggi, che SIEVER Mail non elimina al suo posto.'
-        )
+        throw new Error(messages(MESSAGES).markedDeleted)
       }
     }, `delete:${folderPath}:${uids.length}`)
 
@@ -1647,7 +1650,12 @@ export class AccountConnection extends EventEmitter {
     const target = folderForRole(await this.database.listFolders(this.account.id), role)
 
     if (!target) {
-      throw new Error(`${this.account.email} non ha una cartella «${folderRoleLabel(role)}».`)
+      throw new Error(
+        messages(MESSAGES).noRoleFolder(
+          this.account.email,
+          folderRoleLabel(role, currentLanguage())
+        )
+      )
     }
 
     if (target.path !== folderPath) {
@@ -1680,10 +1688,7 @@ export class AccountConnection extends EventEmitter {
       )
     })
     const failed = [...plan.unknown]
-    let error =
-      plan.unknown.length > 0
-        ? 'Il messaggio non è più in questa cartella: è stato spostato o eliminato altrove.'
-        : undefined
+    let error = plan.unknown.length > 0 ? messages(MESSAGES).messageMovedElsewhere : undefined
 
     if (plan.pending.length === 0) {
       return { failed, error, stayed: plan.stayed, kept: keptRefs(plan, failed) }
@@ -1710,16 +1715,14 @@ export class AccountConnection extends EventEmitter {
         ...[...plan.restores].map(async ([folderPath, uids]) => {
           try {
             if (!inbox) {
-              throw new Error(`${this.account.email} non ha una Posta in arrivo.`)
+              throw new Error(messages(MESSAGES).noInbox(this.account.email))
             }
 
             const restored = await this.moveMessages(folderPath, uids, inbox.path)
             const inInbox = uids.flatMap((uid) => restored.get(uid) ?? [])
 
             if (inInbox.length < uids.length) {
-              throw new Error(
-                'Il messaggio è tornato nella Posta in arrivo, ma il server non ha detto dove: archivialo da lì.'
-              )
+              throw new Error(messages(MESSAGES).backInInbox)
             }
 
             await this.moveMessages(inbox.path, inInbox, archive.path)
@@ -1771,7 +1774,8 @@ export class AccountConnection extends EventEmitter {
   }
 
   private async createArchiveFolder(): Promise<MailFolder> {
-    return this.createFolder(ARCHIVE_FOLDER_NAME, null)
+    // Named in the interface's language: servers know the name as \Archive in any of them.
+    return this.createFolder(folderRoleLabel('\\Archive', currentLanguage()), null)
   }
 
   /** Marks every message of a folder read, on the server and here, in one command. */
@@ -1805,11 +1809,11 @@ export class AccountConnection extends EventEmitter {
     const folder = folders.find((candidate) => candidate.path === folderPath)
 
     if (!folder) {
-      throw new Error('La cartella non è più sul server.')
+      throw new Error(messages(MESSAGES).folderGone)
     }
 
     if (folder.delimiter && name.includes(folder.delimiter)) {
-      throw new Error(`Il nome di una cartella non può contenere «${folder.delimiter}».`)
+      throw new Error(messages(MESSAGES).folderNameDelimiter(folder.delimiter))
     }
 
     const separatorIndex = folder.delimiter ? folderPath.lastIndexOf(folder.delimiter) : -1
@@ -1819,7 +1823,7 @@ export class AccountConnection extends EventEmitter {
       const renamed = await this.requirePrimary().mailboxRename(folderPath, requestedPath)
 
       if (!renamed?.newPath) {
-        throw new Error(`Il server non ha rinominato la cartella in «${name}».`)
+        throw new Error(messages(MESSAGES).folderNotRenamed(name))
       }
 
       return renamed.newPath
@@ -1827,7 +1831,7 @@ export class AccountConnection extends EventEmitter {
     const renamed = (await this.refreshFolders()).find((candidate) => candidate.path === path)
 
     if (!renamed) {
-      throw new Error(`Il server non mostra la cartella «${name}».`)
+      throw new Error(messages(MESSAGES).folderNotShown(name))
     }
 
     this.incrementalSyncFolder(path, 'active-sync')
@@ -1843,7 +1847,7 @@ export class AccountConnection extends EventEmitter {
     const parent = parentPath ? folders.find((folder) => folder.path === parentPath) : null
 
     if (parentPath && !parent?.delimiter) {
-      throw new Error('La cartella in cui crearla non è più sul server.')
+      throw new Error(messages(MESSAGES).parentGone)
     }
 
     // A name, not a path: the server's separator in it would nest the folder
@@ -1851,7 +1855,7 @@ export class AccountConnection extends EventEmitter {
     const delimiter = parent?.delimiter ?? folders.find((folder) => folder.delimiter)?.delimiter
 
     if (delimiter && name.includes(delimiter)) {
-      throw new Error(`Il nome di una cartella non può contenere «${delimiter}».`)
+      throw new Error(messages(MESSAGES).folderNameDelimiter(delimiter))
     }
 
     const requestedPath = parent ? `${parent.path}${parent.delimiter}${name}` : name
@@ -1859,7 +1863,7 @@ export class AccountConnection extends EventEmitter {
       const created = await this.requirePrimary().mailboxCreate(requestedPath)
 
       if (!created?.path) {
-        throw new Error(`Il server non ha creato la cartella «${name}».`)
+        throw new Error(messages(MESSAGES).folderNotCreated(name))
       }
 
       return created.path
@@ -1867,7 +1871,7 @@ export class AccountConnection extends EventEmitter {
     const folder = (await this.refreshFolders()).find((candidate) => candidate.path === path)
 
     if (!folder) {
-      throw new Error(`Il server non mostra la cartella «${name}» appena creata.`)
+      throw new Error(messages(MESSAGES).createdNotShown(name))
     }
 
     return folder
@@ -1995,7 +1999,7 @@ export class AccountConnection extends EventEmitter {
           const attachment = parsed.attachments[index]
 
           if (!attachment) {
-            throw new Error('Allegato non disponibile per questo messaggio.')
+            throw new Error(messages(MESSAGES).attachmentUnavailable)
           }
 
           return {
@@ -2029,14 +2033,14 @@ export class AccountConnection extends EventEmitter {
         const content = fetched?.get(part)
 
         if (!header || !content) {
-          throw new Error('Allegato non disponibile per questo messaggio.')
+          throw new Error(messages(MESSAGES).attachmentUnavailable)
         }
 
         const [attachment] = (await parseMessageSource(buildPartSource(header, content)))
           .attachments
 
         if (!attachment) {
-          throw new Error('Allegato non disponibile per questo messaggio.')
+          throw new Error(messages(MESSAGES).attachmentUnavailable)
         }
 
         return {
@@ -2085,7 +2089,7 @@ export class AccountConnection extends EventEmitter {
     )
 
     if (!fetched?.source) {
-      throw new Error('Messaggio non disponibile sul server.')
+      throw new Error(messages(MESSAGES).messageUnavailable)
     }
 
     return fetched
@@ -2291,7 +2295,7 @@ export class AccountConnection extends EventEmitter {
 
           if (this.reconnecting) {
             this.settleReconnecting(
-              new Error(`${REFUSAL_LINES[refusal]}: ${this.lastError?.message ?? ''}`)
+              new Error(`${messages(REFUSAL_LINES)[refusal]}: ${this.lastError?.message ?? ''}`)
             )
           } else {
             this.emit('refused', refusal, this.lastError?.message ?? '')
@@ -2483,14 +2487,14 @@ export class AccountConnection extends EventEmitter {
 
   private requirePrimary(): ImapFlow {
     if (!this.primaryClient?.usable) {
-      throw new Error('Connessione IMAP non disponibile.')
+      throw new Error(messages(MESSAGES).imapUnavailable)
     }
     return this.primaryClient
   }
 
   private requireSync(): ImapFlow {
     if (!this.syncClient?.usable) {
-      throw new Error('Connessione IMAP di sync non disponibile.')
+      throw new Error(messages(MESSAGES).syncUnavailable)
     }
     return this.syncClient
   }
@@ -3028,7 +3032,7 @@ export class AccountConnection extends EventEmitter {
       )
 
       if (!Array.isArray(serverUids)) {
-        throw new Error(`Il server non ha elencato i messaggi di «${folderPath}».`)
+        throw new Error(messages(MESSAGES).notListed(folderPath))
       }
 
       const newUids = serverUids.filter(
@@ -3157,9 +3161,7 @@ export class AccountConnection extends EventEmitter {
       )
 
       if (fetched.unresolved.length > 0) {
-        throw new Error(
-          `Il server ha rifiutato ${fetched.unresolved.length} messaggi di «${folderPath}»: verranno chiesti di nuovo.`
-        )
+        throw new Error(messages(MESSAGES).refusedMessages(fetched.unresolved.length, folderPath))
       }
 
       return unread
@@ -3705,7 +3707,7 @@ export class AccountConnection extends EventEmitter {
     const serverUids = await this.requireSync().search({ uid: '1:*' }, { uid: true })
 
     if (!Array.isArray(serverUids)) {
-      throw new Error(`Il server non ha elencato i messaggi di «${folderPath}».`)
+      throw new Error(messages(MESSAGES).notListed(folderPath))
     }
 
     const onServer = new Set(serverUids)
@@ -3844,7 +3846,7 @@ export class AccountConnection extends EventEmitter {
     if (this.refused) {
       reject(
         new Error(
-          `La casella ${this.account.email} è ferma: ${REFUSAL_LINES[this.refused].toLowerCase()}. Ricollegala da Impostazioni › Connessioni.`
+          messages(MESSAGES).mailboxStopped(this.account.email, refusalClause(this.refused))
         )
       )
       return { promise, task }
@@ -3867,8 +3869,8 @@ export class AccountConnection extends EventEmitter {
       reject(
         new Error(
           this.status === 'offline'
-            ? 'Nessuna connessione a internet: operazione non eseguita.'
-            : `Il server di ${this.account.email} non risponde: operazione non eseguita.`
+            ? messages(MESSAGES).offline
+            : messages(MESSAGES).serverNotAnswering(this.account.email)
         )
       )
     }

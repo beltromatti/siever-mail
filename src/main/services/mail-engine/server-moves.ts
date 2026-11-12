@@ -1,6 +1,55 @@
 import type { CopyResponseObject, ImapFlow } from 'imapflow'
 
+import { messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
+
 import { formatUidSet } from './fetch-results'
+
+const MESSAGES = defineMessages({
+  notMarkedDeleted: {
+    en: 'The server didn’t mark the messages as deleted.',
+    it: 'Il server non ha segnato i messaggi come eliminati.',
+    de: 'Der Server hat die Nachrichten nicht als gelöscht markiert.'
+  },
+  notDeleted: {
+    en: 'The server didn’t delete the messages.',
+    it: 'Il server non ha eliminato i messaggi.',
+    de: 'Der Server hat die Nachrichten nicht gelöscht.'
+  },
+  notMoved: {
+    en: (destination: string) => `The server didn’t move the messages to “${destination}”.`,
+    it: (destination: string) => `Il server non ha spostato i messaggi in «${destination}».`,
+    de: (destination: string) =>
+      `Der Server hat die Nachrichten nicht nach „${destination}“ verschoben.`
+  },
+  copyWouldExpunge: {
+    en: 'This server moves messages by copying them and deleting the originals, and so it would delete for good the ones another program marked as deleted in this folder too: not moved.',
+    it: 'Questo server sposta i messaggi copiandoli ed eliminando gli originali, e così eliminerebbe per sempre anche quelli che un altro programma ha segnato come eliminati in questa cartella: spostamento non eseguito.',
+    de: 'Dieser Server verschiebt Nachrichten, indem er sie kopiert und die Originale löscht, und würde so auch die Nachrichten endgültig löschen, die ein anderes Programm in diesem Ordner als gelöscht markiert hat: nicht verschoben.'
+  },
+  notCopied: {
+    en: (destination: string) => `The server didn’t copy the messages to “${destination}”.`,
+    it: (destination: string) => `Il server non ha copiato i messaggi in «${destination}».`,
+    de: (destination: string) =>
+      `Der Server hat die Nachrichten nicht nach „${destination}“ kopiert.`
+  },
+  copiedNotRemoved: {
+    en: (destination: string) =>
+      `The messages were copied to “${destination}” but the server didn’t remove them from the folder they came from.`,
+    it: (destination: string) =>
+      `I messaggi sono stati copiati in «${destination}» ma il server non li ha rimossi dalla cartella di origine.`,
+    de: (destination: string) =>
+      `Die Nachrichten wurden nach „${destination}“ kopiert, aber der Server hat sie nicht aus dem Ursprungsordner entfernt.`
+  },
+  copiedStillMarked: {
+    en: (destination: string) =>
+      `The messages were copied to “${destination}”; here they stay marked as deleted until the folder is cleaned up: another program has marked other messages there as deleted too, which SIEVER Mail doesn’t delete in its place.`,
+    it: (destination: string) =>
+      `I messaggi sono stati copiati in «${destination}»; qui restano segnati come eliminati, finché la cartella non viene ripulita: un altro programma vi ha segnato come eliminati anche altri messaggi, che SIEVER Mail non elimina al suo posto.`,
+    de: (destination: string) =>
+      `Die Nachrichten wurden nach „${destination}“ kopiert; hier bleiben sie als gelöscht markiert, bis der Ordner bereinigt wird: Ein anderes Programm hat dort auch weitere Nachrichten als gelöscht markiert, die SIEVER Mail nicht an seiner Stelle löscht.`
+  }
+})
 
 /** What moving and deleting on the server use of a connection. */
 export type RemovingClient = Pick<
@@ -55,7 +104,7 @@ export async function expungeOnly(
 
   if (!client.capabilities.has('UIDPLUS')) {
     if (!(await client.messageFlagsAdd(range, ['\\Deleted'], { uid: true }))) {
-      throw new Error('Il server non ha segnato i messaggi come eliminati.')
+      throw new Error(messages(MESSAGES).notMarkedDeleted)
     }
 
     if (await othersMarkedDeleted(client, uids, ours)) {
@@ -65,7 +114,7 @@ export async function expungeOnly(
   }
 
   if (!(await client.messageDelete(range, { uid: true }))) {
-    throw new Error('Il server non ha eliminato i messaggi.')
+    throw new Error(messages(MESSAGES).notDeleted)
   }
 
   return true
@@ -98,21 +147,19 @@ export async function moveOnServer(
     const moved = await client.messageMove(range, destination, { uid: true })
 
     if (!moved) {
-      throw new Error(`Il server non ha spostato i messaggi in «${destination}».`)
+      throw new Error(messages(MESSAGES).notMoved(destination))
     }
     return moved
   }
 
   if (!client.capabilities.has('UIDPLUS') && (await othersMarkedDeleted(client, uids, ours))) {
-    throw new Error(
-      'Questo server sposta i messaggi copiandoli ed eliminando gli originali, e così eliminerebbe per sempre anche quelli che un altro programma ha segnato come eliminati in questa cartella: spostamento non eseguito.'
-    )
+    throw new Error(messages(MESSAGES).copyWouldExpunge)
   }
 
   const copied = await client.messageCopy(range, destination, { uid: true })
 
   if (!copied) {
-    throw new Error(`Il server non ha copiato i messaggi in «${destination}».`)
+    throw new Error(messages(MESSAGES).notCopied(destination))
   }
 
   let expunged: boolean
@@ -120,16 +167,11 @@ export async function moveOnServer(
   try {
     expunged = await expungeOnly(client, uids, ours)
   } catch (error) {
-    throw new Error(
-      `I messaggi sono stati copiati in «${destination}» ma il server non li ha rimossi dalla cartella di origine.`,
-      { cause: error }
-    )
+    throw new Error(messages(MESSAGES).copiedNotRemoved(destination), { cause: error })
   }
 
   if (!expunged) {
-    throw new Error(
-      `I messaggi sono stati copiati in «${destination}»; qui restano segnati come eliminati, finché la cartella non viene ripulita: un altro programma vi ha segnato come eliminati anche altri messaggi, che SIEVER Mail non elimina al suo posto.`
-    )
+    throw new Error(messages(MESSAGES).copiedStillMarked(destination))
   }
 
   return copied

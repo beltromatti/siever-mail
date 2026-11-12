@@ -1,14 +1,27 @@
+import { firstDayOfWeek, languageNow } from '@renderer/lib/i18n'
 import type { CalendarEvent } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 
 /** How the Calendario app shows time. */
 export type CalendarView = 'giorno' | 'settimana' | 'mese' | 'agenda'
 
+/** Each view's name, as the switch says it. */
+export const CALENDAR_VIEW_NAMES = defineMessages({
+  agenda: { en: 'Agenda', it: 'Agenda', de: 'Agenda' },
+  day: { en: 'Day', it: 'Giorno', de: 'Tag' },
+  week: { en: 'Week', it: 'Settimana', de: 'Woche' },
+  month: { en: 'Month', it: 'Mese', de: 'Monat' }
+})
+
 /** The views, in the switch's order: the agenda first, the one the calendar opens on. */
-export const CALENDAR_VIEWS: ReadonlyArray<{ value: CalendarView; label: string }> = [
-  { value: 'agenda', label: 'Agenda' },
-  { value: 'giorno', label: 'Giorno' },
-  { value: 'settimana', label: 'Settimana' },
-  { value: 'mese', label: 'Mese' }
+export const CALENDAR_VIEWS: ReadonlyArray<{
+  value: CalendarView
+  name: keyof typeof CALENDAR_VIEW_NAMES
+}> = [
+  { value: 'agenda', name: 'agenda' },
+  { value: 'giorno', name: 'day' },
+  { value: 'settimana', name: 'week' },
+  { value: 'mese', name: 'month' }
 ]
 
 /** Days the agenda lists from the day it starts on. */
@@ -23,9 +36,40 @@ export function addDays(date: Date, days: number): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days)
 }
 
-/** The Monday a day's week starts on. */
+const formats = new Map<string, Intl.DateTimeFormat>()
+
+/**
+ * A way of writing dates in the interface's language, as the computer's
+ * region writes them (§13.5) — "giovedì 5 novembre", "Thursday 5 November",
+ * 14:05 or 2:05 PM —, made once for each locale and kept: the grids write
+ * hundreds of times at each drawing.
+ */
+export function dateFormat(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const locale = languageNow().formatLocale
+  const key = `${locale} ${JSON.stringify(options)}`
+  let format = formats.get(key)
+
+  if (!format) {
+    format = new Intl.DateTimeFormat(locale, options)
+    formats.set(key, format)
+  }
+
+  return format
+}
+
+/** The day a day's week starts on, as the region counts weeks. */
 export function startOfWeek(date: Date): Date {
-  return addDays(startOfDay(date), -((date.getDay() + 6) % 7))
+  return addDays(
+    startOfDay(date),
+    -((date.getDay() - (firstDayOfWeek(languageNow().formatLocale) % 7) + 7) % 7)
+  )
+}
+
+/** The seven days of a week in the region's order, by name: "lun", "Mon"; "L", "M" narrow. */
+export function weekdayNames(weekday: 'narrow' | 'short'): string[] {
+  const first = startOfWeek(new Date())
+  const format = dateFormat({ weekday })
+  return Array.from({ length: 7 }, (_, index) => format.format(addDays(first, index)))
 }
 
 /** A day as the calendar and the commitments write it: AAAA-MM-GG, local. */
@@ -47,7 +91,7 @@ export function sameDay(a: Date, b: Date): boolean {
   )
 }
 
-/** The days a view shows around a day: one, a week from Monday, the weeks of a month, the agenda's. */
+/** The days a view shows around a day: one, a week from its first day, the weeks of a month, the agenda's. */
 export function viewDays(view: CalendarView, anchor: Date): Date[] {
   switch (view) {
     case 'giorno':
@@ -77,32 +121,35 @@ export function stepAnchor(view: CalendarView, anchor: Date, direction: 1 | -1):
   }
 }
 
-const MONTH_YEAR = new Intl.DateTimeFormat('it-IT', { month: 'long', year: 'numeric' })
-const FULL_DAY = new Intl.DateTimeFormat('it-IT', {
+const MONTH_YEAR: Intl.DateTimeFormatOptions = { month: 'long', year: 'numeric' }
+const FULL_DAY: Intl.DateTimeFormatOptions = {
   weekday: 'long',
   day: 'numeric',
   month: 'long',
   year: 'numeric'
-})
-const DAY_MONTH = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'long' })
+}
+const DAYS: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'long', year: 'numeric' }
 
-/** What the header says a view shows: "novembre 2026", "2 – 8 novembre 2026", "giovedì 5 novembre 2026". */
+/**
+ * What the header says a view shows, as the region writes it: "novembre
+ * 2026", "2–8 novembre 2026", "November 2 – 8, 2026", "giovedì 5 novembre 2026".
+ */
 export function viewTitle(view: CalendarView, anchor: Date): string {
   if (view === 'giorno') {
-    return FULL_DAY.format(anchor)
+    return dateFormat(FULL_DAY).format(anchor)
   }
 
   if (view === 'mese') {
-    return MONTH_YEAR.format(anchor)
+    return dateFormat(MONTH_YEAR).format(anchor)
   }
 
   const days = viewDays(view, anchor)
-  const first = days[0]
-  const last = days[days.length - 1]
 
-  return first.getMonth() === last.getMonth()
-    ? `${first.getDate()} – ${DAY_MONTH.format(last)} ${last.getFullYear()}`
-    : `${DAY_MONTH.format(first)} – ${DAY_MONTH.format(last)} ${last.getFullYear()}`
+  // Italian writes a range's days padded ("02–08"), which a numeric day does not ask for.
+  return dateFormat(DAYS)
+    .formatRangeToParts(days[0], days[days.length - 1])
+    .map((part) => (part.type === 'day' ? part.value.replace(/^0(?=\d)/, '') : part.value))
+    .join('')
 }
 
 /** An event's start and end as instants — an all-day one's by local midnight, its end exclusive. */

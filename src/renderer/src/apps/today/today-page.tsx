@@ -5,12 +5,15 @@ import { toast } from 'sonner'
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { Input } from '@renderer/components/ui/input'
+import { hourStyle, messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import { calendarKey } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import type { MessageRef } from '@shared/models'
+import { PLACES } from '@shared/places'
 import type { Commitment, DayLine, TodayPage as Today } from '@shared/segretario'
 
-import { isOnDay, startOfDay } from '@renderer/features/calendar/calendar-dates'
+import { dateFormat, isOnDay, startOfDay } from '@renderer/features/calendar/calendar-dates'
 import { EventLine } from '@renderer/features/calendar/event-line'
 import { useCalendarEvents, useCalendarList } from '@renderer/features/calendar/use-calendar'
 
@@ -29,29 +32,133 @@ import {
 import { LinkedWords, useOpenLink } from '@renderer/features/segretario/segretario-text'
 import { COMMITMENT_LABELS, dueLabel } from '@renderer/features/segretario/row-work'
 
-const DAY_TITLE = new Intl.DateTimeFormat('it-IT', {
+const MESSAGES = defineMessages({
+  arrived: {
+    en: 'Marked as arrived',
+    it: 'Segnato come arrivato',
+    de: 'Als eingetroffen markiert'
+  },
+  done: { en: 'Marked as done', it: 'Segnata come fatta', de: 'Als erledigt markiert' },
+  undo: { en: 'Undo', it: 'Annulla', de: 'Rückgängig' },
+  notChanged: { en: 'It did not change', it: 'Non è cambiata', de: 'Es wurde nicht geändert' },
+  settleArrived: { en: 'Arrived', it: 'Arrivato', de: 'Eingetroffen' },
+  settleDone: { en: 'Done', it: 'Fatto', de: 'Erledigt' },
+  followUp: { en: 'Follow-up', it: 'Sollecito', de: 'Nachfassen' },
+  since: {
+    en: (day: string) => `since ${day}`,
+    it: (day: string) => `da ${day}`,
+    de: (day: string) => `seit ${day}`
+  },
+  notAdded: {
+    en: 'It was not added',
+    it: 'Non è stata aggiunta',
+    de: 'Es wurde nicht hinzugefügt'
+  },
+  remember: { en: 'Something to remember', it: 'Una cosa da ricordare', de: 'Etwas zum Merken' },
+  rememberPlaceholder: {
+    en: 'Something to remember: write it and press Enter',
+    it: 'Una cosa da ricordare: scrivila e premi Invio',
+    de: 'Etwas zum Merken: Schreiben Sie es und drücken Sie Eingabe'
+  },
+  notRefreshed: {
+    en: 'The day could not be refreshed',
+    it: 'La giornata non si aggiorna',
+    de: 'Der Tag lässt sich nicht aktualisieren'
+  },
+  lookAgain: {
+    en: 'Look at the day again',
+    it: 'Guarda di nuovo la giornata',
+    de: 'Den Tag erneut ansehen'
+  },
+  point: {
+    en: (point: string) => `${point}, from the Segretario`,
+    it: (point: string) => `${point} del Segretario`,
+    de: (point: string) => `${point} vom Segretario`
+  },
+  writtenAt: {
+    en: (time: string) => `written at ${time}`,
+    it: (time: string) => `scritto alle ${time}`,
+    de: (time: string) => `geschrieben um ${time}`
+  },
+  glance: { en: 'The day at a glance', it: 'La giornata in breve', de: 'Der Tag auf einen Blick' },
+  stillToRead: {
+    en: (count: number, written: string) =>
+      `${count === 1 ? 'One message is' : `${written} messages are`} still to be read.`,
+    it: (count: number, written: string) =>
+      `Restano da leggere ${count === 1 ? 'un messaggio' : `${written} messaggi`}.`,
+    de: (count: number, written: string) =>
+      `${count === 1 ? 'Eine Nachricht ist' : `${written} Nachrichten sind`} noch zu lesen.`
+  },
+  lookingAtDay: {
+    en: 'I’m looking at your day…',
+    it: 'Sto guardando la tua giornata…',
+    de: 'Ich sehe mir Ihren Tag an…'
+  },
+  stillReading: {
+    en: (count: number, written: string, hasLetter: boolean) =>
+      `I’m still reading your mail: ${count === 1 ? 'one message' : `${written} messages`}${hasLetter ? '.' : ', then I’ll tell you how the day looks.'}`,
+    it: (count: number, written: string, hasLetter: boolean) =>
+      `Sto ancora leggendo la tua posta: ${count === 1 ? 'un messaggio' : `${written} messaggi`}${hasLetter ? '.' : ", poi ti dico com'è la giornata."}`,
+    de: (count: number, written: string, hasLetter: boolean) =>
+      `Ich lese noch Ihre E-Mails: ${count === 1 ? 'eine Nachricht' : `${written} Nachrichten`}${hasLetter ? '.' : ', danach sage ich Ihnen, wie der Tag aussieht.'}`
+  },
+  noLetter: {
+    en: 'Today’s letter isn’t here yet.',
+    it: 'La lettera di oggi non c’è ancora.',
+    de: 'Der Brief für heute ist noch nicht da.'
+  },
+  writeNow: { en: 'Write it now', it: 'Scrivila ora', de: 'Jetzt schreiben' },
+  agenda: { en: 'On the agenda', it: 'In agenda', de: 'Auf der Agenda' },
+  questions: { en: 'Questions for you', it: 'Ti chiedo', de: 'Fragen an Sie' },
+  proposals: { en: 'Proposals', it: 'Proposte', de: 'Vorschläge' },
+  nothingPending: {
+    en: 'Nothing pending: everything is in order.',
+    it: 'Niente in sospeso: è tutto in ordine.',
+    de: 'Nichts offen: Alles ist in Ordnung.'
+  }
+})
+
+/** Each part of the day, as its heading says it. */
+const SECTION_TITLES = defineMessages({
+  today: { en: 'To do today', it: 'Da fare oggi', de: 'Heute zu tun' },
+  week: { en: 'This week', it: 'Questa settimana', de: 'Diese Woche' },
+  waiting: { en: 'Waiting on you', it: 'Ti aspettano', de: 'Warten auf Sie' },
+  ready: PLACES.readyReplies,
+  awaited: { en: 'You’re waiting', it: 'Aspetti tu', de: 'Sie warten' }
+})
+
+/** Each part of the day, as its count reads at a glance: "3 to do today". */
+const SECTION_GLANCES = defineMessages({
+  today: { en: 'to do today', it: 'da fare oggi', de: 'heute zu tun' },
+  week: { en: 'this week', it: 'questa settimana', de: 'diese Woche' },
+  waiting: { en: 'waiting on you', it: 'ti aspettano', de: 'warten auf Sie' },
+  ready: { en: 'ready', it: 'pronte', de: 'fertig' },
+  awaited: { en: 'you’re waiting on', it: 'aspetti tu', de: 'von Ihnen erwartet' }
+})
+
+const DAY_TITLE: Intl.DateTimeFormatOptions = {
   weekday: 'long',
   day: 'numeric',
   month: 'long'
-})
+}
 
-const SINCE = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
-const WRITTEN_AT = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
+const SINCE: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' }
+/** Made when used: the hour is written as the region writes it now. */
+const WRITTEN_AT = (): Intl.DateTimeFormatOptions => ({ hour: hourStyle(), minute: '2-digit' })
 /** How long the page waits for a letter asked again before it stops saying so. */
 const REWRITE_WAIT_MS = 3 * 60_000
 
-/** The day's parts, in the order the page gives them: where each is, and how its count reads. */
+/** The day's parts, in the order the page gives them, and where each is. */
 const SECTIONS = [
-  { key: 'today', id: 'oggi-da-fare', title: 'Da fare oggi', glance: 'da fare oggi' },
-  { key: 'week', id: 'oggi-settimana', title: 'Questa settimana', glance: 'questa settimana' },
-  { key: 'waiting', id: 'oggi-ti-aspettano', title: 'Ti aspettano', glance: 'ti aspettano' },
-  { key: 'ready', id: 'oggi-pronte', title: 'Risposte pronte', glance: 'pronte' },
-  { key: 'awaited', id: 'oggi-aspetti', title: 'Aspetti tu', glance: 'aspetti tu' }
+  { key: 'today', id: 'oggi-da-fare' },
+  { key: 'week', id: 'oggi-settimana' },
+  { key: 'waiting', id: 'oggi-ti-aspettano' },
+  { key: 'ready', id: 'oggi-pronte' },
+  { key: 'awaited', id: 'oggi-aspetti' }
 ] as const satisfies ReadonlyArray<{
-  key: keyof Pick<Today, 'today' | 'week' | 'waiting' | 'ready' | 'awaited'>
+  key: keyof Pick<Today, 'today' | 'week' | 'waiting' | 'ready' | 'awaited'> &
+    keyof typeof SECTION_TITLES
   id: string
-  title: string
-  glance: string
 }>
 
 /** Ticks a line's commitment off — done, or arrived — with an undo. */
@@ -64,16 +171,17 @@ async function settleLine(line: DayLine): Promise<boolean> {
 
   try {
     await window.segretarioApi.setCommitmentStatus(commitment.id, 'fatta')
-    toast(commitment.kind === 'aspetti' ? 'Segnato come arrivato' : 'Segnata come fatta', {
+    const m = messagesNow(MESSAGES)
+    toast(commitment.kind === 'aspetti' ? m.arrived : m.done, {
       description: commitment.text,
       action: {
-        label: 'Annulla',
+        label: m.undo,
         onClick: () => undoTick(commitment.id)
       }
     })
     return true
   } catch (error) {
-    toast.error('Non è cambiata', {
+    toast.error(messagesNow(MESSAGES).notChanged, {
       description: error instanceof Error ? error.message : undefined
     })
     return false
@@ -97,20 +205,22 @@ function Line({
   onSettled: (line: DayLine) => void
   onRemind: (commitment: Commitment) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const kinds = useMessages(COMMITMENT_LABELS)
   const openLink = useOpenLink()
   const found = dayLineLink(line)
   // Oggi is where a thing without a source to open is kept: its line opens nothing here.
   const link = found?.kind === 'commitment' ? null : found
   const late = line.due !== null && line.due < day
   const kind = line.commitment?.kind
-  const settleLabel = kind ? (kind === 'aspetti' ? 'Arrivato' : 'Fatto') : null
+  const settleLabel = kind ? (kind === 'aspetti' ? m.settleArrived : m.settleDone) : null
 
   const body = (
     <>
       <span className="voice text-foreground text-[16px] leading-[1.4]">
         {(kind || line.readyKind === 'sollecito') && (
           <span className="text-ai mr-1.5 font-sans text-[12px] font-semibold">
-            {kind ? COMMITMENT_LABELS[kind] : 'Sollecito'}
+            {kind ? kinds[kind] : m.followUp}
           </span>
         )}
         {line.text}
@@ -127,7 +237,9 @@ function Line({
           </span>
         )}
         {showWaitingSince && (
-          <span className="shrink-0">da {SINCE.format(new Date(dayLineSince(line)))}</span>
+          <span className="shrink-0">
+            {m.since(dateFormat(SINCE).format(new Date(dayLineSince(line))))}
+          </span>
         )}
         <span className="min-w-0 truncate">{dayLineSourceWords(line)}</span>
       </span>
@@ -176,6 +288,7 @@ function Line({
  * kept with the rest — its date, if it has one, comes from its menu.
  */
 function RememberField(): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [text, setText] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -195,7 +308,7 @@ function RememberField(): React.JSX.Element {
       )
       setText('')
     } catch (error) {
-      toast.error('Non è stata aggiunta', {
+      toast.error(m.notAdded, {
         description: error instanceof Error ? error.message : undefined
       })
     } finally {
@@ -215,8 +328,8 @@ function RememberField(): React.JSX.Element {
       <Input
         value={text}
         disabled={saving}
-        aria-label="Una cosa da ricordare"
-        placeholder="Una cosa da ricordare: scrivila e premi Invio"
+        aria-label={m.remember}
+        placeholder={m.rememberPlaceholder}
         onChange={(event) => setText(event.target.value)}
         className="focus-visible:border-border h-9 border-transparent bg-transparent shadow-none"
       />
@@ -291,6 +404,11 @@ export function TodayPage({
   /** Asks the Segretario for a reminder to who is awaited. */
   onRemind: (commitment: Commitment) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
+  const sectionTitles = useMessages(SECTION_TITLES)
+  const sectionGlances = useMessages(SECTION_GLANCES)
+  const { formatLocale } = useLanguage()
   const [page, setPage] = useState<Today | null>(null)
   const [settled, setSettled] = useState<ReadonlySet<string>>(() => new Set())
   const settle = useCallback(
@@ -314,7 +432,7 @@ export function TodayPage({
       await window.segretarioApi.refreshToday()
     } catch (error) {
       setRewritingSince(null)
-      toast.error('La giornata non si aggiorna', {
+      toast.error(messagesNow(MESSAGES).notRefreshed, {
         description: error instanceof Error ? error.message : undefined
       })
     }
@@ -403,11 +521,11 @@ export function TodayPage({
           atWindowTopRight ? 'pr-[calc(var(--titlebar-controls)+8px)]' : 'pr-3'
         )}
       >
-        <h1 className="display-title text-[15px]">Oggi</h1>
+        <h1 className="display-title text-[15px]">{places.today}</h1>
         <div className="flex-1" />
         {canWrite && (
           <IconButton
-            label="Guarda di nuovo la giornata"
+            label={m.lookAgain}
             className="window-no-drag text-faint-foreground size-[28px]"
             disabled={rewriting}
             onClick={() => void rewrite()}
@@ -426,20 +544,20 @@ export function TodayPage({
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-2 border-b pb-3">
               <CompassStar className="text-ai-star size-[15px]" />
-              <span className="eyebrow">Il punto del Segretario</span>
+              <span className="eyebrow">{m.point(places.whereItStands)}</span>
               <span className="flex-1" />
               {page?.letterAt && !rewriting && (
                 <span className="text-faint-foreground text-[11.5px]">
-                  scritto alle {WRITTEN_AT.format(page.letterAt)}
+                  {m.writtenAt(dateFormat(WRITTEN_AT()).format(page.letterAt))}
                 </span>
               )}
             </div>
             <p className="display-title pt-2 text-[30px] leading-tight first-letter:uppercase">
-              {DAY_TITLE.format(new Date())}
+              {dateFormat(DAY_TITLE).format(new Date())}
             </p>
             {glance.length > 0 && (
               <nav
-                aria-label="La giornata in breve"
+                aria-label={m.glance}
                 className="text-muted-foreground flex flex-wrap items-baseline gap-x-1.5 gap-y-1 text-[12.5px]"
               >
                 {glance.map((part, index) => (
@@ -462,7 +580,7 @@ export function TodayPage({
                       >
                         {part.count}
                       </span>{' '}
-                      {part.glance}
+                      {sectionGlances[part.key]}
                     </button>
                   </span>
                 ))}
@@ -484,35 +602,35 @@ export function TodayPage({
                 <span>
                   {page.network}
                   {page.reading > 0 &&
-                    ` Restano da leggere ${page.reading === 1 ? 'un messaggio' : `${page.reading.toLocaleString('it-IT')} messaggi`}.`}
+                    ` ${m.stillToRead(page.reading, page.reading.toLocaleString(formatLocale))}`}
                 </span>
               </p>
             ) : rewriting ? (
               <p className="text-muted-foreground flex items-center gap-2 text-[13px]">
                 <LoaderCircle className="text-ai size-4 animate-spin" />
-                Sto guardando la tua giornata…
+                {m.lookingAtDay}
               </p>
             ) : page && page.reading > 0 ? (
               <p className="text-muted-foreground flex items-center gap-2 text-[13px]">
                 <LoaderCircle className="text-ai size-4 animate-spin" />
-                Sto ancora leggendo la tua posta:{' '}
-                {page.reading === 1
-                  ? 'un messaggio'
-                  : `${page.reading.toLocaleString('it-IT')} messaggi`}
-                {page.letter ? '.' : ", poi ti dico com'è la giornata."}
+                {m.stillReading(
+                  page.reading,
+                  page.reading.toLocaleString(formatLocale),
+                  Boolean(page.letter)
+                )}
               </p>
             ) : (
               page &&
               !page.letter &&
               canWrite && (
                 <p className="text-muted-foreground text-[12.5px]">
-                  La lettera di oggi non c’è ancora.{' '}
+                  {m.noLetter}{' '}
                   <button
                     type="button"
                     onClick={() => void rewrite()}
                     className="text-ai focus-visible:ring-ring/60 rounded-sm font-semibold outline-none hover:underline focus-visible:ring-2"
                   >
-                    Scrivila ora
+                    {m.writeNow}
                   </button>
                 </p>
               )
@@ -521,7 +639,7 @@ export function TodayPage({
 
           {meetings.length > 0 && (
             <section className="flex flex-col gap-1">
-              <h2 className="eyebrow">In agenda</h2>
+              <h2 className="eyebrow">{m.agenda}</h2>
               <ul className="flex flex-col">
                 {meetings.map((event) => (
                   <EventLine
@@ -540,7 +658,9 @@ export function TodayPage({
             <>
               {page.questions.length > 0 && (
                 <section className="flex flex-col gap-2">
-                  <h2 className="eyebrow">Ti chiedo · {page.questions.length}</h2>
+                  <h2 className="eyebrow">
+                    {m.questions} · {page.questions.length}
+                  </h2>
                   <ul className="flex flex-col gap-2">
                     {page.questions.flatMap((line) =>
                       line.commitment
@@ -555,7 +675,7 @@ export function TodayPage({
                 <Section
                   key={section.key}
                   id={section.id}
-                  title={section.title}
+                  title={sectionTitles[section.key]}
                   lines={page[section.key]}
                   day={page.day}
                   showWaitingSince={section.key === 'awaited'}
@@ -566,7 +686,9 @@ export function TodayPage({
               ))}
               {page.proposals.length > 0 && (
                 <section className="flex flex-col gap-2">
-                  <h2 className="eyebrow">Proposte · {page.proposals.length}</h2>
+                  <h2 className="eyebrow">
+                    {m.proposals} · {page.proposals.length}
+                  </h2>
                   {page.proposals.map((proposal) => (
                     <ProposalCard
                       key={proposal.id}
@@ -584,9 +706,7 @@ export function TodayPage({
                 </section>
               )}
               {empty && (
-                <p className="voice text-muted-foreground text-[16px]">
-                  Niente in sospeso: è tutto in ordine.
-                </p>
+                <p className="voice text-muted-foreground text-[16px]">{m.nothingPending}</p>
               )}
             </>
           )}

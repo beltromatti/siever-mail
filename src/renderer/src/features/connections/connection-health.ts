@@ -1,4 +1,6 @@
+import { hourStyle, languageNow, messagesNow } from '@renderer/lib/i18n'
 import type { CalendarConnection } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import { REFUSAL_LINES, type AccountConnectionState, type MailAccount } from '@shared/models'
 
 /**
@@ -38,19 +40,134 @@ const RANK: Readonly<Record<ConnectionHealth, number>> = {
   ok: 3
 }
 
-const TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
-const DAY_AND_TIME = new Intl.DateTimeFormat('it-IT', {
+const MESSAGES = defineMessages({
+  atTime: {
+    en: (time: string) => `at ${time}`,
+    it: (time: string) => `alle ${time}`,
+    de: (time: string) => `um ${time}`
+  },
+  onDay: {
+    en: (day: string) => `on ${day}`,
+    it: (day: string) => `il ${day}`,
+    de: (day: string) => `am ${day}`
+  },
+  lastContact: {
+    en: (when: string) => ` · last contact ${when}`,
+    it: (when: string) => ` · ultimo contatto ${when}`,
+    de: (when: string) => ` · letzter Kontakt ${when}`
+  },
+  mailStopped: {
+    en: (why: string) => `Stopped · ${why}`,
+    it: (why: string) => `Ferma · ${why}`,
+    de: (why: string) => `Angehalten · ${why}`
+  },
+  offline: {
+    en: 'No network: it resumes on its own',
+    it: 'Senza rete: riprende da sola',
+    de: 'Kein Netzwerk: wird von selbst fortgesetzt'
+  },
+  serverDown: {
+    en: 'The server isn’t answering: it tries again on its own',
+    it: 'Il server non risponde: riprova da sola',
+    de: 'Der Server antwortet nicht: wird von selbst erneut versucht'
+  },
+  reconnecting: { en: 'Reconnecting…', it: 'Si ricollega…', de: 'Verbindet erneut…' },
+  downloading: {
+    en: 'Downloading the mail…',
+    it: 'Scarica la posta…',
+    de: 'E-Mails werden geladen…'
+  },
+  inStep: {
+    en: 'In sync: mail arrives as soon as it’s there',
+    it: 'Sincronizzata: la posta arriva appena c’è',
+    de: 'Synchronisiert: E-Mails kommen an, sobald sie da sind'
+  },
+  connecting: { en: 'Connecting…', it: 'Si collega…', de: 'Verbindet…' },
+  calendarStopped: {
+    en: (why: string) => `Stopped · ${why}`,
+    it: (why: string) => `Fermo · ${why}`,
+    de: (why: string) => `Angehalten · ${why}`
+  },
+  reconnect: {
+    en: 'Needs reconnecting',
+    it: 'Va ricollegato',
+    de: 'Muss erneut verbunden werden'
+  },
+  retries: {
+    en: (problem: string) => `${problem} It tries again on its own.`,
+    it: (problem: string) => `${problem} Riprova da solo.`,
+    de: (problem: string) => `${problem} Wird von selbst erneut versucht.`
+  },
+  readingMany: {
+    en: (count: number) => `${count} calendars · reading them now`,
+    it: (count: number) => `${count} calendari · li legge ora`,
+    de: (count: number) => `${count} Kalender · werden gerade gelesen`
+  },
+  readingOne: {
+    en: (name: string) => `“${name}” · reading it now`,
+    it: (name: string) => `«${name}» · lo legge ora`,
+    de: (name: string) => `„${name}“ · wird gerade gelesen`
+  },
+  readingCalendars: {
+    en: 'Reading the calendars…',
+    it: 'Legge i calendari…',
+    de: 'Kalender werden gelesen…'
+  },
+  readMany: {
+    en: (count: number, when: string) => `${count} calendars · read ${when}`,
+    it: (count: number, when: string) => `${count} calendari · letti ${when}`,
+    de: (count: number, when: string) => `${count} Kalender · gelesen ${when}`
+  },
+  readOne: {
+    en: (name: string, when: string) => `“${name}” · read ${when}`,
+    it: (name: string, when: string) => `«${name}» · letto ${when}`,
+    de: (name: string, when: string) => `„${name}“ · gelesen ${when}`
+  },
+  noCalendar: {
+    en: (when: string) => `No calendars · checked ${when}`,
+    it: (when: string) => `Nessun calendario · controllato ${when}`,
+    de: (when: string) => `Keine Kalender · geprüft ${when}`
+  },
+  wanting: {
+    en: (count: number) =>
+      count === 1 ? 'A connection needs you' : `${count} connections need you`,
+    it: (count: number) =>
+      count === 1 ? 'Una connessione ha bisogno di te' : `${count} connessioni hanno bisogno di te`,
+    de: (count: number) =>
+      count === 1 ? 'Eine Verbindung braucht Sie' : `${count} Verbindungen brauchen Sie`
+  },
+  allOffline: {
+    en: 'No network: everything resumes on its own when it’s back',
+    it: 'Senza rete: tutto riprende da sé appena torna',
+    de: 'Kein Netzwerk: Alles läuft von selbst weiter, sobald es zurück ist'
+  },
+  waitingServer: {
+    en: 'Waiting for a server: it sorts itself out',
+    it: 'In attesa di un server: si sistema da sé',
+    de: 'Warten auf einen Server: Das regelt sich von selbst'
+  },
+  syncing: { en: 'Syncing…', it: 'Sincronizzazione…', de: 'Synchronisierung…' },
+  allInStep: { en: 'All in sync', it: 'Tutto sincronizzato', de: 'Alles synchronisiert' }
+})
+
+/** Made when used: the hour is written as the region writes it now. */
+const TIME = (): Intl.DateTimeFormatOptions => ({ hour: hourStyle(), minute: '2-digit' })
+/** Made when used: the hour is written as the region writes it now. */
+const DAY_AND_TIME = (): Intl.DateTimeFormatOptions => ({
   day: 'numeric',
   month: 'short',
-  hour: '2-digit',
+  hour: hourStyle(),
   minute: '2-digit'
 })
 
 /** When, as one says it: the time today, the day and the time before. */
 function when(at: number, now: number): string {
+  const m = messagesNow(MESSAGES)
+  const { formatLocale } = languageNow()
+
   return new Date(at).toDateString() === new Date(now).toDateString()
-    ? `alle ${TIME.format(new Date(at))}`
-    : `il ${DAY_AND_TIME.format(new Date(at))}`
+    ? m.atTime(new Intl.DateTimeFormat(formatLocale, TIME()).format(new Date(at)))
+    : m.onDay(new Intl.DateTimeFormat(formatLocale, DAY_AND_TIME()).format(new Date(at)))
 }
 
 /** A mailbox's line: stopped, waiting for the network or its server, at work, or in step. */
@@ -59,6 +176,7 @@ export function mailStanding(
   state: AccountConnectionState | undefined,
   now = Date.now()
 ): ConnectionStanding {
+  const m = messagesNow(MESSAGES)
   const line = (health: ConnectionHealth, text: string): ConnectionStanding => ({
     key: `posta:${account.id}`,
     family: 'posta',
@@ -66,27 +184,23 @@ export function mailStanding(
     health,
     text
   })
-  const lastHeard = state?.lastContactAt
-    ? ` · ultimo contatto ${when(state.lastContactAt, now)}`
-    : ''
+  const lastHeard = state?.lastContactAt ? m.lastContact(when(state.lastContactAt, now)) : ''
 
   if (state?.refused) {
-    return line('attention', `Ferma · ${REFUSAL_LINES[state.refused]}`)
+    return line('attention', m.mailStopped(messagesNow(REFUSAL_LINES)[state.refused]))
   }
 
   switch (state?.status) {
     case 'offline':
-      return line('waiting', `Senza rete: riprende da sola${lastHeard}`)
+      return line('waiting', `${m.offline}${lastHeard}`)
     case 'error':
-      return line('waiting', `Il server non risponde: riprova da sola${lastHeard}`)
+      return line('waiting', `${m.serverDown}${lastHeard}`)
     case 'reconnecting':
-      return line('working', 'Si ricollega…')
+      return line('working', m.reconnecting)
     case 'connected':
-      return state.syncing
-        ? line('working', 'Scarica la posta…')
-        : line('ok', 'Sincronizzata: la posta arriva appena c’è')
+      return state.syncing ? line('working', m.downloading) : line('ok', m.inStep)
     default:
-      return line('working', 'Si collega…')
+      return line('working', m.connecting)
   }
 }
 
@@ -95,6 +209,7 @@ export function calendarStanding(
   connection: CalendarConnection,
   now = Date.now()
 ): ConnectionStanding {
+  const m = messagesNow(MESSAGES)
   const line = (health: ConnectionHealth, text: string): ConnectionStanding => ({
     key: `calendario:${connection.id}`,
     family: 'calendario',
@@ -107,25 +222,25 @@ export function calendarStanding(
   const many = connection.calendars.length > 1
 
   if (connection.refused) {
-    return line('attention', `Fermo · ${REFUSAL_LINES[connection.refused]}`)
+    return line('attention', m.calendarStopped(messagesNow(REFUSAL_LINES)[connection.refused]))
   }
 
   if (connection.renewConsent) {
-    return line('attention', connection.problem ?? 'Va ricollegato')
+    return line('attention', connection.problem ?? m.reconnect)
   }
 
   if (connection.problem) {
-    return line('waiting', `${connection.problem} Riprova da solo.`)
+    return line('waiting', m.retries(connection.problem))
   }
 
   if (connection.lastSyncAt === null) {
     return line(
       'working',
       many
-        ? `${connection.calendars.length} calendari · li legge ora`
+        ? m.readingMany(connection.calendars.length)
         : only
-          ? `«${only.name}» · lo legge ora`
-          : 'Legge i calendari…'
+          ? m.readingOne(only.name)
+          : m.readingCalendars
     )
   }
 
@@ -133,10 +248,10 @@ export function calendarStanding(
   return line(
     'ok',
     many
-      ? `${connection.calendars.length} calendari · letti ${read}`
+      ? m.readMany(connection.calendars.length, read)
       : only
-        ? `«${only.name}» · letto ${read}`
-        : `Nessun calendario · controllato ${read}`
+        ? m.readOne(only.name, read)
+        : m.noCalendar(read)
   )
 }
 
@@ -171,20 +286,20 @@ export function connectionsStatus(
     { indexed: 0, total: 0 }
   )
 
+  const m = messagesNow(MESSAGES)
+
   return {
     health,
     title:
       health === 'attention'
-        ? wanting === 1
-          ? 'Una connessione ha bisogno di te'
-          : `${wanting} connessioni hanno bisogno di te`
+        ? m.wanting(wanting)
         : health === 'waiting'
           ? offline
-            ? 'Senza rete: tutto riprende da sé appena torna'
-            : 'In attesa di un server: si sistema da sé'
+            ? m.allOffline
+            : m.waitingServer
           : health === 'working'
-            ? 'Sincronizzazione…'
-            : 'Tutto sincronizzato',
+            ? m.syncing
+            : m.allInStep,
     standings,
     indexing: indexing.indexed < indexing.total ? indexing : null
   }

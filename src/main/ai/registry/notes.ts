@@ -1,4 +1,6 @@
+import { messages } from '../../i18n'
 import { placeholders, type Sql } from '../sql'
+import { REFUSALS } from './registry.messages'
 import {
   lookedAt,
   RegistryRefusal,
@@ -153,7 +155,11 @@ export class NoteStore {
     const summary = input.summary.trim()
 
     if (!summary) {
-      throw new RegistryRefusal('La nota ha bisogno di una sintesi.')
+      throw new RegistryRefusal(
+        'La nota ha bisogno di una sintesi.',
+        undefined,
+        messages(REFUSALS).noteNeedsSummary
+      )
     }
 
     if (!NATURES.includes(input.nature)) {
@@ -169,7 +175,11 @@ export class NoteStore {
     }
 
     if (input.due !== null && !/^\d{4}-\d{2}-\d{2}$/.test(input.due)) {
-      throw new RegistryRefusal('scadenza: una data come AAAA-MM-GG.')
+      throw new RegistryRefusal(
+        'scadenza: una data come AAAA-MM-GG.',
+        undefined,
+        messages(REFUSALS).notADate('scadenza')
+      )
     }
 
     const now = Date.now()
@@ -264,6 +274,10 @@ export class NoteStore {
       }
     }
 
-    throw new RegistryRefusal('La nota di questo messaggio cambia di continuo: riprova tra poco.')
+    throw new RegistryRefusal(
+      'La nota di questo messaggio cambia di continuo: riprova tra poco.',
+      undefined,
+      messages(REFUSALS).noteKeepsChanging
+    )
   }
 }

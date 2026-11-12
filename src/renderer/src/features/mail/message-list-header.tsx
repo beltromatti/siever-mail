@@ -12,20 +12,76 @@ import {
 import { ShortcutKeys } from '@renderer/components/ui/shortcut-keys'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { IS_MAC, useCommandKeys } from '@renderer/lib/command-shortcuts'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn, formatCount } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
 import type { MessageListFilter } from '@shared/models'
+import { SEARCH_FIELD_PREFIXES } from '@shared/search'
 
 import type { MessageListViewProps } from './message-list-view'
 import { MessageListControls, MessageListTitle } from './message-list-shared'
 
-const FILTER_OPTIONS: ReadonlyArray<{ value: MessageListFilter; label: string }> = [
-  { value: 'all', label: 'Tutti i messaggi' },
-  { value: 'unread', label: 'Non letti' },
-  { value: 'flagged', label: 'Contrassegnati' }
-]
-
-/** With the Segretario on: what has something open, or a reply waiting, wherever it is. */
-const ACTIVE_FILTER = { value: 'active', label: 'Attivi' } as const
+const MESSAGES = defineMessages({
+  allMessages: { en: 'All messages', it: 'Tutti i messaggi', de: 'Alle Nachrichten' },
+  unread: { en: 'Unread', it: 'Non letti', de: 'Ungelesen' },
+  flagged: { en: 'Flagged', it: 'Contrassegnati', de: 'Markiert' },
+  active: { en: 'Active', it: 'Attivi', de: 'Aktiv' },
+  selectedOne: { en: 'selected', it: 'selezionato', de: 'ausgewählt' },
+  selectedOther: { en: 'selected', it: 'selezionati', de: 'ausgewählt' },
+  searchHelp: {
+    en: (scope: string) =>
+      `Searches every message in “${scope}”, text included, ignoring capitals and accents. Use`,
+    it: (scope: string) =>
+      `Cerca in tutti i messaggi di «${scope}», testo compreso, senza badare a maiuscole e accenti. Usa`,
+    de: (scope: string) =>
+      `Durchsucht alle Nachrichten in „${scope}“, auch den Text, ohne auf Groß- und Kleinschreibung oder Akzente zu achten. Mit`
+  },
+  orKeyword: { en: 'OR', it: 'OR', de: 'OR' },
+  searchHelpField: {
+    en: 'to narrow to one field,',
+    it: 'per restringere a un campo,',
+    de: 'schränken Sie auf ein Feld ein, mit'
+  },
+  searchHelpOr: {
+    en: 'for alternatives.',
+    it: 'per alternative.',
+    de: 'suchen Sie Alternativen.'
+  },
+  searchIn: {
+    en: (scope: string) => `Search in ${scope}`,
+    it: (scope: string) => `Cerca in ${scope}`,
+    de: (scope: string) => `In ${scope} suchen`
+  },
+  stopSearch: { en: 'Stop the search', it: 'Ferma la ricerca', de: 'Suche anhalten' },
+  askSegretario: {
+    en: 'Ask the Segretario',
+    it: 'Chiedi al Segretario',
+    de: 'Den Segretario fragen'
+  },
+  segretarioSearching: {
+    en: 'The Segretario is searching: stop',
+    it: 'Il Segretario sta cercando: ferma',
+    de: 'Der Segretario sucht: anhalten'
+  },
+  askSegretarioTip: {
+    en: (keys: string) => `Ask the Segretario: search the way you would say it · ${keys}`,
+    it: (keys: string) => `Chiedi al Segretario: cerca come lo diresti · ${keys}`,
+    de: (keys: string) => `Den Segretario fragen: suchen, wie Sie es sagen würden · ${keys}`
+  },
+  enterKey: { en: 'Ctrl+Enter', it: 'Ctrl+Invio', de: 'Strg+Eingabe' },
+  clearSearch: { en: 'Clear search', it: 'Cancella ricerca', de: 'Suche löschen' },
+  filterLabel: {
+    en: (label: string) => `Filter: ${label}`,
+    it: (label: string) => `Filtro: ${label}`,
+    de: (label: string) => `Filter: ${label}`
+  },
+  showTip: {
+    en: (label: string) => `Show: ${label}`,
+    it: (label: string) => `Mostra: ${label}`,
+    de: (label: string) => `Anzeigen: ${label}`
+  },
+  show: { en: 'Show', it: 'Mostra', de: 'Anzeigen' }
+})
 
 /**
  * The top of the message list: what it shows and how many, the controls
@@ -84,8 +140,16 @@ export function MessageListHeader({
   selectedCount,
   canSelectAll
 }: MessageListHeaderProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const prefixes = useMessages(SEARCH_FIELD_PREFIXES)
   const searchKeys = useCommandKeys('search')
-  const filterOptions = showActiveFilter ? [...FILTER_OPTIONS, ACTIVE_FILTER] : FILTER_OPTIONS
+  const filterOptions: ReadonlyArray<{ value: MessageListFilter; label: string }> = [
+    { value: 'all', label: m.allMessages },
+    { value: 'unread', label: m.unread },
+    { value: 'flagged', label: m.flagged },
+    // With the Segretario on: what has something open, or a reply waiting, wherever it is.
+    ...(showActiveFilter ? [{ value: 'active' as const, label: m.active }] : [])
+  ]
   const activeFilter = filterOptions.find((option) => option.value === filter)
 
   return (
@@ -105,7 +169,7 @@ export function MessageListHeader({
           />
           <p className="text-faint-foreground truncate text-[11px] leading-4">
             {selectedCount > 1
-              ? formatCount(selectedCount, 'selezionato', 'selezionati')
+              ? formatCount(selectedCount, m.selectedOne, m.selectedOther)
               : countLabel}
           </p>
         </div>
@@ -131,9 +195,8 @@ export function MessageListHeader({
               <Search className="text-faint-foreground size-3.5 shrink-0" />
             </TooltipTrigger>
             <TooltipContent side="bottom" className="max-w-72 font-normal">
-              Cerca in tutti i messaggi di «{searchScopeLabel}», testo compreso, senza badare a
-              maiuscole e accenti. Usa <b>da:</b> <b>a:</b> <b>oggetto:</b> per restringere a un
-              campo, <b>OR</b> per alternative.
+              {m.searchHelp(searchScopeLabel)} <b>{prefixes.from}:</b> <b>{prefixes.to}:</b>{' '}
+              <b>{prefixes.subject}:</b> {m.searchHelpField} <b>{m.orKeyword}</b> {m.searchHelpOr}
             </TooltipContent>
           </Tooltip>
           <input
@@ -166,8 +229,8 @@ export function MessageListHeader({
                 event.currentTarget.blur()
               }
             }}
-            placeholder={`Cerca in ${searchScopeLabel}`}
-            aria-label={`Cerca in ${searchScopeLabel}`}
+            placeholder={m.searchIn(searchScopeLabel)}
+            aria-label={m.searchIn(searchScopeLabel)}
             spellCheck={false}
             autoComplete="off"
             className="placeholder:text-faint-foreground min-w-0 flex-1 bg-transparent text-[12.5px] outline-none"
@@ -180,7 +243,7 @@ export function MessageListHeader({
                   onClick={() =>
                     askSegretario.busy ? askSegretario.onStop() : askSegretario.onAsk(search.trim())
                   }
-                  aria-label={askSegretario.busy ? 'Ferma la ricerca' : 'Chiedi al Segretario'}
+                  aria-label={askSegretario.busy ? m.stopSearch : m.askSegretario}
                   className="text-ai-star hover:bg-ai-soft focus-visible:ring-ring/60 group grid size-5 shrink-0 place-items-center rounded-[4px] outline-none focus-visible:ring-2"
                 >
                   {askSegretario.busy ? (
@@ -195,8 +258,8 @@ export function MessageListHeader({
               </TooltipTrigger>
               <TooltipContent side="bottom">
                 {askSegretario.busy
-                  ? 'Il Segretario sta cercando: ferma'
-                  : `Chiedi al Segretario: cerca come lo diresti · ${IS_MAC ? '⌘↵' : 'Ctrl+Invio'}`}
+                  ? m.segretarioSearching
+                  : m.askSegretarioTip(IS_MAC ? '⌘↵' : m.enterKey)}
               </TooltipContent>
             </Tooltip>
           )}
@@ -206,13 +269,13 @@ export function MessageListHeader({
                 <button
                   type="button"
                   onClick={() => onSearchChange('')}
-                  aria-label="Cancella ricerca"
+                  aria-label={m.clearSearch}
                   className="text-faint-foreground hover:text-foreground focus-visible:ring-ring/60 grid size-5 shrink-0 place-items-center rounded-[4px] outline-none focus-visible:ring-2"
                 >
                   <X className="size-3.5" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Cancella ricerca</TooltipContent>
+              <TooltipContent side="bottom">{m.clearSearch}</TooltipContent>
             </Tooltip>
           ) : (
             searchKeys && <ShortcutKeys keys={searchKeys} className="shrink-0" />
@@ -225,7 +288,7 @@ export function MessageListHeader({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  aria-label={`Filtro: ${activeFilter?.label ?? ''}`}
+                  aria-label={m.filterLabel(activeFilter?.label ?? '')}
                   className={cn(
                     'focus-visible:ring-ring/60 flex h-[30px] shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] font-[550] outline-none focus-visible:ring-2',
                     filter === 'all'
@@ -238,10 +301,10 @@ export function MessageListHeader({
                 </button>
               </DropdownMenuTrigger>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Mostra: {activeFilter?.label}</TooltipContent>
+            <TooltipContent side="bottom">{m.showTip(activeFilter?.label ?? '')}</TooltipContent>
           </Tooltip>
           <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuLabel>Mostra</DropdownMenuLabel>
+            <DropdownMenuLabel>{m.show}</DropdownMenuLabel>
             <DropdownMenuRadioGroup
               value={filter}
               onValueChange={(next) => onFilterChange(next as MessageListFilter)}

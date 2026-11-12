@@ -1,0 +1,5 @@
+/* What macOS says when SIEVER Mail first reaches each place, in German. */
+"NSDesktopFolderUsageDescription" = "SIEVER Mail liest Dateien auf Ihrem Schreibtisch, hängt sie an und speichert dort Anhänge.";
+"NSDocumentsFolderUsageDescription" = "SIEVER Mail liest Dateien in Ihrem Ordner „Dokumente“, hängt sie an und speichert dort Anhänge.";
+"NSDownloadsFolderUsageDescription" = "SIEVER Mail liest Dateien in Ihrem Ordner „Downloads“, hängt sie an und speichert dort Anhänge.";
+"NSNetworkVolumesUsageDescription" = "SIEVER Mail liest Dateien in Netzwerkordnern, hängt sie an und speichert dort, worum Sie es bitten.";

@@ -3,11 +3,12 @@ import { LoaderCircle, Search, X } from 'lucide-react'
 
 import { ShortcutKeys } from '@renderer/components/ui/shortcut-keys'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
-import { eventStartDay } from '@renderer/features/calendar/calendar-dates'
+import { dateFormat, eventStartDay } from '@renderer/features/calendar/calendar-dates'
 import { eventTimeLabel } from '@renderer/features/calendar/event-line'
 import { HighlightedText } from '@renderer/features/mail/message-list-shared'
 import { useCommandKeys } from '@renderer/lib/command-shortcuts'
 import { uiLog } from '@renderer/lib/diagnostics'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import {
   calendarSearchWords,
@@ -15,6 +16,7 @@ import {
   type CalendarListEntry,
   type CalendarSearchResult
 } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 
 import { dotStyle } from './event-style'
 import { calendarOf } from './use-calendar-data'
@@ -26,13 +28,50 @@ const SEARCH_SETTLED_MS = 1_500
 /** Events a search lists at most: past them, another word narrows it. */
 const RESULTS_SHOWN = 60
 
-const DAY = new Intl.DateTimeFormat('it-IT', { weekday: 'short', day: 'numeric', month: 'short' })
-const DAY_YEAR = new Intl.DateTimeFormat('it-IT', {
+const MESSAGES = defineMessages({
+  help: {
+    en: 'Searches the events of the calendars shown, past ones too: in the title, the location, the description, the guests and the calendar’s name, regardless of capitals and accents. Every word must be there.',
+    it: 'Cerca negli eventi dei calendari mostrati, anche passati: nel titolo, nel luogo, nella descrizione, tra gli invitati e nel nome del calendario, senza badare a maiuscole e accenti. Ogni parola deve esserci.',
+    de: 'Durchsucht die Termine der angezeigten Kalender, auch vergangene: im Titel, im Ort, in der Beschreibung, unter den Gästen und im Namen des Kalenders, ohne Rücksicht auf Groß- und Kleinschreibung und Akzente. Jedes Wort muss vorkommen.'
+  },
+  search: { en: 'Search events', it: 'Cerca negli eventi', de: 'Termine durchsuchen' },
+  clear: { en: 'Clear search', it: 'Cancella ricerca', de: 'Suche löschen' },
+  found: { en: 'Events found', it: 'Eventi trovati', de: 'Gefundene Termine' },
+  searching: { en: 'Searching…', it: 'Cerco…', de: 'Suche läuft…' },
+  failed: {
+    en: (error: string) => `The search failed: ${error}`,
+    it: (error: string) => `La ricerca non è riuscita: ${error}`,
+    de: (error: string) => `Die Suche ist fehlgeschlagen: ${error}`
+  },
+  none: {
+    en: 'No event with these words.',
+    it: 'Nessun evento con queste parole.',
+    de: 'Kein Termin mit diesen Wörtern.'
+  },
+  noneHint: {
+    en: 'The search covers the calendars shown, from two months ago to a year ahead: try fewer words, or others.',
+    it: 'Si cerca nei calendari mostrati, da due mesi fa a un anno avanti: prova con meno parole o con altre.',
+    de: 'Gesucht wird in den angezeigten Kalendern, von vor zwei Monaten bis ein Jahr im Voraus: Versuchen Sie es mit weniger oder anderen Wörtern.'
+  },
+  upcoming: { en: 'Upcoming', it: 'In arrivo', de: 'Demnächst' },
+  past: { en: 'Past', it: 'Passati', de: 'Vergangen' },
+  more: {
+    en: (count: number) =>
+      `${count === 1 ? 'One more, further from today' : `${count} more, further from today`}: add a word to narrow it down.`,
+    it: (count: number) =>
+      `${count === 1 ? 'Un altro, più lontano da oggi' : `Altri ${count}, più lontani da oggi`}: aggiungi una parola per restringere.`,
+    de: (count: number) =>
+      `${count === 1 ? 'Ein weiterer, weiter von heute entfernt' : `${count} weitere, weiter von heute entfernt`}: Fügen Sie ein Wort hinzu, um die Suche einzugrenzen.`
+  }
+})
+
+const DAY: Intl.DateTimeFormatOptions = { weekday: 'short', day: 'numeric', month: 'short' }
+const DAY_YEAR: Intl.DateTimeFormatOptions = {
   weekday: 'short',
   day: 'numeric',
   month: 'short',
   year: 'numeric'
-})
+}
 
 type Found =
   | { text: string; result: CalendarSearchResult; error?: undefined }
@@ -74,7 +113,7 @@ function FoundEvent({
     >
       <span className="flex flex-col text-[11.5px] leading-[1.35] tabular-nums">
         <span className="text-foreground font-medium first-letter:uppercase">
-          {(day.getFullYear() === new Date().getFullYear() ? DAY : DAY_YEAR).format(day)}
+          {dateFormat(day.getFullYear() === new Date().getFullYear() ? DAY : DAY_YEAR).format(day)}
         </span>
         <span className="text-muted-foreground">{eventTimeLabel(event, day)}</span>
       </span>
@@ -110,7 +149,7 @@ function FoundEvent({
 /**
  * The Calendario's search, as the mail's: words, case and accents aside,
  * looked for in every event kept of the calendars shown — the past ones
- * too — listed under the field, those to come first. Arrows move, Invio or
+ * too — listed under the field, those to come first. Arrows move, Enter or
  * a click goes to the event's day with the event open; Esc empties the
  * field, and a second Esc leaves it.
  */
@@ -124,6 +163,7 @@ export function CalendarSearch({
   inputRef?: Ref<HTMLInputElement>
   onOpen: (event: CalendarEvent) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
   const [found, setFound] = useState<Found | null>(null)
@@ -230,9 +270,7 @@ export function CalendarSearch({
             <Search className="text-faint-foreground size-3.5 shrink-0" />
           </TooltipTrigger>
           <TooltipContent side="bottom" className="max-w-72 font-normal">
-            Cerca negli eventi dei calendari mostrati, anche passati: nel titolo, nel luogo, nella
-            descrizione, tra gli invitati e nel nome del calendario, senza badare a maiuscole e
-            accenti. Ogni parola deve esserci.
+            {m.help}
           </TooltipContent>
         </Tooltip>
         <input
@@ -268,8 +306,8 @@ export function CalendarSearch({
               }
             }
           }}
-          placeholder="Cerca negli eventi"
-          aria-label="Cerca negli eventi"
+          placeholder={m.search}
+          aria-label={m.search}
           role="combobox"
           aria-expanded={open}
           aria-controls={open ? listId : undefined}
@@ -289,13 +327,13 @@ export function CalendarSearch({
                   setFound(null)
                   ownInputRef.current?.focus()
                 }}
-                aria-label="Cancella ricerca"
+                aria-label={m.clear}
                 className="text-faint-foreground hover:text-foreground focus-visible:ring-ring/60 grid size-5 shrink-0 place-items-center rounded-[4px] outline-none focus-visible:ring-2"
               >
                 <X className="size-3.5" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Cancella ricerca</TooltipContent>
+            <TooltipContent side="bottom">{m.clear}</TooltipContent>
           </Tooltip>
         ) : (
           searchKeys && <ShortcutKeys keys={searchKeys} className="shrink-0" />
@@ -308,38 +346,33 @@ export function CalendarSearch({
         <div
           id={listId}
           role="listbox"
-          aria-label="Eventi trovati"
+          aria-label={m.found}
           onMouseDown={(event) => event.preventDefault()}
           className="sheet absolute top-full right-0 z-40 mt-1.5 max-h-[min(480px,70vh)] w-[420px] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-lg p-1"
         >
           {!result ? (
             <p className="text-muted-foreground flex items-center gap-2 px-2 py-2 text-[12px]">
               <LoaderCircle className="size-3.5 animate-spin" />
-              Cerco…
+              {m.searching}
             </p>
           ) : result.error !== undefined ? (
-            <p className="text-destructive px-2 py-2 text-[12px]">
-              La ricerca non è riuscita: {result.error}
-            </p>
+            <p className="text-destructive px-2 py-2 text-[12px]">{m.failed(result.error)}</p>
           ) : events.length === 0 ? (
             <div className="px-2 py-2 text-[12px]">
-              <p className="text-foreground">Nessun evento con queste parole.</p>
-              <p className="text-muted-foreground mt-0.5 text-[11.5px]">
-                Si cerca nei calendari mostrati, da due mesi fa a un anno avanti: prova con meno
-                parole o con altre.
-              </p>
+              <p className="text-foreground">{m.none}</p>
+              <p className="text-muted-foreground mt-0.5 text-[11.5px]">{m.noneHint}</p>
             </div>
           ) : (
             <>
               {result.result.upcoming.length > 0 && (
                 <>
-                  <p className="eyebrow px-2 pt-1.5 pb-0.5">In arrivo</p>
+                  <p className="eyebrow px-2 pt-1.5 pb-0.5">{m.upcoming}</p>
                   {result.result.upcoming.map((event, index) => option(event, index))}
                 </>
               )}
               {result.result.past.length > 0 && (
                 <>
-                  <p className="eyebrow px-2 pt-1.5 pb-0.5">Passati</p>
+                  <p className="eyebrow px-2 pt-1.5 pb-0.5">{m.past}</p>
                   {result.result.past.map((event, index) =>
                     option(event, result.result.upcoming.length + index)
                   )}
@@ -347,10 +380,7 @@ export function CalendarSearch({
               )}
               {result.result.more > 0 && (
                 <p className="text-faint-foreground px-2 pt-1 pb-1.5 text-[11px]">
-                  {result.result.more === 1
-                    ? 'Un altro, più lontano da oggi'
-                    : `Altri ${result.result.more}, più lontani da oggi`}
-                  : aggiungi una parola per restringere.
+                  {m.more(result.result.more)}
                 </p>
               )}
             </>

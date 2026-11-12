@@ -21,6 +21,7 @@ import {
 } from '@renderer/components/ui/select'
 import { Switch } from '@renderer/components/ui/switch'
 import { Textarea } from '@renderer/components/ui/textarea'
+import { messagesNow, useMessages } from '@renderer/lib/i18n'
 import type {
   CalendarEvent,
   CalendarListEntry,
@@ -28,6 +29,7 @@ import type {
   NewCalendarEvent
 } from '@shared/calendar'
 import { calendarKey } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 
 import {
   addDays,
@@ -37,6 +39,78 @@ import {
   localDateTime
 } from '@renderer/features/calendar/calendar-dates'
 import { dotStyle } from './event-style'
+
+const MESSAGES = defineMessages({
+  invalidGuest: {
+    en: 'A guest’s address is not valid.',
+    it: 'Un invitato non ha un indirizzo valido.',
+    de: 'Die Adresse eines Gastes ist ungültig.'
+  },
+  endDayFirst: {
+    en: 'The end day comes before the start day.',
+    it: 'Il giorno di fine viene prima di quello di inizio.',
+    de: 'Der Endtag liegt vor dem Starttag.'
+  },
+  noDateOrTime: {
+    en: 'The date or the time is missing.',
+    it: 'Manca la data o l’ora.',
+    de: 'Datum oder Uhrzeit fehlt.'
+  },
+  endFirst: {
+    en: 'The end must come after the start.',
+    it: 'La fine deve venire dopo l’inizio.',
+    de: 'Das Ende muss nach dem Beginn liegen.'
+  },
+  noTitle: {
+    en: 'Give the event a title.',
+    it: 'Dai un titolo all’evento.',
+    de: 'Geben Sie dem Termin einen Titel.'
+  },
+  notSaved: {
+    en: 'The event was not saved.',
+    it: 'L’evento non è stato salvato.',
+    de: 'Der Termin wurde nicht gespeichert.'
+  },
+  newEvent: { en: 'New event', it: 'Nuovo evento', de: 'Neuer Termin' },
+  editEvent: { en: 'Edit the event', it: 'Modifica l’evento', de: 'Termin bearbeiten' },
+  organizedBy: {
+    en: (organizer: string | null) =>
+      `Organized by ${organizer ?? 'someone else'}: you answer the invitation, but only the organizer can change it.`,
+    it: (organizer: string | null) =>
+      `Lo organizza ${organizer ?? 'un’altra persona'}: all’invito rispondi, ma cambiarlo può solo chi lo organizza.`,
+    de: (organizer: string | null) =>
+      `Organisiert von ${organizer ?? 'einer anderen Person'}: Sie beantworten die Einladung, ändern kann sie nur, wer sie organisiert.`
+  },
+  guestsUpdated: {
+    en: 'The guests get the update.',
+    it: 'Gli invitati ricevono l’aggiornamento.',
+    de: 'Die Gäste erhalten die Aktualisierung.'
+  },
+  guestsInvited: {
+    en: 'Whoever you invite gets the calendar’s invitation.',
+    it: 'Chi inviti riceve l’invito del calendario.',
+    de: 'Wen Sie einladen, erhält die Einladung des Kalenders.'
+  },
+  title: { en: 'Title', it: 'Titolo', de: 'Titel' },
+  calendar: { en: 'Calendar', it: 'Calendario', de: 'Kalender' },
+  chooseCalendar: { en: 'Choose a calendar', it: 'Scegli un calendario', de: 'Kalender wählen' },
+  allDay: { en: 'All day', it: 'Tutto il giorno', de: 'Ganztägig' },
+  startDay: { en: 'Start day', it: 'Giorno di inizio', de: 'Starttag' },
+  startTime: { en: 'Start time', it: 'Ora di inizio', de: 'Startzeit' },
+  endDay: { en: 'End day', it: 'Giorno di fine', de: 'Endtag' },
+  endTime: { en: 'End time', it: 'Ora di fine', de: 'Endzeit' },
+  location: { en: 'Location', it: 'Luogo', de: 'Ort' },
+  guests: { en: 'Guests', it: 'Invitati', de: 'Gäste' },
+  guestsPlaceholder: {
+    en: 'Guests: addresses separated by commas',
+    it: 'Invitati: indirizzi separati da una virgola',
+    de: 'Gäste: Adressen durch Kommas getrennt'
+  },
+  description: { en: 'Description', it: 'Descrizione', de: 'Beschreibung' },
+  cancel: { en: 'Cancel', it: 'Annulla', de: 'Abbrechen' },
+  create: { en: 'Create', it: 'Crea', de: 'Erstellen' },
+  save: { en: 'Save', it: 'Salva', de: 'Speichern' }
+})
 
 /** What the editor opens on: a range drawn on the calendar, or an event to change. */
 export type EditorTarget =
@@ -121,18 +195,19 @@ type EventTiming = Pick<NewCalendarEvent, 'start' | 'end' | 'allDay' | 'attendee
 
 /** The form as the calendar takes it — start and end, the guests — or why it cannot be. */
 function eventOfForm(form: Form): { value: EventTiming } | { problem: string } {
+  const m = messagesNow(MESSAGES)
   const guests = form.guests
     .split(/[,;\s]+/)
     .map((guest) => guest.trim())
     .filter(Boolean)
 
   if (guests.some((guest) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(guest))) {
-    return { problem: 'Un invitato non ha un indirizzo valido.' }
+    return { problem: m.invalidGuest }
   }
 
   if (form.allDay) {
     if (!form.startDate || !form.endDate || form.endDate < form.startDate) {
-      return { problem: 'Il giorno di fine viene prima di quello di inizio.' }
+      return { problem: m.endDayFirst }
     }
 
     return {
@@ -149,11 +224,11 @@ function eventOfForm(form: Form): { value: EventTiming } | { problem: string } {
   const end = new Date(`${form.endDate}T${form.endTime}`)
 
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-    return { problem: 'Manca la data o l’ora.' }
+    return { problem: m.noDateOrTime }
   }
 
   if (end <= start) {
-    return { problem: 'La fine deve venire dopo l’inizio.' }
+    return { problem: m.endFirst }
   }
 
   return {
@@ -216,6 +291,7 @@ export function EventEditor({
   onClose: () => void
   onSaved: (event: CalendarEvent) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [opened] = useState<Form>(() => initialForm(target, calendars, preferredCalendarKey))
   const [form, setForm] = useState<Form>(opened)
   const [saving, setSaving] = useState(false)
@@ -237,7 +313,7 @@ export function EventEditor({
     }
 
     if (!form.title.trim()) {
-      setProblem('Dai un titolo all’evento.')
+      setProblem(m.noTitle)
       return
     }
 
@@ -265,7 +341,7 @@ export function EventEditor({
     try {
       onSaved(await write())
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : 'L’evento non è stato salvato.')
+      setProblem(error instanceof Error ? error.message : messagesNow(MESSAGES).notSaved)
     } finally {
       setSaving(false)
     }
@@ -275,13 +351,13 @@ export function EventEditor({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
-          <DialogTitle>{target.mode === 'new' ? 'Nuovo evento' : 'Modifica l’evento'}</DialogTitle>
+          <DialogTitle>{target.mode === 'new' ? m.newEvent : m.editEvent}</DialogTitle>
           <DialogDescription>
             {invitedTo
-              ? `Lo organizza ${invitedTo.organizer ?? 'un’altra persona'}: all’invito rispondi, ma cambiarlo può solo chi lo organizza.`
+              ? m.organizedBy(invitedTo.organizer)
               : target.mode === 'edit' && target.event.attendees.some((attendee) => !attendee.self)
-                ? 'Gli invitati ricevono l’aggiornamento.'
-                : 'Chi inviti riceve l’invito del calendario.'}
+                ? m.guestsUpdated
+                : m.guestsInvited}
           </DialogDescription>
         </DialogHeader>
 
@@ -294,8 +370,8 @@ export function EventEditor({
         >
           <Input
             autoFocus
-            aria-label="Titolo"
-            placeholder="Titolo"
+            aria-label={m.title}
+            placeholder={m.title}
             value={form.title}
             onChange={(event) => set({ title: event.target.value })}
             className="text-[14px]"
@@ -303,13 +379,13 @@ export function EventEditor({
 
           {target.mode === 'new' && (
             <div className="flex flex-col gap-1.5">
-              <Label>Calendario</Label>
+              <Label>{m.calendar}</Label>
               <Select
                 value={form.calendarKey}
                 onValueChange={(value) => set({ calendarKey: value })}
               >
-                <SelectTrigger aria-label="Calendario">
-                  <SelectValue placeholder="Scegli un calendario" />
+                <SelectTrigger aria-label={m.calendar}>
+                  <SelectValue placeholder={m.chooseCalendar} />
                 </SelectTrigger>
                 <SelectContent>
                   {writable.map((calendar) => (
@@ -330,13 +406,13 @@ export function EventEditor({
 
           <label className="flex items-center gap-2 text-[12.5px]">
             <Switch checked={form.allDay} onCheckedChange={(allDay) => set({ allDay })} />
-            Tutto il giorno
+            {m.allDay}
           </label>
 
           <div className="grid grid-cols-[1fr_auto] gap-2">
             <Input
               type="date"
-              aria-label="Giorno di inizio"
+              aria-label={m.startDay}
               value={form.startDate}
               onChange={(event) =>
                 set({
@@ -348,21 +424,21 @@ export function EventEditor({
             {!form.allDay && (
               <Input
                 type="time"
-                aria-label="Ora di inizio"
+                aria-label={m.startTime}
                 value={form.startTime}
                 onChange={(event) => set({ startTime: event.target.value })}
               />
             )}
             <Input
               type="date"
-              aria-label="Giorno di fine"
+              aria-label={m.endDay}
               value={form.endDate}
               onChange={(event) => set({ endDate: event.target.value })}
             />
             {!form.allDay && (
               <Input
                 type="time"
-                aria-label="Ora di fine"
+                aria-label={m.endTime}
                 value={form.endTime}
                 onChange={(event) => set({ endTime: event.target.value })}
               />
@@ -370,20 +446,20 @@ export function EventEditor({
           </div>
 
           <Input
-            aria-label="Luogo"
-            placeholder="Luogo"
+            aria-label={m.location}
+            placeholder={m.location}
             value={form.location}
             onChange={(event) => set({ location: event.target.value })}
           />
           <Input
-            aria-label="Invitati"
-            placeholder="Invitati: indirizzi separati da una virgola"
+            aria-label={m.guests}
+            placeholder={m.guestsPlaceholder}
             value={form.guests}
             onChange={(event) => set({ guests: event.target.value })}
           />
           <Textarea
-            aria-label="Descrizione"
-            placeholder="Descrizione"
+            aria-label={m.description}
+            placeholder={m.description}
             value={form.description}
             onChange={(event) => set({ description: event.target.value })}
             className="min-h-20 text-[13px]"
@@ -393,7 +469,7 @@ export function EventEditor({
 
           <DialogFooter>
             <Button type="button" variant="ghost" disabled={saving} onClick={onClose}>
-              Annulla
+              {m.cancel}
             </Button>
             <Button
               type="submit"
@@ -402,7 +478,7 @@ export function EventEditor({
               }
             >
               {saving && <LoaderCircle className="size-3.5 animate-spin" />}
-              {target.mode === 'new' ? 'Crea' : 'Salva'}
+              {target.mode === 'new' ? m.create : m.save}
             </Button>
           </DialogFooter>
         </form>

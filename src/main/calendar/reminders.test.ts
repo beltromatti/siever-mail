@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('electron', () => ({ app: { focus: () => undefined }, shell: {}, Notification: class {} }))
+vi.mock('electron', () => ({
+  app: { focus: () => undefined, getSystemLocale: () => 'it-IT', getLocaleCountryCode: () => 'IT' },
+  shell: {},
+  Notification: class {}
+}))
 
 import type { NotificationCenter, NotificationInput } from '@main/notifications/center'
 import {
@@ -57,12 +61,12 @@ describe('the reminders of the events', () => {
   })
 
   it('say when the event starts, in words', () => {
-    expect(startWords(event(), NOW)).toBe('Fra 1 ora · 10:00')
-    expect(startWords(event({ startsAt: NOW + 10 * MINUTE }), NOW)).toBe('Fra 10 minuti · 09:10')
-    expect(startWords(event({ startsAt: NOW + 30_000 }), NOW)).toBe('Adesso · 09:00')
-    expect(startWords(event({ startsAt: NOW + 24 * 60 * MINUTE }), NOW)).toBe('Domani alle 09:00')
-    expect(startWords(event({ allDay: true }), NOW)).toBe('Oggi, tutto il giorno')
-    expect(whenWords(event(), NOW)).toBe('oggi, 10:00–11:00')
+    expect(startWords(event(), NOW)).toBe('In 1 hour · 10:00')
+    expect(startWords(event({ startsAt: NOW + 10 * MINUTE }), NOW)).toBe('In 10 minutes · 09:10')
+    expect(startWords(event({ startsAt: NOW + 30_000 }), NOW)).toBe('Now · 09:00')
+    expect(startWords(event({ startsAt: NOW + 24 * 60 * MINUTE }), NOW)).toBe('Tomorrow at 09:00')
+    expect(startWords(event({ allDay: true }), NOW)).toBe('Today, all day')
+    expect(whenWords(event(), NOW)).toBe('today, 10:00–11:00')
   })
 
   it('reckon an all-day event by local midnight', () => {
@@ -133,11 +137,11 @@ describe('the calendar’s notifications', () => {
     expect(shown[0]).toMatchObject({
       kind: 'calendar.reminder',
       title: 'Sopralluogo in cantiere',
-      subtitle: 'Fra 10 minuti · 10:00',
+      subtitle: 'In 10 minutes · 10:00',
       body: 'Porta il preventivo rev2. · Via Roma 3',
       target: { kind: 'event', eventKey: 'e1' }
     })
-    expect(shown[0].actions?.map((action) => action.label)).toEqual(['Partecipa', 'Fra 5 minuti'])
+    expect(shown[0].actions?.map((action) => action.label)).toEqual(['Join', 'In 5 minutes'])
 
     // Planned again — a sync, a wake —: not given a second time.
     notifications.woke()
@@ -182,7 +186,7 @@ describe('the calendar’s notifications', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     expect(shown.map((input) => input.key)).toEqual(['calendar:reminder:first'])
 
-    shown[0].actions?.find((action) => action.label === 'Fra 5 minuti')?.run()
+    shown[0].actions?.find((action) => action.label === 'In 5 minutes')?.run()
     await vi.advanceTimersByTimeAsync(5 * MINUTE)
     expect(shown.map((input) => input.key)).toEqual([
       'calendar:reminder:first',
@@ -213,17 +217,17 @@ describe('the calendar’s notifications', () => {
     notifications.changedByOthers('Ufficio', [changed('a')], 1)
     // Gone: it opens on its day.
     expect(shown[0]).toMatchObject({
-      title: 'Annullato: Riunione a',
+      title: 'Cancelled: Riunione a',
       kind: 'calendar.change',
       target: { kind: 'day' }
     })
 
     notifications.changedByOthers('Ufficio', [changed('b'), changed('c'), changed('d')], 2)
-    expect(shown[1]).toMatchObject({ title: '3 eventi cambiati', subtitle: 'Ufficio' })
+    expect(shown[1]).toMatchObject({ title: '3 events changed', subtitle: 'Ufficio' })
 
     // A series cancelled whole: one change, that says so.
     notifications.changedByOthers('Ufficio', [{ ...changed('e'), instances: 52 }], 3)
-    expect(shown[2].body).toContain('e altre 51 volte della serie')
+    expect(shown[2].body).toContain('and 51 more times in the series')
   })
 
   it('lets the Segretario look first, and tells as it is what it has not looked at in ten minutes', async () => {
@@ -253,8 +257,8 @@ describe('the calendar’s notifications', () => {
     notifications.changedByOthers('Studio', [change('b')], 9)
     await vi.advanceTimersByTimeAsync(10 * MINUTE)
     expect(shown).toHaveLength(1)
-    expect(shown[0]).toMatchObject({ title: 'Nuovo evento: Sopralluogo b' })
-    expect(shown[0].body).toContain('Da segreteria@brenta.it')
+    expect(shown[0]).toMatchObject({ title: 'New event: Sopralluogo b' })
+    expect(shown[0].body).toContain('From segreteria@brenta.it')
 
     // What the Segretario says takes the place of what was told as it is.
     notifications.segretarioAlert(
@@ -269,7 +273,7 @@ describe('the calendar’s notifications', () => {
       calendar: { ...DEFAULT_NOTIFICATION_PREFERENCES.calendar, onlyFlagged: false }
     }
     notifications.changedByOthers('Studio', [change('c')], 11)
-    expect(shown[2]).toMatchObject({ title: 'Nuovo evento: Sopralluogo c' })
+    expect(shown[2]).toMatchObject({ title: 'New event: Sopralluogo c' })
     expect(
       notifications.segretarioAlert({ ...change('c').event, title: 'Sopralluogo c' }, 'Conta.')
     ).toBe(false)

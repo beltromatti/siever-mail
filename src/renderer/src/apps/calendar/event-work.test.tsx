@@ -42,9 +42,9 @@ describe('whose an event is, in its panel (§7.4)', () => {
     panel({ yours: true, by: 'segretario', reason: 'Il sopralluogo lo fa l’utente' })
 
     expect(
-      await screen.findByText(/Tuo, per il Segretario — Il sopralluogo lo fa l’utente/)
+      await screen.findByText(/Yours, according to the Segretario — Il sopralluogo lo fa l’utente/)
     ).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Non è mio' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Not mine' }))
 
     expect(segretarioApi.setEventYours).toHaveBeenCalledWith(EVENT.key, false)
   })
@@ -52,8 +52,8 @@ describe('whose an event is, in its panel (§7.4)', () => {
   it('lets the user say theirs one the Segretario did not see as theirs', async () => {
     panel({ yours: false, by: null, reason: null })
 
-    expect(await screen.findByText('Non è tra i tuoi eventi')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'È mio' }))
+    expect(await screen.findByText('Not among your events')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'It’s mine' }))
 
     expect(segretarioApi.setEventYours).toHaveBeenCalledWith(EVENT.key, true)
   })
@@ -61,7 +61,7 @@ describe('whose an event is, in its panel (§7.4)', () => {
   it('shows nothing where the calendar says it by itself', async () => {
     panel(null)
 
-    await screen.findByLabelText('Una cosa da fare per questo incontro')
-    expect(screen.queryByRole('button', { name: /mio$/ })).toBeNull()
+    await screen.findByLabelText('Something to do for this meeting')
+    expect(screen.queryByRole('button', { name: /mine$/ })).toBeNull()
   })
 })

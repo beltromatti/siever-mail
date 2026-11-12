@@ -12,29 +12,105 @@ import {
   SettingsPage
 } from '@renderer/components/ui/settings'
 import { Textarea } from '@renderer/components/ui/textarea'
+import { hourStyle, languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
+import { PLACES } from '@shared/places'
 import type { ConnectionLearning, MemoryNote, MemoryVersion } from '@shared/segretario'
 
-const WHEN = new Intl.DateTimeFormat('it-IT', {
-  day: 'numeric',
-  month: 'short',
-  hour: '2-digit',
-  minute: '2-digit'
+const MESSAGES = defineMessages({
+  historyUnreadable: {
+    en: 'The history can’t be read',
+    it: 'La storia non si legge',
+    de: 'Die Versionsgeschichte lässt sich nicht lesen'
+  },
+  correctedByYou: {
+    en: (when: string) => `corrected by you, ${when}`,
+    it: (when: string) => `corretta da te, ${when}`,
+    de: (when: string) => `von Ihnen korrigiert, ${when}`
+  },
+  noteText: {
+    en: (path: string) => `Text of the note ${path}`,
+    it: (path: string) => `Testo della nota ${path}`,
+    de: (path: string) => `Text der Notiz ${path}`
+  },
+  save: { en: 'Save', it: 'Salva', de: 'Speichern' },
+  cancel: { en: 'Cancel', it: 'Annulla', de: 'Abbrechen' },
+  hideHistory: { en: 'Hide history', it: 'Nascondi la storia', de: 'Versionen ausblenden' },
+  history: { en: 'History', it: 'Storia', de: 'Versionen' },
+  noVersions: {
+    en: 'No earlier version.',
+    it: 'Nessuna versione precedente.',
+    de: 'Keine frühere Version.'
+  },
+  byYou: { en: 'by you', it: 'da te', de: 'von Ihnen' },
+  bySegretario: { en: 'by the Segretario', it: 'dal Segretario', de: 'vom Segretario' },
+  restore: { en: 'Restore', it: 'Ripristina', de: 'Wiederherstellen' },
+  unreadable: {
+    en: 'The Segretario’s memory can’t be read.',
+    it: 'Impossibile leggere la memoria del Segretario.',
+    de: 'Das Gedächtnis des Segretario lässt sich nicht lesen.'
+  },
+  loading: {
+    en: 'Loading the memory…',
+    it: 'Caricamento della memoria…',
+    de: 'Gedächtnis wird geladen…'
+  },
+  conoscimiText: {
+    en: 'The Segretario reads your mail, calendars and folders to understand who you are, how you work, with whom and on what, and takes notes. Doing it again updates what it knows, without erasing it.',
+    it: 'Il Segretario legge la tua posta, i tuoi calendari e le tue cartelle per capire chi sei, come lavori, con chi e su cosa, e prende appunti. Rifarlo aggiorna quello che sa, senza cancellarlo.',
+    de: 'Der Segretario liest Ihre E-Mails, Kalender und Ordner, um zu verstehen, wer Sie sind, wie Sie arbeiten, mit wem und woran, und macht sich Notizen. Ein erneuter Durchgang ergänzt, was er weiß, ohne es zu löschen.'
+  },
+  redo: {
+    en: (name: string) => `Run “${name}” again`,
+    it: (name: string) => `Rifai ${name}`,
+    de: (name: string) => `„${name}“ erneut ausführen`
+  },
+  introduce: { en: 'Introduce yourself', it: 'Fatti conoscere', de: 'Stellen Sie sich vor' },
+  doneAt: {
+    en: (when: string) => `Known since ${when}`,
+    it: (when: string) => `Conosciuta ${when}`,
+    de: (when: string) => `Bekannt seit ${when}`
+  },
+  notes: { en: 'Notes', it: 'Note', de: 'Notizen' },
+  notesText: {
+    en: 'What the Segretario knows: about you, your way of writing, the people and the matters at hand. It writes and updates them as it works; correct them when it’s wrong: that’s how it learns.',
+    it: 'Quello che il Segretario sa: di te, del tuo modo di scrivere, delle persone e delle questioni. Le scrive e le aggiorna lui mentre lavora; correggile quando sbaglia: da lì impara.',
+    de: 'Was der Segretario weiß: über Sie, Ihre Art zu schreiben, die Menschen und die Angelegenheiten. Er schreibt und aktualisiert sie, während er arbeitet; korrigieren Sie sie, wenn er sich irrt: Daraus lernt er.'
+  },
+  noNotes: { en: 'No notes yet.', it: 'Nessuna nota, per ora.', de: 'Noch keine Notizen.' },
+  noteNotSaved: { en: 'Note not saved', it: 'Nota non salvata', de: 'Notiz nicht gespeichert' },
+  versionNotRestored: {
+    en: 'Version not restored',
+    it: 'Versione non ripristinata',
+    de: 'Version nicht wiederhergestellt'
+  }
 })
 
-const LEARNING_STATE: Readonly<Record<ConnectionLearning['state'], string>> = {
-  waiting: 'Da conoscere',
-  running: 'Al lavoro…',
-  done: 'Conosciuta'
-}
+const LEARNING_STATE = defineMessages({
+  waiting: { en: 'To get to know', it: 'Da conoscere', de: 'Noch kennenzulernen' },
+  running: { en: 'At work…', it: 'Al lavoro…', de: 'Bei der Arbeit…' },
+  done: { en: 'Known', it: 'Conosciuta', de: 'Bekannt' }
+}) satisfies Record<ConnectionLearning['state'], unknown>
 
-const VERSION_ACTIONS: Readonly<Record<string, string>> = {
-  scrivi: 'scritta',
-  modifica: 'corretta',
-  inserisci: 'ampliata',
-  rinomina: 'rinominata',
-  elimina: 'cancellata',
-  ripristina: 'ripristinata'
+/** What became of a note in a version, by the action that made it. */
+const VERSION_ACTIONS = defineMessages({
+  scrivi: { en: 'written', it: 'scritta', de: 'geschrieben' },
+  modifica: { en: 'corrected', it: 'corretta', de: 'korrigiert' },
+  inserisci: { en: 'expanded', it: 'ampliata', de: 'erweitert' },
+  rinomina: { en: 'renamed', it: 'rinominata', de: 'umbenannt' },
+  elimina: { en: 'deleted', it: 'cancellata', de: 'gelöscht' },
+  ripristina: { en: 'restored', it: 'ripristinata', de: 'wiederhergestellt' }
+})
+
+/** When a note changed: the day and the time, as the region writes them. */
+function when(at: number): string {
+  return new Intl.DateTimeFormat(languageNow().formatLocale, {
+    day: 'numeric',
+    month: 'short',
+    hour: hourStyle(),
+    minute: '2-digit'
+  }).format(at)
 }
 
 /** A note's first line: what it is about, as the index shows it. */
@@ -61,6 +137,8 @@ function NoteRow({
   onSave: (content: string) => Promise<void>
   onRestore: (revision: number) => Promise<void>
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const actions: Readonly<Record<string, string | undefined>> = useMessages(VERSION_ACTIONS)
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState(note.content)
   const [stored, setStored] = useState(note.content)
@@ -82,7 +160,7 @@ function NoteRow({
     try {
       setVersions(versions ? null : await window.segretarioApi.memoryHistory(note.path))
     } catch (error) {
-      toast.error('La storia non si legge', { description: errorText(error) })
+      toast.error(messagesNow(MESSAGES).historyUnreadable, { description: errorText(error) })
     }
   }
 
@@ -117,8 +195,9 @@ function NoteRow({
           </span>
         </span>
         <span className="text-faint-foreground shrink-0 text-[11px]">
-          {note.updatedBy === 'utente' ? 'corretta da te, ' : ''}
-          {WHEN.format(note.updatedAt)}
+          {note.updatedBy === 'utente'
+            ? m.correctedByYou(when(note.updatedAt))
+            : when(note.updatedAt)}
         </span>
       </button>
       {open && (
@@ -127,12 +206,12 @@ function NoteRow({
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             className="voice min-h-40 text-[13.5px] leading-[1.5]"
-            aria-label={`Testo della nota ${note.path}`}
+            aria-label={m.noteText(note.path)}
           />
           <div className="flex items-center gap-2">
             <Button size="sm" disabled={!changed || saving} onClick={() => void save()}>
               {saving && <LoaderCircle className="size-3.5 animate-spin" />}
-              Salva
+              {m.save}
             </Button>
             <Button
               variant="ghost"
@@ -140,29 +219,27 @@ function NoteRow({
               disabled={!changed || saving}
               onClick={() => setDraft(note.content)}
             >
-              Annulla
+              {m.cancel}
             </Button>
             <div className="flex-1" />
             <Button variant="ghost" size="sm" disabled={saving} onClick={() => void showHistory()}>
               <History className="size-3.5" />
-              {versions ? 'Nascondi la storia' : 'Storia'}
+              {versions ? m.hideHistory : m.history}
             </Button>
           </div>
           {versions && (
             <ul className="flex flex-col gap-1 border-t pt-2">
               {versions.length === 0 && (
-                <li className="text-muted-foreground text-[11.5px]">
-                  Nessuna versione precedente.
-                </li>
+                <li className="text-muted-foreground text-[11.5px]">{m.noVersions}</li>
               )}
               {versions.map((version) => (
                 <li key={version.revision} className="flex items-center gap-2 text-[11.5px]">
                   <span className="text-muted-foreground min-w-0 flex-1 truncate">
-                    {WHEN.format(version.at)} · {VERSION_ACTIONS[version.action] ?? version.action}
+                    {when(version.at)} · {actions[version.action] ?? version.action}
                     {version.actor === 'utente'
-                      ? ' da te'
+                      ? ` ${m.byYou}`
                       : version.actor === 'segretario'
-                        ? ' dal Segretario'
+                        ? ` ${m.bySegretario}`
                         : ''}
                   </span>
                   {version.revision !== note.revision && version.content !== null && (
@@ -171,7 +248,7 @@ function NoteRow({
                       onClick={() => void onRestore(version.revision).then(() => setVersions(null))}
                       className="text-foreground focus-visible:ring-ring/60 shrink-0 rounded-sm font-semibold outline-none hover:underline focus-visible:ring-2"
                     >
-                      Ripristina
+                      {m.restore}
                     </button>
                   )}
                 </li>
@@ -199,6 +276,9 @@ export function MemorySection({
   /** Conoscimi runs in the guided setup, on every connection, updating what it knows. */
   onRedoConoscimi: () => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
+  const states = useMessages(LEARNING_STATE)
   const [learning, setLearning] = useState<ConnectionLearning[] | null>(null)
   const [notes, setNotes] = useState<MemoryNote[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -218,7 +298,7 @@ export function MemorySection({
 
     load().catch((error: unknown) => {
       if (current) {
-        setLoadError(errorText(error) ?? 'Impossibile leggere la memoria del Segretario.')
+        setLoadError(errorText(error) ?? messagesNow(MESSAGES).unreadable)
       }
     })
 
@@ -257,7 +337,7 @@ export function MemorySection({
   }
 
   if (!learning || !notes) {
-    return <SettingsLoading>Caricamento della memoria…</SettingsLoading>
+    return <SettingsLoading>{m.loading}</SettingsLoading>
   }
 
   const running = learning.some((connection) => connection.state === 'running')
@@ -265,8 +345,8 @@ export function MemorySection({
   return (
     <SettingsPage>
       <SettingsGroup
-        title="Conoscimi"
-        description="Il Segretario legge la tua posta, i tuoi calendari e le tue cartelle per capire chi sei, come lavori, con chi e su cosa, e prende appunti. Rifarlo aggiorna quello che sa, senza cancellarlo."
+        title={places.conoscimi}
+        description={m.conoscimiText}
         action={
           <Button variant="outline" size="sm" disabled={running} onClick={onRedoConoscimi}>
             {running ? (
@@ -275,8 +355,8 @@ export function MemorySection({
               <RotateCcw className="size-3.5" />
             )}
             {learning.some((connection) => connection.state === 'done')
-              ? 'Rifai Conoscimi'
-              : 'Fatti conoscere'}
+              ? m.redo(places.conoscimi)
+              : m.introduce}
           </Button>
         }
       >
@@ -286,19 +366,16 @@ export function MemorySection({
             title={connection.label}
             description={
               connection.state === 'done' && connection.finishedAt
-                ? `${LEARNING_STATE.done} ${WHEN.format(connection.finishedAt)}`
-                : LEARNING_STATE[connection.state]
+                ? m.doneAt(when(connection.finishedAt))
+                : states[connection.state]
             }
           />
         ))}
       </SettingsGroup>
 
-      <SettingsGroup
-        title="Note"
-        description="Quello che il Segretario sa: di te, del tuo modo di scrivere, delle persone e delle questioni. Le scrive e le aggiorna lui mentre lavora; correggile quando sbaglia: da lì impara."
-      >
+      <SettingsGroup title={m.notes} description={m.notesText}>
         {notes.length === 0 ? (
-          <SettingsEmpty>Nessuna nota, per ora.</SettingsEmpty>
+          <SettingsEmpty>{m.noNotes}</SettingsEmpty>
         ) : (
           notes.map((note) => (
             <NoteRow
@@ -310,14 +387,16 @@ export function MemorySection({
                     await window.segretarioApi.writeMemory(note.path, content, note.revision)
                   )
                 } catch (error) {
-                  toast.error('Nota non salvata', { description: errorText(error) })
+                  toast.error(messagesNow(MESSAGES).noteNotSaved, { description: errorText(error) })
                 }
               }}
               onRestore={async (revision) => {
                 try {
                   setNotes(await window.segretarioApi.restoreMemory(note.path, revision))
                 } catch (error) {
-                  toast.error('Versione non ripristinata', { description: errorText(error) })
+                  toast.error(messagesNow(MESSAGES).versionNotRestored, {
+                    description: errorText(error)
+                  })
                 }
               }}
             />

@@ -1,5 +1,7 @@
 import { CALENDAR_HELD_DAYS, type CalendarChange, type CalendarEvent } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 
+import { messages } from '../../i18n'
 import { HandleRegistry, type HandleRecord } from '../agent/handles'
 import { lookingKey } from '../agent/tool-types'
 import { eventLine } from '../tools/calendar'
@@ -8,6 +10,21 @@ import { nowLine } from './context'
 import type { StartingData } from './day'
 
 const DAY_MS = 24 * 60 * 60 * 1000
+
+/** The runs' titles, as the user sees them. */
+const TITLES = defineMessages({
+  calendar: {
+    en: (what: string) => `Calendar · ${what}`,
+    it: (what: string) => `Calendario · ${what}`,
+    de: (what: string) => `Kalender · ${what}`
+  },
+  changes: {
+    en: (count: number) => `Calendar · ${count} changes`,
+    it: (count: number) => `Calendario · ${count} cambiamenti`,
+    de: (count: number) => `Kalender · ${count} Änderungen`
+  }
+})
+
 const WEEKDAY = new Intl.DateTimeFormat('it-IT', { weekday: 'long' })
 const TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
 const DAY_OF_YEAR = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short' })
@@ -136,7 +153,10 @@ export function prepareCalendarChanges(changes: ReadonlyArray<CalendarChange>): 
   })
 
   return {
-    title: `Calendario · ${groups.length === 1 ? changes[0].event.title : `${groups.length} cambiamenti`}`,
+    title:
+      groups.length === 1
+        ? messages(TITLES).calendar(changes[0].event.title)
+        : messages(TITLES).changes(groups.length),
     data: `${nowLine()}\n\n## Cambiati nel calendario, non da te\n\n${lines.join('\n\n')}`,
     handles: added,
     // The events it looks at as they changed: whether to tell the user of them is its own (§13.3).
@@ -271,7 +291,9 @@ function seriesWords(instances: ReadonlyArray<CalendarEvent>): string {
 export function prepareCalendarLook(
   items: ReadonlyArray<LookItem>,
   calendar: string,
-  ahead: boolean
+  ahead: boolean,
+  /** The calendar as the user reads its name, in the interface's language. */
+  shown = calendar
 ): StartingData {
   const handles = new HandleRegistry()
   const added: HandleRecord[] = []
@@ -285,7 +307,7 @@ export function prepareCalendarLook(
   const last = items[items.length - 1]
 
   return {
-    title: `Calendario · ${calendar}`,
+    title: messages(TITLES).calendar(shown),
     data: `${nowLine()}\n\n## ${
       ahead
         ? `Gli impegni in arrivo di «${calendar}» che non hai ancora guardato`

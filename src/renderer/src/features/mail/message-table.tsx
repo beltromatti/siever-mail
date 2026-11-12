@@ -21,7 +21,9 @@ import {
   summaryToMessageRef
 } from '@renderer/lib/message-selection'
 import { hasWorkLine, rowWorkKey, WorkLine } from '@renderer/features/segretario/row-work'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn, formatByteSize, formatDateTimeLabel } from '@renderer/lib/utils'
+import { defineMessages } from '@shared/i18n'
 import {
   defaultSortDirection,
   type MailMessageSummary,
@@ -58,6 +60,17 @@ import { MessageListHeader } from './message-list-header'
 const TABLE_GRID_TEMPLATE =
   'grid-cols-[0.625rem_1rem_1rem_minmax(7rem,1fr)_minmax(6rem,0.85fr)_minmax(10rem,2fr)_9.5rem_4.25rem]'
 
+const MESSAGES = defineMessages({
+  from: { en: 'From', it: 'Da', de: 'Von' },
+  to: { en: 'To', it: 'A', de: 'An' },
+  mailbox: { en: 'Mailbox', it: 'Casella', de: 'Postfach' },
+  subject: { en: 'Subject', it: 'Oggetto', de: 'Betreff' },
+  received: { en: 'Received', it: 'Ricevuto', de: 'Empfangen' },
+  size: { en: 'Size', it: 'Dimensione', de: 'Größe' },
+  attachments: { en: 'Attachments', it: 'Allegati', de: 'Anhänge' },
+  flagged: { en: 'Flagged', it: 'Contrassegnate', de: 'Markiert' }
+})
+
 interface SortableColumn {
   field: MessageListSortField
   label: string
@@ -66,14 +79,14 @@ interface SortableColumn {
 
 const SECTION_HEADING_HEIGHT_PX = 24
 
-const SORTABLE_COLUMNS: ReadonlyArray<SortableColumn> = [
-  { field: 'sender', label: 'Da' },
-  { field: 'subject', label: 'Oggetto' },
-  { field: 'date', label: 'Ricevuto' },
-  { field: 'size', label: 'Dimensione', align: 'right' }
-]
-
 export function MessageTable(props: MessageListViewProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const sortableColumns: ReadonlyArray<SortableColumn> = [
+    { field: 'sender', label: m.from },
+    { field: 'subject', label: m.subject },
+    { field: 'date', label: m.received },
+    { field: 'size', label: m.size, align: 'right' }
+  ]
   const {
     messages,
     rowWork,
@@ -161,19 +174,19 @@ export function MessageTable(props: MessageListViewProps): React.JSX.Element {
         )}
       >
         <span aria-hidden />
-        <span className="flex justify-center" title="Allegati">
+        <span className="flex justify-center" title={m.attachments}>
           <Paperclip className="size-3" />
         </span>
-        <span className="flex justify-center" title="Contrassegnate">
+        <span className="flex justify-center" title={m.flagged}>
           <Flag className="size-3" />
         </span>
-        {renderColumnHeader(SORTABLE_COLUMNS[0])}
+        {renderColumnHeader(sortableColumns[0])}
         {/* In Tutti gli account the account a message came to says more than its
             recipients, which are mostly that same account. */}
-        <span className="px-1">{accountLabels ? 'Account' : 'A'}</span>
-        {renderColumnHeader(SORTABLE_COLUMNS[1])}
-        {renderColumnHeader(SORTABLE_COLUMNS[2])}
-        {renderColumnHeader(SORTABLE_COLUMNS[3])}
+        <span className="px-1">{accountLabels ? m.mailbox : m.to}</span>
+        {renderColumnHeader(sortableColumns[1])}
+        {renderColumnHeader(sortableColumns[2])}
+        {renderColumnHeader(sortableColumns[3])}
       </div>
 
       {messages.length === 0 && emptyState ? (

@@ -1,5 +1,16 @@
+import { defineMessages } from '@shared/i18n'
+
+import { messagesNow } from './i18n'
 import { buildMessageFrameDocument, MAIL_APP_STYLE_ATTRIBUTE } from './mail-html'
 import { withOffscreenFrames } from './offscreen-frame'
+
+const MESSAGES = defineMessages({
+  notPrepared: {
+    en: 'The quoted message could not be prepared.',
+    it: 'Impossibile preparare il messaggio citato.',
+    de: 'Die zitierte Nachricht konnte nicht vorbereitet werden.'
+  }
+})
 
 /** The composer's working width: the message is laid out as it will be seen there. */
 const QUOTE_LAYOUT_WIDTH = 920
@@ -37,7 +48,7 @@ export async function inlineMessageStyles(rawHtml: string): Promise<string> {
       const bareView = bareDocument.defaultView
 
       if (!styledView || !bareView) {
-        throw new Error('Impossibile preparare il messaggio citato.')
+        throw new Error(messagesNow(MESSAGES).notPrepared)
       }
 
       const properties = Array.from(styledView.getComputedStyle(styledDocument.body))

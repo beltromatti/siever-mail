@@ -1,6 +1,9 @@
+import { defineMessages } from '@shared/i18n'
 import type { MailAddress } from '@shared/models'
 
+import { messages as inLanguage } from '../../i18n'
 import { HandleRegistry, type HandleRecord } from '../agent/handles'
+import type { StillMissing } from '../agent/runner'
 import {
   lookingKey,
   seenKey,
@@ -11,6 +14,26 @@ import type { Registry } from '../registry/registry'
 import type { NoteRecord } from '../registry/types'
 import { formatAddresses, formatDateTime } from '../tools/format'
 import { nowLine } from './context'
+
+/** What the user sees of a reading: its title, and what it still has to leave. */
+const MESSAGES = defineMessages({
+  title: {
+    en: (own: boolean, sender: string | null, subject: string | null) =>
+      `${own ? 'Your message' : sender || 'Message'} · ${subject ?? '(no subject)'}`,
+    it: (own: boolean, sender: string | null, subject: string | null) =>
+      `${own ? 'Tuo messaggio' : sender || 'Messaggio'} · ${subject ?? '(senza oggetto)'}`,
+    de: (own: boolean, sender: string | null, subject: string | null) =>
+      `${own ? 'Ihre Nachricht' : sender || 'Nachricht'} · ${subject ?? '(kein Betreff)'}`
+  },
+  missingNotes: {
+    en: (handles: string) =>
+      `The note on ${handles} is still missing: write it with \`nota\`, then finish the rest if needed.`,
+    it: (handles: string) =>
+      `Manca ancora la nota di ${handles}: scrivila con \`nota\`, poi completa il resto se serve.`,
+    de: (handles: string) =>
+      `Die Notiz zu ${handles} fehlt noch: mit \`nota\` schreiben, dann bei Bedarf den Rest erledigen.`
+  }
+})
 
 export interface ReadingScope {
   accountId: string
@@ -210,11 +233,13 @@ export async function prepareReading(
   const from = lastTarget.location.from[0]
 
   return {
-    title:
-      `${isOwn(lastTarget.location.from, own) ? 'Tuo messaggio' : from?.name || from?.address || 'Messaggio'} · ${lastTarget.location.subject || '(senza oggetto)'}`.slice(
-        0,
-        120
-      ),
+    title: inLanguage(MESSAGES)
+      .title(
+        isOwn(lastTarget.location.from, own),
+        from?.name || from?.address || null,
+        lastTarget.location.subject || null
+      )
+      .slice(0, 120),
     data: sections.join('\n\n'),
     handles: added,
     targets: targets.map((target) => ({
@@ -237,7 +262,7 @@ export async function readingMissing(
   registry: Registry,
   scope: ReadingScope,
   targets: ReadingPlan['targets']
-): Promise<string | null> {
+): Promise<StillMissing | null> {
   const written = new Set(
     (
       await registry.notes.many(
@@ -247,7 +272,13 @@ export async function readingMissing(
   )
   const missing = targets.filter((target) => !written.has(target.messageKey))
 
-  return missing.length === 0
-    ? null
-    : `Manca ancora la nota di ${missing.map((target) => target.handle).join(', ')}: scrivila con \`nota\`, poi completa il resto se serve.`
+  if (missing.length === 0) {
+    return null
+  }
+
+  const handles = missing.map((target) => target.handle).join(', ')
+  return {
+    forModel: `Manca ancora la nota di ${handles}: scrivila con \`nota\`, poi completa il resto se serve.`,
+    shown: inLanguage(MESSAGES).missingNotes(handles)
+  }
 }

@@ -1,7 +1,9 @@
 import { CALENDAR_HELD_DAYS, type CalendarRole } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import { calendarLearningKey, READING_DAYS, type TaskKind } from '@shared/segretario'
 
 import { fileSources } from '../../files/file-sources'
+import { messages } from '../../i18n'
 import { PROMPTS } from '../prompts'
 import type { StoredReading } from '../ai-store'
 import {
@@ -35,6 +37,64 @@ const ROLE_WORDS: Record<CalendarRole, string> = {
     "solo quelli dell'utente (invitato, li organizza o li ha creati lui, o li hai riconosciuti tu)",
   nessuno: "nessuno dei suoi eventi è dell'utente"
 }
+/** The steps' lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  deciding: {
+    en: 'Deciding how far back to read…',
+    it: 'Decido fin dove leggere…',
+    de: 'Entscheide, wie weit zurück gelesen wird…'
+  },
+  decidingRole: {
+    en: 'Deciding whose events they are…',
+    it: 'Decido di chi sono gli eventi…',
+    de: 'Entscheide, wem die Termine gehören…'
+  },
+  looking: {
+    en: 'Looking at the connections…',
+    it: 'Guardo le connessioni…',
+    de: 'Sehe mir die Verbindungen an…'
+  },
+  looked: {
+    en: 'Looked at the connections',
+    it: 'Guardate le connessioni',
+    de: 'Verbindungen angesehen'
+  },
+  reading: {
+    en: (connection: string, days: number) =>
+      `Mail ${connection}: ${days === 1 ? '1 day' : `${days} days`}`,
+    it: (connection: string, days: number) => `Posta ${connection}: ${days} giorni`,
+    de: (connection: string, days: number) =>
+      `E-Mail ${connection}: ${days === 1 ? '1 Tag' : `${days} Tage`}`
+  },
+  role: {
+    en: (calendar: string, role: CalendarRole) =>
+      `${calendar}: ${
+        role === 'tutti'
+          ? 'all its events are yours'
+          : role === 'propri'
+            ? 'only yours (invited, organised or created by you, or recognised by the Segretario)'
+            : 'none of its events are yours'
+      }`,
+    it: (calendar: string, role: CalendarRole) =>
+      `${calendar}: ${
+        role === 'tutti'
+          ? "tutti i suoi eventi sono dell'utente"
+          : role === 'propri'
+            ? "solo quelli dell'utente (invitato, li organizza o li ha creati lui, o li hai riconosciuti tu)"
+            : "nessuno dei suoi eventi è dell'utente"
+      }`,
+    de: (calendar: string, role: CalendarRole) =>
+      `${calendar}: ${
+        role === 'tutti'
+          ? 'alle Termine gehören Ihnen'
+          : role === 'propri'
+            ? 'nur Ihre (eingeladen, von Ihnen organisiert oder erstellt oder vom Segretario erkannt)'
+            : 'keiner der Termine gehört Ihnen'
+      }`
+  },
+  already: { en: 'Already so', it: 'Già così', de: 'Bereits so' }
+})
+
 const DAY_MS = 24 * 60 * 60 * 1000
 /** The readings whose spending tells what reading a message costs. */
 const COST_LOOKBACK_MS = 30 * DAY_MS
@@ -281,7 +341,7 @@ async function setReading(
         ? `: ${missing === 1 ? 'quello che manca si legge' : `i ${missing} che mancano si leggono`} uno per uno${cost !== null ? `, circa ${money(missing * cost)}` : ''}.`
         : '.'
     }${days < was ? ' Ciò che era già letto resta com’è.' : ''}`,
-    summary: `Posta ${connection.label}: ${days} giorni`
+    summary: messages(STEPS).reading(connection.label, days)
   }
 }
 
@@ -342,7 +402,7 @@ async function setRole(
     await context.calendar.setRole(calendar.key, chosen)
     return {
       content: `Da ora ${words}, come ha detto l'utente: lo vede anche in Impostazioni › Notifiche.`,
-      summary: `${calendar.name}: ${ROLE_WORDS[chosen]}`
+      summary: messages(STEPS).role(calendar.name, chosen)
     }
   }
 
@@ -354,7 +414,7 @@ async function setRole(
   }
 
   if (calendar.role === chosen && calendar.roleBy === 'segretario') {
-    return { content: `Già così: ${words}.`, summary: 'Già così' }
+    return { content: `Già così: ${words}.`, summary: messages(STEPS).already }
   }
 
   const seen = seenKey('role', calendar.key)
@@ -401,16 +461,16 @@ export const connectionsTool: SegretarioTool = {
   },
   running: (args) =>
     args.azione === 'lettura'
-      ? 'Decido fin dove leggere…'
+      ? messages(STEPS).deciding
       : args.azione === 'di_chi'
-        ? 'Decido di chi sono gli eventi…'
-        : 'Guardo le connessioni…',
+        ? messages(STEPS).decidingRole
+        : messages(STEPS).looking,
   readsOnly: (args) => args.azione === 'elenco',
   async execute(args, context) {
     const action = requireString(args, 'azione')
 
     if (action === 'elenco') {
-      return { content: await list(context), summary: 'Guardate le connessioni' }
+      return { content: await list(context), summary: messages(STEPS).looked }
     }
 
     if (action === 'lettura') {

@@ -60,6 +60,7 @@ import {
 
 import { diagnostics } from '@main/diagnostics/log'
 import type { BundleFile } from '@main/diagnostics/export'
+import { languageState, messages } from '@main/i18n'
 import type { ContextPayload, ChangesPayload, UserPayload } from './agent/conversation'
 import { handleRecords } from './agent/conversation'
 import { entryOf, firstLine } from './agent/entries'
@@ -111,6 +112,8 @@ import { plainLine, SegretarioNotifications } from './segretario-notifications'
 import type { SegretarioOwnership } from '@main/calendar/ownership'
 import type { NotificationCenter } from '@main/notifications/center'
 import { comparableText, formatDateTime, shortDate } from './tools/format'
+import { userDates } from './tools/user-dates'
+import { HOW, MESSAGES, PURPOSES } from './segretario-service.messages'
 
 const log = diagnostics('segretario')
 /** A calendar write the user decided — undoing the Segretario's, accepting its proposal (§14.4). */
@@ -123,9 +126,15 @@ const KEY_RECHECK_MS = 20 * 60 * 1000
  * credit reads zero, so what is left may be said and not be enough.
  */
 function spentCredit(available: number | null): string {
+  const m = messages(MESSAGES)
   return available !== null && available > 0
-    ? `Il credito OpenRouter che resta (${available.toLocaleString('it-IT', { style: 'currency', currency: 'USD' })}) non basta più per lavorare: ricaricalo su openrouter.ai per riaccendere le funzioni AI.`
-    : 'Il credito OpenRouter è finito: ricaricalo su openrouter.ai per riaccendere le funzioni AI.'
+    ? m.creditTooLow(
+        available.toLocaleString(languageState().formatLocale, {
+          style: 'currency',
+          currency: 'USD'
+        })
+      )
+    : m.creditGone
 }
 /** The week whose spending tells how long the credit lasts. */
 const CREDIT_PACE_DAYS = 7
@@ -153,18 +162,17 @@ const EMPTY_STATUS: SegretarioStatus = {
   modelName: null
 }
 
-/** What spending is shown under, beside the tasks. */
-const PURPOSE_LABELS: Readonly<Record<string, string>> = {
-  ...TASK_LABELS,
-  compattazione: 'Riassunti dei lavori lunghi',
-  titolo: 'Titoli dei lavori',
-  attivita: 'Richieste (prima versione)',
-  smistamento: 'Lettura della posta (prima versione)',
-  'risposta-pronta': 'Risposte pronte (prima versione)',
-  sollecito: 'Solleciti (prima versione)',
-  oggi: 'La giornata (prima versione)',
-  argomento: 'Argomenti (prima versione)',
-  scrittura: 'Scrittura nell’editor (prima versione)'
+/** What spending is shown under, beside the tasks: each purpose of its own, by its words. */
+const PURPOSE_LABELS: Readonly<Record<string, keyof typeof PURPOSES>> = {
+  compattazione: 'compaction',
+  titolo: 'titles',
+  attivita: 'requestsV1',
+  smistamento: 'readingV1',
+  'risposta-pronta': 'readyRepliesV1',
+  sollecito: 'followUpsV1',
+  oggi: 'dayV1',
+  argomento: 'topicsV1',
+  scrittura: 'writingV1'
 }
 
 const PRIORITY_ORDER = { alta: 0, media: 1, bassa: 2 } as const
@@ -267,11 +275,29 @@ function projectOf(summary: ProjectSummary): Project {
   }
 }
 
-/** A refusal of the registry is the user's to read: a plain error. */
+/** A refusal of the registry is the user's to read: a plain error, in their words when it has them. */
+function shownError(error: unknown): unknown {
+  return error instanceof RegistryRefusal ? new Error(error.shown ?? error.message) : error
+}
+
 function plainly<T>(work: Promise<T>): Promise<T> {
   return work.catch((error: unknown) => {
-    throw error instanceof RegistryRefusal ? new Error(error.message) : error
+    throw shownError(error)
   })
+}
+
+/** Why what the user marked handled is done, in their words: kept with it, and shown. */
+function handledReason(): string {
+  return messages(MESSAGES).markedHandled
+}
+
+/** A note's path as the memory keeps it; one not valid is refused in the user's words. */
+function userMemoryPath(path: string): string {
+  try {
+    return normalizeMemoryPath(path)
+  } catch (error) {
+    throw shownError(error)
+  }
 }
 
 /** A letter looked at in Oggi is written again when it is behind by more than this. */
@@ -536,13 +562,13 @@ export class SegretarioService {
     })
 
     // Connections kept by an uninstall, found by this install: a first start, already connected —
-    // the guided setup takes the user from them, as from any first start (§12.2).
+    // the guided setup takes the user through it, the language first, as any first start (§12.2).
     const adopted = await this.options.database.adoptedConnections()
 
     if (adopted && !(await store.meta(ONBOARDING))) {
       const setup: OnboardingState = {
         case: 'primo-avvio',
-        step: 'connessioni',
+        step: 'lingua',
         accountIds: adopted.accountIds,
         conoscimiId: null,
         startedAt: Date.now()
@@ -582,8 +608,7 @@ export class SegretarioService {
       if (activity.visibility === 'pannello') {
         await store.appendEvent(activity.id, 'error', {
           code: 'interrupted',
-          message:
-            'Interrotto: SIEVER Mail è stato chiuso mentre lavoravo. Scrivimi per riprendere.'
+          message: messages(MESSAGES).interruptedByQuit
         })
         await store.updateActivity(activity.id, { status: 'failed', unseen: true })
 
@@ -663,7 +688,7 @@ export class SegretarioService {
 
   private require<T>(value: T | null): T {
     if (value === null) {
-      throw new Error('Il Segretario non è ancora pronto.')
+      throw new Error(messages(MESSAGES).notReady)
     }
 
     return value
@@ -861,7 +886,7 @@ export class SegretarioService {
     log.info('notice', { kind: notice.kind })
     await this.db.store.setMeta('notice', JSON.stringify(notice))
     this.options.send(SEGRETARIO_IPC.notice, notice)
-    const { title, body } = noticeWords(notice)
+    const { title, body } = noticeWords(notice, languageState())
     // In the window a notice of its own says it; away from it, the system does too (§12.1).
     this.options.notifications.notify({
       family: 'app',
@@ -879,7 +904,7 @@ export class SegretarioService {
     const key = rawKey.trim()
 
     if (!/^sk-or-[\w-]{10,}$/.test(key)) {
-      throw new Error('Questa non sembra una chiave OpenRouter: inizia con «sk-or-».')
+      throw new Error(messages(MESSAGES).notAKey)
     }
 
     let status: SegretarioStatus
@@ -890,9 +915,7 @@ export class SegretarioService {
       status = (await this.statusFor(key, null)).status
     } catch (error) {
       if (error instanceof SegretarioError && error.code === 'invalid-key') {
-        throw new Error(
-          'OpenRouter non riconosce questa chiave: controlla di averla copiata intera.'
-        )
+        throw new Error(messages(MESSAGES).keyUnknown)
       }
 
       // OpenRouter could not be reached: the key is kept, and checked later.
@@ -1045,7 +1068,7 @@ export class SegretarioService {
       const { contextLength } = await this.client.modelInfo(await this.requireKey())
 
       if (contextLength === null) {
-        throw new Error('OpenRouter non dice quanti token legge il modello.')
+        throw new Error(messages(MESSAGES).noContextLength)
       }
 
       this.modelContext = contextLength
@@ -1059,10 +1082,7 @@ export class SegretarioService {
     const key = await this.db.store.getApiKey()
 
     if (!key) {
-      throw new SegretarioError(
-        'no-key',
-        'Per lavorare mi serve una chiave OpenRouter: inseriscila in Impostazioni › Segretario.'
-      )
+      throw new SegretarioError('no-key', messages(MESSAGES).noKey)
     }
 
     return key
@@ -1079,13 +1099,11 @@ export class SegretarioService {
   async setPreferences(preferences: SegretarioPreferences): Promise<SegretarioPreferences> {
     // On only with a key that works and credit to spend: else it would go off at its first step.
     if (preferences.enabled && this.status.keyState === 'exhausted') {
-      throw new Error(
-        'Il credito OpenRouter è finito: ricaricalo su openrouter.ai, poi riaccendi le funzioni AI.'
-      )
+      throw new Error(messages(MESSAGES).creditGoneTurnOn)
     }
 
     if (preferences.enabled && this.status.keyState === 'invalid') {
-      throw new Error('OpenRouter non accetta la chiave: inseriscine una valida, poi riaccendi.')
+      throw new Error(messages(MESSAGES).keyRefused)
     }
 
     const wasOn = (await this.db.store.getPreferences()).enabled
@@ -1137,8 +1155,13 @@ export class SegretarioService {
     ])
     const byLabel = new Map<string, number>()
 
+    // The tasks by their names in the interface's language, beside the purposes of their own.
+    const tasks: Readonly<Record<string, string>> = messages(TASK_LABELS)
+    const purposes = messages(PURPOSES)
+
     for (const entry of byPurpose) {
-      const label = PURPOSE_LABELS[entry.purpose] ?? entry.purpose
+      const own = PURPOSE_LABELS[entry.purpose]
+      const label = tasks[entry.purpose] ?? (own ? purposes[own] : entry.purpose)
       byLabel.set(label, (byLabel.get(label) ?? 0) + entry.cost)
     }
 
@@ -1291,13 +1314,11 @@ export class SegretarioService {
    * over a version the Segretario changed since they opened it, refused.
    */
   async writeMemory(path: string, content: string, seenRevision?: number): Promise<MemoryNote[]> {
-    const normalized = normalizeMemoryPath(path)
+    const normalized = userMemoryPath(path)
     const before = await this.db.notebook.read(normalized)
 
     if (before && seenRevision !== undefined && before.revision !== seenRevision) {
-      throw new Error(
-        'Il Segretario ha cambiato questa nota mentre la scrivevi: riaprila, guarda com’è ora e rifai la tua modifica.'
-      )
+      throw new Error(messages(MESSAGES).noteChangedMeanwhile)
     }
 
     await plainly(this.db.notebook.write(normalized, content, USER, { seenRevision }))
@@ -1314,7 +1335,7 @@ export class SegretarioService {
   }
 
   async memoryHistory(path: string): Promise<MemoryVersion[]> {
-    return (await this.db.notebook.history(normalizeMemoryPath(path))).map((version) => ({
+    return (await this.db.notebook.history(userMemoryPath(path))).map((version) => ({
       revision: version.revision,
       content: version.content,
       action: version.action,
@@ -1324,7 +1345,7 @@ export class SegretarioService {
   }
 
   async restoreMemory(path: string, revision: number): Promise<MemoryNote[]> {
-    await plainly(this.db.notebook.restore(normalizeMemoryPath(path), revision, USER))
+    await plainly(this.db.notebook.restore(userMemoryPath(path), revision, USER))
     return this.listMemory()
   }
 
@@ -1394,7 +1415,7 @@ export class SegretarioService {
     const chosen = keys && keys.length > 0 ? all.filter((key) => keys.includes(key)) : all
 
     if (chosen.length === 0) {
-      throw new Error('Non ci sono connessioni da conoscere.')
+      throw new Error(messages(MESSAGES).noConnections)
     }
 
     const { store } = this.db
@@ -1406,7 +1427,7 @@ export class SegretarioService {
       background: true,
       visibility: 'pannello',
       data,
-      shown: 'Fatti conoscere',
+      shown: messages(MESSAGES).getToKnowMe,
       onCreated: async (activityId) => {
         await store.startLearning(chosen, activityId)
         created.resolve(activityId)
@@ -1836,13 +1857,13 @@ export class SegretarioService {
       .sort((a, b) => b.id - a.id)[0]
 
     if (!last) {
-      throw new Error('Non c’è niente da annullare.')
+      throw new Error(messages(MESSAGES).nothingToUndo)
     }
 
     const record = await plainly(registry.undoCommitment(last.id, USER))
 
     if (!record) {
-      throw new Error('Non c’è niente da annullare.')
+      throw new Error(messages(MESSAGES).nothingToUndo)
     }
 
     await store.retractLessons(id, last.at)
@@ -1883,7 +1904,7 @@ export class SegretarioService {
       )
 
       if (!location) {
-        throw new Error('Il messaggio non è più nella posta.')
+        throw new Error(messages(MESSAGES).messageGone)
       }
 
       return {
@@ -1896,7 +1917,7 @@ export class SegretarioService {
 
     if (from.kind === 'event') {
       if (!(await this.options.calendar.event(from.eventKey))) {
-        throw new Error('L’evento non è più nel calendario.')
+        throw new Error(messages(MESSAGES).eventGone)
       }
 
       return { kind: 'evento', eventKey: from.eventKey }
@@ -1936,7 +1957,7 @@ export class SegretarioService {
 
       for (const record of owed) {
         await registry.setCommitmentStatus(record.id, 'fatta', USER, {
-          reason: 'Segnata come gestita.'
+          reason: handledReason()
         })
       }
 
@@ -1954,7 +1975,7 @@ export class SegretarioService {
     const event = await store.getEvent(eventId)
 
     if (!event || event.activityId !== activityId || event.type !== 'changes') {
-      throw new Error('Questa modifica non c’è più.')
+      throw new Error(messages(MESSAGES).changeGone)
     }
 
     const payload = event.payload as ChangesPayload
@@ -1962,11 +1983,11 @@ export class SegretarioService {
     const undo = change?.undo
 
     if (!undo) {
-      throw new Error('Questa modifica non si può annullare da qui.')
+      throw new Error(messages(MESSAGES).changeNotUndoable)
     }
 
     if (change.undoneAt !== undefined) {
-      throw new Error('Questa modifica è già stata annullata.')
+      throw new Error(messages(MESSAGES).changeUndone)
     }
 
     switch (undo.kind) {
@@ -2111,7 +2132,7 @@ export class SegretarioService {
     const event = await this.options.calendar.event(eventKey)
 
     if (!event) {
-      throw new Error('L’evento non c’è più nel calendario.')
+      throw new Error(messages(MESSAGES).eventNotThere)
     }
 
     await plainly(
@@ -2184,7 +2205,7 @@ export class SegretarioService {
     revision?: number
   ): Promise<void> {
     if (this.deciding.has(id)) {
-      throw new Error('Questa proposta si sta già decidendo.')
+      throw new Error(messages(MESSAGES).proposalDeciding)
     }
 
     this.deciding.add(id)
@@ -2206,11 +2227,11 @@ export class SegretarioService {
     const proposal = await registry.proposals.get(id)
 
     if (!proposal || proposal.status !== 'aperta') {
-      throw new Error('Questa proposta non è più in attesa.')
+      throw new Error(messages(MESSAGES).proposalNotWaiting)
     }
 
     if (revision !== undefined && revision !== proposal.revision) {
-      throw new Error('La proposta è cambiata da quando l’hai vista: guardala di nuovo.')
+      throw new Error(messages(MESSAGES).proposalChanged)
     }
 
     if (accepted && proposal.kind === 'evento') {
@@ -2272,9 +2293,7 @@ export class SegretarioService {
         calendars[0]
 
       if (!calendar) {
-        throw new Error(
-          'Nessun calendario collegato in cui metterlo: collegalo in Impostazioni › Connessioni.'
-        )
+        throw new Error(messages(MESSAGES).noCalendar)
       }
 
       const created = await this.options.calendar.create(
@@ -2436,7 +2455,7 @@ export class SegretarioService {
           subject: summary.subject,
           from:
             sender && own.has(sender.address.toLowerCase())
-              ? 'Tu'
+              ? messages(MESSAGES).you
               : sender?.name || sender?.address || '',
           dateIso: summary.dateIso
         })
@@ -2855,7 +2874,7 @@ export class SegretarioService {
     )
 
     if (!folder) {
-      throw new Error('Questo progetto non ha una cartella collegata.')
+      throw new Error(messages(MESSAGES).noProjectFolder)
     }
 
     return folder.location
@@ -2875,7 +2894,13 @@ export class SegretarioService {
         visibility: 'nascosta',
         data,
         signal,
-        missing: async (run) => (run.results.review ? null : 'Dai l’esito con `revisione`.')
+        missing: async (run) =>
+          run.results.review
+            ? null
+            : {
+                forModel: 'Dai l’esito con `revisione`.',
+                shown: messages(MESSAGES).reviewMissing
+              }
       })
     )
     return result.run.results.review ?? []
@@ -2896,17 +2921,22 @@ export class SegretarioService {
         shown: question,
         signal,
         missing: async (run) =>
-          run.results.search ? null : 'Mostra la ricerca con `mostra` (`ricerca`).'
+          run.results.search
+            ? null
+            : {
+                forModel: 'Mostra la ricerca con `mostra` (`ricerca`).',
+                shown: messages(MESSAGES).searchMissing
+              }
       })
     )
     const search = result.run.results.search
 
     if (result.status === 'cancelled') {
-      throw new SegretarioError('cancelled', 'Interrotto.')
+      throw new SegretarioError('cancelled', messages(MESSAGES).stopped)
     }
 
     if (!search) {
-      throw new Error(result.error?.message ?? 'Non sono riuscito a capire cosa cercare.')
+      throw new Error(result.error?.message ?? messages(MESSAGES).searchNotUnderstood)
     }
 
     return this.keepSearch(search, question)
@@ -2932,25 +2962,27 @@ export class SegretarioService {
   /** A search run over every account's mail as it is now, kept for this session. */
   private async keepSearch(search: AskedSearch, question: string): Promise<AskedMail> {
     const refs = await this.runSearch(search)
+    const how = messages(HOW)
+    const { locale } = userDates()
     const entry: AskedMail = {
       id: randomUUID(),
       question,
       summary: search.summary || question,
       how: [
-        search.text ? `«${search.text}»` : null,
-        search.folder ? `in ${folderQueryLabel(search.folder)}` : null,
-        search.account ? `di ${search.account}` : null,
+        search.text ? how.text(search.text) : null,
+        search.folder ? how.folder(folderQueryLabel(search.folder)) : null,
+        search.account ? how.account(search.account) : null,
         search.period
           ? periodWords(search.period)
           : search.from && search.to
-            ? `dal ${shortDate(search.from)} al ${shortDate(search.to)}`
+            ? how.fromTo(shortDate(search.from, locale), shortDate(search.to, locale))
             : search.from
-              ? `dal ${shortDate(search.from)}`
+              ? how.from(shortDate(search.from, locale))
               : search.to
-                ? `fino al ${shortDate(search.to)}`
+                ? how.until(shortDate(search.to, locale))
                 : null,
-        search.unreadOnly ? 'non letti' : null,
-        search.withAttachments ? 'con allegati' : null
+        search.unreadOnly ? how.unread : null,
+        search.withAttachments ? how.withAttachments : null
       ]
         .filter(Boolean)
         .join(' · '),
@@ -3015,7 +3047,7 @@ export class SegretarioService {
     const asked = this.searches.get(id)
 
     if (!asked) {
-      throw new Error('Questa ricerca non c’è più: chiedila di nuovo per tenerla.')
+      throw new Error(messages(MESSAGES).searchGone)
     }
 
     await this.db.store.saveSearch({
@@ -3079,7 +3111,7 @@ export class SegretarioService {
       text: `${PROMPTS.tasks.richiesta}\n\n---\n\n${block}`
     })
     const request = await this.appendUserMessage(id, text, context)
-    void this.nameActivity(id, request)
+    void this.nameActivity(id, request, text)
     void this.converse(id)
     return summary
   }
@@ -3088,13 +3120,13 @@ export class SegretarioService {
     const { store, runner } = this.db
 
     if (runner.isRunning(id)) {
-      throw new Error('Sto ancora lavorando su questo: aspetta che finisca o fermami.')
+      throw new Error(messages(MESSAGES).stillWorking)
     }
 
     const activity = await store.getActivity(id)
 
     if (!activity) {
-      throw new Error('Questo lavoro non esiste più.')
+      throw new Error(messages(MESSAGES).workGone)
     }
 
     await this.requireKey()
@@ -3117,7 +3149,7 @@ export class SegretarioService {
     const activity = await store.getActivity(id)
 
     if (activity?.task !== 'richiesta' || activity.status !== 'failed') {
-      throw new Error('Questo lavoro non è da riprovare.')
+      throw new Error(messages(MESSAGES).notRetryable)
     }
 
     await this.requireKey()
@@ -3367,8 +3399,12 @@ export class SegretarioService {
     return lines
   }
 
-  /** A short title for a conversation, from the request as the model reads it. */
-  private async nameActivity(id: string, request: string): Promise<void> {
+  /**
+   * A short title for a conversation, from the request as the model reads it,
+   * in the language of the user's own words — given last, apart from what
+   * frames them, for a quick model to tell (§13.5).
+   */
+  private async nameActivity(id: string, request: string, words: string): Promise<void> {
     try {
       const key = await this.requireKey()
       const result = await this.client.chat(
@@ -3376,7 +3412,10 @@ export class SegretarioService {
         {
           messages: [
             { role: 'system', content: PROMPTS.title },
-            { role: 'user', content: request.slice(0, 4_000) }
+            {
+              role: 'user',
+              content: `${request.slice(0, 4_000)}\n\n---\nLe parole dell'utente, nella cui lingua è il titolo: «${words.trim().slice(0, 600)}»`
+            }
           ],
           reasoningEffort: 'none',
           maxTokens: 40
@@ -3423,7 +3462,7 @@ export class SegretarioService {
         () => {
           this.composeRequests.delete(requestId)
           clearTimeout(timer)
-          reject(new SegretarioError('cancelled', 'Interrotto.'))
+          reject(new SegretarioError('cancelled', messages(MESSAGES).stopped))
         },
         { once: true }
       )

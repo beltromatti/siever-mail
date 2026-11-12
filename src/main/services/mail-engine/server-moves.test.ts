@@ -133,9 +133,7 @@ describe('moveOnServer', () => {
   it('does not start a move that would expunge what another program marked deleted', async () => {
     const box = mailbox({ capabilities: [], deleted: [4] })
 
-    await expect(moveOnServer(box.client, [1], 'Archivio')).rejects.toThrow(
-      /spostamento non eseguito/
-    )
+    await expect(moveOnServer(box.client, [1], 'Archivio')).rejects.toThrow(/: not moved\./)
     expect(box.copies).toEqual([])
     expect(box.messages.get(4)).toBe(true)
     expect(box.commands).toEqual(['NOOP', 'SEARCH DELETED'])

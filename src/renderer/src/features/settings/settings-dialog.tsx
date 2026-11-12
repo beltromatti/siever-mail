@@ -34,9 +34,80 @@ import { ShortcutsSection } from '@renderer/features/settings/shortcuts-section'
 import { SignaturesSection } from '@renderer/features/settings/signatures-section'
 import { AppEdition } from '@renderer/features/workspace/app-edition'
 import { uiLog } from '@renderer/lib/diagnostics'
+import { useLanguage, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarConnection } from '@shared/calendar'
+import { defineMessages, localized, type Language, type Messages } from '@shared/i18n'
 import type { AccountConnectionState, MailAccount, UiPreferences } from '@shared/models'
+import { PLACES } from '@shared/places'
+
+const MESSAGES = defineMessages({
+  accountsText: {
+    en: 'The mail, calendars and files SIEVER Mail reaches, as equals: each a connection of its own, grouped by sign-in.',
+    it: 'La posta, i calendari e i file che SIEVER Mail raggiunge, alla pari: ognuno una connessione a sé, raggruppati per accesso.',
+    de: 'Die E-Mails, Kalender und Dateien, die SIEVER Mail erreicht, gleichrangig: jede eine eigene Verbindung, nach Zugang gruppiert.'
+  },
+  segretarioText: {
+    en: 'Whether it works for you, with which key, and how much it spends.',
+    it: 'Se lavora per te, con quale chiave, e quanto spende.',
+    de: 'Ob er für Sie arbeitet, mit welchem Schlüssel und wie viel er ausgibt.'
+  },
+  memoryText: {
+    en: 'How the Segretario knows you, and its notes: read them and correct them.',
+    it: 'Come il Segretario ti conosce, e le sue note: leggile e correggile.',
+    de: 'Wie der Segretario Sie kennt, und seine Notizen: Lesen und korrigieren Sie sie.'
+  },
+  preferencesText: {
+    en: 'How SIEVER Mail looks, and how its apps work.',
+    it: 'Come si presenta SIEVER Mail, e come lavorano le sue app.',
+    de: 'Wie SIEVER Mail aussieht und wie seine Apps arbeiten.'
+  },
+  notificationsText: {
+    en: 'What interrupts you, app by app, and the number on the icon.',
+    it: "Ciò che ti interrompe, app per app, e il numero sull'icona.",
+    de: 'Was Sie unterbricht, App für App, und die Zahl auf dem Symbol.'
+  },
+  shortcutsTitle: {
+    en: 'Keyboard shortcuts',
+    it: 'Scorciatoie da tastiera',
+    de: 'Tastenkürzel'
+  },
+  shortcutsText: {
+    en: 'The keys that run each command, app by app.',
+    it: 'I tasti che eseguono ogni comando, app per app.',
+    de: 'Die Tasten, die jeden Befehl ausführen, App für App.'
+  },
+  signaturesText: {
+    en: 'What each mailbox puts at the top and bottom of the messages you write from it.',
+    it: 'Ciò che ogni casella mette in cima e in fondo ai messaggi che scrivi da lì.',
+    de: 'Was jedes Postfach an den Anfang und das Ende der Nachrichten setzt, die Sie von dort schreiben.'
+  },
+  dataText: {
+    en: 'What SIEVER Mail keeps on this computer, and what you can remove.',
+    it: 'Ciò che SIEVER Mail tiene su questo computer, e ciò che puoi togliere.',
+    de: 'Was SIEVER Mail auf diesem Computer aufbewahrt, und was Sie entfernen können.'
+  },
+  editionFor: {
+    en: (name: string) => `SIEVER Mail’s edition for ${name}`,
+    it: (name: string) => `L’edizione di SIEVER Mail per ${name}`,
+    de: (name: string) => `Die Ausgabe von SIEVER Mail für ${name}`
+  },
+  extensionText: {
+    en: 'SIEVER Mail tailored to an organization.',
+    it: 'SIEVER Mail su misura per un’organizzazione.',
+    de: 'SIEVER Mail, zugeschnitten auf eine Organisation.'
+  },
+  summary: {
+    en: 'SIEVER Mail’s connections, Segretario, preferences, notifications and data.',
+    it: 'Connessioni, Segretario, preferenze, notifiche e dati di SIEVER Mail.',
+    de: 'Verbindungen, Segretario, Einstellungen, Benachrichtigungen und Daten von SIEVER Mail.'
+  },
+  addConnection: {
+    en: 'Add a connection',
+    it: 'Aggiungi una connessione',
+    de: 'Verbindung hinzufügen'
+  }
+})
 
 export type SettingsSectionId =
   | 'accounts'
@@ -97,92 +168,96 @@ interface SettingsDialogProps {
  * The pages, in three groups as the rail's apps are (§13.1, §13.2): what
  * SIEVER Mail is for the user — what it reaches, and whether the
  * Segretario works for them —; how it looks and behaves, app by app; what
- * it keeps, and whose edition it is.
+ * it keeps, and whose edition it is. Named in the interface's language.
  */
-const CORE_SETTINGS_GROUPS: SettingsSection[][] = [
-  [
-    {
-      id: 'accounts',
-      label: 'Connessioni',
-      title: 'Connessioni',
-      description:
-        'La posta, i calendari e i file che SIEVER Mail raggiunge, alla pari: ognuno una connessione a sé, raggruppati per accesso.',
-      icon: AtSign
-    },
-    {
-      id: 'segretario',
-      label: 'Segretario',
-      title: 'Segretario',
-      description: 'Se lavora per te, con quale chiave, e quanto spende.',
-      icon: CompassStar
-    },
-    {
-      id: 'memoria',
-      label: 'Cosa so di te',
-      title: 'Cosa so di te',
-      description: 'Come il Segretario ti conosce, e le sue note: leggile e correggile.',
-      icon: NotebookPen
-    }
-  ],
-  [
-    {
-      id: 'preferences',
-      label: 'Preferenze',
-      title: 'Preferenze',
-      description: 'Come si presenta SIEVER Mail, e come lavorano le sue app.',
-      icon: SlidersHorizontal
-    },
-    {
-      id: 'notifications',
-      label: 'Notifiche',
-      title: 'Notifiche',
-      description: "Ciò che ti interrompe, app per app, e il numero sull'icona.",
-      icon: Bell
-    },
-    {
-      id: 'shortcuts',
-      label: 'Scorciatoie',
-      title: 'Scorciatoie da tastiera',
-      description: 'I tasti che eseguono ogni comando, app per app.',
-      icon: Keyboard
-    },
-    {
-      id: 'signatures',
-      label: 'Intestazione e firma',
-      title: 'Intestazione e firma',
-      description: 'Ciò che ogni casella mette in cima e in fondo ai messaggi che scrivi da lì.',
-      icon: Signature
-    }
-  ],
-  [
-    {
-      id: 'data',
-      label: 'Dati',
-      title: 'Dati',
-      description: 'Ciò che SIEVER Mail tiene su questo computer, e ciò che puoi togliere.',
-      icon: Database
-    },
-    {
-      id: 'extension',
-      label: 'Estensione',
-      title: 'Estensione',
-      // A legal name may end with its own full stop ("S.r.l."): the sentence does not add another.
-      description: extensionShared.identity
-        ? `L’edizione di SIEVER Mail per ${extensionShared.identity.name}`.replace(/\.?$/, '.')
-        : 'SIEVER Mail su misura per un’organizzazione.',
-      icon: Puzzle
-    },
-    // The extension's own pages follow its own, under "Estensione"; the public build has none.
-    ...extensionRenderer.settingsTabs.map((tab) => ({
-      id: tab.id,
-      label: tab.label,
-      title: tab.title,
-      description: tab.description,
-      icon: tab.icon ?? Blocks
-    }))
+function settingsGroups(
+  m: Messages<typeof MESSAGES>,
+  places: Messages<typeof PLACES>,
+  language: Language
+): SettingsSection[][] {
+  return [
+    [
+      {
+        id: 'accounts',
+        label: places.connections,
+        title: places.connections,
+        description: m.accountsText,
+        icon: AtSign
+      },
+      {
+        id: 'segretario',
+        label: places.segretario,
+        title: places.segretario,
+        description: m.segretarioText,
+        icon: CompassStar
+      },
+      {
+        id: 'memoria',
+        label: places.aboutYou,
+        title: places.aboutYou,
+        description: m.memoryText,
+        icon: NotebookPen
+      }
+    ],
+    [
+      {
+        id: 'preferences',
+        label: places.preferences,
+        title: places.preferences,
+        description: m.preferencesText,
+        icon: SlidersHorizontal
+      },
+      {
+        id: 'notifications',
+        label: places.notifications,
+        title: places.notifications,
+        description: m.notificationsText,
+        icon: Bell
+      },
+      {
+        id: 'shortcuts',
+        label: places.shortcuts,
+        title: m.shortcutsTitle,
+        description: m.shortcutsText,
+        icon: Keyboard
+      },
+      {
+        id: 'signatures',
+        label: places.letterhead,
+        title: places.letterhead,
+        description: m.signaturesText,
+        icon: Signature
+      }
+    ],
+    [
+      {
+        id: 'data',
+        label: places.data,
+        title: places.data,
+        description: m.dataText,
+        icon: Database
+      },
+      {
+        id: 'extension',
+        label: places.extension,
+        title: places.extension,
+        // A legal name may end with its own full stop ("S.r.l."): the sentence does not add another.
+        description: extensionShared.identity
+          ? m.editionFor(extensionShared.identity.name).replace(/\.?$/, '.')
+          : m.extensionText,
+        icon: Puzzle
+      },
+      // The extension's own pages follow its own, under "Extension"; the public build has none.
+      ...extensionRenderer.settingsTabs.map((tab) => ({
+        id: tab.id,
+        label: localized(tab.label, language),
+        title: localized(tab.title, language),
+        description: localized(tab.description, language),
+        icon: tab.icon ?? Blocks
+      }))
+    ]
   ]
-]
-const SETTINGS_SECTIONS = CORE_SETTINGS_GROUPS.flat()
+}
 
 export function SettingsDialog({
   open,
@@ -208,6 +283,11 @@ export function SettingsDialog({
   onRedoConoscimi,
   onUnifiedPreferencesChanged
 }: SettingsDialogProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
+  const { language } = useLanguage()
+  const groups = settingsGroups(m, places, language)
+  const sections = groups.flat()
   const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>(
     initialSectionId ?? 'accounts'
   )
@@ -220,8 +300,7 @@ export function SettingsDialog({
       setActiveSectionId(initialSectionId)
     }
   }
-  const activeSection =
-    SETTINGS_SECTIONS.find((section) => section.id === activeSectionId) ?? SETTINGS_SECTIONS[0]
+  const activeSection = sections.find((section) => section.id === activeSectionId) ?? sections[0]
 
   // Where the user goes in Settings (§14.4).
   useEffect(() => {
@@ -240,13 +319,11 @@ export function SettingsDialog({
           {/* The desk the sections sit on: the same tone as the app's sidebar. */}
           <nav className="bg-background flex h-full min-h-0 flex-col border-r px-3 pt-5 pb-3">
             <DialogHeader className="px-2 pb-4">
-              <DialogTitle className="display-title text-[17px]">Impostazioni</DialogTitle>
-              <DialogDescription className="sr-only">
-                Connessioni, Segretario, preferenze, notifiche e dati di SIEVER Mail.
-              </DialogDescription>
+              <DialogTitle className="display-title text-[17px]">{places.settings}</DialogTitle>
+              <DialogDescription className="sr-only">{m.summary}</DialogDescription>
             </DialogHeader>
             <div className="flex min-h-0 flex-col overflow-y-auto">
-              {CORE_SETTINGS_GROUPS.map((group, index) => (
+              {groups.map((group, index) => (
                 <Fragment key={group[0].id}>
                   {index > 0 && <div aria-hidden className="bg-border mx-2.5 my-2 h-px" />}
                   <ul className="flex flex-col gap-0.5">
@@ -316,7 +393,7 @@ export function SettingsDialog({
                   onClick={onAddAccount}
                 >
                   <Plus className="size-4" />
-                  Aggiungi una connessione
+                  {m.addConnection}
                 </Button>
               </div>
             ) : activeSectionId === 'preferences' ? (

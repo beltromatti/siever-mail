@@ -2,10 +2,48 @@ import { useEffect, useRef } from 'react'
 import { CloudOff, Forward, LoaderCircle, MailOpen, PenLine, Plus, Reply, X } from 'lucide-react'
 
 import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages, type Messages } from '@shared/i18n'
 
 import { addressDisplayName } from './address-tokens'
 import { COMPOSER_TITLES, type ComposerKind, type ComposerSummary } from './mail-composer'
+
+const MESSAGES = defineMessages({
+  to: {
+    en: (name: string, others: number) =>
+      `To ${name}${others === 0 ? '' : others === 1 ? ' and 1 other' : ` and ${others} others`}`,
+    it: (name: string, others: number) => `A ${name}${others > 0 ? ` e altri ${others}` : ''}`,
+    de: (name: string, others: number) => `An ${name}${others > 0 ? ` und ${others} weitere` : ''}`
+  },
+  noRecipient: { en: 'No recipient', it: 'Nessun destinatario', de: 'Kein Empfänger' },
+  savingToDrafts: {
+    en: 'Saving to Drafts…',
+    it: 'Salvataggio in Bozze…',
+    de: 'Wird in Entwürfen gespeichert…'
+  },
+  notInDraftsYet: {
+    en: 'Saved on this computer, not in Drafts yet',
+    it: 'Salvata su questo computer, non ancora in Bozze',
+    de: 'Auf diesem Computer gespeichert, noch nicht in den Entwürfen'
+  },
+  tabs: {
+    en: 'Reading and messages being written',
+    it: 'Lettura e messaggi in scrittura',
+    de: 'Lesen und Nachrichten in Arbeit'
+  },
+  reading: { en: 'Reading', it: 'Lettura', de: 'Lesen' },
+  closeNamed: {
+    en: (title: string) => `Close ${title} and keep it in Drafts`,
+    it: (title: string) => `Chiudi ${title} e tienila in Bozze`,
+    de: (title: string) => `${title} schließen und in Entwürfen behalten`
+  },
+  closeKeepInDrafts: {
+    en: 'Close and keep in Drafts',
+    it: 'Chiudi e tieni in Bozze',
+    de: 'Schließen und in Entwürfen behalten'
+  }
+})
 
 const KIND_ICONS = { new: PenLine, reply: Reply, forward: Forward } as const
 
@@ -16,7 +54,7 @@ export interface ComposerTab {
   summary: ComposerSummary | null
 }
 
-function tabTitle(tab: ComposerTab): string {
+function tabTitle(tab: ComposerTab, titles: Messages<typeof COMPOSER_TITLES>): string {
   const summary = tab.summary
   const subject = summary?.subject.trim()
 
@@ -26,23 +64,16 @@ function tabTitle(tab: ComposerTab): string {
 
   const [first] = summary?.recipients ?? []
   return first
-    ? `${COMPOSER_TITLES[summary?.kind ?? tab.kind]} · ${addressDisplayName(first)}`
-    : COMPOSER_TITLES[summary?.kind ?? tab.kind]
+    ? `${titles[summary?.kind ?? tab.kind]} · ${addressDisplayName(first)}`
+    : titles[summary?.kind ?? tab.kind]
 }
 
 /** Who it goes to, in the tooltip: the tab itself has room for the subject only. */
-function tabHint(tab: ComposerTab): string {
+function tabHint(tab: ComposerTab, m: Messages<typeof MESSAGES>): string {
   const [first, ...others] = tab.summary?.recipients ?? []
-  const to = first
-    ? `A ${addressDisplayName(first)}${others.length > 0 ? ` e altri ${others.length}` : ''}`
-    : 'Nessun destinatario'
+  const to = first ? m.to(addressDisplayName(first), others.length) : m.noRecipient
   const state = tab.summary?.status?.state
-  const saved =
-    state === 'saving'
-      ? 'Salvataggio in Bozze…'
-      : state === 'error'
-        ? 'Salvata su questo computer, non ancora in Bozze'
-        : null
+  const saved = state === 'saving' ? m.savingToDrafts : state === 'error' ? m.notInDraftsYet : null
 
   return [to, saved].filter(Boolean).join(' · ')
 }
@@ -77,6 +108,8 @@ export function ComposerTabs({
   onClose: (id: string) => void
   onNew: () => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const titles = useMessages(COMPOSER_TITLES)
   const stripRef = useRef<HTMLDivElement | null>(null)
 
   // The tab in front is always in sight, however many there are.
@@ -96,7 +129,7 @@ export function ComposerTabs({
       <div
         ref={stripRef}
         role="tablist"
-        aria-label="Lettura e messaggi in scrittura"
+        aria-label={m.tabs}
         // The tabs scroll sideways when they do not fit; the wheel moves them too.
         onWheel={(event) => {
           if (event.deltaY !== 0 && stripRef.current) {
@@ -119,7 +152,7 @@ export function ComposerTabs({
           )}
         >
           <MailOpen className="size-3.5 shrink-0" />
-          <span className="min-w-0 truncate">{readingLabel || 'Lettura'}</span>
+          <span className="min-w-0 truncate">{readingLabel || m.reading}</span>
         </button>
 
         {tabs.map((tab) => {
@@ -133,7 +166,7 @@ export function ComposerTabs({
               role="tab"
               tabIndex={0}
               aria-selected={active}
-              title={tabHint(tab)}
+              title={tabHint(tab, m)}
               onClick={() => onSelect(tab.id)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
@@ -163,11 +196,11 @@ export function ComposerTabs({
               ) : (
                 <Icon className="text-primary size-3.5 shrink-0" />
               )}
-              <span className="min-w-0 flex-1 truncate">{tabTitle(tab)}</span>
+              <span className="min-w-0 flex-1 truncate">{tabTitle(tab, titles)}</span>
               <button
                 type="button"
-                aria-label={`Chiudi ${tabTitle(tab)} e tienila in Bozze`}
-                title="Chiudi e tieni in Bozze"
+                aria-label={m.closeNamed(tabTitle(tab, titles))}
+                title={m.closeKeepInDrafts}
                 onClick={(event) => {
                   event.stopPropagation()
                   onClose(tab.id)
@@ -184,10 +217,10 @@ export function ComposerTabs({
         })}
       </div>
 
-      <ActionTooltip label="Nuovo messaggio" commandId="compose" side="bottom">
+      <ActionTooltip label={titles.new} commandId="compose" side="bottom">
         <button
           type="button"
-          aria-label="Nuovo messaggio"
+          aria-label={titles.new}
           onClick={onNew}
           className="window-no-drag text-muted-foreground hover:bg-hover hover:text-foreground mb-1 grid size-7 shrink-0 place-items-center rounded-md outline-none focus-visible:ring-2"
         >

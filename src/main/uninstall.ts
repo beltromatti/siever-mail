@@ -6,9 +6,11 @@ import { basename, dirname, join, resolve } from 'node:path'
 
 import { app, dialog, shell } from 'electron'
 
+import { DEFAULT_LANGUAGE, defineMessages, messagesIn, type Language } from '@shared/i18n'
 import type { UninstallKeep, UninstallOffer } from '@shared/models'
 
 import { APP_ID, PRODUCT_NAME } from './app-identity'
+import { messages, profileLanguage } from './i18n'
 import {
   KEPT_CONNECTIONS_FILE,
   readConnections,
@@ -33,6 +35,47 @@ const PROFILE_DATABASE = 'siever-mail.sqlite'
 const SAFE_STORAGE_KEY_FILE = 'Local State'
 /** How long the app that asked is waited for: it finishes what it was writing first. */
 const APP_EXIT_WAIT_MS = 60_000
+
+const MESSAGES = defineMessages({
+  notAProfile: {
+    en: (profile: string) => `${profile} isn’t a SIEVER Mail profile: it wasn’t touched.`,
+    it: (profile: string) => `${profile} non è un profilo di SIEVER Mail: non è stato toccato.`,
+    de: (profile: string) => `${profile} ist kein Profil von SIEVER Mail: Es wurde nicht verändert.`
+  },
+  notFullyRemoved: {
+    en: 'SIEVER Mail wasn’t completely removed.',
+    it: 'SIEVER Mail non è stato tolto del tutto.',
+    de: 'SIEVER Mail wurde nicht vollständig entfernt.'
+  },
+  removed: {
+    en: 'SIEVER Mail has been removed from this computer.',
+    it: 'SIEVER Mail è stato tolto da questo computer.',
+    de: 'SIEVER Mail wurde von diesem Computer entfernt.'
+  },
+  couldNotRemove: {
+    en: (paths: string) => `This couldn’t be removed:\n${paths}\n\nYou can remove it by hand.`,
+    it: (paths: string) => `Non si è potuto togliere:\n${paths}\n\nSi può togliere a mano.`,
+    de: (paths: string) =>
+      `Folgendes konnte nicht entfernt werden:\n${paths}\n\nSie können es von Hand entfernen.`
+  },
+  onlyConnections: {
+    en: 'Only the connections remain: install it again and you’ll find them already connected.',
+    it: 'Restano solo le connessioni: installandolo di nuovo, le ritrovi già collegate.',
+    de: 'Nur die Verbindungen bleiben: Wenn Sie es erneut installieren, sind sie bereits verbunden.'
+  },
+  nothingLeft: { en: 'Nothing is left.', it: 'Non resta niente.', de: 'Es bleibt nichts zurück.' },
+  nothingOfData: {
+    en: 'Nothing of its data is left. The program itself is removed with the package manager.',
+    it: 'Non resta niente dei suoi dati. Il programma si toglie con il gestore dei pacchetti.',
+    de: 'Von seinen Daten bleibt nichts zurück. Das Programm selbst entfernen Sie mit der Paketverwaltung.'
+  },
+  ok: { en: 'OK', it: 'OK', de: 'OK' },
+  onlyInstalled: {
+    en: 'SIEVER Mail can be removed from here only in the installed app.',
+    it: 'Da qui SIEVER Mail si toglie solo nell’app installata.',
+    de: 'Von hier aus lässt sich SIEVER Mail nur in der installierten App entfernen.'
+  }
+})
 
 interface UninstallRequest {
   keep: UninstallKeep
@@ -78,13 +121,15 @@ export async function runUninstall(request: UninstallRequest): Promise<void> {
     app.setActivationPolicy('accessory')
   }
   const left: string[] = []
+  // The words of the profile taken away, read before it goes: this process has a profile of its own.
+  const language = profileLanguage(request.profile)
 
   try {
     if (request.waitFor) {
       await processGone(request.waitFor)
     }
 
-    left.push(...(await clearProfile(request.profile, request.keep)))
+    left.push(...(await clearProfile(request.profile, request.keep, process.platform, language)))
     forgetLoginItem()
 
     if (request.keep === 'niente') {
@@ -99,7 +144,7 @@ export async function runUninstall(request: UninstallRequest): Promise<void> {
   }
 
   if (request.tell) {
-    await sayHowItWent(request, left)
+    await sayHowItWent(request, left, language)
   }
 
   app.exit(left.length > 0 ? 1 : 0)
@@ -124,12 +169,14 @@ async function processGone(pid: number): Promise<void> {
  * Empties the profile, keeping the connections when asked: they are read
  * from the database first, and stay alone, with the key that opens their
  * accesses. A folder that holds no SIEVER Mail database is not ours to
- * empty — a path given wrong never clears anything else.
+ * empty — a path given wrong never clears anything else, and says so in
+ * `language`.
  */
 export async function clearProfile(
   profile: string,
   keep: UninstallKeep,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  language: Language = DEFAULT_LANGUAGE
 ): Promise<string[]> {
   if (!existsSync(profile)) {
     return []
@@ -139,7 +186,7 @@ export async function clearProfile(
     !existsSync(join(profile, PROFILE_DATABASE)) &&
     !existsSync(join(profile, KEPT_CONNECTIONS_FILE))
   ) {
-    return [`${profile} non è un profilo di SIEVER Mail: non è stato toccato.`]
+    return [messagesIn(MESSAGES, language).notAProfile(profile)]
   }
 
   // The connections in the database; or, the database gone, those a former uninstall kept here.
@@ -269,24 +316,26 @@ async function removeProgram(program: string): Promise<string[]> {
   }
 }
 
-async function sayHowItWent(request: UninstallRequest, left: string[]): Promise<void> {
+async function sayHowItWent(
+  request: UninstallRequest,
+  left: string[],
+  language: Language
+): Promise<void> {
+  const m = messagesIn(MESSAGES, language)
   app.focus({ steal: true })
   await dialog.showMessageBox({
     type: left.length > 0 ? 'warning' : 'info',
     title: 'SIEVER Mail',
-    message:
-      left.length > 0
-        ? 'SIEVER Mail non è stato tolto del tutto.'
-        : 'SIEVER Mail è stato tolto da questo computer.',
+    message: left.length > 0 ? m.notFullyRemoved : m.removed,
     detail:
       left.length > 0
-        ? `Non si è potuto togliere:\n${left.join('\n')}\n\nSi può togliere a mano.`
+        ? m.couldNotRemove(left.join('\n'))
         : request.keep === 'connessioni'
-          ? 'Restano solo le connessioni: installandolo di nuovo, le ritrovi già collegate.'
+          ? m.onlyConnections
           : request.program || process.platform === 'win32'
-            ? 'Non resta niente.'
-            : 'Non resta niente dei suoi dati. Il programma si toglie con il gestore dei pacchetti.',
-    buttons: ['OK']
+            ? m.nothingLeft
+            : m.nothingOfData,
+    buttons: [m.ok]
   })
 }
 
@@ -332,7 +381,7 @@ export function uninstallOffer(): UninstallOffer {
  */
 export function beginUninstall(keep: UninstallKeep): void {
   if (!uninstallOffer().available) {
-    throw new Error('Da qui SIEVER Mail si toglie solo nell’app installata.')
+    throw new Error(messages(MESSAGES).onlyInstalled)
   }
 
   if (process.platform === 'win32') {

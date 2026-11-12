@@ -24,6 +24,8 @@ import { fileURLToPath } from 'node:url'
 
 import { app, shell } from 'electron'
 
+import { messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
 import type { RecentFile } from '@shared/models'
 
 import { isExecutableAttachment } from './attachment-files'
@@ -35,8 +37,10 @@ export interface RecentFileCandidate {
   usedAt: number
 }
 
-/** Opened or saved: the system does not tell which. */
-const SYSTEM_ACTIVITY = 'Usato di recente'
+const MESSAGES = defineMessages({
+  /** Opened or saved: the system does not tell which. */
+  usedRecently: { en: 'Used recently', it: 'Usato di recente', de: 'Kürzlich verwendet' }
+})
 const SYSTEM_LOOKUP_DEADLINE_MS = 1_500
 /** What the system remembers is looked up again past this age. */
 const SYSTEM_RECENTS_FRESH_MS = 3_000
@@ -79,7 +83,7 @@ async function listWindowsRecentFiles(): Promise<RecentFileCandidate[]> {
     .flatMap(({ shortcutPath, usedAt }) => {
       try {
         const { target } = shell.readShortcutLink(shortcutPath)
-        return target ? [{ path: target, activity: SYSTEM_ACTIVITY, usedAt }] : []
+        return target ? [{ path: target, activity: messages(MESSAGES).usedRecently, usedAt }] : []
       } catch {
         // A shortcut Explorer wrote for something that is not a file.
         return []
@@ -124,7 +128,9 @@ function listMacRecentFiles(): Promise<RecentFileCandidate[]> {
               .replace(' ', '')
           )
 
-          return Number.isFinite(usedAt) ? [{ path, activity: SYSTEM_ACTIVITY, usedAt }] : []
+          return Number.isFinite(usedAt)
+            ? [{ path, activity: messages(MESSAGES).usedRecently, usedAt }]
+            : []
         })
 
         resolve(
@@ -149,7 +155,7 @@ async function listLinuxRecentFiles(): Promise<RecentFileCandidate[]> {
         ? [
             {
               path: fileURLToPath(href.replaceAll('&amp;', '&')),
-              activity: SYSTEM_ACTIVITY,
+              activity: messages(MESSAGES).usedRecently,
               usedAt
             }
           ]

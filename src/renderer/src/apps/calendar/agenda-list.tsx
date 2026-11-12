@@ -2,8 +2,10 @@ import { MapPin } from 'lucide-react'
 
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { eventTimeLabel, RESPONSE_LABELS } from '@renderer/features/calendar/event-line'
+import { useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import type { DayLine } from '@shared/segretario'
 
 import { COMMITMENT_LABELS } from '@renderer/features/segretario/row-work'
@@ -13,13 +15,25 @@ import {
   dayLineSourceWords
 } from '@renderer/features/segretario/day-line-source'
 
-import { dayKey, isOnDay, sameDay } from '@renderer/features/calendar/calendar-dates'
+import { dateFormat, dayKey, isOnDay, sameDay } from '@renderer/features/calendar/calendar-dates'
 import { dotStyle } from './event-style'
 import type { CalendarSelection } from './time-grid'
 import { calendarOf, type ProposedEvent } from './use-calendar-data'
 
-const WEEKDAY = new Intl.DateTimeFormat('it-IT', { weekday: 'short' })
-const MONTH = new Intl.DateTimeFormat('it-IT', { month: 'short' })
+const MESSAGES = defineMessages({
+  today: { en: 'Today', it: 'Oggi', de: 'Heute' },
+  nothing: {
+    en: 'Nothing on the agenda.',
+    it: 'Niente in agenda.',
+    de: 'Nichts auf der Agenda.'
+  },
+  proposed: { en: 'Proposed', it: 'Proposto', de: 'Vorgeschlagen' },
+  deadline: { en: 'Deadline', it: 'Scadenza', de: 'Frist' }
+})
+
+const WEEKDAY: Intl.DateTimeFormatOptions = { weekday: 'short' }
+const MONTH: Intl.DateTimeFormatOptions = { month: 'short' }
+const FULL_DAY: Intl.DateTimeFormatOptions = { dateStyle: 'full' }
 
 /**
  * The days ahead one under the other: each with its events, the deadlines
@@ -45,6 +59,9 @@ export function AgendaList({
   onSelect: (selection: CalendarSelection) => void
   onOpenLine: (line: DayLine) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const responses = useMessages(RESPONSE_LABELS)
+  const kinds = useMessages(COMMITMENT_LABELS)
   const today = new Date()
   const selectedId =
     selection?.kind === 'event'
@@ -74,11 +91,13 @@ export function AgendaList({
           return (
             <section
               key={dayKey(day)}
-              aria-label={day.toLocaleDateString('it-IT', { dateStyle: 'full' })}
+              aria-label={dateFormat(FULL_DAY).format(day)}
               className="grid grid-cols-[56px_minmax(0,1fr)] gap-x-5 border-b py-4 last:border-b-0"
             >
               <div className="flex flex-col items-start leading-none">
-                <span className="eyebrow">{isToday ? 'Oggi' : WEEKDAY.format(day)}</span>
+                <span className="eyebrow">
+                  {isToday ? m.today : dateFormat(WEEKDAY).format(day)}
+                </span>
                 <span
                   className={cn(
                     'display-title mt-1 text-[26px] tabular-nums',
@@ -87,10 +106,12 @@ export function AgendaList({
                 >
                   {day.getDate()}
                 </span>
-                <span className="text-faint-foreground mt-1 text-[11px]">{MONTH.format(day)}</span>
+                <span className="text-faint-foreground mt-1 text-[11px]">
+                  {dateFormat(MONTH).format(day)}
+                </span>
               </div>
               {ofDay.length + proposedOfDay.length + dueOfDay.length === 0 ? (
-                <p className="text-muted-foreground self-center text-[13px]">Niente in agenda.</p>
+                <p className="text-muted-foreground self-center text-[13px]">{m.nothing}</p>
               ) : (
                 <ul className="flex min-w-0 flex-col gap-0.5">
                   {ofDay.map((event) => (
@@ -129,7 +150,7 @@ export function AgendaList({
                                       : 'text-muted-foreground'
                                   )}
                                 >
-                                  {RESPONSE_LABELS[event.myResponse]}
+                                  {responses[event.myResponse]}
                                 </span>
                               )}
                           </span>
@@ -155,7 +176,7 @@ export function AgendaList({
                       >
                         <span className="text-ai flex items-center gap-1.5 text-[11.5px] font-semibold">
                           <CompassStar className="text-ai-star size-3" />
-                          Proposto
+                          {m.proposed}
                         </span>
                         <span className="text-muted-foreground truncate text-[14px] italic">
                           {proposed.title}
@@ -172,7 +193,7 @@ export function AgendaList({
                       >
                         <span className="text-ai flex items-center gap-1.5 text-[11.5px] font-semibold whitespace-nowrap">
                           <DayLineSourceIcon line={line} className="size-3 shrink-0" />
-                          {line.commitment ? COMMITMENT_LABELS[line.commitment.kind] : 'Scadenza'}
+                          {line.commitment ? kinds[line.commitment.kind] : m.deadline}
                         </span>
                         <span className="flex min-w-0 flex-col gap-0.5">
                           <span className="text-foreground text-[14px] leading-[1.35]">

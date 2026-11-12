@@ -3,7 +3,32 @@ import { join } from 'node:path'
 import { is } from '@electron-toolkit/utils'
 import { BrowserWindow } from 'electron'
 
+import { defineMessages } from '@shared/i18n'
 import { PDF_PAGES_IPC, type PdfPagesRequest, type PdfPagesResult } from '@shared/pdf-pages'
+
+import { messages } from '../i18n'
+
+/**
+ * Why pages were not drawn: an error of the step that read the PDF, which
+ * its line shows the user — in the interface's language.
+ */
+const ERRORS = defineMessages({
+  late: {
+    en: 'The PDF’s pages weren’t drawn in time.',
+    it: 'Le pagine del PDF non sono state disegnate in tempo.',
+    de: 'Die Seiten der PDF wurden nicht rechtzeitig gezeichnet.'
+  },
+  gone: {
+    en: (reason: string) => `The page that draws PDFs closed (${reason}).`,
+    it: (reason: string) => `La pagina che disegna i PDF si è chiusa (${reason}).`,
+    de: (reason: string) => `Die Seite, die PDFs zeichnet, wurde beendet (${reason}).`
+  },
+  closed: {
+    en: 'The page that draws PDFs was closed.',
+    it: 'La pagina che disegna i PDF è stata chiusa.',
+    de: 'Die Seite, die PDFs zeichnet, wurde geschlossen.'
+  }
+})
 
 /** The hidden page closes when nothing has been drawn for this long. */
 const IDLE_CLOSE_MS = 60_000
@@ -43,7 +68,7 @@ class PdfPageRenderer {
       return await new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           this.pending.delete(id)
-          reject(new Error('Le pagine del PDF non sono state disegnate in tempo.'))
+          reject(new Error(messages(ERRORS).late))
           this.close()
         }, RENDER_TIMEOUT_MS)
 
@@ -88,11 +113,11 @@ class PdfPageRenderer {
       this.settle(result)
     )
     window.webContents.on('render-process-gone', (_event, details) => {
-      this.failAll(new Error(`La pagina che disegna i PDF si è chiusa (${details.reason}).`))
+      this.failAll(new Error(messages(ERRORS).gone(details.reason)))
       this.close()
     })
     window.once('closed', () => {
-      this.failAll(new Error('La pagina che disegna i PDF è stata chiusa.'))
+      this.failAll(new Error(messages(ERRORS).closed))
 
       if (this.window === window) {
         this.window = null

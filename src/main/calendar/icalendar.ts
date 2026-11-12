@@ -2,10 +2,37 @@ import ICAL from 'ical.js'
 import { tzlib_get_ical_block } from 'timezones-ical-library'
 
 import { diagnostics } from '@main/diagnostics/log'
+import { messages } from '@main/i18n'
 
 import type { CalendarAttendee, CalendarResponse, EventOrigin } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 
 import type { EventField, ProviderEvent, ProviderEventInput } from './calendar-provider'
+
+const MESSAGES = defineMessages({
+  untitled: { en: '(untitled)', it: '(senza titolo)', de: '(ohne Titel)' },
+  seriesNotFound: {
+    en: 'The repeating event isn’t in the calendar.',
+    it: 'L’evento ripetuto non si trova nel calendario.',
+    de: 'Der Serientermin ist nicht im Kalender.'
+  },
+  eventNotFound: {
+    en: 'The event isn’t in the calendar.',
+    it: 'L’evento non si trova nel calendario.',
+    de: 'Der Termin ist nicht im Kalender.'
+  },
+  notInvited: {
+    en: 'You’re not among the invitees of this event.',
+    it: 'In questo evento non sei tra gli invitati.',
+    de: 'Sie gehören nicht zu den Eingeladenen dieses Termins.'
+  },
+  noOrganizer: {
+    en: 'This invitation doesn’t say whom to answer.',
+    it: 'Questo invito non dice a chi rispondere.',
+    de: 'Diese Einladung gibt nicht an, wem zu antworten ist.'
+  },
+  invitation: { en: 'Invitation', it: 'Invito', de: 'Einladung' }
+})
 
 const log = diagnostics('calendar')
 
@@ -290,7 +317,7 @@ function occurrenceOf(
   return {
     recurrenceId,
     iCalUid: event.uid || null,
-    title: event.summary?.trim() || '(senza titolo)',
+    title: event.summary?.trim() || messages(MESSAGES).untitled,
     start: allDay ? dayOf(start) : new Date(startsAt).toISOString(),
     end: allDay ? dayOf(lastDay) : new Date(endsAt).toISOString(),
     allDay,
@@ -486,7 +513,7 @@ function instanceComponent(calendar: ICAL.Component, recurrenceId: string): ICAL
   }
 
   if (!master) {
-    throw new Error('L’evento ripetuto non si trova nel calendario.')
+    throw new Error(messages(MESSAGES).seriesNotFound)
   }
 
   const instance = new ICAL.Component(ICAL.parse(master.toString()))
@@ -665,7 +692,7 @@ export function changeEventResource(
       : instanceComponent(calendar, recurrenceId)
 
   if (!component) {
-    throw new Error('L’evento non si trova nel calendario.')
+    throw new Error(messages(MESSAGES).eventNotFound)
   }
 
   writeFields(component, event, organizer, fields)
@@ -728,7 +755,7 @@ export function withResponse(
   }
 
   if (!answered) {
-    throw new Error('In questo evento non sei tra gli invitati.')
+    throw new Error(messages(MESSAGES).notInvited)
   }
 
   return calendar.toString()
@@ -805,7 +832,7 @@ export function invitationReply(
   const organizer = invited?.getFirstPropertyValue('organizer')
 
   if (!invited || !organizer) {
-    throw new Error('Questo invito non dice a chi rispondere.')
+    throw new Error(messages(MESSAGES).noOrganizer)
   }
 
   const own = new Set(user.addresses.map(addressOf))
@@ -839,6 +866,8 @@ export function invitationReply(
   return {
     ics: reply.toString(),
     organizer: addressOf(organizer),
-    summary: String(invited.getFirstPropertyValue('summary') ?? 'Invito').trim()
+    summary: String(
+      invited.getFirstPropertyValue('summary') ?? messages(MESSAGES).invitation
+    ).trim()
   }
 }

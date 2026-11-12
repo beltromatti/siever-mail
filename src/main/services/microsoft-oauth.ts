@@ -7,6 +7,57 @@ import {
 import { net, shell } from 'electron'
 
 import type { RuntimeConfig } from '@main/config/env'
+import { currentLanguage, messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
+
+const MESSAGES = defineMessages({
+  signInAgain: {
+    en: 'Microsoft asks you to sign in to this account again.',
+    it: 'Microsoft chiede di accedere di nuovo a questo account.',
+    de: 'Microsoft verlangt, dass Sie sich erneut bei diesem Konto anmelden.'
+  },
+  cancelled: {
+    en: 'Signing in to Microsoft was cancelled.',
+    it: 'Accesso a Microsoft annullato.',
+    de: 'Die Anmeldung bei Microsoft wurde abgebrochen.'
+  },
+  notConfigured: {
+    en: 'Signing in with Microsoft isn’t configured (MICROSOFT_OAUTH_CLIENT_ID).',
+    it: "L'accesso con Microsoft non è configurato (MICROSOFT_OAUTH_CLIENT_ID).",
+    de: 'Die Anmeldung mit Microsoft ist nicht konfiguriert (MICROSOFT_OAUTH_CLIENT_ID).'
+  },
+  chooseService: {
+    en: 'Choose mail, calendar, or both.',
+    it: 'Scegli la posta, il calendario o tutti e due.',
+    de: 'Wählen Sie E-Mail, Kalender oder beides.'
+  },
+  signedIn: { en: 'Signed in', it: 'Accesso completato', de: 'Angemeldet' },
+  signedInBody: {
+    en: 'You can close this tab and go back to SIEVER Mail.',
+    it: 'Puoi chiudere questa scheda e tornare a SIEVER Mail.',
+    de: 'Sie können diesen Tab schließen und zu SIEVER Mail zurückkehren.'
+  },
+  signInFailed: {
+    en: 'Sign-in didn’t succeed',
+    it: 'Accesso non riuscito',
+    de: 'Anmeldung fehlgeschlagen'
+  },
+  signInFailedBody: {
+    en: 'Authorization cancelled or not valid. You can close this tab.',
+    it: 'Autorizzazione annullata o non valida. Puoi chiudere questa scheda.',
+    de: 'Autorisierung abgebrochen oder ungültig. Sie können diesen Tab schließen.'
+  },
+  noAccount: {
+    en: 'Microsoft didn’t say which account you chose.',
+    it: 'Microsoft non ha detto quale account hai scelto.',
+    de: 'Microsoft hat nicht mitgeteilt, welches Konto Sie gewählt haben.'
+  },
+  noAddress: {
+    en: 'Microsoft didn’t give this account’s address.',
+    it: "Microsoft non ha dato l'indirizzo di questo account.",
+    de: 'Microsoft hat die Adresse dieses Kontos nicht mitgeteilt.'
+  }
+})
 
 /** Work, school and personal accounts alike. */
 const AUTHORITY = 'https://login.microsoftonline.com/common'
@@ -59,7 +110,7 @@ export interface MicrosoftAuthResult {
 /** The account has to sign in again: the server will not renew its access by itself. */
 export class MicrosoftSignInNeeded extends Error {
   constructor() {
-    super('Microsoft chiede di accedere di nuovo a questo account.')
+    super(messages(MESSAGES).signInAgain)
     this.name = 'MicrosoftSignInNeeded'
   }
 }
@@ -67,7 +118,7 @@ export class MicrosoftSignInNeeded extends Error {
 /** The sign-in in the browser was left: the user went back, or the browser never answered. */
 export class MicrosoftSignInCancelled extends Error {
   constructor() {
-    super('Accesso a Microsoft annullato.')
+    super(messages(MESSAGES).cancelled)
     this.name = 'MicrosoftSignInCancelled'
   }
 }
@@ -76,7 +127,7 @@ export class MicrosoftSignInCancelled extends Error {
 const SIGN_IN_TIMEOUT_MS = 5 * 60 * 1000
 
 const page = (title: string, body: string): string =>
-  `<!doctype html><html><head><meta charset="utf-8" /><title>${title}</title></head><body style="font-family:system-ui;padding:24px;background:#101421;color:#f1f5f9"><h2>${title}</h2><p>${body}</p></body></html>`
+  `<!doctype html><html lang="${currentLanguage()}"><head><meta charset="utf-8" /><title>${title}</title></head><body style="font-family:system-ui;padding:24px;background:#101421;color:#f1f5f9"><h2>${title}</h2><p>${body}</p></body></html>`
 
 function parseSecret(secret: string): MicrosoftSecret {
   const parsed = JSON.parse(secret) as Partial<MicrosoftSecret>
@@ -120,7 +171,7 @@ export class MicrosoftOAuthService {
 
   private application(state: { cache: string }): PublicClientApplication {
     if (!this.clientId) {
-      throw new Error("L'accesso con Microsoft non è configurato (MICROSOFT_OAUTH_CLIENT_ID).")
+      throw new Error(messages(MESSAGES).notConfigured)
     }
 
     const cachePlugin: ICachePlugin = {
@@ -152,7 +203,7 @@ export class MicrosoftOAuthService {
     services: { mail: boolean; calendar: boolean } = { mail: true, calendar: true }
   ): Promise<MicrosoftAuthResult> {
     if (!services.mail && !services.calendar) {
-      throw new Error('Scegli la posta, il calendario o tutti e due.')
+      throw new Error(messages(MESSAGES).chooseService)
     }
 
     // MSAL asks for one resource's scopes and has the others consented with them: the
@@ -180,14 +231,8 @@ export class MicrosoftOAuthService {
       openBrowser: async (url) => {
         await shell.openExternal(url)
       },
-      successTemplate: page(
-        'Accesso completato',
-        'Puoi chiudere questa scheda e tornare a SIEVER Mail.'
-      ),
-      errorTemplate: page(
-        'Accesso non riuscito',
-        'Autorizzazione annullata o non valida. Puoi chiudere questa scheda.'
-      )
+      successTemplate: page(messages(MESSAGES).signedIn, messages(MESSAGES).signedInBody),
+      errorTemplate: page(messages(MESSAGES).signInFailed, messages(MESSAGES).signInFailedBody)
     })
     // Answered after it was given up, it goes nowhere.
     interactive.catch(() => undefined)
@@ -216,7 +261,7 @@ export class MicrosoftOAuthService {
     }
 
     if (!result.account) {
-      throw new Error('Microsoft non ha detto quale account hai scelto.')
+      throw new Error(messages(MESSAGES).noAccount)
     }
 
     const homeAccountId = result.account.homeAccountId
@@ -233,7 +278,7 @@ export class MicrosoftOAuthService {
     const email = (me.mail || result.account.username || me.userPrincipalName || '').trim()
 
     if (!email) {
-      throw new Error("Microsoft non ha dato l'indirizzo di questo account.")
+      throw new Error(messages(MESSAGES).noAddress)
     }
 
     this.latest.set(homeAccountId, state.cache)

@@ -1,9 +1,10 @@
 import type { FetchMessageObject, MessageAddressObject, MessageStructureObject } from 'imapflow'
 import type { AddressObject, ParsedMail } from 'mailparser'
 
+import { currentLanguage } from '@main/i18n'
 import type { FetchedMessageDetail, MailAddress, MailAttachment } from '@shared/models'
 import { cleanDisplayName, deriveSenderKey, deriveSenderName } from '@shared/sender'
-import { EMPTY_SUBJECT_LABEL } from '@shared/subject'
+import { emptySubjectLabel } from '@shared/subject'
 
 import {
   contentDigest,
@@ -117,8 +118,9 @@ export function hasAttachmentInStructure(
   return Boolean(structure.childNodes?.some((node) => hasAttachmentInStructure(node, ignored)))
 }
 
+/** The subject as kept: a message without one is listed so, in the language of this moment. */
 export function formatSubject(subject: string | undefined): string {
-  return subject?.trim() ? subject.trim() : EMPTY_SUBJECT_LABEL
+  return subject?.trim() ? subject.trim() : emptySubjectLabel(currentLanguage())
 }
 
 export function internalDateToIso(internalDate: Date | string | undefined): string {

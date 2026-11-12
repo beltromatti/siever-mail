@@ -1,5 +1,17 @@
+import { defineMessages, messagesIn, type LanguageState } from '@shared/i18n'
 import type { MailMessageSummary, MessageGroupingMode, MessageListSortField } from '@shared/models'
 import { senderSortKey } from '@shared/sender'
+
+import { firstDayOfWeek, languageNow } from './i18n'
+
+const MESSAGES = defineMessages({
+  unknownDate: { en: 'Unknown date', it: 'Data sconosciuta', de: 'Unbekanntes Datum' },
+  today: { en: 'Today', it: 'Oggi', de: 'Heute' },
+  yesterday: { en: 'Yesterday', it: 'Ieri', de: 'Gestern' },
+  thisWeek: { en: 'This week', it: 'Questa settimana', de: 'Diese Woche' },
+  thisMonth: { en: 'This month', it: 'Questo mese', de: 'Dieser Monat' },
+  unknownSender: { en: 'Unknown sender', it: 'Mittente sconosciuto', de: 'Unbekannter Absender' }
+})
 
 /**
  * Slices an already-ordered page of messages into the labelled sections the
@@ -41,13 +53,13 @@ function startOfDay(date: Date): number {
 }
 
 /**
- * Monday-based start of the week containing `date`. Italian calendars start
- * on Monday, so a message from Sunday belongs to the week that just ended,
- * not to the one starting the next day.
+ * The start of the week containing `date`, as the region counts weeks
+ * (`firstDayOfWeek`): a message from Sunday belongs, in Italy, to the week
+ * that just ended; in the United States, to the one it starts.
  */
 function startOfWeek(date: Date): number {
-  const dayOfWeek = (date.getDay() + 6) % 7
-  return startOfDay(date) - dayOfWeek * 24 * 60 * 60 * 1000
+  const back = (date.getDay() - (firstDayOfWeek(languageNow().formatLocale) % 7) + 7) % 7
+  return startOfDay(date) - back * 24 * 60 * 60 * 1000
 }
 
 function capitalizeFirst(value: string): string {
@@ -55,15 +67,21 @@ function capitalizeFirst(value: string): string {
 }
 
 /**
- * Buckets a message date relative to `now`: Oggi / Ieri / this week / this
- * month, then one section per calendar month. Returns a key plus the label,
- * so two dates in the same month share a section without re-deriving text.
+ * Buckets a message date relative to `now`: today / yesterday / this week /
+ * this month, then one section per calendar month. Returns a key plus the
+ * label, so two dates in the same month share a section without re-deriving
+ * text.
  */
-function resolveDateSection(dateIso: string, now: Date): { key: string; label: string } {
+function resolveDateSection(
+  dateIso: string,
+  now: Date,
+  language: LanguageState
+): { key: string; label: string } {
+  const m = messagesIn(MESSAGES, language.language)
   const date = new Date(dateIso)
 
   if (Number.isNaN(date.valueOf())) {
-    return { key: 'unknown', label: 'Data sconosciuta' }
+    return { key: 'unknown', label: m.unknownDate }
   }
 
   const messageDay = startOfDay(date)
@@ -71,30 +89,30 @@ function resolveDateSection(dateIso: string, now: Date): { key: string; label: s
   const dayInMs = 24 * 60 * 60 * 1000
 
   if (messageDay === today) {
-    return { key: 'today', label: 'Oggi' }
+    return { key: 'today', label: m.today }
   }
 
   if (messageDay === today - dayInMs) {
-    return { key: 'yesterday', label: 'Ieri' }
+    return { key: 'yesterday', label: m.yesterday }
   }
 
   // Future-dated messages do exist (clock skew on the sending server). They
   // belong at the top with today's mail rather than in a month section that
   // would sort below it.
   if (messageDay > today) {
-    return { key: 'today', label: 'Oggi' }
+    return { key: 'today', label: m.today }
   }
 
   if (messageDay >= startOfWeek(now)) {
-    return { key: 'this-week', label: 'Questa settimana' }
+    return { key: 'this-week', label: m.thisWeek }
   }
 
   if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()) {
-    return { key: 'this-month', label: 'Questo mese' }
+    return { key: 'this-month', label: m.thisMonth }
   }
 
   const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-  const monthLabel = new Intl.DateTimeFormat('it-IT', {
+  const monthLabel = new Intl.DateTimeFormat(language.formatLocale, {
     month: 'long',
     year: 'numeric'
   }).format(date)
@@ -108,19 +126,22 @@ function resolveDateSection(dateIso: string, now: Date): { key: string; label: s
  * address never open two sections, and neither do the several addresses a
  * company writes from under one name.
  */
-function resolveSenderSection(message: MailMessageSummary): { key: string; label: string } {
+function resolveSenderSection(
+  message: MailMessageSummary,
+  language: LanguageState
+): { key: string; label: string } {
   const key = senderSortKey(message.senderLabel)
 
   return {
     key: key ? `sender-${key}` : 'sender-unknown',
-    label: message.senderLabel || 'Mittente sconosciuto'
+    label: message.senderLabel || messagesIn(MESSAGES, language.language).unknownSender
   }
 }
 
 /**
  * 'auto' follows the sort: date buckets only make sense while the list is
- * ordered by date (under any other sort they would interleave and put an
- * "Oggi" heading three times down the page), and sender sections while it is
+ * ordered by date (under any other sort they would interleave and put a
+ * "Today" heading three times down the page), and sender sections while it is
  * ordered by sender. Subject and size stay one flat run — a heading per
  * distinct value would be noise. Explicit sender grouping holds under any
  * sort, because the query then puts the sender first in its ORDER BY.
@@ -143,11 +164,13 @@ export function resolveSectionKind(
   }
 }
 
+/** `language`: the headings' words and the months' names, the interface's of the moment by default. */
 export function buildMessageSections(
   messages: MailMessageSummary[],
   grouping: MessageGroupingMode,
   sortField: MessageListSortField,
-  now: Date = new Date()
+  now: Date = new Date(),
+  language: LanguageState = languageNow()
 ): MessageSection[] {
   const countUnread = (items: MailMessageSummary[]): number =>
     items.reduce((total, message) => (message.isRead ? total : total + 1), 0)
@@ -172,8 +195,8 @@ export function buildMessageSections(
 
   const resolveSection =
     kind === 'sender'
-      ? resolveSenderSection
-      : (message: MailMessageSummary) => resolveDateSection(message.date, now)
+      ? (message: MailMessageSummary) => resolveSenderSection(message, language)
+      : (message: MailMessageSummary) => resolveDateSection(message.date, now, language)
 
   const sections: MessageSection[] = []
   let currentGroupKey: string | null = null

@@ -1,4 +1,6 @@
 import type { Sql } from '@main/ai/sql'
+import { messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
 import type { DataStorageSection } from '@shared/models'
 
 /**
@@ -9,6 +11,21 @@ import type { DataStorageSection } from '@shared/models'
  * the bytes of each table come from SQLite itself (`dbstat`), and a table
  * several own is shared out by its rows.
  */
+
+const MESSAGES = defineMessages({
+  segretario: { en: 'The Segretario', it: 'Il Segretario', de: 'Der Segretario' },
+  common: {
+    en: 'Shared by all apps',
+    it: 'Comuni a tutte le app',
+    de: 'Von allen Apps gemeinsam genutzt'
+  },
+  attachments: {
+    en: 'Copies of attachments',
+    it: 'Copie degli allegati',
+    de: 'Kopien der Anhänge'
+  },
+  diagnostics: { en: 'Diagnostics', it: 'Diagnostica', de: 'Diagnose' }
+})
 
 export interface StorageOwners {
   mail: ReadonlyArray<{ id: string; label: string }>
@@ -238,6 +255,7 @@ export function storageSections(
   owners: StorageOwners,
   files: { attachments: number; draftFiles: number; diagnostics: number }
 ): DataStorageSection[] {
+  const m = messages(MESSAGES)
   const bytes = (owner: Owner): number => Math.round(shares.get(owner) ?? 0)
   const sections: DataStorageSection[] = [
     ...owners.mail.map((mailbox): DataStorageSection => {
@@ -265,14 +283,14 @@ export function storageSections(
     {
       id: 'segretario',
       kind: 'segretario',
-      label: 'Il Segretario',
+      label: m.segretario,
       sizeBytes: bytes('segretario'),
       segretarioBytes: bytes('segretario')
     },
     {
       id: 'common',
       kind: 'common',
-      label: 'Comuni a tutte le app',
+      label: m.common,
       // The files local drafts were opened with are the user's own, as the rest here.
       sizeBytes: bytes('common') + files.draftFiles,
       segretarioBytes: 0
@@ -291,14 +309,14 @@ export function storageSections(
     {
       id: 'attachments',
       kind: 'attachments',
-      label: 'Copie degli allegati',
+      label: m.attachments,
       sizeBytes: files.attachments,
       segretarioBytes: 0
     },
     {
       id: 'diagnostics',
       kind: 'diagnostics',
-      label: 'Diagnostica',
+      label: m.diagnostics,
       sizeBytes: files.diagnostics,
       segretarioBytes: 0
     }

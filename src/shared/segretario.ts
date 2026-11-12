@@ -1,4 +1,6 @@
+import { defineMessages, messagesIn, type LanguageState } from './i18n'
 import type { MessageRef } from './models'
+import { PLACES } from './places'
 
 /**
  * The Segretario: SIEVER Mail's agent. What the main process and the page
@@ -65,39 +67,102 @@ export const OPENROUTER_MODELS_URL = 'https://openrouter.ai/models'
 export const OPENROUTER_CREDITS_URL = 'https://openrouter.ai/settings/credits'
 export const OPENROUTER_KEYS_URL = 'https://openrouter.ai/settings/keys'
 
-function dollars(amount: number): string {
-  return amount.toLocaleString('it-IT', { style: 'currency', currency: 'USD' })
-}
+/** What SIEVER Mail tells the user about the AI (`SegretarioNotice`), in every language. */
+const NOTICE_WORDS = defineMessages({
+  exhaustedTitle: {
+    en: 'AI credit used up',
+    it: 'Credito AI finito',
+    de: 'KI-Guthaben aufgebraucht'
+  },
+  exhaustedBody: {
+    en: 'Your OpenRouter credit has run out, or the key has reached its spending limit: from now on the AI features are off and SIEVER Mail carries on without the Segretario. What it has learnt stays. To turn them back on, top up your credit on OpenRouter, then turn “AI features” back on in Settings › Segretario.',
+    it: 'Il credito OpenRouter è finito, o la chiave ha raggiunto il suo limite di spesa: da ora le funzioni AI sono spente e SIEVER Mail continua senza il Segretario. Quello che ha imparato resta. Per riaccenderle ricarica il credito su OpenRouter, poi riattiva «Funzioni AI» in Impostazioni › Segretario.',
+    de: 'Ihr OpenRouter-Guthaben ist aufgebraucht, oder der Schlüssel hat sein Ausgabenlimit erreicht: Ab jetzt sind die KI-Funktionen ausgeschaltet, und SIEVER Mail arbeitet ohne den Segretario weiter. Was er gelernt hat, bleibt erhalten. Um sie wieder einzuschalten, laden Sie Ihr Guthaben bei OpenRouter auf und aktivieren Sie dann „KI-Funktionen“ unter Einstellungen › Segretario wieder.'
+  },
+  keyRefusedTitle: {
+    en: 'OpenRouter key refused',
+    it: 'Chiave OpenRouter rifiutata',
+    de: 'OpenRouter-Schlüssel abgelehnt'
+  },
+  keyRefusedBody: {
+    en: 'OpenRouter no longer accepts the key: from now on the AI features are off and SIEVER Mail carries on without the Segretario. What it has learnt stays. To turn them back on, turn “AI features” back on in Settings › Segretario and enter a valid key.',
+    it: 'OpenRouter non accetta più la chiave: da ora le funzioni AI sono spente e SIEVER Mail continua senza il Segretario. Quello che ha imparato resta. Per riaccenderle riattiva «Funzioni AI» in Impostazioni › Segretario e inserisci una chiave valida.',
+    de: 'OpenRouter akzeptiert den Schlüssel nicht mehr: Ab jetzt sind die KI-Funktionen ausgeschaltet, und SIEVER Mail arbeitet ohne den Segretario weiter. Was er gelernt hat, bleibt erhalten. Um sie wieder einzuschalten, aktivieren Sie „KI-Funktionen“ unter Einstellungen › Segretario wieder und geben Sie einen gültigen Schlüssel ein.'
+  },
+  modelGoneTitle: {
+    en: 'AI model unavailable',
+    it: 'Modello AI non disponibile',
+    de: 'KI-Modell nicht verfügbar'
+  },
+  modelGoneBody: {
+    en: 'OpenRouter no longer offers the Segretario’s model, or no provider serves it without keeping your data: from now on the AI features are off and SIEVER Mail carries on without the Segretario. What it has learnt stays. Turn “AI features” back on in Settings › Segretario when you want to try again.',
+    it: 'OpenRouter non offre più il modello del Segretario, o nessun fornitore lo serve senza tenere i tuoi dati: da ora le funzioni AI sono spente e SIEVER Mail continua senza il Segretario. Quello che ha imparato resta. Riattiva «Funzioni AI» in Impostazioni › Segretario quando vuoi riprovare.',
+    de: 'OpenRouter bietet das Modell des Segretario nicht mehr an, oder kein Anbieter stellt es bereit, ohne Ihre Daten zu speichern: Ab jetzt sind die KI-Funktionen ausgeschaltet, und SIEVER Mail arbeitet ohne den Segretario weiter. Was er gelernt hat, bleibt erhalten. Aktivieren Sie „KI-Funktionen“ unter Einstellungen › Segretario wieder, wenn Sie es erneut versuchen möchten.'
+  },
+  lowTitle: { en: 'AI credit low', it: 'Credito AI basso', de: 'KI-Guthaben niedrig' },
+  almostOutTitle: {
+    en: 'AI credit almost used up',
+    it: 'Credito AI quasi finito',
+    de: 'KI-Guthaben fast aufgebraucht'
+  },
+  /** How long the credit lasts at the pace of the last days; nothing when nothing was spent. */
+  lasts: {
+    en: (days: number | null) =>
+      days === null
+        ? ''
+        : days < 1
+          ? ' — at the pace of the last few days, less than a day'
+          : ` — at the pace of the last few days, about ${days === 1 ? 'a day' : `${days} days`}`,
+    it: (days: number | null) =>
+      days === null
+        ? ''
+        : days < 1
+          ? ' — al ritmo degli ultimi giorni, meno di un giorno'
+          : ` — al ritmo degli ultimi giorni, circa ${days === 1 ? 'un giorno' : `${days} giorni`}`,
+    de: (days: number | null) =>
+      days === null
+        ? ''
+        : days < 1
+          ? ' — beim Verbrauch der letzten Tage weniger als ein Tag'
+          : ` — beim Verbrauch der letzten Tage etwa ${days === 1 ? 'ein Tag' : `${days} Tage`}`
+  },
+  lowBody: {
+    en: (amount: string, lasts: string) =>
+      `${amount} of OpenRouter credit left${lasts}. Top it up in time: when it runs out, the AI features turn off until you top it up.`,
+    it: (amount: string, lasts: string) =>
+      `Restano ${amount} di credito OpenRouter${lasts}. Ricaricalo per tempo: quando finisce, le funzioni AI si spengono finché non lo ricarichi.`,
+    de: (amount: string, lasts: string) =>
+      `Noch ${amount} OpenRouter-Guthaben übrig${lasts}. Laden Sie es rechtzeitig auf: Wenn es aufgebraucht ist, schalten sich die KI-Funktionen aus, bis Sie es wieder aufladen.`
+  }
+})
 
-/** A notice in words: its title, and what it says — the same in the app and in the system's alert. */
-export function noticeWords(notice: SegretarioNotice): { title: string; body: string } {
+/**
+ * A notice in words, in the interface's language and with its way of
+ * writing amounts: its title, and what it says — the same in the app and
+ * in the system's alert.
+ */
+export function noticeWords(
+  notice: SegretarioNotice,
+  { language, formatLocale }: LanguageState
+): { title: string; body: string } {
+  const m = messagesIn(NOTICE_WORDS, language)
+
   switch (notice.kind) {
     case 'credito-finito':
-      return {
-        title: 'Credito AI finito',
-        body: 'Il credito OpenRouter è finito, o la chiave ha raggiunto il suo limite di spesa: da ora le funzioni AI sono spente e SIEVER Mail continua senza il Segretario. Quello che ha imparato resta. Per riaccenderle ricarica il credito su OpenRouter, poi riattiva «Funzioni AI» in Impostazioni › Segretario.'
-      }
+      return { title: m.exhaustedTitle, body: m.exhaustedBody }
     case 'chiave-rifiutata':
-      return {
-        title: 'Chiave OpenRouter rifiutata',
-        body: 'OpenRouter non accetta più la chiave: da ora le funzioni AI sono spente e SIEVER Mail continua senza il Segretario. Quello che ha imparato resta. Per riaccenderle riattiva «Funzioni AI» in Impostazioni › Segretario e inserisci una chiave valida.'
-      }
+      return { title: m.keyRefusedTitle, body: m.keyRefusedBody }
     case 'modello-non-disponibile':
-      return {
-        title: 'Modello AI non disponibile',
-        body: 'OpenRouter non offre più il modello del Segretario, o nessun fornitore lo serve senza tenere i tuoi dati: da ora le funzioni AI sono spente e SIEVER Mail continua senza il Segretario. Quello che ha imparato resta. Riattiva «Funzioni AI» in Impostazioni › Segretario quando vuoi riprovare.'
-      }
+      return { title: m.modelGoneTitle, body: m.modelGoneBody }
     default: {
-      const lasts =
-        notice.days === null
-          ? ''
-          : notice.days < 1
-            ? ' — al ritmo degli ultimi giorni, meno di un giorno'
-            : ` — al ritmo degli ultimi giorni, circa ${notice.days === 1 ? 'un giorno' : `${notice.days} giorni`}`
+      const dollars = notice.available.toLocaleString(formatLocale, {
+        style: 'currency',
+        currency: 'USD'
+      })
 
       return {
-        title: notice.kind === 'credito-basso' ? 'Credito AI basso' : 'Credito AI quasi finito',
-        body: `Restano ${dollars(notice.available)} di credito OpenRouter${lasts}. Ricaricalo per tempo: quando finisce, le funzioni AI si spengono finché non lo ricarichi.`
+        title: notice.kind === 'credito-basso' ? m.lowTitle : m.almostOutTitle,
+        body: m.lowBody(dollars, m.lasts(notice.days))
       }
     }
   }
@@ -468,7 +533,7 @@ export type OnboardingCase =
 
 /** Its steps, in their order: not every case has every one. */
 export type OnboardingStep =
-  'connessioni' | 'segretario' | 'preparazione' | 'conoscimi' | 'lettura' | 'entra'
+  'lingua' | 'connessioni' | 'segretario' | 'preparazione' | 'conoscimi' | 'lettura' | 'entra'
 
 /**
  * The guided setup under way, kept so that a quit in the middle of it
@@ -595,18 +660,22 @@ export type TaskKind =
   | 'al_passo'
 
 /** What a task is called for the user. */
-export const TASK_LABELS: Readonly<Record<TaskKind, string>> = {
-  richiesta: 'Richiesta',
-  lettura: 'Lettura della posta',
-  giornata: 'La giornata',
-  punto: 'Il punto di un progetto',
-  calendario: 'Calendario',
-  revisione: 'Revisione',
-  ricerca: 'Ricerca in parole',
-  conoscimi: 'Conoscimi',
-  riflessione: 'Riflessione',
-  al_passo: 'Al passo'
-}
+export const TASK_LABELS = defineMessages({
+  richiesta: { en: 'Request', it: 'Richiesta', de: 'Anfrage' },
+  lettura: { en: 'Reading the mail', it: 'Lettura della posta', de: 'E-Mails lesen' },
+  giornata: { en: 'The day', it: 'La giornata', de: 'Der Tag' },
+  punto: {
+    en: 'Where a project stands',
+    it: 'Il punto di un progetto',
+    de: 'Stand eines Projekts'
+  },
+  calendario: PLACES.calendar,
+  revisione: { en: 'Review', it: 'Revisione', de: 'Überprüfung' },
+  ricerca: { en: 'Search in words', it: 'Ricerca in parole', de: 'Suche in Worten' },
+  conoscimi: PLACES.conoscimi,
+  riflessione: { en: 'Reflection', it: 'Riflessione', de: 'Reflexion' },
+  al_passo: PLACES.alPasso
+}) satisfies Record<TaskKind, unknown>
 
 export type ActivityStatus = 'running' | 'waiting' | 'done' | 'failed' | 'cancelled'
 

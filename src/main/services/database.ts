@@ -702,9 +702,11 @@ function headerSenderName(message: FetchedMessageSummary): string | undefined {
  * `senderSortKey`, `subjectSortKey`). Bumping it re-files the rows a
  * database already holds on the next start:
  *   1 — one sender's spellings of a name share a label;
- *   2 — subjects sort by their first letter or digit, those without one first.
+ *   2 — subjects sort by their first letter or digit, those without one first;
+ *   4 — subjects sort past the reply and forward prefixes of more languages
+ *       ("Inoltro:", "Wtr:", "PD:"…), and those without one, in any language, first.
  */
-const SORT_FILING_VERSION = 3
+const SORT_FILING_VERSION = 4
 
 /**
  * The shape of the cache (see `resetCacheIfOutdated`). Bump it when what a

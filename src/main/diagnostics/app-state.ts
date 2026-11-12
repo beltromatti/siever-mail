@@ -3,6 +3,8 @@ import { arch, cpus, platform, release, totalmem, version as osVersion } from 'n
 
 import { app } from 'electron'
 
+import { languageState } from '@main/i18n'
+
 import { diagnosticsInfo, diagnosticsSession } from './log'
 
 /**
@@ -24,8 +26,8 @@ export function systemLine(): string {
 
 /**
  * The shell's own state in an export (§14.4): the build and its edition,
- * the system, the profile, how long it has run and what it takes, the
- * database's size, the log's.
+ * the system, the profile, the interface's language and how it writes
+ * dates, how long it has run and what it takes, the database's size, the log's.
  */
 export function appDiagnosticState(about: {
   edition: string
@@ -60,6 +62,7 @@ export function appDiagnosticState(about: {
       node: process.versions.node
     },
     locale: app.getLocale(),
+    language: languageState(),
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     memoryMb: {
       rss: megabytes(memory.rss),

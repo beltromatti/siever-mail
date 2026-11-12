@@ -4,9 +4,11 @@ import { lstat, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 
+import { defineMessages } from '@shared/i18n'
 import { foldSearchText } from '@shared/search'
 
 import { fileSources } from '../../files/file-sources'
+import { messages } from '../../i18n'
 import { reachablePath } from '../../services/network-volumes'
 import { PROMPTS } from '../prompts'
 import {
@@ -23,6 +25,41 @@ import {
 import { countOf, formatDateTime } from './format'
 
 const DEFAULT_FILE_LIMIT = 30
+
+/** The step's lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  listing: {
+    en: 'Looking in the folder…',
+    it: 'Guardo nella cartella…',
+    de: 'Sehe im Ordner nach…'
+  },
+  continuing: {
+    en: 'Still looking for the files…',
+    it: 'Continuo a cercare i file…',
+    de: 'Suche weiter nach den Dateien…'
+  },
+  searchingNamed: {
+    en: (name: string) => `Looking for files “${name}”…`,
+    it: (name: string) => `Cerco i file «${name}»…`,
+    de: (name: string) => `Suche Dateien „${name}“…`
+  },
+  searching: { en: 'Looking for files…', it: 'Cerco i file…', de: 'Suche Dateien…' },
+  lookedIn: {
+    en: (folder: string) => `Looked in ${folder}`,
+    it: (folder: string) => `Guardato in ${folder}`,
+    de: (folder: string) => `In ${folder} nachgesehen`
+  },
+  stillSearching: { en: 'Still looking…', it: 'Cerco ancora…', de: 'Suche noch…' },
+  none: { en: 'No files', it: 'Nessun file', de: 'Keine Dateien' },
+  found: {
+    en: (count: number, more: boolean) =>
+      `Found ${count === 1 ? '1 file' : `${count} files`}${more ? ', there are more' : ''}`,
+    it: (count: number, more: boolean) =>
+      `Trovati ${count} file${more ? ', ce ne sono altri' : ''}`,
+    de: (count: number, more: boolean) =>
+      `${count === 1 ? '1 Datei' : `${count} Dateien`} gefunden${more ? ', es gibt weitere' : ''}`
+  }
+})
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 /**
@@ -256,14 +293,18 @@ export const searchFilesTool: SegretarioTool = {
       limite: { type: 'integer' }
     }
   },
-  running: (args) =>
-    booleanArg(args, 'elenca')
-      ? 'Guardo nella cartella…'
+  running: (args) => {
+    const m = messages(STEPS)
+    const name = stringArg(args, 'nome')
+
+    return booleanArg(args, 'elenca')
+      ? m.listing
       : stringArg(args, 'continua')
-        ? 'Continuo a cercare i file…'
-        : stringArg(args, 'nome')
-          ? `Cerco i file «${stringArg(args, 'nome')}»…`
-          : 'Cerco i file…',
+        ? m.continuing
+        : name
+          ? m.searchingNamed(name)
+          : m.searching
+  },
   readsOnly: () => true,
   async execute(args, context) {
     const given = stringArg(args, 'cartella')
@@ -342,7 +383,7 @@ export const searchFilesTool: SegretarioTool = {
 
       return {
         content: `${folder} (${countOf(items.length, 'elemento', 'elementi')}: le cartelle, poi i più recenti${page > 1 ? `; pagina ${page}` : ''}${undated > 0 ? `; ${countOf(undated, 'elemento', 'elementi')} senza data, la cartella risponde lentamente` : ''}):\n${lines.join('\n') || '(nient’altro)'}${rest > 0 ? `\n[Altri ${rest}: continua con pagina=${page + 1}.]` : ''}`,
-        summary: `Guardato in ${basename(folder) || folder}`,
+        summary: messages(STEPS).lookedIn(basename(folder) || folder),
         files: shown.filter((item) => !item.directory).map((item) => item.path)
       }
     }
@@ -445,7 +486,7 @@ function searchResult(
   if (shown.length === 0) {
     return {
       content: `${unfinished ? 'Per ora nessun file o cartella con' : 'Nessun file o cartella con'} ${where}.${more}`,
-      summary: unfinished ? 'Cerco ancora…' : 'Nessun file'
+      summary: unfinished ? messages(STEPS).stillSearching : messages(STEPS).none
     }
   }
 
@@ -457,7 +498,7 @@ function searchResult(
 
   return {
     content: `${countOf(shown.length, 'trovato', 'trovati')} (${where}), i più recenti per primi:\n${lines.join('\n')}${more}`,
-    summary: `Trovati ${shown.length} file${unfinished ? ', ce ne sono altri' : ''}`,
+    summary: messages(STEPS).found(shown.length, unfinished),
     files: shown.filter((item) => !item.directory).map((item) => item.path)
   }
 }

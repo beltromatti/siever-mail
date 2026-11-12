@@ -1,7 +1,9 @@
 import { google, type calendar_v3 } from 'googleapis'
 
+import { messages } from '@main/i18n'
 import { refusalOf } from '@main/services/connection-refusal'
 import type { CalendarResponse, EventOrigin } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 
 import {
   SyncTokenExpired,
@@ -47,6 +49,40 @@ function statusCode(error: unknown): number | undefined {
       : undefined
 }
 
+const MESSAGES = defineMessages({
+  accessNotRecognized: {
+    en: 'Google no longer recognizes the access to the calendar: connect it again.',
+    it: "Google non riconosce più l'accesso al calendario: collegalo di nuovo.",
+    de: 'Google erkennt den Zugriff auf den Kalender nicht mehr an: Verbinden Sie ihn erneut.'
+  },
+  accessNotGiven: {
+    en: 'Google didn’t give access to the calendar: connect it again.',
+    it: "Google non ha dato l'accesso al calendario: collegalo di nuovo.",
+    de: 'Google hat keinen Zugriff auf den Kalender gewährt: Verbinden Sie ihn erneut.'
+  },
+  untitled: { en: '(untitled)', it: '(senza titolo)', de: '(ohne Titel)' },
+  createdNotReturned: {
+    en: 'Google didn’t return the event it created.',
+    it: 'Google non ha restituito l’evento creato.',
+    de: 'Google hat den erstellten Termin nicht zurückgegeben.'
+  },
+  notReturned: {
+    en: 'Google didn’t return the event.',
+    it: 'Google non ha restituito l’evento.',
+    de: 'Google hat den Termin nicht zurückgegeben.'
+  },
+  someoneElses: {
+    en: 'This is someone else’s calendar: answer the invitation from yours.',
+    it: 'Questo è il calendario di un’altra persona: rispondi all’invito dal tuo.',
+    de: 'Dies ist der Kalender einer anderen Person: Beantworten Sie die Einladung aus Ihrem eigenen.'
+  },
+  notInvited: {
+    en: 'You’re not among the invitees of this event.',
+    it: 'In questo evento non sei tra gli invitati.',
+    de: 'Sie gehören nicht zu den Eingeladenen dieses Termins.'
+  }
+})
+
 /**
  * Google's errors in the user's words, where they are the user's to act
  * on: the token refused, or without the calendar in what it allows, is the
@@ -58,17 +94,19 @@ export function readableError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error)
 
   if (status === 401 || refusalOf(error) === 'autorizzazione') {
-    return new CalendarRequestError(
-      "Google non riconosce più l'accesso al calendario: collegalo di nuovo.",
-      { status, refusal: 'autorizzazione', cause: error }
-    )
+    return new CalendarRequestError(messages(MESSAGES).accessNotRecognized, {
+      status,
+      refusal: 'autorizzazione',
+      cause: error
+    })
   }
 
   if (status === 403 && /insufficient|scope/i.test(message)) {
-    return new CalendarRequestError(
-      "Google non ha dato l'accesso al calendario: collegalo di nuovo.",
-      { status, refusal: 'autorizzazione', cause: error }
-    )
+    return new CalendarRequestError(messages(MESSAGES).accessNotGiven, {
+      status,
+      refusal: 'autorizzazione',
+      cause: error
+    })
   }
 
   return error instanceof Error ? error : new Error(message)
@@ -153,7 +191,7 @@ function eventOf(
     iCalUid: event.iCalUID ?? null,
     // An instance of a recurring event carries its series' id.
     seriesId: event.recurringEventId ?? null,
-    title: event.summary?.trim() || '(senza titolo)',
+    title: event.summary?.trim() || messages(MESSAGES).untitled,
     start,
     end,
     allDay,
@@ -339,7 +377,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
             : undefined
         }
       })
-      return this.provided(calendarId, data, 'Google non ha restituito l’evento creato.')
+      return this.provided(calendarId, data, messages(MESSAGES).createdNotReturned)
     } catch (error) {
       throw readableError(error)
     }
@@ -386,7 +424,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
             : {})
         }
       })
-      return this.provided(calendarId, data, 'Google non ha restituito l’evento.')
+      return this.provided(calendarId, data, messages(MESSAGES).notReturned)
     } catch (error) {
       throw readableError(error)
     }
@@ -426,7 +464,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
   ): Promise<ProviderEvent> {
     // In a calendar someone shares, "self" is its owner: answering there would answer for them.
     if (!selfIsUser(calendarId, this.selfEmail)) {
-      throw new Error('Questo è il calendario di un’altra persona: rispondi all’invito dal tuo.')
+      throw new Error(messages(MESSAGES).someoneElses)
     }
 
     try {
@@ -443,7 +481,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
         Boolean(attendee.self) || attendee.email?.toLowerCase() === this.selfEmail
 
       if (!current.attendees?.some(isUser)) {
-        throw new Error('In questo evento non sei tra gli invitati.')
+        throw new Error(messages(MESSAGES).notInvited)
       }
 
       const attendees = current.attendees.map((attendee) =>
@@ -455,7 +493,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
         sendUpdates: 'all',
         requestBody: { attendees }
       })
-      return this.provided(calendarId, data, 'Google non ha restituito l’evento.')
+      return this.provided(calendarId, data, messages(MESSAGES).notReturned)
     } catch (error) {
       throw readableError(error)
     }

@@ -7,6 +7,7 @@ import { app, BrowserWindow, Menu, Tray, nativeImage, powerMonitor, session, she
 import { electronApp, is } from '@electron-toolkit/utils'
 import { config as loadDotenv } from 'dotenv'
 import { z } from 'zod'
+import { defineMessages, type Language } from '@shared/i18n'
 import { IPC_CHANNELS } from '@shared/ipc'
 
 import extensionMain from '@app/extension/main'
@@ -15,7 +16,7 @@ import extensionShared from '@app/extension/shared'
 import { APP_ID } from './app-identity'
 import { setAppWindow } from './app-window'
 import { loadRuntimeConfig } from './config/env'
-import { installAppMenu } from './app-menu'
+import { installAppMenu, refreshAppMenu } from './app-menu'
 import { installContextMenus } from './context-menu'
 import { registerMailIpc } from './ipc/register-mail-ipc'
 import { registerCalendarIpc } from './ipc/register-calendar-ipc'
@@ -27,6 +28,13 @@ import { prepareUpgradeMigration } from './services/data-migration'
 import { normalizeExternalHttpUrl } from './utils/external-url'
 import { profileKind, systemLine } from '@main/diagnostics/app-state'
 import { diagnostics, flushDiagnostics, startDiagnostics } from '@main/diagnostics/log'
+import {
+  currentLanguage,
+  messages,
+  onLanguageChange,
+  registerLanguageIpc,
+  startLanguage
+} from './i18n'
 import { runUninstall, uninstallRequest } from './uninstall'
 import { Workspace } from './workspace'
 import {
@@ -46,8 +54,17 @@ if (existsSync(dotenvPath)) {
   loadDotenv({ path: dotenvPath })
 }
 
-// Input the main process turns down is described in the app's language.
-z.config(z.locales.it())
+/** Zod's words for each language of the interface: what input the main process turns down says. */
+const ZOD_LOCALES: Readonly<Record<Language, () => z.core.$ZodConfig>> = {
+  en: z.locales.en,
+  it: z.locales.it,
+  de: z.locales.de
+}
+
+/** Input the main process turns down is described in the interface's language. */
+function describeRefusalsInLanguage(): void {
+  z.config(ZOD_LOCALES[currentLanguage()]())
+}
 
 // An error no part caught is written down and the rest goes on: one part failing neither takes
 // the app down nor goes unsaid (§14.3).
@@ -137,6 +154,28 @@ function showMainWindow(): void {
   mainWindow.focus()
 }
 
+const TRAY = defineMessages({
+  open: { en: 'Open SIEVER Mail', it: 'Apri SIEVER Mail', de: 'SIEVER Mail öffnen' },
+  quit: { en: 'Quit', it: 'Esci', de: 'Beenden' }
+})
+
+/** The tray's menu, in the interface's language: made again when it changes. */
+function trayMenu(): Menu {
+  const m = messages(TRAY)
+
+  return Menu.buildFromTemplate([
+    { label: m.open, click: () => showMainWindow() },
+    { type: 'separator' },
+    {
+      label: m.quit,
+      click: () => {
+        isQuitting = true
+        app.quit()
+      }
+    }
+  ])
+}
+
 function createTray(): Tray {
   const trayImage = nativeImage.createFromPath(icon).resize({
     width: process.platform === 'darwin' ? 22 : 20,
@@ -150,24 +189,7 @@ function createTray(): Tray {
     showMainWindow()
   })
 
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Apri SIEVER Mail',
-      click: () => showMainWindow()
-    },
-    {
-      type: 'separator'
-    },
-    {
-      label: 'Esci',
-      click: () => {
-        isQuitting = true
-        app.quit()
-      }
-    }
-  ])
-
-  tray.setContextMenu(contextMenu)
+  tray.setContextMenu(trayMenu())
   return tray
 }
 
@@ -406,6 +428,17 @@ if (starts) {
       if (mainWindow?.isFocused()) {
         pageLog.info('window.focus')
       }
+    })
+
+    // The interface's language, before anything shows a word: the menus, the window, the page's
+    // first paint (§13.5).
+    startLanguage({ editionDefault: extensionShared.defaultLanguage })
+    describeRefusalsInLanguage()
+    registerLanguageIpc()
+    onLanguageChange(() => {
+      describeRefusalsInLanguage()
+      refreshAppMenu()
+      appTray?.setContextMenu(trayMenu())
     })
 
     prepareUpgradeMigration()

@@ -1,15 +1,19 @@
 import { CompassStar } from '@renderer/components/ui/compass-star'
+import { hourStyle, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarListEntry } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import type { DayLine } from '@shared/segretario'
 import { DayLineSourceIcon, dayLineKey } from '@renderer/features/segretario/day-line-source'
 
 import {
   addDays,
+  dateFormat,
   dayKey,
   eventSpan,
   isOnDay,
-  sameDay
+  sameDay,
+  weekdayNames
 } from '@renderer/features/calendar/calendar-dates'
 import { dotStyle, eventTint } from './event-style'
 import type { CalendarSelection, DrawnRange } from './time-grid'
@@ -17,8 +21,16 @@ import { calendarOf, type ProposedEvent } from './use-calendar-data'
 
 /** Entries a day's cell lists before it says how many more there are. */
 const SHOWN_PER_DAY = 3
-const WEEKDAYS = ['lun', 'mar', 'mer', 'gio', 'ven', 'sab', 'dom']
-const TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
+/** Made when used: the hour is written as the region writes it now. */
+const TIME = (): Intl.DateTimeFormatOptions => ({ hour: hourStyle(), minute: '2-digit' })
+
+const MESSAGES = defineMessages({
+  more: {
+    en: (count: number) => (count === 1 ? 'one more' : `${count} more`),
+    it: (count: number) => (count === 1 ? 'un altro' : `altri ${count}`),
+    de: (count: number) => (count === 1 ? 'ein weiterer' : `${count} weitere`)
+  }
+})
 
 type Entry =
   | { kind: 'event'; key: string; event: CalendarEvent; start: number }
@@ -56,6 +68,8 @@ export function MonthGrid({
   onDraw: (range: DrawnRange) => void
   onOpenLine: (line: DayLine) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const time = dateFormat(TIME())
   const today = new Date()
   const selectedId =
     selection?.kind === 'event'
@@ -67,9 +81,9 @@ export function MonthGrid({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="grid shrink-0 grid-cols-7 border-b">
-        {WEEKDAYS.map((weekday) => (
+        {weekdayNames('short').map((weekday, index) => (
           <div
-            key={weekday}
+            key={index}
             className="text-muted-foreground border-l py-2 text-center text-[11.5px] uppercase first:border-l-0"
           >
             {weekday}
@@ -183,7 +197,7 @@ export function MonthGrid({
                           style={dotStyle(calendarOf(entry.event, calendars)?.color ?? null)}
                         />
                         <span className="text-muted-foreground shrink-0 tabular-nums">
-                          {TIME.format(Date.parse(entry.event.start))}
+                          {time.format(Date.parse(entry.event.start))}
                         </span>
                       </>
                     )}
@@ -197,7 +211,7 @@ export function MonthGrid({
                   onClick={() => onOpenDay(day)}
                   className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/60 self-start rounded-sm px-1 text-[11px] outline-none focus-visible:ring-2"
                 >
-                  {more === 1 ? 'un altro' : `altri ${more}`}
+                  {m.more(more)}
                 </button>
               )}
             </div>

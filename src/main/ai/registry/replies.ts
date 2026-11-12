@@ -1,4 +1,6 @@
+import { messages } from '../../i18n'
 import { placeholders, type Sql } from '../sql'
+import { REFUSALS } from './registry.messages'
 import {
   RegistryRefusal,
   lookedAt,
@@ -114,7 +116,11 @@ export class ReplyStore {
     const text = input.text.trim()
 
     if (!text) {
-      throw new RegistryRefusal('Il testo della risposta è vuoto.')
+      throw new RegistryRefusal(
+        'Il testo della risposta è vuoto.',
+        undefined,
+        messages(REFUSALS).replyEmpty
+      )
     }
 
     const now = Date.now()
@@ -232,7 +238,11 @@ export class ReplyStore {
       }
     }
 
-    throw new RegistryRefusal('La risposta preparata cambia di continuo: riprova tra poco.')
+    throw new RegistryRefusal(
+      'La risposta preparata cambia di continuo: riprova tra poco.',
+      undefined,
+      messages(REFUSALS).replyKeepsChanging
+    )
   }
 
   /**

@@ -1,3 +1,15 @@
+import { defineMessages } from '@shared/i18n'
+
+import { messagesNow } from './i18n'
+
+const MESSAGES = defineMessages({
+  notPrepared: {
+    en: 'The message could not be prepared.',
+    it: 'Impossibile preparare il messaggio.',
+    de: 'Die Nachricht konnte nicht vorbereitet werden.'
+  }
+})
+
 /**
  * Lays `html` out in a frame nobody sees, at `width`, and hands its document
  * to `work`. The frame is sandboxed like the reading pane — no script runs
@@ -44,7 +56,7 @@ function load(frame: HTMLIFrameElement, html: string): Promise<Document> {
         if (frame.contentDocument) {
           resolve(frame.contentDocument)
         } else {
-          reject(new Error('Impossibile preparare il messaggio.'))
+          reject(new Error(messagesNow(MESSAGES).notPrepared))
         }
       },
       { once: true }

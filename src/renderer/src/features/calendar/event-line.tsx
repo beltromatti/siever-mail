@@ -1,40 +1,60 @@
 import { MapPin, Video } from 'lucide-react'
 
+import { hourStyle, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent, CalendarResponse } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import type { LinkedText } from '@shared/segretario'
 
 import { LinkedWords } from '@renderer/features/segretario/segretario-text'
 
-const TIME = new Intl.DateTimeFormat('it-IT', { hour: '2-digit', minute: '2-digit' })
+import { dateFormat } from './calendar-dates'
 
-export const RESPONSE_LABELS: Readonly<Record<CalendarResponse, string>> = {
-  accepted: 'Partecipi',
-  tentative: 'Forse',
-  declined: 'Non partecipi',
-  needsAction: 'Da rispondere'
-}
+const MESSAGES = defineMessages({
+  allDay: { en: 'All day', it: 'Tutto il giorno', de: 'Ganztägig' },
+  from: {
+    en: (time: string) => `from ${time}`,
+    it: (time: string) => `dalle ${time}`,
+    de: (time: string) => `ab ${time}`
+  },
+  until: {
+    en: (time: string) => `until ${time}`,
+    it: (time: string) => `fino alle ${time}`,
+    de: (time: string) => `bis ${time}`
+  },
+  joinCall: { en: 'Join the call', it: 'Entra nella call', de: 'Dem Anruf beitreten' }
+})
 
-/** "9:00–10:30", "dalle 18:00", or "Tutto il giorno": when an event is, on the day it is listed. */
+/** The user's answer to an invitation, as a list and the panel say it. */
+export const RESPONSE_LABELS = defineMessages({
+  accepted: { en: 'Going', it: 'Partecipi', de: 'Zugesagt' },
+  tentative: { en: 'Maybe', it: 'Forse', de: 'Vielleicht' },
+  declined: { en: 'Not going', it: 'Non partecipi', de: 'Abgesagt' },
+  needsAction: { en: 'No reply yet', it: 'Da rispondere', de: 'Noch nicht beantwortet' }
+}) satisfies Record<CalendarResponse, unknown>
+
+/** Made when used: the hour is written as the region writes it now. */
+const TIME = (): Intl.DateTimeFormatOptions => ({ hour: hourStyle(), minute: '2-digit' })
+
+/** "9:00–10:30", "from 18:00", or "All day": when an event is, on the day it is listed. */
 export function eventTimeLabel(event: CalendarEvent, day: Date): string {
+  const m = messagesNow(MESSAGES)
+
   if (event.allDay) {
-    return 'Tutto il giorno'
+    return m.allDay
   }
 
+  const time = dateFormat(TIME())
   const start = new Date(event.start)
   const end = new Date(event.end)
   const startsToday = start.toDateString() === day.toDateString()
   const endsToday = end.toDateString() === day.toDateString()
 
   if (startsToday && endsToday) {
-    return `${TIME.format(start)}–${TIME.format(end)}`
+    return `${time.format(start)}–${time.format(end)}`
   }
 
-  return startsToday
-    ? `dalle ${TIME.format(start)}`
-    : endsToday
-      ? `fino alle ${TIME.format(end)}`
-      : 'Tutto il giorno'
+  return startsToday ? m.from(time.format(start)) : endsToday ? m.until(time.format(end)) : m.allDay
 }
 
 /**
@@ -54,6 +74,8 @@ export function EventLine({
   /** How to prepare for it, as the Segretario wrote it. */
   prep?: LinkedText
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const responses = useMessages(RESPONSE_LABELS)
   const over = !event.allDay && Date.parse(event.end) < now
 
   return (
@@ -76,7 +98,7 @@ export function EventLine({
                 event.myResponse === 'needsAction' ? 'text-urgent' : 'text-muted-foreground'
               )}
             >
-              {RESPONSE_LABELS[event.myResponse]}
+              {responses[event.myResponse]}
             </span>
           )}
         </span>
@@ -97,7 +119,7 @@ export function EventLine({
                 className="text-primary-text hover:text-foreground focus-visible:ring-ring/60 flex shrink-0 items-center gap-1 rounded-sm font-semibold outline-none focus-visible:ring-2"
               >
                 <Video className="size-3" />
-                Entra nella call
+                {m.joinCall}
               </button>
             )}
           </span>

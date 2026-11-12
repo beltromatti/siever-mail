@@ -59,10 +59,10 @@ describe('connectionsStatus', () => {
     expect(connectionsStatus([], {}, [], NOW)).toBeNull()
 
     const status = connectionsStatus([A], { a: state('a', 'connected') }, [calendar('lavoro')], NOW)
-    expect(status).toMatchObject({ health: 'ok', title: 'Tutto sincronizzato', indexing: null })
+    expect(status).toMatchObject({ health: 'ok', title: 'All in sync', indexing: null })
     expect(status?.standings.map((standing) => standing.text)).toEqual([
-      'Sincronizzata: la posta arriva appena c’è',
-      '«Lavoro» · letto alle 10:29'
+      'In sync: mail arrives as soon as it’s there',
+      '“Lavoro” · read at 10:29 AM'
     ])
   })
 
@@ -75,7 +75,7 @@ describe('connectionsStatus', () => {
     )
 
     expect(status?.health).toBe('attention')
-    expect(status?.title).toBe('Una connessione ha bisogno di te')
+    expect(status?.title).toBe('A connection needs you')
     expect(status?.standings.map((standing) => [standing.key, standing.health])).toEqual([
       ['posta:b', 'attention'],
       ['posta:a', 'waiting'],
@@ -88,19 +88,19 @@ describe('connectionsStatus', () => {
     const offline = connectionsStatus([A], { a: state('a', 'offline', { lastContactAt }) }, [], NOW)
     expect(offline).toMatchObject({
       health: 'waiting',
-      title: 'Senza rete: tutto riprende da sé appena torna'
+      title: 'No network: everything resumes on its own when it’s back'
     })
     expect(offline?.standings[0].text).toBe(
-      'Senza rete: riprende da sola · ultimo contatto il 7 nov, 18:05'
+      'No network: it resumes on its own · last contact on Nov 7, 6:05 PM'
     )
 
     const calendarDown = connectionsStatus(
       [],
       {},
-      [calendar('lavoro', { problem: 'Il server del calendario non risponde.' })],
+      [calendar('lavoro', { problem: 'The calendar server is not answering.' })],
       NOW
     )
-    expect(calendarDown?.title).toBe('In attesa di un server: si sistema da sé')
+    expect(calendarDown?.title).toBe('Waiting for a server: it sorts itself out')
   })
 
   it('tells how far the search has read the mail, only while it still reads', () => {
@@ -122,14 +122,14 @@ describe('the lines of the connections', () => {
   it('says a mailbox at work, and stopped', () => {
     expect(mailStanding(A, undefined, NOW)).toMatchObject({
       health: 'working',
-      text: 'Si collega…'
+      text: 'Connecting…'
     })
     expect(mailStanding(A, state('a', 'connected', { syncing: true }), NOW).text).toBe(
-      'Scarica la posta…'
+      'Downloading the mail…'
     )
     expect(mailStanding(A, state('a', 'error', { refused: 'certificato' }), NOW)).toMatchObject({
       health: 'attention',
-      text: 'Ferma · Il certificato del server non è valido'
+      text: 'Stopped · The server’s certificate isn’t valid'
     })
   })
 
@@ -139,30 +139,30 @@ describe('the lines of the connections', () => {
       { connectionId: 'l', calendarId: 'd', name: 'Cantieri', primary: false }
     ]
     expect(calendarStanding(calendar('l', { calendars: two }), NOW).text).toBe(
-      '2 calendari · letti alle 10:29'
+      '2 calendars · read at 10:29 AM'
     )
     expect(calendarStanding(calendar('l', { lastSyncAt: null }), NOW).text).toBe(
-      '«Lavoro» · lo legge ora'
+      '“Lavoro” · reading it now'
     )
     expect(
       calendarStanding(calendar('l', { calendars: [], lastSyncAt: NOW - 2 * 86_400_000 }), NOW).text
-    ).toBe('Nessun calendario · controllato il 6 nov, 10:30')
+    ).toBe('No calendars · checked on Nov 6, 10:30 AM')
   })
 
   it('says a calendar stopped, with a consent to renew, or not answering', () => {
     expect(calendarStanding(calendar('l', { refused: 'sparito' }), NOW)).toMatchObject({
       health: 'attention',
-      text: 'Fermo · Non si trova più al suo indirizzo'
+      text: 'Stopped · It’s no longer at its address'
     })
     expect(
       calendarStanding(
-        calendar('l', { renewConsent: true, problem: 'Ricollega il calendario.' }),
+        calendar('l', { renewConsent: true, problem: 'Reconnect the calendar.' }),
         NOW
       )
-    ).toMatchObject({ health: 'attention', text: 'Ricollega il calendario.' })
-    expect(calendarStanding(calendar('l', { problem: 'Non risponde.' }), NOW)).toMatchObject({
+    ).toMatchObject({ health: 'attention', text: 'Reconnect the calendar.' })
+    expect(calendarStanding(calendar('l', { problem: 'Not answering.' }), NOW)).toMatchObject({
       health: 'waiting',
-      text: 'Non risponde. Riprova da solo.'
+      text: 'Not answering. It tries again on its own.'
     })
   })
 })

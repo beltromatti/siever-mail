@@ -14,8 +14,10 @@ import {
 import { useCalendarList } from '@renderer/features/calendar/use-calendar'
 import { GROUPING_OPTIONS } from '@renderer/features/mail/message-list-shared'
 import { IS_MAC } from '@renderer/lib/command-shortcuts'
+import { chooseLanguage, messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
 import { READER_ZOOM_STEPS } from '@renderer/lib/reader-zoom'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages, LANGUAGE_NAMES, LANGUAGES, type Messages } from '@shared/i18n'
 import {
   NEW_EVENT_MINUTES,
   type MailAccount,
@@ -25,38 +27,151 @@ import {
   type ThemeMode,
   type UiPreferences
 } from '@shared/models'
+import { PLACES } from '@shared/places'
 
-const THEME_OPTIONS = [
-  { value: 'system', label: 'Sistema', icon: Monitor },
-  { value: 'light', label: 'Chiaro', icon: Sun },
-  { value: 'dark', label: 'Scuro', icon: Moon }
-] as const satisfies ReadonlyArray<{ value: ThemeMode; label: string; icon: typeof Monitor }>
-
-const LAYOUT_OPTIONS: ReadonlyArray<{ mode: MailLayoutMode; label: string; description: string }> =
-  [
-    {
-      mode: 'apple',
-      label: 'Affiancata',
-      description: 'Cartelle, elenco e messaggio uno accanto all’altro.'
-    },
-    {
-      mode: 'outlook',
-      label: 'In colonna',
-      description: 'L’elenco denso in alto, il messaggio sotto.'
-    }
-  ]
+const MESSAGES = defineMessages({
+  themeSystem: { en: 'System', it: 'Sistema', de: 'System' },
+  themeLight: { en: 'Light', it: 'Chiaro', de: 'Hell' },
+  themeDark: { en: 'Dark', it: 'Scuro', de: 'Dunkel' },
+  layoutSide: { en: 'Side by side', it: 'Affiancata', de: 'Nebeneinander' },
+  layoutSideText: {
+    en: 'Folders, list and message next to one another.',
+    it: 'Cartelle, elenco e messaggio uno accanto all’altro.',
+    de: 'Ordner, Liste und Nachricht nebeneinander.'
+  },
+  layoutColumn: { en: 'In a column', it: 'In colonna', de: 'Untereinander' },
+  layoutColumnText: {
+    en: 'The dense list on top, the message below.',
+    it: 'L’elenco denso in alto, il messaggio sotto.',
+    de: 'Die dichte Liste oben, die Nachricht darunter.'
+  },
+  minutes: {
+    en: (minutes: number) => `${minutes} minutes`,
+    it: (minutes: number) => `${minutes} minuti`,
+    de: (minutes: number) => `${minutes} Minuten`
+  },
+  hoursAndMinutes: {
+    en: (hours: number, minutes: number) =>
+      `${hours === 1 ? '1 hour' : `${hours} hours`}${minutes ? ` ${minutes} minutes` : ''}`,
+    it: (hours: number, minutes: number) =>
+      `${hours === 1 ? '1 ora' : `${hours} ore`}${minutes ? ` e ${minutes} minuti` : ''}`,
+    de: (hours: number, minutes: number) =>
+      `${hours === 1 ? '1 Stunde' : `${hours} Stunden`}${minutes ? ` ${minutes} Minuten` : ''}`
+  },
+  unifiedUnreadable: {
+    en: 'The included mailboxes cannot be read.',
+    it: 'Le caselle incluse non si leggono.',
+    de: 'Die einbezogenen Postfächer lassen sich nicht lesen.'
+  },
+  unifiedNotSaved: {
+    en: 'The included mailboxes were not saved.',
+    it: 'Le caselle incluse non sono state salvate.',
+    de: 'Die einbezogenen Postfächer wurden nicht gespeichert.'
+  },
+  notSaved: {
+    en: 'Setting not saved',
+    it: 'Impostazione non salvata',
+    de: 'Einstellung nicht gespeichert'
+  },
+  language: { en: 'Language', it: 'Lingua', de: 'Sprache' },
+  languageText: {
+    en: 'The language SIEVER Mail speaks to you in. Dates and numbers are written as your computer’s region writes them. The Segretario writes to you in your own language, even if it is another.',
+    it: 'La lingua in cui SIEVER Mail ti parla. Date e numeri si scrivono come li scrive la regione del computer. Il Segretario ti scrive nella tua lingua, anche se è un’altra.',
+    de: 'Die Sprache, in der SIEVER Mail mit Ihnen spricht. Datum und Zahlen werden so geschrieben, wie die Region Ihres Computers sie schreibt. Der Segretario schreibt Ihnen in Ihrer eigenen Sprache, auch wenn es eine andere ist.'
+  },
+  appearance: { en: 'Appearance', it: 'Aspetto', de: 'Erscheinungsbild' },
+  appearanceText: {
+    en: 'System follows the computer, also when it changes during the day. Messages stay on a white page, as they are written.',
+    it: 'Sistema segue il computer, anche quando cambia nel corso della giornata. I messaggi restano su pagina bianca, come si scrivono.',
+    de: 'System folgt dem Computer, auch wenn er sich im Laufe des Tages ändert. Nachrichten bleiben auf weißem Grund, so wie sie geschrieben werden.'
+  },
+  openAtLogin: {
+    en: 'Open at login',
+    it: 'Apri all’accesso al computer',
+    de: 'Bei der Anmeldung öffnen'
+  },
+  openAtLoginInstalled: {
+    en: 'Chosen in the installed app.',
+    it: 'Si sceglie nell’app installata.',
+    de: 'Wird in der installierten App gewählt.'
+  },
+  openAtLoginApproval: {
+    en: 'The system is waiting for you to allow it: System Settings › General › Login Items.',
+    it: 'Il sistema aspetta che lo consenta tu: Impostazioni di Sistema › Generali › Elementi login.',
+    de: 'Das System wartet auf Ihre Erlaubnis: Systemeinstellungen › Allgemein › Anmeldeobjekte.'
+  },
+  openAtLoginText: {
+    en: 'So what arrives finds you even before you open it: the notifications, and the Segretario’s work.',
+    it: 'Così ciò che arriva ti trova anche prima che tu lo apra: le notifiche, e il lavoro del Segretario.',
+    de: 'So erreicht Sie, was ankommt, schon bevor Sie die App öffnen: die Benachrichtigungen und die Arbeit des Segretario.'
+  },
+  layout: { en: 'Layout', it: 'Disposizione', de: 'Anordnung' },
+  layoutLabel: { en: 'Mail layout', it: 'Disposizione della Posta', de: 'Anordnung der E-Mail' },
+  order: { en: 'List order', it: 'Ordine dell’elenco', de: 'Reihenfolge der Liste' },
+  orderText: {
+    en: 'From the bottom, like a chat: the newest messages at the bottom, and you scroll up to go back.',
+    it: 'Dal fondo, come una chat: i messaggi più recenti in basso, e si sale per andare indietro.',
+    de: 'Von unten, wie in einem Chat: die neuesten Nachrichten unten, und man scrollt nach oben, um zurückzugehen.'
+  },
+  fromTop: { en: 'From the top', it: 'Dall’alto', de: 'Von oben' },
+  fromBottom: { en: 'From the bottom', it: 'Dal fondo', de: 'Von unten' },
+  grouping: { en: 'Grouping', it: 'Raggruppamento', de: 'Gruppierung' },
+  groupingText: {
+    en: 'Automatic follows the sorting: by day if you sort by date, by sender if you sort by sender.',
+    it: 'Automatico segue l’ordinamento: per giorno se ordini per data, per mittente se ordini per mittente.',
+    de: 'Automatisch folgt der Sortierung: nach Tag, wenn Sie nach Datum sortieren, nach Absender, wenn Sie nach Absender sortieren.'
+  },
+  groupingLabel: {
+    en: 'Grouping of the list',
+    it: 'Raggruppamento dell’elenco',
+    de: 'Gruppierung der Liste'
+  },
+  messageSize: { en: 'Message size', it: 'Dimensione dei messaggi', de: 'Nachrichtengröße' },
+  messageSizeText: {
+    en: (modifier: string) => `Also with ${modifier} and the scroll wheel, on the message.`,
+    it: (modifier: string) => `Anche con ${modifier} e la rotella, sul messaggio.`,
+    de: (modifier: string) => `Auch mit ${modifier} und dem Mausrad, auf der Nachricht.`
+  },
+  unifiedText: {
+    en: '“All mailboxes”, in the Mail sidebar, gathers into one list the mail of the mailboxes switched on here: Inbox, Sent, Drafts, Archive, Spam and Trash. One left out stays in its own section.',
+    it: '«Tutte le caselle», nella barra della Posta, riunisce in un elenco solo la posta delle caselle accese qui: Posta in arrivo, Inviata, Bozze, Archivio, Spam e Cestino. Una esclusa resta nella sua sezione.',
+    de: '„Alle Postfächer“ in der Seitenleiste der E-Mail fasst die E-Mails der hier eingeschalteten Postfächer in einer Liste zusammen: Posteingang, Gesendet, Entwürfe, Archiv, Spam und Papierkorb. Ein ausgeschlossenes bleibt in seinem eigenen Bereich.'
+  },
+  noneIncluded: {
+    en: 'No mailbox included: “All mailboxes” does not appear.',
+    it: 'Nessuna casella inclusa: «Tutte le caselle» non compare.',
+    de: 'Kein Postfach einbezogen: „Alle Postfächer“ erscheint nicht.'
+  },
+  newEventCalendar: {
+    en: 'Calendar for new events',
+    it: 'Calendario dei nuovi eventi',
+    de: 'Kalender für neue Termine'
+  },
+  newEventCalendarText: {
+    en: 'Where an event you create in the Calendar goes; you can change it event by event too.',
+    it: 'Dove va un evento che crei nel Calendario; lo cambi anche evento per evento.',
+    de: 'Wohin ein Termin geht, den Sie im Kalender erstellen; Sie können ihn auch Termin für Termin ändern.'
+  },
+  principal: { en: 'The main one', it: 'Il principale', de: 'Der Hauptkalender' },
+  newEventLength: {
+    en: 'Length of a new event',
+    it: 'Durata di un evento nuovo',
+    de: 'Dauer eines neuen Termins'
+  },
+  newEventLengthText: {
+    en: 'With a click on the calendar, or with “New event”. When you drag, it is what you draw.',
+    it: 'Con un clic sul calendario, o con «Nuovo evento». Trascinando, è quella che disegni.',
+    de: 'Mit einem Klick in den Kalender oder mit „Neuer Termin“. Beim Ziehen ist es die, die Sie zeichnen.'
+  }
+})
 
 /** The calendar new events go to when the user has not chosen one: the principal one. */
 const PRINCIPAL = '__principale__'
 
-function minutesWords(minutes: number): string {
-  if (minutes < 60) {
-    return `${minutes} minuti`
-  }
-
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  return `${hours === 1 ? '1 ora' : `${hours} ore`}${rest ? ` e ${rest} minuti` : ''}`
+function minutesWords(m: Messages<typeof MESSAGES>, minutes: number): string {
+  return minutes < 60
+    ? m.minutes(minutes)
+    : m.hoursAndMinutes(Math.floor(minutes / 60), minutes % 60)
 }
 
 function errorText(error: unknown): string | undefined {
@@ -115,6 +230,9 @@ export function PreferencesSection({
   /** The mailboxes «Tutte le caselle» gathers changed. */
   onUnifiedChanged: () => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
+  const { language } = useLanguage()
   const { calendars } = useCalendarList()
   const [openAtLogin, setOpenAtLogin] = useState<OpenAtLogin | null>(null)
   const [unified, setUnified] = useState<string[] | null>(null)
@@ -153,7 +271,7 @@ export function PreferencesSection({
       })
       .catch((error: unknown) => {
         if (current) {
-          setUnifiedError(errorText(error) ?? 'Le caselle incluse non si leggono.')
+          setUnifiedError(errorText(error) ?? messagesNow(MESSAGES).unifiedUnreadable)
         }
       })
 
@@ -166,7 +284,7 @@ export function PreferencesSection({
     try {
       setOpenAtLogin(await window.mailApi.setOpenAtLogin(enabled))
     } catch (error) {
-      toast.error('Impostazione non salvata', { description: errorText(error) })
+      toast.error(m.notSaved, { description: errorText(error) })
     }
   }
 
@@ -187,7 +305,7 @@ export function PreferencesSection({
       setUnified(saved.includedAccountIds)
       onUnifiedChanged()
     } catch (error) {
-      setUnifiedError(errorText(error) ?? 'Le caselle incluse non sono state salvate.')
+      setUnifiedError(errorText(error) ?? m.unifiedNotSaved)
     } finally {
       setSaving(false)
     }
@@ -203,6 +321,16 @@ export function PreferencesSection({
   )
     ? (preferences.newEventCalendarKey as string)
     : PRINCIPAL
+  const themeOptions = [
+    { value: 'system', label: m.themeSystem, icon: Monitor },
+    { value: 'light', label: m.themeLight, icon: Sun },
+    { value: 'dark', label: m.themeDark, icon: Moon }
+  ] as const satisfies ReadonlyArray<{ value: ThemeMode; label: string; icon: typeof Monitor }>
+  const layoutOptions: ReadonlyArray<{ mode: MailLayoutMode; label: string; description: string }> =
+    [
+      { mode: 'apple', label: m.layoutSide, description: m.layoutSideText },
+      { mode: 'outlook', label: m.layoutColumn, description: m.layoutColumnText }
+    ]
   const zoomSteps = [
     ...new Set<number>([...READER_ZOOM_STEPS.filter((step) => step >= 75), preferences.readerZoom])
   ].sort((a, b) => a - b)
@@ -210,24 +338,34 @@ export function PreferencesSection({
   return (
     <SettingsPage>
       <SettingsGroup title="SIEVER Mail">
+        <ChoiceRow
+          title={m.language}
+          description={m.languageText}
+          value={language}
+          options={LANGUAGES}
+          words={(option) => LANGUAGE_NAMES[option]}
+          label={m.language}
+          width="w-36"
+          onChange={(chosen) => void chooseLanguage(chosen)}
+        />
         <OptionsRow
-          title="Aspetto"
-          description="Sistema segue il computer, anche quando cambia nel corso della giornata. I messaggi restano su pagina bianca, come si scrivono."
+          title={m.appearance}
+          description={m.appearanceText}
           value={preferences.themeMode}
-          options={THEME_OPTIONS}
-          label="Aspetto"
+          options={themeOptions}
+          label={m.appearance}
           onChange={(themeMode) => onChange({ themeMode })}
         />
         {loginRow && (
           <SettingRow
             id="preferences-open-at-login"
-            title="Apri all’accesso al computer"
+            title={m.openAtLogin}
             description={
               !openAtLogin.supported
-                ? 'Si sceglie nell’app installata.'
+                ? m.openAtLoginInstalled
                 : openAtLogin.needsApproval
-                  ? 'Il sistema aspetta che lo consenta tu: Impostazioni di Sistema › Generali › Elementi login.'
-                  : 'Così ciò che arriva ti trova anche prima che tu lo apra: le notifiche, e il lavoro del Segretario.'
+                  ? m.openAtLoginApproval
+                  : m.openAtLoginText
             }
             checked={openAtLogin.enabled || openAtLogin.needsApproval}
             disabled={!openAtLogin.supported}
@@ -237,15 +375,11 @@ export function PreferencesSection({
       </SettingsGroup>
 
       {accounts.length > 0 && (
-        <SettingsGroup title="Posta">
+        <SettingsGroup title={places.mail}>
           <div className="bg-hover flex flex-col gap-2 rounded-md px-3 py-2">
-            <span className="text-[12px] font-medium">Disposizione</span>
-            <div
-              role="radiogroup"
-              aria-label="Disposizione della Posta"
-              className="grid grid-cols-2 gap-2"
-            >
-              {LAYOUT_OPTIONS.map((option) => {
+            <span className="text-[12px] font-medium">{m.layout}</span>
+            <div role="radiogroup" aria-label={m.layoutLabel} className="grid grid-cols-2 gap-2">
+              {layoutOptions.map((option) => {
                 const active = preferences.layoutMode === option.mode
 
                 return (
@@ -278,45 +412,41 @@ export function PreferencesSection({
             </div>
           </div>
           <OptionsRow
-            title="Ordine dell’elenco"
-            description="Dal fondo, come una chat: i messaggi più recenti in basso, e si sale per andare indietro."
+            title={m.order}
+            description={m.orderText}
             value={preferences.invertMessageListOrder ? 'fondo' : 'alto'}
             options={[
-              { value: 'alto', label: 'Dall’alto' },
-              { value: 'fondo', label: 'Dal fondo' }
+              { value: 'alto', label: m.fromTop },
+              { value: 'fondo', label: m.fromBottom }
             ]}
-            label="Ordine dell’elenco"
+            label={m.order}
             onChange={(order) => onChange({ invertMessageListOrder: order === 'fondo' })}
           />
           <OptionsRow
-            title="Raggruppamento"
-            description="Automatico segue l’ordinamento: per giorno se ordini per data, per mittente se ordini per mittente."
+            title={m.grouping}
+            description={m.groupingText}
             value={preferences.messageGrouping}
             options={GROUPING_OPTIONS.map((option) => ({
               value: option.mode,
-              label: option.label
+              label: option.label[language]
             }))}
-            label="Raggruppamento dell’elenco"
+            label={m.groupingLabel}
             onChange={(messageGrouping: MessageGroupingMode) => onChange({ messageGrouping })}
           />
           <ChoiceRow
-            title="Dimensione dei messaggi"
-            description={`Anche con ${IS_MAC ? '⌘' : 'Ctrl'} e la rotella, sul messaggio.`}
+            title={m.messageSize}
+            description={m.messageSizeText(IS_MAC ? '⌘' : 'Ctrl')}
             value={String(preferences.readerZoom)}
             options={zoomSteps.map(String)}
             words={(zoom) => `${zoom}%`}
-            label="Dimensione dei messaggi"
+            label={m.messageSize}
             width="w-24"
             onChange={(zoom) => onChange({ readerZoom: Number(zoom) })}
           />
 
           {accounts.length > 1 && (
             <div className="flex flex-col gap-2">
-              <p className="text-muted-foreground mt-1 text-[11px]">
-                «Tutte le caselle», nella barra della Posta, riunisce in un elenco solo la posta
-                delle caselle accese qui: Posta in arrivo, Inviata, Bozze, Archivio, Spam e Cestino.
-                Una esclusa resta nella sua sezione.
-              </p>
+              <p className="text-muted-foreground mt-1 text-[11px]">{m.unifiedText}</p>
               {accounts.map((account) => (
                 <SettingRow
                   key={account.id}
@@ -328,11 +458,7 @@ export function PreferencesSection({
                   onCheckedChange={(included) => void include(account.id, included)}
                 />
               ))}
-              {unified?.length === 0 && (
-                <SettingsEmpty>
-                  Nessuna casella inclusa: «Tutte le caselle» non compare.
-                </SettingsEmpty>
-              )}
+              {unified?.length === 0 && <SettingsEmpty>{m.noneIncluded}</SettingsEmpty>}
               {unifiedError && <SettingsNotice tone="error">{unifiedError}</SettingsNotice>}
             </div>
           )}
@@ -340,31 +466,31 @@ export function PreferencesSection({
       )}
 
       {writable.length > 0 && (
-        <SettingsGroup title="Calendario">
+        <SettingsGroup title={places.calendar}>
           <ChoiceRow
-            title="Calendario dei nuovi eventi"
-            description="Dove va un evento che crei nel Calendario; lo cambi anche evento per evento."
+            title={m.newEventCalendar}
+            description={m.newEventCalendarText}
             value={chosenCalendar}
             options={[PRINCIPAL, ...writable.map((calendar) => calendar.key)]}
             words={(key) => {
               if (key === PRINCIPAL) {
-                return 'Il principale'
+                return m.principal
               }
 
               const calendar = writable.find((candidate) => candidate.key === key)
               return calendar ? `${calendar.name} · ${calendar.connection}` : key
             }}
-            label="Calendario dei nuovi eventi"
+            label={m.newEventCalendar}
             width="w-60"
             onChange={(key) => onChange({ newEventCalendarKey: key === PRINCIPAL ? null : key })}
           />
           <ChoiceRow
-            title="Durata di un evento nuovo"
-            description="Con un clic sul calendario, o con «Nuovo evento». Trascinando, è quella che disegni."
+            title={m.newEventLength}
+            description={m.newEventLengthText}
             value={String(preferences.newEventMinutes)}
             options={NEW_EVENT_MINUTES.map(String)}
-            words={(minutes) => minutesWords(Number(minutes))}
-            label="Durata di un evento nuovo"
+            words={(minutes) => minutesWords(m, Number(minutes))}
+            label={m.newEventLength}
             width="w-44"
             onChange={(minutes) => onChange({ newEventMinutes: Number(minutes) })}
           />

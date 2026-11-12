@@ -8,6 +8,8 @@ import MailComposer from 'nodemailer/lib/mail-composer'
 
 import { extractErrorDetails } from '@main/utils/error-utils'
 import { diagnostics } from '@main/diagnostics/log'
+import { messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
 import type {
   AddImapAccountInput,
   ComposeMailInput,
@@ -18,6 +20,65 @@ import type {
 import type { MailTokens } from '../mail-tokens'
 
 const log = diagnostics('mail')
+
+/** How a server that turned the connection down is described to the user who set it up. */
+const MESSAGES = defineMessages({
+  imapFailed: {
+    en: (server: string, mode: string) => `IMAP connection failed on ${server} (${mode}).`,
+    it: (server: string, mode: string) => `Connessione IMAP fallita su ${server} (${mode}).`,
+    de: (server: string, mode: string) => `IMAP-Verbindung zu ${server} fehlgeschlagen (${mode}).`
+  },
+  smtpFailed: {
+    en: (server: string, mode: string) => `SMTP connection failed on ${server} (${mode}).`,
+    it: (server: string, mode: string) => `Connessione SMTP fallita su ${server} (${mode}).`,
+    de: (server: string, mode: string) => `SMTP-Verbindung zu ${server} fehlgeschlagen (${mode}).`
+  },
+  user: {
+    en: (user: string) => `User: ${user}`,
+    it: (user: string) => `Utente: ${user}`,
+    de: (user: string) => `Benutzer: ${user}`
+  },
+  serverCode: {
+    en: (code: string) => `Server code: ${code}`,
+    it: (code: string) => `Codice server: ${code}`,
+    de: (code: string) => `Servercode: ${code}`
+  },
+  imapCommand: {
+    en: (command: string) => `IMAP command: ${command}`,
+    it: (command: string) => `Comando IMAP: ${command}`,
+    de: (command: string) => `IMAP-Befehl: ${command}`
+  },
+  serverAnswer: {
+    en: (answer: string) => `Server answer: ${answer}`,
+    it: (answer: string) => `Risposta server: ${answer}`,
+    de: (answer: string) => `Antwort des Servers: ${answer}`
+  },
+  detail: {
+    en: (detail: string) => `Detail: ${detail}`,
+    it: (detail: string) => `Dettaglio: ${detail}`,
+    de: (detail: string) => `Detail: ${detail}`
+  },
+  imapHint: {
+    en: 'Hint: the IMAP server didn’t accept the credentials, or the account is locked or disabled by the provider.',
+    it: 'Suggerimento: credenziali non accettate dal server IMAP o account bloccato/disabilitato lato provider.',
+    de: 'Hinweis: Der IMAP-Server hat die Anmeldedaten nicht akzeptiert, oder das Konto wurde vom Anbieter gesperrt bzw. deaktiviert.'
+  },
+  errorCode: {
+    en: (code: string) => `Error code: ${code}`,
+    it: (code: string) => `Codice errore: ${code}`,
+    de: (code: string) => `Fehlercode: ${code}`
+  },
+  smtpHint: {
+    en: 'Hint: the SMTP port is blocked by a firewall, or the port or SSL mode is wrong (try 465 SSL or 587 STARTTLS).',
+    it: 'Suggerimento: porta SMTP bloccata/firewall oppure porta/modalità SSL errata (prova 465 SSL o 587 STARTTLS).',
+    de: 'Hinweis: Der SMTP-Port ist durch eine Firewall gesperrt, oder Port bzw. SSL-Modus sind falsch (versuchen Sie 465 SSL oder 587 STARTTLS).'
+  },
+  noAnswer: {
+    en: (server: string) => `No answer from ${server}.`,
+    it: (server: string) => `Nessuna risposta da ${server}.`,
+    de: (server: string) => `Keine Antwort von ${server}.`
+  }
+})
 
 export interface AccountWithSecret extends MailAccount {
   secret: string
@@ -161,30 +222,29 @@ function formatConnectionMode(secure: boolean): string {
 
 export function composeImapVerificationError(input: ImapServer, error: unknown): Error {
   const details = extractErrorDetails(error)
+  const m = messages(MESSAGES)
 
   const lines = [
-    `Connessione IMAP fallita su ${input.imapHost}:${input.imapPort} (${formatConnectionMode(input.imapSecure)}).`,
-    `Utente: ${input.username}`
+    m.imapFailed(`${input.imapHost}:${input.imapPort}`, formatConnectionMode(input.imapSecure)),
+    m.user(input.username)
   ]
 
   if (details.serverResponseCode) {
-    lines.push(`Codice server: ${details.serverResponseCode}`)
+    lines.push(m.serverCode(details.serverResponseCode))
   }
 
   if (details.executedCommand) {
-    lines.push(`Comando IMAP: ${details.executedCommand}`)
+    lines.push(m.imapCommand(details.executedCommand))
   }
 
   if (details.responseText) {
-    lines.push(`Risposta server: ${details.responseText}`)
+    lines.push(m.serverAnswer(details.responseText))
   } else if (details.message) {
-    lines.push(`Dettaglio: ${details.message}`)
+    lines.push(m.detail(details.message))
   }
 
   if (details.authenticationFailed || details.serverResponseCode === 'AUTHENTICATIONFAILED') {
-    lines.push(
-      'Suggerimento: credenziali non accettate dal server IMAP o account bloccato/disabilitato lato provider.'
-    )
+    lines.push(m.imapHint)
   }
 
   return new Error(lines.join('\n'), { cause: error })
@@ -192,26 +252,25 @@ export function composeImapVerificationError(input: ImapServer, error: unknown):
 
 export function composeSmtpVerificationError(input: SmtpServer, error: unknown): Error {
   const details = extractErrorDetails(error)
+  const m = messages(MESSAGES)
 
   const lines = [
-    `Connessione SMTP fallita su ${input.smtpHost}:${input.smtpPort} (${formatConnectionMode(input.smtpSecure)}).`,
-    `Utente: ${input.username}`
+    m.smtpFailed(`${input.smtpHost}:${input.smtpPort}`, formatConnectionMode(input.smtpSecure)),
+    m.user(input.username)
   ]
 
   if (details.code) {
-    lines.push(`Codice errore: ${details.code}`)
+    lines.push(m.errorCode(details.code))
   }
 
   if (details.response) {
-    lines.push(`Risposta server: ${details.response}`)
+    lines.push(m.serverAnswer(details.response))
   } else if (details.message) {
-    lines.push(`Dettaglio: ${details.message}`)
+    lines.push(m.detail(details.message))
   }
 
   if (details.code === 'ETIMEDOUT') {
-    lines.push(
-      'Suggerimento: porta SMTP bloccata/firewall oppure porta/modalità SSL errata (prova 465 SSL o 587 STARTTLS).'
-    )
+    lines.push(m.smtpHint)
   }
 
   return new Error(lines.join('\n'), { cause: error })
@@ -264,7 +323,7 @@ function openSmtpSocket(
   const timer = setTimeout(
     () =>
       settle(
-        Object.assign(new Error(`Nessuna risposta da ${options.host}:${options.port}.`), {
+        Object.assign(new Error(messages(MESSAGES).noAnswer(`${options.host}:${options.port}`)), {
           code: 'ETIMEDOUT'
         })
       ),

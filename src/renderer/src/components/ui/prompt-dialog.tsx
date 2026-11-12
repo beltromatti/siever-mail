@@ -10,6 +10,12 @@ import {
   DialogTitle
 } from '@renderer/components/ui/dialog'
 import { Input } from '@renderer/components/ui/input'
+import { useMessages } from '@renderer/lib/i18n'
+import { defineMessages } from '@shared/i18n'
+
+const MESSAGES = defineMessages({
+  cancel: { en: 'Cancel', it: 'Annulla', de: 'Abbrechen' }
+})
 
 export interface PromptOptions {
   title: string
@@ -33,6 +39,7 @@ export function usePromptDialog(): {
   dialog: React.JSX.Element
   open: boolean
 } {
+  const m = useMessages(MESSAGES)
   const [options, setOptions] = useState<PromptOptions | null>(null)
   const [value, setValue] = useState('')
   const resolveRef = useRef<((value: string | null) => void) | null>(null)
@@ -103,7 +110,7 @@ export function usePromptDialog(): {
 
           <DialogFooter className="flex-wrap">
             <Button type="button" variant="ghost" onClick={() => settle(null)}>
-              Annulla
+              {m.cancel}
             </Button>
             <Button type="submit" disabled={!canConfirm}>
               {options?.confirmLabel}

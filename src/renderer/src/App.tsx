@@ -87,11 +87,13 @@ import { useTaskbarBadge } from '@renderer/lib/taskbar-badge'
 import { segretarioProjectPath } from '@shared/folders'
 import { CommandShortcutsProvider, isOverlaySurfaceOpen } from '@renderer/lib/command-shortcuts'
 import { uiLog } from '@renderer/lib/diagnostics'
+import { languageNow, messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
 import { buildOutgoingMailHtml } from '@renderer/lib/outgoing-mail-html'
 import { messageRefKey, summaryToMessageRef } from '@renderer/lib/message-selection'
 import { cn } from '@renderer/lib/utils'
 import { clampReaderZoom, DEFAULT_UI_PREFERENCES } from '@shared/models'
 import { findCommand, type HostCommandId } from '@shared/commands'
+import { PLACES } from '@shared/places'
 import { replyRecipients, replyReferences } from '@shared/reply'
 import { forwardSubject, replySubject } from '@shared/subject'
 import type {
@@ -106,7 +108,9 @@ import type {
   WindowControlsState
 } from '@shared/models'
 
-/** How long a notice offering "Annulla" stays, as Gmail leaves its own. */
+import { MESSAGES } from './App.messages'
+
+/** How long a notice offering "Undo" stays, as Gmail leaves its own. */
 const UNDO_TOAST_DURATION_MS = 10_000
 const READER_ZOOM_SAVE_DELAY_MS = 400
 
@@ -136,7 +140,7 @@ function useMailBootstrap(): {
       setCapabilities(payload.capabilities)
     } catch (caughtError) {
       setError(
-        caughtError instanceof Error ? caughtError.message : 'Bootstrap applicazione non riuscito.'
+        caughtError instanceof Error ? caughtError.message : messagesNow(MESSAGES).bootstrapFailed
       )
     } finally {
       setLoading(false)
@@ -256,17 +260,28 @@ const APP_ICONS: Readonly<Record<AppId, LucideIcon>> = {
   projects: Briefcase
 }
 
+/** Each app by the name of its place, in the interface's language. */
+const APP_PLACES: Readonly<Record<AppId, keyof typeof PLACES>> = {
+  oggi: 'today',
+  mail: 'mail',
+  calendar: 'calendar',
+  files: 'files',
+  contacts: 'contacts',
+  projects: 'projects'
+}
+
 /**
- * The apps of the rail, in their groups (see `WORKSPACE_APPS`). Oggi is the
- * Segretario's, there only with the AI on.
+ * The apps of the rail, in their groups (see `WORKSPACE_APPS`), named where
+ * they are drawn. Oggi is the Segretario's, there only with the AI on.
  */
-const RAIL_ITEMS: ReadonlyArray<RailItem & { id: AppId }> = WORKSPACE_APPS.map((app) => ({
-  id: app.id,
-  label: app.label,
-  icon: APP_ICONS[app.id],
-  group: app.group,
-  soon: !app.available
-}))
+const RAIL_ITEMS: ReadonlyArray<Omit<RailItem, 'label'> & { id: AppId }> = WORKSPACE_APPS.map(
+  (app) => ({
+    id: app.id,
+    icon: APP_ICONS[app.id],
+    group: app.group,
+    soon: !app.available
+  })
+)
 
 function AppFrame({
   children,
@@ -300,6 +315,7 @@ function AppFrame({
   /** What asks the user wherever the window stands: a refusal, a confirmation. */
   overlay: ReactNode
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   // Where the window's own chrome sits, for the panes to keep clear of it:
   // macOS draws its three lights in the top left corner of the rail and the
   // sidebar; Windows gets the app's own buttons in the top right.
@@ -341,8 +357,8 @@ function AppFrame({
               type="button"
               className="text-muted-foreground hover:bg-hover hover:text-foreground inline-flex h-8 w-10 items-center justify-center transition-colors"
               onClick={onMinimizeWindow}
-              aria-label="Minimizza finestra"
-              title="Minimizza"
+              aria-label={m.minimizeWindow}
+              title={m.minimize}
             >
               <Minus className="size-3.5" />
             </button>
@@ -350,10 +366,8 @@ function AppFrame({
               type="button"
               className="text-muted-foreground hover:bg-hover hover:text-foreground inline-flex h-8 w-10 items-center justify-center transition-colors"
               onClick={onToggleMaximizeWindow}
-              aria-label={
-                windowControlsState.maximized ? 'Riduci finestra' : 'Ingrandisci finestra'
-              }
-              title={windowControlsState.maximized ? 'Riduci' : 'Ingrandisci'}
+              aria-label={windowControlsState.maximized ? m.restoreWindow : m.maximizeWindow}
+              title={windowControlsState.maximized ? m.restore : m.maximize}
             >
               <Square className="size-3" />
             </button>
@@ -361,8 +375,8 @@ function AppFrame({
               type="button"
               className="text-muted-foreground hover:bg-destructive hover:text-destructive-foreground inline-flex h-8 w-10 items-center justify-center transition-colors"
               onClick={onCloseWindow}
-              aria-label="Chiudi finestra"
-              title="Chiudi"
+              aria-label={m.closeWindow}
+              title={m.close}
             >
               <X className="size-3.5" />
             </button>
@@ -377,6 +391,10 @@ function AppFrame({
 }
 
 function App(): React.JSX.Element {
+  // The whole window redraws in the interface's language when it changes (§13.5).
+  const { language } = useLanguage()
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
   useTaskbarBadge()
   const {
     accounts,
@@ -437,7 +455,9 @@ function App(): React.JSX.Element {
   const segretarioOffered = aiOn
   // Oggi is the Segretario's: with the AI off the rail goes without it, and the first source
   // takes its place.
-  const railItems = aiOn ? RAIL_ITEMS : RAIL_ITEMS.filter((item) => item.id !== 'oggi')
+  const railItems = (aiOn ? RAIL_ITEMS : RAIL_ITEMS.filter((item) => item.id !== 'oggi')).map(
+    (item) => ({ ...item, label: places[APP_PLACES[item.id]] })
+  )
   const shownApp: AppId = activeApp === 'oggi' && !aiOn ? firstSourceApp : activeApp
 
   /** The calendar, opened on a day — and on an event of it, its panel open. */
@@ -452,7 +472,7 @@ function App(): React.JSX.Element {
       const event = await window.calendarApi.event(eventKey)
 
       if (!event) {
-        toast.error('L’evento non è più nel calendario.')
+        toast.error(messagesNow(MESSAGES).eventGone)
         openCalendar({ day: new Date() })
         return
       }
@@ -657,12 +677,12 @@ function App(): React.JSX.Element {
           .then(
             (taken) =>
               taken &&
-              toast.info('Non è più in uscita', {
-                description: 'Il messaggio è tornato nelle tue mani: invialo quando è pronto.'
+              toast.info(messagesNow(MESSAGES).takenBack, {
+                description: messagesNow(MESSAGES).takenBackText
               })
           )
           .catch((error: unknown) =>
-            toast.error('Non è stato tolto dalla posta in uscita', {
+            toast.error(messagesNow(MESSAGES).notTakenBack, {
               description: error instanceof Error ? error.message : undefined
             })
           )
@@ -689,12 +709,14 @@ function App(): React.JSX.Element {
     (id: string, outcome: ComposerOutcome): void => {
       removeComposeSession(id)
 
+      const words = messagesNow(MESSAGES)
+
       if (outcome.kind === 'saved') {
         const { content } = outcome
-        toast.success('Bozza salvata in Bozze', {
-          description: content.subject.trim() || '(senza oggetto)',
+        toast.success(words.draftSaved, {
+          description: content.subject.trim() || words.noSubject,
           action: {
-            label: 'Apri',
+            label: words.open,
             onClick: () => openComposer(draftToInitialData(content))
           }
         })
@@ -707,22 +729,22 @@ function App(): React.JSX.Element {
 
       const { content } = outcome
       window.mailApi.discardDraft(id).catch((error: unknown) =>
-        toast.error('Bozza non eliminata', {
+        toast.error(messagesNow(MESSAGES).draftNotDeleted, {
           description: error instanceof Error ? error.message : undefined
         })
       )
-      toast('Bozza eliminata', {
-        description: content.subject.trim() || '(senza oggetto)',
+      toast(words.draftDeleted, {
+        description: content.subject.trim() || words.noSubject,
         duration: UNDO_TOAST_DURATION_MS,
         action: {
-          label: 'Annulla',
+          label: words.undo,
           onClick: () => {
             // Written again as it was, and back in front.
             window.mailApi
               .saveDraft(content)
               .then((status) => openComposer(draftToInitialData(content), { status }))
               .catch((error: unknown) =>
-                toast.error('Bozza non ripristinata', {
+                toast.error(messagesNow(MESSAGES).draftNotRestored, {
                   description: error instanceof Error ? error.message : undefined
                 })
               )
@@ -798,9 +820,9 @@ function App(): React.JSX.Element {
         }
 
         reported.add(status.id)
-        toast.warning('Bozza non ancora in Bozze', {
-          description:
-            `È al sicuro su questo computer e ci andrà appena possibile. ${status.message ?? ''}`.trim()
+        const words = messagesNow(MESSAGES)
+        toast.warning(words.draftNotInDrafts, {
+          description: `${words.draftSafeHere} ${status.message ?? ''}`.trim()
         })
       }),
     [removeComposeSession]
@@ -840,8 +862,8 @@ function App(): React.JSX.Element {
       if (stored) {
         openComposer(draftToInitialData(stored.content), { status: stored.status })
       } else {
-        toast.error('Bozza non più disponibile', {
-          description: 'È stata inviata o scartata.'
+        toast.error(messagesNow(MESSAGES).draftUnavailable, {
+          description: messagesNow(MESSAGES).draftSentOrDiscarded
         })
       }
     },
@@ -896,7 +918,7 @@ function App(): React.JSX.Element {
           to: addresses(spec.to),
           cc: addresses(spec.cc),
           bcc: addresses(spec.bcc),
-          subject: forwardSubject(message.subject),
+          subject: forwardSubject(message.subject, languageNow().language),
           quoteHtml: await buildForwardQuoteHtml(message),
           original,
           attachments: [
@@ -924,7 +946,7 @@ function App(): React.JSX.Element {
         to: addresses(spec.to) ?? recipients.to,
         cc: addresses(spec.cc) ?? recipients.cc,
         bcc: addresses(spec.bcc),
-        subject: replySubject(message.subject),
+        subject: replySubject(message.subject, languageNow().language),
         quoteHtml: await buildReplyQuoteHtml(message),
         inReplyTo: message.messageId,
         references: replyReferences(message),
@@ -939,7 +961,8 @@ function App(): React.JSX.Element {
   // The Segretario writes a draft. In one open in a tab — the message the user is writing — it
   // writes in place, as a step ⌘Z takes back. Otherwise the draft opens in a tab of its own,
   // kept and filed in Bozze like any draft, and the Segretario hears its id once the first save
-  // has landed.
+  // has landed. What goes wrong is told to the Segretario, as its tool's error: in Italian, the
+  // language it works in (vision §13.5).
   useEffect(
     () =>
       window.segretarioApi.onComposeRequest(({ requestId, spec }) => {
@@ -1034,8 +1057,8 @@ function App(): React.JSX.Element {
         const source = await window.segretarioApi.replySource(accountId, messageKey)
 
         if (!source) {
-          toast.error('Il messaggio non c’è più', {
-            description: 'È stato spostato fuori dalla posta o eliminato.'
+          toast.error(messagesNow(MESSAGES).messageGone, {
+            description: messagesNow(MESSAGES).messageGoneText
           })
           return
         }
@@ -1051,7 +1074,7 @@ function App(): React.JSX.Element {
         uiLog.info('composer.open', { kind: 'reply', prepared: true })
         await window.segretarioApi.takeUpReply(accountId, messageKey, id)
       } catch (error) {
-        toast.error('La risposta non si è aperta', {
+        toast.error(messagesNow(MESSAGES).replyNotOpened, {
           description: error instanceof Error ? error.message : undefined
         })
       }
@@ -1074,13 +1097,13 @@ function App(): React.JSX.Element {
             ? await window.segretarioApi.replySource(source.accountId, source.messageKey)
             : null
         setSegretarioOpen(true)
-        await startSegretario(`Prepara un sollecito: ${commitment.text}`, {
+        await startSegretario(messagesNow(MESSAGES).remindRequest(commitment.text), {
           messages: ref ? [ref] : [],
           accountId: source.kind === 'message' ? source.accountId : null,
           folderLabel: null
         })
       } catch (error) {
-        toast.error('Il sollecito non è partito', {
+        toast.error(messagesNow(MESSAGES).remindFailed, {
           description: error instanceof Error ? error.message : undefined
         })
       }
@@ -1109,7 +1132,8 @@ function App(): React.JSX.Element {
   /**
    * The user's answer to a confirmation the Segretario asked for. A send
    * goes out the way any message goes — through its composer, with the
-   * same checks and the same layout — and the Segretario hears how it went.
+   * same checks and the same layout — and the Segretario hears how it went,
+   * in Italian, the language it works in.
    */
   const answerSegretarioApproval = useCallback(
     async (activityId: string, approval: ApprovalRequest, approved: boolean): Promise<void> => {
@@ -1210,10 +1234,12 @@ function App(): React.JSX.Element {
     }
   }
 
-  // How every connection stands — mail and calendars — for the rail's dot.
+  // How every connection stands — mail and calendars — for the rail's dot, in the interface's
+  // language: said again when it changes.
   const connectionStatus = useMemo(
     () => connectionsStatus(accounts, mail.accountConnections, calendarConnections ?? []),
-    [accounts, calendarConnections, mail.accountConnections]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the words follow the language
+    [accounts, calendarConnections, mail.accountConnections, language]
   )
   const { openMessage: openMailMessage, selectFolder, openAskedSearch, setSelectedAccountId } = mail
 
@@ -1358,8 +1384,8 @@ function App(): React.JSX.Element {
           if (ref) {
             openMessageRef(ref)
           } else {
-            toast.error('Il messaggio non c’è più', {
-              description: 'È stato spostato fuori dalla posta o eliminato.'
+            toast.error(messagesNow(MESSAGES).messageGone, {
+              description: messagesNow(MESSAGES).messageGoneText
             })
           }
         })
@@ -1402,8 +1428,8 @@ function App(): React.JSX.Element {
             } else if (source?.kind === 'user') {
               setActiveApp('oggi')
             } else {
-              toast.error('Non c’è più', {
-                description: 'Il messaggio o l’evento da cui veniva è stato eliminato.'
+              toast.error(messagesNow(MESSAGES).sourceGone, {
+                description: messagesNow(MESSAGES).sourceGoneText
               })
             }
           })
@@ -1515,7 +1541,7 @@ function App(): React.JSX.Element {
       }
 
       void (async () => {
-        const sendingToast = toast.loading('Invio in corso…')
+        const sendingToast = toast.loading(messagesNow(MESSAGES).sending)
         // Who sent it: the user, or the Segretario that asked and waits to hear (§14.4).
         const sent = {
           by:
@@ -1537,13 +1563,12 @@ function App(): React.JSX.Element {
           uiLog.info('composer.send', { ...sent, queued, ms: Date.now() - startedAt })
 
           if (queued) {
-            toast.info('In uscita', {
+            toast.info(messagesNow(MESSAGES).queued, {
               id: sendingToast,
-              description:
-                'Il server della posta ora non si raggiunge: il messaggio parte da solo appena risponde.'
+              description: messagesNow(MESSAGES).queuedText
             })
           } else {
-            toast.success('Messaggio inviato', { id: sendingToast })
+            toast.success(messagesNow(MESSAGES).sent, { id: sendingToast })
           }
 
           settleSegretarioSend(payload.draftId, { sent: true, queued })
@@ -1557,6 +1582,7 @@ function App(): React.JSX.Element {
         } catch (caughtError) {
           toast.dismiss(sendingToast)
           uiLog.warn('composer.send.failed', { ...sent, ms: Date.now() - startedAt })
+          // The Segretario reads its own words (Italian); the user, theirs.
           settleSegretarioSend(payload.draftId, {
             sent: false,
             error:
@@ -1570,7 +1596,7 @@ function App(): React.JSX.Element {
             message:
               caughtError instanceof Error && caughtError.message.trim()
                 ? caughtError.message
-                : 'Invio email non riuscito.'
+                : messagesNow(MESSAGES).sendFailedText
           }
           setFailedSends((current) => [...current, failure])
         }
@@ -1582,8 +1608,8 @@ function App(): React.JSX.Element {
   // The outbox: a message that waited for its server went, or gave up — its draft offered back.
   useEffect(() => {
     const offSent = window.mailApi.onOutboxSent(({ subject }) =>
-      toast.success('Messaggio partito', {
-        description: `«${subject || 'Senza oggetto'}» era in uscita: il server ora risponde.`
+      toast.success(messagesNow(MESSAGES).outboxSent, {
+        description: messagesNow(MESSAGES).outboxSentText(subject)
       })
     )
     const offFailed = window.mailApi.onOutboxFailed(({ draftId, message }) => {
@@ -1591,7 +1617,10 @@ function App(): React.JSX.Element {
         const stored = draftId ? await window.mailApi.getStoredDraft(draftId) : null
 
         if (!stored) {
-          toast.error('Invio non riuscito', { description: message, duration: Infinity })
+          toast.error(messagesNow(MESSAGES).sendFailed, {
+            description: message,
+            duration: Infinity
+          })
           return
         }
 
@@ -1680,7 +1709,7 @@ function App(): React.JSX.Element {
     setupOpenRef.current = next !== null
     setOnboarding(next)
     void window.segretarioApi.setOnboarding(next).catch((error: unknown) =>
-      toast.error('La configurazione non è stata salvata', {
+      toast.error(messagesNow(MESSAGES).setupNotSaved, {
         description: error instanceof Error ? error.message : undefined
       })
     )
@@ -1733,7 +1762,7 @@ function App(): React.JSX.Element {
           }
 
           window.calendarApi.disconnect(notice.id).catch((error: unknown) =>
-            toast.error('Il calendario non si è scollegato', {
+            toast.error(messagesNow(MESSAGES).calendarNotDisconnected, {
               description: error instanceof Error ? error.message : undefined
             })
           )
@@ -1756,10 +1785,10 @@ function App(): React.JSX.Element {
       >
         <div className="mx-auto flex h-full max-w-xl items-center px-6">
           <div className="border-destructive/40 bg-destructive/15 w-full rounded-xl border p-6">
-            <p className="display-title text-2xl">Errore inizializzazione</p>
+            <p className="display-title text-2xl">{m.startupError}</p>
             <p className="text-destructive-soft-foreground mt-2 text-sm">{bootstrapError}</p>
             <Button className="window-no-drag mt-5" onClick={() => void reloadBootstrap()}>
-              Riprova
+              {m.retry}
             </Button>
           </div>
         </div>
@@ -1781,7 +1810,7 @@ function App(): React.JSX.Element {
         <div className="flex h-full items-center justify-center">
           <div className="border-border bg-card/70 flex items-center gap-3 rounded-xl border px-5 py-4 text-sm">
             <LoaderCircle className="text-primary size-5 animate-spin" />
-            Avvio di SIEVER Mail…
+            {m.starting}
           </div>
         </div>
       </AppFrame>
@@ -1789,8 +1818,7 @@ function App(): React.JSX.Element {
   }
 
   // Another app than the mail is what the user looks at, not the selection left in the mail.
-  const shownPage =
-    shownApp === 'mail' ? null : (RAIL_ITEMS.find((item) => item.id === shownApp)?.label ?? null)
+  const shownPage = shownApp === 'mail' ? null : places[APP_PLACES[shownApp]]
   const mailSight = mail.sight
   // In the calendar, what it shows: the days, and the event open.
   const calendarInSight = shownApp === 'calendar' ? calendarSight : null
@@ -1812,8 +1840,8 @@ function App(): React.JSX.Element {
           composing: composerHandlesRef.current.get(composingInFront.id)?.describe() ?? null
         }),
         label: composingSummary?.subject.trim()
-          ? `Il messaggio che scrivi: «${composingSummary.subject.trim()}»`
-          : 'Il messaggio che scrivi',
+          ? m.writingSubject(composingSummary.subject.trim())
+          : m.writing,
         kind: 'composing'
       }
     : {
@@ -1825,7 +1853,7 @@ function App(): React.JSX.Element {
         },
         label: calendarInSight
           ? calendarInSight.event
-            ? `«${calendarInSight.event.title}»`
+            ? m.quoted(calendarInSight.event.title)
             : calendarInSight.label
           : shownPage
             ? shownPage
@@ -1976,20 +2004,13 @@ function App(): React.JSX.Element {
                 app={
                   shownApp === 'mail' && accounts.length === 0 ? (
                     <AppPlaceholder
-                      title="Posta"
+                      title={places.mail}
                       icon={Mail}
                       atWindowTopRight={!segretarioOpen}
-                      lead="Nessuna casella collegata. Le altre app funzionano anche così; con una casella, la posta arriva qui."
-                      points={[
-                        'Ogni casella è una connessione a sé: Gmail, Microsoft, iCloud, o qualunque altra con IMAP.',
-                        ...(aiOn
-                          ? [
-                              'Il Segretario la legge come legge i calendari: le cose aperte, i progetti e la giornata la comprendono.'
-                            ]
-                          : [])
-                      ]}
+                      lead={m.mailLead}
+                      points={[m.mailEach, ...(aiOn ? [m.mailSegretario] : [])]}
                       action={{
-                        label: 'Collega una casella',
+                        label: m.connectMailbox,
                         onClick: () => startOnboarding('nuova-connessione')
                       }}
                     />
@@ -2018,51 +2039,39 @@ function App(): React.JSX.Element {
                     />
                   ) : shownApp === 'files' ? (
                     <AppPlaceholder
-                      title="File"
+                      title={places.files}
                       icon={Files}
-                      badge="In arrivo"
+                      badge={m.comingSoon}
                       atWindowTopRight={!segretarioOpen}
-                      lead="I tuoi documenti, ovunque siano: il computer, i dischi di rete, i drive. Una fonte come la posta e il calendario."
+                      lead={m.filesLead}
                       points={[
-                        'Ogni volume del computer o di rete, e ogni drive — Google Drive, OneDrive e SharePoint, Dropbox, iCloud Drive — è una connessione, come una casella o un calendario.',
-                        'Una ricerca sola su tutti, e il documento si apre dov’è: niente copie, niente sincronizzazione.',
-                        'Per ogni file, i progetti, le conversazioni e gli appuntamenti a cui appartiene.',
-                        ...(aiOn
-                          ? [
-                              'Il Segretario legge già i file del computer e dei dischi di rete collegati, solo in lettura.'
-                            ]
-                          : [])
+                        m.filesEach,
+                        m.filesSearch,
+                        m.filesBelonging,
+                        ...(aiOn ? [m.filesSegretario] : [])
                       ]}
                     />
                   ) : shownApp === 'contacts' ? (
                     <AppPlaceholder
-                      title="Contatti"
+                      title={places.contacts}
                       icon={BookUser}
-                      badge="In arrivo"
+                      badge={m.comingSoon}
                       atWindowTopRight={!segretarioOpen}
-                      lead="Le persone e gli enti con cui lavori, in un posto solo, con quello che il Segretario sa di ciascuno."
-                      points={[
-                        'Da tutte le fonti: chi ti scrive, chi incontri, le rubriche delle connessioni.',
-                        'Per ognuno: le conversazioni, gli appuntamenti, i progetti in comune e le cose aperte.',
-                        'Quello che il Segretario ha capito di loro, scritto da lui e corretto da te.'
-                      ]}
+                      lead={m.contactsLead}
+                      points={[m.contactsSources, m.contactsEach, m.contactsSegretario]}
                     />
                   ) : shownApp === 'projects' ? (
                     <AppPlaceholder
-                      title="Progetti"
+                      title={places.projects}
                       icon={Briefcase}
-                      badge="In arrivo"
+                      badge={m.comingSoon}
                       atWindowTopRight={!segretarioOpen}
-                      lead="Ogni progetto con tutto ciò che gli appartiene, da ogni fonte, nello stesso posto."
+                      lead={m.projectsLead}
                       points={[
-                        'Le conversazioni, gli appuntamenti, le cartelle e i documenti, le persone e le cose aperte del progetto, insieme.',
-                        'Uno spazio di lavoro, non un altro archivio: ogni cosa resta dov’è, e un file usato da tre progetti è un file solo.',
-                        'Un progetto è un contesto che dura — un cliente, un lavoro, un viaggio, la casa, l’università —: il Segretario li riconosce e tu li correggi.',
-                        ...(aiOn && accounts.length > 0
-                          ? [
-                              'Intanto i progetti del Segretario sono nella barra laterale della Posta.'
-                            ]
-                          : [])
+                        m.projectsTogether,
+                        m.projectsWorkspace,
+                        m.projectsContext,
+                        ...(aiOn && accounts.length > 0 ? [m.projectsMeanwhile] : [])
                       ]}
                     />
                   ) : undefined
@@ -2136,7 +2145,7 @@ function App(): React.JSX.Element {
 
               <ConfirmDialog
                 open={failedSend !== null}
-                title="Invio non riuscito"
+                title={m.sendFailed}
                 description={failedSend?.message}
                 details={
                   failedSend && (
@@ -2144,14 +2153,14 @@ function App(): React.JSX.Element {
                       <AlertTriangle className="text-destructive size-3.5 shrink-0" />
                       <span className="min-w-0 truncate">
                         {failedSend.draft.subject
-                          ? `Il messaggio non è partito: «${failedSend.draft.subject}»`
-                          : 'Il messaggio non è partito.'}
+                          ? m.notSentSubject(failedSend.draft.subject)
+                          : m.notSent}
                       </span>
                     </div>
                   )
                 }
-                confirmLabel="Riapri e riprova"
-                cancelLabel="Lascia in Bozze"
+                confirmLabel={m.reopenAndRetry}
+                cancelLabel={m.leaveInDrafts}
                 initialFocus="confirm"
                 onConfirm={() => settleFailedSend(true)}
                 onCancel={() => settleFailedSend(false)}

@@ -11,6 +11,7 @@ import {
   localDay,
   recordDiagnostic
 } from '@main/diagnostics/log'
+import { messages } from '@main/i18n'
 import { handleIpc } from '@main/ipc/handle'
 import {
   DIAGNOSTICS_EXPORT_DAYS,
@@ -18,8 +19,29 @@ import {
   type DiagnosticsExport,
   type DiagnosticsExportOptions
 } from '@shared/diagnostics'
+import { defineMessages } from '@shared/i18n'
 
 const log = diagnostics('app')
+
+const MESSAGES = defineMessages({
+  notReady: {
+    en: 'The diagnostics aren’t ready yet.',
+    it: 'La diagnostica non è ancora pronta.',
+    de: 'Die Diagnose ist noch nicht bereit.'
+  },
+  exportTitle: {
+    en: 'Export diagnostics',
+    it: 'Esporta la diagnostica',
+    de: 'Diagnose exportieren'
+  },
+  exportButton: { en: 'Export', it: 'Esporta', de: 'Exportieren' },
+  fileName: {
+    en: (day: string) => `SIEVER Mail diagnostics ${day}.zip`,
+    it: (day: string) => `SIEVER Mail diagnostica ${day}.zip`,
+    de: (day: string) => `SIEVER Mail Diagnose ${day}.zip`
+  },
+  zipArchive: { en: 'Zip archive', it: 'Archivio zip', de: 'ZIP-Archiv' }
+})
 
 /** What the page records: its own area or an extension's, a short event, its fields. */
 const pageDiagnosticSchema = z.object({
@@ -61,7 +83,7 @@ export function registerDiagnosticsIpc(
 
   handleIpc('app', DIAGNOSTICS_IPC.openFolder, async () => {
     const folder = diagnosticsFolder()
-    const failure = folder ? await shell.openPath(folder) : 'La diagnostica non è ancora pronta.'
+    const failure = folder ? await shell.openPath(folder) : messages(MESSAGES).notReady
 
     if (failure) {
       throw new Error(failure)
@@ -74,11 +96,12 @@ export function registerDiagnosticsIpc(
     async (input: DiagnosticsExportOptions): Promise<DiagnosticsExport> => {
       const options = exportOptionsSchema.parse(input)
       const window = getWindow()
+      const m = messages(MESSAGES)
       const dialogOptions = {
-        title: 'Esporta la diagnostica',
-        buttonLabel: 'Esporta',
-        defaultPath: join(app.getPath('downloads'), `SIEVER Mail diagnostica ${localDay()}.zip`),
-        filters: [{ name: 'Archivio zip', extensions: ['zip'] }]
+        title: m.exportTitle,
+        buttonLabel: m.exportButton,
+        defaultPath: join(app.getPath('downloads'), m.fileName(localDay())),
+        filters: [{ name: m.zipArchive, extensions: ['zip'] }]
       }
       const choice =
         window && !window.isDestroyed()

@@ -57,7 +57,7 @@ Nessuna fonte ha privilegi nel modello del lavoro: una cosa aperta, un progetto,
 - **strumenti propri** per il Segretario, dopo quelli dell'app;
 - **azioni nell'interfaccia**: un pulsante nel lettore, la sua finestra, un comando con la sua scorciatoia, una scheda nelle Impostazioni, le proposte che sa eseguire;
 - **i suoi dati**, nelle sue tabelle, e i **segni** che lascia sui messaggi: ciò che ha fatto di loro fuori dalla posta (§6.3);
-- **la forma della casa**: il carattere, i colori, la firma predefinita.
+- **la forma della casa**: il carattere, i colori, la firma predefinita, la lingua di un primo avvio (§13.5).
 
 **Non rinomina le sezioni e non impone procedure.** Il pubblico funziona da solo e il privato parte solo più informato, su ogni fonte allo stesso modo: posta, calendario, file. Il Segretario resta lo stesso, con la stessa libertà: l'estensione gli dice di più, non gli dice come lavorare.
 
@@ -961,6 +961,7 @@ Una connessione lascia due cose diverse, e ognuna se ne va a modo suo: i suoi **
 
 Un solo componente a schermo intero, riusato in tutti i casi:
 
+0. **Lingua** (al primo avvio): la lingua di SIEVER Mail, prima di ogni altra cosa (§13.5). Sceglierla cambia subito tutto, anche questo passo; quella del computer, se SIEVER Mail la parla, è indicata.
 1. **Connessioni**: aggiungi posta, calendari e, quando ci saranno, file. Ne basta una, di qualunque famiglia: con un calendario solo si entra nel Calendario, e la Posta senza caselle offre di collegarne una.
 2. **Segretario**: incolla la chiave OpenRouter (verificata) e accendi, oppure "Non ora".
 3. **Preparazione**: aspetta che le connessioni siano sincronizzate e, con l'AI, che la posta recente sia indicizzata. Con avanzamento ed errori chiari: si può riprovare o togliere una connessione che non va.
@@ -990,13 +991,13 @@ Un solo componente a schermo intero, riusato in tutti i casi:
 
 | Caso                                 | Passi                                                                                                                                                                                                                                                |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Primo avvio                          | 1 → 2 → 3 → (4 → 5 se AI) → 6                                                                                                                                                                                                                        |
+| Primo avvio                          | 0 → 1 → 2 → 3 → (4 → 5 se AI) → 6                                                                                                                                                                                                                    |
 | Nuova connessione                    | 1 → 3 → (4 solo sulle nuove, coerente con la memoria → 5 solo sulle nuove) → 6                                                                                                                                                                       |
 | AI accesa la prima volta             | 2 → 3 → 4 → 5 → 6                                                                                                                                                                                                                                    |
 | AI spenta e riaccesa                 | 2 → 3 → 4 (sempre, su tutte le connessioni: aggiorna ciò che sa) → 5: i messaggi non ancora letti e **ogni calendario intero**, di nuovo (mentre l'AI era spenta nessuno lo seguiva: guardarlo com'è ora copre ciò che è cambiato nel frattempo) → 6 |
 | "Rifai Conoscimi" dalle impostazioni | 4 su tutte le connessioni, aggiornando la memoria senza cancellarla → 6                                                                                                                                                                              |
 | Connessione rimossa                  | niente procedura: si tolgono i suoi dati, e la memoria che la cita viene rivista dal Segretario (lezione, §11.4)                                                                                                                                     |
-| Reinstallato tenendo le connessioni  | un primo avvio, che le trova già collegate al passo 1 (§15.6): 1 → 2 → 3 → (4 → 5 se AI) → 6                                                                                                                                                         |
+| Reinstallato tenendo le connessioni  | un primo avvio, che le trova già collegate al passo 1 (§15.6): 0 → 1 → 2 → 3 → (4 → 5 se AI) → 6                                                                                                                                                     |
 
 **Conoscimi e lettura sono cose diverse:**
 
@@ -1059,7 +1060,7 @@ Tutte sono fatte degli stessi pezzi (`components/ui/settings`): un gruppo con il
 
 - **Segretario** comincia dall'interruttore (§12.1), che è ciò che fa di SIEVER Mail un insieme di app o un sistema intelligente: acceso, il Segretario lavora per l'utente; spento, ci sono le app; accenderlo passa dalla procedura guidata. Sotto, la chiave OpenRouter e il credito, la spesa, la riservatezza. In fondo **«Dimentica tutto»**, finché il Segretario tiene qualcosa (anche solo la chiave): come se non fosse mai stato acceso — §12.1. Senza la chiave l'interruttore è giù anche se era su, e riaccenderlo passa dalla procedura, che la chiede. Del suo lavoro non conta i messaggi letti: la posta è una delle fonti, e quel numero non serve all'utente.
 - **Cosa so di te** mostra Conoscimi, connessione per connessione, e le note della memoria: si leggono, si correggono, si ripristinano dalla loro storia. Non si cancellano da qui, né una né tutte: una memoria cancellata sotto il resto del lavoro del Segretario sarebbe un Segretario che sa meno di ciò che ha fatto. Ricominciare è «Dimentica tutto».
-- **Preferenze:** di SIEVER Mail, l'aspetto e l'apertura all'accesso al computer (sui sistemi che lo permettono: così le notifiche e il Segretario ci sono da subito); della Posta, la disposizione, l'ordine e il raggruppamento dell'elenco, la dimensione dei messaggi, le caselle che «Tutte le caselle» riunisce; del Calendario, il calendario dei nuovi eventi (di base il principale) e la loro durata.
+- **Preferenze:** di SIEVER Mail, la lingua (§13.5), l'aspetto e l'apertura all'accesso al computer (sui sistemi che lo permettono: così le notifiche e il Segretario ci sono da subito); della Posta, la disposizione, l'ordine e il raggruppamento dell'elenco, la dimensione dei messaggi, le caselle che «Tutte le caselle» riunisce; del Calendario, il calendario dei nuovi eventi (di base il principale) e la loro durata.
 - **Notifiche** dice che cosa interrompe l'utente, app per app, e il numero sull'icona (§13.3).
 - **Scorciatoie** le elenca app per app: quelle di SIEVER Mail (cercare, il Segretario, le Impostazioni), della Posta, del Calendario; le scorciatoie di un'estensione stanno con la sua app.
 - **Intestazione e firma** è della Posta: per ogni casella, ciò che sta in cima ai messaggi e ciò che li chiude (§6.6).
@@ -1132,6 +1133,57 @@ Chi nelle versioni 1.x aveva spento le notifiche — che erano solo della posta 
 - **Le fonti:** la rubrica che l'app già impara dalla posta, i partecipanti degli eventi, i contatti delle connessioni, la memoria del Segretario sulle persone.
 - **Come li collega:** il Segretario userà uno strumento per legare una nota della memoria a un contatto, così l'interfaccia mostrerà "cosa so di lui" senza leggere il Markdown né obbligare il modello a scrivere JSON.
 
+### 13.5 Le lingue
+
+**SIEVER Mail parla inglese, italiano e tedesco**, e una lingua in più non cambia niente di come è fatto: è una voce in una lista e le sue parole in ogni messaggio.
+
+**Che cosa segue la lingua scelta, e che cosa no.**
+
+- **L'interfaccia** — ogni parola dell'app, i menu, le notifiche, i dialoghi, gli errori, l'installer di Windows — è nella lingua scelta.
+- **Date e numeri** seguono la regione del computer, nella lingua scelta: l'inglese su un computer italiano scrive 12/11/2026, 14:05 e 1.234,5, e la settimana comincia di lunedì (`en-IT`); su un computer americano 11/12/26, 2:05 PM e la domenica. La lingua è dell'utente, la regione è del computer — quella con cui il sistema scrive le date, anche quando l'utente l'ha scelta diversa dalla lingua del sistema (un Mac in inglese con i formati dell'Italia) —: sono due cose, e non se ne inventa una dall'altra.
+- **Ciò che va agli altri** segue il suo genere: la riga di citazione di una risposta, l'intestazione di un inoltro, i prefissi «Re:»/«R:»/«AW:» sono nella lingua dell'interfaccia, come in Outlook; ciò che il Segretario scrive per gli altri è nella lingua in cui l'utente scriverebbe a quella persona (§6.6). La ricerca capisce i suoi operatori in ogni lingua, e un oggetto con il prefisso di qualunque lingua non lo raddoppia.
+- **Ciò che è dell'utente non si traduce:** la posta, i nomi delle cartelle sul server, ciò che il Segretario ha scritto, il diario e le righe che l'app ha lasciato nel registro nella lingua di quel momento.
+
+**Il Segretario scrive nella lingua dell'utente.** I suoi prompt sono in italiano — è dove chi decide li legge e li controlla —, e questo non deve diventare la lingua in cui parla. Il contesto gli dice in che lingua è l'interfaccia, e come vi si chiamano i posti dell'app quando li nomina (gli stessi nomi che l'utente legge: una lista sola, `PLACES`, per l'interfaccia e per lui). In una conversazione la lingua è quella in cui l'utente gli scrive in quel momento: chi scrive in inglese vuole la risposta in inglese, anche se la memoria dice che con gli altri scrive in italiano (nello studio di prova una nota «Lingua: italiano, sempre», sullo stile delle sue mail, aveva fatto rispondere in italiano a una domanda in inglese). Ciò che resta per lui senza che lo chieda — le note, le cose aperte, la lettera, «Il punto», la memoria — è di base nella lingua dell'interfaccia; ma se ciò che vede — come l'utente scrive, ciò che gli dice, ciò che la memoria sa di lui — dice che la sua lingua è un'altra, usa quella. Un'interfaccia in inglese scelta da uno spagnolo non obbliga il Segretario all'inglese. È morbido, nel prompt d'identità: nessun controllo e nessuna regola sul testo (§4.9). Il titolo di una conversazione è nella lingua in cui l'utente ha chiesto.
+
+**Dove si sceglie.**
+
+- **Al primo avvio**, nella procedura guidata, come primo passo (§12.2). Fino a lì SIEVER Mail è in inglese, o nella lingua di partenza della sua edizione — un'estensione la dà per la sua organizzazione (§1). La schermata d'apertura non ha un interruttore: la decisione si prende una volta, nel posto in cui si comincia, e non a metà del lavoro del Segretario.
+- **Poi** in Impostazioni › Preferenze, la prima riga di SIEVER Mail.
+- **Cambiarla ridisegna tutto subito**, senza riavviare: ogni finestra, i menu, l'area delle notifiche. Il lavoro del Segretario in corso non se ne accorge: ogni esecuzione riceve la lingua quando parte.
+- **Chi aggiorna dalle versioni senza lingue**, che erano in italiano, resta in italiano: un aggiornamento non cambia la lingua a nessuno. Un profilo nuovo parte in inglese; uno che ritrova solo le connessioni (§15.6) è un primo avvio, e la sceglie.
+
+**Le parole nel codice: con il modulo che le usa, tutte le lingue insieme.** Ogni modulo definisce le sue parole con `defineMessages`, ogni messaggio con le sue lingue una accanto all'altra, e le legge con `useMessages` (nella pagina, che si ridisegna quando la lingua cambia), `messagesNow` (fuori dal disegno) o `messages` (nel processo principale), sempre nel momento in cui le dice. Perché così, e non cataloghi per lingua (i file JSON di i18next) o l'estrazione dal codice (gettext, Lingui):
+
+- **un passo solo per chi sviluppa:** chi aggiunge una scritta scrive le sue lingue lì, dove la usa, e le rilegge insieme; niente file lontani da tenere in pari, niente estrazione da ricordare. È ciò che tiene leggero lo sviluppo di tutti i giorni;
+- **il compilatore e il lint controllano:** una lingua che manca, o una traduzione con argomenti diversi dall'inglese, non si compila; una scritta messa a mano nell'interfaccia è un errore del lint (`no-raw-ui-text`);
+- **la grammatica è di ogni lingua:** un messaggio con argomenti è una funzione in ogni lingua — plurali, articoli, casi, ordine delle parole sono suoi, senza una sintassi da imparare;
+- **una lingua in più** è una voce in `LANGUAGES` e le sue parole in ogni messaggio: il compilatore elenca ogni posto che manca;
+- un'estensione scrive le sue parole allo stesso modo (il kit gliele offre), e le parole che dà al contratto possono essere una per lingua (`Localized`).
+
+**In che lingua sta ogni cosa del progetto**, e perché: l'interfaccia nelle lingue dell'utente; il codice, i suoi commenti e il README pubblico in inglese, le convenzioni di tutti e la lettura internazionale; questa vision, `AGENTS.md`, il README di un'estensione e i prompt del Segretario in italiano, dove chi decide legge e controlla.
+
+**Le parole del prodotto**, una volta per tutte. Il resto segue il tono di ogni lingua: l'inglese semplice e diretto; il tedesco con il «Sie», come si usa nel software di lavoro; l'italiano com'è.
+
+| Italiano                      | English                      | Deutsch                          |
+| ----------------------------- | ---------------------------- | -------------------------------- |
+| SIEVER Mail, Segretario       | SIEVER Mail, Segretario      | SIEVER Mail, der Segretario      |
+| Oggi, Posta, Calendario, File | Today, Mail, Calendar, Files | Heute, E-Mail, Kalender, Dateien |
+| Contatti, Progetti            | Contacts, Projects           | Kontakte, Projekte               |
+| Impostazioni                  | Settings                     | Einstellungen                    |
+| Posta in arrivo               | Inbox                        | Posteingang                      |
+| Da gestire, In attesa         | To handle, Waiting           | Zu erledigen, Ausstehend         |
+| Risposte pronte               | Ready replies                | Fertige Antworten                |
+| Cose aperte                   | Open items                   | Offene Punkte                    |
+| Il punto                      | Where it stands              | Stand der Dinge                  |
+| Conoscimi, Al passo           | Get to know me, Catch up     | Lerne mich kennen, Aufholen      |
+| Cosa so di te                 | What I know about you        | Was ich über Sie weiß            |
+| Preferenze                    | Preferences                  | Allgemein                        |
+| casella, connessione          | mailbox, connection          | Postfach, Verbindung             |
+| procedura guidata             | guided setup                 | Einrichtung                      |
+
+Il Segretario è un nome, come SIEVER Mail: non si traduce.
+
 ---
 
 ## 14. Gli errori
@@ -1166,7 +1218,7 @@ Un'esecuzione che non arriva in fondo da sé: 10 turni di fila senza progressi (
 
 ### 14.3 Gli errori del programma
 
-Un'eccezione inattesa, un errore del database: si scrive nella diagnostica (§14.4), l'operazione fallisce con una frase in italiano dove l'utente l'ha chiesta, e il resto continua. Mai in silenzio, mai un crash per un errore di una parte. In pratica: il processo principale scrive ciò che nessuno ha preso; gli errori della pagina — ciò che si rompe disegnando, con il componente in cui si è rotto, le promesse fallite, ciò che stampa — finiscono nello stesso registro; una pagina che muore si ricarica (al massimo una volta al minuto); una promessa della pagina fallita senza che nessuno aspettasse si dice in un avviso; ogni riquadro della finestra si rompe da solo («Qui qualcosa si è rotto», «Riprova») e gli altri restano.
+Un'eccezione inattesa, un errore del database: si scrive nella diagnostica (§14.4), l'operazione fallisce con una frase nella lingua dell'utente dove l'ha chiesta, e il resto continua. Mai in silenzio, mai un crash per un errore di una parte. In pratica: il processo principale scrive ciò che nessuno ha preso; gli errori della pagina — ciò che si rompe disegnando, con il componente in cui si è rotto, le promesse fallite, ciò che stampa — finiscono nello stesso registro; una pagina che muore si ricarica (al massimo una volta al minuto); una promessa della pagina fallita senza che nessuno aspettasse si dice in un avviso; ogni riquadro della finestra si rompe da solo («Qui qualcosa si è rotto», «Riprova») e gli altri restano.
 
 ### 14.4 La diagnostica
 
@@ -1186,7 +1238,7 @@ Per capire che cosa è successo sul computer di un utente — un errore, un modo
 
 **L'esportazione: uno zip che si legge da solo**, aperto nella sua cartella, pronto da allegare.
 
-- `LEGGIMI.txt`: che cosa contiene, in italiano, e che non è stato mandato a nessuno.
+- `README.txt`, `LEGGIMI.txt` o `LIESMICH.txt`, nella lingua dell'utente: che cosa contiene, e che non è stato mandato a nessuno.
 - `manifesto.json`: la versione, l'edizione, il periodo, le scelte, i file.
 - `stato.json`: com'era ogni parte in quel momento, in conti e stati — ciò che il Segretario ha scritto sta solo nelle sue sessioni. L'app: la versione e l'edizione, il sistema, il profilo, la memoria, il database, le preferenze. Ogni casella: i server, lo stato, l'ultimo contatto con il server, l'indice, quanti messaggi e cartelle (anche quelle mai sincronizzate), le bozze, la coda d'uscita, i segni. Ogni calendario. Il Segretario: acceso o no, lo stato della chiave (mai la chiave), la procedura, il motore, la lettura, Conoscimi, la spesa, quanto tiene il registro. L'estensione. Ogni parte dice il suo stato da sé, e una fonte nuova si aggiunge nello stesso modo (`provideDiagnosticState`).
 - `riepilogo.json`: il registro a colpo d'occhio, contato dal registro stesso. Gli avvii; quanto tempo la finestra è stata in primo piano ogni giorno — ciò che l'app esiste per ridurre (§0); quante volte è successa ogni cosa; gli errori e gli avvisi raggruppati per tipo; le esecuzioni del Segretario per compito, con come sono finite, la durata mediana e al 95° percentile, il costo, le chiamate non riuscite; come l'utente ha risposto al suo lavoro; le notifiche per tipo — mostrate, aperte, scartate (§13.3); i canali lenti.
@@ -1254,6 +1306,8 @@ Un'estensione porta i suoi prompt nel suo repository: le istruzioni dell'organiz
 I prompt delle versioni 1.x sono confluiti qui: smistamento e risposta pronta in `compiti/lettura.md`, oggi e sollecito in `compiti/giornata.md`, argomento in `compiti/punto.md`, chiedi alla posta in `compiti/ricerca.md`; «di cosa si tratta» un progetto lo scrive il Segretario con `progetti`.
 
 **Obiettivi e criteri, non procedure.** I prompt dicono cosa deve esserci alla fine e perché, e lasciano al modello come arrivarci. Suggeriscono dove guardare in modo generale; non iniettano dossier; nessun controllo del testo che il modello scrive.
+
+**In italiano, per chi decide.** I prompt restano in italiano in ogni lingua dell'app: la lingua in cui il Segretario scrive all'utente la decide lui, dal contesto e da ciò che vede (§13.5).
 
 **Gli esempi sono esempi.** I prompt pubblici danno esempi presi da lavori diversi — un preventivo, una riunione, il commercialista, un trasloco — e `segretario.md` dice al modello che sono solo esempi: come l'utente chiama le cose e come lavora, lo impara dalle sue fonti e ci si adegua. Le convenzioni vere arrivano solo dalle istruzioni di un'estensione, che lo dicono (§1).
 
@@ -1389,3 +1443,4 @@ Nello sviluppo e nello studio di prova l'app non si toglie da sé: c'è solo nel
 24. **Le Impostazioni (§13.2):** tre gruppi di pagine come la barra — che cosa SIEVER Mail è per l'utente (Connessioni, Segretario, Cosa so di te), come si presenta e si comporta, app per app (Preferenze, Notifiche, Scorciatoie, Intestazione e firma), ciò che tiene (Dati, Estensione e le pagine di un'estensione) —, fatte degli stessi pezzi. L'interruttore del Segretario in cima alla sua pagina; «Dimentica tutto», come se non fosse mai stato acceso, chiave compresa (§12.1); la memoria si corregge, non si cancella a pezzi. Dati mostra ogni connessione alla pari con la parte del Segretario, il Segretario, ciò che è comune, l'estensione, i file, e toglie la posta di una casella, le copie degli allegati, o tutto — connessioni e preferenze escluse.
 25. **Scrivere (§6.6):** nel riquadro di lettura, come Outlook, a schede — la lettura e ogni messaggio in scrittura, che resta com'era quando si legge altro —, mai in una finestra sopra il lavoro; il dock non c'è più. L'editor (Squire) ha il testo suo, messo una volta e cambiato solo da passi decisi che si annullano: nessun ritorno del testo che fa saltare il cursore; una riga nuova tiene lo stile, nessun carattere invisibile. Lo zoom è quello della lettura. Barra completa per chi scrive tutto il giorno (tabelle comprese), su una riga. Ogni casella ha intestazione e firma. Il Segretario scrive nel messaggio dalla chat, che lo vede; ⌘J gli passa la parola, e il compito `scrittura` non c'è più.
 26. **Installare, aggiornare, togliere (§15.6):** aggiornare è installare la versione nuova con il gesto del sistema, e i dati restano; su Windows l'installer chiude l'app come l'utente, finendo ciò che scriveva. Togliere lascia ciò che l'utente sceglie — le connessioni sole, che la prossima installazione trova collegate e da cui riparte la procedura guidata, o niente —, con un solo modo di togliere i dati, il codice dell'app, chiesto dal disinstallatore di Windows e da Impostazioni › Dati su ogni sistema.
+27. **Le lingue (§13.5):** inglese, italiano e tedesco, e ogni lingua in più senza cambiare niente. L'interfaccia nella lingua scelta, date e numeri come li scrive la regione del computer. Si sceglie al primo passo del primo avvio (in inglese fino lì, o nella lingua dell'edizione) e poi in Preferenze; cambia tutto subito; chi aggiorna resta in italiano. Il Segretario, con i prompt in italiano, scrive nella lingua dell'utente: quella dell'interfaccia, se niente dice che è un'altra. Le parole stanno con il modulo che le usa, tutte le lingue insieme, controllate dal compilatore e dal lint.

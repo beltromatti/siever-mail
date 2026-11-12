@@ -81,7 +81,7 @@ describe('changedEvent', () => {
     ]).toEqual(['title'])
     expect(() =>
       changedEvent(moment, { start: '2026-11-11T09:00:00.000Z', end: '2026-11-11T09:00:00.000Z' })
-    ).toThrow('La fine dell’evento deve venire dopo l’inizio.')
+    ).toThrow('The event’s end must come after its start.')
   })
 
   it('keeps the days of an event made all-day, from wherever it now starts', () => {
@@ -107,7 +107,7 @@ describe('changedEvent', () => {
     })
     expect(changedEvent(moment, { allDay: true })).toMatchObject({ end: '2026-11-11' })
     expect(() => changedEvent({ ...late, allDay: true }, { allDay: false })).toThrow(
-      'servono inizio e fine'
+      'it needs a start and an end'
     )
   })
 })

@@ -1,9 +1,11 @@
+import { defineMessages, messagesIn, type Language } from './i18n'
 import type { MailFolder } from './models'
+import { PLACES } from './places'
 
 /**
  * The folders every mail account has, whatever its server calls them: the
- * ones the sidebar names in Italian, lists first and gathers across
- * accounts under "Tutti gli account".
+ * ones the sidebar names in the interface's language, lists first and
+ * gathers across accounts under "Tutti gli account".
  */
 export type FolderRole = '\\Inbox' | '\\Sent' | '\\Drafts' | '\\Archive' | '\\Junk' | '\\Trash'
 
@@ -17,20 +19,21 @@ export const UNIFIED_FOLDER_ROLES: ReadonlyArray<FolderRole> = [
   '\\Trash'
 ]
 
-const ROLE_LABELS: Readonly<Record<FolderRole, string>> = {
-  '\\Inbox': 'Posta in arrivo',
-  '\\Sent': 'Posta inviata',
-  '\\Drafts': 'Bozze',
-  '\\Archive': 'Archivio',
-  '\\Junk': 'Spam',
-  '\\Trash': 'Cestino'
-}
+const ROLE_LABELS = defineMessages({
+  '\\Inbox': PLACES.inbox,
+  '\\Sent': { en: 'Sent', it: 'Posta inviata', de: 'Gesendet' },
+  '\\Drafts': { en: 'Drafts', it: 'Bozze', de: 'Entwürfe' },
+  '\\Archive': { en: 'Archive', it: 'Archivio', de: 'Archiv' },
+  '\\Junk': { en: 'Spam', it: 'Spam', de: 'Spam' },
+  '\\Trash': { en: 'Trash', it: 'Cestino', de: 'Papierkorb' }
+}) satisfies Record<FolderRole, unknown>
 
 /** "[Gmail]/…", or "[Google Mail]/…" where the brand differs. */
 const GMAIL_SYSTEM_FOLDER_PATTERN = /^\[(?:gmail|google mail)\]/i
 
-export function folderRoleLabel(role: FolderRole): string {
-  return ROLE_LABELS[role]
+/** A role's folder as the interface names it, in `language`. */
+export function folderRoleLabel(role: FolderRole, language: Language): string {
+  return messagesIn(ROLE_LABELS, language)[role]
 }
 
 /**
@@ -47,22 +50,20 @@ export function folderRole(folder: {
   }
 
   const specialUse = folder.specialUse?.toLowerCase()
-  return (
-    (Object.keys(ROLE_LABELS) as FolderRole[]).find((role) => role.toLowerCase() === specialUse) ??
-    null
-  )
+  return UNIFIED_FOLDER_ROLES.find((role) => role.toLowerCase() === specialUse) ?? null
 }
 
 /**
- * A folder as the app names it: by its role when it has one — "INBOX",
- * "Sent Items" and "INBOX.Trash" read as Italian, as every other folder of
- * that kind does — and by its own name otherwise.
+ * A folder as the app names it, in `language`: by its role when it has one
+ * — "INBOX", "Sent Items" and "INBOX.Trash" read in that language, as every
+ * other folder of that kind does — and by its own name otherwise.
  */
 export function folderDisplayName(
-  folder: Pick<MailFolder, 'path' | 'specialUse' | 'name'>
+  folder: Pick<MailFolder, 'path' | 'specialUse' | 'name'>,
+  language: Language
 ): string {
   const role = folderRole(folder)
-  return role ? ROLE_LABELS[role] : folder.name
+  return role ? folderRoleLabel(role, language) : folder.name
 }
 
 /**
@@ -168,14 +169,15 @@ export function segretarioView(path: string | null | undefined): SegretarioView 
     : null
 }
 
-const SEGRETARIO_VIEW_LABELS: Readonly<Record<SegretarioView, string>> = {
-  'da-gestire': 'Da gestire',
-  'in-attesa': 'In attesa',
-  'bozze-pronte': 'Risposte pronte'
-}
+const SEGRETARIO_VIEW_PLACES = {
+  'da-gestire': 'toHandle',
+  'in-attesa': 'waiting',
+  'bozze-pronte': 'readyReplies'
+} as const satisfies Record<SegretarioView, keyof typeof PLACES>
 
-export function segretarioViewLabel(view: SegretarioView): string {
-  return SEGRETARIO_VIEW_LABELS[view]
+/** A view of the Segretario's as the interface names it, in `language`. */
+export function segretarioViewLabel(view: SegretarioView, language: Language): string {
+  return messagesIn(PLACES, language)[SEGRETARIO_VIEW_PLACES[view]]
 }
 
 const SEGRETARIO_PROJECT_PREFIX = '__segretario__:progetto:'

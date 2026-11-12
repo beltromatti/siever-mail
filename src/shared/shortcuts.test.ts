@@ -23,12 +23,14 @@ function press(overrides: Partial<ShortcutKeyEvent>): ShortcutKeyEvent {
 
 describe('formatChordKeys', () => {
   it("draws a chord in each platform's vocabulary and order", () => {
-    expect(formatChordKeys('Mod+Shift+KeyR', true)).toEqual(['⇧', '⌘', 'R'])
-    expect(formatChordKeys('Mod+Shift+KeyR', false)).toEqual(['Ctrl', 'Shift', 'R'])
-    expect(formatChordKeys('Mod+Enter', true)).toEqual(['⌘', '↩'])
-    expect(formatChordKeys('Mod+Enter', false)).toEqual(['Ctrl', 'Invio'])
-    expect(formatChordKeys('Escape', true)).toEqual(['Esc'])
-    expect(formatChordKeys('KeyT', false)).toEqual(['T'])
+    expect(formatChordKeys('Mod+Shift+KeyR', true, 'en')).toEqual(['⇧', '⌘', 'R'])
+    expect(formatChordKeys('Mod+Shift+KeyR', false, 'en')).toEqual(['Ctrl', 'Shift', 'R'])
+    expect(formatChordKeys('Mod+Enter', true, 'de')).toEqual(['⌘', '↩'])
+    expect(formatChordKeys('Mod+Enter', false, 'en')).toEqual(['Ctrl', 'Enter'])
+    expect(formatChordKeys('Mod+Enter', false, 'it')).toEqual(['Ctrl', 'Invio'])
+    expect(formatChordKeys('Mod+Shift+Delete', false, 'de')).toEqual(['Strg', 'Umschalt', 'Entf'])
+    expect(formatChordKeys('Escape', true, 'it')).toEqual(['Esc'])
+    expect(formatChordKeys('KeyT', false, 'en')).toEqual(['T'])
   })
 })
 
@@ -116,21 +118,24 @@ describe('validateChord', () => {
 describe('readShortcutEvent', () => {
   it('reports held modifiers so the recorder can preview them', () => {
     expect(
-      readShortcutEvent(press({ code: 'ShiftLeft', ctrlKey: true, shiftKey: true }), false)
+      readShortcutEvent(press({ code: 'ShiftLeft', ctrlKey: true, shiftKey: true }), false, 'en')
     ).toEqual({ kind: 'modifiers-only', keys: ['Ctrl', 'Shift'] })
+    expect(
+      readShortcutEvent(press({ code: 'ShiftLeft', ctrlKey: true, shiftKey: true }), false, 'de')
+    ).toEqual({ kind: 'modifiers-only', keys: ['Strg', 'Umschalt'] })
   })
 
   it("refuses the platform's foreign modifier", () => {
-    expect(readShortcutEvent(press({ ctrlKey: true }), true)).toEqual({
+    expect(readShortcutEvent(press({ ctrlKey: true }), true, 'en')).toEqual({
       kind: 'unsupported-modifier'
     })
-    expect(readShortcutEvent(press({ metaKey: true }), false)).toEqual({
+    expect(readShortcutEvent(press({ metaKey: true }), false, 'en')).toEqual({
       kind: 'unsupported-modifier'
     })
   })
 
   it('turns a full chord into storage form', () => {
-    expect(readShortcutEvent(press({ metaKey: true, code: 'KeyE' }), true)).toEqual({
+    expect(readShortcutEvent(press({ metaKey: true, code: 'KeyE' }), true, 'it')).toEqual({
       kind: 'combo',
       value: 'Mod+KeyE'
     })

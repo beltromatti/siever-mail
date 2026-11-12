@@ -15,6 +15,7 @@ import {
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { ProjectPickerPopover } from '@renderer/features/segretario/project-picker'
 import { buildFolderTree, folderNodeLabel, type FolderTreeNode } from '@renderer/lib/folder-tree'
+import { useLanguage, useMessages } from '@renderer/lib/i18n'
 import { cn, formatCount } from '@renderer/lib/utils'
 import {
   folderRole,
@@ -28,10 +29,42 @@ import {
   type FolderRole,
   type SegretarioView
 } from '@shared/folders'
+import { defineMessages } from '@shared/i18n'
 import type { MailFolder, UnifiedFolderSummary } from '@shared/models'
+import { PLACES } from '@shared/places'
 import type { Project, SavedSearch } from '@shared/segretario'
 
 import { folderIcon, ROLE_ICONS } from './folder-icons'
+
+const MESSAGES = defineMessages({
+  collapse: {
+    en: (name: string) => `Collapse ${name}`,
+    it: (name: string) => `Comprimi ${name}`,
+    de: (name: string) => `${name} zuklappen`
+  },
+  expand: {
+    en: (name: string) => `Expand ${name}`,
+    it: (name: string) => `Espandi ${name}`,
+    de: (name: string) => `${name} aufklappen`
+  },
+  messageOne: { en: 'message', it: 'messaggio', de: 'Nachricht' },
+  messageOther: { en: 'messages', it: 'messaggi', de: 'Nachrichten' },
+  unreadOne: { en: 'unread', it: 'non letto', de: 'ungelesen' },
+  unreadOther: { en: 'unread', it: 'non letti', de: 'ungelesen' },
+  conversationOne: { en: 'conversation', it: 'conversazione', de: 'Unterhaltung' },
+  conversationOther: { en: 'conversations', it: 'conversazioni', de: 'Unterhaltungen' },
+  openItemOne: { en: 'open item', it: 'cosa aperta', de: 'offener Punkt' },
+  openItemOther: { en: 'open items', it: 'cose aperte', de: 'offene Punkte' },
+  createdByYou: { en: ' (created by you)', it: ' (creato da te)', de: ' (von Ihnen erstellt)' },
+  quoted: {
+    en: (text: string) => `“${text}”`,
+    it: (text: string) => `«${text}»`,
+    de: (text: string) => `„${text}“`
+  },
+  searchAll: { en: 'Search them all…', it: 'Cerca tra tutti…', de: 'Alle durchsuchen…' },
+  searchOrCreate: { en: 'Search or create…', it: 'Cerca o crea…', de: 'Suchen oder erstellen…' },
+  allMailboxes: { en: 'All mailboxes', it: 'Tutte le caselle', de: 'Alle Postfächer' }
+})
 
 /** How many projects in corso the sidebar lists; the others are a search away. */
 const PROJECTS_SHOWN = 8
@@ -106,8 +139,8 @@ function badgeCount(role: FolderRole | null, messageCount: number, unseenCount: 
 /**
  * One folder per line, with its count pinned right.
  *
- * The previous two-line rows spent 52px each restating "N messaggi • M non
- * letti" for every folder, which pushed half the mailbox below the fold on a
+ * The previous two-line rows spent 52px each restating "N messages • M
+ * unread" for every folder, which pushed half the mailbox below the fold on a
  * laptop. A single 26px line with the count as a badge shows the whole tree
  * at once — the count that actually gets read stays, the sentence around it
  * goes.
@@ -146,6 +179,9 @@ function FolderRow({
   /** What its tooltip says, when not its count of messages. */
   hint?: string
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const { formatLocale } = useLanguage()
+
   return (
     <div
       className={cn(
@@ -198,7 +234,7 @@ function FolderRow({
             type="button"
             onClick={onToggleExpanded}
             aria-expanded={expanded}
-            aria-label={expanded ? `Comprimi ${name}` : `Espandi ${name}`}
+            aria-label={expanded ? m.collapse(name) : m.expand(name)}
             className="text-faint-foreground hover:text-foreground focus-visible:ring-ring/60 inline-flex size-4 items-center justify-center rounded-sm outline-none focus-visible:ring-2"
           >
             {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
@@ -212,8 +248,8 @@ function FolderRow({
         title={
           hint ??
           (onSelect
-            ? `${name} — ${formatCount(messageCount, 'messaggio', 'messaggi')}${
-                unseenCount > 0 ? `, ${formatCount(unseenCount, 'non letto', 'non letti')}` : ''
+            ? `${name} — ${formatCount(messageCount, m.messageOne, m.messageOther)}${
+                unseenCount > 0 ? `, ${formatCount(unseenCount, m.unreadOne, m.unreadOther)}` : ''
               }`
             : name)
         }
@@ -242,7 +278,7 @@ function FolderRow({
               unseenCount > 0 ? 'text-foreground font-semibold' : 'text-faint-foreground'
             )}
           >
-            {badge.toLocaleString('it-IT')}
+            {badge.toLocaleString(formatLocale)}
           </span>
         )}
       </button>
@@ -257,12 +293,12 @@ function SectionHeading({ children }: { children: React.ReactNode }): React.JSX.
 }
 
 /**
- * The folders, in two parts. "Tutti gli account" gathers, for each kind of
- * folder every account has — Posta in arrivo, Posta inviata, Bozze,
- * Archivio, Spam, Cestino — that folder of every account it includes, in
- * one list. Below, the account the dropdown has open, as its server nests
- * its folders: the ones with a role first, named in Italian, then the
- * others as a tree whose branches fold away.
+ * The folders, in two parts. "All mailboxes" gathers, for each kind of
+ * folder every account has — Inbox, Sent, Drafts, Archive, Spam, Trash —
+ * that folder of every account it includes, in one list. Below, the
+ * account the dropdown has open, as its server nests its folders: the ones
+ * with a role first, named in the interface's language, then the others
+ * as a tree whose branches fold away.
  */
 export function FolderSidebar({
   segretarioViews,
@@ -277,6 +313,9 @@ export function FolderSidebar({
   onCreateProject,
   messageDrop
 }: FolderSidebarProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
+  const { language } = useLanguage()
   const tree = useMemo(() => buildFolderTree(folders), [folders])
   const [projectSearchOpen, setProjectSearchOpen] = useState(false)
   const openProjectId = segretarioProject(selectedFolderPath)
@@ -335,7 +374,7 @@ export function FolderSidebar({
       <div key={node.path}>
         <FolderRow
           icon={folderIcon(role, hasChildren && expanded)}
-          name={folderNodeLabel(node)}
+          name={folderNodeLabel(node, language)}
           messageCount={folder?.messageCount ?? 0}
           unseenCount={folder?.unseenCount ?? 0}
           badge={folder ? badgeCount(role, folder.messageCount, folder.unseenCount) : 0}
@@ -352,7 +391,7 @@ export function FolderSidebar({
                     kind: 'container',
                     accountId: folders[0]?.accountId ?? '',
                     path: node.path,
-                    name: folderNodeLabel(node)
+                    name: folderNodeLabel(node, language)
                   }
             )
           }
@@ -376,8 +415,8 @@ export function FolderSidebar({
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-px px-2 pb-3">
           {(segretarioViews.length > 0 || savedSearches.length > 0) && (
-            <section aria-label="Segretario">
-              <SectionHeading>Segretario</SectionHeading>
+            <section aria-label={places.segretario}>
+              <SectionHeading>{places.segretario}</SectionHeading>
               {segretarioViews.map(({ view, count }) => {
                 const path = segretarioViewPath(view)
 
@@ -385,7 +424,7 @@ export function FolderSidebar({
                   <FolderRow
                     key={path}
                     icon={VIEW_ICONS[view]}
-                    name={segretarioViewLabel(view)}
+                    name={segretarioViewLabel(view, language)}
                     messageCount={count}
                     unseenCount={count}
                     badge={count}
@@ -402,7 +441,7 @@ export function FolderSidebar({
                     key={path}
                     icon={ScanSearch}
                     name={search.summary}
-                    hint={`${search.summary} — «${search.question}»`}
+                    hint={`${search.summary} — ${m.quoted(search.question)}`}
                     messageCount={0}
                     unseenCount={0}
                     badge={0}
@@ -415,8 +454,8 @@ export function FolderSidebar({
           )}
 
           {projects && (
-            <section aria-label="Progetti">
-              <SectionHeading>Progetti</SectionHeading>
+            <section aria-label={places.projects}>
+              <SectionHeading>{places.projects}</SectionHeading>
               {shownProjects.map((project) => {
                 const path = segretarioProjectPath(project.id)
 
@@ -425,13 +464,13 @@ export function FolderSidebar({
                     key={path}
                     icon={project.origin === 'utente' ? Layers : Briefcase}
                     name={project.title}
-                    hint={`${project.title}${project.origin === 'utente' ? ' (creato da te)' : ''} — ${formatCount(
+                    hint={`${project.title}${project.origin === 'utente' ? m.createdByYou : ''} — ${formatCount(
                       project.conversations,
-                      'conversazione',
-                      'conversazioni'
+                      m.conversationOne,
+                      m.conversationOther
                     )}${
                       project.openCommitments > 0
-                        ? `, ${formatCount(project.openCommitments, 'cosa aperta', 'cose aperte')}`
+                        ? `, ${formatCount(project.openCommitments, m.openItemOne, m.openItemOther)}`
                         : ''
                     }`}
                     messageCount={project.conversations}
@@ -464,9 +503,7 @@ export function FolderSidebar({
                   >
                     <Search className="size-[15px] shrink-0" strokeWidth={1.7} />
                     <span className="min-w-0 flex-1 truncate">
-                      {projects.length > shownProjects.length
-                        ? 'Cerca tra tutti…'
-                        : 'Cerca o crea…'}
+                      {projects.length > shownProjects.length ? m.searchAll : m.searchOrCreate}
                     </span>
                   </button>
                 }
@@ -475,8 +512,8 @@ export function FolderSidebar({
           )}
 
           {unifiedFolders.length > 0 && (
-            <section aria-label="Tutte le caselle">
-              <SectionHeading>Tutte le caselle</SectionHeading>
+            <section aria-label={m.allMailboxes}>
+              <SectionHeading>{m.allMailboxes}</SectionHeading>
               {unifiedFolders.map((summary) => {
                 const path = unifiedFolderPath(summary.role)
 
@@ -484,7 +521,7 @@ export function FolderSidebar({
                   <FolderRow
                     key={path}
                     icon={ROLE_ICONS[summary.role]}
-                    name={folderRoleLabel(summary.role)}
+                    name={folderRoleLabel(summary.role, language)}
                     messageCount={summary.messageCount}
                     unseenCount={summary.unseenCount}
                     badge={badgeCount(summary.role, summary.messageCount, summary.unseenCount)}

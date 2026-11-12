@@ -24,6 +24,8 @@ import { app } from 'electron'
 import type { ParsedMail } from 'mailparser'
 
 import { diagnostics } from '@main/diagnostics/log'
+import { messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
 import type {
   DraftAttachment,
   DraftContent,
@@ -41,10 +43,41 @@ import {
   type AccountWithSecret
 } from './mail-engine/mail-transport'
 import { mapParsedAddresses } from './mail-engine/message-mapper'
-import { partitionMessageAttachments } from './mail-engine/message-parts'
+import { attachmentFileName, partitionMessageAttachments } from './mail-engine/message-parts'
 import { plainTextOfHtml } from './mail-engine/preview'
 
 const log = diagnostics('mail')
+
+const MESSAGES = defineMessages({
+  leftInDrafts: {
+    en: (reason: string | null) =>
+      `The draft stayed in Drafts: ${reason ?? 'the server didn’t move it to the Trash.'}`,
+    it: (reason: string | null) =>
+      `La bozza è rimasta in Bozze: ${reason ?? 'il server non l’ha spostata nel Cestino.'}`,
+    de: (reason: string | null) =>
+      `Der Entwurf ist in den Entwürfen geblieben: ${reason ?? 'Der Server hat ihn nicht in den Papierkorb verschoben.'}`
+  },
+  draftGone: {
+    en: 'The draft is no longer on the server.',
+    it: 'La bozza non è più sul server.',
+    de: 'Der Entwurf ist nicht mehr auf dem Server.'
+  },
+  draftAhead: {
+    en: 'A draft has changes the server hasn’t taken yet: it stays in Drafts.',
+    it: 'Una bozza ha modifiche che il server non ha ancora preso: resta in Bozze.',
+    de: 'Ein Entwurf hat Änderungen, die der Server noch nicht übernommen hat: Er bleibt in den Entwürfen.'
+  },
+  accountGone: {
+    en: 'The account the draft is sent from is no longer there.',
+    it: 'L’account da cui parte la bozza non c’è più.',
+    de: 'Das Konto, von dem der Entwurf gesendet wird, ist nicht mehr vorhanden.'
+  },
+  notSaved: {
+    en: 'The server didn’t save the draft.',
+    it: 'Il server non ha salvato la bozza.',
+    de: 'Der Server hat den Entwurf nicht gespeichert.'
+  }
+})
 
 /** A draft goes to the server this long after the last word typed. */
 const SERVER_SAVE_DELAY_MS = 5_000
@@ -131,7 +164,7 @@ export function draftFromParsedMail(
       references
     },
     files: official.map(({ index, attachment }) => ({
-      name: attachment.filename || `allegato-${index + 1}`,
+      name: attachmentFileName(attachment, index),
       content: Buffer.from(attachment.content)
     }))
   }
@@ -216,9 +249,7 @@ export class DraftService {
       ])
 
       if (moved.failed.length > 0) {
-        throw new Error(
-          `La bozza è rimasta in Bozze: ${moved.error ?? 'il server non l’ha spostata nel Cestino.'}`
-        )
+        throw new Error(messages(MESSAGES).leftInDrafts(moved.error ?? null))
       }
     }
   }
@@ -319,7 +350,7 @@ export class DraftService {
     const draft = read as ReturnType<typeof draftFromParsedMail> | null
 
     if (missing.length > 0 || !draft) {
-      throw new Error('La bozza non è più sul server.')
+      throw new Error(messages(MESSAGES).draftGone)
     }
 
     // This draft, open in a composer or not yet filed as it is now, is newer than any copy.
@@ -391,7 +422,7 @@ export class DraftService {
         }
 
         refused.push(ref)
-        error = 'Una bozza ha modifiche che il server non ha ancora preso: resta in Bozze.'
+        error = messages(MESSAGES).draftAhead
         continue
       }
 
@@ -529,7 +560,7 @@ export class DraftService {
       const account = await this.deps.getAccount(content.accountId)
 
       if (!account) {
-        throw new Error('L’account da cui parte la bozza non c’è più.')
+        throw new Error(messages(MESSAGES).accountGone)
       }
 
       const domain = account.email.split('@')[1] || 'siever-mail.local'
@@ -611,7 +642,7 @@ export class DraftService {
         id,
         state: 'error',
         savedAt: this.statuses.get(id)?.savedAt,
-        message: errorText(error, 'Il server non ha salvato la bozza.')
+        message: errorText(error, messages(MESSAGES).notSaved)
       })
     }
   }

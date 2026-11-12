@@ -16,12 +16,17 @@ import { AddConnection } from '@renderer/features/connections/add-connection'
 import { showConnectionRefused } from '@renderer/features/connections/connection-refused'
 import { ConnectionsList } from '@renderer/features/connections/connections-list'
 import { ActivityThread } from '@renderer/features/segretario/segretario-panel'
+import { LanguageStep } from '@renderer/features/onboarding/language-step'
+import { StepFrame } from '@renderer/features/onboarding/step-frame'
 import type { SegretarioState } from '@renderer/features/segretario/use-segretario'
 import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { Input } from '@renderer/components/ui/input'
+import { messagesNow, useLanguage, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import { defineMessages, type Messages } from '@shared/i18n'
+import { PLACES } from '@shared/places'
 import { calendarRefusedNotice, type CalendarConnection } from '@shared/calendar'
 import {
   mailRefusedNotice,
@@ -43,12 +48,25 @@ import {
   type ReadingStatus
 } from '@shared/segretario'
 
+import { MESSAGES } from './onboarding-wizard.messages'
+
+/** What an OpenRouter key looks like: the same in every language. */
+const KEY_PLACEHOLDER = 'sk-or-v1-…'
+
 /** How often the preparation and the reading are looked at again while the user waits. */
 const POLL_MS = 2500
 
 /** Every step a case can have, in order; which apply is decided as the user goes (`applies`). */
 const CASE_STEPS: Readonly<Record<OnboardingCase, ReadonlyArray<OnboardingStep>>> = {
-  'primo-avvio': ['connessioni', 'segretario', 'preparazione', 'conoscimi', 'lettura', 'entra'],
+  'primo-avvio': [
+    'lingua',
+    'connessioni',
+    'segretario',
+    'preparazione',
+    'conoscimi',
+    'lettura',
+    'entra'
+  ],
   'nuova-connessione': [
     'connessioni',
     'segretario',
@@ -76,14 +94,15 @@ export function newOnboarding(
   }
 }
 
-const STEP_LABELS: Readonly<Record<OnboardingStep, string>> = {
-  connessioni: 'Connessioni',
-  segretario: 'Segretario',
-  preparazione: 'Preparazione',
-  conoscimi: 'Conoscimi',
-  lettura: 'Al passo',
-  entra: 'Entra'
-}
+const STEP_LABELS = defineMessages({
+  lingua: { en: 'Language', it: 'Lingua', de: 'Sprache' },
+  connessioni: PLACES.connections,
+  segretario: PLACES.segretario,
+  preparazione: { en: 'Preparation', it: 'Preparazione', de: 'Vorbereitung' },
+  conoscimi: PLACES.conoscimi,
+  lettura: PLACES.alPasso,
+  entra: { en: 'Enter', it: 'Entra', de: 'Start' }
+}) satisfies Record<OnboardingStep, unknown>
 
 /**
  * Whether a step is for this setup: asking for the AI only when it is
@@ -111,30 +130,6 @@ function applies(
 
 function errorText(error: unknown): string | undefined {
   return error instanceof Error && error.message.trim() ? error.message : undefined
-}
-
-/** A step's frame: its title in the house's voice, what it is for, and its buttons at the bottom. */
-function StepFrame({
-  title,
-  lead,
-  children,
-  actions
-}: {
-  title: string
-  lead: React.ReactNode
-  children?: React.ReactNode
-  actions: React.ReactNode
-}): React.JSX.Element {
-  return (
-    <div className="flex flex-1 flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <h1 className="display-title text-[30px] leading-tight">{title}</h1>
-        <p className="voice text-muted-foreground text-[16px] leading-[1.5]">{lead}</p>
-      </div>
-      {children}
-      <div className="mt-auto flex flex-wrap items-center justify-end gap-2 pt-2">{actions}</div>
-    </div>
-  )
 }
 
 /**
@@ -175,6 +170,7 @@ function ConnectionsStep({
   /** From inside SIEVER Mail, before anything is added: the user may go back. */
   onCancel: (() => void) | null
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const hasConnection = accounts.length > 0 || calendarConnections.length > 0
   // Opened by itself when there is nothing yet, and when the user came to add one — not a
   // mailbox's calendar, asked for in the list.
@@ -187,17 +183,17 @@ function ConnectionsStep({
 
   return (
     <StepFrame
-      title="Le tue connessioni"
-      lead="Collega la posta e i calendari che usi: ogni casella e ogni calendario è una connessione a sé, e presto anche i volumi e i drive dei tuoi file. Ne basta una, di qualunque tipo."
+      title={m.connectionsTitle}
+      lead={m.connectionsLead}
       actions={
         <>
           {onCancel && !calendarAdded && (
             <Button variant="ghost" size="lg" onClick={onCancel}>
-              Annulla
+              {m.cancel}
             </Button>
           )}
           <Button size="lg" disabled={!hasConnection} onClick={onNext}>
-            Continua
+            {m.continue}
           </Button>
         </>
       }
@@ -230,7 +226,7 @@ function ConnectionsStep({
             className="text-muted-foreground hover:bg-hover hover:text-foreground focus-visible:ring-ring/60 flex items-center gap-2.5 rounded-[10px] border border-dashed px-4 py-3 text-left text-[13px] font-medium outline-none focus-visible:ring-2"
           >
             <Plus className="size-4 shrink-0" />
-            {hasConnection ? 'Aggiungi una connessione' : 'Collega la prima connessione'}
+            {hasConnection ? m.addConnection : m.firstConnection}
           </button>
         )}
       </div>
@@ -255,6 +251,8 @@ function SegretarioStep({
   onSkip: (() => void) | null
   onCancel: (() => void) | null
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const { formatLocale } = useLanguage()
   const [key, setKey] = useState('')
   const [working, setWorking] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
@@ -270,7 +268,7 @@ function SegretarioStep({
     try {
       await action()
     } catch (error) {
-      setProblem(errorText(error) ?? 'Non è andata.')
+      setProblem(errorText(error) ?? messagesNow(MESSAGES).failed)
     } finally {
       setWorking(false)
     }
@@ -278,25 +276,18 @@ function SegretarioStep({
 
   return (
     <StepFrame
-      title={setupCase === 'ai-riaccesa' ? 'Riaccendi il Segretario' : 'Il Segretario'}
-      lead={
-        <>
-          Il Segretario segue la tua posta e i tuoi calendari mentre cambiano, tiene il conto di
-          quello che ti chiedono, di quello che hai promesso e di quello che aspetti, riconosce i
-          tuoi progetti, prepara le risposte, gli incontri e la tua giornata. Lavora con un modello
-          linguistico che usi con il tuo account OpenRouter: paghi solo quello che fa.
-        </>
-      }
+      title={setupCase === 'ai-riaccesa' ? m.segretarioAgain : m.segretarioTitle}
+      lead={m.segretarioLead}
       actions={
         <>
           {onCancel && (
             <Button variant="ghost" size="lg" disabled={working} onClick={onCancel}>
-              Annulla
+              {m.cancel}
             </Button>
           )}
           {onSkip && (
             <Button variant="ghost" size="lg" disabled={working} onClick={onSkip}>
-              Non ora
+              {m.notNow}
             </Button>
           )}
           <Button
@@ -309,24 +300,21 @@ function SegretarioStep({
             ) : (
               <Sparkles className="size-4" />
             )}
-            Accendi le funzioni AI
+            {m.turnOnAi}
           </Button>
         </>
       }
     >
       {exhausted ? (
         <div className="bg-destructive/10 flex flex-col gap-3 rounded-[10px] px-4 py-3 text-[13px]">
-          <span className="text-destructive-soft-foreground">
-            Il credito OpenRouter è finito, o la chiave ha raggiunto il suo limite di spesa: le
-            funzioni AI si possono riaccendere quando c&apos;è di nuovo credito.
-          </span>
+          <span className="text-destructive-soft-foreground">{m.creditExhausted}</span>
           <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               onClick={() => void window.mailApi.openExternalUrl(OPENROUTER_CREDITS_URL)}
             >
               <ExternalLink className="size-3.5" />
-              Ricarica su OpenRouter
+              {m.topUp}
             </Button>
             <Button
               size="sm"
@@ -335,15 +323,13 @@ function SegretarioStep({
               onClick={() =>
                 void run(async () => {
                   if ((await window.segretarioApi.checkKey()).keyState === 'exhausted') {
-                    throw new Error(
-                      'Il credito risulta ancora finito: se hai appena ricaricato, riprova tra qualche istante.'
-                    )
+                    throw new Error(messagesNow(MESSAGES).stillExhausted)
                   }
                 })
               }
             >
               {working && <LoaderCircle className="size-3.5 animate-spin" />}
-              Ho ricaricato, verifica
+              {m.toppedUp}
             </Button>
           </div>
         </div>
@@ -351,15 +337,17 @@ function SegretarioStep({
         <div className="bg-hover flex items-center gap-2.5 rounded-[10px] px-4 py-3 text-[13px]">
           <Check className="text-status-online size-4 shrink-0" />
           <span className="min-w-0 flex-1">
-            Chiave OpenRouter collegata{status?.keyLabel ? ` · ${status.keyLabel}` : ''}
+            {m.keyConnected}
+            {status?.keyLabel ? ` · ${status.keyLabel}` : ''}
             {status?.credit && (
               <span className="text-muted-foreground">
-                {' '}
-                · credito{' '}
-                {status.credit.available.toLocaleString('it-IT', {
-                  style: 'currency',
-                  currency: 'USD'
-                })}
+                {' · '}
+                {m.credit(
+                  status.credit.available.toLocaleString(formatLocale, {
+                    style: 'currency',
+                    currency: 'USD'
+                  })
+                )}
               </span>
             )}
           </span>
@@ -381,8 +369,8 @@ function SegretarioStep({
               type="password"
               autoComplete="off"
               spellCheck={false}
-              placeholder="sk-or-v1-…"
-              aria-label="Chiave OpenRouter"
+              placeholder={KEY_PLACEHOLDER}
+              aria-label={m.keyLabel}
               value={key}
               onChange={(event) => setKey(event.target.value)}
               className="tabular"
@@ -394,18 +382,17 @@ function SegretarioStep({
               ) : (
                 <KeyRound className="size-4" />
               )}
-              Verifica
+              {m.check}
             </Button>
           </div>
           <p className="text-muted-foreground text-[12px]">
-            Non hai una chiave? Crea un account su OpenRouter, aggiungi qualche dollaro di credito e
-            genera una chiave.{' '}
+            {m.noKey}{' '}
             <button
               type="button"
               className="text-foreground inline-flex items-center gap-1 underline underline-offset-2"
               onClick={() => void window.mailApi.openExternalUrl(OPENROUTER_KEYS_URL)}
             >
-              Apri openrouter.ai
+              {m.openOpenRouter}
               <ExternalLink className="size-3" />
             </button>
           </p>
@@ -431,6 +418,7 @@ type Preparation =
   | { stage: 'refused'; line: string; notice: ConnectionRefusedNotice }
 
 function preparationOf(
+  m: Messages<typeof MESSAGES>,
   account: MailAccount,
   state: AccountConnectionState | undefined,
   recentMailIndexed: boolean | undefined,
@@ -439,23 +427,23 @@ function preparationOf(
   if (state?.refused) {
     return {
       stage: 'refused',
-      line: REFUSAL_LINES[state.refused],
+      line: messagesNow(REFUSAL_LINES)[state.refused],
       notice: mailRefusedNotice(account, state.refused, state.errorMessage ?? '')
     }
   }
 
   if (state?.status === 'offline') {
-    return { stage: 'waiting', line: 'Senza rete: riprende da sola appena torna.' }
+    return { stage: 'waiting', line: m.offline }
   }
 
   if (state?.status === 'error') {
-    return { stage: 'waiting', line: 'Il server non risponde: riprova da sola.' }
+    return { stage: 'waiting', line: m.serverDown }
   }
 
   if (!state || state.status !== 'connected' || state.syncing || !state.index) {
     return {
       stage: 'working',
-      line: state?.status === 'reconnecting' ? 'Si ricollega…' : 'Scarico la posta…'
+      line: state?.status === 'reconnecting' ? m.reconnecting : m.downloadingMail
     }
   }
 
@@ -463,11 +451,11 @@ function preparationOf(
     const { total, indexed } = state.index
     return {
       stage: 'working',
-      line: `Leggo il testo dei messaggi recenti…${total > 0 ? ` ${Math.round((indexed / total) * 100)}%` : ''}`
+      line: m.readingRecent(total > 0 ? Math.round((indexed / total) * 100) : null)
     }
   }
 
-  return { stage: 'ready', line: 'Pronta' }
+  return { stage: 'ready', line: m.mailboxReady }
 }
 
 /**
@@ -475,22 +463,25 @@ function preparationOf(
  * with a calendar of it that could not be, which it says — waiting for its
  * server, or turned down.
  */
-function calendarPreparationOf(connection: CalendarConnection): Preparation {
+function calendarPreparationOf(
+  m: Messages<typeof MESSAGES>,
+  connection: CalendarConnection
+): Preparation {
   if (connection.refused) {
     return {
       stage: 'refused',
-      line: REFUSAL_LINES[connection.refused],
+      line: messagesNow(REFUSAL_LINES)[connection.refused],
       notice: calendarRefusedNotice(connection, connection.refused)
     }
   }
 
   if (connection.lastSyncAt !== null) {
-    return { stage: 'ready', line: connection.problem ?? 'Pronto' }
+    return { stage: 'ready', line: connection.problem ?? m.calendarReady }
   }
 
   return connection.problem
-    ? { stage: 'waiting', line: `${connection.problem} Riprova da solo.` }
-    : { stage: 'working', line: 'Scarico gli eventi…' }
+    ? { stage: 'waiting', line: m.retriesAlone(connection.problem) }
+    : { stage: 'working', line: m.downloadingEvents }
 }
 
 /**
@@ -514,24 +505,24 @@ function PreparationStep({
   onRemoveAccount: (accountId: string) => void
   onNext: () => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [indexed, setIndexed] = useState<ReadonlyMap<string, boolean>>(() => new Map())
   const { confirm, dialog } = useConfirmDialog()
   // As Settings does: asked first, and a removal that fails says so.
   const removeCalendar = async (connection: CalendarConnection): Promise<void> => {
     const confirmed = await confirm({
-      title: `Scollegare il calendario di ${connection.label}?`,
-      description:
-        'I suoi eventi spariscono da SIEVER Mail; nel calendario restano come sono. Puoi ricollegarlo quando vuoi.',
-      confirmLabel: 'Scollega',
+      title: m.disconnectCalendar(connection.label),
+      description: m.disconnectCalendarText,
+      confirmLabel: m.disconnect,
       destructive: true
     })
 
     if (confirmed) {
-      await window.calendarApi
-        .disconnect(connection.id)
-        .catch((error: unknown) =>
-          toast.error('Il calendario non si è scollegato', { description: errorText(error) })
-        )
+      await window.calendarApi.disconnect(connection.id).catch((error: unknown) =>
+        toast.error(messagesNow(MESSAGES).calendarNotDisconnected, {
+          description: errorText(error)
+        })
+      )
     }
   }
   const accountIds = useMemo(() => accounts.map((account) => account.id), [accounts])
@@ -568,13 +559,13 @@ function PreparationStep({
       key: `mail:${account.id}`,
       name: account.email,
       remove: () => onRemoveAccount(account.id),
-      ...preparationOf(account, connections[account.id], indexed.get(account.id), aiOn)
+      ...preparationOf(m, account, connections[account.id], indexed.get(account.id), aiOn)
     })),
     ...calendarConnections.map((connection) => ({
       key: `calendar:${connection.id}`,
-      name: `${connection.label} · calendari`,
+      name: m.calendarsOf(connection.label),
       remove: () => void removeCalendar(connection),
-      ...calendarPreparationOf(connection)
+      ...calendarPreparationOf(m, connection)
     }))
   ]
   const ready = rows.length > 0 && rows.every((row) => row.stage === 'ready')
@@ -588,24 +579,24 @@ function PreparationStep({
 
   return (
     <StepFrame
-      title="Preparo le connessioni"
+      title={m.preparationTitle}
       lead={
         !hasMail
-          ? 'Scarico gli eventi di ogni calendario.'
+          ? m.preparationCalendars
           : aiOn
-            ? `Scarico la posta${calendarConnections.length > 0 ? ' e i calendari' : ''} di ogni connessione e leggo il testo dei messaggi recenti: è da lì che il Segretario comincia.`
-            : `Scarico la posta${calendarConnections.length > 0 ? ' e i calendari' : ''} di ogni connessione. I messaggi più vecchi continuano ad arrivare mentre lavori.`
+            ? m.preparationWithAi(calendarConnections.length > 0)
+            : m.preparationWithoutAi(calendarConnections.length > 0)
       }
       actions={
         <>
           {waiting > 0 && (
             <Button variant="ghost" size="lg" onClick={retryNow}>
-              Riprova ora
+              {m.retryNow}
             </Button>
           )}
           <Button size="lg" disabled={!ready} onClick={onNext}>
             {!ready && refused === 0 && <LoaderCircle className="size-4 animate-spin" />}
-            Continua
+            {m.continue}
           </Button>
         </>
       }
@@ -639,21 +630,19 @@ function PreparationStep({
             </span>
             {(row.stage === 'refused' || row.stage === 'waiting') && (
               <Button variant="ghost" size="sm" onClick={row.remove}>
-                Togli
+                {m.remove}
               </Button>
             )}
             {row.stage === 'refused' && (
               <Button variant="outline" size="sm" onClick={() => showConnectionRefused(row.notice)}>
-                Ricollega
+                {m.reconnect}
               </Button>
             )}
           </div>
         ))}
         {(refused > 0 || waiting > 0) && (
           <p className="text-muted-foreground text-[12px] leading-[1.45]">
-            {refused > 0
-              ? `${refused === 1 ? 'Una connessione non funziona' : `${refused} connessioni non funzionano`}, e una connessione che non funziona non si collega: ricollega${refused === 1 ? 'la' : 'le'}, o togli${refused === 1 ? 'la' : 'le'} e aggiungi${refused === 1 ? 'la' : 'le'} quando è a posto.`
-              : `${waiting === 1 ? 'Un server non risponde' : `${waiting} server non rispondono`}: SIEVER Mail riprova da solo, e si va avanti appena ${waiting === 1 ? 'risponde' : 'rispondono'}. Se non vuoi aspettare, togli la connessione e aggiungila più tardi.`}
+            {refused > 0 ? m.refusedNote(refused) : m.waitingNote(waiting)}
           </p>
         )}
       </div>
@@ -689,6 +678,8 @@ function ConoscimiStep({
   /** Turning the AI on: where Conoscimi does not finish, the setup ends without the AI. */
   onContinueWithoutAi: () => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
   const [starting, setStarting] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const { select } = segretario
@@ -725,7 +716,9 @@ function ConoscimiStep({
       const activity = await window.segretarioApi.startConoscimi(keys)
       onStarted(activity.id)
     } catch (error) {
-      setProblem(errorText(error) ?? 'Conoscimi non è partito.')
+      setProblem(
+        errorText(error) ?? messagesNow(MESSAGES).conoscimiNotStarted(messagesNow(PLACES).conoscimi)
+      )
     } finally {
       setStarting(false)
     }
@@ -734,19 +727,22 @@ function ConoscimiStep({
   if (!state.conoscimiId) {
     return (
       <StepFrame
-        title="Fatti conoscere"
+        title={m.introduce}
         lead={
           again
-            ? 'Il Segretario ti conosce già: rilegge le tue connessioni e aggiorna quello che sa, senza cancellarlo. Se nel frattempo non è cambiato molto, ci mette poco.'
+            ? m.conoscimiAgain
             : adding
-              ? `Il Segretario ti conosce già: ora legge ${unknown.length === 1 ? 'la connessione che non conosce ancora' : 'le connessioni che non conosce ancora'} — ${unknown.map((connection) => connection.label).join(', ')} — e ${unknown.length === 1 ? 'la lega' : 'le lega'} a quello che sa di te, del tuo lavoro e delle persone. Prende appunti che potrai leggere e correggere. Puoi guardarlo mentre lavora.`
-              : 'Prima di cominciare, il Segretario legge la tua posta, i calendari e le tue cartelle per capire chi sei, come lavori, con chi e su cosa. Prende appunti che potrai leggere e correggere. Puoi guardarlo mentre lavora.'
+              ? m.conoscimiAdding(
+                  unknown.length,
+                  unknown.map((connection) => connection.label).join(', ')
+                )
+              : m.conoscimiFirst
         }
         actions={
           <>
             {onCancel && (
               <Button variant="ghost" size="lg" disabled={starting} onClick={onCancel}>
-                Annulla
+                {m.cancel}
               </Button>
             )}
             <Button
@@ -760,7 +756,7 @@ function ConoscimiStep({
               ) : (
                 <CompassStar className="size-4" />
               )}
-              Fatti conoscere
+              {m.introduce}
             </Button>
           </>
         }
@@ -777,9 +773,9 @@ function ConoscimiStep({
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div className="flex items-center gap-2.5">
         <CompassStar className="text-ai-star size-5" />
-        <h1 className="display-title text-[22px]">Conoscimi</h1>
+        <h1 className="display-title text-[22px]">{places.conoscimi}</h1>
         <span className="text-muted-foreground text-[12.5px]">
-          {done ? 'Fatto' : failed ? 'Interrotto' : 'Al lavoro…'}
+          {done ? m.done : failed ? m.stopped : m.atWork}
         </span>
       </div>
       <div className="sheet flex min-h-0 flex-1 flex-col overflow-hidden rounded-[12px]">
@@ -796,20 +792,20 @@ function ConoscimiStep({
             <span className="text-destructive-soft-foreground mr-auto text-[12.5px]">
               {problem ??
                 (onCancel
-                  ? 'Conoscimi si è fermato prima della fine: quello che sapeva prima resta.'
-                  : 'Conoscimi si è fermato prima della fine. Senza conoscerti il Segretario non comincia: riprova, o continua senza AI e riaccendila quando vuoi.')}
+                  ? m.conoscimiStoppedKept(places.conoscimi)
+                  : m.conoscimiStopped(places.conoscimi))}
             </span>
             {onCancel ? (
               <Button variant="ghost" size="lg" onClick={onCancel}>
-                Chiudi
+                {m.close}
               </Button>
             ) : (
               <Button variant="ghost" size="lg" onClick={onContinueWithoutAi}>
-                Continua senza AI
+                {m.continueWithoutAi}
               </Button>
             )}
             <Button size="lg" disabled={starting} onClick={() => void start()}>
-              Riprova
+              {m.retry}
             </Button>
           </>
         ) : (
@@ -818,11 +814,13 @@ function ConoscimiStep({
             <>
               <span className="text-muted-foreground mr-auto flex items-start gap-2 text-[12.5px]">
                 <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-                <span>{waiting} Conoscimi riprende da solo da dove era.</span>
+                <span>
+                  {waiting} {m.conoscimiResumes(places.conoscimi)}
+                </span>
               </span>
               {!onCancel && (
                 <Button variant="ghost" size="lg" onClick={onContinueWithoutAi}>
-                  Continua senza AI
+                  {m.continueWithoutAi}
                 </Button>
               )}
             </>
@@ -830,7 +828,7 @@ function ConoscimiStep({
         )}
         {done && (
           <Button size="lg" onClick={onNext}>
-            Continua
+            {m.continue}
           </Button>
         )}
       </div>
@@ -861,14 +859,10 @@ function useEngineWaiting(): string | null {
   return waiting
 }
 
-/** "3 minuti", "meno di un minuto": what is left, said plainly. */
-function remaining(milliseconds: number): string {
+/** "about 3 minutes", "less than a minute": what is left, said plainly. */
+function remaining(m: Messages<typeof MESSAGES>, milliseconds: number): string {
   const minutes = Math.round(milliseconds / 60_000)
-  return minutes < 1
-    ? 'meno di un minuto'
-    : minutes === 1
-      ? 'circa un minuto'
-      : `circa ${minutes} minuti`
+  return minutes < 1 ? m.lessThanMinute : minutes === 1 ? m.aboutMinute : m.aboutMinutes(minutes)
 }
 
 /**
@@ -889,6 +883,8 @@ function ReadingStep({
   onNext: () => void
   onContinueWithoutAi: () => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const { formatLocale } = useLanguage()
   const [retrying, setRetrying] = useState(false)
   const [status, setStatus] = useState<ReadingStatus | null>(null)
   const [engine, setEngine] = useState<EngineState | null>(null)
@@ -945,7 +941,7 @@ function ReadingStep({
       await window.segretarioApi.retryReading(accountIds)
       setStatus(await window.segretarioApi.getReadingStatus(accountIds))
     } catch (error) {
-      toast.error('Non riesco a riprovare', { description: errorText(error) })
+      toast.error(messagesNow(MESSAGES).retryFailed, { description: errorText(error) })
     } finally {
       setRetrying(false)
     }
@@ -953,29 +949,29 @@ function ReadingStep({
 
   return (
     <StepFrame
-      title="Il Segretario si mette al passo"
-      lead="Legge ogni connessione fin dove ha deciso conoscendoti: i messaggi uno per uno, come se fossero appena arrivati, e gli impegni del calendario. Annota cosa ti chiedono, apre le cose da fare, riconosce i progetti, prepara le risposte che servono."
+      title={m.readingTitle}
+      lead={m.readingLead}
       actions={
         done && failures > 0 ? (
           <>
             <Button variant="ghost" size="lg" onClick={onContinueWithoutAi}>
-              Continua senza AI
+              {m.continueWithoutAi}
             </Button>
             <Button size="lg" disabled={retrying} onClick={() => void retry()}>
               {retrying && <LoaderCircle className="size-4 animate-spin" />}
-              Riprova
+              {m.retry}
             </Button>
           </>
         ) : (
           <>
             {!done && waiting && (
               <Button variant="ghost" size="lg" onClick={onContinueWithoutAi}>
-                Continua senza AI
+                {m.continueWithoutAi}
               </Button>
             )}
             <Button size="lg" disabled={!done} onClick={onNext}>
               {!done && <LoaderCircle className="size-4 animate-spin" />}
-              {done ? 'Continua' : 'Sto leggendo…'}
+              {done ? m.continue : m.reading}
             </Button>
           </>
         )
@@ -993,22 +989,26 @@ function ReadingStep({
             {status
               ? [
                   status.total > 0
-                    ? `Letti ${status.read.toLocaleString('it-IT')} messaggi su ${status.total.toLocaleString('it-IT')}`
+                    ? m.messagesRead(
+                        status.read.toLocaleString(formatLocale),
+                        status.total.toLocaleString(formatLocale)
+                      )
                     : null,
                   status.events.total > 0
-                    ? `guardati ${status.events.looked.toLocaleString('it-IT')} eventi su ${status.events.total.toLocaleString('it-IT')}`
+                    ? m.eventsLooked(
+                        status.events.looked.toLocaleString(formatLocale),
+                        status.events.total.toLocaleString(formatLocale)
+                      )
                     : null
                 ]
                   .filter(Boolean)
-                  .join(' · ') || 'Niente da leggere'
-              : 'Conto i messaggi…'}
+                  .join(' · ') || m.nothingToRead
+              : m.counting}
           </span>
-          {estimate !== null && !done && <span>Manca {remaining(estimate)}</span>}
+          {estimate !== null && !done && <span>{m.left(remaining(m, estimate))}</span>}
         </p>
         {status && status.downloading && (
-          <p className="text-muted-foreground text-[12.5px]">
-            Scarico ancora la posta più vecchia: la leggo man mano che arriva.
-          </p>
+          <p className="text-muted-foreground text-[12.5px]">{m.stillDownloading}</p>
         )}
         {status && status.horizons.length > 0 && (
           <ul className="mt-2 flex flex-col gap-1.5 text-[12.5px]">
@@ -1016,13 +1016,13 @@ function ReadingStep({
               <li key={horizon.key} className="flex flex-col">
                 <span>
                   <span className="font-semibold">
-                    {horizon.kind === 'calendario' ? `Calendario ${horizon.label}` : horizon.label}
+                    {horizon.kind === 'calendario' ? m.calendarNamed(horizon.label) : horizon.label}
                   </span>
                   <span className="text-muted-foreground">
                     {' · '}
                     {horizon.kind === 'calendario'
-                      ? `tutto: da ${horizon.days} giorni fa a un anno avanti`
-                      : `ultimi ${horizon.days} giorni`}
+                      ? m.calendarHorizon(horizon.days)
+                      : m.mailHorizon(horizon.days)}
                   </span>
                 </span>
                 {horizon.reason && (
@@ -1036,18 +1036,13 @@ function ReadingStep({
           <p className="text-muted-foreground flex items-start gap-2 text-[12.5px]">
             <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
             <span>
-              {waiting} Il Segretario riprende da solo da dove era; se il problema resta, puoi
-              continuare senza AI.
+              {waiting} {m.segretarioResumes}
             </span>
           </p>
         )}
         {status && status.failed.length > 0 && (
           <div className="mt-2 flex flex-col gap-1">
-            <p className="text-[12.5px] font-semibold">
-              {status.failed.length === 1
-                ? 'Una lettura non è riuscita: riprovala, o continua senza AI.'
-                : `${status.failed.length} letture non sono riuscite: riprovale, o continua senza AI.`}
-            </p>
+            <p className="text-[12.5px] font-semibold">{m.readingsFailed(status.failed.length)}</p>
             <ul className="text-muted-foreground flex flex-col gap-0.5 text-[12px]">
               {status.failed.slice(0, 6).map((failure, index) => (
                 <li key={index} className="truncate">
@@ -1065,17 +1060,18 @@ function ReadingStep({
 
 /** The last step: ready, and in. */
 function EnterStep({ aiOn, onEnter }: { aiOn: boolean; onEnter: () => void }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const places = useMessages(PLACES)
+
   return (
     <StepFrame
-      title="Pronto"
+      title={m.ready}
       lead={
-        aiOn
-          ? 'Il Segretario è al passo: trovi la giornata in Oggi, con le cose da gestire, quelle che aspetti, le risposte pronte e i tuoi progetti. Da qui in poi segue quello che cambia.'
-          : 'Le tue app sono pronte. Puoi accendere il Segretario quando vuoi, da Impostazioni › Segretario.'
+        aiOn ? m.enterWithAi(places.today) : m.enterWithoutAi(places.settings, places.segretario)
       }
       actions={
         <Button size="lg" onClick={onEnter}>
-          Entra in SIEVER Mail
+          {m.enter}
         </Button>
       }
     />
@@ -1130,6 +1126,8 @@ export function OnboardingWizard({
   /** Over — finished, or given up before the AI was turned on. */
   onFinish: (entered: boolean) => void
 }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+  const stepLabels = useMessages(STEP_LABELS)
   const [learning, setLearning] = useState<ConnectionLearning[] | null>(null)
   // Before the AI is decided on, the way shown is the whole of it.
   const all = CASE_STEPS[state.case]
@@ -1239,7 +1237,7 @@ export function OnboardingWizard({
             watching ? 'h-full' : 'min-h-full'
           )}
         >
-          <nav aria-label="Passi" className="flex items-center gap-3">
+          <nav aria-label={m.steps} className="flex items-center gap-3">
             <CompassStar className="text-ai-star size-5 shrink-0" />
             <ol className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px]">
               {steps.map((step, index) => {
@@ -1258,7 +1256,7 @@ export function OnboardingWizard({
                     )}
                   >
                     {index > 0 && <span className="text-faint-foreground">·</span>}
-                    {STEP_LABELS[step]}
+                    {stepLabels[step]}
                   </li>
                 )
               })}
@@ -1271,6 +1269,7 @@ export function OnboardingWizard({
               watching ? 'min-h-[420px] flex-1' : 'min-h-[360px] shrink-0'
             )}
           >
+            {state.step === 'lingua' && <LanguageStep onNext={() => next()} />}
             {state.step === 'connessioni' && (
               <ConnectionsStep
                 accounts={accounts}

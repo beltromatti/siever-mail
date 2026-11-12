@@ -2,10 +2,12 @@ import { open, readFile, stat } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 
 import { seriesKey } from '@shared/calendar'
+import { defineMessages } from '@shared/i18n'
 import type { MessageRef } from '@shared/models'
 import { pecReceiptAt, pecReceiptWords } from '@shared/pec'
 import { unlinked } from '@shared/segretario-links'
 
+import { messages } from '../../i18n'
 import { looksLikeText, TEXT_SNIFF_BYTES } from '../document-formats'
 import { extractContent, knownFormat } from '../extraction'
 import { reachShare } from './files'
@@ -34,6 +36,78 @@ import {
   shortDate,
   withoutQuotedHistory
 } from './format'
+
+/** The step's lines, as the user sees them in the panel. */
+const STEPS = defineMessages({
+  readingConversation: {
+    en: 'Reading the conversation…',
+    it: 'Leggo la conversazione…',
+    de: 'Lese die Unterhaltung…'
+  },
+  reading: { en: 'Reading…', it: 'Leggo…', de: 'Lese…' },
+  looked: {
+    en: (file: string) => `Looked at ${file}`,
+    it: (file: string) => `Guardato ${file}`,
+    de: (file: string) => `${file} angesehen`
+  },
+  notRead: {
+    en: (file: string) => `Couldn’t read ${file}`,
+    it: (file: string) => `Non letto ${file}`,
+    de: (file: string) => `${file} nicht gelesen`
+  },
+  /** A PDF, looked at or read, with the pages shown when it has more than one. */
+  pdf: {
+    en: (file: string, looked: boolean, pages: [number, number] | null) =>
+      `${looked ? 'Looked at' : 'Read'} ${file}${pages ? ` · ${pages[0] === pages[1] ? `page ${pages[0]}` : `pages ${pages[0]}–${pages[1]}`}` : ''}`,
+    it: (file: string, looked: boolean, pages: [number, number] | null) =>
+      `${looked ? 'Guardato' : 'Letto'} ${file}${pages ? ` · ${pages[0] === pages[1] ? `pagina ${pages[0]}` : `pagine ${pages[0]}–${pages[1]}`}` : ''}`,
+    de: (file: string, looked: boolean, pages: [number, number] | null) =>
+      `${file} ${looked ? 'angesehen' : 'gelesen'}${pages ? ` · ${pages[0] === pages[1] ? `Seite ${pages[0]}` : `Seiten ${pages[0]}–${pages[1]}`}` : ''}`
+  },
+  read: {
+    en: (what: string) => `Read ${what}`,
+    it: (what: string) => `Letto ${what}`,
+    de: (what: string) => `${what} gelesen`
+  },
+  readMessage: {
+    en: (subject: string) => `Read “${subject}”`,
+    it: (subject: string) => `Letto «${subject}»`,
+    de: (subject: string) => `„${subject}“ gelesen`
+  },
+  readConversation: {
+    en: (subject: string, count: number) =>
+      `Read the conversation “${subject}” · ${count === 1 ? '1 message' : `${count} messages`}`,
+    it: (subject: string, count: number) =>
+      `Letta la conversazione «${subject}» · ${count === 1 ? '1 messaggio' : `${count} messaggi`}`,
+    de: (subject: string, count: number) =>
+      `Unterhaltung „${subject}“ gelesen · ${count === 1 ? '1 Nachricht' : `${count} Nachrichten`}`
+  },
+  eventGone: {
+    en: 'Event no longer there',
+    it: 'Evento non più presente',
+    de: 'Termin nicht mehr vorhanden'
+  },
+  readEvent: {
+    en: (title: string) => `Read the event “${title}”`,
+    it: (title: string) => `Letto l'evento «${title}»`,
+    de: (title: string) => `Termin „${title}“ gelesen`
+  },
+  readProject: {
+    en: (title: string) => `Read the project ${title}`,
+    it: (title: string) => `Letto il progetto ${title}`,
+    de: (title: string) => `Projekt ${title} gelesen`
+  },
+  draftGone: {
+    en: 'Draft no longer there',
+    it: 'Bozza non più presente',
+    de: 'Entwurf nicht mehr vorhanden'
+  },
+  readDraft: {
+    en: (subject: string) => `Read the draft “${subject}”`,
+    it: (subject: string) => `Letta la bozza «${subject}»`,
+    de: (subject: string) => `Entwurf „${subject}“ gelesen`
+  }
+})
 
 /** Characters of one message read at once. */
 const MESSAGE_PAGE_CHARS = 30_000
@@ -78,14 +152,14 @@ function pecLine(message: ReadMessage): string {
   }
 
   if (message.pec) {
-    return `Ricevuta PEC: ${pecReceiptWords(message.pec.kind, certification)}${at}, del messaggio inviato «${message.subject}».`
+    return `Ricevuta PEC: ${pecReceiptWords(message.pec.kind, certification, 'it')}${at}, del messaggio inviato «${message.subject}».`
   }
 
   return message.pecReceipts && message.pecReceipts.length > 0
     ? `PEC: ${message.pecReceipts
         .map(
           (receipt) =>
-            `${pecReceiptWords(receipt.kind, receipt.certification)} il ${formatDateTime(pecReceiptAt(receipt))}`
+            `${pecReceiptWords(receipt.kind, receipt.certification, 'it')} il ${formatDateTime(pecReceiptAt(receipt))}`
         )
         .join('; ')}.`
     : ''
@@ -137,12 +211,12 @@ export function describeExtraction(
           { type: 'text', text: `${handle} ${fileName}: l'immagine è qui sotto.` },
           { type: 'image_url', image_url: { url: extracted.dataUrl } }
         ],
-        summary: `Guardato ${fileName}`
+        summary: messages(STEPS).looked(fileName)
       }
     case 'unreadable':
       return {
         content: `${handle} ${fileName}: ${extracted.reason}`,
-        summary: `Non letto ${fileName}`,
+        summary: messages(STEPS).notRead(fileName),
         failed: true
       }
     case 'pdf': {
@@ -187,9 +261,11 @@ export function describeExtraction(
 
       return {
         content,
-        summary: `${looked > 0 ? 'Guardato' : 'Letto'} ${fileName}${
-          range && extracted.totalPages > 1 ? ` · ${range}` : ''
-        }`
+        summary: messages(STEPS).pdf(
+          fileName,
+          looked > 0,
+          shown.length > 0 && extracted.totalPages > 1 ? [shown[0], shown[shown.length - 1]] : null
+        )
       }
     }
     case 'text':
@@ -204,7 +280,7 @@ export function describeExtraction(
         ]
           .filter((line) => line !== '')
           .join('\n'),
-        summary: `Letto ${fileName}`
+        summary: messages(STEPS).read(fileName)
       }
   }
 }
@@ -232,7 +308,7 @@ async function readOneMessage(
     ]
       .filter((line) => line !== '')
       .join('\n'),
-    summary: `Letto «${message.subject}»`,
+    summary: messages(STEPS).readMessage(message.subject),
     messages: [ref]
   }
 }
@@ -340,8 +416,8 @@ async function readConversation(context: ToolContext, ref: MessageRef): Promise<
     content: `Conversazione di ${countOf(thread.length, 'messaggio', 'messaggi')}, dal più vecchio:\n\n${parts.join('\n\n')}\n\n# Il lavoro su questa conversazione\n${work.join('\n')}`,
     summary:
       thread.length <= 1
-        ? `Letto «${message.subject}»`
-        : `Letta la conversazione «${message.subject}» · ${countOf(thread.length, 'messaggio', 'messaggi')}`,
+        ? messages(STEPS).readMessage(message.subject)
+        : messages(STEPS).readConversation(message.subject, thread.length),
     messages: refs
   }
 }
@@ -427,7 +503,7 @@ async function readEvent(
   if (!event) {
     return {
       content: `${handle}: l'evento non c'è più nel calendario.`,
-      summary: 'Evento non più presente',
+      summary: messages(STEPS).eventGone,
       failed: true
     }
   }
@@ -489,7 +565,7 @@ async function readEvent(
     ]
       .filter(Boolean)
       .join('\n'),
-    summary: `Letto l'evento «${event.title}»`
+    summary: messages(STEPS).readEvent(event.title)
   }
 }
 
@@ -594,7 +670,7 @@ export async function readProject(
     ]
       .filter(Boolean)
       .join('\n\n'),
-    summary: `Letto il progetto ${project.title}`
+    summary: messages(STEPS).readProject(project.title)
   }
 }
 
@@ -612,7 +688,10 @@ export const readTool: SegretarioTool = {
     },
     required: ['cosa']
   },
-  running: (args) => (booleanArg(args, 'conversazione') ? 'Leggo la conversazione…' : 'Leggo…'),
+  running: (args) =>
+    booleanArg(args, 'conversazione')
+      ? messages(STEPS).readingConversation
+      : messages(STEPS).reading,
   readsOnly: () => true,
   async execute(args, context) {
     const reference = requireString(args, 'cosa')
@@ -667,7 +746,7 @@ export const readTool: SegretarioTool = {
         if (!draft) {
           return {
             content: `${reference}: la bozza non c'è più.`,
-            summary: 'Bozza non più presente',
+            summary: messages(STEPS).draftGone,
             failed: true
           }
         }
@@ -684,7 +763,7 @@ export const readTool: SegretarioTool = {
           ]
             .filter((line) => line !== '')
             .join('\n'),
-          summary: `Letta la bozza «${draft.subject}»`
+          summary: messages(STEPS).readDraft(draft.subject)
         }
       }
       default:

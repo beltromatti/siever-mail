@@ -7,8 +7,51 @@ import { Input } from '@renderer/components/ui/input'
 import { dayKey } from '@renderer/features/calendar/calendar-dates'
 import { CommitmentRow } from '@renderer/features/segretario/commitment-row'
 import { useOpenLink } from '@renderer/features/segretario/segretario-text'
+import { useMessages } from '@renderer/lib/i18n'
 import type { CalendarEvent } from '@shared/calendar'
+import { defineMessages, type Messages } from '@shared/i18n'
 import type { EventWhose, EventWork } from '@shared/segretario'
+
+const MESSAGES = defineMessages({
+  yoursByUser: {
+    en: 'Yours: you said so',
+    it: 'Tuo: l’hai detto tu',
+    de: 'Ihrer: Sie haben es gesagt'
+  },
+  yoursBySegretario: {
+    en: 'Yours, according to the Segretario',
+    it: 'Tuo, per il Segretario',
+    de: 'Ihrer, laut dem Segretario'
+  },
+  notYoursByUser: {
+    en: 'Not yours: you said so',
+    it: 'Non tuo: l’hai detto tu',
+    de: 'Nicht Ihrer: Sie haben es gesagt'
+  },
+  notYours: {
+    en: 'Not among your events',
+    it: 'Non è tra i tuoi eventi',
+    de: 'Nicht unter Ihren Terminen'
+  },
+  notSaved: { en: 'It was not saved', it: 'Non è stato salvato', de: 'Es wurde nicht gespeichert' },
+  notMine: { en: 'Not mine', it: 'Non è mio', de: 'Nicht meiner' },
+  mine: { en: 'It’s mine', it: 'È mio', de: 'Das ist meiner' },
+  notAdded: {
+    en: 'It was not added',
+    it: 'Non è stata aggiunta',
+    de: 'Es wurde nicht hinzugefügt'
+  },
+  toDo: {
+    en: 'To do for this meeting',
+    it: 'Da fare per questo incontro',
+    de: 'Für diese Besprechung zu tun'
+  },
+  addToDo: {
+    en: 'Something to do for this meeting',
+    it: 'Una cosa da fare per questo incontro',
+    de: 'Eine Aufgabe für diese Besprechung'
+  }
+})
 
 /** What the work holds of an event, kept current while the Segretario and the user change it. */
 function useEventWork(eventKey: string): EventWork | null {
@@ -34,12 +77,12 @@ function useEventWork(eventKey: string): EventWork | null {
 }
 
 /** Whose the event is, in words: as the Segretario found it, as the user said it, or not theirs. */
-function whoseWords(whose: EventWhose): string {
+function whoseWords(m: Messages<typeof MESSAGES>, whose: EventWhose): string {
   if (whose.yours) {
-    return whose.by === 'utente' ? 'Tuo: l’hai detto tu' : 'Tuo, per il Segretario'
+    return whose.by === 'utente' ? m.yoursByUser : m.yoursBySegretario
   }
 
-  return whose.by === 'utente' ? 'Non tuo: l’hai detto tu' : 'Non è tra i tuoi eventi'
+  return whose.by === 'utente' ? m.notYoursByUser : m.notYours
 }
 
 /**
@@ -48,6 +91,7 @@ function whoseWords(whose: EventWhose): string {
  * put it right: it stands, and teaches the Segretario.
  */
 function WhoseRow({ eventKey, whose }: { eventKey: string; whose: EventWhose }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const [saving, setSaving] = useState(false)
 
   const say = async (yours: boolean): Promise<void> => {
@@ -56,7 +100,7 @@ function WhoseRow({ eventKey, whose }: { eventKey: string; whose: EventWhose }):
     try {
       await window.segretarioApi.setEventYours(eventKey, yours)
     } catch (error) {
-      toast.error('Non è stato salvato', {
+      toast.error(m.notSaved, {
         description: error instanceof Error ? error.message : undefined
       })
     } finally {
@@ -68,7 +112,7 @@ function WhoseRow({ eventKey, whose }: { eventKey: string; whose: EventWhose }):
     <p className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-[12px]">
       {whose.by === 'segretario' && <CompassStar className="text-ai-star size-3.5 shrink-0" />}
       <span className="min-w-0 truncate" title={whose.reason ?? undefined}>
-        {whoseWords(whose)}
+        {whoseWords(m, whose)}
         {whose.reason ? ` — ${whose.reason}` : ''}
       </span>
       <button
@@ -77,7 +121,7 @@ function WhoseRow({ eventKey, whose }: { eventKey: string; whose: EventWhose }):
         onClick={() => void say(!whose.yours)}
         className="hover:text-foreground focus-visible:ring-ring/60 shrink-0 rounded-sm underline underline-offset-2 outline-none focus-visible:ring-2 disabled:no-underline"
       >
-        {whose.yours ? 'Non è mio' : 'È mio'}
+        {whose.yours ? m.notMine : m.mine}
       </button>
     </p>
   )
@@ -89,6 +133,7 @@ function WhoseRow({ eventKey, whose }: { eventKey: string; whose: EventWhose }):
  * add — due on the event's day, what it takes to be ready for it.
  */
 export function EventWorkSection({ event }: { event: CalendarEvent }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
   const work = useEventWork(event.key)
   const openLink = useOpenLink()
   const [text, setText] = useState('')
@@ -118,7 +163,7 @@ export function EventWorkSection({ event }: { event: CalendarEvent }): React.JSX
       )
       setText('')
     } catch (error) {
-      toast.error('Non è stata aggiunta', {
+      toast.error(m.notAdded, {
         description: error instanceof Error ? error.message : undefined
       })
     } finally {
@@ -155,7 +200,7 @@ export function EventWorkSection({ event }: { event: CalendarEvent }): React.JSX
         <div className="flex flex-col gap-1.5">
           <p className="text-ai flex items-center gap-1.5 text-[12px] font-semibold">
             <CompassStar className="text-ai-star size-3.5" />
-            Da fare per questo incontro
+            {m.toDo}
           </p>
           <ul className="flex flex-col gap-1.5">
             {work.commitments.map((commitment) => (
@@ -175,8 +220,8 @@ export function EventWorkSection({ event }: { event: CalendarEvent }): React.JSX
         <Input
           value={text}
           disabled={saving}
-          aria-label="Una cosa da fare per questo incontro"
-          placeholder="Una cosa da fare per questo incontro"
+          aria-label={m.addToDo}
+          placeholder={m.addToDo}
           onChange={(change) => setText(change.target.value)}
           className="focus-visible:border-border h-8 border-transparent bg-transparent text-[12.5px] shadow-none"
         />

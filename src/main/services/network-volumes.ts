@@ -31,8 +31,47 @@ import { join, resolve, win32 } from 'node:path'
 import { app } from 'electron'
 
 import { diagnostics } from '@main/diagnostics/log'
+import { messages } from '@main/i18n'
+import { defineMessages } from '@shared/i18n'
 
 const log = diagnostics('files')
+
+const MESSAGES = defineMessages({
+  shareOn: {
+    en: (share: string, host: string) => `“${share}” on ${host}`,
+    it: (share: string, host: string) => `«${share}» su ${host}`,
+    de: (share: string, host: string) => `„${share}“ auf ${host}`
+  },
+  notConnected: {
+    en: (volume: string) =>
+      `“${volume}” isn’t connected. If it’s a network folder, open it once in the Finder: from then on SIEVER Mail will reconnect it by itself.`,
+    it: (volume: string) =>
+      `«${volume}» non è collegato. Se è una cartella di rete, aprila una volta nel Finder: da quel momento SIEVER Mail la ricollegherà da sola.`,
+    de: (volume: string) =>
+      `„${volume}“ ist nicht verbunden. Wenn es ein Netzwerkordner ist, öffnen Sie ihn einmal im Finder: Ab dann verbindet SIEVER Mail ihn von selbst wieder.`
+  },
+  mountCancelled: {
+    en: (share: string) => `Connecting to ${share} was cancelled.`,
+    it: (share: string) => `Collegamento a ${share} annullato.`,
+    de: (share: string) => `Die Verbindung zu ${share} wurde abgebrochen.`
+  },
+  mountFailed: {
+    en: (share: string) =>
+      `${share} couldn’t be connected: check the network, or connect it from the Finder.`,
+    it: (share: string) =>
+      `Impossibile collegare ${share}: controlla la rete, o collegala dal Finder.`,
+    de: (share: string) =>
+      `${share} konnte nicht verbunden werden: Prüfen Sie das Netzwerk, oder verbinden Sie es über den Finder.`
+  },
+  driveNotReconnected: {
+    en: (drive: string) =>
+      `The drive ${drive} isn’t connected and couldn’t be reconnected: open it in File Explorer, or check the network.`,
+    it: (drive: string) =>
+      `L'unità ${drive} non è collegata e non si è potuta ricollegare: aprila in Esplora file, o controlla la rete.`,
+    de: (drive: string) =>
+      `Das Laufwerk ${drive} ist nicht verbunden und konnte nicht wieder verbunden werden: Öffnen Sie es im Explorer, oder prüfen Sie das Netzwerk.`
+  }
+})
 
 const VOLUMES_ROOT = '/Volumes'
 const KNOWN_SHARES_FILE = 'network-volumes.json'
@@ -158,7 +197,7 @@ function describeShare(url: string): string {
   try {
     const parsed = new URL(url)
     const share = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''))
-    return share ? `«${share}» su ${parsed.hostname}` : parsed.hostname
+    return share ? messages(MESSAGES).shareOn(share, parsed.hostname) : parsed.hostname
   } catch {
     return url
   }
@@ -313,9 +352,7 @@ class MacNetworkVolumes {
 
     if (!url) {
       if (mount) {
-        throw new Error(
-          `«${mountPoint.slice(VOLUMES_ROOT.length + 1)}» non è collegato. Se è una cartella di rete, aprila una volta nel Finder: da quel momento SIEVER Mail la ricollegherà da sola.`
-        )
+        throw new Error(messages(MESSAGES).notConnected(mountPoint.slice(VOLUMES_ROOT.length + 1)))
       }
 
       return mountPoint
@@ -340,8 +377,8 @@ class MacNetworkVolumes {
       const detail = error instanceof Error ? error.message : String(error)
       throw new Error(
         /-128\b/.test(detail)
-          ? `Collegamento a ${describeShare(url)} annullato.`
-          : `Impossibile collegare ${describeShare(url)}: controlla la rete, o collegala dal Finder.`,
+          ? messages(MESSAGES).mountCancelled(describeShare(url))
+          : messages(MESSAGES).mountFailed(describeShare(url)),
         { cause: error }
       )
     }
@@ -508,10 +545,7 @@ async function reconnect(drive: string, remote: string): Promise<void> {
       RECONNECT_DEADLINE_MS
     )
   } catch (error) {
-    throw new Error(
-      `L'unità ${drive} non è collegata e non si è potuta ricollegare: aprila in Esplora file, o controlla la rete.`,
-      { cause: error }
-    )
+    throw new Error(messages(MESSAGES).driveNotReconnected(drive), { cause: error })
   }
 }
 

@@ -9,6 +9,12 @@ import {
   DialogHeader,
   DialogTitle
 } from '@renderer/components/ui/dialog'
+import { useMessages } from '@renderer/lib/i18n'
+import { defineMessages } from '@shared/i18n'
+
+const MESSAGES = defineMessages({
+  cancel: { en: 'Cancel', it: 'Annulla', de: 'Abbrechen' }
+})
 
 export interface ConfirmOptions {
   title: string
@@ -46,13 +52,14 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel,
-  cancelLabel = 'Annulla',
+  cancelLabel,
   destructive = false,
   details,
   initialFocus = 'cancel',
   onConfirm,
   onCancel
 }: ConfirmDialogProps): React.JSX.Element {
+  const m = useMessages(MESSAGES)
   const confirmButtonRef = useRef<HTMLButtonElement | null>(null)
 
   return (
@@ -80,7 +87,7 @@ export function ConfirmDialog({
         {/* Answers can name an account; a long pair wraps instead of spilling. */}
         <DialogFooter className="flex-wrap">
           <Button type="button" variant="ghost" onClick={onCancel}>
-            {cancelLabel}
+            {cancelLabel ?? m.cancel}
           </Button>
           <Button
             ref={confirmButtonRef}
