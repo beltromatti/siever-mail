@@ -471,6 +471,46 @@ const HOST_COMMANDS = [
     scope: 'calendar',
     defaultChord: 'Escape',
     editable: true
+  },
+  {
+    id: 'calendar-edit-event',
+    label: { en: 'Edit the event', it: 'Modifica l’evento', de: 'Termin bearbeiten' },
+    description: {
+      en: 'Opens the open event in the editor.',
+      it: 'Apre nell’editor l’evento aperto.',
+      de: 'Öffnet den geöffneten Termin im Editor.'
+    },
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'KeyE',
+    editable: true
+  },
+  {
+    id: 'calendar-duplicate-event',
+    label: { en: 'Duplicate the event', it: 'Duplica l’evento', de: 'Termin duplizieren' },
+    description: {
+      en: 'Opens a new event with everything of the open one, to change what differs.',
+      it: 'Apre un evento nuovo con tutto quello aperto, per cambiare ciò che è diverso.',
+      de: 'Öffnet einen neuen Termin mit allem des geöffneten, um zu ändern, was anders ist.'
+    },
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'Mod+KeyD',
+    editable: true
+  },
+  // Backspace, the delete key of a Mac keyboard; the Delete key does the same while it is the chord.
+  {
+    id: 'calendar-delete-event',
+    label: { en: 'Delete the event', it: 'Elimina l’evento', de: 'Termin löschen' },
+    description: {
+      en: 'Deletes the open event, after asking; of a recurring one, this event or the whole series.',
+      it: 'Elimina l’evento aperto, dopo averlo chiesto; di uno che si ripete, questo o tutta la serie.',
+      de: 'Löscht den geöffneten Termin nach Rückfrage; bei einem wiederkehrenden diesen oder die ganze Serie.'
+    },
+    group: 'calendar',
+    scope: 'calendar',
+    defaultChord: 'Backspace',
+    editable: true
   }
 ] as const satisfies ReadonlyArray<CommandDefinition>
 

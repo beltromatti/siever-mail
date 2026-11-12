@@ -112,6 +112,15 @@ export const MESSAGES = defineMessages({
     it: 'Questa modifica è già stata annullata.',
     de: 'Diese Änderung wurde bereits rückgängig gemacht.'
   },
+  /** Of several events changed at once, some could not be put back: why the first could not. */
+  someNotUndone: {
+    en: (failed: number, total: number, reason: string) =>
+      `${failed} of ${total} events couldn’t be put back: ${reason}`,
+    it: (failed: number, total: number, reason: string) =>
+      `${failed} eventi su ${total} non si sono potuti rimettere com’erano: ${reason}`,
+    de: (failed: number, total: number, reason: string) =>
+      `${failed} von ${total} Terminen ließen sich nicht wiederherstellen: ${reason}`
+  },
   proposalDeciding: {
     en: 'This proposal is already being decided.',
     it: 'Questa proposta si sta già decidendo.',

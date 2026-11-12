@@ -92,7 +92,7 @@ describe('readChatStream', () => {
         }),
         'data: [DONE]\n\n'
       ),
-      (text) => heard.push(text)
+      { onText: (text) => heard.push(text) }
     )
 
     expect(heard.join('')).toBe('Cerco subito.')
@@ -125,9 +125,108 @@ describe('readChatStream', () => {
           event({ choices: [{ delta: { content: 'Ok' } }] }),
           event({ error: { code: 402, message: 'Insufficient credits' } })
         ),
-        () => undefined
+        {}
       )
     ).rejects.toMatchObject({ code: 'no-credit' })
+  })
+
+  /** A stream whose chunks come at these moments, the clock moved to each as it is read. */
+  function timedStream(...chunks: Array<[at: number, chunk: string]>): ReadableStream<Uint8Array> {
+    const encoder = new TextEncoder()
+    const queue = [...chunks]
+
+    return new ReadableStream(
+      {
+        pull(controller) {
+          const next = queue.shift()
+
+          if (!next) {
+            controller.close()
+            return
+          }
+
+          vi.setSystemTime(next[0])
+          controller.enqueue(encoder.encode(next[1]))
+        }
+        // Each chunk asked for when the reader is ready for it, not ahead.
+      },
+      { highWaterMark: 0 }
+    )
+  }
+
+  const reasoning = (text: string): string =>
+    event({ choices: [{ delta: { reasoning_details: [{ type: 'reasoning.text', text }] } }] })
+
+  it('counts the thinking as it streams, and how long it lasted before the answer', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+
+    try {
+      const counts: number[] = []
+      const answered: Array<number | null> = []
+      const result = await readChatStream(
+        timedStream(
+          [1_000, reasoning('Vedo')],
+          [1_400, reasoning(' che')],
+          [2_000, reasoning(' va')],
+          [24_000, event({ choices: [{ delta: { content: 'Ecco.' } }] })],
+          [25_000, event({ choices: [{ delta: {}, finish_reason: 'stop' }] })]
+        ),
+        {
+          onReasoning: (tokens) => counts.push(tokens),
+          onOutput: (ms) => answered.push(ms)
+        }
+      )
+
+      // A delta a token, as DeepSeek's providers send them.
+      expect(counts).toEqual([1, 2, 3])
+      expect(answered).toEqual([23_000])
+      expect(result.thinking).toEqual({ ms: 23_000, tokens: 3 })
+      expect(result.content).toBe('Ecco.')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('never counts far short when a provider sends many tokens in a delta', async () => {
+    const counts: number[] = []
+    const result = await readChatStream(
+      streamOf(
+        reasoning('x'.repeat(400)),
+        event({ choices: [{ delta: { reasoning: 'y'.repeat(40) } }] }),
+        event({
+          choices: [{ delta: { tool_calls: [{ index: 0, id: 'a', function: { name: 'leggi' } }] } }]
+        })
+      ),
+      { onReasoning: (tokens) => counts.push(tokens) }
+    )
+
+    expect(counts).toEqual([100, 110])
+    expect(result.thinking?.tokens).toBe(110)
+  })
+
+  it('says a turn that only thought, until its end, and none for one that did not think', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+
+    try {
+      const answered: Array<number | null> = []
+      const silent = await readChatStream(
+        timedStream([5_000, reasoning('Penso')], [9_000, reasoning(' ancora')]),
+        { onOutput: (ms) => answered.push(ms) }
+      )
+
+      expect(answered).toEqual([])
+      expect(silent.thinking).toEqual({ ms: 4_000, tokens: 3 })
+
+      const plain = await readChatStream(
+        streamOf(event({ choices: [{ delta: { content: 'Sì.' } }] })),
+        { onOutput: (ms) => answered.push(ms) }
+      )
+
+      expect(answered).toEqual([null])
+      expect(plain.thinking).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

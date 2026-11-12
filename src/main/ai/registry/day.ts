@@ -21,18 +21,27 @@ const ERRORS = defineMessages({
   }
 })
 
+/** Who wrote words that stay as they are now: the Segretario, or the user rewriting them (§10.1). */
+export type WrittenBy = 'segretario' | 'utente'
+
+function writtenBy(value: string | null): WrittenBy {
+  return value === 'utente' ? 'utente' : 'segretario'
+}
+
 export interface DayLetter {
   day: string
   text: string
   /** What its short names stand for. */
   links: HandleLink[]
   writtenAt: number
+  writtenBy: WrittenBy
 }
 
 export interface MeetingPrep {
   text: string
   links: HandleLink[]
   writtenAt: number
+  writtenBy: WrittenBy
 }
 
 /**
@@ -50,13 +59,15 @@ export class DayStore {
       text: string
       links_json: string
       created_at: number
-    }>('SELECT day, text, links_json, created_at FROM ai_briefings WHERE day = ?', day)
+      written_by: string | null
+    }>('SELECT day, text, links_json, created_at, written_by FROM ai_briefings WHERE day = ?', day)
     return row
       ? {
           day: row.day,
           text: row.text,
           links: JSON.parse(row.links_json) as HandleLink[],
-          writtenAt: Number(row.created_at)
+          writtenAt: Number(row.created_at),
+          writtenBy: writtenBy(row.written_by)
         }
       : null
   }
@@ -65,13 +76,15 @@ export class DayStore {
    * Writes a day's letter — over that day's only if it is the one the run saw
    * (§4.6): `seenAt`, when the one it read was written; 0, that there was
    * none; `UNSEEN`, that it never looked. A letter is a day's: a new day's
-   * starts from the state, not over yesterday's (§3.4).
+   * starts from the state, not over yesterday's (§3.4). `by`: the user
+   * rewriting it, whose words the next rewrite starts from (§10.1).
    */
   async saveLetter(
     day: string,
     text: string,
     links: ReadonlyArray<HandleLink>,
-    seenAt?: number
+    seenAt?: number,
+    by: WrittenBy = 'segretario'
   ): Promise<DayLetter> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const current = await this.letter(day)
@@ -80,12 +93,15 @@ export class DayStore {
         const at = new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(
           new Date(current.writtenAt)
         )
+        const byUser = current.writtenBy === 'utente' ? ", dall'utente" : ''
         throw new RevisionConflict(
           `${
             lookedAt(seenAt) === 'mai'
-              ? `La lettera di oggi c'è già, scritta alle ${at}, e non l'hai ancora letta`
-              : `La lettera di oggi è stata riscritta alle ${at}, da quando l'hai letta`
-          }: dice «${unlinked(current.text)}». Se la tua vale ancora, riscrivila partendo da lì.`,
+              ? `La lettera di oggi c'è già, scritta alle ${at}${byUser}, e non l'hai ancora letta`
+              : `La lettera di oggi è stata riscritta alle ${at}${byUser}, da quando l'hai letta`
+          }: dice «${unlinked(current.text)}». Se la tua vale ancora, riscrivila partendo da lì${
+            byUser ? ': le parole dell’utente restano le sue' : ''
+          }.`,
           { revision: current.writtenAt }
         )
       }
@@ -93,24 +109,28 @@ export class DayStore {
       const writtenAt = Math.max(Date.now(), (current?.writtenAt ?? 0) + 1)
       const changed = current
         ? await this.sql.run(
-            'UPDATE ai_briefings SET text = ?, links_json = ?, created_at = ? WHERE day = ? AND created_at = ?',
+            `UPDATE ai_briefings SET text = ?, links_json = ?, created_at = ?, written_by = ?
+             WHERE day = ? AND created_at = ?`,
             text.trim(),
             JSON.stringify(links),
             writtenAt,
+            by,
             day,
             current.writtenAt
           )
         : await this.sql.run(
-            `INSERT INTO ai_briefings (day, text, basis, links_json, created_at) VALUES (?, ?, '[]', ?, ?)
+            `INSERT INTO ai_briefings (day, text, basis, links_json, created_at, written_by)
+             VALUES (?, ?, '[]', ?, ?, ?)
              ON CONFLICT(day) DO NOTHING`,
             day,
             text.trim(),
             JSON.stringify(links),
-            writtenAt
+            writtenAt,
+            by
           )
 
       if (changed === 1) {
-        return { day, text: text.trim(), links: [...links], writtenAt }
+        return { day, text: text.trim(), links: [...links], writtenAt, writtenBy: by }
       }
     }
 
@@ -118,15 +138,21 @@ export class DayStore {
   }
 
   async prep(eventKey: string): Promise<MeetingPrep | null> {
-    const row = await this.sql.get<{ text: string; links_json: string; written_at: number }>(
-      'SELECT text, links_json, written_at FROM ai_event_preps WHERE event_key = ?',
+    const row = await this.sql.get<{
+      text: string
+      links_json: string
+      written_at: number
+      written_by: string | null
+    }>(
+      'SELECT text, links_json, written_at, written_by FROM ai_event_preps WHERE event_key = ?',
       eventKey
     )
     return row
       ? {
           text: row.text,
           links: JSON.parse(row.links_json) as HandleLink[],
-          writtenAt: Number(row.written_at)
+          writtenAt: Number(row.written_at),
+          writtenBy: writtenBy(row.written_by)
         }
       : null
   }
@@ -141,8 +167,9 @@ export class DayStore {
       text: string
       links_json: string
       written_at: number
+      written_by: string | null
     }>(
-      `SELECT event_key, text, links_json, written_at FROM ai_event_preps
+      `SELECT event_key, text, links_json, written_at, written_by FROM ai_event_preps
        WHERE event_key IN (${eventKeys.map(() => '?').join(', ')})`,
       ...eventKeys
     )
@@ -152,7 +179,8 @@ export class DayStore {
         {
           text: row.text,
           links: JSON.parse(row.links_json) as HandleLink[],
-          writtenAt: Number(row.written_at)
+          writtenAt: Number(row.written_at),
+          writtenBy: writtenBy(row.written_by)
         }
       ])
     )
@@ -161,27 +189,32 @@ export class DayStore {
   /**
    * Writes a meeting's preparation — over the one there only if it is the one
    * the run saw (§4.6): `seenAt`, when the one it read was written; 0, that
-   * there was none; `UNSEEN`, that it never looked.
+   * there was none; `UNSEEN`, that it never looked. `by`: the user
+   * rewriting it, whose words the next rewrite starts from (§10.1).
    */
   async savePrep(
     eventKey: string,
     text: string,
     links: ReadonlyArray<HandleLink>,
     runId: string | null,
-    seenAt?: number
+    seenAt?: number,
+    by: WrittenBy = 'segretario'
   ): Promise<MeetingPrep> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const current = await this.prep(eventKey)
 
       if (current && seenAt !== undefined && current.writtenAt !== seenAt) {
+        const byUser = current.writtenBy === 'utente'
         throw new RevisionConflict(
           `${
             lookedAt(seenAt) === 'mai'
-              ? 'Questo evento ha già una preparazione, e non l’hai ancora letta'
+              ? `Questo evento ha già una preparazione${byUser ? ', scritta dall’utente' : ''}, e non l’hai ancora letta`
               : lookedAt(seenAt) === 'comparsa'
-                ? 'Da quando l’hai letto, questo evento ha avuto una preparazione'
-                : 'La preparazione di questo evento è cambiata da quando l’hai letta'
-          }: dice «${unlinked(current.text)}». Se la tua vale ancora, riscrivila tenendo ciò che serve.`,
+                ? `Da quando l’hai letto, questo evento ha avuto una preparazione${byUser ? ', dall’utente' : ''}`
+                : `La preparazione di questo evento è cambiata da quando l’hai letta${byUser ? ', per mano dell’utente' : ''}`
+          }: dice «${unlinked(current.text)}». Se la tua vale ancora, riscrivila tenendo ciò che serve${
+            byUser ? ': le parole dell’utente restano le sue' : ''
+          }.`,
           { revision: current.writtenAt }
         )
       }
@@ -189,27 +222,30 @@ export class DayStore {
       const now = Math.max(Date.now(), (current?.writtenAt ?? 0) + 1)
       const changed = current
         ? await this.sql.run(
-            `UPDATE ai_event_preps SET text = ?, links_json = ?, run_id = ?, written_at = ?
+            `UPDATE ai_event_preps SET text = ?, links_json = ?, run_id = ?, written_at = ?, written_by = ?
              WHERE event_key = ? AND written_at = ?`,
             text.trim(),
             JSON.stringify(links),
             runId,
             now,
+            by,
             eventKey,
             current.writtenAt
           )
         : await this.sql.run(
-            `INSERT INTO ai_event_preps (event_key, text, links_json, run_id, written_at) VALUES (?, ?, ?, ?, ?)
+            `INSERT INTO ai_event_preps (event_key, text, links_json, run_id, written_at, written_by)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT(event_key) DO NOTHING`,
             eventKey,
             text.trim(),
             JSON.stringify(links),
             runId,
-            now
+            now,
+            by
           )
 
       if (changed === 1) {
-        return { text: text.trim(), links: [...links], writtenAt: now }
+        return { text: text.trim(), links: [...links], writtenAt: now, writtenBy: by }
       }
     }
 

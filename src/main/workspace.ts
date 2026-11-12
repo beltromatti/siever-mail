@@ -202,6 +202,7 @@ export class Workspace {
     this.notifications = new NotificationCenter({
       window: getAppWindow,
       giveOnce: (key) => this.database.giveNotificationOnce(key),
+      moveGiven: (from, to) => this.database.moveNotificationsGiven(from, to),
       onStatusChange: (status) =>
         getAppWindow()?.webContents.send(NOTIFICATIONS_IPC.statusChanged, status)
     })
@@ -277,10 +278,14 @@ export class Workspace {
       parentWindow: () => getAppWindow(),
       onRefused: (notice) => this.connectionRefused(notice),
       onEventsChanged: () => this.calendarNotifications.eventsChanged(),
+      notificationsMoved: (moves) => this.calendarNotifications.eventsMoved(moves),
       onChangedByOthers: (calendar, changes, through) =>
         this.calendarNotifications.changedByOthers(calendar, changes, through),
       // Whose things are, as the Segretario found them: with the AI on (§7.4).
       ownership: () => this.segretario.ownership(),
+      // An event moved to another calendar is the same event (§7.5): what the Segretario keeps of
+      // it follows it, once it is open — before anything shows the move.
+      onEventsMoved: (moves) => this.segretario.eventsMoved(moves),
       // A calendar connection going (§11.4), as a mailbox.
       onDisconnecting: (connectionId) =>
         this.segretario

@@ -6,6 +6,7 @@ import { HandleRegistry, type HandleRecord } from '../agent/handles'
 import { lookingKey } from '../agent/tool-types'
 import { eventLine } from '../tools/calendar'
 import { eventWhen, formatDateTime } from '../tools/format'
+import { recurrenceWords, remindersWords } from '../tools/recurrence'
 import { nowLine } from './context'
 import type { StartingData } from './day'
 
@@ -80,6 +81,23 @@ export function changeHeld(change: CalendarChange, now = Date.now()): boolean {
 /** What moved in an event, in words: its time, title, place, who answered what. */
 function whatChanged(before: CalendarEvent, after: CalendarEvent): string[] {
   const lines: string[] = []
+
+  // Moved to another calendar: the same event (§7.5), where it was.
+  if (before.connectionId !== after.connectionId || before.calendarId !== after.calendarId) {
+    lines.push(`   era nel calendario «${before.calendarName}»`)
+  }
+
+  if (JSON.stringify(before.recurrence ?? null) !== JSON.stringify(after.recurrence ?? null)) {
+    lines.push(
+      `   prima: ${before.recurrence ? recurrenceWords(before.recurrence, before.start) : 'non si ripeteva'}`
+    )
+  }
+
+  if (JSON.stringify(before.reminders ?? null) !== JSON.stringify(after.reminders ?? null)) {
+    lines.push(
+      `   promemoria prima: ${Array.isArray(before.reminders) ? remindersWords(before.reminders, before.allDay) : 'quelli del calendario'}`
+    )
+  }
 
   if (before.start !== after.start || before.end !== after.end || before.allDay !== after.allDay) {
     lines.push(`   prima: ${eventWhen(before.start, before.end, before.allDay)}`)

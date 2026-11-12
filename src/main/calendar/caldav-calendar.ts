@@ -9,6 +9,7 @@ import { defineMessages, type Language } from '@shared/i18n'
 import type {
   CalendarProvider,
   EventField,
+  MoveHow,
   ProviderEvent,
   ProviderEventInput
 } from './calendar-provider'
@@ -17,8 +18,10 @@ import {
   changeEventResource,
   newEventResource,
   occurrenceIn,
+  holdsSeries,
   occurrencesOf,
   removeOccurrence,
+  seriesOf,
   withResponse,
   type Occurrence
 } from './icalendar'
@@ -190,8 +193,40 @@ const MESSAGES = defineMessages({
     en: 'The event wasn’t deleted',
     it: 'L’evento non è stato eliminato',
     de: 'Der Termin wurde nicht gelöscht'
+  },
+  eventNotMoved: {
+    en: 'The event wasn’t moved',
+    it: 'L’evento non è stato spostato',
+    de: 'Der Termin wurde nicht verschoben'
+  },
+  copyWouldCancel: {
+    en: 'The server doesn’t move events between its calendars, and a copy would cancel the invitation for the invitees.',
+    it: 'Il server non sposta gli eventi tra i suoi calendari, e una copia annullerebbe l’invito per gli invitati.',
+    de: 'Der Server verschiebt keine Termine zwischen seinen Kalendern, und eine Kopie würde die Einladung für die Eingeladenen absagen.'
+  },
+  sameUidRefused: {
+    en: 'The server neither moves the event nor takes a copy of it in another of its calendars: move it in the server’s own app.',
+    it: 'Il server non sposta l’evento e non ne accetta una copia in un altro suo calendario: spostalo dall’app del server.',
+    de: 'Der Server verschiebt den Termin nicht und nimmt auch keine Kopie in einem anderen seiner Kalender an: Verschieben Sie ihn in der App des Servers.'
   }
 })
+
+/** The answers of a server that will not do a MOVE between its calendars: it may take a copy. */
+const MOVE_REFUSED = new Set([400, 403, 405, 501, 502])
+
+/**
+ * Why a server turned down a copy of an object, when it says the UID is
+ * taken (RFC 4791 §5.3.2.1 `no-uid-conflict`, RFC 6638 §3.2.4.1
+ * `unique-scheduling-object-resource`): the same event cannot be in two
+ * of its calendars.
+ */
+const UID_TAKEN = /no-uid-conflict|unique-scheduling-object-resource/i
+
+/** The last part of an object's address: its name in a calendar. */
+function nameOfObject(url: string): string {
+  const path = new URL(url).pathname
+  return path.slice(path.lastIndexOf('/') + 1)
+}
 
 /**
  * A request about one calendar or one event that the server answered with
@@ -601,7 +636,14 @@ export class CalDavCalendarProvider implements CalendarProvider {
     return stored
   }
 
-  /** The object written, kept as the server now has it: its new version, or read again when it gave none. */
+  /**
+   * The object written, kept as the server now has it: its new version, or
+   * read again when it gave none. A series is not kept: the service reads
+   * its occurrences in right after writing it (`CalendarService`), and a read
+   * that found it here at the server's version would find nothing new and
+   * make none. Left out, the read finds it new, makes every occurrence and
+   * keeps it, with its version; a change before then reads it from the server.
+   */
   private async written(
     calendarId: string,
     url: string,
@@ -609,6 +651,11 @@ export class CalDavCalendarProvider implements CalendarProvider {
     data: string
   ): Promise<StoredObject> {
     const etag = response.headers.get('etag')
+
+    if (holdsSeries(data)) {
+      await this.options.store.remove([url])
+      return { url, etag, data }
+    }
 
     if (!etag) {
       return this.fetchObject(calendarId, url)
@@ -748,6 +795,95 @@ export class CalDavCalendarProvider implements CalendarProvider {
       await this.options.store.remove([url])
       return
     }
+  }
+
+  async series(calendarId: string, seriesId: string): Promise<ProviderEventInput> {
+    const { url } = splitEventId(seriesId)
+    const object = (await this.options.store.get(url)) ?? (await this.fetchObject(calendarId, url))
+    const series = seriesOf(object.data, await this.addresses())
+
+    if (!series) {
+      throw new Error(messages(MESSAGES).eventGone)
+    }
+
+    return series
+  }
+
+  /**
+   * WebDAV's own move (RFC 4918 §9.9) of the event's object to the other
+   * calendar, never over another (`Overwrite: F`): a move between
+   * calendars sends no invitation and no cancellation (RFC 6638 §3.2.3.4).
+   * A server that will not move it takes, where nobody is invited, a copy
+   * — the same object, its UID — then loses the old one; one that will
+   * not have the same event twice, even for a moment, refuses both. Where
+   * it went is not kept here: the service reads the calendar right after
+   * (`CalendarService`), and that read finds it new — every occurrence of
+   * it, its version — where one that found it kept would find nothing.
+   */
+  async move(
+    calendarId: string,
+    eventId: string,
+    toCalendarId: string,
+    { guests }: { guests: boolean }
+  ): Promise<{ eventId: string; how: MoveHow }> {
+    const { url } = splitEventId(eventId)
+    const client = await this.dav()
+    const target = await this.calendar(toCalendarId)
+    const object = (await this.options.store.get(url)) ?? (await this.fetchObject(calendarId, url))
+    const name = nameOfObject(url)
+    const destination = new URL(
+      name,
+      toCalendarId.endsWith('/') ? toCalendarId : `${toCalendarId}/`
+    ).toString()
+    const [answer] = await client.davRequest({
+      url,
+      init: {
+        method: 'MOVE',
+        headers: { Destination: destination, Overwrite: 'F' },
+        body: undefined
+      },
+      convertIncoming: false,
+      parseOutgoing: false,
+      headersToExclude: ['Content-Type']
+    })
+
+    if (answer.ok) {
+      await this.options.store.remove([url, destination])
+      return { eventId: destination, how: 'native' }
+    }
+
+    if (!MOVE_REFUSED.has(answer.status)) {
+      throw await davError(answer, messages(MESSAGES).eventNotMoved)
+    }
+
+    if (guests) {
+      throw new Error(messages(MESSAGES).copyWouldCancel)
+    }
+
+    const copied = await client.createCalendarObject({
+      calendar: target,
+      filename: name,
+      iCalString: object.data
+    })
+
+    if (!copied.ok) {
+      const said = await copied.text().catch(() => '')
+      throw UID_TAKEN.test(said) || copied.status === 409
+        ? new CalendarRequestError(messages(MESSAGES).sameUidRefused, { status: copied.status })
+        : await davError(copied, messages(MESSAGES).eventNotMoved)
+    }
+
+    await this.options.store.remove([destination])
+
+    try {
+      await this.remove(calendarId, url, false)
+    } catch (error) {
+      // The old one stays: the copy goes, so the event is not there twice.
+      await this.remove(toCalendarId, destination, false).catch(() => undefined)
+      throw error
+    }
+
+    return { eventId: destination, how: 'copy' }
   }
 
   async respond(

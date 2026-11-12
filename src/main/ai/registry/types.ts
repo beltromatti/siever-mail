@@ -22,6 +22,12 @@ export interface Actor {
    * user decided without something newer to show for it.
    */
   background?: boolean
+  /**
+   * The run carries the user's own words on this very thing (§10.1): what
+   * they decided on it before gives way, as they asked. Set by the registry
+   * for the reflection taking those words in, never by a tool.
+   */
+  onUsersWord?: boolean
 }
 
 export const USER: Actor = { by: 'utente' }
@@ -150,6 +156,8 @@ export interface ProjectRecord {
   state: string | null
   stateLinks: HandleLink[]
   stateAt: number | null
+  /** Who wrote "Il punto" as it is: rewritten by the user, the next rewrite starts from their words. */
+  stateBy: 'segretario' | 'utente'
   /** Since when "Il punto" no longer tells the whole story: something moved after it. */
   staleSince: number | null
   origin: ActorKind
@@ -211,6 +219,8 @@ export interface ReplyRecord extends MessageAnchor {
   status: ReplyStatus
   /** Why it is to be looked at again. */
   staleReason: string | null
+  /** Who wrote it as it is: rewritten by the user, it is their words. */
+  writtenBy: 'segretario' | 'utente'
   revision: number
   runId: string | null
   createdAt: number
@@ -271,6 +281,18 @@ export interface RegistryChange {
   undo?: UndoSpec
 }
 
+/** What puts back an event the Segretario wrote in the calendar. */
+export type EventUndo =
+  /** An event it put in the calendar — with its series, when it made it repeat: undone, it goes. */
+  | { kind: 'evento-creato'; eventKey: string; series?: boolean }
+  /**
+   * An event it changed — or its series —, moved to another calendar too
+   * (`before.calendarKey`, where it was): undone, it is as it was.
+   */
+  | { kind: 'evento-modificato'; eventKey: string; before: EventChange; series?: boolean }
+  /** An event it took away — a series, with its rule —: undone, it is put back as it was. */
+  | { kind: 'evento-eliminato'; event: NewCalendarEvent }
+
 export type UndoSpec =
   | { kind: 'impegno'; itemId: number; historyId: number }
   | {
@@ -287,12 +309,9 @@ export type UndoSpec =
   | { kind: 'progetto-rinominato'; projectId: string; title: string }
   /** A project it hid or showed again: undone, it is as it was. */
   | { kind: 'progetto-nascosto'; projectId: string; hidden: boolean }
-  /** An event the Segretario put in the calendar: undone, it goes. */
-  | { kind: 'evento-creato'; eventKey: string }
-  /** An event it changed: undone, it is as it was. */
-  | { kind: 'evento-modificato'; eventKey: string; before: EventChange }
-  /** An event it took away: undone, it is put back as it was. */
-  | { kind: 'evento-eliminato'; event: NewCalendarEvent }
+  | EventUndo
+  /** The same change to several events, decided once (§4.6): undone together, each as it was. */
+  | { kind: 'eventi'; each: EventUndo[] }
   /** An event it found the user's, or not (§7.4): undone, the user's word says the other. */
   | {
       kind: 'evento-tuo'

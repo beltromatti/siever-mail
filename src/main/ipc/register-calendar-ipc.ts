@@ -6,8 +6,10 @@ import { handleIpc, type HandleOptions } from '@main/ipc/handle'
 import {
   CALENDAR_IPC,
   CALENDAR_ROLES,
+  WEEKDAYS,
   type CalendarResponse,
-  type MessageInvitation
+  type MessageInvitation,
+  type Weekday
 } from '@shared/calendar'
 import { defineMessages } from '@shared/i18n'
 import type { MessageRef } from '@shared/models'
@@ -64,6 +66,31 @@ const attendeesSchema = z
       .email({ error: () => messages(MESSAGES).invalidAttendee })
   )
   .max(200)
+/**
+ * How an event repeats (`EventRecurrence`): its shape here; whether it
+ * holds together — every 1 or more, an end or a count — the service says,
+ * in the user's words.
+ */
+const recurrenceSchema = z
+  .object({
+    frequency: z.enum(['daily', 'weekly', 'monthly', 'yearly']),
+    interval: z.number().int().max(1000),
+    weekdays: z
+      .array(z.enum(WEEKDAYS as readonly [Weekday, ...Weekday[]]))
+      .max(7)
+      .optional(),
+    monthlyBy: z.enum(['day', 'weekday', 'lastWeekday']).optional(),
+    until: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, invalidDate)
+      .optional(),
+    count: z.number().int().max(10_000).optional()
+  })
+  .strict()
+/** Reminders in minutes before an event: at most four weeks, as the calendars keep them. */
+const remindersSchema = z.array(z.number().int().min(0).max(40_320)).max(50)
+/** Of an instance of a series, whether a change or a removal is for the whole series. */
+const scopeSchema = z.object({ series: z.boolean().optional() }).strict().optional()
 const newEventSchema = z
   .object({
     calendarKey: keySchema,
@@ -73,7 +100,9 @@ const newEventSchema = z
     allDay: z.boolean(),
     location: z.string().max(1000).nullable(),
     description: z.string().max(20_000).nullable(),
-    attendees: attendeesSchema
+    attendees: attendeesSchema,
+    recurrence: recurrenceSchema.nullable().optional(),
+    reminders: remindersSchema.nullable().optional()
   })
   .strict()
 const searchSchema = z
@@ -93,7 +122,10 @@ const eventChangeSchema = z
     allDay: z.boolean().optional(),
     location: z.string().max(1000).nullable().optional(),
     description: z.string().max(20_000).nullable().optional(),
-    attendees: attendeesSchema.optional()
+    attendees: attendeesSchema.optional(),
+    calendarKey: keySchema.optional(),
+    recurrence: recurrenceSchema.nullable().optional(),
+    reminders: remindersSchema.nullable().optional()
   })
   .strict()
 
@@ -197,11 +229,14 @@ export function registerCalendarIpc(
   handle(CALENDAR_IPC.create, (event: unknown) =>
     calendar.create(newEventSchema.parse(event), { byUser: true })
   )
-  handle(CALENDAR_IPC.update, (key: unknown, change: unknown) =>
-    calendar.update(keySchema.parse(key), eventChangeSchema.parse(change), { byUser: true })
+  handle(CALENDAR_IPC.update, (key: unknown, change: unknown, scope: unknown) =>
+    calendar.update(keySchema.parse(key), eventChangeSchema.parse(change), {
+      ...scopeSchema.parse(scope),
+      byUser: true
+    })
   )
-  handle(CALENDAR_IPC.remove, (key: unknown) =>
-    calendar.remove(keySchema.parse(key), { byUser: true })
+  handle(CALENDAR_IPC.remove, (key: unknown, scope: unknown) =>
+    calendar.remove(keySchema.parse(key), { ...scopeSchema.parse(scope), byUser: true })
   )
   handle(CALENDAR_IPC.syncNow, () => calendar.syncAll())
 }

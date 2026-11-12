@@ -3,7 +3,12 @@ import { createHash } from 'node:crypto'
 import { messages } from '@main/i18n'
 import { defineMessages } from '@shared/i18n'
 
-import { SyncTokenExpired, type CalendarProvider, type ProviderEvent } from './calendar-provider'
+import {
+  SyncTokenExpired,
+  type CalendarProvider,
+  type ProviderEvent,
+  type ProviderEventInput
+} from './calendar-provider'
 import { CalendarRequestError } from './calendar-refusal'
 import { occurrencesOf } from './icalendar'
 
@@ -249,6 +254,10 @@ export class IcsCalendarProvider implements CalendarProvider {
   }
 
   async remove(): Promise<void> {
+    throw readOnly()
+  }
+
+  async series(): Promise<ProviderEventInput> {
     throw readOnly()
   }
 

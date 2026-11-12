@@ -1,3 +1,4 @@
+import { open, readFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 
 import { strFromU8, unzipSync } from 'fflate'
@@ -13,9 +14,11 @@ import {
   outlookMessageText,
   rtfText,
   signedEnvelopeContent,
+  TEXT_SNIFF_BYTES,
   wordDocumentText,
   zipListing
 } from './document-formats'
+import type { ContentPart } from './openrouter'
 import { renderPdfPages } from './pdf-pages'
 
 /** A failure of the reading, which the step's line shows the user. */
@@ -58,6 +61,26 @@ export type ExtractedContent =
     }
   | { kind: 'image'; mimeType: string; dataUrl: string }
   | { kind: 'unreadable'; reason: string }
+  /**
+   * Asked whole, a document past the room given: how much text and how many
+   * pictures it holds (its pages, for a PDF) — nothing of it read.
+   */
+  | { kind: 'oversize'; chars: number; pictures: number; totalPages: number | null }
+
+export interface ExtractOptions {
+  /** Where the text goes on from. */
+  offset?: number
+  /** The PDF page it goes on from. */
+  page?: number
+  /** Every page of a PDF as a picture too, with its text. */
+  look?: boolean
+  /**
+   * The whole document at once, as a request's attachment takes it — all its
+   * text, every PDF page's text and its scanned pages drawn — when it fits in
+   * this room; `oversize` when it does not.
+   */
+  whole?: { chars: number; pictures: number }
+}
 
 /** Characters handed over at once: about a dozen thousand tokens. */
 export const EXTRACT_PAGE_CHARS = 40_000
@@ -145,8 +168,17 @@ function calendarText(text: string): string {
     .trim()
 }
 
-/** The part of `text` from `offset`, at most a page of it. */
-function page(text: string, offset: number): ExtractedContent {
+/**
+ * The part of `text` a reading gives: from `offset`, at most a page of it —
+ * or, asked whole, all of it when it fits.
+ */
+function page(text: string, { offset = 0, whole }: ExtractOptions): ExtractedContent {
+  if (whole) {
+    return text.length > whole.chars
+      ? { kind: 'oversize', chars: text.length, pictures: 0, totalPages: null }
+      : { kind: 'text', text, totalChars: text.length, nextOffset: null }
+  }
+
   const start = Math.max(0, Math.min(offset, text.length))
   const end = Math.min(text.length, start + EXTRACT_PAGE_CHARS)
 
@@ -162,14 +194,15 @@ export async function extractContent(
   fileName: string,
   contentType: string | undefined,
   data: Buffer,
-  options: { offset?: number; page?: number; look?: boolean } = {}
+  options: ExtractOptions = {}
 ): Promise<ExtractedContent> {
   const extension = extname(fileName).toLowerCase()
   const type = (contentType ?? '').toLowerCase().split(';')[0].trim()
-  const offset = options.offset ?? 0
 
   if (extension === '.pdf' || type === 'application/pdf') {
-    return extractPdf(data, options.page ?? 1, options.look ?? false)
+    return options.whole
+      ? extractWholePdf(data, options.whole)
+      : extractPdf(data, options.page ?? 1, options.look ?? false)
   }
 
   // A signed document (CAdES): the document it carries, read as what it is — "fattura.xml.p7m" as XML.
@@ -192,7 +225,7 @@ export async function extractContent(
   }
 
   if (extension === '.svg' || type === 'image/svg+xml') {
-    return page(decodeText(data), offset)
+    return page(decodeText(data), options)
   }
 
   const modelImageType =
@@ -228,34 +261,34 @@ export async function extractContent(
   if (WORD_EXTENSIONS.has(extension)) {
     const mammoth = await import('mammoth')
     const { value } = await mammoth.convertToHtml({ buffer: data })
-    return page(htmlToMarkdown.translate(value), offset)
+    return page(htmlToMarkdown.translate(value), options)
   }
 
   if (SHEET_EXTENSIONS.has(extension)) {
-    return page(await sheetsText(data), offset)
+    return page(await sheetsText(data), options)
   }
 
   if (SLIDES_EXTENSIONS.has(extension) || OPEN_DOCUMENT_EXTENSIONS.has(extension)) {
-    return page(officeXmlText(data), offset)
+    return page(officeXmlText(data), options)
   }
 
   if (extension === '.doc' || extension === '.dot' || type === 'application/msword') {
-    return textOrReason(await wordDocumentText(data), offset)
+    return textOrReason(await wordDocumentText(data), options)
   }
 
   if (extension === '.msg' || type === 'application/vnd.ms-outlook') {
     return textOrReason(
       await outlookMessageText(data, (html) => htmlToMarkdown.translate(html)),
-      offset
+      options
     )
   }
 
   if (extension === '.rtf' || type === 'application/rtf' || type === 'text/rtf') {
-    return page(rtfText(decodeText(data)), offset)
+    return page(rtfText(decodeText(data)), options)
   }
 
   if (['.html', '.htm', '.xhtml'].includes(extension) || type === 'text/html') {
-    return page(htmlToMarkdown.translate(decodeText(data)), offset)
+    return page(htmlToMarkdown.translate(decodeText(data)), options)
   }
 
   if (extension === '.eml' || type === 'message/rfc822') {
@@ -273,13 +306,13 @@ export async function extractContent(
     const files = parsed.attachments.map((file) => file.filename).filter(Boolean)
     return page(
       `${header}\n\n${body}${files.length > 0 ? `\n\nAllegati: ${files.join(', ')}` : ''}`,
-      offset
+      options
     )
   }
 
   // An invitation travels as `text/calendar` in the message and as `application/ics` attached.
   if (extension === '.ics' || type === 'text/calendar' || type === 'application/ics') {
-    return page(calendarText(decodeText(data)), offset)
+    return page(calendarText(decodeText(data)), options)
   }
 
   if (
@@ -287,7 +320,7 @@ export async function extractContent(
     type === 'application/zip' ||
     type === 'application/x-zip-compressed'
   ) {
-    return page(zipListing(data), offset)
+    return page(zipListing(data), options)
   }
 
   if (extension === '.ppt') {
@@ -300,7 +333,7 @@ export async function extractContent(
 
   // Anything that is text inside, whatever its name: a CSV, code, a drawing or a model exchanged as text.
   if (type.startsWith('text/') || looksLikeText(data)) {
-    return page(decodeText(data), offset)
+    return page(decodeText(data), options)
   }
 
   return {
@@ -310,8 +343,13 @@ export async function extractContent(
 }
 
 /** A text, or why the document gave none. */
-function textOrReason(read: string | { reason: string }, offset: number): ExtractedContent {
-  return typeof read === 'string' ? page(read, offset) : { kind: 'unreadable', reason: read.reason }
+function textOrReason(
+  read: string | { reason: string },
+  options: ExtractOptions
+): ExtractedContent {
+  return typeof read === 'string'
+    ? page(read, options)
+    : { kind: 'unreadable', reason: read.reason }
 }
 
 /**
@@ -352,10 +390,7 @@ async function extractPdf(
   fromPage: number,
   look: boolean
 ): Promise<ExtractedContent> {
-  const { extractText, getDocumentProxy } = await import('unpdf')
-  const { totalPages, text } = await extractText(await getDocumentProxy(new Uint8Array(data)), {
-    mergePages: false
-  })
+  const { totalPages, text } = await pdfText(data)
   const first = Math.max(1, Math.min(Math.trunc(fromPage), totalPages))
   const read: Array<{ page: number; text: string; picture: boolean }> = []
   let chars = 0
@@ -382,15 +417,54 @@ async function extractPdf(
     pictures += picture ? 1 : 0
   }
 
+  return pdfPages(data, totalPages, read, next)
+}
+
+/**
+ * A PDF whole, as a request's attachment takes it: every page's text, and
+ * every scanned page drawn as a picture — or, past the room given, how much
+ * there is (`oversize`), with nothing drawn.
+ */
+async function extractWholePdf(
+  data: Buffer,
+  room: { chars: number; pictures: number }
+): Promise<ExtractedContent> {
+  const { totalPages, text } = await pdfText(data)
+  const read = text.map((raw, index) => {
+    const pageText = raw.trim()
+    const picture = pageText.length < PDF_TEXT_PAGE_MIN_CHARS
+    return { page: index + 1, text: picture ? '' : pageText, picture }
+  })
+  const chars = read.reduce((sum, item) => sum + item.text.length, 0)
+  const pictures = read.filter((item) => item.picture).length
+
+  if (chars > room.chars || pictures > room.pictures) {
+    return { kind: 'oversize', chars, pictures, totalPages }
+  }
+
+  return pdfPages(data, totalPages, read, null)
+}
+
+/** A PDF's pages and their text, page by page. */
+async function pdfText(data: Buffer): Promise<{ totalPages: number; text: string[] }> {
+  const { extractText, getDocumentProxy } = await import('unpdf')
+  return extractText(await getDocumentProxy(new Uint8Array(data)), { mergePages: false })
+}
+
+/** The pages read of a PDF, those to look at drawn as pictures. */
+async function pdfPages(
+  data: Buffer,
+  totalPages: number,
+  read: ReadonlyArray<{ page: number; text: string; picture: boolean }>,
+  nextPage: number | null
+): Promise<ExtractedContent> {
+  const toDraw = read.flatMap((item) => (item.picture ? [item.page] : []))
   const drawn = new Map(
-    pictures > 0
-      ? (
-          await renderPdfPages(
-            new Uint8Array(data),
-            read.flatMap((item) => (item.picture ? [item.page] : [])),
-            PDF_PICTURE_WIDTH
-          )
-        ).map((image) => [image.page, `data:image/jpeg;base64,${image.jpeg.toString('base64')}`])
+    toDraw.length > 0
+      ? (await renderPdfPages(new Uint8Array(data), toDraw, PDF_PICTURE_WIDTH)).map((image) => [
+          image.page,
+          `data:image/jpeg;base64,${image.jpeg.toString('base64')}`
+        ])
       : []
   )
 
@@ -410,8 +484,57 @@ async function extractPdf(
 
       return { page, text: pageText, dataUrl }
     }),
-    nextPage: next
+    nextPage
   }
+}
+
+/**
+ * What an extraction holds, as the model reads it: the text; a PDF's pages,
+ * each marked, a scanned one as its picture; a picture as itself. The same
+ * for what `leggi` reads and for what a request carries.
+ */
+export function extractedParts(
+  extracted: Extract<ExtractedContent, { kind: 'text' | 'pdf' | 'image' }>
+): ContentPart[] {
+  switch (extracted.kind) {
+    case 'text':
+      return [{ type: 'text', text: extracted.text || '(nessun testo)' }]
+    case 'image':
+      return [{ type: 'image_url', image_url: { url: extracted.dataUrl } }]
+    case 'pdf':
+      return extracted.pages.flatMap((page): ContentPart[] => [
+        page.dataUrl && !page.text
+          ? { type: 'text', text: `— Pagina ${page.page} (scansione) —` }
+          : { type: 'text', text: `— Pagina ${page.page} —\n${page.text}` },
+        ...(page.dataUrl ? [{ type: 'image_url' as const, image_url: { url: page.dataUrl } }] : [])
+      ])
+  }
+}
+
+/** The first `bytes` of a file, without reading the rest. */
+async function readHead(path: string, bytes: number): Promise<Buffer> {
+  const file = await open(path, 'r')
+
+  try {
+    const { buffer, bytesRead } = await file.read(Buffer.alloc(bytes), 0, bytes, 0)
+    return buffer.subarray(0, bytesRead)
+  } finally {
+    await file.close()
+  }
+}
+
+/**
+ * What of a file the reader needs: all of it — or, for a large file of a
+ * format not known by name, its first bytes when they are not text: a video
+ * or a program is said for what it is, not loaded to be refused.
+ */
+export async function documentData(path: string, size: number): Promise<Buffer> {
+  if (knownFormat(path) || size <= TEXT_SNIFF_BYTES) {
+    return readFile(path)
+  }
+
+  const head = await readHead(path, TEXT_SNIFF_BYTES)
+  return looksLikeText(head) ? readFile(path) : head
 }
 
 async function sheetsText(data: Buffer): Promise<string> {

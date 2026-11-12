@@ -2,10 +2,16 @@ import { Marked } from 'marked'
 import { NodeHtmlMarkdown } from 'node-html-markdown'
 
 import { messages } from '@main/i18n'
-import type { CalendarAttendee, CalendarResponse, EventOrigin } from '@shared/calendar'
+import type {
+  CalendarAttendee,
+  CalendarEvent,
+  CalendarResponse,
+  EventOrigin
+} from '@shared/calendar'
 import { defineMessages } from '@shared/i18n'
 
 import {
+  ALL_FIELDS,
   SyncTokenExpired,
   type CalendarProvider,
   type EventField,
@@ -15,6 +21,14 @@ import {
 import { CalendarRequestError } from './calendar-refusal'
 import type { Fetch } from './ics-calendar'
 import { canonicalUid, originValue } from './icalendar'
+import {
+  dayIn,
+  graphRecurrenceOf,
+  recurrenceOfGraph,
+  systemZone,
+  wallOf,
+  type GraphRecurrence
+} from './recurrence'
 
 const GRAPH = 'https://graph.microsoft.com/v1.0'
 /** Times in UTC, and ids that do not change when an event moves. */
@@ -24,6 +38,8 @@ const ORIGIN_PROPERTY_ID = 'String {6f1d2c8e-3b7a-4e95-8c41-5a0e9d27b3f6} Name S
 const MEETING_LINK =
   /https:\/\/(?:teams\.microsoft\.com|teams\.live\.com|meet\.google\.com|[\w.-]*zoom\.us|[\w.-]*webex\.com)\/[^\s"<>)]+/i
 const MAX_RETRY_WAIT_MS = 30_000
+/** How many series are asked for their rule at once, as a calendar is read. */
+const SERIES_AT_ONCE = 8
 
 const MESSAGES = defineMessages({
   mailboxZoneNotGranted: {
@@ -55,8 +71,206 @@ const MESSAGES = defineMessages({
     en: 'Microsoft no longer accepts the access to this calendar: reconnect it.',
     it: 'Microsoft non accetta più l’accesso a questo calendario: ricollegalo.',
     de: 'Microsoft akzeptiert den Zugriff auf diesen Kalender nicht mehr: Verbinden Sie ihn erneut.'
+  },
+  fifthWeekday: {
+    en: 'Microsoft doesn’t repeat an event on a fifth weekday of the month (the fifth Tuesday, say): choose the last one.',
+    it: 'Microsoft non ripete un evento in un quinto giorno della settimana del mese (il quinto martedì, per esempio): scegli l’ultimo.',
+    de: 'Microsoft wiederholt keinen Termin an einem fünften Wochentag des Monats (etwa am fünften Dienstag): Wählen Sie den letzten.'
   }
 })
+
+/**
+ * The zones Graph takes by an IANA name, besides Windows' own names
+ * (dateTimeTimeZone, «Additional time zones»): one for each of Windows'
+ * zones — Europe/Berlin, not Europe/Rome.
+ */
+const GRAPH_ZONES = [
+  'Etc/GMT+12',
+  'Etc/GMT+11',
+  'Pacific/Honolulu',
+  'America/Anchorage',
+  'America/Santa_Isabel',
+  'America/Los_Angeles',
+  'America/Phoenix',
+  'America/Chihuahua',
+  'America/Denver',
+  'America/Guatemala',
+  'America/Chicago',
+  'America/Mexico_City',
+  'America/Regina',
+  'America/Bogota',
+  'America/New_York',
+  'America/Indiana/Indianapolis',
+  'America/Caracas',
+  'America/Asuncion',
+  'America/Halifax',
+  'America/Cuiaba',
+  'America/La_Paz',
+  'America/Santiago',
+  'America/St_Johns',
+  'America/Sao_Paulo',
+  'America/Argentina/Buenos_Aires',
+  'America/Cayenne',
+  'America/Godthab',
+  'America/Montevideo',
+  'America/Bahia',
+  'Etc/GMT+2',
+  'Atlantic/Azores',
+  'Atlantic/Cape_Verde',
+  'Africa/Casablanca',
+  'Etc/GMT',
+  'Europe/London',
+  'Atlantic/Reykjavik',
+  'Europe/Berlin',
+  'Europe/Budapest',
+  'Europe/Paris',
+  'Europe/Warsaw',
+  'Africa/Lagos',
+  'Africa/Windhoek',
+  'Europe/Bucharest',
+  'Asia/Beirut',
+  'Africa/Cairo',
+  'Asia/Damascus',
+  'Africa/Johannesburg',
+  'Europe/Kyiv',
+  'Europe/Istanbul',
+  'Asia/Jerusalem',
+  'Asia/Amman',
+  'Asia/Baghdad',
+  'Europe/Kaliningrad',
+  'Asia/Riyadh',
+  'Africa/Nairobi',
+  'Asia/Tehran',
+  'Asia/Dubai',
+  'Asia/Baku',
+  'Europe/Moscow',
+  'Indian/Mauritius',
+  'Asia/Tbilisi',
+  'Asia/Yerevan',
+  'Asia/Kabul',
+  'Asia/Karachi',
+  'Asia/Tashkent',
+  'Asia/Kolkata',
+  'Asia/Colombo',
+  'Asia/Kathmandu',
+  'Asia/Almaty',
+  'Asia/Dhaka',
+  'Asia/Yekaterinburg',
+  'Asia/Yangon',
+  'Asia/Bangkok',
+  'Asia/Novosibirsk',
+  'Asia/Shanghai',
+  'Asia/Krasnoyarsk',
+  'Asia/Singapore',
+  'Australia/Perth',
+  'Asia/Taipei',
+  'Asia/Ulaanbaatar',
+  'Asia/Irkutsk',
+  'Asia/Tokyo',
+  'Asia/Seoul',
+  'Australia/Adelaide',
+  'Australia/Darwin',
+  'Australia/Brisbane',
+  'Australia/Sydney',
+  'Pacific/Port_Moresby',
+  'Australia/Hobart',
+  'Asia/Yakutsk',
+  'Pacific/Guadalcanal',
+  'Asia/Vladivostok',
+  'Pacific/Auckland',
+  'Etc/GMT-12',
+  'Pacific/Fiji',
+  'Asia/Magadan',
+  'Pacific/Tongatapu',
+  'Pacific/Apia',
+  'Pacific/Kiritimati'
+]
+
+const HOUR_MS = 3_600_000
+
+/** A zone's distance from UTC at an instant, in minutes. */
+function offsetAt(zone: string, instant: number): number {
+  const wall = wallOf(instant, zone)
+  return Math.round(
+    (Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second) -
+      Math.floor(instant / 1000) * 1000) /
+      60_000
+  )
+}
+
+/**
+ * Whether two zones' clocks read the same from `from` on, for the next
+ * years: the same distance from UTC, changing at the same quarter hour.
+ */
+function sameClocks(a: string, b: string, from: number): boolean {
+  const step = 6 * HOUR_MS
+  let before: string | null = null
+
+  try {
+    for (let at = from; at < from + 3 * 366 * 24 * HOUR_MS; at += step) {
+      const now = `${offsetAt(a, at)}/${offsetAt(b, at)}`
+
+      if (offsetAt(a, at) !== offsetAt(b, at)) {
+        return false
+      }
+
+      // The clocks changed in these six hours: they did at the same quarter hour.
+      for (
+        let quarter = at - step + HOUR_MS / 4;
+        before !== null && before !== now && quarter < at;
+        quarter += HOUR_MS / 4
+      ) {
+        if (offsetAt(a, quarter) !== offsetAt(b, quarter)) {
+          return false
+        }
+      }
+
+      before = now
+    }
+  } catch {
+    return false
+  }
+
+  return true
+}
+
+let seriesZoneFound: { system: string; zone: string | null } | null = null
+
+/**
+ * The zone a series is written in on Microsoft, so it keeps its hour
+ * across summer time: one Graph takes, whose clocks read as the
+ * computer's — the computer's own, or one with the same hours and the same
+ * changes of the clocks (Europe/Rome reads as Europe/Berlin). Null when
+ * none does: the series is written in UTC.
+ */
+export function graphSeriesZone(system = systemZone(), now = Date.now()): string | null {
+  if (seriesZoneFound?.system !== system) {
+    seriesZoneFound = {
+      system,
+      zone: GRAPH_ZONES.includes(system)
+        ? system
+        : (GRAPH_ZONES.find((zone) => sameClocks(system, zone, now)) ?? null)
+    }
+  }
+
+  return seriesZoneFound.zone
+}
+
+/** Runs `work` on each of `items`, so many at a time. */
+async function eachLimited<T>(
+  items: ReadonlyArray<T>,
+  limit: number,
+  work: (item: T) => Promise<void>
+): Promise<void> {
+  let next = 0
+  const lane = async (): Promise<void> => {
+    while (next < items.length) {
+      await work(items[next++])
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane))
+}
 
 /** What the user is told where an all-day event waits for the mailbox's time zone. */
 export function mailboxZoneNotGranted(): string {
@@ -108,6 +322,10 @@ export interface GraphEvent {
   /** Whether the event reminds its owner, and how long before it starts. */
   isReminderOn?: boolean
   reminderMinutesBeforeStart?: number
+  /** How a series master repeats; null for any other event. */
+  recurrence?: GraphRecurrence | null
+  /** `singleInstance`, `occurrence`, `exception` or `seriesMaster`. */
+  type?: string
 }
 
 interface GraphCalendar {
@@ -158,7 +376,8 @@ export function eventOfGraph(
   item: GraphEvent,
   calendarId: string,
   self: string,
-  ownCalendar: boolean
+  ownCalendar: boolean,
+  series?: ReadonlyMap<string, CalendarEvent['recurrence']>
 ): ProviderEvent {
   const own = self.trim().toLowerCase()
   const organizer = addressOf(item.organizer) || null
@@ -218,6 +437,13 @@ export function eventOfGraph(
         : item.isReminderOn === true && typeof item.reminderMinutesBeforeStart === 'number'
           ? [item.reminderMinutesBeforeStart]
           : undefined,
+    // An instance's rule is its series master's, read apart (`seriesRules`); a master carries its own.
+    recurrence: item.seriesMasterId
+      ? series?.get(item.seriesMasterId)
+      : item.recurrence
+        ? recurrenceOfGraph(item.recurrence)
+        : null,
+    managedBy: null,
     cancelled: item.isCancelled === true
   }
 }
@@ -253,9 +479,22 @@ function removedEvent(id: string, calendarId: string): ProviderEvent {
  * in: at UTC's midnight it would cross into the next day east of it.
  */
 function graphTime(value: string, allDay: boolean, zone: string): GraphDateTime {
-  return allDay
-    ? { dateTime: `${value.slice(0, 10)}T00:00:00`, timeZone: zone }
-    : { dateTime: new Date(value).toISOString().slice(0, 23), timeZone: 'UTC' }
+  if (allDay) {
+    return { dateTime: `${value.slice(0, 10)}T00:00:00`, timeZone: zone }
+  }
+
+  if (zone === 'UTC') {
+    return { dateTime: new Date(value).toISOString().slice(0, 23), timeZone: 'UTC' }
+  }
+
+  // A series' time on its zone's clock: the hour it keeps across summer time.
+  const wall = wallOf(Date.parse(value), zone)
+  const two = (value: number): string => String(value).padStart(2, '0')
+
+  return {
+    dateTime: `${wall.year}-${two(wall.month)}-${two(wall.day)}T${two(wall.hour)}:${two(wall.minute)}:${two(wall.second)}`,
+    timeZone: zone
+  }
 }
 
 const escapeHtml = (text: string): string =>
@@ -407,18 +646,38 @@ export class GraphCalendarProvider implements CalendarProvider {
 
   /**
    * The fields of an event as Graph takes them: only `fields`, the guests
-   * kept as they are in the event at `current` — none for a new one.
+   * kept as they are in the event at `current` — none for a new one. A
+   * series' rule goes with its time, its range beginning on its start's
+   * day as Graph asks, and its times on the clock of a zone, which it keeps
+   * its hour in; one event again, its rule null. One reminder: the earliest.
    */
   private async fieldsOf(
     event: ProviderEventInput,
     fields: ReadonlySet<EventField>,
     current: string | null
   ): Promise<Record<string, unknown>> {
-    const zone = fields.has('time') && event.allDay ? await this.mailboxZone() : 'UTC'
+    const rule = event.recurrence && event.recurrence !== 'other' ? event.recurrence : null
+    const writesRule = fields.has('recurrence') || (fields.has('time') && rule !== null)
+    const writesTime = fields.has('time') || writesRule
+    // A series — its rule the app's or another's — keeps its hour on a zone's clock.
+    const zone = !writesTime
+      ? 'UTC'
+      : event.allDay
+        ? await this.mailboxZone()
+        : event.recurrence !== null
+          ? (graphSeriesZone() ?? 'UTC')
+          : 'UTC'
+    const recurrence = rule
+      ? graphRecurrenceOf(rule, dayIn(event.start, event.allDay, zone), zone)
+      : null
+
+    if (writesRule && rule && !recurrence) {
+      throw new Error(messages(MESSAGES).fifthWeekday)
+    }
 
     return {
       ...(fields.has('title') ? { subject: event.title } : {}),
-      ...(fields.has('time')
+      ...(writesTime
         ? {
             start: graphTime(event.start, event.allDay, zone),
             end: graphTime(event.end, event.allDay, zone),
@@ -429,6 +688,15 @@ export class GraphCalendarProvider implements CalendarProvider {
       ...(fields.has('description') ? { body: bodyOf(event.description) } : {}),
       ...(fields.has('attendees')
         ? { attendees: await this.attendeesOf(event.attendees, current) }
+        : {}),
+      ...(writesRule && (recurrence || (current && event.recurrence === null))
+        ? { recurrence }
+        : {}),
+      // None given — the calendar's own — leaves Outlook's as it is.
+      ...(fields.has('reminders') && event.reminders !== null
+        ? event.reminders.length > 0
+          ? { isReminderOn: true, reminderMinutesBeforeStart: Math.max(...event.reminders) }
+          : { isReminderOn: false }
         : {})
     }
   }
@@ -536,17 +804,54 @@ export class GraphCalendarProvider implements CalendarProvider {
     }
 
     const own = await this.ownCalendar(calendarId)
+    const series = await this.seriesRules(calendarId, items)
     const events: ProviderEvent[] = []
 
     for (const item of items) {
       events.push(
         item['@removed']
           ? await this.removed(calendarId, item.id, own)
-          : eventOfGraph(item, calendarId, this.self, own)
+          : eventOfGraph(item, calendarId, this.self, own, series)
       )
     }
 
     return { events, syncToken: deltaLink }
+  }
+
+  /**
+   * How the series of the occurrences read repeat: each series master
+   * asked for its rule once, a few at a time. One that cannot be read is
+   * left out: its occurrences say nothing of it, and keep what was known.
+   */
+  private async seriesRules(
+    calendarId: string,
+    items: ReadonlyArray<GraphEvent>
+  ): Promise<Map<string, CalendarEvent['recurrence']>> {
+    const ids = [
+      ...new Set(
+        items.flatMap((item) =>
+          item.seriesMasterId && !item['@removed'] && !item.isCancelled ? [item.seriesMasterId] : []
+        )
+      )
+    ]
+    const rules = new Map<string, CalendarEvent['recurrence']>()
+
+    await eachLimited(ids, SERIES_AT_ONCE, async (masterId) => {
+      const response = await this.request(
+        `${this.eventPath(calendarId, masterId)}?$select=recurrence`
+      )
+
+      if (response.status === 401) {
+        throw await graphError(response)
+      }
+
+      if (response.ok) {
+        const { recurrence } = (await response.json()) as Pick<GraphEvent, 'recurrence'>
+        rules.set(masterId, recurrence ? recurrenceOfGraph(recurrence) : null)
+      }
+    })
+
+    return rules
   }
 
   /**
@@ -568,7 +873,13 @@ export class GraphCalendarProvider implements CalendarProvider {
       throw await graphError(response)
     }
 
-    return eventOfGraph((await response.json()) as GraphEvent, calendarId, this.self, own)
+    const event = (await response.json()) as GraphEvent
+
+    // One event made to repeat is its series master now, which no view holds: its occurrences
+    // come by themselves.
+    return event.type === 'seriesMaster'
+      ? removedEvent(eventId, calendarId)
+      : eventOfGraph(event, calendarId, this.self, own)
   }
 
   async create(
@@ -582,11 +893,7 @@ export class GraphCalendarProvider implements CalendarProvider {
       {
         method: 'POST',
         body: {
-          ...(await this.fieldsOf(
-            event,
-            new Set<EventField>(['title', 'time', 'location', 'description', 'attendees']),
-            null
-          )),
+          ...(await this.fieldsOf(event, ALL_FIELDS, null)),
           ...(origin
             ? {
                 singleValueExtendedProperties: [
@@ -617,6 +924,32 @@ export class GraphCalendarProvider implements CalendarProvider {
     })
 
     return eventOfGraph(updated, calendarId, this.self, own)
+  }
+
+  async series(calendarId: string, seriesId: string): Promise<ProviderEventInput> {
+    const own = await this.ownCalendar(calendarId)
+    const master = eventOfGraph(
+      await this.json<GraphEvent>(this.eventPath(calendarId, seriesId)),
+      calendarId,
+      this.self,
+      own
+    )
+
+    return {
+      title: master.title,
+      start: master.start,
+      end: master.end,
+      allDay: master.allDay,
+      location: master.location,
+      description: master.description,
+      attendees: master.attendees
+        .filter((attendee) => !attendee.self)
+        .map((attendee) => attendee.email),
+      recurrence: master.recurrence ?? null,
+      reminders: master.reminders ?? null,
+      // Exchange names its zones its own way: the series is reckoned on the computer's clock.
+      zone: systemZone()
+    }
   }
 
   async remove(calendarId: string, eventId: string): Promise<void> {

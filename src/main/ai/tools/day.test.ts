@@ -85,4 +85,18 @@ describe('oggi', () => {
       /la scrive il lavoro della giornata/
     )
   })
+
+  it('is put right by the reflection as the user said, over the user’s own words it read', async () => {
+    await registry.saveLetter(localDay(), 'Oggi conta il sopralluogo.', [], { by: 'utente' })
+    const reflection = runOf('riflessione')
+
+    expect((await todayTool.execute({}, reflection)).content).toContain(
+      "riscritta dall'utente alle"
+    )
+    await write('Oggi conta il sopralluogo, spostato alle 15.', reflection)
+    expect(await registry.day.letter(localDay())).toMatchObject({
+      text: 'Oggi conta il sopralluogo, spostato alle 15.',
+      writtenBy: 'segretario'
+    })
+  })
 })

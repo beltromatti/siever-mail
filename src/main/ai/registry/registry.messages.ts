@@ -267,6 +267,22 @@ export const MESSAGES = defineMessages({
     it: (yours: boolean, title: string) => `${yours ? 'Tuo' : 'Non tuo'}: ${title}`,
     de: (yours: boolean, title: string) => `${yours ? 'Ihr Termin' : 'Nicht Ihr Termin'}: ${title}`
   },
+  /** The user's words on a thing, given or taken back, and taken in by the Segretario (§10.1). */
+  wordsGiven: {
+    en: (correction: boolean): string => (correction ? 'To be corrected' : 'Answered'),
+    it: (correction: boolean): string => (correction ? 'Da correggere' : 'Risposta data'),
+    de: (correction: boolean): string => (correction ? 'Zu korrigieren' : 'Beantwortet')
+  },
+  wordsWithdrawn: {
+    en: 'Words taken back',
+    it: 'Parole ritirate',
+    de: 'Worte zurückgenommen'
+  },
+  wordsTaken: {
+    en: 'Words taken in',
+    it: 'Parole prese in carico',
+    de: 'Worte übernommen'
+  },
   /** Why something open from a message deleted for good is no longer needed: kept with it, and shown. */
   messageDeleted: {
     en: 'The message it came from was deleted.',
@@ -397,5 +413,12 @@ export const REFUSALS = defineMessages({
     en: (revision: number, path: string) => `Version ${revision} of ${path} can’t be found.`,
     it: (revision: number, path: string) => `Non trovo la versione ${revision} di ${path}.`,
     de: (revision: number, path: string) => `Version ${revision} von ${path} wurde nicht gefunden.`
-  }
+  },
+  /** What the user's words were about is no longer there: closed, rewritten away, gone with its source. */
+  workGone: {
+    en: 'It isn’t there any more: it may have changed in the meantime.',
+    it: 'Non c’è più: forse è cambiata nel frattempo.',
+    de: 'Das gibt es nicht mehr: Es hat sich wohl inzwischen geändert.'
+  },
+  wordsEmpty: { en: 'Write something.', it: 'Scrivi qualcosa.', de: 'Schreiben Sie etwas.' }
 })

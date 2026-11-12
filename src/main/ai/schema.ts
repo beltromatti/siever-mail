@@ -9,7 +9,7 @@ import type { Sql } from './sql'
  * order, as an old one runs the steps it has not had: one path, so what a
  * fresh database looks like is what an upgraded one looks like.
  */
-const SCHEMA_VERSION = 12
+const SCHEMA_VERSION = 13
 
 /** The tables of the first 2.0 builds, as they stood (version 1). */
 /** The open things' indexes: by conversation, by state, and — from version 5 — by event. */
@@ -392,6 +392,18 @@ const STEP_12 = [
   'CREATE INDEX IF NOT EXISTS idx_ai_alerts_event ON ai_alerts(event_key)'
 ] as const
 
+/**
+ * Version 13: who wrote what stays — the letter, a meeting's preparation,
+ * «Il punto», a reply prepared —: rewritten by the user, it is their words,
+ * the base the next rewrite starts from (vision §10.1). Null: the Segretario.
+ */
+const STEP_13_COLUMNS: ReadonlyArray<{ table: string; column: string; definition: string }> = [
+  { table: 'ai_briefings', column: 'written_by', definition: 'TEXT' },
+  { table: 'ai_event_preps', column: 'written_by', definition: 'TEXT' },
+  { table: 'ai_projects', column: 'state_by', definition: 'TEXT' },
+  { table: 'ai_ready_drafts', column: 'written_by', definition: 'TEXT' }
+]
+
 async function hasTable(sql: Sql, table: string): Promise<boolean> {
   return (
     (await sql.get<{ name: string }>(
@@ -666,6 +678,12 @@ export async function ensureAiSchema(sql: Sql): Promise<void> {
       if (columns.has(column)) {
         await sql.run(`ALTER TABLE ai_notes DROP COLUMN ${column}`)
       }
+    }
+  }
+
+  if (version < 13) {
+    for (const { table, column, definition } of STEP_13_COLUMNS) {
+      await addColumn(sql, table, column, definition)
     }
   }
 

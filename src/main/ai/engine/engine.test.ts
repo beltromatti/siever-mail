@@ -997,6 +997,48 @@ describe('What the user taught', () => {
     ])
   })
 
+  it('takes the user’s words in half a minute after the newest, whatever the interval', async () => {
+    const start = new Date('2026-11-10T09:00:00.000Z').getTime()
+    vi.useFakeTimers({ now: start, toFake: ['Date'] })
+    // A reflection was done a minute ago: a tick waits for the interval.
+    await sql.run(
+      `INSERT INTO ai_activities (id, kind, task, title, status, visibility, created_at, updated_at)
+       VALUES ('r0', 'riflessione', 'riflessione', 'Riflessione', 'done', 'diario', ?, ?)`,
+      start - 60_000,
+      start - 60_000
+    )
+    await store.addLesson('impegno_non_serve', { impegno: 1 })
+    await plan(start)
+    expect(await reflections()).toEqual([])
+
+    await store.addLesson('da_correggere', { oggetto: { kind: 'impegno', id: 1 }, parole: 'No.' })
+    await plan(start)
+    const [waiting] = await reflections()
+    expect(waiting).toMatchObject({ notBefore: start + 30_000, priority: 30 })
+
+    // Two in a row: the second moves it, and the first lesson goes with them.
+    vi.setSystemTime(start + 10_000)
+    await store.addLesson('risposta', { oggetto: { kind: 'impegno', id: 2 }, parole: 'Sì.' })
+    await plan(start + 10_000)
+    await plan(start + 20_000)
+    expect((await reflections()).map((unit) => [unit.id, unit.notBefore])).toEqual([
+      [waiting.id, start + 40_000]
+    ])
+  })
+
+  it('takes the user’s words in sooner than the lessons it was waiting for', async () => {
+    const start = new Date('2026-11-10T09:00:00.000Z').getTime()
+    vi.useFakeTimers({ now: start, toFake: ['Date'] })
+    await store.addLesson('impegno_non_serve', { impegno: 1 })
+    await plan(start)
+    expect((await reflections())[0].notBefore).toBe(start + 2 * 60_000)
+
+    vi.setSystemTime(start + 5_000)
+    await store.addLesson('da_correggere', { oggetto: { kind: 'impegno', id: 1 }, parole: 'No.' })
+    await plan(start + 5_000)
+    expect((await reflections()).map((unit) => unit.notBefore)).toEqual([start + 35_000])
+  })
+
   it('lets a reflection running finish, and does one failed again only for a lesson come after', async () => {
     await store.addLesson('nota_corretta', {})
     await plan(Date.now())

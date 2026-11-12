@@ -4,10 +4,28 @@ import { tzlib_get_ical_block } from 'timezones-ical-library'
 import { diagnostics } from '@main/diagnostics/log'
 import { messages } from '@main/i18n'
 
-import type { CalendarAttendee, CalendarResponse, EventOrigin } from '@shared/calendar'
+import type {
+  CalendarAttendee,
+  CalendarResponse,
+  EventOrigin,
+  EventRecurrence
+} from '@shared/calendar'
 import { defineMessages } from '@shared/i18n'
 
-import type { EventField, ProviderEvent, ProviderEventInput } from './calendar-provider'
+import {
+  ALL_FIELDS,
+  type EventField,
+  type ProviderEvent,
+  type ProviderEventInput
+} from './calendar-provider'
+import {
+  addDays,
+  dayNumber,
+  knownZone,
+  recurrenceOfLines,
+  ruleOf,
+  type SeriesAnchor
+} from './recurrence'
 
 const MESSAGES = defineMessages({
   untitled: { en: '(untitled)', it: '(senza titolo)', de: '(ohne Titel)' },
@@ -289,7 +307,8 @@ function occurrenceOf(
   start: ICAL.Time,
   end: ICAL.Time,
   recurrenceId: string | null,
-  self: ReadonlySet<string>
+  self: ReadonlySet<string>,
+  recurrence: EventRecurrence | 'other' | null | undefined
 ): Occurrence {
   const organizer = event.organizer ? addressOf(event.organizer) : null
   const attendees: CalendarAttendee[] = event.attendees.map((property) => {
@@ -333,7 +352,52 @@ function occurrenceOf(
     htmlLink: null,
     origin: originOf(event.component),
     reminders: remindersOf(event.component, startsAt, endsAt),
+    recurrence,
+    managedBy: null,
     cancelled: status === 'CANCELLED'
+  }
+}
+
+/** The zone a time is kept in, as `Intl` names it: UTC, its own, or — floating — the computer's. */
+function zoneNameOf(time: ICAL.Time): string {
+  return time.zone === ICAL.Timezone.utcTimezone ? 'UTC' : knownZone(time.zone?.tzid)
+}
+
+/** Where a series begins, from its DTSTART: its day and hour as written, in its zone. */
+function anchorOfTime(time: ICAL.Time): SeriesAnchor {
+  return {
+    day: dayOf(time),
+    allDay: time.isDate,
+    zone: zoneNameOf(time),
+    seconds: time.isDate ? 0 : time.hour * 3600 + time.minute * 60 + time.second
+  }
+}
+
+/** The lines a VEVENT says how it repeats in. */
+const RECURRENCE_PROPERTIES = ['rrule', 'rdate', 'exrule', 'exdate']
+
+/** How a series repeats, from its master VEVENT and its start (`recurrenceOfLines`). */
+function recurrenceOfComponent(
+  component: ICAL.Component,
+  start: ICAL.Time
+): EventRecurrence | 'other' | null {
+  return recurrenceOfLines(
+    component
+      .getAllProperties()
+      .filter((property) => RECURRENCE_PROPERTIES.includes(property.name))
+      .map((property) => property.toICALString()),
+    anchorOfTime(start)
+  )
+}
+
+/** Whether an iCalendar text holds a series: an event that repeats, by rule or by dates. */
+export function holdsSeries(text: string): boolean {
+  try {
+    return new ICAL.Component(ICAL.parse(text))
+      .getAllSubcomponents('vevent')
+      .some((event) => event.hasProperty('rrule') || event.hasProperty('rdate'))
+  } catch {
+    return false
   }
 }
 
@@ -391,7 +455,8 @@ export function occurrencesOf(
                 event.startDate,
                 event.endDate,
                 event.recurrenceId.toString(),
-                own
+                own,
+                undefined
               )
             )
           }
@@ -406,9 +471,12 @@ export function occurrencesOf(
         }
 
         if (!event.isRecurring()) {
-          keep(occurrenceOf(event, event.startDate, event.endDate, null, own))
+          keep(occurrenceOf(event, event.startDate, event.endDate, null, own, null))
           continue
         }
+
+        // Every instance carries its series' rule, read once.
+        const recurrence = recurrenceOfComponent(master, event.startDate)
 
         const iterator = guardedIterator(event)
         const length = Math.max(instantOf(event.endDate) - instantOf(event.startDate), 0)
@@ -432,7 +500,7 @@ export function occurrencesOf(
           }
 
           const details = event.getOccurrenceDetails(next)
-          keep(occurrenceOf(details.item, details.startDate, details.endDate, id, own))
+          keep(occurrenceOf(details.item, details.startDate, details.endDate, id, own, recurrence))
         }
 
         // An instance from after the window, moved into it.
@@ -440,7 +508,9 @@ export function occurrencesOf(
           const id = exception.recurrenceId.toString()
 
           if (!walked.has(id) && instantOf(exception.recurrenceId) >= range.to) {
-            keep(occurrenceOf(exception, exception.startDate, exception.endDate, id, own))
+            keep(
+              occurrenceOf(exception, exception.startDate, exception.endDate, id, own, recurrence)
+            )
           }
         }
       } catch (error) {
@@ -518,7 +588,7 @@ function instanceComponent(calendar: ICAL.Component, recurrenceId: string): ICAL
 
   const instance = new ICAL.Component(ICAL.parse(master.toString()))
 
-  for (const name of ['rrule', 'rdate', 'exdate', 'recurrence-id']) {
+  for (const name of ['rrule', 'rdate', 'exrule', 'exdate', 'recurrence-id']) {
     instance.removeAllProperties(name)
   }
 
@@ -589,29 +659,204 @@ function setAttendees(
   }
 }
 
-/** Every field: what a new event is written with. */
-const ALL_FIELDS: ReadonlySet<EventField> = new Set<EventField>([
-  'title',
-  'time',
-  'location',
-  'description',
-  'attendees'
-])
+/** Whether a time's zone is a zone of its own: neither UTC nor floating. */
+function ownZone(zone: ICAL.Timezone | null | undefined): zone is ICAL.Timezone {
+  return Boolean(zone && zone !== ICAL.Timezone.utcTimezone && zone !== ICAL.Timezone.localTimezone)
+}
+
+/**
+ * A zone of the IANA database, as a calendar object carries it: its
+ * VTIMEZONE in the object — added from the library when missing — and
+ * known to ical.js. Null when no zone goes by that name.
+ */
+function zoneIn(calendar: ICAL.Component, tzid: string): ICAL.Timezone | null {
+  const carried = calendar
+    .getAllSubcomponents('vtimezone')
+    .find((zone) => zone.getFirstPropertyValue('tzid') === tzid)
+
+  if (!carried) {
+    const block = tzlib_get_ical_block(tzid)
+    const vtimezone = Array.isArray(block) ? block[0] : null
+
+    if (!vtimezone?.includes('BEGIN:VTIMEZONE')) {
+      return null
+    }
+
+    const zone = new ICAL.Component(ICAL.parse(vtimezone))
+    calendar.addSubcomponent(zone)
+    ICAL.TimezoneService.register(zone)
+  } else if (!ICAL.TimezoneService.has(tzid)) {
+    ICAL.TimezoneService.register(carried)
+  }
+
+  return ICAL.TimezoneService.get(tzid) ?? null
+}
+
+/** A property's times written again: a day as a day, a time of a zone with its TZID. */
+function setTimes(property: ICAL.Property, times: ReadonlyArray<ICAL.Time>): void {
+  const [first] = times
+
+  if (first && ownZone(first.zone) && !first.isDate) {
+    property.setParameter('tzid', first.zone.tzid)
+  } else {
+    property.removeParameter('tzid')
+  }
+
+  // An EXDATE may list several; a RECURRENCE-ID is one.
+  if (property.name === 'exdate') {
+    property.setValues([...times])
+  } else {
+    property.setValue(first)
+  }
+}
+
+/**
+ * The times of a series' instances — its exceptions' RECURRENCE-IDs, its
+ * EXDATEs — moved with its first time: the same days on, at its new hour,
+ * so each still names its instance (RFC 5545 §3.8.4.4), and none taken out
+ * comes back.
+ */
+function moveInstances(
+  calendar: ICAL.Component,
+  master: ICAL.Component,
+  before: ICAL.Time,
+  after: ICAL.Time
+): void {
+  const days = dayNumber(dayOf(after)) - dayNumber(dayOf(before))
+  const sameHour =
+    before.isDate === after.isDate &&
+    (before.isDate ||
+      (before.hour === after.hour &&
+        before.minute === after.minute &&
+        before.second === after.second &&
+        before.zone === after.zone))
+
+  if (days === 0 && sameHour) {
+    return
+  }
+
+  const moved = (time: ICAL.Time): ICAL.Time => {
+    const wall = time.isDate || !ownZone(before.zone) ? time : time.convertToZone(before.zone)
+    const [year, month, day] = addDays(dayOf(wall), days).split('-').map(Number)
+
+    return after.isDate
+      ? ICAL.Time.fromData({ year, month, day, isDate: true })
+      : ICAL.Time.fromData(
+          {
+            year,
+            month,
+            day,
+            hour: after.hour,
+            minute: after.minute,
+            second: after.second,
+            isDate: false
+          },
+          after.zone
+        )
+  }
+  const uid = master.getFirstPropertyValue('uid')
+
+  for (const exception of calendar.getAllSubcomponents('vevent')) {
+    const property = exception.getFirstProperty('recurrence-id')
+
+    if (property && exception.getFirstPropertyValue('uid') === uid) {
+      setTimes(property, [moved(property.getFirstValue() as ICAL.Time)])
+    }
+  }
+
+  for (const property of master.getAllProperties('exdate')) {
+    setTimes(property, (property.getValues() as ICAL.Time[]).map(moved))
+  }
+}
+
+/**
+ * How a series repeats, written on its VEVENT (vision §7.5): its rule from
+ * its start, the days taken out kept; none — one event again —, the rule,
+ * the days taken out and the instances changed on their own gone.
+ */
+function writeRule(
+  calendar: ICAL.Component,
+  component: ICAL.Component,
+  recurrence: EventRecurrence | null
+): void {
+  for (const name of ['rrule', 'rdate', 'exrule']) {
+    component.removeAllProperties(name)
+  }
+
+  if (recurrence) {
+    const start = new ICAL.Event(component, { exceptions: [] }).startDate
+    component.addPropertyWithValue(
+      'rrule',
+      ICAL.Recur.fromString(ruleOf(recurrence, anchorOfTime(start)))
+    )
+    return
+  }
+
+  component.removeAllProperties('exdate')
+  const uid = component.getFirstPropertyValue('uid')
+
+  for (const exception of calendar.getAllSubcomponents('vevent')) {
+    if (exception.hasProperty('recurrence-id') && exception.getFirstPropertyValue('uid') === uid) {
+      calendar.removeSubcomponent(exception)
+    }
+  }
+}
+
+/**
+ * An event's reminders as alarms that show (VALARM, `ACTION:DISPLAY`), in
+ * place of those that show or sound; one that sends an email is the
+ * server's, and stays. None for null — the calendar says nothing of them.
+ */
+function writeAlarms(
+  component: ICAL.Component,
+  reminders: ReadonlyArray<number> | null,
+  title: string
+): void {
+  for (const alarm of component.getAllSubcomponents('valarm')) {
+    const action = String(alarm.getFirstPropertyValue('action') ?? 'DISPLAY').toUpperCase()
+
+    if (action === 'DISPLAY' || action === 'AUDIO') {
+      component.removeSubcomponent(alarm)
+    }
+  }
+
+  for (const minutes of [...new Set(reminders ?? [])].sort((a, b) => a - b)) {
+    const alarm = new ICAL.Component('valarm')
+    alarm.addPropertyWithValue('action', 'DISPLAY')
+    // A DISPLAY alarm says something (RFC 5545 §3.6.6): what it reminds of.
+    alarm.addPropertyWithValue('description', title)
+    alarm.addPropertyWithValue('trigger', ICAL.Duration.fromSeconds(-minutes * 60))
+    component.addSubcomponent(alarm)
+  }
+}
 
 function writeFields(
+  calendar: ICAL.Component,
   component: ICAL.Component,
   event: ProviderEventInput,
   organizer: string | null,
   fields: ReadonlySet<EventField> = ALL_FIELDS
 ): void {
   const target = new ICAL.Event(component, { exceptions: [] })
-  const zone = target.startDate && !target.startDate.isDate ? target.startDate.zone : null
+  const kept = target.startDate && !target.startDate.isDate ? target.startDate.zone : null
+  // A series' rule, written with it — or with its time, which it is read from (`EventField`).
+  const rule =
+    !component.hasProperty('recurrence-id') && (fields.has('recurrence') || fields.has('time'))
+      ? event.recurrence
+      : undefined
+  // A series keeps its hour across summer time in a zone: one kept in UTC, or floating, takes
+  // the zone it is written from.
+  const zone = ownZone(kept)
+    ? kept
+    : rule && !event.allDay
+      ? (zoneIn(calendar, knownZone(event.zone)) ?? kept)
+      : kept
 
   if (fields.has('title')) {
     target.summary = event.title
   }
 
-  if (fields.has('time')) {
+  if (fields.has('time') || (zone !== kept && !event.allDay)) {
     target.startDate = timeOf(event.start, event.allDay, zone)
     target.endDate = timeOf(event.end, event.allDay, zone)
     component.removeAllProperties('duration')
@@ -636,6 +881,17 @@ function writeFields(
     setAttendees(component, event.attendees, organizer)
   }
 
+  // A rule made elsewhere is never written again: only the app's own, or none.
+  if (rule && rule !== 'other') {
+    writeRule(calendar, component, rule)
+  } else if (rule === null && fields.has('recurrence')) {
+    writeRule(calendar, component, null)
+  }
+
+  if (fields.has('reminders')) {
+    writeAlarms(component, event.reminders, event.title)
+  }
+
   component.updatePropertyWithValue(
     'sequence',
     Number(component.getFirstPropertyValue('sequence') ?? 0) + 1
@@ -645,8 +901,10 @@ function writeFields(
 
 /**
  * A new event as a calendar object: always with an end (some servers want
- * one), in UTC, the organizer the user when there are guests — a CalDAV
- * server that schedules sends them the invitation itself.
+ * one), in UTC — a series in the zone it is written from, with its
+ * VTIMEZONE, so it keeps its hour across summer time —, its reminders as
+ * alarms, the organizer the user when there are guests: a CalDAV server
+ * that schedules sends them the invitation itself.
  */
 export function newEventResource(
   uid: string,
@@ -666,7 +924,7 @@ export function newEventResource(
     component.updatePropertyWithValue(ORIGIN_PROPERTY, originValue(origin))
   }
 
-  writeFields(component, event, organizer)
+  writeFields(calendar, component, event, organizer)
   calendar.addSubcomponent(component)
   return calendar.toString()
 }
@@ -677,7 +935,11 @@ function calendarOf(text: string): ICAL.Component {
   return root.name === 'vcalendar' ? root : root.getFirstSubcomponent('vcalendar')!
 }
 
-/** An event object changed: the series (no `recurrenceId`), or one instance of it. */
+/**
+ * An event object changed: the series (no `recurrenceId`), or one instance
+ * of it. A series moved to another day or hour takes its instances' names
+ * with it (`moveInstances`).
+ */
 export function changeEventResource(
   text: string,
   recurrenceId: string | null,
@@ -695,8 +957,55 @@ export function changeEventResource(
     throw new Error(messages(MESSAGES).eventNotFound)
   }
 
-  writeFields(component, event, organizer, fields)
+  const before = new ICAL.Event(component, { exceptions: [] }).startDate?.clone()
+  writeFields(calendar, component, event, organizer, fields)
+  const after = new ICAL.Event(component, { exceptions: [] }).startDate
+
+  if (recurrenceId === null && before && after && component.hasProperty('rrule')) {
+    moveInstances(calendar, component, before, after)
+  }
+
   return calendar.toString()
+}
+
+/**
+ * A series as its object keeps it: its first time's fields, how it
+ * repeats, the zone its hours are in — what a change of the whole series,
+ * or a copy of it, is written from. Null for an object with no series.
+ */
+export function seriesOf(text: string, self: ReadonlyArray<string>): ProviderEventInput | null {
+  const master = objectEvents(calendarOf(text)).find(
+    (component) => !component.hasProperty('recurrence-id')
+  )
+  const event = master ? new ICAL.Event(master, { exceptions: [] }) : null
+
+  if (!master || !event?.startDate) {
+    return null
+  }
+
+  const first = occurrenceOf(
+    event,
+    event.startDate,
+    event.endDate,
+    null,
+    new Set(self.map(addressOf)),
+    recurrenceOfComponent(master, event.startDate)
+  )
+
+  return {
+    title: first.title,
+    start: first.start,
+    end: first.end,
+    allDay: first.allDay,
+    location: first.location,
+    description: first.description,
+    attendees: first.attendees
+      .filter((attendee) => !attendee.self)
+      .map((attendee) => attendee.email),
+    recurrence: first.recurrence ?? null,
+    reminders: first.reminders ?? null,
+    zone: first.allDay ? undefined : zoneNameOf(event.startDate)
+  }
 }
 
 /** One instance of a series taken out: an EXDATE on the series, its exception gone. */

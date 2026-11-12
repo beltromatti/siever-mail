@@ -1,4 +1,4 @@
-import type { ApprovalRequest, SegretarioContext } from '@shared/segretario'
+import type { ApprovalRequest, SegretarioContext, SentAttachment } from '@shared/segretario'
 
 import type { StoredEvent } from '../ai-store'
 import type { RegistryChange } from '../registry/types'
@@ -19,12 +19,29 @@ export interface UserPayload {
   handles: HandleRecord[]
   /** Set when the Segretario began the work on its own: `text` says what it set out to do. */
   origin?: 'segretario'
+  /** The files and pictures the request carries, as the page shows them. */
+  attachments?: SentAttachment[]
+  /**
+   * What the model reads of them, after `forModel`: each one's line, its
+   * text, its pages, its pictures — kept as given, so the conversation is
+   * rebuilt the same after a restart, as a tool's pictures are.
+   */
+  attachmentParts?: ContentPart[]
 }
 
 export interface AssistantPayload {
   content: string
   toolCalls: ToolCall[]
   reasoningDetails: unknown[]
+  /** How long the model thought before its answer began, when it thought. */
+  thinkingMs?: number
+  /** Its reasoning tokens in the turn, as billed (or counted from the stream, when not billed). */
+  reasoningTokens?: number
+}
+
+/** A turn that answered nothing: neither words nor calls. */
+export function silentTurn(payload: AssistantPayload): boolean {
+  return !payload.content.trim() && payload.toolCalls.length === 0
 }
 
 export interface ToolPayload {
@@ -67,7 +84,10 @@ export interface ChangesPayload {
  *     block the activity began with, inside the first user message, so the
  *     prefix the provider caches is as long and as stable as it can be;
  *   • after a compaction, its summary in place of what it covers;
- *   • every tool call answered: one a quit interrupted reads as interrupted.
+ *   • every tool call answered: one a quit interrupted reads as interrupted;
+ *   • the files and pictures a request carries, after its words;
+ *   • a turn that answered nothing only where the user wrote after it: one
+ *     that ended a run failing for it (the runner's `noAnswer`) is asked again.
  */
 export function buildConversation(
   system: string,
@@ -79,6 +99,25 @@ export function buildConversation(
     CompactionPayload | undefined
   const messages: ChatMessage[] = [{ role: 'system', content: system }]
   let preamble = context?.text ?? ''
+  // A turn that answered nothing stays where words of the user come after it, so the turns go
+  // on alternating as they went; with nothing after it, or another like it, it ended a run that
+  // failed for it (the runner's `noAnswer`), and «Riprova» asks for the answer again.
+  const leftOut = new Set<number>()
+  let next: string | null = null
+
+  for (const event of [...events].reverse()) {
+    if (
+      event.type === 'assistant' &&
+      next !== 'user' &&
+      silentTurn(event.payload as AssistantPayload)
+    ) {
+      leftOut.add(event.id)
+    }
+
+    if (event.type === 'user' || event.type === 'assistant' || event.type === 'tool') {
+      next = event.type
+    }
+  }
 
   if (compaction) {
     preamble = `${preamble}\n\n# Il lavoro fin qui\n\nLa parte più vecchia di questa conversazione è stata riassunta così:\n\n${compaction.summary}`
@@ -105,11 +144,21 @@ export function buildConversation(
         const payload = event.payload as UserPayload
         const text = preamble ? `${preamble}\n\n---\n\n${payload.forModel}` : payload.forModel
         preamble = ''
-        messages.push({ role: 'user', content: text })
+        messages.push({
+          role: 'user',
+          content:
+            payload.attachmentParts && payload.attachmentParts.length > 0
+              ? [{ type: 'text', text }, ...payload.attachmentParts]
+              : text
+        })
         break
       }
       case 'assistant': {
         const payload = event.payload as AssistantPayload
+
+        if (leftOut.has(event.id)) {
+          break
+        }
 
         if (preamble) {
           // A conversation compacted between a user's words and the answer

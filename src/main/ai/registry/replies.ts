@@ -22,14 +22,15 @@ interface ReplyRow {
   doubts: string
   status: string
   stale_reason: string | null
+  written_by: string | null
   revision: number
   run_id: string | null
   created_at: number
   updated_at: number | null
 }
 
-const COLUMNS = `account_id, message_key, thread_id, kind, text, doubts, status, stale_reason, revision,
-  run_id, created_at, updated_at`
+const COLUMNS = `account_id, message_key, thread_id, kind, text, doubts, status, stale_reason,
+  written_by, revision, run_id, created_at, updated_at`
 
 function recordOf(row: ReplyRow): ReplyRecord {
   const createdAt = Number(row.created_at)
@@ -42,6 +43,7 @@ function recordOf(row: ReplyRow): ReplyRecord {
     doubts: row.doubts,
     status: row.status as ReplyStatus,
     staleReason: row.stale_reason,
+    writtenBy: row.written_by === 'utente' ? 'utente' : 'segretario',
     revision: Number(row.revision),
     runId: row.run_id,
     createdAt,
@@ -105,7 +107,8 @@ export class ReplyStore {
   /**
    * Prepares the reply to a message, or writes it again: it is ready, and
    * what made it stale no longer holds. One the user already used or set
-   * aside is not offered again from the background.
+   * aside is not offered again from the background. The user's rewrite is
+   * theirs (§10.1): kept as written by them.
    */
   async save(
     anchor: MessageAnchor,
@@ -130,14 +133,14 @@ export class ReplyStore {
     // before is never written over unseen.
     const changed = await this.sql.run(
       `INSERT INTO ai_ready_drafts (
-        account_id, message_key, thread_id, kind, text, doubts, status, stale_reason, revision,
-        run_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'pronta', NULL, 1, ?, ?, ?)
+        account_id, message_key, thread_id, kind, text, doubts, status, stale_reason, written_by,
+        revision, run_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pronta', NULL, ?, 1, ?, ?, ?)
       ON CONFLICT(account_id, message_key) DO UPDATE SET
         thread_id = excluded.thread_id, kind = excluded.kind, text = excluded.text,
         doubts = excluded.doubts, status = 'pronta', stale_reason = NULL,
-        revision = ai_ready_drafts.revision + 1, run_id = excluded.run_id,
-        updated_at = excluded.updated_at
+        written_by = excluded.written_by, revision = ai_ready_drafts.revision + 1,
+        run_id = excluded.run_id, updated_at = excluded.updated_at
       WHERE 1 = 1
         ${actor.background ? "AND ai_ready_drafts.status NOT IN ('usata', 'scartata')" : ''}
         ${seen === undefined ? '' : 'AND ai_ready_drafts.revision = ?'}`,
@@ -147,6 +150,7 @@ export class ReplyStore {
       input.kind,
       text,
       input.doubts.trim(),
+      actor.by === 'utente' ? 'utente' : 'segretario',
       actor.runId ?? null,
       now,
       now,
@@ -160,7 +164,7 @@ export class ReplyStore {
           lookedAt(seen) === 'mai'
             ? 'Per questo messaggio c’è già una risposta preparata, e non l’hai ancora letta'
             : 'La risposta preparata è cambiata da quando l’hai letta'
-        }: è ${record.status.replace('_', ' ')}, e dice «${
+        }${record.writtenBy === 'utente' ? ' (l’ha riscritta l’utente: le sue parole restano)' : ''}: è ${record.status.replace('_', ' ')}, e dice «${
           record.text.length > 600 ? `${record.text.slice(0, 600)}…` : record.text
         }». Se la tua vale ancora, rifalla.`,
         record

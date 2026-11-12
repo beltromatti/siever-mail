@@ -4,10 +4,12 @@ import { SyncTokenExpired } from './calendar-provider'
 import { refusalOfCalendar } from './calendar-refusal'
 import {
   GraphCalendarProvider,
+  graphSeriesZone,
   mailboxZoneNotGranted,
   eventOfGraph,
   type GraphEvent
 } from './graph-calendar'
+import { systemZone, wallOf } from './recurrence'
 
 /**
  * Graph's iCalUId is Exchange's Global Object ID in hex. A meeting
@@ -423,7 +425,9 @@ describe('GraphCalendarProvider', () => {
         location: null,
         description:
           'Portare il **verbale**.\n[Partecipa](https://teams.microsoft.com/l/meetup-join/abc)\n\n<div style="display:none"><img src="https://x.example/p.png" onerror="alert(1)"></div>',
-        attendees: ['luca@brenta.it', 'sala-riunioni@brenta.it', 'nuovo@brenta.it']
+        attendees: ['luca@brenta.it', 'sala-riunioni@brenta.it', 'nuovo@brenta.it'],
+        recurrence: null,
+        reminders: null
       },
       true,
       new Set(['description', 'attendees'])
@@ -483,7 +487,9 @@ describe('GraphCalendarProvider', () => {
         allDay: true,
         location: null,
         description: null,
-        attendees: []
+        attendees: [],
+        recurrence: null,
+        reminders: null
       },
       null
     )
@@ -528,7 +534,9 @@ describe('GraphCalendarProvider', () => {
       allDay: false,
       location: null,
       description: null,
-      attendees: []
+      attendees: [],
+      recurrence: null,
+      reminders: null
     }
 
     expect(await provider.mailboxZoneGranted()).toBe(false)
@@ -545,5 +553,187 @@ describe('GraphCalendarProvider', () => {
     expect(asked.find((request) => request.method === 'POST')!.body).toMatchObject({
       start: { dateTime: '2026-11-20T09:00:00.000', timeZone: 'UTC' }
     })
+  })
+})
+
+describe('GraphCalendarProvider, series and reminders', () => {
+  const ownCalendar = [
+    'GET',
+    /\/me\/calendars\/cal-1\?\$select=/,
+    () => ({ id: 'cal-1', isDefaultCalendar: true })
+  ] as const
+  const weekly = {
+    pattern: {
+      type: 'weekly',
+      interval: 1,
+      daysOfWeek: ['monday', 'thursday'],
+      firstDayOfWeek: 'monday'
+    },
+    range: { type: 'endDate', startDate: '2026-11-16', endDate: '2026-12-22' }
+  }
+
+  it('reads an occurrence’s rule on its series master, once a read', async () => {
+    const occurrence = (id: string, day: string): GraphEvent => ({
+      id,
+      seriesMasterId: 'AAMk-serie',
+      subject: 'Lezione di analisi',
+      isOrganizer: true,
+      start: { dateTime: `${day}T08:00:00.0000000`, timeZone: 'UTC' },
+      end: { dateTime: `${day}T10:00:00.0000000`, timeZone: 'UTC' }
+    })
+    const { provider, asked } = graph([
+      [...ownCalendar],
+      [
+        'GET',
+        /calendarView\/delta/,
+        () => ({
+          value: [occurrence('AAMk-o1', '2026-11-16'), occurrence('AAMk-o2', '2026-11-19')],
+          '@odata.deltaLink': 'https://graph.microsoft.com/v1.0/delta?token=1'
+        })
+      ],
+      [
+        'GET',
+        /\/events\/AAMk-serie\?\$select=recurrence$/,
+        () => ({ id: 'AAMk-serie', recurrence: weekly })
+      ]
+    ])
+
+    const { events } = await provider.changes('cal-1', {
+      fromIso: '2026-11-01T00:00:00.000Z',
+      toIso: '2027-11-01T00:00:00.000Z'
+    })
+
+    expect(events.map((event) => [event.seriesId, event.recurrence])).toEqual([
+      [
+        'AAMk-serie',
+        { frequency: 'weekly', interval: 1, weekdays: ['MO', 'TH'], until: '2026-12-22' }
+      ],
+      [
+        'AAMk-serie',
+        { frequency: 'weekly', interval: 1, weekdays: ['MO', 'TH'], until: '2026-12-22' }
+      ]
+    ])
+    expect(asked.filter((request) => /AAMk-serie/.test(request.url))).toHaveLength(1)
+  })
+
+  it('writes a series on a zone’s clock, its range from its first day, one reminder: the earliest', async () => {
+    const { provider, asked } = graph([
+      [...ownCalendar],
+      [
+        'POST',
+        /\/me\/calendars\/cal-1\/events$/,
+        ({ body }) => ({
+          id: 'AAMk-serie',
+          subject: 'Lezione',
+          isOrganizer: true,
+          ...(body as object),
+          start: { dateTime: '2026-11-16T08:00:00.0000000', timeZone: 'UTC' },
+          end: { dateTime: '2026-11-16T10:00:00.0000000', timeZone: 'UTC' }
+        })
+      ]
+    ])
+    const zone = graphSeriesZone() ?? 'UTC'
+    const wall = wallOf(Date.parse('2026-11-16T08:00:00.000Z'), zone)
+    const two = (value: number): string => String(value).padStart(2, '0')
+
+    await provider.create(
+      'cal-1',
+      {
+        title: 'Lezione',
+        start: '2026-11-16T08:00:00.000Z',
+        end: '2026-11-16T10:00:00.000Z',
+        allDay: false,
+        location: null,
+        description: null,
+        attendees: [],
+        recurrence: { frequency: 'weekly', interval: 1, weekdays: ['MO', 'TH'], count: 20 },
+        reminders: [10, 60]
+      },
+      null
+    )
+
+    const body = asked.find((request) => request.method === 'POST')!.body as Record<string, unknown>
+    expect(body).toMatchObject({
+      start: {
+        dateTime: `${wall.year}-${two(wall.month)}-${two(wall.day)}T${two(wall.hour)}:${two(wall.minute)}:00`,
+        timeZone: zone
+      },
+      recurrence: {
+        pattern: {
+          type: 'weekly',
+          interval: 1,
+          daysOfWeek: ['monday', 'thursday'],
+          firstDayOfWeek: 'monday'
+        },
+        range: {
+          type: 'numbered',
+          startDate: `${wall.year}-${two(wall.month)}-${two(wall.day)}`,
+          numberOfOccurrences: 20,
+          recurrenceTimeZone: zone
+        }
+      },
+      isReminderOn: true,
+      reminderMinutesBeforeStart: 60
+    })
+  })
+
+  it('makes a series one event again with no rule, turns its reminder off, and leaves Outlook’s for the calendar’s own', async () => {
+    const { provider, asked } = graph([
+      [...ownCalendar],
+      [
+        'PATCH',
+        /\/events\/AAMk-serie$/,
+        () => ({
+          id: 'AAMk-serie',
+          subject: 'Lezione',
+          isOrganizer: true,
+          start: { dateTime: '2026-11-23T08:00:00.0000000', timeZone: 'UTC' },
+          end: { dateTime: '2026-11-23T10:00:00.0000000', timeZone: 'UTC' }
+        })
+      ]
+    ])
+    const lesson = {
+      title: 'Lezione',
+      start: '2026-11-23T08:00:00.000Z',
+      end: '2026-11-23T10:00:00.000Z',
+      allDay: false,
+      location: null,
+      description: null,
+      attendees: [],
+      recurrence: null,
+      reminders: [] as number[]
+    }
+
+    await provider.update(
+      'cal-1',
+      'AAMk-serie',
+      lesson,
+      false,
+      new Set(['time', 'recurrence', 'reminders'])
+    )
+    await provider.update(
+      'cal-1',
+      'AAMk-serie',
+      { ...lesson, reminders: null },
+      false,
+      new Set(['reminders'])
+    )
+
+    const [single, calendarOwn] = asked.filter((request) => request.method === 'PATCH')
+    expect(single.body).toMatchObject({
+      recurrence: null,
+      isReminderOn: false,
+      start: { dateTime: '2026-11-23T08:00:00.000', timeZone: 'UTC' }
+    })
+    expect(calendarOwn.body).toEqual({})
+  })
+
+  it('writes a series in the zone Graph takes whose clocks read as the computer’s', () => {
+    expect(graphSeriesZone('Europe/Berlin')).toBe('Europe/Berlin')
+    expect(graphSeriesZone('Europe/Rome')).toBe('Europe/Berlin')
+    expect(graphSeriesZone('America/Toronto')).toBe('America/New_York')
+    expect(graphSeriesZone('Pacific/Chatham')).toBeNull()
+    // Asked again for the computer's own, as the provider does.
+    expect(graphSeriesZone()).toBe(graphSeriesZone(systemZone()))
   })
 })

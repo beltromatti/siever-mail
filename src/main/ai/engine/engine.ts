@@ -36,6 +36,7 @@ import {
 } from '../tasks/calendar'
 import { prepareDay, prepareProjectState } from '../tasks/day'
 import { prepareKeepingUp, prepareReflection } from '../tasks/memory-work'
+import { WORDS_LESSONS } from '../registry/words'
 import {
   prepareReading,
   readingLockKeys,
@@ -107,6 +108,8 @@ const PRIORITY = {
   calendar: 10,
   dayRefresh: 15,
   day: 20,
+  // The user's words on a thing: it waits for them, dimmed (§10.1).
+  words: 30,
   project: 40,
   memory: 50,
   backlog: 60
@@ -132,6 +135,13 @@ const REFLECTION_INTERVAL_MS = 6 * 60 * 60 * 1000
  * things right does more than one, and may change their mind.
  */
 const LESSONS_SETTLE_MS = 2 * 60_000
+/**
+ * How long the user's words on a thing wait for the rest of theirs before
+ * the reflection takes them in, whatever its interval (§10.1): a thing
+ * dimmed waits for the user, a tick does not; two corrections in a row go
+ * together.
+ */
+const WORDS_SETTLE_MS = 30_000
 const KEEP_UP_INTERVAL_MS = 20 * 60 * 60 * 1000
 const KEEP_UP_MIN_NOTES = 12
 /** How long changes to the calendar wait for the rest of theirs: a meeting moved, then its guests answering. */
@@ -1096,16 +1106,23 @@ export class SegretarioEngine {
    * What the user taught, taken in once they stopped putting things right:
    * a reflection waiting waits for the newest lesson; one running is left
    * to finish, and one failed is done again only for a lesson come after
-   * (§4.3).
+   * (§4.3). The user's words on a thing (§10.1) do not wait for the
+   * interval: half a minute after the newest of them, with every lesson
+   * waiting beside them.
    */
   private async planReflection(now: number): Promise<void> {
     const { store, queue } = this.deps
     const lastReflection = await store.lastActivityAt('riflessione', 'done')
     const teaching = (await store.pendingLessons()).filter((lesson) => lesson.kind !== 'confermata')
+    const words = teaching.filter((lesson) =>
+      (WORDS_LESSONS as ReadonlyArray<string>).includes(lesson.kind)
+    )
 
     if (
       teaching.length === 0 ||
-      (lastReflection !== null && now - lastReflection <= REFLECTION_INTERVAL_MS)
+      (words.length === 0 &&
+        lastReflection !== null &&
+        now - lastReflection <= REFLECTION_INTERVAL_MS)
     ) {
       return
     }
@@ -1116,6 +1133,22 @@ export class SegretarioEngine {
       (failedAt !== undefined && !teaching.some((lesson) => lesson.createdAt > failedAt)) ||
       (!(await queue.waitingFor('riflessione')) && (await queue.inProgress('riflessione')))
     ) {
+      return
+    }
+
+    if (words.length > 0) {
+      const newest = Math.max(...words.map((lesson) => lesson.createdAt))
+
+      // Set, not only put off — the words may come sooner than the lessons a reflection waits
+      // for —, at the same moment however often it is planned: from the newest words on.
+      await queue.enqueue({
+        task: 'riflessione',
+        scopeKey: 'riflessione',
+        scope: {},
+        priority: PRIORITY.words,
+        delayMs: Math.min(WORDS_SETTLE_MS, Math.max(0, newest + WORDS_SETTLE_MS - Date.now())),
+        now: true
+      })
       return
     }
 
@@ -1397,7 +1430,11 @@ export class SegretarioEngine {
           const today = localDay()
           const begun = Date.now()
           const letter = await deps.registry.day.letter(today)
-          const data = prepareDay({ refresh, lastLetterAt: letter?.writtenAt ?? null })
+          const data = prepareDay({
+            refresh,
+            lastLetterAt: letter?.writtenAt ?? null,
+            lastLetterBy: letter?.writtenBy ?? null
+          })
           const startOfDay = new Date()
           startOfDay.setHours(DAY_STARTS_AT_HOUR, 0, 0, 0)
 
@@ -1535,6 +1572,12 @@ export class SegretarioEngine {
           })
 
           await deps.store.endReflection(result.activityId, result.status === 'done')
+
+          // The user's words it took in are done: the things they were on show as they are now.
+          if (result.status === 'done') {
+            await deps.registry.wordsTaken(data.words)
+          }
+
           settle(result)
         }
       },

@@ -175,6 +175,11 @@ const segretarioApi: SegretarioApi = {
   setCommitmentStatus: async (id, status, options) =>
     invoke(SEGRETARIO_IPC.setCommitmentStatus, id, status, options),
   editCommitment: async (id, changes) => invoke(SEGRETARIO_IPC.editCommitment, id, changes),
+  rewriteWork: async (target, text) => invoke(SEGRETARIO_IPC.rewriteWork, target, text),
+  correctWork: async (target, words) => invoke(SEGRETARIO_IPC.correctWork, target, words),
+  answerQuestion: async (commitmentId, words) =>
+    invoke(SEGRETARIO_IPC.answerQuestion, commitmentId, words),
+  withdrawWords: async (target) => invoke(SEGRETARIO_IPC.withdrawWords, target),
   undoCommitmentStatus: async (id) => invoke(SEGRETARIO_IPC.undoCommitmentStatus, id),
   openCommitment: async (from, input) => invoke(SEGRETARIO_IPC.openCommitment, from, input),
   markHandled: async (messages) => invoke(SEGRETARIO_IPC.markHandled, messages),
@@ -216,8 +221,13 @@ const segretarioApi: SegretarioApi = {
   onEngineChanged: (listener) => subscribe(SEGRETARIO_IPC.engineChanged, listener),
   listActivities: async (options) => invoke(SEGRETARIO_IPC.listActivities, options),
   getActivity: async (id) => invoke(SEGRETARIO_IPC.getActivity, id),
-  startActivity: async (text, context) => invoke(SEGRETARIO_IPC.startActivity, text, context),
-  sendMessage: async (id, text, context) => invoke(SEGRETARIO_IPC.sendMessage, id, text, context),
+  startActivity: async (text, context, attachments) =>
+    invoke(SEGRETARIO_IPC.startActivity, text, context, attachments),
+  sendMessage: async (id, text, context, attachments) =>
+    invoke(SEGRETARIO_IPC.sendMessage, id, text, context, attachments),
+  chooseFiles: async () => invoke(SEGRETARIO_IPC.chooseFiles),
+  prepareAttachment: async (source) => invoke(SEGRETARIO_IPC.prepareAttachment, source),
+  dropAttachments: async (ids) => invoke(SEGRETARIO_IPC.dropAttachments, ids),
   retryActivity: async (id) => invoke(SEGRETARIO_IPC.retryActivity, id),
   cancelActivity: async (id) => invoke(SEGRETARIO_IPC.cancelActivity, id),
   removeActivity: async (id) => invoke(SEGRETARIO_IPC.removeActivity, id),
@@ -258,8 +268,8 @@ const calendarApi: CalendarApi = {
   setCalendarRole: async (calendarKey, role) =>
     invoke(CALENDAR_IPC.setCalendarRole, calendarKey, role),
   create: async (event) => invoke(CALENDAR_IPC.create, event),
-  update: async (eventKey, change) => invoke(CALENDAR_IPC.update, eventKey, change),
-  remove: async (eventKey) => invoke(CALENDAR_IPC.remove, eventKey),
+  update: async (eventKey, change, scope) => invoke(CALENDAR_IPC.update, eventKey, change, scope),
+  remove: async (eventKey, scope) => invoke(CALENDAR_IPC.remove, eventKey, scope),
   syncNow: async () => invoke(CALENDAR_IPC.syncNow),
   onChanged: (listener) => subscribe(CALENDAR_IPC.changed, () => listener())
 }

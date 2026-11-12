@@ -100,7 +100,9 @@ describe.skipIf(!server)('CalDavCalendarProvider (a real server)', () => {
       allDay: false,
       location: 'Cantiere',
       description: null,
-      attendees: ['davide@studio.it']
+      attendees: ['davide@studio.it'],
+      recurrence: null,
+      reminders: null
     }
     const origin = { by: 'segretario', accountId: 'a', messageKey: 'k' } as const
 
@@ -163,7 +165,9 @@ describe.skipIf(!server)('CalDavCalendarProvider (a real server)', () => {
         allDay: false,
         location: null,
         description: null,
-        attendees: []
+        attendees: [],
+        recurrence: null,
+        reminders: null
       },
       false,
       new Set(['title', 'time'])

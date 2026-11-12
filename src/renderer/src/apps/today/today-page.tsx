@@ -31,6 +31,15 @@ import {
 } from '@renderer/features/segretario/day-line-source'
 import { LinkedWords, useOpenLink } from '@renderer/features/segretario/segretario-text'
 import { COMMITMENT_LABELS, dueLabel } from '@renderer/features/segretario/row-work'
+import {
+  dimmedBy,
+  PendingWordsLine,
+  RewriteField,
+  useWorkWords,
+  WORK_WORDS,
+  WorkMenu,
+  type WorkWords
+} from '@renderer/features/segretario/work-words'
 
 const MESSAGES = defineMessages({
   arrived: {
@@ -110,6 +119,7 @@ const MESSAGES = defineMessages({
   writeNow: { en: 'Write it now', it: 'Scrivila ora', de: 'Jetzt schreiben' },
   agenda: { en: 'On the agenda', it: 'In agenda', de: 'Auf der Agenda' },
   questions: { en: 'Questions for you', it: 'Ti chiedo', de: 'Fragen an Sie' },
+  letter: { en: 'The letter', it: 'La lettera', de: 'Der Brief' },
   proposals: { en: 'Proposals', it: 'Proposte', de: 'Vorschläge' },
   nothingPending: {
     en: 'Nothing pending: everything is in order.',
@@ -196,34 +206,50 @@ function Line({
   line,
   day,
   showWaitingSince,
+  words,
   onSettled,
   onRemind
 }: {
   line: DayLine
   day: string
   showWaitingSince?: boolean
+  words: WorkWords
   onSettled: (line: DayLine) => void
   onRemind: (commitment: Commitment) => void
 }): React.JSX.Element {
   const m = useMessages(MESSAGES)
+  const w = useMessages(WORK_WORDS)
   const kinds = useMessages(COMMITMENT_LABELS)
   const openLink = useOpenLink()
+  const [rewriting, setRewriting] = useState(false)
   const found = dayLineLink(line)
-  // Oggi is where a thing without a source to open is kept: its line opens nothing here.
-  const link = found?.kind === 'commitment' ? null : found
+  // Oggi is where a thing without a source to open is kept: its line opens nothing here; nor
+  // one being rewritten, whose words are a field.
+  const link = found?.kind === 'commitment' || rewriting ? null : found
   const late = line.due !== null && line.due < day
   const kind = line.commitment?.kind
   const settleLabel = kind ? (kind === 'aspetti' ? m.settleArrived : m.settleDone) : null
+  const pending = line.commitment?.pending ?? null
 
   const body = (
     <>
-      <span className="voice text-foreground text-[16px] leading-[1.4]">
+      <span className={cn('voice text-foreground text-[16px] leading-[1.4]', dimmedBy(pending))}>
         {(kind || line.readyKind === 'sollecito') && (
           <span className="text-ai mr-1.5 font-sans text-[12px] font-semibold">
             {kind ? kinds[kind] : m.followUp}
           </span>
         )}
-        {line.text}
+        {rewriting && line.commitment ? (
+          <RewriteField
+            target={{ kind: 'impegno', id: line.commitment.id }}
+            text={line.commitment.text}
+            label={w.rewrite}
+            onDone={() => setRewriting(false)}
+            className="mt-1 font-sans text-[13px]"
+          />
+        ) : (
+          line.text
+        )}
       </span>
       <span className="text-muted-foreground flex min-w-0 items-baseline gap-1.5 text-[12px]">
         {line.due && (
@@ -243,6 +269,7 @@ function Line({
         )}
         <span className="min-w-0 truncate">{dayLineSourceWords(line)}</span>
       </span>
+      <PendingWordsLine pending={pending} />
     </>
   )
 
@@ -267,6 +294,8 @@ function Line({
           <CommitmentMenu
             commitment={line.commitment}
             onRemind={onRemind}
+            words={words}
+            onRewrite={() => setRewriting(true)}
             className="grid size-7 place-items-center"
           />
           <button
@@ -344,6 +373,7 @@ function Section({
   day,
   showWaitingSince,
   settled,
+  words,
   onSettled,
   onRemind
 }: {
@@ -352,6 +382,7 @@ function Section({
   lines: ReadonlyArray<DayLine>
   day: string
   showWaitingSince?: boolean
+  words: WorkWords
   /** Lines just dealt with here, gone before the day is read again. */
   settled: ReadonlySet<string>
   onSettled: (line: DayLine) => void
@@ -375,6 +406,7 @@ function Section({
             line={line}
             day={day}
             showWaitingSince={showWaitingSince}
+            words={words}
             onSettled={onSettled}
             onRemind={onRemind}
           />
@@ -423,6 +455,8 @@ export function TodayPage({
     new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).toISOString()
   )
   const [rewritingSince, setRewritingSince] = useState<number | null>(null)
+  const [editingLetter, setEditingLetter] = useState(false)
+  const words = useWorkWords()
   const reloadTimer = useRef<number | null>(null)
 
   const rewrite = useCallback(async (): Promise<void> => {
@@ -551,6 +585,16 @@ export function TodayPage({
                   {m.writtenAt(dateFormat(WRITTEN_AT()).format(page.letterAt))}
                 </span>
               )}
+              {page?.letter && !rewriting && !editingLetter && (
+                <WorkMenu
+                  target={{ kind: 'lettera', day: page.day }}
+                  pending={page.letterPending}
+                  about={page.letter}
+                  words={words}
+                  onRewrite={() => setEditingLetter(true)}
+                  label={m.letter}
+                />
+              )}
             </div>
             <p className="display-title pt-2 text-[30px] leading-tight first-letter:uppercase">
               {dateFormat(DAY_TITLE).format(new Date())}
@@ -586,16 +630,28 @@ export function TodayPage({
                 ))}
               </nav>
             )}
-            {page?.letter && (
-              <LinkedWords
-                text={page.letter}
-                links={page.letterLinks}
-                className={cn(
-                  'drop-cap text-foreground text-[18px] leading-[1.55]',
-                  rewriting && 'opacity-60'
-                )}
-              />
-            )}
+            {page?.letter &&
+              (editingLetter ? (
+                <RewriteField
+                  target={{ kind: 'lettera', day: page.day }}
+                  text={page.letter}
+                  label={m.letter}
+                  onDone={() => setEditingLetter(false)}
+                  className="voice text-[16px] leading-[1.55]"
+                />
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  <LinkedWords
+                    text={page.letter}
+                    links={page.letterLinks}
+                    className={cn(
+                      'drop-cap text-foreground text-[18px] leading-[1.55]',
+                      (rewriting || page.letterPending?.kind === 'correzione') && 'opacity-60'
+                    )}
+                  />
+                  <PendingWordsLine pending={page.letterPending} />
+                </div>
+              ))}
             {page?.network ? (
               <p className="text-muted-foreground flex items-start gap-2 text-[13px]">
                 <AlertCircle className="mt-0.5 size-4 shrink-0" />
@@ -664,7 +720,13 @@ export function TodayPage({
                   <ul className="flex flex-col gap-2">
                     {page.questions.flatMap((line) =>
                       line.commitment
-                        ? [<CommitmentRow key={dayLineKey(line)} commitment={line.commitment} />]
+                        ? [
+                            <CommitmentRow
+                              key={dayLineKey(line)}
+                              commitment={line.commitment}
+                              words={words}
+                            />
+                          ]
                         : []
                     )}
                   </ul>
@@ -680,6 +742,7 @@ export function TodayPage({
                   day={page.day}
                   showWaitingSince={section.key === 'awaited'}
                   settled={settled}
+                  words={words}
                   onSettled={settle}
                   onRemind={onRemind}
                 />
@@ -710,6 +773,7 @@ export function TodayPage({
               )}
             </>
           )}
+          {words.dialogs}
         </article>
       </div>
     </div>

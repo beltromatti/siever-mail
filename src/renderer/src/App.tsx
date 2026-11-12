@@ -57,6 +57,7 @@ import {
   type CalendarFocus,
   type CalendarSight
 } from '@renderer/apps/calendar/calendar-app'
+import type { CalendarMailRequest } from '@renderer/apps/calendar/use-calendar-actions'
 import { dayKey, dayOfKey, eventSpan } from '@renderer/features/calendar/calendar-dates'
 import { AppPlaceholder } from '@renderer/apps/app-placeholder'
 import { WORKSPACE_APPS, type AppId } from '@shared/workspace'
@@ -1275,6 +1276,27 @@ function App(): React.JSX.Element {
     [openMailMessage, whenSetupAllows]
   )
 
+  /**
+   * A message to an event's guests, from the Calendario: in the Posta, from
+   * the mailbox that came with the event's calendar when there is one, else
+   * the one in sight.
+   */
+  const { selectedAccountId: mailAccountInSight } = mail
+  const writeAboutEvent = useCallback(
+    ({ to, subject, connectionId }: CalendarMailRequest): void => {
+      const own = calendarConnections?.find((connection) => connection.id === connectionId)
+      const accountId =
+        accounts.find((account) => account.id === own?.mailAccountId)?.id ??
+        mailAccountInSight ??
+        accounts[0]?.id
+
+      if (accountId) {
+        openComposer({ kind: 'new', accountId, to: parseRecipients(to.join(', ')), subject })
+      }
+    },
+    [accounts, calendarConnections, mailAccountInSight, openComposer]
+  )
+
   // A notification clicked opens where it leads (§13.3), as a link of the Segretario would — past
   // the welcome, and once the setup allows it.
   const selectSegretarioActivity = segretario.select
@@ -1857,7 +1879,8 @@ function App(): React.JSX.Element {
             : calendarInSight.label
           : shownPage
             ? shownPage
-            : mailSight.label
+            : mailSight.label,
+        kind: calendarInSight ? 'calendar' : shownPage ? 'page' : undefined
       }
   const segretarioSuggestionList = segretarioSuggestions({
     composing: composingInFront
@@ -2036,6 +2059,20 @@ function App(): React.JSX.Element {
                       atWindowTopRight={!segretarioOpen}
                       onOpenMessage={openMessageRef}
                       onOpenConnections={() => startOnboarding('nuova-connessione')}
+                      onOpenConnectionSettings={() => {
+                        setSettingsSection('accounts')
+                        setSettingsOpen(true)
+                      }}
+                      onWriteTo={accounts.length > 0 ? writeAboutEvent : undefined}
+                      onRemind={(commitment) => void remindAbout(commitment)}
+                      onAskSegretario={
+                        segretarioOffered
+                          ? () => {
+                              setSegretarioOpen(true)
+                              setSegretarioFocusRequest((current) => current + 1)
+                            }
+                          : undefined
+                      }
                     />
                   ) : shownApp === 'files' ? (
                     <AppPlaceholder

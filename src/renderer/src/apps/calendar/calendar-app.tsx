@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { ChevronLeft, ChevronRight, LoaderCircle, Plus, RefreshCw } from 'lucide-react'
-import { toast } from 'sonner'
 
 import { ActionTooltip } from '@renderer/components/ui/action-tooltip'
 import { Button } from '@renderer/components/ui/button'
-import { useConfirmDialog } from '@renderer/components/ui/confirm-dialog'
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { useCalendarEvents } from '@renderer/features/calendar/use-calendar'
@@ -17,7 +15,7 @@ import type { HostCommandId } from '@shared/commands'
 import { defineMessages } from '@shared/i18n'
 import type { MessageRef } from '@shared/models'
 import { PLACES } from '@shared/places'
-import type { DayLine } from '@shared/segretario'
+import type { Commitment, DayLine } from '@shared/segretario'
 import { DayLineSourceIcons, dayLineLink } from '@renderer/features/segretario/day-line-source'
 import { useOpenLink } from '@renderer/features/segretario/segretario-text'
 
@@ -27,8 +25,11 @@ import {
   CALENDAR_VIEW_NAMES,
   CALENDAR_VIEWS,
   dateFormat,
+  dayKey,
+  dayOfKey,
   eventStartDay,
   sameDay,
+  shiftSpan,
   startOfDay,
   startOfWeek,
   stepAnchor,
@@ -37,13 +38,20 @@ import {
   weekdayNames,
   type CalendarView
 } from '@renderer/features/calendar/calendar-dates'
+import { canEditEvent } from './calendar-menus'
 import { CalendarSearch } from './calendar-search'
 import { EventEditor, type EditorTarget } from './event-editor'
 import { EventPanel } from './event-panel'
 import { dotStyle } from './event-style'
 import { MonthGrid } from './month-grid'
 import { TimeGrid, type CalendarSelection } from './time-grid'
-import { calendarOf, useCalendarList, useSegretarioLayers } from './use-calendar-data'
+import { useCalendarActions, type CalendarMailRequest } from './use-calendar-actions'
+import {
+  calendarOf,
+  useCalendarList,
+  useSegretarioLayers,
+  type ProposedEvent
+} from './use-calendar-data'
 import { useCalendarKeys } from './use-calendar-keys'
 
 const MESSAGES = defineMessages({
@@ -58,22 +66,6 @@ const MESSAGES = defineMessages({
   previousMonth: { en: 'Previous month', it: 'Mese prima', de: 'Vorheriger Monat' },
   nextMonth: { en: 'Next month', it: 'Mese dopo', de: 'Nächster Monat' },
   readOnly: { en: 'read-only', it: 'sola lettura', de: 'schreibgeschützt' },
-  moveTitle: {
-    en: (title: string) => `Move “${title}”?`,
-    it: (title: string) => `Spostare «${title}»?`,
-    de: (title: string) => `„${title}“ verschieben?`
-  },
-  guestsUpdated: {
-    en: 'The guests get the update.',
-    it: 'Gli invitati ricevono l’aggiornamento.',
-    de: 'Die Gäste erhalten die Aktualisierung.'
-  },
-  move: { en: 'Move', it: 'Sposta', de: 'Verschieben' },
-  notMoved: {
-    en: 'The event was not moved',
-    it: 'L’evento non è stato spostato',
-    de: 'Der Termin wurde nicht verschoben'
-  },
   calendars: { en: 'Calendars', it: 'Calendari', de: 'Kalender' },
   newEvent: { en: 'New event', it: 'Nuovo evento', de: 'Neuer Termin' },
   noCalendar: {
@@ -175,12 +167,14 @@ const isLayers = (value: unknown): value is { due: boolean; proposals: boolean }
 function MiniMonth({
   anchor,
   days,
-  onPick
+  onPick,
+  onDayMenu
 }: {
   anchor: Date
   /** The days the calendar shows, marked. */
   days: ReadonlyArray<Date>
   onPick: (day: Date) => void
+  onDayMenu: (day: Date) => void
 }): React.JSX.Element {
   const m = useMessages(MESSAGES)
   const [month, setMonth] = useState(() => new Date(anchor.getFullYear(), anchor.getMonth(), 1))
@@ -238,6 +232,10 @@ function MiniMonth({
               key={day.getTime()}
               type="button"
               onClick={() => onPick(day)}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                onDayMenu(day)
+              }}
               className={cn(
                 'focus-visible:ring-ring/60 mx-auto grid size-6 place-items-center rounded-full tabular-nums outline-none focus-visible:ring-2',
                 sameDay(day, today)
@@ -258,13 +256,15 @@ function MiniMonth({
   )
 }
 
-/** The calendars of each connection, each to show or hide. */
+/** The calendars of each connection, each to show or hide, and its right-click menu. */
 function CalendarsList({
   calendars,
-  onSetHidden
+  onSetHidden,
+  onMenu
 }: {
   calendars: ReadonlyArray<CalendarListEntry>
   onSetHidden: (key: string, hidden: boolean) => void
+  onMenu: (calendar: CalendarListEntry) => void
 }): React.JSX.Element {
   const m = useMessages(MESSAGES)
   const accounts = [...new Set(calendars.map((calendar) => calendar.connection))]
@@ -279,6 +279,10 @@ function CalendarsList({
             .map((calendar) => (
               <label
                 key={calendar.key}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  onMenu(calendar)
+                }}
                 className="hover:bg-hover flex cursor-pointer items-center gap-2 rounded-[6px] px-1 py-1 text-[12.5px]"
               >
                 <input
@@ -325,7 +329,8 @@ function CalendarsList({
  * layers, when it is on: what the mail says is due, and the events it
  * proposes. An event opens beside it; a drag on the grid makes one. The
  * events are searched, past ones too, from the header; and moved through
- * from the keyboard, its keys a letter each (`useCalendarKeys`).
+ * from the keyboard, its keys a letter each (`useCalendarKeys`). Every
+ * thing on it has its right-click menu, as the Posta's (vision §7.3).
  */
 export function CalendarApp({
   aiOn,
@@ -335,6 +340,10 @@ export function CalendarApp({
   atWindowTopRight,
   onOpenMessage,
   onOpenConnections,
+  onOpenConnectionSettings,
+  onWriteTo,
+  onAskSegretario,
+  onRemind,
   searchInputRef,
   keysEnabled
 }: {
@@ -349,6 +358,14 @@ export function CalendarApp({
   onOpenMessage: (ref: MessageRef) => void
   /** No calendar connected: where to connect one. */
   onOpenConnections: () => void
+  /** Impostazioni › Connessioni, where the calendars' connections stand. */
+  onOpenConnectionSettings: () => void
+  /** A message to an event's guests, in the Posta; absent with no mailbox. */
+  onWriteTo?: (request: CalendarMailRequest) => void
+  /** The Segretario's panel, opened on what the calendar shows; absent with the AI off. */
+  onAskSegretario?: () => void
+  /** Asks the Segretario for a reminder to who is awaited, from a deadline's menu. */
+  onRemind?: (commitment: Commitment) => void
   /** The search field, for the window's "Cerca" command while the calendar is in front. */
   searchInputRef?: Ref<HTMLInputElement>
   /** Whether its keys answer: not while something of the shell is over it, a message being written. */
@@ -368,7 +385,7 @@ export function CalendarApp({
   )
   const [editor, setEditor] = useState<EditorTarget | null>(null)
   const [syncing, setSyncing] = useState(false)
-  const { calendars, setHidden } = useCalendarList()
+  const { calendars, setHidden, setRole } = useCalendarList()
   // Drawn anew each time, not kept: a week starts where the language's region says (§13.5).
   const days = viewDays(view, anchor)
   const from = days[0]
@@ -378,7 +395,6 @@ export function CalendarApp({
   const [moved, setMoved] = useState<{ event: CalendarEvent; over: CalendarEvent[] | null } | null>(
     null
   )
-  const { confirm, dialog: confirmDialog } = useConfirmDialog()
   const events = useMemo(
     () =>
       (allEvents ?? [])
@@ -433,33 +449,9 @@ export function CalendarApp({
     }
   }
 
-  /** An event dragged to another time: whoever is invited is told, once the user says so. */
-  const moveEvent = async (event: CalendarEvent, start: number, end: number): Promise<void> => {
-    if (
-      event.attendees.some((attendee) => !attendee.self) &&
-      !(await confirm({
-        title: m.moveTitle(event.title),
-        description: m.guestsUpdated,
-        confirmLabel: m.move
-      }))
-    ) {
-      return
-    }
-
-    const change = { start: new Date(start).toISOString(), end: new Date(end).toISOString() }
-    setMoved({ event: { ...event, ...change }, over: allEvents })
-
-    try {
-      await window.calendarApi.update(event.key, change)
-    } catch (error) {
-      setMoved(null)
-      toast.error(m.notMoved, {
-        description: error instanceof Error ? error.message : undefined
-      })
-    }
-  }
   const canWrite = Boolean(calendars?.some((calendar) => calendar.writable))
-  const newEvent = (): void => {
+  /** A new event on the day in sight — today from the next half hour — in a calendar, or the usual one. */
+  const newEvent = (calendarKey?: string): void => {
     const start = new Date()
     start.setMinutes(start.getMinutes() < 30 ? 30 : 60, 0, 0)
     const base = sameDay(anchor, new Date())
@@ -469,13 +461,75 @@ export function CalendarApp({
       mode: 'new',
       start: base.getTime(),
       end: base.getTime() + newEventDefaults.minutes * 60_000,
-      allDay: false
+      allDay: false,
+      calendarKey
     })
   }
   /** An event, on its day, open beside the calendar. */
   const showEvent = (event: CalendarEvent): void => {
     setAnchor(eventStartDay(event))
     setSelection({ kind: 'event', key: event.key })
+  }
+  const actions = useCalendarActions({
+    calendars,
+    aiOn,
+    show: showEvent,
+    showProposal: (proposed) => {
+      setAnchor(eventStartDay(proposed))
+      setSelection({ kind: 'proposal', id: proposed.proposal.id })
+    },
+    openEditor: setEditor,
+    replaced: (key, now) =>
+      setSelection((current) =>
+        current?.kind === 'event' && current.key === key
+          ? now
+            ? { kind: 'event', key: now.key }
+            : null
+          : current
+      ),
+    showMoved: (event) => setMoved(event ? { event, over: allEvents } : null),
+    setHidden,
+    setRole,
+    goToDay: (day) => {
+      setAnchor(startOfDay(day))
+      setView('giorno')
+    },
+    newEventMinutes: newEventDefaults.minutes,
+    newEventIn: newEvent,
+    openLine,
+    openMessage: onOpenMessage,
+    openConnections: onOpenConnectionSettings,
+    writeTo: onWriteTo,
+    askSegretario: onAskSegretario
+      ? (event) => {
+          showEvent(event)
+          onAskSegretario()
+        }
+      : undefined,
+    remind: onRemind
+  })
+  /** An event dragged to another day of the month: its days, or its hours on the new day. */
+  const moveDays = (event: CalendarEvent, shift: number): void => {
+    if (event.allDay) {
+      void actions.reschedule(event, {
+        start: dayKey(addDays(dayOfKey(event.start.slice(0, 10)), shift)),
+        end: dayKey(addDays(dayOfKey(event.end.slice(0, 10)), shift))
+      })
+      return
+    }
+
+    const span = shiftSpan({ start: Date.parse(event.start), end: Date.parse(event.end) }, shift, 0)
+    void actions.reschedule(event, {
+      start: new Date(span.start).toISOString(),
+      end: new Date(span.end).toISOString()
+    })
+  }
+  /** What each thing of the grids does on a right click. */
+  const menus = {
+    onEventMenu: (event: CalendarEvent) => void actions.eventMenu(event),
+    onProposalMenu: (proposed: ProposedEvent) => void actions.proposalMenu(proposed),
+    onDueMenu: (line: DayLine) => void actions.dueMenu(line),
+    onDayMenu: (day: Date) => void actions.dayMenu(day)
   }
   const previousKeys = useCommandKeys('calendar-previous')
   const nextKeys = useCommandKeys('calendar-next')
@@ -512,10 +566,31 @@ export function CalendarApp({
 
         setSelection(null)
         return true
+      case 'calendar-edit-event':
+        if (!selectedEvent || !canEditEvent(selectedEvent, calendars)) {
+          return false
+        }
+
+        actions.edit(selectedEvent)
+        return true
+      case 'calendar-duplicate-event':
+        if (!selectedEvent || !canWrite) {
+          return false
+        }
+
+        actions.duplicate(selectedEvent)
+        return true
+      case 'calendar-delete-event':
+        if (!selectedEvent || !canEditEvent(selectedEvent, calendars)) {
+          return false
+        }
+
+        void actions.remove(selectedEvent)
+        return true
       default:
         return false
     }
-  }, keysEnabled)
+  }, keysEnabled && !actions.asking)
 
   return (
     <div className="paper flex h-full min-h-0">
@@ -524,14 +599,23 @@ export function CalendarApp({
         className="flex w-[232px] shrink-0 flex-col gap-5 overflow-y-auto border-r px-3 pt-[var(--titlebar-band)] pb-4"
       >
         <ActionTooltip label={m.newEvent} commandId="calendar-new-event">
-          <Button className="mt-2 w-full" onClick={newEvent} disabled={!canWrite}>
+          <Button className="mt-2 w-full" onClick={() => newEvent()} disabled={!canWrite}>
             <Plus className="size-4" />
             {m.newEvent}
           </Button>
         </ActionTooltip>
-        <MiniMonth anchor={anchor} days={days} onPick={(day) => setAnchor(day)} />
+        <MiniMonth
+          anchor={anchor}
+          days={days}
+          onPick={(day) => setAnchor(day)}
+          onDayMenu={(day) => void actions.dayMenu(day)}
+        />
         {calendars && calendars.length > 0 ? (
-          <CalendarsList calendars={calendars} onSetHidden={setHidden} />
+          <CalendarsList
+            calendars={calendars}
+            onSetHidden={setHidden}
+            onMenu={(calendar) => void actions.calendarMenu(calendar)}
+          />
         ) : (
           calendars && (
             <div className="text-muted-foreground flex flex-col gap-2 px-1 text-[12px]">
@@ -617,7 +701,12 @@ export function CalendarApp({
             {viewTitle(view, anchor)}
           </h1>
           <div className="flex-1" />
-          <CalendarSearch calendars={calendars} inputRef={searchInputRef} onOpen={showEvent} />
+          <CalendarSearch
+            calendars={calendars}
+            inputRef={searchInputRef}
+            onOpen={showEvent}
+            onEventMenu={menus.onEventMenu}
+          />
           <div
             role="tablist"
             aria-label={m.view}
@@ -685,7 +774,9 @@ export function CalendarApp({
                   setView('giorno')
                 }}
                 onDraw={(range) => setEditor({ mode: 'new', ...range })}
+                onMoveDays={moveDays}
                 onOpenLine={openLine}
+                {...menus}
               />
             ) : view === 'agenda' ? (
               <AgendaList
@@ -697,6 +788,7 @@ export function CalendarApp({
                 selection={selection}
                 onSelect={setSelection}
                 onOpenLine={openLine}
+                {...menus}
               />
             ) : (
               <TimeGrid
@@ -709,8 +801,15 @@ export function CalendarApp({
                 onSelect={setSelection}
                 newEventMinutes={newEventDefaults.minutes}
                 onDraw={(range) => setEditor({ mode: 'new', ...range })}
-                onMove={(event, start, end) => void moveEvent(event, start, end)}
+                onMove={(event, start, end) =>
+                  void actions.reschedule(event, {
+                    start: new Date(start).toISOString(),
+                    end: new Date(end).toISOString()
+                  })
+                }
                 onOpenLine={openLine}
+                onSlotMenu={(day, minute) => void actions.slotMenu(day, minute)}
+                {...menus}
               />
             )}
           </div>
@@ -721,10 +820,11 @@ export function CalendarApp({
               event={selectedEvent}
               proposed={selectedProposal}
               calendar={selectedEvent ? calendarOf(selectedEvent, calendars) : undefined}
+              calendars={calendars}
               aiOn={aiOn}
-              onEdit={(event) => setEditor({ mode: 'edit', event })}
+              canWriteMail={onWriteTo !== undefined}
+              actions={actions}
               onClose={() => setSelection(null)}
-              onOpenMessage={onOpenMessage}
             />
           )}
         </div>
@@ -742,7 +842,7 @@ export function CalendarApp({
           }}
         />
       )}
-      {confirmDialog}
+      {actions.dialogs}
     </div>
   )
 }

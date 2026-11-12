@@ -53,6 +53,20 @@ export interface Reminder {
   key: string
 }
 
+/** A reminder's key (`Reminder.key`): its event's, its start's, its lead's. */
+function reminderKey(eventKey: string, startsAt: number, lead: number): string {
+  return JSON.stringify([eventKey, startsAt, lead])
+}
+
+/**
+ * How the keys of an event's reminders begin, whatever its start and
+ * lead: an event moved to another calendar takes those given with it
+ * (vision §7.5).
+ */
+export function reminderKeysOf(eventKey: string): string {
+  return reminderKey(eventKey, 0, 0).replace(/0,0\]$/, '')
+}
+
 /** Every reminder of these events, the earliest first. */
 export function remindersOf(
   events: ReadonlyArray<RemindedEvent>,
@@ -71,7 +85,7 @@ export function remindersOf(
         event,
         at: event.startsAt - lead * 60_000,
         minutes: lead,
-        key: JSON.stringify([event.key, event.startsAt, lead])
+        key: reminderKey(event.key, event.startsAt, lead)
       }))
     })
     .sort((a, b) => a.at - b.at)

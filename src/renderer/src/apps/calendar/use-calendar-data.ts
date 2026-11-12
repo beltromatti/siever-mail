@@ -1,14 +1,23 @@
 import { useCallback, useEffect, useState } from 'react'
 
-import { calendarKey, type CalendarEvent, type CalendarListEntry } from '@shared/calendar'
+import {
+  calendarKey,
+  type CalendarEvent,
+  type CalendarListEntry,
+  type CalendarRole
+} from '@shared/calendar'
 import type { DayLine, Proposal } from '@shared/segretario'
 
 import { dayKey, dayOfKey } from '@renderer/features/calendar/calendar-dates'
 
-/** Every connected calendar, kept as the calendars change; and the way to show or hide one. */
+/**
+ * Every connected calendar, kept as the calendars change; and the ways to
+ * show or hide one, and to say whose its events are (§7.4).
+ */
 export function useCalendarList(): {
   calendars: CalendarListEntry[] | null
   setHidden: (key: string, hidden: boolean) => void
+  setRole: (key: string, role: CalendarRole | null) => Promise<void>
 } {
   const [calendars, setCalendars] = useState<CalendarListEntry[] | null>(null)
 
@@ -40,7 +49,11 @@ export function useCalendarList(): {
       .catch(() => undefined)
   }, [])
 
-  return { calendars, setHidden }
+  const setRole = useCallback(async (key: string, role: CalendarRole | null): Promise<void> => {
+    setCalendars(await window.calendarApi.setCalendarRole(key, role))
+  }, [])
+
+  return { calendars, setHidden, setRole }
 }
 
 /** The calendar an event is in, of those listed. */

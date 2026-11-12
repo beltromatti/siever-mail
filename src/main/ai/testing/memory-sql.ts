@@ -28,6 +28,20 @@ export function memorySql(): Sql & { close(): void } {
       (db.prepare(sql).all(...bind(params))[0] as T | undefined) ?? null,
     run: async (sql: string, ...params: unknown[]) =>
       Number(db.prepare(sql).run(...bind(params)).changes),
+    batch: async (statements) => {
+      db.exec('BEGIN')
+
+      try {
+        const changed = statements.map((statement) =>
+          Number(db.prepare(statement.sql).run(...bind(statement.params)).changes)
+        )
+        db.exec('COMMIT')
+        return changed
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
+    },
     close: () => db.close()
   }
 }

@@ -813,33 +813,37 @@ model CalendarChange {
 
 /// An event of a connected calendar — an instance, for a recurring one.
 model CalendarEvent {
-  key           String  @id
-  connectionId  String  @map("connection_id")
-  calendarId    String  @map("calendar_id")
-  eventId       String  @map("event_id")
-  iCalUid       String? @map("ical_uid")
+  key            String  @id
+  connectionId   String  @map("connection_id")
+  calendarId     String  @map("calendar_id")
+  eventId        String  @map("event_id")
+  iCalUid        String? @map("ical_uid")
   /// The series a recurring event's instance belongs to (`CalendarEvent.seriesId`).
-  seriesId      String? @map("series_id")
-  title         String
-  start         String
-  end           String
-  allDay        Int     @map("all_day")
+  seriesId       String? @map("series_id")
+  title          String
+  start          String
+  end            String
+  allDay         Int     @map("all_day")
   /// Its start and end as instants (an all-day event's by local midnight), for ranges.
-  startsAt      BigInt  @map("starts_at")
-  endsAt        BigInt  @map("ends_at")
-  location      String?
-  description   String?
-  attendeesJson String  @map("attendees_json")
-  organizer     String?
+  startsAt       BigInt  @map("starts_at")
+  endsAt         BigInt  @map("ends_at")
+  location       String?
+  description    String?
+  attendeesJson  String  @map("attendees_json")
+  organizer      String?
   /// Who put it in the calendar, by address, where the calendar says it (Google).
-  creator       String?
-  myResponse    String? @map("my_response")
-  meetLink      String? @map("meet_link")
-  htmlLink      String? @map("html_link")
+  creator        String?
+  myResponse     String? @map("my_response")
+  meetLink       String? @map("meet_link")
+  htmlLink       String? @map("html_link")
   /// Put there by the Segretario (`EventOrigin`), as the provider's private properties say.
-  originJson    String? @map("origin_json")
+  originJson     String? @map("origin_json")
   /// Its own reminders, minutes before it starts, as JSON; null where it says nothing of them.
-  remindersJson String? @map("reminders_json")
+  remindersJson  String? @map("reminders_json")
+  /// How its series repeats (`EventRecurrence`, or "other"), as JSON; null for an event on its own.
+  recurrenceJson String? @map("recurrence_json")
+  /// The service that keeps it (`CalendarEvent.managedBy`): gmail, birthdays; null for the calendar's own.
+  managedBy      String? @map("managed_by")
 
   @@index([startsAt, endsAt], map: "idx_calendar_events_range")
   @@index([iCalUid], map: "idx_calendar_events_ical_uid")

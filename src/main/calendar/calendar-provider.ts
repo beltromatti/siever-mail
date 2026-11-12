@@ -1,6 +1,14 @@
 import { messages } from '@main/i18n'
-import type { CalendarEvent, CalendarResponse, EventChange, EventOrigin } from '@shared/calendar'
+import type {
+  CalendarEvent,
+  CalendarResponse,
+  EventChange,
+  EventOrigin,
+  EventRecurrence
+} from '@shared/calendar'
 import { defineMessages } from '@shared/i18n'
+
+import { sameRecurrence } from './recurrence'
 
 const MESSAGES = defineMessages({
   allDayNeedsTimes: {
@@ -34,7 +42,25 @@ export interface ProviderEventInput {
   description: string | null
   /** The addresses invited, the user's own excluded. */
   attendees: string[]
+  /**
+   * How it repeats, from its start (vision §7.5): a series' rule, written
+   * from the start it is written with; null for one event. `'other'` is
+   * a rule made elsewhere, read but never written: a write that would
+   * have to write it again is refused before it reaches a provider.
+   */
+  recurrence: EventRecurrence | 'other' | null
+  /** Its reminders in minutes before it starts: [] none; null the calendar's own (§13.3). */
+  reminders: number[] | null
+  /**
+   * The zone its hours are kept in, where its provider says it — a series'
+   * own —: where its rule is read and written from. The computer's when
+   * absent, as for what the app writes new.
+   */
+  zone?: string
 }
+
+/** How an event went to another calendar: the provider's own move, or a copy and the old one taken away. */
+export type MoveHow = 'native' | 'copy'
 
 /**
  * A calendar service as the app speaks to it — Google Calendar, Microsoft
@@ -98,6 +124,26 @@ export interface CalendarProvider {
    */
   remove(calendarId: string, eventId: string, notify: boolean): Promise<void>
   /**
+   * A series as its provider keeps it, by its id (an instance's `seriesId`):
+   * every field of its first time, how it repeats, its zone — what a change
+   * of the whole series, or a copy of it, is written from.
+   */
+  series(calendarId: string, seriesId: string): Promise<ProviderEventInput>
+  /**
+   * Moves an event — a series whole, by its id — to another calendar of the
+   * same connection, the same event there: resolves with its id in the new
+   * calendar, and how it went. Absent where the provider has no move of its
+   * own (Microsoft): the event is copied there, and taken away here.
+   * `guests`: whether it has guests — a copy then would cancel it for them,
+   * and is refused.
+   */
+  move?(
+    calendarId: string,
+    eventId: string,
+    toCalendarId: string,
+    options: { guests: boolean }
+  ): Promise<{ eventId: string; how: MoveHow }>
+  /**
    * Answers an invitation as the user; the organizer is told — refused
    * where they would not be, or where the calendar is someone else's. With
    * `series`, an instance's whole series is answered, every instance at once.
@@ -110,8 +156,24 @@ export interface CalendarProvider {
   ): Promise<ProviderEvent>
 }
 
-/** A part of an event a change can touch: the time is its start, end and whether all day. */
-export type EventField = 'title' | 'time' | 'location' | 'description' | 'attendees'
+/**
+ * A part of an event a change can touch: the time is its start, end and
+ * whether all day. A series' time written writes its rule again too, from
+ * its new start: what the rule says of the start's day follows it.
+ */
+export type EventField =
+  'title' | 'time' | 'location' | 'description' | 'attendees' | 'recurrence' | 'reminders'
+
+/** Every field: what a new event is written with. */
+export const ALL_FIELDS: ReadonlySet<EventField> = new Set<EventField>([
+  'title',
+  'time',
+  'location',
+  'description',
+  'attendees',
+  'recurrence',
+  'reminders'
+])
 
 /** The parts of an event a change touches. */
 export function changedFields(change: EventChange): ReadonlySet<EventField> {
@@ -124,8 +186,17 @@ export function changedFields(change: EventChange): ReadonlySet<EventField> {
   if (change.location !== undefined) fields.add('location')
   if (change.description !== undefined) fields.add('description')
   if (change.attendees !== undefined) fields.add('attendees')
+  if (change.recurrence !== undefined) fields.add('recurrence')
+  if (change.reminders !== undefined) fields.add('reminders')
 
   return fields
+}
+
+/** Two lists of reminders the same: the same minutes, however written. */
+function sameReminders(a: ReadonlyArray<number> | null, b: ReadonlyArray<number> | null): boolean {
+  const minutes = (list: ReadonlyArray<number>): string =>
+    [...new Set(list)].sort((x, y) => x - y).join(',')
+  return a === null || b === null ? a === b : minutes(a) === minutes(b)
 }
 
 /**
@@ -150,7 +221,9 @@ export function differingFields(
       sameTime(current.end, next.end),
     location: (current.location ?? null) === (next.location ?? null),
     description: (current.description ?? null) === (next.description ?? null),
-    attendees: addresses(current.attendees) === addresses(next.attendees)
+    attendees: addresses(current.attendees) === addresses(next.attendees),
+    recurrence: sameRecurrence(current.recurrence, next.recurrence),
+    reminders: sameReminders(current.reminders, next.reminders)
   }
 
   return new Set([...fields].filter((field) => !same[field]))
@@ -181,7 +254,9 @@ export function eventInput(current: CalendarEvent): ProviderEventInput {
     description: current.description,
     attendees: current.attendees
       .filter((attendee) => !attendee.self)
-      .map((attendee) => attendee.email)
+      .map((attendee) => attendee.email),
+    recurrence: current.recurrence ?? null,
+    reminders: current.reminders ?? null
   }
 }
 
@@ -248,7 +323,9 @@ export function changedEvent(
     title: change.title ?? event.title,
     location: change.location !== undefined ? change.location : event.location,
     description: change.description !== undefined ? change.description : event.description,
-    attendees: change.attendees ?? event.attendees
+    attendees: change.attendees ?? event.attendees,
+    recurrence: change.recurrence !== undefined ? change.recurrence : event.recurrence,
+    reminders: change.reminders !== undefined ? change.reminders : event.reminders
   }
 }
 

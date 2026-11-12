@@ -1,4 +1,4 @@
-import { open, readFile, stat } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 
 import { seriesKey } from '@shared/calendar'
@@ -8,8 +8,7 @@ import { pecReceiptAt, pecReceiptWords } from '@shared/pec'
 import { unlinked } from '@shared/segretario-links'
 
 import { messages } from '../../i18n'
-import { looksLikeText, TEXT_SNIFF_BYTES } from '../document-formats'
-import { extractContent, knownFormat } from '../extraction'
+import { documentData, extractContent, extractedParts } from '../extraction'
 import { reachShare } from './files'
 import { threadMessages } from '../mail-search'
 import type { ContentPart } from '../openrouter'
@@ -26,6 +25,7 @@ import {
   type ToolOutcome,
   UnknownHandle
 } from '../agent/tool-types'
+import { eventFacts } from './calendar'
 import { commitmentLine, messageWork, noteLine, projectLine, rememberCommitments } from './describe'
 import {
   clip,
@@ -209,13 +209,20 @@ export function describeExtraction(
       return {
         content: [
           { type: 'text', text: `${handle} ${fileName}: l'immagine è qui sotto.` },
-          { type: 'image_url', image_url: { url: extracted.dataUrl } }
+          ...extractedParts(extracted)
         ],
         summary: messages(STEPS).looked(fileName)
       }
     case 'unreadable':
       return {
         content: `${handle} ${fileName}: ${extracted.reason}`,
+        summary: messages(STEPS).notRead(fileName),
+        failed: true
+      }
+    case 'oversize':
+      // Only a reading asked whole stops at its size, and this one reads by parts: said all the same.
+      return {
+        content: `${handle} ${fileName}: è troppo grande per leggerlo intero; leggilo a parti.`,
         summary: messages(STEPS).notRead(fileName),
         failed: true
       }
@@ -241,19 +248,9 @@ export function describeExtraction(
                 ? ' (le pagine scansionate sono immagini da guardare)'
                 : ''
           }`
-        }
+        },
+        ...extractedParts(extracted)
       ]
-
-      for (const page of extracted.pages) {
-        content.push(
-          page.dataUrl && !page.text
-            ? { type: 'text', text: `— Pagina ${page.page} (scansione) —` }
-            : { type: 'text', text: `— Pagina ${page.page} —\n${page.text}` },
-          ...(page.dataUrl
-            ? [{ type: 'image_url' as const, image_url: { url: page.dataUrl } }]
-            : [])
-        )
-      }
 
       if (extracted.nextPage !== null) {
         content.push({ type: 'text', text: `[Continua con pagina=${extracted.nextPage}.]` })
@@ -440,18 +437,6 @@ async function readThreadMessage(
   return { item, own, page: clip(own.text, THREAD_MESSAGE_CHARS) }
 }
 
-/** The first `bytes` of a file, without reading the rest. */
-async function readHead(path: string, bytes: number): Promise<Buffer> {
-  const file = await open(path, 'r')
-
-  try {
-    const { buffer, bytesRead } = await file.read(Buffer.alloc(bytes), 0, bytes, 0)
-    return buffer.subarray(0, bytesRead)
-  } finally {
-    await file.close()
-  }
-}
-
 async function readFileAt(
   context: ToolContext,
   given: string,
@@ -469,25 +454,14 @@ async function readFileAt(
     context.newHandles
   )
   const name = basename(path)
-  // A large file of a format not known by name is read whole only when it is text: a video or a
-  // program is said for what it is, not loaded to be refused.
-  const head =
-    knownFormat(name) || info.size <= TEXT_SNIFF_BYTES
-      ? null
-      : await readHead(path, TEXT_SNIFF_BYTES)
   const outcome = describeExtraction(
     handle,
     name,
-    await extractContent(
-      name,
-      undefined,
-      head && !looksLikeText(head) ? head : await readFile(path),
-      {
-        offset: numberArg(args, 'da_carattere'),
-        page: numberArg(args, 'pagina'),
-        look: booleanArg(args, 'guarda')
-      }
-    )
+    await extractContent(name, undefined, await documentData(path, info.size), {
+      offset: numberArg(args, 'da_carattere'),
+      page: numberArg(args, 'pagina'),
+      look: booleanArg(args, 'guarda')
+    })
   )
 
   return { ...outcome, files: [path] }
@@ -536,6 +510,8 @@ async function readEvent(
       `${handle} · ${event.title}`,
       `Quando: ${eventWhen(event.start, event.end, event.allDay)}`,
       `Calendario: ${event.calendarName}`,
+      // How it repeats, who else keeps it, its own reminders (§7.5).
+      ...eventFacts(event).map((fact) => `${fact.charAt(0).toUpperCase()}${fact.slice(1)}`),
       event.location ? `Dove: ${event.location}` : '',
       event.organizer ? `Organizzatore: ${event.organizer}` : '',
       event.creator && event.creator !== event.organizer
@@ -555,7 +531,9 @@ async function readEvent(
             context.newHandles
           )} ${project.title}`
       ),
-      prep ? `\nLa preparazione che hai scritto:\n${unlinked(prep.text)}` : '',
+      prep
+        ? `\n${prep.writtenBy === 'utente' ? "La preparazione, riscritta dall'utente (le parole sono sue)" : 'La preparazione che hai scritto'}:\n${unlinked(prep.text)}`
+        : '',
       alerts.length > 0
         ? `\nGli avvisi che ne hai dato all'utente:\n${alerts.map((alert) => `  ${formatDateTime(new Date(alert.toldAt).toISOString())} · «${alert.text}»${alert.delivered ? '' : ' (non gli è arrivato)'}`).join('\n')}`
         : '',
@@ -643,7 +621,7 @@ export async function readProject(
     content: [
       projectLine(context, project),
       project.state
-        ? `Il punto (scritto il ${shortDate(new Date(project.stateAt ?? project.updatedAt).toISOString())}${project.staleSince ? ', poi qualcosa si è mosso: va aggiornato' : ''}):\n${unlinked(project.state)}`
+        ? `Il punto (${project.stateBy === 'utente' ? "riscritto dall'utente" : 'scritto'} il ${shortDate(new Date(project.stateAt ?? project.updatedAt).toISOString())}${project.staleSince ? ', poi qualcosa si è mosso: va aggiornato' : ''}):\n${unlinked(project.state)}`
         : 'Il punto: non ancora scritto.',
       resources.some((resource) => resource.kind !== 'evento')
         ? `Risorse: ${resources

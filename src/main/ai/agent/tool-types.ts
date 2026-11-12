@@ -4,6 +4,7 @@ import type {
   CalendarChange,
   CalendarConnection,
   CalendarEvent,
+  CalendarProviderKind,
   CalendarResponse,
   CalendarRole,
   CalendarSearchQuery,
@@ -174,12 +175,14 @@ export interface SegretarioMailPort {
   } | null>
 }
 
-/** The calendars, as the Segretario reaches them: the same as the page's. */
 /** How the Segretario's calendar writes are told in the diagnostics (§14.4): who decided them. */
 export interface CalendarWriteOptions {
   actor?: DiagnosticActor
+  /** Of an instance of a recurring event, the whole series (`EventScope`, vision §7.5). */
+  series?: boolean
 }
 
+/** The calendars, as the Segretario reaches them: the same as the page's. */
 export interface SegretarioCalendarPort {
   /**
    * Tells the user now, with a notification, what cannot wait about an
@@ -202,6 +205,8 @@ export interface SegretarioCalendarPort {
       primary: boolean
       writable: boolean
       hidden: boolean
+      /** Who the connection is with: what can be done with its events depends on it (`eventMoveLimit`). */
+      provider: CalendarProviderKind
       role: CalendarRole
       roleBy: 'utente' | 'segretario' | null
       roleReason: string | null
@@ -219,11 +224,17 @@ export interface SegretarioCalendarPort {
   event(eventKey: string): Promise<CalendarEvent | null>
   /** `actor`: who decided the write, for the diagnostics — the user, undoing or accepting. */
   create(event: NewCalendarEvent, options?: CalendarWriteOptions): Promise<CalendarEvent>
+  /**
+   * Changes an event — or, with `series`, an instance's whole series — and
+   * moves it to another calendar (`change.calendarKey`): resolves with it as
+   * it is now, under its key there; what the Segretario keeps of it follows.
+   */
   update(
     eventKey: string,
     change: EventChange,
     options?: CalendarWriteOptions
   ): Promise<CalendarEvent>
+  /** Takes an event away — or, with `series`, an instance's whole series. */
   remove(eventKey: string, options?: CalendarWriteOptions): Promise<void>
   respond(
     eventKey: string,

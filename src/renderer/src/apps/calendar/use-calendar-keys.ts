@@ -6,7 +6,7 @@ import {
   useShortcutOverrides
 } from '@renderer/lib/command-shortcuts'
 import { uiLog } from '@renderer/lib/diagnostics'
-import type { HostCommandId } from '@shared/commands'
+import { commandChord, findCommand, type HostCommandId } from '@shared/commands'
 
 /** The fields the keyboard writes in — not a checkbox, nor a button. */
 const TEXT_FIELDS =
@@ -15,6 +15,28 @@ const TEXT_FIELDS =
 /** Whether a key goes into what is written: there it is a letter, not a command. */
 function isTyping(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || target.matches(TEXT_FIELDS))
+}
+
+/**
+ * The Delete key, alone, as the delete command while that answers to
+ * Backspace — the delete key of a Mac keyboard —: on every keyboard either
+ * key takes an event away, as in the Posta.
+ */
+function deleteKeyCommand(
+  event: KeyboardEvent,
+  overrides: ReturnType<typeof useShortcutOverrides>
+): HostCommandId | undefined {
+  const command = findCommand('calendar-delete-event')
+
+  return command &&
+    event.code === 'Delete' &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey &&
+    commandChord(command, overrides) === 'Backspace'
+    ? 'calendar-delete-event'
+    : undefined
 }
 
 /**
@@ -50,11 +72,12 @@ export function useCalendarKeys(
         return
       }
 
-      const command = commandForKeyEvent(event, 'calendar', overrides)
+      const id =
+        commandForKeyEvent(event, 'calendar', overrides)?.id ?? deleteKeyCommand(event, overrides)
 
-      if (command && runRef.current(command.id as HostCommandId)) {
+      if (id && runRef.current(id as HostCommandId)) {
         event.preventDefault()
-        uiLog.info('command', { id: command.id, via: 'keyboard' })
+        uiLog.info('command', { id, via: 'keyboard' })
       }
     }
 

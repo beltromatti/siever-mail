@@ -16,6 +16,7 @@ import { CommitmentList } from './commitment-row'
 import { ProjectPickerPopover } from './project-picker'
 import { eventProposalWords } from './proposal-words'
 import { COMMITMENT_LABELS, dueLabel } from './row-work'
+import { dimmedBy, PendingWordsLine, RewriteField, useWorkWords, WorkMenu } from './work-words'
 
 const MESSAGES = defineMessages({
   important: { en: 'Important', it: 'Importante', de: 'Wichtig' },
@@ -105,7 +106,9 @@ const MESSAGES = defineMessages({
     de: 'Dieses Nachfassen verwenden'
   },
   useReply: { en: 'Use this reply', it: 'Usa questa risposta', de: 'Diese Antwort verwenden' },
-  discard: { en: 'Discard', it: 'Scarta', de: 'Verwerfen' }
+  discard: { en: 'Discard', it: 'Scarta', de: 'Verwerfen' },
+  note: { en: 'The note', it: 'La nota', de: 'Die Notiz' },
+  reply: { en: 'The ready reply', it: 'La risposta pronta', de: 'Die fertige Antwort' }
 })
 
 const SHORT_DAY: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' }
@@ -352,6 +355,8 @@ export function MessageWorkPanel({
   const kinds = useMessages(COMMITMENT_LABELS)
   const [work, setWork] = useState<MessageWork | null>(null)
   const [takingUp, setTakingUp] = useState(false)
+  const [rewriting, setRewriting] = useState<'nota' | 'risposta' | null>(null)
+  const words = useWorkWords()
 
   const load = useCallback(
     async (): Promise<void> =>
@@ -453,7 +458,39 @@ export function MessageWorkPanel({
           </button>
         )}
       </div>
-      {note && <p className="voice text-foreground text-[15px] leading-[1.45]">{note.summary}</p>}
+      {note &&
+        (rewriting === 'nota' ? (
+          <RewriteField
+            target={{ kind: 'nota', accountId: note.accountId, messageKey: note.messageKey }}
+            text={note.summary}
+            label={m.note}
+            onDone={() => setRewriting(null)}
+            className="voice text-[14px] leading-[1.45]"
+          />
+        ) : (
+          <div className="group/note flex items-start gap-1.5">
+            <div className="min-w-0 flex-1">
+              <p
+                className={cn(
+                  'voice text-foreground text-[15px] leading-[1.45]',
+                  dimmedBy(note.pending)
+                )}
+              >
+                {note.summary}
+              </p>
+              <PendingWordsLine pending={note.pending} />
+            </div>
+            <WorkMenu
+              target={{ kind: 'nota', accountId: note.accountId, messageKey: note.messageKey }}
+              pending={note.pending}
+              about={note.summary}
+              words={words}
+              onRewrite={() => setRewriting('nota')}
+              label={m.note}
+              className="mt-1 opacity-0 group-hover/note:opacity-100"
+            />
+          </div>
+        ))}
       {note?.twinAccountId && (
         <p className="text-muted-foreground text-[11.5px]">
           {m.twin(accountEmail(note.twinAccountId) ?? m.anotherAccount)}
@@ -461,19 +498,57 @@ export function MessageWorkPanel({
       )}
       {reply && (
         <div className="bg-ai-soft/45 flex flex-col gap-2 rounded-[8px] px-3 py-2.5">
-          <p className="text-ai text-[11.5px] font-semibold">
-            {reply.kind === 'sollecito' ? m.followUpReady : m.replyReady}
-            {reply.status === 'da_rivedere' && (
-              <span className="text-urgent">
-                {' '}
-                · {m.toReview}
-                {reply.staleReason ? `: ${reply.staleReason}` : ''}
-              </span>
+          <div className="flex items-start gap-1.5">
+            <p className="text-ai min-w-0 flex-1 text-[11.5px] font-semibold">
+              {reply.kind === 'sollecito' ? m.followUpReady : m.replyReady}
+              {reply.status === 'da_rivedere' && (
+                <span className="text-urgent">
+                  {' '}
+                  · {m.toReview}
+                  {reply.staleReason ? `: ${reply.staleReason}` : ''}
+                </span>
+              )}
+            </p>
+            {rewriting !== 'risposta' && (
+              <WorkMenu
+                target={{
+                  kind: 'risposta',
+                  accountId: reply.accountId,
+                  messageKey: reply.messageKey
+                }}
+                pending={reply.pending}
+                about={reply.text}
+                words={words}
+                onRewrite={() => setRewriting('risposta')}
+                label={m.reply}
+              />
             )}
-          </p>
-          <p className="voice text-foreground max-h-56 overflow-y-auto text-[14px] leading-[1.5] whitespace-pre-wrap">
-            {reply.text}
-          </p>
+          </div>
+          {rewriting === 'risposta' ? (
+            <RewriteField
+              target={{
+                kind: 'risposta',
+                accountId: reply.accountId,
+                messageKey: reply.messageKey
+              }}
+              text={reply.text}
+              label={m.reply}
+              onDone={() => setRewriting(null)}
+              className="voice max-h-72 text-[14px] leading-[1.5]"
+            />
+          ) : (
+            <>
+              <p
+                className={cn(
+                  'voice text-foreground max-h-56 overflow-y-auto text-[14px] leading-[1.5] whitespace-pre-wrap',
+                  dimmedBy(reply.pending)
+                )}
+              >
+                {reply.text}
+              </p>
+              <PendingWordsLine pending={reply.pending} />
+            </>
+          )}
           {reply.doubts && (
             <p className="text-muted-foreground text-[12px] leading-[1.45]">{reply.doubts}</p>
           )}
@@ -508,6 +583,7 @@ export function MessageWorkPanel({
         <ProposalCard key={proposal.id} proposal={proposal} onAct={onActOnProposal} />
       ))}
       <CommitmentList commitments={work.commitments} onRemind={onRemind} />
+      {words.dialogs}
     </section>
   )
 }

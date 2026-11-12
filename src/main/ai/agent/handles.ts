@@ -136,6 +136,25 @@ export class HandleRegistry {
     return target?.kind === 'event' ? target : null
   }
 
+  /**
+   * An event moved to another calendar under a new key (vision §7.5) keeps
+   * its name: the same event, found where it is now. `added` collects the
+   * name given anew, so the log rebuilds it so.
+   */
+  follow(from: string, to: { eventKey: string; title: string }, added?: HandleRecord[]): void {
+    const handle = this.byIdentity.get(identityOf({ kind: 'event', eventKey: from, title: '' }))
+
+    if (!handle || from === to.eventKey) {
+      return
+    }
+
+    const target: HandleTarget = { kind: 'event', ...to }
+    this.byIdentity.delete(identityOf({ kind: 'event', eventKey: from, title: '' }))
+    this.byIdentity.set(identityOf(target), handle)
+    this.byHandle.set(handle, target)
+    added?.push({ handle, target })
+  }
+
   private restore({ handle, target }: HandleRecord): void {
     // A name of a kind this build no longer gives (the topics of the first 2.0 builds) is let go.
     if (!(target.kind in PREFIX)) {

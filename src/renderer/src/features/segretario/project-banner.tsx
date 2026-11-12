@@ -32,6 +32,7 @@ import type { Commitment, Project, ProjectDetail } from '@shared/segretario'
 
 import { CommitmentList } from './commitment-row'
 import { LinkedWords } from './segretario-text'
+import { PendingWordsLine, RewriteField, useWorkWords, WorkWordsItems } from './work-words'
 
 /** About what four lines of "Il punto" hold in the list's width: past it, it folds. */
 const STATE_CLAMPED_CHARS = 220
@@ -170,8 +171,10 @@ export function ProjectBanner({
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [rewritingSince, setRewritingSince] = useState<number | null>(null)
   const [stateOpen, setStateOpen] = useState(false)
+  const [editingState, setEditingState] = useState(false)
   const reloadTimer = useRef<number | null>(null)
   const { prompt, dialog } = usePromptDialog()
+  const words = useWorkWords()
 
   const rewrite = useCallback(async (): Promise<void> => {
     setRewritingSince(Date.now())
@@ -343,6 +346,18 @@ export function ProjectBanner({
             </IconButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {project.state && !rewriting && (
+              <>
+                <WorkWordsItems
+                  target={{ kind: 'punto', projectId: project.id }}
+                  pending={project.statePending}
+                  about={project.state}
+                  words={words}
+                  onRewrite={() => setEditingState(true)}
+                />
+                <DropdownMenuSeparator />
+              </>
+            )}
             <DropdownMenuItem
               onSelect={() =>
                 void prompt({
@@ -390,7 +405,15 @@ export function ProjectBanner({
         <p className="text-muted-foreground text-[12.5px] leading-[1.45]">{project.description}</p>
       )}
 
-      {project.state ? (
+      {project.state && editingState ? (
+        <RewriteField
+          target={{ kind: 'punto', projectId: project.id }}
+          text={project.state}
+          label={places.whereItStands}
+          onDone={() => setEditingState(false)}
+          className="text-[13.5px] leading-[1.5]"
+        />
+      ) : project.state ? (
         <div className="flex flex-col items-start gap-0.5">
           <LinkedWords
             text={project.state}
@@ -398,9 +421,10 @@ export function ProjectBanner({
             className={cn(
               'text-foreground text-[14.5px] leading-[1.5]',
               !stateOpen && 'line-clamp-4',
-              rewriting && 'opacity-60'
+              (rewriting || project.statePending?.kind === 'correzione') && 'opacity-60'
             )}
           />
+          <PendingWordsLine pending={project.statePending} masculine />
           {project.state.length > STATE_CLAMPED_CHARS && (
             <button
               type="button"
@@ -425,6 +449,7 @@ export function ProjectBanner({
 
       <CommitmentList commitments={project.commitments} onRemind={onRemind} />
       {dialog}
+      {words.dialogs}
     </section>
   )
 }

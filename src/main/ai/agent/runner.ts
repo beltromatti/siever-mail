@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { DiagnosticFields } from '@shared/diagnostics'
 import { defineMessages } from '@shared/i18n'
-import type { ActivityEvent, ActivityStatus, SendOutcome } from '@shared/segretario'
+import type { ActivityEvent, ActivityStatus, SendOutcome, ThinkingNow } from '@shared/segretario'
 
 import { diagnostics } from '@main/diagnostics/log'
 import { messages } from '../../i18n'
@@ -98,8 +98,21 @@ const MESSAGES = defineMessages({
     it: (turns: number) =>
       `Mi sono fermato: da ${turns} passaggi di fila non riuscivo ad andare avanti.`,
     de: (turns: number) => `Ich habe angehalten: ${turns} Schritte in Folge kam ich nicht weiter.`
+  },
+  noAnswer: {
+    en: 'The Segretario stopped without answering you.',
+    it: 'Il Segretario si è fermato senza risponderti.',
+    de: 'Der Segretario hat aufgehört, ohne Ihnen zu antworten.'
   }
 })
+
+/**
+ * The tasks that answer the user in words: a conversation of the panel. A
+ * turn of theirs that ends with neither words nor calls has not answered —
+ * the run fails, said, with «Riprova» (§14.2). The other tasks leave what
+ * they must through their tools (`missing`).
+ */
+const ANSWERING_TASKS: ReadonlySet<TaskKind> = new Set(['richiesta'])
 
 /**
  * What a run's task still asks for, when the model stops short of it: told
@@ -172,6 +185,59 @@ export const TASK_EFFORT: Readonly<Record<TaskKind, 'low' | 'max'>> = {
   ricerca: 'low'
 }
 const STREAM_FLUSH_MS = 60
+/** How often the thinking under way is told to the page: its count grows a few times a second. */
+const THINKING_FLUSH_MS = 250
+
+/**
+ * The thinking of a turn as the page sees it live: «at work» as the turn
+ * begins, its tokens as they grow — a few times a second, not with every
+ * one —, how long it thought once the answer begins, nothing once the turn
+ * is written.
+ */
+function liveThinking(show: (thinking: ThinkingNow | null) => void): {
+  begin(): void
+  grow(tokens: number): void
+  answered(ms: number | null): void
+  end(): void
+} {
+  let tokens = 0
+  let answered = false
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const hold = (): void => {
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+  }
+
+  return {
+    begin() {
+      hold()
+      tokens = 0
+      answered = false
+      show({ tokens: 0, ms: null })
+    },
+    grow(count) {
+      tokens = count
+
+      if (!answered) {
+        timer ??= setTimeout(() => {
+          timer = null
+          show({ tokens, ms: null })
+        }, THINKING_FLUSH_MS)
+      }
+    },
+    answered(ms) {
+      hold()
+      answered = true
+      show(ms === null ? null : { tokens, ms })
+    },
+    end() {
+      hold()
+      show(null)
+    }
+  }
+}
 
 export interface RunnerDeps {
   client: OpenRouterClient
@@ -419,37 +485,53 @@ export class AgentRunner {
             flushTimer = null
           }
         }
-
-        const result = await this.reach(
-          signal,
-          () =>
-            this.deps.client.chat(
-              key,
-              {
-                messages: buildConversation(system, events),
-                tools,
-                reasoningEffort: TASK_EFFORT[options.task],
-                sessionId: id
-              },
-              {
-                signal,
-                onLateBill: (bill) => this.deps.recordUsage(id, options.task, bill),
-                onText: (text) => {
-                  streamed += text
-                  flushTimer ??= setTimeout(() => {
-                    flushTimer = null
-                    this.deps.emit({ type: 'stream', activityId: id, text: streamed })
-                  }, STREAM_FLUSH_MS)
-                }
-              }
-            ),
-          // Cut off mid-answer: what was shown of it goes, the turn is written again.
-          () => {
-            stopStream()
-            streamed = ''
-            this.deps.emit({ type: 'stream', activityId: id, text: '' })
-          }
+        const thinking = liveThinking((now) =>
+          this.deps.emit({ type: 'thinking', activityId: id, thinking: now })
         )
+
+        let result: ChatResult
+
+        try {
+          result = await this.reach(
+            signal,
+            () => {
+              thinking.begin()
+              return this.deps.client.chat(
+                key,
+                {
+                  messages: buildConversation(system, events),
+                  tools,
+                  reasoningEffort: TASK_EFFORT[options.task],
+                  sessionId: id
+                },
+                {
+                  signal,
+                  onLateBill: (bill) => this.deps.recordUsage(id, options.task, bill),
+                  onReasoning: (tokens) => thinking.grow(tokens),
+                  onOutput: (ms) => thinking.answered(ms),
+                  onText: (text) => {
+                    streamed += text
+                    flushTimer ??= setTimeout(() => {
+                      flushTimer = null
+                      this.deps.emit({ type: 'stream', activityId: id, text: streamed })
+                    }, STREAM_FLUSH_MS)
+                  }
+                }
+              )
+            },
+            // Cut off mid-answer: what was shown of it goes, the turn is written again.
+            () => {
+              stopStream()
+              thinking.end()
+              streamed = ''
+              this.deps.emit({ type: 'stream', activityId: id, text: '' })
+            }
+          )
+        } catch (error) {
+          stopStream()
+          thinking.end()
+          throw error
+        }
 
         stopStream()
         countTurn(live.stats, result)
@@ -458,13 +540,29 @@ export class AgentRunner {
         const assistant = await store.appendEvent<AssistantPayload>(id, 'assistant', {
           content: result.content,
           toolCalls: result.toolCalls,
-          reasoningDetails: result.reasoningDetails
+          reasoningDetails: result.reasoningDetails,
+          // How it thought, with the tokens billed in place of those counted along the way.
+          ...(result.thinking
+            ? {
+                thinkingMs: result.thinking.ms,
+                reasoningTokens: result.usage.reasoningTokens || result.thinking.tokens
+              }
+            : {})
         })
 
-        this.deps.emit({ type: 'stream', activityId: id, text: '' })
+        // The turn as written takes the place of what was shown of it live.
         this.emitEntry(id, assistant)
+        thinking.end()
+        this.deps.emit({ type: 'stream', activityId: id, text: '' })
 
         if (result.toolCalls.length === 0) {
+          // Neither words nor calls — however long it thought, wherever it was cut — is no answer:
+          // the conversation fails, said, for the user to try again or to go on writing. Only
+          // whether there are words counts, never what they say (§4.9).
+          if (ANSWERING_TASKS.has(options.task) && !result.content.trim()) {
+            throw new SegretarioError('no-answer', messages(MESSAGES).noAnswer)
+          }
+
           const missing = options.missing ? await options.missing(context) : null
 
           if (!missing) {
@@ -541,6 +639,10 @@ export class AgentRunner {
         task: options.task,
         background: options.background,
         status: ended,
+        // Why a run failed, by kind: its own (no answer, stuck), a refused request, the program's.
+        ...(ended === 'failed'
+          ? { reason: failure instanceof SegretarioError ? failure.code : 'internal' }
+          : {}),
         ms: Date.now() - context.startedAt,
         changes: context.changes.length,
         ...live.stats,

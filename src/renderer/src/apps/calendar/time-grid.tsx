@@ -25,6 +25,7 @@ import {
   sameDay,
   shiftSpan
 } from '@renderer/features/calendar/calendar-dates'
+import { canReschedule } from './calendar-menus'
 import { eventTint } from './event-style'
 import { calendarOf, type ProposedEvent } from './use-calendar-data'
 
@@ -79,6 +80,8 @@ export interface DrawnRange {
 
 interface Placed {
   id: string
+  /** The event, or the proposal, it shows: what its menu is for. */
+  of: { event: CalendarEvent } | { proposed: ProposedEvent }
   /** The event itself when the user may move it on the grid; null for a proposal, an invitation. */
   movable: CalendarEvent | null
   start: number
@@ -93,15 +96,21 @@ interface Placed {
 /** A deadline the Segretario found — in the mail, an event, the user's word — on its day. */
 function DueChip({
   line,
-  onOpen
+  onOpen,
+  onMenu
 }: {
   line: DayLine
   onOpen: (line: DayLine) => void
+  onMenu: (line: DayLine) => void
 }): React.JSX.Element {
   return (
     <button
       type="button"
       onClick={() => onOpen(line)}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        onMenu(line)
+      }}
       title={`${line.text} — ${dayLineSourceWords(line)}`}
       className="text-ai bg-ai-soft/60 hover:bg-ai-soft focus-visible:ring-ring/60 flex w-full min-w-0 shrink-0 items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-left text-[11px] font-medium outline-none focus-visible:ring-2"
     >
@@ -111,9 +120,11 @@ function DueChip({
   )
 }
 
-/** An event being moved on the grid: where it was taken, and where it is now. */
+/** An event being moved on the grid — or made longer or shorter by its lower edge —: where it was taken, and where it is now. */
 interface Move {
   item: Placed
+  /** Moved whole, or only its end: dragged by its lower edge. */
+  resize: boolean
   /** The column it was taken in, and where the pointer was. */
   dayIndex: number
   x: number
@@ -129,7 +140,9 @@ interface Move {
  * side by side where they overlap; all-day ones, deadlines and proposals
  * in the band on top; now as a line. A click or a drag on the free grid
  * draws a new event; an event the user organises, in a calendar that can
- * be written, is moved by dragging it.
+ * be written, is moved by dragging it, and lengthened by its lower edge.
+ * Every thing on it has its right-click menu: an event, a proposal, a
+ * deadline, a day, an empty hour.
  */
 export function TimeGrid({
   days,
@@ -142,7 +155,12 @@ export function TimeGrid({
   onSelect,
   onDraw,
   onMove,
-  onOpenLine
+  onOpenLine,
+  onEventMenu,
+  onProposalMenu,
+  onDueMenu,
+  onSlotMenu,
+  onDayMenu
 }: {
   days: ReadonlyArray<Date>
   events: ReadonlyArray<CalendarEvent>
@@ -154,9 +172,15 @@ export function TimeGrid({
   newEventMinutes: number
   onSelect: (selection: CalendarSelection) => void
   onDraw: (range: DrawnRange) => void
-  /** An event dragged elsewhere: its new start and end. */
+  /** An event dragged elsewhere, or made longer or shorter: its new start and end. */
   onMove: (event: CalendarEvent, start: number, end: number) => void
   onOpenLine: (line: DayLine) => void
+  onEventMenu: (event: CalendarEvent) => void
+  onProposalMenu: (proposed: ProposedEvent) => void
+  onDueMenu: (line: DayLine) => void
+  /** An empty hour's menu: the day, and the minute of it the pointer was at. */
+  onSlotMenu: (day: Date, minute: number) => void
+  onDayMenu: (day: Date) => void
 }): React.JSX.Element {
   const m = useMessages(MESSAGES)
   const time = dateFormat(TIME())
@@ -190,9 +214,9 @@ export function TimeGrid({
       .filter((event) => !inTopBand(event))
       .map((event) => ({
         id: event.key,
+        of: { event },
         // Moved only by who organises it, in a calendar written in: an invitation is answered.
-        movable:
-          calendarOf(event, calendars)?.writable && event.organizedByUser === true ? event : null,
+        movable: canReschedule(event, calendars) ? event : null,
         ...eventSpan(event),
         title: event.title,
         color: calendarOf(event, calendars)?.color ?? null,
@@ -204,6 +228,7 @@ export function TimeGrid({
       .filter((proposed) => !inTopBand(proposed))
       .map((proposed) => ({
         id: proposed.proposal.id,
+        of: { proposed },
         movable: null,
         ...eventSpan(proposed),
         title: proposed.title,
@@ -217,7 +242,7 @@ export function TimeGrid({
   }, [calendars, events, proposals])
 
   /** The minute of a day a pointer is at in its column, snapped to a slot. */
-  const minuteAt = (event: React.PointerEvent<HTMLDivElement>): number => {
+  const minuteAt = (event: React.MouseEvent<HTMLDivElement>): number => {
     const rect = event.currentTarget.getBoundingClientRect()
     const minutes = ((event.clientY - rect.top) / HOUR_PX) * 60
     return Math.min(24 * 60, Math.max(0, Math.round(minutes / SLOT_MINUTES) * SLOT_MINUTES))
@@ -248,6 +273,17 @@ export function TimeGrid({
     }
 
     const minutes = Math.round(((dy / HOUR_PX) * 60) / SLOT_MINUTES) * SLOT_MINUTES
+
+    if (move.resize) {
+      // Its end follows the pointer, a slot after its start at the least.
+      const end = Math.max(
+        move.item.start + SLOT_MINUTES * 60_000,
+        move.item.end + minutes * 60_000
+      )
+      setMove({ ...move, moving: true, start: move.item.start, end })
+      return
+    }
+
     const shifted = shiftSpan(move.item, dayIndexAt(event.clientX) - move.dayIndex, minutes)
     setMove({ ...move, moving: true, ...shifted })
   }
@@ -260,7 +296,11 @@ export function TimeGrid({
     movedRef.current = move.moving
     setMove(null)
 
-    if (move.moving && move.item.movable && move.start !== move.item.start) {
+    if (
+      move.moving &&
+      move.item.movable &&
+      (move.start !== move.item.start || move.end !== move.item.end)
+    ) {
       onMove(move.item.movable, move.start, move.end)
     }
   }
@@ -326,6 +366,10 @@ export function TimeGrid({
             key={event.key}
             type="button"
             onClick={() => onSelect({ kind: 'event', key: event.key })}
+            onContextMenu={(click) => {
+              click.preventDefault()
+              onEventMenu(event)
+            }}
             style={eventTint(calendarOf(event, calendars)?.color ?? null)}
             className={cn(
               'focus-visible:ring-ring/60 w-full min-w-0 shrink-0 truncate rounded-[4px] border-l-[3px] px-1.5 py-0.5 text-left text-[11px] font-medium outline-none focus-visible:ring-2',
@@ -343,6 +387,10 @@ export function TimeGrid({
             key={proposed.proposal.id}
             type="button"
             onClick={() => onSelect({ kind: 'proposal', id: proposed.proposal.id })}
+            onContextMenu={(click) => {
+              click.preventDefault()
+              onProposalMenu(proposed)
+            }}
             style={eventTint(null, true)}
             className={cn(
               'text-muted-foreground focus-visible:ring-ring/60 flex w-full min-w-0 shrink-0 items-center gap-1 rounded-[4px] border-l-[3px] px-1.5 py-0.5 text-left text-[11px] italic outline-none focus-visible:ring-2',
@@ -355,7 +403,9 @@ export function TimeGrid({
         )),
       ...due
         .filter((line) => line.due === dayKey(day))
-        .map((line) => <DueChip key={dayLineKey(line)} line={line} onOpen={onOpenLine} />)
+        .map((line) => (
+          <DueChip key={dayLineKey(line)} line={line} onOpen={onOpenLine} onMenu={onDueMenu} />
+        ))
     ]
   }))
   const bandOverflows = band.some(({ entries }) => entries.length > BAND_SHOWN)
@@ -374,6 +424,10 @@ export function TimeGrid({
             <div
               key={dayKey(day)}
               className="flex items-baseline justify-center gap-1.5 border-l py-2 text-[12px]"
+              onContextMenu={(event) => {
+                event.preventDefault()
+                onDayMenu(day)
+              }}
             >
               <span className="text-muted-foreground uppercase">
                 {dateFormat(WEEKDAY).format(day)}
@@ -420,6 +474,12 @@ export function TimeGrid({
             onDoubleClick={(event) => {
               if (event.target === event.currentTarget) {
                 onDraw({ start: day.getTime(), end: addDays(day, 1).getTime(), allDay: true })
+              }
+            }}
+            onContextMenu={(event) => {
+              if (event.target === event.currentTarget) {
+                event.preventDefault()
+                onDayMenu(day)
               }
             }}
           >
@@ -475,7 +535,8 @@ export function TimeGrid({
                   backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${HOUR_PX - 1}px, hsl(var(--border)) ${HOUR_PX - 1}px, hsl(var(--border)) ${HOUR_PX}px)`
                 }}
                 onPointerDown={(event) => {
-                  if (event.button !== 0 || event.target !== event.currentTarget) {
+                  // Ctrl and a click is the right click of a Mac: a menu, not a new event.
+                  if (event.button !== 0 || event.ctrlKey || event.target !== event.currentTarget) {
                     return
                   }
 
@@ -490,6 +551,13 @@ export function TimeGrid({
                   }
                 }}
                 onPointerUp={finishDrawing}
+                onContextMenu={(event) => {
+                  if (event.target === event.currentTarget) {
+                    event.preventDefault()
+                    // An hour's menu offers the half hour the pointer is in, as a click draws.
+                    onSlotMenu(day, Math.min(23 * 60 + 30, Math.floor(minuteAt(event) / 30) * 30))
+                  }
+                }}
               >
                 {laid.map(({ item, column, columns: count }) => {
                   const top = (minutesInto(day, item.start) / 60) * HOUR_PX
@@ -509,8 +577,17 @@ export function TimeGrid({
 
                         onSelect(item.select)
                       }}
+                      onContextMenu={(event) => {
+                        event.preventDefault()
+
+                        if ('event' in item.of) {
+                          onEventMenu(item.of.event)
+                        } else {
+                          onProposalMenu(item.of.proposed)
+                        }
+                      }}
                       onPointerDown={(event) => {
-                        if (event.button !== 0 || !item.movable) {
+                        if (event.button !== 0 || event.ctrlKey || !item.movable) {
                           return
                         }
 
@@ -518,6 +595,9 @@ export function TimeGrid({
                         movedRef.current = false
                         setMove({
                           item,
+                          resize:
+                            event.target instanceof HTMLElement &&
+                            event.target.dataset.resize !== undefined,
                           dayIndex,
                           x: event.clientX,
                           y: event.clientY,
@@ -557,6 +637,13 @@ export function TimeGrid({
                         <span className="text-muted-foreground truncate text-[10.5px] tabular-nums">
                           {time.format(item.start)}–{time.format(item.end)}
                         </span>
+                      )}
+                      {item.movable && (
+                        <span
+                          aria-hidden
+                          data-resize=""
+                          className="absolute inset-x-0 bottom-0 h-1.5 cursor-ns-resize"
+                        />
                       )}
                     </button>
                   )

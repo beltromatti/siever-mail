@@ -2,7 +2,7 @@
 
 Nel progetto qui sotto qualcosa si è mosso da quando hai scritto «Il punto» (o non l'hai ancora scritto). Riscrivilo: è ciò che l'utente legge in cima al progetto, e deve fargli capire in pochi secondi dove siamo, cosa manca e chi deve muoversi.
 
-Comincia leggendo il progetto (`leggi`): le sue conversazioni con le tue note, i suoi eventi, le cose aperte, le cartelle collegate, «Il punto» di prima.
+Comincia leggendo il progetto (`leggi`): le sue conversazioni con le tue note, i suoi eventi, le cose aperte, le cartelle collegate, «Il punto» di prima. Se quello di prima l'ha riscritto l'utente, parti da lì: le parole sono sue, e restano dove valgono ancora; cambia ciò che i fatti hanno cambiato.
 
 ## Cosa deve esserci quando hai finito
 

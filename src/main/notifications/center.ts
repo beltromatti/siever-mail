@@ -150,6 +150,8 @@ export class NotificationCenter {
       window: () => BrowserWindow | null
       /** True the first time a key is given; never again (kept on disk). */
       giveOnce: (key: string) => Promise<boolean>
+      /** The keys given that begin with `from` begin with `to` from now on. */
+      moveGiven?: (from: string, to: string) => Promise<void>
       onStatusChange: (status: NotificationStatus) => void
     }
   ) {}
@@ -218,10 +220,31 @@ export class NotificationCenter {
       ...(input.group ? { groupId: input.group.id, groupTitle: input.group.title } : {})
     })
 
-    this.withdraw(input.key)
-    this.shown.set(input.key, { notification, input })
-    void this.present(notification, input)
+    // Its own copy: what it is of may move under it (`rekey`), and its click with it.
+    const own = { ...input }
+    this.withdraw(own.key)
+    this.shown.set(own.key, { notification, input: own })
+    void this.present(notification, own)
     return true
+  }
+
+  /**
+   * A notification on screen now of something under another key — an
+   * event moved to another calendar, the same event (vision §7.5) —: it
+   * stays, is taken away by its new key, and its click leads to `target`.
+   */
+  rekey(from: string, to: string, target: NotificationTarget): void {
+    const shown = this.shown.get(from)
+
+    if (!shown || from === to) {
+      return
+    }
+
+    this.withdraw(to)
+    this.shown.delete(from)
+    shown.input.key = to
+    shown.input.target = target
+    this.shown.set(to, shown)
   }
 
   /** Takes a notification away — what it said is over: read, answered, gone. */
@@ -256,6 +279,18 @@ export class NotificationCenter {
       log.warn('notification.once-unknown', { err: error })
       return false
     })
+  }
+
+  /**
+   * What was given once under keys beginning with `from` counts as given
+   * under `to` — a reminder of an event moved to another calendar is not
+   * given again.
+   */
+  moveGiven(from: string, to: string): Promise<void> {
+    const kept = (key: string): string => key.replaceAll('\u0000', '\\0')
+    return (this.deps.moveGiven?.(kept(from), kept(to)) ?? Promise.resolve()).catch(
+      (error: unknown) => log.warn('notification.once-not-moved', { err: error })
+    )
   }
 
   status(): NotificationStatus {

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import type { StoredEvent } from '../ai-store'
 import type { ToolCall } from '../openrouter'
-import { buildConversation, handleRecords } from './conversation'
+import { buildConversation, handleRecords, type UserPayload } from './conversation'
+import { entryOf } from './entries'
 
 let id = 0
 const event = (type: string, payload: unknown): StoredEvent => ({
@@ -117,5 +118,78 @@ describe('buildConversation', () => {
       })
     ])
     expect(records.map((record) => record.handle)).toEqual(['m1', 'm2'])
+  })
+
+  it('rebuilds a request with what it carried, after its words, as the model first read it', () => {
+    id = 0
+    const parts = [
+      { type: 'text' as const, text: '# Allegati alla richiesta (1)' },
+      { type: 'text' as const, text: '## Allegato f1 · pianta.png' },
+      { type: 'image_url' as const, image_url: { url: 'data:image/png;base64,AAAA' } }
+    ]
+    const request: UserPayload = {
+      text: 'Che ne dici?',
+      forModel: '[ora] Che ne dici?',
+      handles: [
+        {
+          handle: 'f1',
+          target: {
+            kind: 'file',
+            file: { kind: 'path', path: '/Casa al mare/pianta.png', fileName: 'pianta.png' }
+          }
+        }
+      ],
+      attachments: [
+        {
+          name: 'pianta.png',
+          kind: 'image',
+          size: 2048,
+          pages: null,
+          path: '/Casa al mare/pianta.png',
+          thumbnail: 'data:image/png;base64,BB',
+          handle: 'f1',
+          shortfall: null
+        }
+      ],
+      attachmentParts: parts
+    }
+    const events = [event('context', { text: 'C' }), event('user', request)]
+
+    expect(buildConversation('S', events)[1]).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: 'C\n\n---\n\n[ora] Che ne dici?' }, ...parts]
+    })
+    // Its file's name stays the run's, for `leggi f1` and its links later.
+    expect(handleRecords(events).map((record) => record.handle)).toEqual(['f1'])
+    // The page shows the words and what went with them.
+    expect(entryOf(events[1])).toMatchObject({
+      kind: 'user',
+      text: 'Che ne dici?',
+      attachments: [{ name: 'pianta.png', handle: 'f1', shortfall: null }],
+      handles: [{ handle: 'f1', kind: 'file', path: '/Casa al mare/pianta.png' }]
+    })
+  })
+
+  it('keeps a turn that answered nothing only where the user wrote after it', () => {
+    id = 0
+    const silent = { content: '', toolCalls: [], reasoningDetails: [{ r: 1 }], thinkingMs: 9_000 }
+    const ended = [
+      event('context', { text: 'C' }),
+      event('user', { text: 'x', forModel: 'x', handles: [] }),
+      event('assistant', silent),
+      event('error', { code: 'no-answer', message: 'Stopped.' }),
+      event('assistant', silent),
+      event('error', { code: 'no-answer', message: 'Stopped.' })
+    ]
+
+    expect(buildConversation('S', ended).map((message) => message.role)).toEqual(['system', 'user'])
+    expect(
+      buildConversation('S', [
+        ...ended,
+        event('user', { text: 'y', forModel: 'y', handles: [] })
+      ]).map((message) => message.role)
+    ).toEqual(['system', 'user', 'assistant', 'user'])
+    // The page still shows how long it thought before saying nothing.
+    expect(entryOf(ended[2])).toMatchObject({ kind: 'assistant', text: '', thought: { ms: 9_000 } })
   })
 })

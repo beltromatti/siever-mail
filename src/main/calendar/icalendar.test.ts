@@ -10,6 +10,7 @@ import {
   occurrenceIn,
   occurrencesOf,
   removeOccurrence,
+  seriesOf,
   withResponse
 } from './icalendar'
 
@@ -327,7 +328,9 @@ describe('writing events', () => {
     allDay: false,
     location: 'Studio',
     description: null,
-    attendees: ['davide@studio.it']
+    attendees: ['davide@studio.it'],
+    recurrence: null,
+    reminders: null
   }
 
   it('writes a new event in UTC, with its end, its organizer and who made it', () => {
@@ -359,7 +362,9 @@ describe('writing events', () => {
       allDay: false,
       location: null,
       description: null,
-      attendees: []
+      attendees: [],
+      recurrence: null,
+      reminders: null
     }
     // Written here, then given a place by another client.
     const onServer = newEventResource('luogo@test', asKept, null, null).replace(
@@ -390,7 +395,9 @@ describe('writing events', () => {
         allDay: false,
         location: null,
         description: null,
-        attendees: []
+        attendees: [],
+        recurrence: null,
+        reminders: null
       },
       null
     )
@@ -420,6 +427,159 @@ describe('writing events', () => {
       )?.myResponse
     ).toBe('accepted')
     expect(() => withResponse(SERIES, null, ['qualcun.altro@x.it'], 'accepted')).toThrow()
+  })
+})
+
+describe('writing a series', () => {
+  const lesson = {
+    title: 'Lezione di analisi',
+    start: '2026-11-16T08:00:00.000Z',
+    end: '2026-11-16T10:00:00.000Z',
+    allDay: false,
+    location: 'Aula 3',
+    description: null,
+    attendees: [],
+    recurrence: {
+      frequency: 'weekly' as const,
+      interval: 1,
+      weekdays: ['MO' as const, 'TH' as const],
+      until: '2026-12-22'
+    },
+    reminders: [60, 10],
+    zone: 'Europe/Rome'
+  }
+
+  it('writes it in its zone — the VTIMEZONE with it —, its rule from its start, its reminders as alarms that show', () => {
+    const text = newEventResource('lezione@test', lesson, null, null)
+    const instances = occurrencesOf(text, {
+      from: Date.UTC(2026, 10, 15),
+      to: Date.UTC(2027, 0, 31)
+    })
+
+    expect(text).toContain('BEGIN:VTIMEZONE')
+    expect(text).toContain('DTSTART;TZID=Europe/Rome:20261116T090000')
+    expect(text).toContain('RRULE:FREQ=WEEKLY;BYDAY=MO,TH;UNTIL=20261222T225959Z')
+    expect(text).toContain('TRIGGER:-PT1H')
+    expect(text).toContain('TRIGGER:-PT10M')
+    // Mondays and Thursdays from 16 November to 22 December: eleven, at nine in Rome every time.
+    expect(instances).toHaveLength(11)
+    expect(instances.at(-1)?.start).toBe('2026-12-21T08:00:00.000Z')
+    expect(instances[0]).toMatchObject({ recurrence: lesson.recurrence, reminders: [10, 60] })
+    expect(seriesOf(text, [])).toEqual({ ...lesson, reminders: [10, 60] })
+  })
+
+  it('moves the names of its instances with its first time, so none moved or taken out is lost', () => {
+    // From Monday at nine to Tuesday at ten: the instance of 9 November, moved, stays moved; the
+    // one of 2 November, taken out, stays out.
+    const first = seriesOf(SERIES, [])!
+    const moved = changeEventResource(
+      SERIES,
+      null,
+      { ...first, start: '2026-10-20T08:00:00.000Z', end: '2026-10-20T08:30:00.000Z' },
+      null,
+      new Set(['time'])
+    )
+
+    expect(first).toMatchObject({
+      start: '2026-10-19T07:00:00.000Z',
+      recurrence: { frequency: 'weekly', interval: 1, count: 6 },
+      zone: 'Europe/Rome'
+    })
+    expect(moved).toContain('RECURRENCE-ID;TZID=Europe/Rome:20261110T100000')
+    expect(moved).toContain('EXDATE;TZID=Europe/Rome:20261103T100000')
+    expect(
+      occurrencesOf(moved, range).map((occurrence) => [occurrence.title, occurrence.start])
+    ).toEqual([
+      ['Riunione del lunedì', '2026-10-27T09:00:00.000Z'],
+      ['Riunione spostata', '2026-11-10T14:00:00.000Z'],
+      ['Riunione del lunedì', '2026-11-17T09:00:00.000Z'],
+      ['Riunione del lunedì', '2026-11-24T09:00:00.000Z']
+    ])
+  })
+
+  it('made one event again, loses its rule, the days taken out and the instances changed on their own', () => {
+    const single = changeEventResource(
+      SERIES,
+      null,
+      {
+        ...seriesOf(SERIES, [])!,
+        start: '2026-11-16T08:00:00.000Z',
+        end: '2026-11-16T08:30:00.000Z',
+        recurrence: null
+      },
+      null,
+      new Set(['time', 'recurrence'])
+    )
+
+    expect(single).not.toMatch(/RRULE:FREQ=WEEKLY|EXDATE|RECURRENCE-ID/)
+    expect(occurrencesOf(single, range)).toEqual([
+      expect.objectContaining({ start: '2026-11-16T08:00:00.000Z', recurrence: null })
+    ])
+  })
+
+  it('changes its reminders, an alarm that sends an email left to the server', () => {
+    const visit = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'BEGIN:VEVENT',
+      'UID:visita@test',
+      'DTSTAMP:20261101T000000Z',
+      'DTSTART:20261120T090000Z',
+      'DTEND:20261120T100000Z',
+      'SUMMARY:Visita',
+      'BEGIN:VALARM',
+      'ACTION:EMAIL',
+      'TRIGGER:-P1D',
+      'SUMMARY:Visita',
+      'DESCRIPTION:Visita',
+      'ATTENDEE:mailto:mattia@studio.it',
+      'END:VALARM',
+      'BEGIN:VALARM',
+      'ACTION:DISPLAY',
+      'TRIGGER:-PT15M',
+      'DESCRIPTION:Visita',
+      'END:VALARM',
+      'END:VEVENT',
+      'END:VCALENDAR'
+    ].join('\r\n')
+    const kept = seriesOf(visit, [])!
+    const none = changeEventResource(
+      visit,
+      null,
+      { ...kept, reminders: [] },
+      null,
+      new Set(['reminders'])
+    )
+    const two = changeEventResource(
+      visit,
+      null,
+      { ...kept, reminders: [5, 120] },
+      null,
+      new Set(['reminders'])
+    )
+
+    expect(kept.reminders).toEqual([15])
+    expect(none).toContain('ACTION:EMAIL')
+    expect(none).not.toContain('ACTION:DISPLAY')
+    // Alarms only by email: none that shows, the reminders off.
+    expect(seriesOf(none, [])?.reminders).toEqual([])
+    expect(seriesOf(two, [])?.reminders).toEqual([5, 120])
+  })
+
+  it('reads a series with days added by date as one made elsewhere', () => {
+    const added = FEED.replace(
+      'RRULE:FREQ=WEEKLY;COUNT=6',
+      'RRULE:FREQ=WEEKLY;COUNT=6\nRDATE;TZID=Europe/Rome:20261111T090000'
+    )
+
+    expect(
+      occurrencesOf(added, range).find((occurrence) => occurrence.iCalUid === 'riunione@test')
+        ?.recurrence
+    ).toBe('other')
+    expect(
+      occurrencesOf(FEED, range).find((occurrence) => occurrence.iCalUid === 'riunione@test')
+        ?.recurrence
+    ).toEqual({ frequency: 'weekly', interval: 1, count: 6 })
   })
 })
 

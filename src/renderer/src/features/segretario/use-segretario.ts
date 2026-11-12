@@ -6,7 +6,8 @@ import type {
   HandleLink,
   SegretarioContext,
   SegretarioPreferences,
-  SegretarioStatus
+  SegretarioStatus,
+  ThinkingNow
 } from '@shared/segretario'
 
 export interface SegretarioState {
@@ -20,6 +21,8 @@ export interface SegretarioState {
   entries: ActivityEntry[] | null
   /** What the Segretario is writing now in the activity on screen. */
   streaming: string
+  /** How it thinks in the turn under way of the activity on screen; null between turns. */
+  thinking: ThinkingNow | null
   /** The short names of the activity on screen, to make links of. */
   handles: ReadonlyMap<string, HandleLink>
   /** An activity is waiting for the user, or finished unseen: the rail says so. */
@@ -27,8 +30,10 @@ export interface SegretarioState {
   /** OpenRouter does not answer: what runs waits for it, and says until when (§14.1). */
   waiting: string | null
   select(id: string | null): void
-  start(text: string, context: SegretarioContext): Promise<void>
-  send(text: string, context: SegretarioContext): Promise<void>
+  /** A new request, with the attachments it carries (`PreparedAttachment.id`, in order). */
+  start(text: string, context: SegretarioContext, attachments?: string[]): Promise<void>
+  /** The user writes in the activity on screen — a new one when there is none. */
+  send(text: string, context: SegretarioContext, attachments?: string[]): Promise<void>
   /** A request that stopped short, taken up again from where it was (§14.2). */
   retry(id: string): Promise<void>
   cancel(id: string): void
@@ -43,6 +48,21 @@ export interface SegretarioState {
   /** The work it did on its own, the latest first; null until asked for. */
   diary: ActivitySummary[] | null
   loadDiary(): Promise<void>
+}
+
+/** What a run is writing and thinking now, as its last events said; forgotten once it says nothing. */
+function remember(
+  live: Map<string, { text: string; thinking: ThinkingNow | null }>,
+  activityId: string,
+  change: { text?: string; thinking?: ThinkingNow | null }
+): void {
+  const next = { text: '', thinking: null, ...live.get(activityId), ...change }
+
+  if (next.text || next.thinking) {
+    live.set(activityId, next)
+  } else {
+    live.delete(activityId)
+  }
 }
 
 function sortActivities(activities: ActivitySummary[]): ActivitySummary[] {
@@ -101,8 +121,12 @@ export function useSegretario(visible: boolean): SegretarioState {
   // What the activity on screen is writing, as it writes: only that one's, so the work done
   // alone, step after step, does not redraw the app.
   const [stream, setStream] = useState<{ id: string; text: string } | null>(null)
+  const [thought, setThought] = useState<{ id: string; thinking: ThinkingNow } | null>(null)
   const waiting = useAiWaiting()
   const selectedRef = useRef<string | null>(null)
+  // What every run is writing and thinking now, kept without redrawing: an activity put on
+  // screen — a request just started among them — shows it at once, as it is.
+  const liveRef = useRef(new Map<string, { text: string; thinking: ThinkingNow | null }>())
   const visibleRef = useRef(visible)
 
   useEffect(() => {
@@ -141,11 +165,32 @@ export function useSegretario(visible: boolean): SegretarioState {
           break
         }
         case 'entry':
+          // The turn as written takes the place of what was shown of it live, in the same paint.
+          if (event.entry.kind === 'assistant') {
+            liveRef.current.delete(event.activityId)
+          }
+
           if (event.activityId === selectedRef.current) {
             setEntries((current) => (current ? upsertEntry(current, event.entry) : current))
+
+            if (event.entry.kind === 'assistant') {
+              setStream(null)
+              setThought(null)
+            }
           }
           break
+        case 'thinking': {
+          const { activityId, thinking } = event
+          remember(liveRef.current, activityId, { thinking })
+
+          if (activityId === selectedRef.current) {
+            setThought(thinking ? { id: activityId, thinking } : null)
+          }
+          break
+        }
         case 'stream':
+          remember(liveRef.current, event.activityId, { text: event.text })
+
           if (event.activityId === selectedRef.current) {
             setStream((current) =>
               current?.id === event.activityId && current.text === event.text
@@ -155,6 +200,7 @@ export function useSegretario(visible: boolean): SegretarioState {
           }
           break
         case 'removed':
+          liveRef.current.delete(event.activityId)
           setActivities((current) => current.filter((activity) => activity.id !== event.activityId))
           setDiary(
             (current) => current?.filter((activity) => activity.id !== event.activityId) ?? null
@@ -180,6 +226,9 @@ export function useSegretario(visible: boolean): SegretarioState {
     selectedRef.current = id
     setSelectedId(id)
     setEntries(id ? null : [])
+    const live = id ? liveRef.current.get(id) : undefined
+    setStream(id && live?.text ? { id, text: live.text } : null)
+    setThought(id && live?.thinking ? { id, thinking: live.thinking } : null)
 
     if (!id) {
       return
@@ -203,8 +252,8 @@ export function useSegretario(visible: boolean): SegretarioState {
   }, [activities, selectedId, visible])
 
   const start = useCallback(
-    async (text: string, context: SegretarioContext): Promise<void> => {
-      const summary = await window.segretarioApi.startActivity(text, context)
+    async (text: string, context: SegretarioContext, attachments?: string[]): Promise<void> => {
+      const summary = await window.segretarioApi.startActivity(text, context, attachments)
       setActivities((current) =>
         sortActivities([...current.filter((activity) => activity.id !== summary.id), summary])
       )
@@ -214,13 +263,13 @@ export function useSegretario(visible: boolean): SegretarioState {
   )
 
   const send = useCallback(
-    async (text: string, context: SegretarioContext): Promise<void> => {
+    async (text: string, context: SegretarioContext, attachments?: string[]): Promise<void> => {
       if (!selectedRef.current) {
-        await start(text, context)
+        await start(text, context, attachments)
         return
       }
 
-      await window.segretarioApi.sendMessage(selectedRef.current, text, context)
+      await window.segretarioApi.sendMessage(selectedRef.current, text, context, attachments)
     },
     [start]
   )
@@ -249,6 +298,7 @@ export function useSegretario(visible: boolean): SegretarioState {
     []
   )
   const streaming = selectedId && stream?.id === selectedId ? stream.text : ''
+  const thinking = selectedId && thought?.id === selectedId ? thought.thinking : null
   // Something waits for the user: an answer, work not looked at.
   const attention = activities.some((activity) => activity.status === 'waiting' || activity.unseen)
 
@@ -261,6 +311,7 @@ export function useSegretario(visible: boolean): SegretarioState {
       selectedId,
       entries,
       streaming,
+      thinking,
       handles,
       attention,
       select,
@@ -282,6 +333,7 @@ export function useSegretario(visible: boolean): SegretarioState {
       selectedId,
       entries,
       streaming,
+      thinking,
       handles,
       attention,
       waiting,

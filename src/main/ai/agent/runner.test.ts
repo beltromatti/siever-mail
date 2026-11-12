@@ -8,6 +8,25 @@ vi.mock('electron', () => ({
 }))
 vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
 
+// What the runs write in the diagnostics, to read how they ended.
+const logged = vi.hoisted(() => [] as Array<{ ev: string; fields: Record<string, unknown> }>)
+vi.mock('@main/diagnostics/log', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@main/diagnostics/log')>()
+  return {
+    ...original,
+    diagnostics: (area: Parameters<typeof original.diagnostics>[0]) => {
+      const scope = original.diagnostics(area)
+      const kept =
+        (level: 'info' | 'warn') =>
+        (ev: string, fields: Record<string, unknown> = {}): void => {
+          logged.push({ ev, fields })
+          scope[level](ev, fields)
+        }
+      return { ...scope, info: kept('info'), warn: kept('warn') }
+    }
+  }
+})
+
 import { AiStore } from '../ai-store'
 import { Reachability } from '../engine/reachability'
 import { Notebook } from '../memory/notebook'
@@ -16,14 +35,16 @@ import {
   type ChatRequest,
   type ChatResult,
   type OpenRouterClient,
+  type StreamListener,
   type ToolCall
 } from '../openrouter'
 import { Registry } from '../registry/registry'
 import { ensureAiSchema } from '../schema'
 import { memorySql } from '../testing/memory-sql'
-import type { CompactionPayload, ToolPayload } from './conversation'
+import type { AssistantPayload, CompactionPayload, ToolPayload } from './conversation'
 import { AgentRunner, TASK_EFFORT, type RunnerDeps } from './runner'
 import { ToolInputError, type SegretarioTool } from './tool-types'
+import type { ActivityEvent } from '@shared/segretario'
 
 type Turn = {
   calls?: Array<{ name: string; args?: Record<string, unknown> }>
@@ -51,7 +72,8 @@ function answer(turn: Turn): ChatResult {
     },
     model: null,
     provider: null,
-    billed: true
+    billed: true,
+    thinking: null
   }
 }
 
@@ -70,6 +92,7 @@ describe('AgentRunner', () => {
   let sql: ReturnType<typeof memorySql>
   let store: AiStore
   let requests: ChatRequest[]
+  let emitted: ActivityEvent[]
   let reachability: Reachability
 
   beforeEach(async () => {
@@ -77,6 +100,8 @@ describe('AgentRunner', () => {
     await ensureAiSchema(sql)
     store = new AiStore(sql)
     requests = []
+    emitted = []
+    logged.length = 0
     reachability = new Reachability()
   })
 
@@ -84,14 +109,18 @@ describe('AgentRunner', () => {
 
   /** A runner whose model answers `next` for each request, with these tools. */
   function runnerWith(
-    next: (request: ChatRequest, index: number) => Promise<ChatResult> | ChatResult,
+    next: (
+      request: ChatRequest,
+      index: number,
+      stream: StreamListener
+    ) => Promise<ChatResult> | ChatResult,
     tools: SegretarioTool[],
     contextLength = 1_000_000
   ): AgentRunner {
     const client = {
-      chat: async (_key: string, request: ChatRequest) => {
+      chat: async (_key: string, request: ChatRequest, stream: StreamListener = {}) => {
         requests.push(request)
-        return next(request, requests.length - 1)
+        return next(request, requests.length - 1, stream)
       }
     } as unknown as OpenRouterClient
     return new AgentRunner({
@@ -106,7 +135,7 @@ describe('AgentRunner', () => {
       calendar: {} as RunnerDeps['calendar'],
       page: {} as RunnerDeps['page'],
       requireKey: async () => 'sk-test',
-      emit: () => undefined,
+      emit: (event) => emitted.push(event),
       recordUsage: async () => undefined
     })
   }
@@ -375,5 +404,122 @@ describe('AgentRunner', () => {
         .filter((event) => event.type === 'tool')
         .map((event) => (event.payload as ToolPayload).result)
     ).toEqual(['LETTO 1', 'LETTO 2'])
+  })
+
+  it('fails a conversation’s turn that ends with neither words nor calls, asked again by «Riprova»', async () => {
+    const runner = runnerWith(
+      (_request, index) =>
+        index === 0
+          ? { ...answer({}), content: '  ', thinking: { ms: 540_000, tokens: 90_000 } }
+          : answer({}),
+      []
+    )
+    const id = await start()
+    const failed = await runner.run({ activityId: id, task: 'richiesta', background: false })
+
+    expect(failed.status).toBe('failed')
+    expect((failed.error as SegretarioError).code).toBe('no-answer')
+    expect((await store.listEvents(id)).at(-1)).toMatchObject({
+      type: 'error',
+      payload: { code: 'no-answer', message: 'The Segretario stopped without answering you.' }
+    })
+    expect((await store.getActivity(id))?.status).toBe('failed')
+    expect(logged.find((line) => line.ev === 'run.end')?.fields).toMatchObject({
+      status: 'failed',
+      reason: 'no-answer'
+    })
+
+    // Asked again, the request is the same: the turn that said nothing is not in it.
+    const again = await runner.run({ activityId: id, task: 'richiesta', background: false })
+    expect(again.status).toBe('done')
+    expect(requests[1].messages).toEqual(requests[0].messages)
+    expect(requests[1].messages.at(-1)).toMatchObject({ role: 'user' })
+  })
+
+  it('fails one cut at its length with no words, lets the user go on, and leaves other tasks be', async () => {
+    const runner = runnerWith(
+      (_request, index) =>
+        index === 0 ? { ...answer({}), content: '', finishReason: 'length' } : answer({}),
+      []
+    )
+    const id = await start()
+    const cut = await runner.run({ activityId: id, task: 'richiesta', background: false })
+    expect(cut.error).toMatchObject({ code: 'no-answer' })
+
+    // The user writes again in the same conversation: it goes on from all it holds.
+    await store.appendEvent(id, 'user', { text: 'Allora?', forModel: 'Allora?', handles: [] })
+    expect(
+      (await runner.run({ activityId: id, task: 'richiesta', background: false })).status
+    ).toBe('done')
+    expect(requests[1].messages.slice(1).map((message) => message.role)).toEqual([
+      'user',
+      'assistant',
+      'user'
+    ])
+
+    // A task that leaves its work through its tools may end without a word.
+    requests = []
+    const quiet = runnerWith(() => ({ ...answer({}), content: '' }), [])
+    expect(
+      (await quiet.run({ activityId: await start('b'), task: 'lettura', background: true })).status
+    ).toBe('done')
+  })
+
+  it('shows the thinking live, a few times a second, and keeps how long it lasted with the turn', async () => {
+    const runner = runnerWith(
+      async (_request, index, stream) => {
+        if (index > 0) {
+          // Not billed with its reasoning: the count of the stream stands for it.
+          return { ...answer({}), thinking: { ms: 500, tokens: 12 } }
+        }
+
+        for (let tokens = 1; tokens <= 40; tokens++) {
+          stream.onReasoning?.(tokens)
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 300))
+        stream.onReasoning?.(41)
+        stream.onOutput?.(23_000)
+        const turn = answer({ calls: [{ name: 'leggi' }] })
+        return {
+          ...turn,
+          usage: { ...turn.usage, reasoningTokens: 1_240 },
+          thinking: { ms: 23_000, tokens: 41 }
+        }
+      },
+      [tool('leggi')]
+    )
+    const id = await start()
+    expect(
+      (await runner.run({ activityId: id, task: 'richiesta', background: false })).status
+    ).toBe('done')
+
+    // As the turn begins; once in its first quarter of a second, whatever the count; how long,
+    // once the answer begins; nothing, once the turn is written — and again for the next turn.
+    expect(emitted.flatMap((event) => (event.type === 'thinking' ? [event.thinking] : []))).toEqual(
+      [
+        { tokens: 0, ms: null },
+        { tokens: 40, ms: null },
+        { tokens: 41, ms: 23_000 },
+        null,
+        { tokens: 0, ms: null },
+        null
+      ]
+    )
+
+    const turns = (await store.listEvents(id))
+      .filter((event) => event.type === 'assistant')
+      .map((event) => event.payload as AssistantPayload)
+    expect(turns[0]).toMatchObject({ thinkingMs: 23_000, reasoningTokens: 1_240 })
+    expect(turns[1]).toMatchObject({ thinkingMs: 500, reasoningTokens: 12 })
+
+    // A turn of calls alone shows for how it thought; the turn written comes before the live line goes.
+    const shown = emitted.findIndex(
+      (event) => event.type === 'entry' && event.entry.kind === 'assistant'
+    )
+    expect(emitted[shown]).toMatchObject({
+      entry: { kind: 'assistant', text: '', thought: { ms: 23_000, tokens: 1_240 } }
+    })
+    expect(emitted[shown + 1]).toMatchObject({ type: 'thinking', thinking: null })
   })
 })

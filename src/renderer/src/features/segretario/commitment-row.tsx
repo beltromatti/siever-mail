@@ -14,10 +14,20 @@ import {
 } from '@renderer/components/ui/dropdown-menu'
 import { languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
+import type { ContextMenuItem } from '@shared/context-menu'
 import { defineMessages, type Messages } from '@shared/i18n'
-import type { Commitment, CommitmentStatus, WorkActor } from '@shared/segretario'
+import type { Commitment, CommitmentStatus, WorkActor, WorkTarget } from '@shared/segretario'
 
 import { COMMITMENT_LABELS, daysFromToday, dueLabel } from './row-work'
+import {
+  dimmedBy,
+  PendingWordsLine,
+  RewriteField,
+  useWorkWords,
+  withdrawWords,
+  WORK_WORDS,
+  type WorkWords
+} from './work-words'
 
 const MESSAGES = defineMessages({
   tomorrow: { en: 'Tomorrow', it: 'Domani', de: 'Morgen' },
@@ -111,7 +121,9 @@ const MESSAGES = defineMessages({
   arrivedTitle: { en: 'Arrived', it: 'Arrivato', de: 'Eingetroffen' },
   doneTitle: { en: 'Done', it: 'Fatta', de: 'Erledigt' },
   reopen: { en: 'Reopen', it: 'Riapri', de: 'Wieder öffnen' },
-  correct: { en: 'Edit', it: 'Correggi', de: 'Korrigieren' },
+  openMessage: { en: 'Open the email', it: 'Apri la mail', de: 'E-Mail öffnen' },
+  openEvent: { en: 'Open the event', it: 'Apri l’evento', de: 'Termin öffnen' },
+  openProject: { en: 'Open the project', it: 'Apri il progetto', de: 'Projekt öffnen' },
   stillOpen: { en: 'Still open', it: 'È ancora aperta', de: 'Noch offen' },
   hasArrived: { en: 'It arrived', it: 'È arrivato', de: 'Ist eingetroffen' },
   isDone: { en: 'It’s done', it: 'È fatta', de: 'Ist erledigt' },
@@ -247,42 +259,260 @@ async function edit(
   }
 }
 
+/** An open thing, as the user's words on it name it (vision §10.1). */
+function targetOf(commitment: Commitment): WorkTarget {
+  return { kind: 'impegno', id: commitment.id }
+}
+
+/** What can be done to an open thing, as a menu has it: an item, a group of them, a line between. */
+type CommitmentAction =
+  | { id: string; label: string; run: () => void | Promise<void> }
+  | { id: string; label: string; submenu: CommitmentAction[] }
+  | 'separator'
+
+interface CommitmentActionOptions {
+  /** The boxes for the user's words: «Correggi…», «Rispondi…», «Riscrivi» where not in place. */
+  words: WorkWords
+  /** Asks the Segretario for a reminder to who is awaited; absent where it cannot be asked. */
+  onRemind?: (commitment: Commitment) => void
+  /** Opens where it comes from — its message, its event, its project —, where the thing shows apart. */
+  onOpenSource?: (commitment: Commitment) => void
+  /** Rewrites its words in place; without, in a box. */
+  onRewrite?: () => void
+}
+
+/** Where a thing comes from, as its menu offers to open it; null for the user's word alone. */
+function sourceLabel(commitment: Commitment, m: Messages<typeof MESSAGES>): string | null {
+  const { source } = commitment
+  return source.kind === 'message'
+    ? m.openMessage
+    : source.kind === 'event'
+      ? m.openEvent
+      : source.projectId
+        ? m.openProject
+        : null
+}
+
+/**
+ * Everything that can be done to an open thing besides ticking it, in one
+ * list for every menu that offers it — its «⋯», a native one in the
+ * Calendario: open where it comes from, chase it, say it is not needed, put
+ * it off, move its deadline; and the user's word on it — rewrite it,
+ * correct it, answer its question, or take back what they said (§10.1).
+ * For one settled: reopen it, or correct it.
+ */
+function commitmentActions(
+  commitment: Commitment,
+  m: Messages<typeof MESSAGES>,
+  w: Messages<typeof WORK_WORDS>,
+  options: CommitmentActionOptions
+): CommitmentAction[] {
+  const { words, onRemind, onOpenSource, onRewrite } = options
+  const target = targetOf(commitment)
+  const pending = commitment.pending ?? null
+  const open = commitment.status === 'aperta'
+  const source = onOpenSource ? sourceLabel(commitment, m) : null
+  const actions: CommitmentAction[] = []
+
+  if (source && onOpenSource) {
+    actions.push({ id: 'source', label: source, run: () => onOpenSource(commitment) }, 'separator')
+  }
+
+  if (open) {
+    if (commitment.kind === 'aspetti' && onRemind) {
+      actions.push({ id: 'remind', label: m.followUp, run: () => onRemind(commitment) })
+    }
+
+    actions.push(
+      {
+        id: 'not-needed',
+        label: m.notNeeded,
+        run: () => setStatus(commitment, 'non_serve')
+      },
+      {
+        id: 'postpone',
+        label: m.postpone,
+        submenu: dayChoices(m).map((choice) => ({
+          id: `postpone:${choice.day}`,
+          label: choice.label,
+          run: () => setStatus(commitment, 'rinviata', { until: choice.day })
+        }))
+      },
+      {
+        id: 'deadline',
+        label: m.deadline,
+        submenu: [
+          { id: 'due:today', label: m.today, run: () => edit(commitment, { due: inDays(0) }) },
+          ...dayChoices(m).map((choice) => ({
+            id: `due:${choice.day}`,
+            label: choice.label,
+            run: () => edit(commitment, { due: choice.day })
+          })),
+          ...(commitment.due
+            ? ([
+                'separator',
+                { id: 'due:none', label: m.noDeadline, run: () => edit(commitment, { due: null }) }
+              ] as const)
+            : [])
+        ]
+      },
+      'separator',
+      {
+        id: 'rewrite',
+        label: w.rewrite,
+        run: () => (onRewrite ? onRewrite() : words.rewrite(target, commitment.text))
+      }
+    )
+  } else {
+    actions.push(
+      { id: 'reopen', label: m.reopen, run: () => setStatus(commitment, 'aperta') },
+      'separator'
+    )
+  }
+
+  if (pending) {
+    actions.push({
+      id: 'withdraw',
+      label: pending.kind === 'correzione' ? w.withdrawCorrection : w.withdrawAnswer,
+      run: () => withdrawWords(target)
+    })
+  } else {
+    actions.push({
+      id: 'correct',
+      label: w.correct,
+      run: () => words.correct(target, commitment.text)
+    })
+
+    if (open && commitment.question) {
+      actions.push({ id: 'answer', label: w.answer, run: () => words.answer(commitment) })
+    }
+  }
+
+  return tidy(actions)
+}
+
+/** A list without a line at either end, or two in a row: where what was between them is not offered. */
+function tidy(actions: CommitmentAction[]): CommitmentAction[] {
+  return actions
+    .map((action) =>
+      action !== 'separator' && 'submenu' in action
+        ? { ...action, submenu: tidy(action.submenu) }
+        : action
+    )
+    .filter(
+      (action, index, all) =>
+        action !== 'separator' ||
+        (index > 0 && index < all.length - 1 && all[index - 1] !== 'separator')
+    )
+}
+
+/**
+ * An open thing's actions as a native menu — in the Calendario, on a
+ * deadline —: the same words and the same actions as its «⋯» (one list,
+ * two forms). `run` does what the item chosen says.
+ */
+export function commitmentContextMenu(
+  commitment: Commitment,
+  options: CommitmentActionOptions
+): { items: ContextMenuItem[]; run: (id: string) => Promise<void> } {
+  const actions = commitmentActions(
+    commitment,
+    messagesNow(MESSAGES),
+    messagesNow(WORK_WORDS),
+    options
+  )
+  const itemOf = (action: CommitmentAction): ContextMenuItem =>
+    action === 'separator'
+      ? { type: 'separator' }
+      : 'submenu' in action
+        ? { id: action.id, label: action.label, submenu: action.submenu.map(itemOf) }
+        : { id: action.id, label: action.label }
+  const find = (
+    list: ReadonlyArray<CommitmentAction>,
+    id: string
+  ): Extract<CommitmentAction, { run: unknown }> | null => {
+    for (const action of list) {
+      if (action === 'separator') {
+        continue
+      }
+
+      const found =
+        'submenu' in action ? find(action.submenu, id) : action.id === id ? action : null
+
+      if (found) {
+        return found
+      }
+    }
+
+    return null
+  }
+
+  return {
+    items: actions.map(itemOf),
+    run: async (id) => {
+      await find(actions, id)?.run()
+    }
+  }
+}
+
+/** The same list, as the items of a dropdown. */
+function ActionItems({ actions }: { actions: ReadonlyArray<CommitmentAction> }): React.JSX.Element {
+  return (
+    <>
+      {actions.map((action, index) =>
+        action === 'separator' ? (
+          <DropdownMenuSeparator key={`separator-${index}`} />
+        ) : 'submenu' in action ? (
+          <DropdownMenuSub key={action.id}>
+            <DropdownMenuSubTrigger>{action.label}</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <ActionItems actions={action.submenu} />
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : (
+          <DropdownMenuItem key={action.id} onSelect={() => void action.run()}>
+            {action.label}
+          </DropdownMenuItem>
+        )
+      )}
+    </>
+  )
+}
+
 /**
  * One thing open between the user and someone, the same wherever it shows —
  * the reader, a project, Oggi, the agenda: ticked off with an undo, put
- * off, not needed, corrected, opened again. What is awaited is ticked as
- * arrived, and can be chased. A question the Segretario asks about it is
- * answered here.
+ * off, not needed, rewritten in place, opened again. What is awaited is
+ * ticked as arrived, and can be chased. A question the Segretario asks about
+ * it is answered here, with a click or in words; corrected in words, it
+ * stays dimmed until the Segretario has put it right (§10.1).
  */
 export function CommitmentRow({
   commitment,
   onRemind,
+  words: shared,
   className
 }: {
   commitment: Commitment
   /** Asks the Segretario for a reminder to who is awaited; absent where it cannot be asked. */
   onRemind?: (commitment: Commitment) => void
+  /** The boxes for the user's words, when the list around has them; otherwise the row's own. */
+  words?: WorkWords
   className?: string
 }): React.JSX.Element {
   const m = useMessages(MESSAGES)
+  const w = useMessages(WORK_WORDS)
   const kinds = useMessages(COMMITMENT_LABELS)
-  const [editing, setEditing] = useState(false)
-  const [text, setText] = useState(commitment.text)
+  const own = useWorkWords()
+  const words = shared ?? own
+  const [rewriting, setRewriting] = useState(false)
   const open = commitment.status === 'aperta'
   const awaited = commitment.kind === 'aspetti'
   const settled = settledLine(commitment, m)
   const late = open && commitment.due !== null && daysFromToday(commitment.due) < 0
-
-  const save = (): void => {
-    setEditing(false)
-    const next = text.trim()
-
-    if (next && next !== commitment.text) {
-      void edit(commitment, { text: next })
-    } else {
-      setText(commitment.text)
-    }
-  }
+  const pending = commitment.pending ?? null
+  // Words wait on it — an answer, or what is wrong with it: its question is the Segretario's to settle.
+  const spoken = pending !== null
 
   return (
     <li
@@ -311,25 +541,16 @@ export function CommitmentRow({
       </button>
 
       <div className="min-w-0 flex-1">
-        {editing ? (
-          <input
-            autoFocus
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            onBlur={save}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                save()
-              } else if (event.key === 'Escape') {
-                setText(commitment.text)
-                setEditing(false)
-              }
-            }}
-            aria-label={m.correct}
-            className="border-input bg-background focus-visible:ring-ring/60 w-full rounded-[4px] border px-1.5 py-0.5 text-[12.5px] outline-none focus-visible:ring-2"
+        {rewriting ? (
+          <RewriteField
+            target={targetOf(commitment)}
+            text={commitment.text}
+            label={w.rewrite}
+            onDone={() => setRewriting(false)}
+            className="px-1.5 py-0.5 text-[12.5px]"
           />
         ) : (
-          <span className={cn('min-w-0', !open && 'text-faint-foreground')}>
+          <span className={cn('min-w-0', !open && 'text-faint-foreground', dimmedBy(pending))}>
             <span className="text-muted-foreground">{kinds[commitment.kind]}:</span>{' '}
             <span className={cn(!open && commitment.status !== 'rinviata' && 'line-through')}>
               {commitment.text}
@@ -345,7 +566,7 @@ export function CommitmentRow({
 
         {settled && <p className="text-faint-foreground text-[11.5px]">{settled}</p>}
 
-        {open && commitment.question && (
+        {open && commitment.question && !spoken && (
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px]">
             <span className="text-ai">{commitment.question}</span>
             <button
@@ -369,20 +590,27 @@ export function CommitmentRow({
             >
               {m.notNeeded}
             </button>
+            <button
+              type="button"
+              onClick={() => words.answer(commitment)}
+              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/60 rounded-sm outline-none focus-visible:ring-2"
+            >
+              {w.answer}
+            </button>
           </div>
         )}
+
+        <PendingWordsLine pending={pending} className="mt-0.5" />
       </div>
 
       <CommitmentMenu
         commitment={commitment}
         onRemind={onRemind}
-        onCorrect={() => {
-          // From the words as they are now: the Segretario may have changed them since.
-          setText(commitment.text)
-          setEditing(true)
-        }}
+        words={words}
+        onRewrite={() => setRewriting(true)}
         className="mt-[1px] opacity-0 group-hover/commitment:opacity-100"
       />
+      {!shared && own.dialogs}
     </li>
   )
 }
@@ -390,23 +618,19 @@ export function CommitmentRow({
 /**
  * What can be done to an open thing besides ticking it, wherever it is
  * shown — the reader, a project, Oggi: chase it, say it is not needed, put
- * it off, move its deadline, correct its words; for one settled, reopen it.
+ * it off, move its deadline, rewrite or correct its words, answer its
+ * question; for one settled, reopen it (`commitmentActions`).
  */
 export function CommitmentMenu({
   commitment,
-  onRemind,
-  onCorrect,
-  className
-}: {
+  className,
+  ...options
+}: CommitmentActionOptions & {
   commitment: Commitment
-  onRemind?: (commitment: Commitment) => void
-  /** Where the words can be corrected in place. */
-  onCorrect?: () => void
   className?: string
 }): React.JSX.Element {
   const m = useMessages(MESSAGES)
-  const open = commitment.status === 'aperta'
-  const awaited = commitment.kind === 'aspetti'
+  const w = useMessages(WORK_WORDS)
 
   return (
     <DropdownMenu>
@@ -423,65 +647,7 @@ export function CommitmentMenu({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[13rem]">
-        {open ? (
-          <>
-            {awaited && onRemind && (
-              <DropdownMenuItem onSelect={() => onRemind(commitment)}>
-                {m.followUp}
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuItem onSelect={() => void setStatus(commitment, 'non_serve')}>
-              {m.notNeeded}
-            </DropdownMenuItem>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>{m.postpone}</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {dayChoices(m).map((choice) => (
-                  <DropdownMenuItem
-                    key={choice.day}
-                    onSelect={() => void setStatus(commitment, 'rinviata', { until: choice.day })}
-                  >
-                    {choice.label}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>{m.deadline}</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => void edit(commitment, { due: inDays(0) })}>
-                  {m.today}
-                </DropdownMenuItem>
-                {dayChoices(m).map((choice) => (
-                  <DropdownMenuItem
-                    key={choice.day}
-                    onSelect={() => void edit(commitment, { due: choice.day })}
-                  >
-                    {choice.label}
-                  </DropdownMenuItem>
-                ))}
-                {commitment.due && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={() => void edit(commitment, { due: null })}>
-                      {m.noDeadline}
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            {onCorrect && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={onCorrect}>{m.correct}</DropdownMenuItem>
-              </>
-            )}
-          </>
-        ) : (
-          <DropdownMenuItem onSelect={() => void setStatus(commitment, 'aperta')}>
-            {m.reopen}
-          </DropdownMenuItem>
-        )}
+        <ActionItems actions={commitmentActions(commitment, m, w, options)} />
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -498,6 +664,7 @@ export function CommitmentList({
   className?: string
 }): React.JSX.Element | null {
   const m = useMessages(MESSAGES)
+  const words = useWorkWords()
   const [showSettled, setShowSettled] = useState(false)
   const open = commitments.filter((commitment) => commitment.status === 'aperta')
   const settled = commitments.filter((commitment) => commitment.status !== 'aperta')
@@ -511,7 +678,12 @@ export function CommitmentList({
       {open.length > 0 && (
         <ul className="flex flex-col gap-1">
           {open.map((commitment) => (
-            <CommitmentRow key={commitment.id} commitment={commitment} onRemind={onRemind} />
+            <CommitmentRow
+              key={commitment.id}
+              commitment={commitment}
+              onRemind={onRemind}
+              words={words}
+            />
           ))}
         </ul>
       )}
@@ -527,12 +699,13 @@ export function CommitmentList({
           {showSettled && (
             <ul className="flex flex-col gap-1">
               {settled.map((commitment) => (
-                <CommitmentRow key={commitment.id} commitment={commitment} />
+                <CommitmentRow key={commitment.id} commitment={commitment} words={words} />
               ))}
             </ul>
           )}
         </>
       )}
+      {words.dialogs}
     </div>
   )
 }

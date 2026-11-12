@@ -6,11 +6,19 @@ import { CompassStar } from '@renderer/components/ui/compass-star'
 import { Input } from '@renderer/components/ui/input'
 import { dayKey } from '@renderer/features/calendar/calendar-dates'
 import { CommitmentRow } from '@renderer/features/segretario/commitment-row'
-import { useOpenLink } from '@renderer/features/segretario/segretario-text'
+import { LinkedWords, useOpenLink } from '@renderer/features/segretario/segretario-text'
+import {
+  dimmedBy,
+  PendingWordsLine,
+  RewriteField,
+  useWorkWords,
+  WorkMenu
+} from '@renderer/features/segretario/work-words'
 import { useMessages } from '@renderer/lib/i18n'
+import { cn } from '@renderer/lib/utils'
 import type { CalendarEvent } from '@shared/calendar'
 import { defineMessages, type Messages } from '@shared/i18n'
-import type { EventWhose, EventWork } from '@shared/segretario'
+import type { EventWhose, EventWork, LinkedText } from '@shared/segretario'
 
 const MESSAGES = defineMessages({
   yoursByUser: {
@@ -50,8 +58,94 @@ const MESSAGES = defineMessages({
     en: 'Something to do for this meeting',
     it: 'Una cosa da fare per questo incontro',
     de: 'Eine Aufgabe für diese Besprechung'
-  }
+  },
+  prepare: { en: 'To prepare', it: 'Per prepararti', de: 'Zur Vorbereitung' }
 })
+
+/** What the Segretario wrote to prepare for an event, kept current while it and the user change it. */
+function useEventPrep(eventKey: string): (LinkedText & { writtenAt: number }) | null {
+  const [prep, setPrep] = useState<{
+    eventKey: string
+    value: (LinkedText & { writtenAt: number }) | null
+  } | null>(null)
+
+  useEffect(() => {
+    let current = true
+    const load = (): void =>
+      void window.segretarioApi
+        .eventPrep(eventKey)
+        .then((value) => current && setPrep({ eventKey, value }))
+
+    load()
+    const unsubscribe = window.segretarioApi.onWorkChanged(load)
+
+    return () => {
+      current = false
+      unsubscribe()
+    }
+  }, [eventKey])
+
+  return prep?.eventKey === eventKey ? prep.value : null
+}
+
+/**
+ * How to prepare for a meeting, as the Segretario wrote it, with the user's
+ * word on it (vision §10.1): rewritten in place, or corrected in words — then
+ * dimmed, until the Segretario has put it right.
+ */
+export function EventPrepSection({ eventKey }: { eventKey: string }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
+  const prep = useEventPrep(eventKey)
+  const words = useWorkWords()
+  const [editing, setEditing] = useState(false)
+
+  if (!prep) {
+    return null
+  }
+
+  const target = { kind: 'preparazione', eventKey } as const
+
+  return (
+    <div className="group/prep flex flex-col gap-1.5">
+      <div className="flex items-center gap-1.5">
+        <p className="text-ai flex min-w-0 flex-1 items-center gap-1.5 text-[12px] font-semibold">
+          <CompassStar className="text-ai-star size-3.5" />
+          {m.prepare}
+        </p>
+        {!editing && (
+          <WorkMenu
+            target={target}
+            pending={prep.pending}
+            about={prep.text}
+            words={words}
+            onRewrite={() => setEditing(true)}
+            label={m.prepare}
+            className="opacity-0 group-hover/prep:opacity-100"
+          />
+        )}
+      </div>
+      {editing ? (
+        <RewriteField
+          target={target}
+          text={prep.text}
+          label={m.prepare}
+          onDone={() => setEditing(false)}
+          className="text-[13px] leading-[1.5]"
+        />
+      ) : (
+        <div className="border-ai-line flex flex-col gap-1 border-l-2 pl-2.5">
+          <LinkedWords
+            text={prep.text}
+            links={prep.links}
+            className={cn('text-foreground text-[13.5px] leading-[1.5]', dimmedBy(prep.pending))}
+          />
+          <PendingWordsLine pending={prep.pending} />
+        </div>
+      )}
+      {words.dialogs}
+    </div>
+  )
+}
 
 /** What the work holds of an event, kept current while the Segretario and the user change it. */
 function useEventWork(eventKey: string): EventWork | null {
@@ -136,6 +230,7 @@ export function EventWorkSection({ event }: { event: CalendarEvent }): React.JSX
   const m = useMessages(MESSAGES)
   const work = useEventWork(event.key)
   const openLink = useOpenLink()
+  const words = useWorkWords()
   const [text, setText] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -204,11 +299,12 @@ export function EventWorkSection({ event }: { event: CalendarEvent }): React.JSX
           </p>
           <ul className="flex flex-col gap-1.5">
             {work.commitments.map((commitment) => (
-              <CommitmentRow key={commitment.id} commitment={commitment} />
+              <CommitmentRow key={commitment.id} commitment={commitment} words={words} />
             ))}
           </ul>
         </div>
       )}
+      {words.dialogs}
       <form
         className="flex items-center gap-2"
         onSubmit={(formEvent) => {

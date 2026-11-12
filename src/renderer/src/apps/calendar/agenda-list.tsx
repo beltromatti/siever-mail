@@ -16,6 +16,7 @@ import {
 } from '@renderer/features/segretario/day-line-source'
 
 import { dateFormat, dayKey, isOnDay, sameDay } from '@renderer/features/calendar/calendar-dates'
+import { RepeatMark } from '@renderer/features/calendar/repeat-mark'
 import { dotStyle } from './event-style'
 import type { CalendarSelection } from './time-grid'
 import { calendarOf, type ProposedEvent } from './use-calendar-data'
@@ -38,7 +39,8 @@ const FULL_DAY: Intl.DateTimeFormatOptions = { dateStyle: 'full' }
 /**
  * The days ahead one under the other: each with its events, the deadlines
  * the mail gives it and the events proposed, as a list to read through.
- * Days with nothing are left out, today aside.
+ * Days with nothing are left out, today aside. Each thing has its
+ * right-click menu, and each day.
  */
 export function AgendaList({
   days,
@@ -48,7 +50,11 @@ export function AgendaList({
   proposals,
   selection,
   onSelect,
-  onOpenLine
+  onOpenLine,
+  onEventMenu,
+  onProposalMenu,
+  onDueMenu,
+  onDayMenu
 }: {
   days: ReadonlyArray<Date>
   events: ReadonlyArray<CalendarEvent>
@@ -58,6 +64,10 @@ export function AgendaList({
   selection: CalendarSelection
   onSelect: (selection: CalendarSelection) => void
   onOpenLine: (line: DayLine) => void
+  onEventMenu: (event: CalendarEvent) => void
+  onProposalMenu: (proposed: ProposedEvent) => void
+  onDueMenu: (line: DayLine) => void
+  onDayMenu: (day: Date) => void
 }): React.JSX.Element {
   const m = useMessages(MESSAGES)
   const responses = useMessages(RESPONSE_LABELS)
@@ -94,7 +104,13 @@ export function AgendaList({
               aria-label={dateFormat(FULL_DAY).format(day)}
               className="grid grid-cols-[56px_minmax(0,1fr)] gap-x-5 border-b py-4 last:border-b-0"
             >
-              <div className="flex flex-col items-start leading-none">
+              <div
+                className="flex flex-col items-start leading-none"
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  onDayMenu(day)
+                }}
+              >
                 <span className="eyebrow">
                   {isToday ? m.today : dateFormat(WEEKDAY).format(day)}
                 </span>
@@ -119,6 +135,10 @@ export function AgendaList({
                       <button
                         type="button"
                         onClick={() => onSelect({ kind: 'event', key: event.key })}
+                        onContextMenu={(click) => {
+                          click.preventDefault()
+                          onEventMenu(event)
+                        }}
                         className={cn(
                           'hover:bg-hover focus-visible:ring-ring/60 grid w-full grid-cols-[92px_minmax(0,1fr)] items-baseline gap-x-3 rounded-[7px] px-2 py-1.5 text-left outline-none focus-visible:ring-2',
                           event.key === selectedId && 'bg-selected'
@@ -139,6 +159,7 @@ export function AgendaList({
                             )}
                           >
                             {event.title}
+                            <RepeatMark event={event} className="ml-1.5" />
                             {event.myResponse &&
                               event.myResponse !== 'accepted' &&
                               event.myResponse !== 'declined' && (
@@ -169,6 +190,10 @@ export function AgendaList({
                       <button
                         type="button"
                         onClick={() => onSelect({ kind: 'proposal', id: proposed.proposal.id })}
+                        onContextMenu={(click) => {
+                          click.preventDefault()
+                          onProposalMenu(proposed)
+                        }}
                         className={cn(
                           'hover:bg-hover focus-visible:ring-ring/60 grid w-full grid-cols-[92px_minmax(0,1fr)] items-baseline gap-x-3 rounded-[7px] px-2 py-1.5 text-left outline-none focus-visible:ring-2',
                           proposed.proposal.id === selectedId && 'bg-selected'
@@ -189,6 +214,10 @@ export function AgendaList({
                       <button
                         type="button"
                         onClick={() => onOpenLine(line)}
+                        onContextMenu={(click) => {
+                          click.preventDefault()
+                          onDueMenu(line)
+                        }}
                         className="hover:bg-hover focus-visible:ring-ring/60 grid w-full grid-cols-[92px_minmax(0,1fr)] items-baseline gap-x-3 rounded-[7px] px-2 py-1.5 text-left outline-none focus-visible:ring-2"
                       >
                         <span className="text-ai flex items-center gap-1.5 text-[11.5px] font-semibold whitespace-nowrap">

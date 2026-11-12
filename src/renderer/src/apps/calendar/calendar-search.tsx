@@ -85,7 +85,8 @@ function FoundEvent({
   id,
   active,
   onHover,
-  onChoose
+  onChoose,
+  onMenu
 }: {
   event: CalendarEvent
   words: readonly string[]
@@ -94,6 +95,7 @@ function FoundEvent({
   active: boolean
   onHover: () => void
   onChoose: () => void
+  onMenu: () => void
 }): React.JSX.Element {
   const day = eventStartDay(event)
 
@@ -106,6 +108,10 @@ function FoundEvent({
       aria-selected={active}
       onMouseEnter={onHover}
       onClick={onChoose}
+      onContextMenu={(click) => {
+        click.preventDefault()
+        onMenu()
+      }}
       className={cn(
         'grid w-full grid-cols-[92px_minmax(0,1fr)] items-baseline gap-x-3 rounded-[6px] px-2 py-1.5 text-left',
         active && 'bg-selected'
@@ -150,18 +156,20 @@ function FoundEvent({
  * The Calendario's search, as the mail's: words, case and accents aside,
  * looked for in every event kept of the calendars shown — the past ones
  * too — listed under the field, those to come first. Arrows move, Enter or
- * a click goes to the event's day with the event open; Esc empties the
- * field, and a second Esc leaves it.
+ * a click goes to the event's day with the event open, a right click gives
+ * its menu; Esc empties the field, and a second Esc leaves it.
  */
 export function CalendarSearch({
   calendars,
   inputRef,
-  onOpen
+  onOpen,
+  onEventMenu
 }: {
   calendars: ReadonlyArray<CalendarListEntry> | null
   /** For the window's "Cerca" command, which puts the cursor here. */
   inputRef?: Ref<HTMLInputElement>
   onOpen: (event: CalendarEvent) => void
+  onEventMenu: (event: CalendarEvent) => void
 }): React.JSX.Element {
   const m = useMessages(MESSAGES)
   const [query, setQuery] = useState('')
@@ -259,6 +267,11 @@ export function CalendarSearch({
       active={index === activeIndex}
       onHover={() => setActive(index)}
       onChoose={() => choose(event)}
+      onMenu={() => {
+        // A result acted on from its menu, as one chosen: the list gives way to what follows.
+        ownInputRef.current?.blur()
+        onEventMenu(event)
+      }}
     />
   )
 

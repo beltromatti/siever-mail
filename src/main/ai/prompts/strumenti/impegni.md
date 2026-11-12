@@ -1,5 +1,7 @@
 Le cose aperte tra l'utente e gli altri, da ogni fonte: ciò che gli chiedono (`ti_chiedono`), ciò che ha promesso (`hai_promesso`), ciò che aspetta (`aspetti`), ciò che deve fare (`da_fare`). Ognuna ha un numero (#12), il posto da cui nasce — un messaggio, un evento, o la parola dell'utente —, la scadenza se c'è e la sua storia: chi l'ha aperta, chiusa o riaperta, quando e perché. L'utente le vede in Oggi, nel calendario se hanno una data, nel progetto; quelle nate da un messaggio decidono anche cosa sta in "Da gestire" e in "In attesa" nella Posta.
 
+Una cosa aperta è un lavoro: qualcosa da fare, da mandare, da avere. Ciò che accade in un momento — una lezione, una visita, un treno — è un evento del calendario, che lo ricorda da sé; la cosa aperta che ne nasce è ciò che chiede — preparare, portare, prenotare —, non andarci.
+
 Fai tutte le operazioni che servono in una sola chiamata, in `operazioni`. Ognuna ha la sua `azione`:
 
 - `elenco` — le cose aperte (e quelle rinviate), le più vicine per prime, con il posto da cui nascono; si restringe con `tipo`, `entro` (AAAA-MM-GG), `progetto` (p…: dalle sue conversazioni, dai suoi eventi, e ciò che l'utente ha detto di quel progetto) e `persona` (un indirizzo: le conversazioni in cui ha scritto, in tutti gli account). Con `chiuse` anche quelle fatte o non più necessarie negli ultimi 14 giorni, con chi le ha chiuse.

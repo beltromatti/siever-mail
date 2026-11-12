@@ -1,6 +1,7 @@
 import { shell } from 'electron'
 import { z } from 'zod'
 
+import { chooseFiles } from '@main/ai/attachments'
 import type { SegretarioService } from '@main/ai/segretario-service'
 import { reachablePath } from '@main/services/network-volumes'
 import { diagnostics } from '@main/diagnostics/log'
@@ -8,7 +9,7 @@ import { messages } from '@main/i18n'
 import { handleIpc, type HandleOptions } from '@main/ipc/handle'
 import type { DiagnosticFields } from '@shared/diagnostics'
 import { defineMessages } from '@shared/i18n'
-import { SEGRETARIO_IPC, type OnboardingState } from '@shared/segretario'
+import { REQUEST_ATTACHMENTS, SEGRETARIO_IPC, type OnboardingState } from '@shared/segretario'
 
 const log = diagnostics('segretario')
 
@@ -34,6 +35,11 @@ const MESSAGES = defineMessages({
     it: 'Scrivi cosa cerchi.',
     de: 'Schreiben Sie, was Sie suchen.'
   },
+  writeYourWords: {
+    en: 'Write what you want to say.',
+    it: 'Scrivi cosa vuoi dire.',
+    de: 'Schreiben Sie, was Sie sagen möchten.'
+  },
   folderNotOpened: {
     en: (reason: string) => `The folder can’t be opened: ${reason}`,
     it: (reason: string) => `La cartella non si apre: ${reason}`,
@@ -55,6 +61,19 @@ const USER_ANSWERS: Readonly<
   },
   [SEGRETARIO_IPC.undoCommitmentStatus]: { ev: 'commitment.status-undone' },
   [SEGRETARIO_IPC.editCommitment]: { ev: 'commitment.edited' },
+  [SEGRETARIO_IPC.rewriteWork]: {
+    ev: 'work.rewritten',
+    fields: (target) => ({ kind: String((target as { kind?: unknown })?.kind) })
+  },
+  [SEGRETARIO_IPC.correctWork]: {
+    ev: 'work.corrected',
+    fields: (target) => ({ kind: String((target as { kind?: unknown })?.kind) })
+  },
+  [SEGRETARIO_IPC.answerQuestion]: { ev: 'commitment.answered' },
+  [SEGRETARIO_IPC.withdrawWords]: {
+    ev: 'work.words-withdrawn',
+    fields: (target) => ({ kind: String((target as { kind?: unknown })?.kind) })
+  },
   [SEGRETARIO_IPC.openCommitment]: { ev: 'commitment.opened' },
   [SEGRETARIO_IPC.markHandled]: {
     ev: 'messages.handled',
@@ -157,6 +176,23 @@ const commitmentChangeSchema = z
   })
   .strict()
 
+/** What the Segretario wrote that the user puts right (vision §10.1). */
+const workTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('impegno'), id: commitmentIdSchema }).strict(),
+  messageSchema.extend({ kind: z.literal('nota') }).strict(),
+  z.object({ kind: z.literal('preparazione'), eventKey: z.string().min(1).max(2000) }).strict(),
+  z.object({ kind: z.literal('punto'), projectId: idSchema }).strict(),
+  z.object({ kind: z.literal('lettera'), day: daySchema }).strict(),
+  messageSchema.extend({ kind: z.literal('risposta') }).strict()
+])
+
+/** The user's words on it, or their version of it: a letter is the longest. */
+const workWordsSchema = z
+  .string()
+  .trim()
+  .min(1, { error: () => messages(MESSAGES).writeYourWords })
+  .max(20_000)
+
 const newCommitmentSchema = z
   .object({ kind: commitmentKindSchema, text: commitmentTextSchema, due: daySchema.nullable() })
   .strict()
@@ -184,6 +220,35 @@ const textSchema = z
   .trim()
   .min(1, { error: () => messages(MESSAGES).writeToSegretario })
   .max(20_000)
+
+/** A request's words: some, unless it carries files — their being any is the service's to say. */
+const requestTextSchema = (attachments: ReadonlyArray<string>): z.ZodType<string> =>
+  attachments.length > 0 ? z.string().trim().max(20_000) : textSchema
+
+/** The attachments a request carries, by the ids they were read under, in their order. */
+const attachmentIdsSchema = z
+  .array(z.string().min(1).max(100))
+  .max(REQUEST_ATTACHMENTS.count)
+  .optional()
+  .transform((ids) => ids ?? [])
+
+/** A file by its path, or a picture without one: its bytes, up to what a file is read to. */
+const attachmentSourceSchema = z.union([
+  z.object({ path: z.string().min(1).max(4096) }).strict(),
+  z
+    .object({
+      picture: z
+        .object({
+          name: z.string().max(500),
+          type: z.string().regex(/^image\/[\w.+-]+$/),
+          data: z
+            .instanceof(Uint8Array)
+            .refine((data) => data.byteLength <= REQUEST_ATTACHMENTS.fileBytes)
+        })
+        .strict()
+    })
+    .strict()
+])
 
 // The page sends the setup whole and `strict` refuses a field it does not know: the fields
 // are the shared type's, every one, which the compiler checks.
@@ -340,6 +405,18 @@ export function registerSegretarioIpc(
   handle(SEGRETARIO_IPC.editCommitment, (id: unknown, changes: unknown) =>
     segretario.editCommitment(commitmentIdSchema.parse(id), commitmentChangeSchema.parse(changes))
   )
+  handle(SEGRETARIO_IPC.rewriteWork, (target: unknown, text: unknown) =>
+    segretario.rewriteWork(workTargetSchema.parse(target), workWordsSchema.parse(text))
+  )
+  handle(SEGRETARIO_IPC.correctWork, (target: unknown, words: unknown) =>
+    segretario.correctWork(workTargetSchema.parse(target), workWordsSchema.parse(words))
+  )
+  handle(SEGRETARIO_IPC.answerQuestion, (commitmentId: unknown, words: unknown) =>
+    segretario.answerQuestion(commitmentIdSchema.parse(commitmentId), workWordsSchema.parse(words))
+  )
+  handle(SEGRETARIO_IPC.withdrawWords, (target: unknown) =>
+    segretario.withdrawWords(workTargetSchema.parse(target))
+  )
   handle(SEGRETARIO_IPC.openCommitment, (from: unknown, input: unknown) =>
     segretario.openCommitment(commitmentFromSchema.parse(from), newCommitmentSchema.parse(input))
   )
@@ -479,11 +556,33 @@ export function registerSegretarioIpc(
     )
   )
   handle(SEGRETARIO_IPC.getActivity, (id: unknown) => segretario.getActivity(idSchema.parse(id)))
-  handle(SEGRETARIO_IPC.startActivity, (text: unknown, context: unknown) =>
-    segretario.startActivity(textSchema.parse(text), contextSchema.parse(context))
+  handle(SEGRETARIO_IPC.startActivity, (text: unknown, context: unknown, attachments: unknown) => {
+    const carried = attachmentIdsSchema.parse(attachments)
+    return segretario.startActivity(
+      requestTextSchema(carried).parse(text),
+      contextSchema.parse(context),
+      carried
+    )
+  })
+  handle(
+    SEGRETARIO_IPC.sendMessage,
+    (id: unknown, text: unknown, context: unknown, attachments: unknown) => {
+      const carried = attachmentIdsSchema.parse(attachments)
+      return segretario.sendMessage(
+        idSchema.parse(id),
+        requestTextSchema(carried).parse(text),
+        contextSchema.parse(context),
+        carried
+      )
+    }
   )
-  handle(SEGRETARIO_IPC.sendMessage, (id: unknown, text: unknown, context: unknown) =>
-    segretario.sendMessage(idSchema.parse(id), textSchema.parse(text), contextSchema.parse(context))
+  // The system's dialog waits for the user, not the app.
+  handle(SEGRETARIO_IPC.chooseFiles, () => chooseFiles(), { untimed: true })
+  handle(SEGRETARIO_IPC.prepareAttachment, (source: unknown) =>
+    segretario.prepareAttachment(attachmentSourceSchema.parse(source))
+  )
+  handle(SEGRETARIO_IPC.dropAttachments, (ids: unknown) =>
+    segretario.dropAttachments(z.array(idSchema).max(1000).parse(ids))
   )
   handle(SEGRETARIO_IPC.retryActivity, (id: unknown) =>
     segretario.retryActivity(idSchema.parse(id))

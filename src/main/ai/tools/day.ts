@@ -72,8 +72,11 @@ const TASK_WORDS: Record<string, string> = {
   al_passo: 'Al passo'
 }
 
-/** Who writes the letter: the day's own work, and the user who asks for it. */
-const LETTER_WRITERS: ReadonlyArray<TaskKind> = ['giornata', 'richiesta']
+/**
+ * Who writes the letter: the day's own work, the user who asks for it, and
+ * the reflection putting it right as the user said (§10.1).
+ */
+const LETTER_WRITERS: ReadonlyArray<TaskKind> = ['giornata', 'richiesta', 'riflessione']
 
 /**
  * The desk's own text (vision §13.1): the letter at the top of Oggi, a day's
@@ -103,9 +106,17 @@ export const todayTool: SegretarioTool = {
       const current = await context.registry.day.letter(day)
       context.run.seen.set(seen, current?.writtenAt ?? 0)
 
+      const at = current
+        ? new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(
+            new Date(current.writtenAt)
+          )
+        : null
+
       return {
         content: current
-          ? `La lettera di oggi, scritta alle ${new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(new Date(current.writtenAt))}:\n${unlinked(current.text)}`
+          ? current.writtenBy === 'utente'
+            ? `La lettera di oggi, riscritta dall'utente alle ${at}: le parole sono sue, e restano dove valgono ancora.\n${unlinked(current.text)}`
+            : `La lettera di oggi, scritta alle ${at}:\n${unlinked(current.text)}`
           : "Oggi non c'è ancora una lettera.",
         summary: messages(STEPS).readLetter
       }

@@ -1,5 +1,6 @@
 import type { CalendarRole } from '@shared/calendar'
-import type { HandleLink } from '@shared/segretario'
+import { workTargetKey, type HandleLink, type WorkTarget } from '@shared/segretario'
+import { linkedHandles, relinked, unlinked } from '@shared/segretario-links'
 
 import { movedUnder } from '../../files/paths'
 import { messages } from '../../i18n'
@@ -7,13 +8,15 @@ import { placeholders, type Sql } from '../sql'
 import { AlertStore } from './alerts'
 import { CommitmentStore } from './commitments'
 import { DayStore, type DayLetter, type MeetingPrep } from './day'
+import { relocateEvents, type EventMove } from './event-moves'
 import { NoteStore, type NoteInput } from './notes'
 import { OwnershipStore, type EventMark } from './ownership'
 import { ProjectStore } from './projects'
 import { ProposalStore } from './proposals'
 import { ReadMarks } from './read-marks'
 import { ReplyStore } from './replies'
-import { MESSAGES } from './registry.messages'
+import { MESSAGES, REFUSALS } from './registry.messages'
+import { WordStore } from './words'
 import {
   OWED_KINDS,
   type Actor,
@@ -58,9 +61,7 @@ export interface RegistryHooks {
 const GONE_AFTER_MS = 30 * 60 * 1000
 
 /** Where a lesson about an open thing comes from: its message or its event; nothing for the user's word. */
-function lessonSource(
-  record: CommitmentRecord
-): { messaggio: { accountId: string; messageKey: string } } | { evento: string } | object {
+function lessonSource(record: CommitmentRecord): Record<string, unknown> {
   const { origin } = record
   return origin.kind === 'messaggio'
     ? { messaggio: { accountId: origin.accountId, messageKey: origin.messageKey } }
@@ -106,6 +107,7 @@ export class Registry {
   readonly ownership: OwnershipStore
   readonly alerts: AlertStore
   readonly readMarks: ReadMarks
+  readonly words: WordStore
 
   constructor(
     private readonly sql: Sql,
@@ -120,6 +122,7 @@ export class Registry {
     this.ownership = new OwnershipStore(sql)
     this.alerts = new AlertStore(sql)
     this.readMarks = new ReadMarks(sql)
+    this.words = new WordStore(sql)
   }
 
   /* ─────────────────────────────── notes ─────────────────────────────── */
@@ -147,13 +150,27 @@ export class Registry {
     anchor: MessageAnchor & { direction: 'in' | 'out'; messageDate: string },
     input: NoteInput,
     actor: Actor,
-    options: { twinAccountId?: string | null; seenRevision?: number } = {}
+    options: {
+      twinAccountId?: string | null
+      seenRevision?: number
+      /** The user's change teaches as a correction; false where it teaches otherwise (`rewrite`). */
+      lesson?: boolean
+    } = {}
   ): Promise<{ record: NoteRecord; change: RegistryChange }> {
     const before = await this.notes.get(anchor.accountId, anchor.messageKey)
-    const { record, created } = await this.notes.write(anchor, input, actor, options)
+    const { record, created } = await this.notes.write(
+      anchor,
+      input,
+      await this.onWords(actor, {
+        kind: 'nota',
+        accountId: anchor.accountId,
+        messageKey: anchor.messageKey
+      }),
+      options
+    )
     const projectIds = await this.projects.markStaleByThreads([anchor])
 
-    if (actor.by === 'utente' && before) {
+    if (actor.by === 'utente' && before && options.lesson !== false) {
       this.hooks.lesson('nota_corretta', {
         messaggio: { accountId: record.accountId, messageKey: record.messageKey },
         prima: { sintesi: before.summary, natura: before.nature, importanza: before.priority },
@@ -254,13 +271,24 @@ export class Registry {
       origin?: CommitmentOrigin
     },
     actor: Actor,
-    options: { seenRevision?: number; evidence?: Evidence; reason?: string } = {}
+    options: {
+      seenRevision?: number
+      evidence?: Evidence
+      reason?: string
+      /** The user's change teaches as a correction; false where it teaches otherwise (`rewrite`). */
+      lesson?: boolean
+    } = {}
   ): Promise<{ record: CommitmentRecord; change: RegistryChange }> {
     const before = await this.commitments.get(id)
-    const { record, historyId } = await this.commitments.edit(id, changes, actor, options)
+    const { record, historyId } = await this.commitments.edit(
+      id,
+      changes,
+      await this.onWords(actor, { kind: 'impegno', id }),
+      options
+    )
     const place = await this.commitmentPlace(record)
 
-    if (actor.by === 'utente' && before) {
+    if (actor.by === 'utente' && before && options.lesson !== false) {
       this.hooks.lesson('impegno_corretto', {
         ...lessonSource(record),
         impegno: record.id,
@@ -297,7 +325,12 @@ export class Registry {
     } = {}
   ): Promise<{ record: CommitmentRecord; change: RegistryChange | null }> {
     const before = await this.commitments.get(id)
-    const { record, historyId } = await this.commitments.setStatus(id, status, actor, options)
+    const { record, historyId } = await this.commitments.setStatus(
+      id,
+      status,
+      await this.onWords(actor, { kind: 'impegno', id }),
+      options
+    )
 
     if (historyId === null) {
       return { record, change: null }
@@ -369,7 +402,15 @@ export class Registry {
     dropIds: ReadonlyArray<number>,
     actor: Actor
   ): Promise<RegistryChange[]> {
-    const merged = await this.commitments.merge(keepId, dropIds, actor)
+    // The user's words on any of them — «it is the same as #5» — are their word on the merge.
+    const carried = await Promise.all(
+      [keepId, ...dropIds].map((id) => this.onWords(actor, { kind: 'impegno', id }))
+    )
+    const merged = await this.commitments.merge(
+      keepId,
+      dropIds,
+      carried.find((acting) => acting.onUsersWord) ?? actor
+    )
     const changes: RegistryChange[] = []
 
     for (const { record, historyId } of merged) {
@@ -519,7 +560,14 @@ export class Registry {
     actor: Actor,
     seenRevision?: number
   ): Promise<ProjectRecord> {
-    const record = await this.projects.setState(id, state, links, basisAt, seenRevision)
+    const record = await this.projects.setState(
+      id,
+      state,
+      links,
+      basisAt,
+      seenRevision,
+      actor.by === 'utente' ? 'utente' : 'segretario'
+    )
     this.emitProject(record, 'punto', messages(MESSAGES).projectState(record.title), actor)
     return record
   }
@@ -934,6 +982,18 @@ export class Registry {
     return this.projects.relocateFolders(movedUnder(from, to))
   }
 
+  /**
+   * Events moved to another calendar under new keys (vision §7.5): what the
+   * registry keeps of each follows it, in one transaction — see
+   * `relocateEvents`. How many rows followed.
+   */
+  async relocateEvents(
+    moves: ReadonlyArray<EventMove>,
+    seriesOf: (eventKey: string) => Promise<string | null>
+  ): Promise<number> {
+    return relocateEvents(this.sql, moves, seriesOf)
+  }
+
   /* ──────────────────────────────── views ──────────────────────────────── */
 
   /**
@@ -1177,7 +1237,13 @@ export class Registry {
     actor: Actor,
     seenAt?: number
   ): Promise<DayLetter> {
-    const letter = await this.day.saveLetter(day, text, links, seenAt)
+    const letter = await this.day.saveLetter(
+      day,
+      text,
+      links,
+      seenAt,
+      actor.by === 'utente' ? 'utente' : 'segretario'
+    )
     this.emit(
       {
         object: 'giornata',
@@ -1203,7 +1269,14 @@ export class Registry {
     actor: Actor,
     seenAt?: number
   ): Promise<MeetingPrep> {
-    const prep = await this.day.savePrep(eventKey, text, links, actor.runId ?? null, seenAt)
+    const prep = await this.day.savePrep(
+      eventKey,
+      text,
+      links,
+      actor.runId ?? null,
+      seenAt,
+      actor.by === 'utente' ? 'utente' : 'segretario'
+    )
     this.emit(
       {
         object: 'giornata',
@@ -1218,6 +1291,352 @@ export class Registry {
       actor
     )
     return prep
+  }
+
+  /* ─────────────────────────── the user's words (§10.1) ─────────────────────────── */
+
+  /**
+   * A thing the Segretario wrote, as the user's words on it need it: what it
+   * says now, where it shows — for the views to follow —, and where it
+   * comes from, for the lesson. Null when it is no longer there.
+   */
+  private async workThing(target: WorkTarget): Promise<{
+    said: string
+    object: RegistryChange['object']
+    place: Pick<RegistryChange, 'accountId' | 'threadIds' | 'messageKeys' | 'projectIds'>
+    source: Record<string, unknown>
+    question: string | null
+  } | null> {
+    const nowhere = { accountId: null, threadIds: [], messageKeys: [], projectIds: [] }
+
+    switch (target.kind) {
+      case 'impegno': {
+        const record = await this.commitments.get(target.id)
+        const { origin } = record ?? {}
+
+        return record && origin
+          ? {
+              said: record.text,
+              object: 'impegno',
+              place:
+                origin.kind === 'messaggio'
+                  ? {
+                      accountId: origin.accountId,
+                      threadIds: [origin.threadId],
+                      messageKeys: [origin.messageKey],
+                      projectIds: []
+                    }
+                  : {
+                      ...nowhere,
+                      projectIds:
+                        origin.kind === 'utente' && origin.projectId ? [origin.projectId] : []
+                    },
+              source: lessonSource(record),
+              question: record.question
+            }
+          : null
+      }
+      case 'nota':
+      case 'risposta': {
+        const message = { accountId: target.accountId, messageKey: target.messageKey }
+        const found =
+          target.kind === 'nota'
+            ? await this.notes.get(target.accountId, target.messageKey)
+            : await this.replies.get(target.accountId, target.messageKey)
+
+        if (
+          !found ||
+          ('status' in found && found.status !== 'pronta' && found.status !== 'da_rivedere')
+        ) {
+          return null
+        }
+
+        return {
+          said: 'summary' in found ? found.summary : found.text,
+          object: target.kind,
+          place: {
+            accountId: target.accountId,
+            threadIds: [found.threadId],
+            messageKeys: [target.messageKey],
+            projectIds: []
+          },
+          source: { messaggio: message },
+          question: null
+        }
+      }
+      case 'preparazione': {
+        const prep = await this.day.prep(target.eventKey)
+        return prep
+          ? {
+              said: unlinked(prep.text),
+              object: 'giornata',
+              place: nowhere,
+              source: { evento: target.eventKey },
+              question: null
+            }
+          : null
+      }
+      case 'punto': {
+        const project = await this.projects.get(target.projectId)
+        return project?.state
+          ? {
+              said: unlinked(project.state),
+              object: 'progetto',
+              place: { ...nowhere, projectIds: [project.id] },
+              source: { progetto: project.title },
+              question: null
+            }
+          : null
+      }
+      case 'lettera': {
+        const letter = await this.day.letter(target.day)
+        return letter
+          ? {
+              said: unlinked(letter.text),
+              object: 'giornata',
+              place: nowhere,
+              source: { giorno: target.day },
+              question: null
+            }
+          : null
+      }
+    }
+  }
+
+  /** A run's actor on a thing: carrying the user's words on it, their word (`Actor.onUsersWord`). */
+  private async onWords(actor: Actor, target: WorkTarget): Promise<Actor> {
+    return actor.background && (await this.words.carriedBy(actor.runId, target))
+      ? { ...actor, onUsersWord: true }
+      : actor
+  }
+
+  /**
+   * The user's words on what the Segretario wrote (§10.1): what is wrong with
+   * it — it shows dimmed until put right — or the answer to the question
+   * it asks of an open thing. A lesson, with the thing as it reads now,
+   * which the reflection takes in soon after.
+   */
+  async giveWords(
+    target: WorkTarget,
+    kind: 'correzione' | 'risposta',
+    words: string
+  ): Promise<void> {
+    const said = words.trim()
+    const thing = await this.workThing(target)
+
+    if (!said) {
+      throw new RegistryRefusal('Parole vuote.', undefined, messages(REFUSALS).wordsEmpty)
+    }
+
+    if (!thing) {
+      throw new RegistryRefusal('Non c’è più.', undefined, messages(REFUSALS).workGone)
+    }
+
+    await this.words.give(kind === 'correzione' ? 'da_correggere' : 'risposta', target, said, {
+      ...thing.source,
+      com_era: thing.said,
+      ...(kind === 'risposta' ? { domanda: thing.question } : {})
+    })
+    this.emit(
+      {
+        object: thing.object,
+        action: kind === 'correzione' ? 'da_correggere' : 'risposta',
+        label: messages(MESSAGES).wordsGiven(kind === 'correzione'),
+        ...thing.place,
+        id: workTargetKey(target)
+      },
+      USER
+    )
+  }
+
+  /**
+   * Takes back the user's words on a thing, not yet taken in. Those a
+   * reflection was taking in already it may have acted on: their withdrawal
+   * is a lesson of its own, so the next one knows (§10).
+   */
+  async withdrawWords(target: WorkTarget): Promise<void> {
+    const taking = await this.words.withdraw(target)
+
+    if (taking.length > 0) {
+      this.hooks.lesson('parole_ritirate', {
+        oggetto: target,
+        parole: taking.map((given) => given.words)
+      })
+    }
+
+    await this.wordsMoved([target], USER, messages(MESSAGES).wordsWithdrawn)
+  }
+
+  /** The words on these things were taken in: what showed them shows the things again. */
+  async wordsTaken(targets: ReadonlyArray<WorkTarget>): Promise<void> {
+    await this.wordsMoved(targets, SYSTEM, messages(MESSAGES).wordsTaken)
+  }
+
+  private async wordsMoved(
+    targets: ReadonlyArray<WorkTarget>,
+    actor: Actor,
+    label: string
+  ): Promise<void> {
+    const seen = new Set<string>()
+
+    for (const target of targets) {
+      const key = workTargetKey(target)
+
+      if (seen.has(key)) {
+        continue
+      }
+
+      seen.add(key)
+      const thing = await this.workThing(target)
+      this.emit(
+        {
+          object: thing?.object ?? 'giornata',
+          action: 'parole',
+          label,
+          ...(thing?.place ?? { accountId: null, threadIds: [], messageKeys: [], projectIds: [] }),
+          id: key
+        },
+        actor
+      )
+    }
+  }
+
+  /**
+   * The user rewrote by hand what the Segretario wrote (§10.1): their version
+   * stands at once, written by them — a run that saw the one before meets
+   * a conflict (§4.6) — and teaches as a draft corrected does, with the
+   * before and the after. In words that stay, the links stay where their
+   * words survive (`relinked`). `eventTitle`, for a preparation's line.
+   */
+  async rewrite(
+    target: WorkTarget,
+    text: string,
+    options: { eventTitle?: string } = {}
+  ): Promise<void> {
+    const written = text.trim()
+
+    if (!written) {
+      throw new RegistryRefusal('Testo vuoto.', undefined, messages(REFUSALS).wordsEmpty)
+    }
+
+    const gone = (): RegistryRefusal =>
+      new RegistryRefusal('Non c’è più.', undefined, messages(REFUSALS).workGone)
+    const teach = (prima: string, dopo: string, source: Record<string, unknown>): void => {
+      if (prima.trim() !== dopo.trim()) {
+        this.hooks.lesson('riscritta', { oggetto: target, ...source, prima, dopo })
+      }
+    }
+    // Words that stay, with the links that still have their words.
+    const linked = (before: {
+      text: string
+      links: ReadonlyArray<HandleLink>
+    }): { text: string; links: HandleLink[] } => {
+      const next = relinked(written, before.text)
+      const kept = new Set(linkedHandles(next))
+      return { text: next, links: before.links.filter((link) => kept.has(link.handle)) }
+    }
+
+    switch (target.kind) {
+      case 'impegno': {
+        const before = await this.commitments.get(target.id)
+
+        if (!before) {
+          throw gone()
+        }
+
+        const { record } = await this.editCommitment(target.id, { text: written }, USER, {
+          lesson: false
+        })
+        teach(before.text, record.text, { ...lessonSource(record), impegno: record.id })
+        return
+      }
+      case 'nota': {
+        const before = await this.notes.get(target.accountId, target.messageKey)
+
+        if (!before) {
+          throw gone()
+        }
+
+        await this.writeNote(
+          {
+            accountId: before.accountId,
+            messageKey: before.messageKey,
+            threadId: before.threadId,
+            direction: before.direction,
+            messageDate: before.messageDate
+          },
+          {
+            summary: written,
+            nature: before.nature,
+            priority: before.priority,
+            reason: before.reason,
+            due: before.due
+          },
+          USER,
+          { twinAccountId: before.twinAccountId, lesson: false }
+        )
+        teach(before.summary, written, {
+          messaggio: { accountId: before.accountId, messageKey: before.messageKey }
+        })
+        return
+      }
+      case 'risposta': {
+        const before = await this.replies.get(target.accountId, target.messageKey)
+
+        if (!before || (before.status !== 'pronta' && before.status !== 'da_rivedere')) {
+          throw gone()
+        }
+
+        // The doubts were the Segretario's on its own words: the user's have none of them.
+        await this.saveReply(
+          { accountId: before.accountId, messageKey: before.messageKey, threadId: before.threadId },
+          { kind: before.kind, text: written, doubts: '' },
+          USER
+        )
+        teach(before.text, written, {
+          messaggio: { accountId: before.accountId, messageKey: before.messageKey },
+          tipo: before.kind
+        })
+        return
+      }
+      case 'preparazione': {
+        const before = await this.day.prep(target.eventKey)
+
+        if (!before) {
+          throw gone()
+        }
+
+        const next = linked(before)
+        await this.savePrep(target.eventKey, options.eventTitle ?? '', next.text, next.links, USER)
+        teach(unlinked(before.text), unlinked(next.text), { evento: target.eventKey })
+        return
+      }
+      case 'punto': {
+        const before = await this.projects.get(target.projectId)
+
+        if (!before) {
+          throw gone()
+        }
+
+        const next = linked({ text: before.state ?? '', links: before.stateLinks })
+        // Written by the user now, it is current: they saw the project as it is.
+        await this.setProjectState(before.id, next.text, next.links, Date.now(), USER)
+        teach(unlinked(before.state ?? ''), unlinked(next.text), { progetto: before.title })
+        return
+      }
+      case 'lettera': {
+        const before = await this.day.letter(target.day)
+
+        if (!before) {
+          throw gone()
+        }
+
+        const next = linked(before)
+        await this.saveLetter(target.day, next.text, next.links, USER)
+        teach(unlinked(before.text), unlinked(next.text), { giorno: target.day })
+        return
+      }
+    }
   }
 
   /* ─────────────────────────────── whose things are (§7.4) ─────────────────────────────── */

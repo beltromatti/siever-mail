@@ -85,10 +85,12 @@ describe('the calendar’s notifications', () => {
   let looking: boolean
   let seen: number | null
   let preferences: NotificationPreferences
+  let rekeyed: unknown[][]
 
   beforeEach(() => {
     vi.useFakeTimers({ now: NOW })
     shown = []
+    rekeyed = []
     given = new Set()
     events = []
     looking = false
@@ -109,7 +111,14 @@ describe('the calendar’s notifications', () => {
         const first = !given.has(key)
         given.add(key)
         return first
-      }
+      },
+      moveGiven: async (from: string, to: string) => {
+        for (const key of [...given].filter((candidate) => candidate.startsWith(from))) {
+          given.delete(key)
+          given.add(`${to}${key.slice(from.length)}`)
+        }
+      },
+      rekey: (...args: unknown[]) => void rekeyed.push(args)
     } as unknown as NotificationCenter
     notifications = new CalendarNotifications({
       center,
@@ -147,6 +156,26 @@ describe('the calendar’s notifications', () => {
     notifications.woke()
     await vi.advanceTimersByTimeAsync(MINUTE)
     expect(shown).toHaveLength(1)
+  })
+
+  it('follows an event moved to another calendar: given once there too, still on screen, leading to it there', async () => {
+    events = [event({ key: 'lavoro\u0000e1', reminders: [10] })]
+    notifications.start()
+    await vi.advanceTimersByTimeAsync(51 * MINUTE)
+    expect(shown).toHaveLength(1)
+
+    // Moved to another calendar before it begins: the same event, under another key.
+    events = [event({ key: 'vita\u0000e1', reminders: [10] })]
+    await notifications.eventsMoved([{ from: 'lavoro\u0000e1', to: 'vita\u0000e1' }])
+    notifications.woke()
+    await vi.advanceTimersByTimeAsync(MINUTE)
+
+    expect(shown).toHaveLength(1)
+    expect(rekeyed).toContainEqual([
+      'calendar:reminder:lavoro\u0000e1',
+      'calendar:reminder:vita\u0000e1',
+      { kind: 'event', eventKey: 'vita\u0000e1' }
+    ])
   })
 
   it('gives late what came due while away, if the event is still to come — not one begun', async () => {

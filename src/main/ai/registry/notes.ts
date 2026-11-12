@@ -144,7 +144,8 @@ export class NoteStore {
 
   /**
    * Writes a message's note — or corrects it. A note the user corrected is
-   * not rewritten by a run in the background.
+   * not rewritten by a run in the background — unless it carries the user's
+   * words on it (§10.1).
    */
   async write(
     anchor: MessageAnchor & { direction: 'in' | 'out'; messageDate: string },
@@ -209,7 +210,7 @@ export class NoteStore {
         )
       }
 
-      if (current?.writtenBy === 'utente' && actor.background) {
+      if (current?.writtenBy === 'utente' && actor.background && !actor.onUsersWord) {
         throw new RegistryRefusal(
           'La nota di questo messaggio l’ha corretta l’utente: non la riscrivere.',
           current

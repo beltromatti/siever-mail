@@ -78,13 +78,26 @@ export function entryOf(event: StoredEvent): ActivityEntry | null {
         context: payload.context,
         ...(payload.origin ? { origin: payload.origin } : {}),
         at: event.createdAt,
-        handles: handleLinks(payload.handles)
+        handles: handleLinks(payload.handles),
+        ...(payload.attachments?.length ? { attachments: payload.attachments } : {})
       }
     }
     case 'assistant': {
       const payload = event.payload as AssistantPayload
-      return payload.content.trim()
-        ? { kind: 'assistant', id: event.id, text: payload.content, at: event.createdAt }
+      const thought =
+        payload.thinkingMs !== undefined
+          ? { ms: payload.thinkingMs, tokens: payload.reasoningTokens ?? 0 }
+          : null
+
+      // A turn of calls alone shows for how it thought, at the head of its calls.
+      return payload.content.trim() || thought
+        ? {
+            kind: 'assistant',
+            id: event.id,
+            text: payload.content.trim() ? payload.content : '',
+            at: event.createdAt,
+            ...(thought ? { thought } : {})
+          }
         : null
     }
     case 'tool': {

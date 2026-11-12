@@ -5,6 +5,7 @@ import {
   AtSign,
   Bell,
   BookOpen,
+  Brain,
   Briefcase,
   CalendarDays,
   Check,
@@ -37,6 +38,7 @@ import { Button } from '@renderer/components/ui/button'
 import { CompassStar } from '@renderer/components/ui/compass-star'
 import { IconButton } from '@renderer/components/ui/icon-button'
 import { ShortcutKeys } from '@renderer/components/ui/shortcut-keys'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/components/ui/tooltip'
 import { useCommandKeys } from '@renderer/lib/command-shortcuts'
 import { hourStyle, languageNow, messagesNow, useMessages } from '@renderer/lib/i18n'
 import { cn } from '@renderer/lib/utils'
@@ -52,8 +54,15 @@ import {
   type SegretarioContext
 } from '@shared/segretario'
 
+import { ComposingAttachments, SentAttachments, useRequestAttachments } from './request-attachments'
 import { SegretarioText } from './segretario-text'
 import type { SegretarioState } from './use-segretario'
+
+/** A number of things, and the number as the language writes it. */
+interface Counted {
+  count: number
+  shown: string
+}
 
 const MESSAGES = defineMessages({
   toConfirm: { en: 'To confirm', it: 'Da confermare', de: 'Zu bestätigen' },
@@ -141,7 +150,38 @@ const MESSAGES = defineMessages({
     de: 'Eingabe zum Senden · ⇧ Eingabe für neue Zeile'
   },
   stop: { en: 'Stop', it: 'Ferma', de: 'Anhalten' },
-  sendRequest: { en: 'Send', it: 'Manda', de: 'Senden' }
+  sendRequest: { en: 'Send', it: 'Manda', de: 'Senden' },
+  addFiles: {
+    en: 'Add files or pictures',
+    it: 'Aggiungi file o immagini',
+    de: 'Dateien oder Bilder hinzufügen'
+  },
+  dropToAdd: {
+    en: 'Drop to add to the request',
+    it: 'Rilascia per aggiungerli alla richiesta',
+    de: 'Zum Hinzufügen zur Anfrage loslassen'
+  },
+  /** The model thinking, live: its reasoning so far, once it has begun. */
+  thinking: {
+    en: (count: number, shown: string) =>
+      count === 0 ? 'Thinking' : `Thinking · ${shown} ${count === 1 ? 'token' : 'tokens'}`,
+    it: (count: number, shown: string) =>
+      count === 0 ? 'Sto pensando' : `Sto pensando · ${shown} token`,
+    de: (count: number, shown: string) =>
+      count === 0 ? 'Denkt nach' : `Denkt nach · ${shown} Token`
+  },
+  /** How long it thought before an answer: «23 s», «1 min 20 s». */
+  thoughtFor: {
+    en: (duration: string) => `Thought for ${duration}`,
+    it: (duration: string) => `Pensato per ${duration}`,
+    de: (duration: string) => `${duration} nachgedacht`
+  },
+  reasoningTokens: {
+    en: ({ count, shown }: Counted) =>
+      `${shown} ${count === 1 ? 'reasoning token' : 'reasoning tokens'}`,
+    it: ({ shown }: Counted) => `${shown} token di ragionamento`,
+    de: ({ shown }: Counted) => `${shown} Token zum Nachdenken`
+  }
 })
 
 /** A piece of work's state, as its row says it. */
@@ -159,8 +199,12 @@ export interface SegretarioContextChip {
   /** What goes along, read as the user sends: a message being written changes as it is typed. */
   resolve?: () => SegretarioContext
   label: string
-  /** A message being written, rather than one read or an event. */
-  kind?: 'composing'
+  /**
+   * What is in sight, for its icon: a message being written, the calendar
+   * or one of its events, a page of its own (Oggi, a project); the mail
+   * when not said.
+   */
+  kind?: 'composing' | 'calendar' | 'page'
 }
 
 /** Each tool's icon in the Segretario's work: the host's, then the extension's own. */
@@ -273,6 +317,85 @@ function ToolLine({
         <Icon className="mt-px size-3.5 shrink-0" />
       )}
       <span className="min-w-0">{entry.tool.summary}</span>
+    </div>
+  )
+}
+
+/** A thinking shorter than this is not worth a line. */
+const MIN_THOUGHT_MS = 1_000
+
+/** How long a thinking took, as the line says it: «23 s», «1 min 20 s», «1 h 5 min». */
+function thoughtDuration(ms: number): string {
+  const seconds = Math.round(ms / 1_000)
+
+  if (seconds < 60) {
+    return `${seconds} s`
+  }
+
+  const minutes = Math.floor(seconds / 60)
+
+  if (minutes < 60) {
+    return seconds % 60 ? `${minutes} min ${seconds % 60} s` : `${minutes} min`
+  }
+
+  return minutes % 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes / 60} h`
+}
+
+/**
+ * The model thinking, live, where its answer will come: its reasoning as it
+ * grows, so the user sees it is at work. Screen readers hear it once, not
+ * with every count.
+ */
+function ThinkingLine({ tokens }: { tokens: number }): React.JSX.Element {
+  const m = useMessages(MESSAGES)
+
+  return (
+    <div
+      role="status"
+      className="text-faint-foreground flex items-start gap-2 text-[12px] leading-[17px]"
+    >
+      <Brain className="text-ai mt-px size-3.5 shrink-0 animate-pulse" />
+      <span className="sr-only">{m.thinking(0, '')}</span>
+      <span aria-hidden className="min-w-0 tabular-nums">
+        {m.thinking(tokens, tokens.toLocaleString(languageNow().formatLocale))}
+      </span>
+    </div>
+  )
+}
+
+/** How long the model thought before a turn's answer, at its head; its tokens in the tooltip. */
+function ThoughtLine({ ms, tokens }: { ms: number; tokens: number }): React.JSX.Element | null {
+  const m = useMessages(MESSAGES)
+
+  if (ms < MIN_THOUGHT_MS) {
+    return null
+  }
+
+  const counted =
+    tokens > 0
+      ? m.reasoningTokens({
+          count: tokens,
+          shown: tokens.toLocaleString(languageNow().formatLocale)
+        })
+      : null
+  const line = (
+    <span className="min-w-0">
+      {m.thoughtFor(thoughtDuration(ms))}
+      {counted && <span className="sr-only"> · {counted}</span>}
+    </span>
+  )
+
+  return (
+    <div className="text-faint-foreground flex items-start gap-2 text-[12px] leading-[17px]">
+      <Brain className="mt-px size-3.5 shrink-0" />
+      {counted ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{line}</TooltipTrigger>
+          <TooltipContent side="top">{counted}</TooltipContent>
+        </Tooltip>
+      ) : (
+        line
+      )}
     </div>
   )
 }
@@ -602,8 +725,10 @@ export function ActivityThread({
   const m = useMessages(MESSAGES)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
-  const entries = state.entries ?? []
+  const entries = (state.entries ?? []).filter((entry) => drawn(entry, state.selectedId !== null))
   const lastError = entries.findLastIndex((entry) => entry.kind === 'error')
+  const live = state.thinking
+  const lastQuiet = entries.length > 0 && quietLine(entries[entries.length - 1])
 
   // Follows the work as it is written, unless the user scrolled up to read.
   useLayoutEffect(() => {
@@ -612,7 +737,7 @@ export function ActivityThread({
     if (element && stickToBottom.current) {
       element.scrollTop = element.scrollHeight
     }
-  }, [state.entries, state.streaming])
+  }, [state.entries, state.streaming, state.thinking])
 
   useEffect(() => {
     stickToBottom.current = true
@@ -630,7 +755,8 @@ export function ActivityThread({
       <div className="flex flex-col gap-3">
         {entries.map((entry, index) => {
           const previous = entries[index - 1]
-          const tight = entry.kind === 'tool' && previous?.kind === 'tool'
+          // The lines of steps and of thinking follow one another close, as a list.
+          const tight = quietLine(entry) && previous !== undefined && quietLine(previous)
 
           switch (entry.kind) {
             case 'user':
@@ -647,20 +773,32 @@ export function ActivityThread({
               }
 
               return (
-                <div key={entry.id} className="mt-1 flex flex-col items-end gap-1">
-                  <div className="bg-hover max-w-[88%] rounded-[12px_12px_4px_12px] px-3 py-2 text-[13px] leading-[1.45] whitespace-pre-wrap shadow-[inset_0_0_0_1px_hsl(var(--border))]">
-                    {entry.text}
-                  </div>
+                <div key={entry.id} className="mt-1 flex flex-col items-end gap-1.5">
+                  {entry.text && (
+                    <div className="bg-hover max-w-[88%] rounded-[12px_12px_4px_12px] px-3 py-2 text-[13px] leading-[1.45] whitespace-pre-wrap shadow-[inset_0_0_0_1px_hsl(var(--border))]">
+                      {entry.text}
+                    </div>
+                  )}
+                  {entry.attachments && entry.attachments.length > 0 && (
+                    <SentAttachments attachments={entry.attachments} onOpen={onOpen} />
+                  )}
                 </div>
               )
             case 'assistant':
+              // A turn of calls alone: how it thought, at the head of its steps.
+              if (!entry.text) {
+                return (
+                  <div key={entry.id} className={cn(tight && '-mt-1.5')}>
+                    {entry.thought && <ThoughtLine {...entry.thought} />}
+                  </div>
+                )
+              }
+
               return (
-                <SegretarioText
-                  key={entry.id}
-                  text={entry.text}
-                  handles={state.handles}
-                  onOpen={onOpen}
-                />
+                <div key={entry.id} className="flex flex-col gap-1.5">
+                  {entry.thought && <ThoughtLine {...entry.thought} />}
+                  <SegretarioText text={entry.text} handles={state.handles} onOpen={onOpen} />
+                </div>
               )
             case 'tool':
               return (
@@ -678,9 +816,9 @@ export function ActivityThread({
                 />
               )
             case 'changes':
-              return state.selectedId ? (
-                <ChangesBlock key={entry.id} activityId={state.selectedId} entry={entry} />
-              ) : null
+              return (
+                <ChangesBlock key={entry.id} activityId={state.selectedId ?? ''} entry={entry} />
+              )
             case 'compaction':
               return (
                 <p key={entry.id} className="text-faint-foreground text-center text-[11.5px]">
@@ -704,17 +842,54 @@ export function ActivityThread({
               )
           }
         })}
-        {state.streaming && (
-          <SegretarioText
-            text={state.streaming}
-            streaming
-            handles={state.handles}
-            onOpen={onOpen}
-          />
+        {live?.ms === null ? (
+          // Still thinking: the live line, where its answer will come.
+          <div className={cn(lastQuiet && '-mt-1.5')}>
+            <ThinkingLine tokens={live.tokens} />
+          </div>
+        ) : (
+          (state.streaming || (live?.ms ?? 0) >= MIN_THOUGHT_MS) && (
+            <div
+              className={cn('flex flex-col gap-1.5', lastQuiet && !state.streaming && '-mt-1.5')}
+            >
+              {live?.ms != null && <ThoughtLine ms={live.ms} tokens={live.tokens} />}
+              {state.streaming && (
+                <SegretarioText
+                  text={state.streaming}
+                  streaming
+                  handles={state.handles}
+                  onOpen={onOpen}
+                />
+              )}
+            </div>
+          )
         )}
       </div>
     </div>
   )
+}
+
+/** Whether an entry draws as a quiet line: a step, or the thinking of a turn of calls alone. */
+function quietLine(entry: ActivityEntry): boolean {
+  return entry.kind === 'tool' || (entry.kind === 'assistant' && !entry.text)
+}
+
+/**
+ * Whether an entry draws anything: a turn of calls that thought too briefly
+ * to say, a confirmation once answered — its step says what became of it —,
+ * a page of changes with none, or with no run to undo them in, do not.
+ */
+function drawn(entry: ActivityEntry, inRun: boolean): boolean {
+  switch (entry.kind) {
+    case 'assistant':
+      return Boolean(entry.text) || (entry.thought?.ms ?? 0) >= MIN_THOUGHT_MS
+    case 'approval':
+      return entry.approval.status === 'pending'
+    case 'changes':
+      return inRun && entry.changes.length > 0
+    default:
+      return true
+  }
 }
 
 function Introduction({
@@ -788,6 +963,9 @@ export function SegretarioPanel({
   const onDiaryRun = state.selectedId !== null && selected === null
   const working = selected?.status === 'running' || selected?.status === 'waiting'
   const ready = state.status?.keyState === 'ready' || state.status?.keyState === 'unchecked'
+  const attachments = useRequestAttachments()
+  const [dropping, setDropping] = useState(false)
+  const canSend = (text.trim() !== '' || attachments.carriesAny) && attachments.ready && !sending
 
   // What the user looks at changes: it goes along again.
   useEffect(() => {
@@ -817,10 +995,29 @@ export function SegretarioPanel({
     }
   }
 
+  /** Files dropped on the composer: by their path, or — dragged from a page — as pictures. */
+  const addDropped = (files: ReadonlyArray<File>): void => {
+    const paths = files.map((file) => window.mailApi.getPathForFile(file))
+    const overflow = attachments.addPaths(paths.filter(Boolean))
+    const pictures = files.filter((file, index) => !paths[index] && file.type.startsWith('image/'))
+    setError(overflow ?? (pictures.length > 0 ? attachments.addPictures(pictures) : null))
+  }
+
+  const chooseFiles = async (): Promise<void> => {
+    try {
+      setError(attachments.addPaths(await window.segretarioApi.chooseFiles()))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : null)
+    } finally {
+      inputRef.current?.focus()
+    }
+  }
+
   const submit = async (message: string): Promise<void> => {
     const trimmed = message.trim()
 
-    if (!trimmed || sending || working) {
+    // Nothing goes while a file is still being read, or one could not be.
+    if ((!trimmed && !attachments.carriesAny) || !attachments.ready || sending || working) {
       return
     }
 
@@ -832,7 +1029,11 @@ export function SegretarioPanel({
         contextChip && !contextDetached
           ? (contextChip.resolve?.() ?? contextChip.context)
           : EMPTY_CONTEXT
-      await (onDiaryRun ? state.start(trimmed, context) : state.send(trimmed, context))
+      const carried = attachments.ids()
+      await (onDiaryRun
+        ? state.start(trimmed, context, carried)
+        : state.send(trimmed, context, carried))
+      attachments.sent()
       setShowDiary(false)
       setText('')
     } catch (caught) {
@@ -943,13 +1144,42 @@ export function SegretarioPanel({
       {ready && (
         <div className="shrink-0 p-3 pt-0">
           {error && <p className="text-destructive-soft-foreground mb-2 text-[12px]">{error}</p>}
-          <div className="sheet rounded-[12px] p-2 pb-1.5">
+          <div
+            className="sheet relative rounded-[12px] p-2 pb-1.5"
+            onDragEnter={(event) => {
+              if (event.dataTransfer.types.includes('Files')) {
+                event.preventDefault()
+                setDropping(true)
+              }
+            }}
+          >
+            {dropping && (
+              <div
+                className="border-ai-line bg-background/85 absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-[12px] border-2 border-dashed backdrop-blur-sm"
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'copy'
+                }}
+                onDragLeave={() => setDropping(false)}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  setDropping(false)
+                  addDropped(Array.from(event.dataTransfer.files))
+                }}
+              >
+                {/* Children ignore the pointer, so leaving them is not leaving the target. */}
+                <Paperclip className="text-ai pointer-events-none size-4" />
+                <p className="pointer-events-none text-[12.5px] font-medium">{m.dropToAdd}</p>
+              </div>
+            )}
             {contextChip && !contextDetached && (
               <span className="bg-hover text-muted-foreground mb-1.5 inline-flex max-w-full items-center gap-1.5 rounded-[6px] px-2 py-1 text-[11.5px]">
                 {contextChip.kind === 'composing' ? (
                   <PenLine className="size-3 shrink-0" />
-                ) : contextChip.context.eventKey ? (
+                ) : contextChip.kind === 'calendar' || contextChip.context.eventKey ? (
                   <CalendarDays className="size-3 shrink-0" />
+                ) : contextChip.kind === 'page' ? (
+                  <Eye className="size-3 shrink-0" />
                 ) : (
                   <Mail className="size-3 shrink-0" />
                 )}
@@ -964,6 +1194,7 @@ export function SegretarioPanel({
                 </button>
               </span>
             )}
+            <ComposingAttachments attachments={attachments} />
             <textarea
               ref={inputRef}
               value={text}
@@ -975,11 +1206,46 @@ export function SegretarioPanel({
                   void submit(text)
                 }
               }}
+              onPaste={(event) => {
+                const files = Array.from(event.clipboardData.files)
+
+                if (files.length === 0) {
+                  return
+                }
+
+                // Files copied where they are — Finder, Explorer — go by their path.
+                const paths = files
+                  .map((file) => window.mailApi.getPathForFile(file))
+                  .filter(Boolean)
+
+                if (paths.length > 0) {
+                  event.preventDefault()
+                  setError(attachments.addPaths(paths))
+                  return
+                }
+
+                // A picture without a file — a screenshot, an image copied from a page — unless
+                // words come with it: a table copied from a spreadsheet brings a picture of itself.
+                const pictures = files.filter((file) => file.type.startsWith('image/'))
+
+                if (pictures.length > 0 && !event.clipboardData.getData('text/plain').trim()) {
+                  event.preventDefault()
+                  setError(attachments.addPictures(pictures))
+                }
+              }}
               placeholder={selected ? m.replyOrAsk : onDiaryRun ? m.askAboutRun : m.askOrHandOver}
               className="placeholder:text-faint-foreground block w-full resize-none bg-transparent px-1 py-1 text-[13px] leading-[1.45] outline-none"
             />
-            <div className="flex items-center justify-between gap-2 pt-1">
-              <span className="text-faint-foreground px-1 text-[11px]">
+            <div className="flex items-center gap-1 pt-1">
+              <IconButton
+                label={m.addFiles}
+                tooltipSide="top"
+                className="text-faint-foreground size-[28px] rounded-full"
+                onClick={() => void chooseFiles()}
+              >
+                <Plus className="size-4" />
+              </IconButton>
+              <span className="text-faint-foreground min-w-0 flex-1 truncate px-1 text-[11px]">
                 {working
                   ? selected!.status === 'running' && state.waiting
                     ? state.waiting
@@ -987,21 +1253,22 @@ export function SegretarioPanel({
                   : m.keys}
               </span>
               {working ? (
-                <Button
+                <IconButton
+                  label={m.stop}
+                  tooltipSide="top"
                   variant="secondary"
-                  size="sm"
+                  className="size-[28px] rounded-full"
                   onClick={() => selected && state.cancel(selected.id)}
                 >
-                  <Square className="size-3" />
-                  {m.stop}
-                </Button>
+                  <Square className="size-3 fill-current" />
+                </IconButton>
               ) : (
                 <IconButton
                   label={m.sendRequest}
                   tooltipSide="top"
                   variant="default"
                   className="size-[28px] rounded-full"
-                  disabled={!text.trim() || sending}
+                  disabled={!canSend}
                   onClick={() => void submit(text)}
                 >
                   {sending ? (

@@ -27,6 +27,7 @@ interface ProjectRow {
   state: string | null
   state_links_json: string
   state_at: number | null
+  state_by: string | null
   stale_since: number | null
   origin: string
   hidden_at: number | null
@@ -38,8 +39,8 @@ interface ProjectRow {
   updated_at: number
 }
 
-const COLUMN_NAMES = `id, title, title_by, description, state, state_links_json, state_at, stale_since,
-  origin, hidden_at, closed_at, closed_by, active_at, revision, created_at, updated_at`
+const COLUMN_NAMES = `id, title, title_by, description, state, state_links_json, state_at, state_by,
+  stale_since, origin, hidden_at, closed_at, closed_by, active_at, revision, created_at, updated_at`
 
 const COLUMNS = COLUMN_NAMES.split(',')
   .map((name) => `p.${name.trim()}`)
@@ -62,6 +63,7 @@ function recordOf(row: ProjectRow): ProjectRecord {
     state: row.state,
     stateLinks: JSON.parse(row.state_links_json) as HandleLink[],
     stateAt: nullableNumber(row.state_at),
+    stateBy: row.state_by === 'utente' ? 'utente' : 'segretario',
     staleSince: nullableNumber(row.stale_since),
     origin: actorKind(row.origin),
     hiddenAt: nullableNumber(row.hidden_at),
@@ -311,14 +313,16 @@ export class ProjectStore {
   /**
    * Writes "Il punto": where the project stands now. It is current again —
    * unless the project moved after `basisAt`, the moment its writer began
-   * looking: what came since, it did not see.
+   * looking: what came since, it did not see. `by`: the user rewriting it,
+   * whose words the next rewrite starts from (§10.1).
    */
   async setState(
     id: string,
     state: string,
     links: ReadonlyArray<HandleLink>,
     basisAt: number,
-    seenRevision?: number
+    seenRevision?: number,
+    by: 'segretario' | 'utente' = 'segretario'
   ): Promise<ProjectRecord> {
     const before = await this.require(id)
     return this.update(
@@ -327,6 +331,7 @@ export class ProjectStore {
         state: state.trim() || null,
         state_links_json: JSON.stringify(links),
         state_at: Date.now(),
+        state_by: by,
         stale_since:
           before.activeAt !== null && before.activeAt > basisAt ? before.staleSince : null
       },
@@ -755,7 +760,9 @@ export class ProjectStore {
       const current = await this.require(id)
       const now = [
         current.description ? `di cosa si tratta: «${current.description}»` : null,
-        current.state ? `«Il punto»: «${current.state}»` : null,
+        current.state
+          ? `«Il punto»${current.stateBy === 'utente' ? ", riscritto dall'utente" : ''}: «${current.state}»`
+          : null,
         current.closedAt ? 'concluso' : null,
         current.hiddenAt ? 'nascosto' : null
       ].filter(Boolean)

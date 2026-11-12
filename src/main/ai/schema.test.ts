@@ -115,7 +115,7 @@ describe('ensureAiSchema', () => {
       )
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '12'
+      value: '13'
     })
   })
 
@@ -243,7 +243,7 @@ describe('ensureAiSchema', () => {
       { id: 'p1', revision: 1 }
     ])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '12'
+      value: '13'
     })
   })
 
@@ -269,7 +269,7 @@ describe('ensureAiSchema', () => {
       await sql.all("SELECT name FROM sqlite_master WHERE name = 'idx_ai_items_project'")
     ).toEqual([{ name: 'idx_ai_items_project' }])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '12'
+      value: '13'
     })
   })
 
@@ -291,7 +291,7 @@ describe('ensureAiSchema', () => {
       await sql.get("SELECT name FROM sqlite_master WHERE name = 'ai_saved_copies'")
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '12'
+      value: '13'
     })
   })
 
@@ -310,7 +310,7 @@ describe('ensureAiSchema', () => {
     )
     expect(tables.map((table) => table.name)).toEqual(['ai_alerts', 'ai_read'])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '12'
+      value: '13'
     })
   })
 
@@ -330,7 +330,7 @@ describe('ensureAiSchema', () => {
     )
     expect(tables.map((table) => table.name)).toEqual(['ai_calendar_roles', 'ai_own_events'])
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '12'
+      value: '13'
     })
   })
 
@@ -387,7 +387,7 @@ describe('ensureAiSchema', () => {
       )
     ).toBeNull()
     expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
-      value: '12'
+      value: '13'
     })
   })
 
@@ -427,6 +427,36 @@ describe('ensureAiSchema', () => {
     expect(await sql.all('SELECT message_key, twin_account_id FROM ai_read')).toEqual([
       { message_key: 'm:anna', twin_account_id: 'ufficio' }
     ])
+  })
+
+  it('gives a version 12 database who wrote the words that stay', async () => {
+    await ensureAiSchema(sql)
+
+    for (const [table, column] of [
+      ['ai_briefings', 'written_by'],
+      ['ai_event_preps', 'written_by'],
+      ['ai_projects', 'state_by'],
+      ['ai_ready_drafts', 'written_by']
+    ]) {
+      await sql.run(`ALTER TABLE ${table} DROP COLUMN ${column}`)
+    }
+
+    await sql.run(
+      "INSERT INTO ai_briefings (day, text, basis, created_at) VALUES ('2026-11-12', 'Oggi.', '[]', 1)"
+    )
+    await sql.run("UPDATE ai_meta SET value = '12' WHERE key = 'schema_version'")
+
+    await ensureAiSchema(sql)
+
+    expect(await sql.all('SELECT day, written_by FROM ai_briefings')).toEqual([
+      { day: '2026-11-12', written_by: null }
+    ])
+    expect(
+      await sql.all("SELECT name FROM pragma_table_info('ai_projects') WHERE name = 'state_by'")
+    ).toEqual([{ name: 'state_by' }])
+    expect(await sql.get("SELECT value FROM ai_meta WHERE key = 'schema_version'")).toEqual({
+      value: '13'
+    })
   })
 
   it('runs again on a database already brought up, changing nothing', async () => {

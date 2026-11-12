@@ -2636,6 +2636,22 @@ export class AppDatabase {
   }
 
   /**
+   * The notifications given once under keys beginning with `from` count as
+   * given under keys beginning with `to`: a reminder of an event moved to
+   * another calendar is the same reminder (vision §7.5). One given already
+   * under the new key stays as it is.
+   */
+  async moveNotificationsGiven(from: string, to: string): Promise<void> {
+    await this.ready
+
+    await this.prisma.$executeRaw`
+      UPDATE OR IGNORE notifications_given
+      SET key = ${to} || substr(key, length(${from}) + 1)
+      WHERE substr(key, 1, length(${from})) = ${from}
+    `
+  }
+
+  /**
    * Whether a notification given once was given already; it is marked as
    * given if not. True the first time only.
    */
@@ -3276,7 +3292,9 @@ export class AppDatabase {
         meet_link TEXT,
         html_link TEXT,
         origin_json TEXT,
-        reminders_json TEXT
+        reminders_json TEXT,
+        recurrence_json TEXT,
+        managed_by TEXT
       )
     `)
     await this.prisma.$executeRawUnsafe(
@@ -3370,6 +3388,21 @@ export class AppDatabase {
     // it — whose an event is (§7.4) —, a read anew, no change for the Segretario.
     if (!(await columns('calendar_events')).has('creator')) {
       await this.prisma.$executeRawUnsafe('ALTER TABLE calendar_events ADD COLUMN creator TEXT')
+      await this.prisma.$executeRawUnsafe('UPDATE calendar_calendars SET window_end = NULL')
+      await this.prisma.$executeRawUnsafe('UPDATE calendar_connections SET last_sync_at = NULL')
+    }
+
+    // Kept before events said how their series repeats, and which service keeps them (§7.5): every
+    // calendar is read whole again at its next sync, which says it — a read anew, no change for the
+    // Segretario.
+    const eventColumns = await columns('calendar_events')
+    const missing = ['recurrence_json', 'managed_by'].filter((name) => !eventColumns.has(name))
+
+    if (missing.length > 0) {
+      for (const column of missing) {
+        await this.prisma.$executeRawUnsafe(`ALTER TABLE calendar_events ADD COLUMN ${column} TEXT`)
+      }
+
       await this.prisma.$executeRawUnsafe('UPDATE calendar_calendars SET window_end = NULL')
       await this.prisma.$executeRawUnsafe('UPDATE calendar_connections SET last_sync_at = NULL')
     }

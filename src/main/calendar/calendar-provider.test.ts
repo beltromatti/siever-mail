@@ -12,7 +12,9 @@ describe('differingFields', () => {
     allDay: false,
     location: 'Cantiere',
     description: 'Portare il **verbale**.',
-    attendees: ['luca@brenta.it', 'rossi@cliente.it']
+    attendees: ['luca@brenta.it', 'rossi@cliente.it'],
+    recurrence: null,
+    reminders: null
   }
 
   it('keeps of the fields given only those that really change', () => {

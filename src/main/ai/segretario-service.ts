@@ -7,7 +7,8 @@ import {
   type CalendarConnection,
   type CalendarProviderKind,
   type CalendarResponse,
-  type EventChange
+  type EventChange,
+  type EventRecurrence
 } from '@shared/calendar'
 import type { MailAccount, MessageRef } from '@shared/models'
 import {
@@ -19,6 +20,8 @@ import {
   type ActivityEvent,
   type ActivitySummary,
   type AskedMail,
+  type AttachmentPreparation,
+  type AttachmentSource,
   type Commitment,
   type CommitmentKind,
   type CommitmentStatus,
@@ -54,6 +57,9 @@ import {
   type SendOutcome,
   type TodayPage,
   type WorkChange,
+  type PendingWords,
+  type WorkTarget,
+  workTargetKey,
   READING_DAYS,
   setupTurnsAiOn
 } from '@shared/segretario'
@@ -74,6 +80,7 @@ import {
 } from './agent/tool-types'
 import { AiStore } from './ai-store'
 import { periodWords, searchPeriod, type AskedSearch } from './ask-mail'
+import { AttachmentShelf, requestAttachments, type ReadyAttachment } from './attachments'
 import { SegretarioEngine } from './engine/engine'
 import { Reachability } from './engine/reachability'
 import { WorkQueue } from './engine/work-queue'
@@ -97,6 +104,7 @@ import {
   USER,
   type CommitmentOrigin,
   type CommitmentRecord,
+  type EventUndo,
   type NoteRecord,
   type ProjectSummary
 } from './registry/types'
@@ -209,7 +217,12 @@ export interface SegretarioServiceOptions {
   onOwnershipChanged?(): void
 }
 
-function noteOf(record: NoteRecord): MessageNote {
+/** The user's words waiting on what the Segretario wrote (§10.1), by `workTargetKey`. */
+type WaitingWords = ReadonlyMap<string, PendingWords>
+
+const NO_WORDS: WaitingWords = new Map()
+
+function noteOf(record: NoteRecord, words: WaitingWords = NO_WORDS): MessageNote {
   return {
     accountId: record.accountId,
     messageKey: record.messageKey,
@@ -222,11 +235,15 @@ function noteOf(record: NoteRecord): MessageNote {
     due: record.due,
     messageDate: record.messageDate,
     twinAccountId: record.twinAccountId,
-    writtenBy: record.writtenBy
+    writtenBy: record.writtenBy,
+    pending:
+      words.get(
+        workTargetKey({ kind: 'nota', accountId: record.accountId, messageKey: record.messageKey })
+      ) ?? null
   }
 }
 
-function commitmentOf(record: CommitmentRecord): Commitment {
+function commitmentOf(record: CommitmentRecord, words: WaitingWords = NO_WORDS): Commitment {
   const { origin } = record
   return {
     id: record.id,
@@ -252,6 +269,7 @@ function commitmentOf(record: CommitmentRecord): Commitment {
     reason: record.reason,
     evidenceKey: record.evidenceKey,
     question: record.question,
+    pending: words.get(workTargetKey({ kind: 'impegno', id: record.id })) ?? null,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt
   }
@@ -453,6 +471,8 @@ export class SegretarioService {
     string,
     { resolve: (draftId: string) => void; reject: (error: Error) => void }
   >()
+  /** The files and pictures read for the requests being written in the panel, until they go. */
+  private readonly attachments = new AttachmentShelf()
   /** Searches asked this session, the latest few: their lists, to open and to keep. */
   private readonly searches = new Map<
     string,
@@ -1783,10 +1803,18 @@ export class SegretarioService {
         links.filter((link) => !link.rejected).map((link) => registry.projects.get(link.projectId))
       )
     ).filter((project) => project !== null)
+    const replyTarget: WorkTarget | null = reply
+      ? { kind: 'risposta', accountId, messageKey: reply.messageKey }
+      : null
+    const words = await registry.words.pending([
+      ...commitments.map((record): WorkTarget => ({ kind: 'impegno', id: record.id })),
+      ...(note ? [{ kind: 'nota', accountId, messageKey } as const] : []),
+      ...(replyTarget ? [replyTarget] : [])
+    ])
 
     return {
-      note: note ? noteOf(note) : null,
-      commitments: commitments.map(commitmentOf),
+      note: note ? noteOf(note, words) : null,
+      commitments: commitments.map((record) => commitmentOf(record, words)),
       projects: projects.map((project) => ({ id: project!.id, title: project!.title })),
       reply:
         reply && (reply.status === 'pronta' || reply.status === 'da_rivedere')
@@ -1797,7 +1825,8 @@ export class SegretarioService {
               text: reply.text,
               doubts: reply.doubts,
               status: reply.status,
-              staleReason: reply.staleReason
+              staleReason: reply.staleReason,
+              pending: replyTarget ? (words.get(workTargetKey(replyTarget)) ?? null) : null
             }
           : null,
       proposals: proposals
@@ -1843,7 +1872,15 @@ export class SegretarioService {
         reason: options.reason ?? null
       })
     )
-    return commitmentOf(record)
+    return this.commitmentNow(record)
+  }
+
+  /** An open thing as the page shows it, with the user's words waiting on it. */
+  private async commitmentNow(record: CommitmentRecord): Promise<Commitment> {
+    return commitmentOf(
+      record,
+      await this.db.registry.words.pending([{ kind: 'impegno', id: record.id }])
+    )
   }
 
   /**
@@ -1867,7 +1904,7 @@ export class SegretarioService {
     }
 
     await store.retractLessons(id, last.at)
-    return commitmentOf(record)
+    return this.commitmentNow(record)
   }
 
   async editCommitment(
@@ -1875,7 +1912,42 @@ export class SegretarioService {
     changes: { text?: string; due?: string | null; kind?: CommitmentKind }
   ): Promise<Commitment> {
     const { record } = await plainly(this.db.registry.editCommitment(id, changes, USER))
-    return commitmentOf(record)
+    return this.commitmentNow(record)
+  }
+
+  /**
+   * The user rewrites by hand what the Segretario wrote (§10.1): theirs at
+   * once, written by them, and a lesson with the before and the after.
+   */
+  async rewriteWork(target: WorkTarget, text: string): Promise<void> {
+    const eventTitle =
+      target.kind === 'preparazione'
+        ? (await this.options.calendar.event(target.eventKey))?.title
+        : undefined
+    await plainly(this.db.registry.rewrite(target, text, { eventTitle }))
+  }
+
+  /**
+   * The user says in words what is wrong with something the Segretario
+   * wrote (§10.1): it shows dimmed, and the reflection — woken soon after
+   * the last words, whatever its interval — puts it right and learns.
+   */
+  async correctWork(target: WorkTarget, words: string): Promise<void> {
+    await plainly(this.db.registry.giveWords(target, 'correzione', words))
+    this.db.engine.wake()
+  }
+
+  /** The user answers in words the question the Segretario asks about an open thing (§10.1). */
+  async answerQuestion(commitmentId: number, words: string): Promise<void> {
+    await plainly(
+      this.db.registry.giveWords({ kind: 'impegno', id: commitmentId }, 'risposta', words)
+    )
+    this.db.engine.wake()
+  }
+
+  /** Takes back the user's words on a thing, while the Segretario has not taken them in. */
+  async withdrawWords(target: WorkTarget): Promise<void> {
+    await this.db.registry.withdrawWords(target)
   }
 
   /** The user adds an open thing: from a message, from an event, or of their own. */
@@ -1888,7 +1960,7 @@ export class SegretarioService {
   ): Promise<Commitment> {
     const origin = await this.originOf(from)
     const { record } = await plainly(this.db.registry.openCommitment(origin, input, USER))
-    return commitmentOf(record)
+    return this.commitmentNow(record)
   }
 
   /** Where the user's new open thing comes from, as the registry keeps it. */
@@ -1990,6 +2062,9 @@ export class SegretarioService {
       throw new Error(messages(MESSAGES).changeUndone)
     }
 
+    // Undone in part: what could not be is said once the change shows undone.
+    let partly: Error | null = null
+
     switch (undo.kind) {
       case 'impegno':
         await plainly(registry.undoCommitment(undo.historyId, USER))
@@ -2022,14 +2097,36 @@ export class SegretarioService {
         await plainly(registry.setProjectHidden(undo.projectId, !undo.hidden, USER))
         break
       case 'evento-creato':
-        await this.options.calendar.remove(undo.eventKey, BY_USER)
-        break
       case 'evento-modificato':
-        await this.options.calendar.update(undo.eventKey, undo.before, BY_USER)
-        break
       case 'evento-eliminato':
-        await this.options.calendar.create(undo.event, BY_USER)
+        await this.undoEvent(undo)
         break
+      // Several events changed with one decision: each put back that can be — one gone since
+      // does not keep the others as they are, and is said once the rest is back.
+      case 'eventi': {
+        const failures: unknown[] = []
+
+        for (const each of undo.each) {
+          await this.undoEvent(each).catch((error: unknown) => failures.push(error))
+        }
+
+        const first = shownError(failures[0])
+
+        if (failures.length === undo.each.length) {
+          throw first
+        }
+
+        if (failures.length > 0) {
+          partly = new Error(
+            messages(MESSAGES).someNotUndone(
+              failures.length,
+              undo.each.length,
+              first instanceof Error ? first.message : String(first)
+            )
+          )
+        }
+        break
+      }
       // The user says the other: their word, which the Segretario does not overturn.
       case 'evento-tuo':
         await plainly(
@@ -2057,6 +2154,31 @@ export class SegretarioService {
     if (entry) {
       this.emit({ type: 'entry', activityId, entry })
     }
+
+    if (partly) {
+      throw partly
+    }
+  }
+
+  /**
+   * Puts back an event the Segretario wrote in the calendar, as the user's
+   * act: one it made goes — its series with it, when it made it repeat —,
+   * one it changed or moved is as it was, one it took away comes back.
+   */
+  private async undoEvent(undo: EventUndo): Promise<void> {
+    const options = { ...BY_USER, series: 'series' in undo && undo.series === true }
+
+    switch (undo.kind) {
+      case 'evento-creato':
+        await this.options.calendar.remove(undo.eventKey, options)
+        break
+      case 'evento-modificato':
+        await this.options.calendar.update(undo.eventKey, undo.before, options)
+        break
+      case 'evento-eliminato':
+        await this.options.calendar.create(undo.event, BY_USER)
+        break
+    }
   }
 
   async replySource(accountId: string, messageKey: string): Promise<MessageRef | null> {
@@ -2080,7 +2202,21 @@ export class SegretarioService {
 
   /** How to prepare for an event, as written for it (by the day's work, or asked in the chat). */
   async eventPrep(eventKey: string): Promise<(LinkedText & { writtenAt: number }) | null> {
-    return this.db.registry.day.prep(eventKey)
+    const { registry } = this.db
+    const target: WorkTarget = { kind: 'preparazione', eventKey }
+    const [prep, words] = await Promise.all([
+      registry.day.prep(eventKey),
+      registry.words.pending([target])
+    ])
+
+    return prep
+      ? {
+          text: prep.text,
+          links: prep.links,
+          writtenAt: prep.writtenAt,
+          pending: words.get(workTargetKey(target)) ?? null
+        }
+      : null
   }
 
   /** What the work holds of an event: the things born from it, the projects that gather it. */
@@ -2091,9 +2227,12 @@ export class SegretarioService {
       registry.projects.ofEvents([eventKey]),
       this.eventWhose(eventKey)
     ])
+    const words = await registry.words.pending(
+      items.map((record): WorkTarget => ({ kind: 'impegno', id: record.id }))
+    )
 
     return {
-      commitments: items.map(commitmentOf),
+      commitments: items.map((record) => commitmentOf(record, words)),
       projects: (projects.get(eventKey) ?? []).map((project) => ({
         id: project.id,
         title: project.title
@@ -2244,18 +2383,33 @@ export class SegretarioService {
         description: string | null
         attendees: string[]
         calendar: string | null
+        /** The calendar named, as found when it was proposed. */
+        calendarKey?: string | null
         eventKey: string | null
         /** An answer to the event's invitation. */
         response?: Exclude<CalendarResponse, 'needsAction'>
         /** What changes in the event, and only that. */
         change?: EventChange
+        /** Of an instance of a recurring event, the change or the answer is the whole series'. */
+        series?: boolean
+        /** A new event: how it repeats, and its reminders. */
+        recurrence?: EventRecurrence | null
+        reminders?: number[] | null
+      }
+      const scope = { ...BY_USER, series: payload.series === true }
+
+      // Put in the calendar by the user, changed first («Modifica e aggiungi»): the event is there
+      // already, under the key the answer gives; what they made of it is what the Segretario learns.
+      if (!payload.eventKey && typeof result?.eventKey === 'string') {
+        await registry.decideProposal(id, 'accettata', result)
+        return
       }
 
       if (payload.eventKey && payload.response) {
         const answered = await this.options.calendar.respond(
           payload.eventKey,
           payload.response,
-          BY_USER
+          scope
         )
         await registry.decideProposal(id, 'accettata', { eventKey: answered.key, ...result })
         return
@@ -2273,7 +2427,7 @@ export class SegretarioService {
           ...(payload.description ? { description: payload.description } : {}),
           ...(payload.attendees?.length ? { attendees: payload.attendees } : {})
         }
-        const updated = await this.options.calendar.update(payload.eventKey, change, BY_USER)
+        const updated = await this.options.calendar.update(payload.eventKey, change, scope)
         await registry.decideProposal(id, 'accettata', { eventKey: updated.key, ...result })
         return
       }
@@ -2282,6 +2436,9 @@ export class SegretarioService {
         (calendar) => calendar.writable
       )
       const calendar =
+        calendars.find(
+          (candidate) => payload.calendarKey && candidate.key === payload.calendarKey
+        ) ??
         calendars.find(
           (candidate) =>
             payload.calendar &&
@@ -2310,7 +2467,9 @@ export class SegretarioService {
             by: 'segretario',
             accountId: proposal.accountId,
             messageKey: proposal.messageKey
-          }
+          },
+          recurrence: payload.recurrence ?? null,
+          reminders: payload.reminders ?? null
         },
         BY_USER
       )
@@ -2409,6 +2568,23 @@ export class SegretarioService {
     return moved
   }
 
+  /**
+   * Events moved to another calendar under new keys — by the Segretario, by
+   * the user here or elsewhere — (vision §7.5): an event moved is the same
+   * event, and what the Segretario keeps of it follows it. Nothing to learn:
+   * the calendar's look sees the move as a change, when it was not its own.
+   */
+  async eventsMoved(moves: ReadonlyArray<{ from: string; to: string }>): Promise<void> {
+    await this.whenReady()
+    const rows = await this.db.registry.relocateEvents(moves, async (eventKey) => {
+      const event = await this.options.calendar.event(eventKey)
+      return event?.seriesId
+        ? seriesKey(event.connectionId, event.calendarId, event.seriesId)
+        : null
+    })
+    log.info('events.moved', { events: moves.length, rows })
+  }
+
   /* ───────────────────────────────── views ───────────────────────────────── */
 
   /** The messages a view holds, by key, across all accounts. */
@@ -2505,10 +2681,13 @@ export class SegretarioService {
       )
     )
     const lines = new Map<number, DayLine>()
+    const words = await registry.words.pending(
+      records.map((record): WorkTarget => ({ kind: 'impegno', id: record.id }))
+    )
 
     for (const record of records) {
       const { origin } = record
-      const line = { text: record.text, due: record.due, commitment: commitmentOf(record) }
+      const line = { text: record.text, due: record.due, commitment: commitmentOf(record, words) }
 
       if (origin.kind === 'messaggio') {
         const key = `${origin.accountId}\u0000${origin.messageKey}`
@@ -2624,12 +2803,18 @@ export class SegretarioService {
     const events = await this.options.calendar
       .events(startOfDay.toISOString(), new Date(startOfDay.getTime() + DAY_MS).toISOString())
       .catch(() => [])
+    const letterTarget: WorkTarget = { kind: 'lettera', day: today }
+    const words = await registry.words.pending([
+      letterTarget,
+      ...events.map((event): WorkTarget => ({ kind: 'preparazione', eventKey: event.key }))
+    ])
 
     return {
       day: today,
       letter: letter?.text ?? null,
       letterLinks: letter?.links ?? [],
       letterAt: letter?.writtenAt ?? null,
+      letterPending: words.get(workTargetKey(letterTarget)) ?? null,
       letterRewriting: await engine.dayInProgress(),
       reading: Math.max(0, state.reading.total - state.reading.read),
       network: state.waiting,
@@ -2669,7 +2854,11 @@ export class SegretarioService {
       preps: Object.fromEntries(
         [...(await registry.day.preps(events.map((event) => event.key)))].map(([key, prep]) => [
           key,
-          { text: prep.text, links: prep.links }
+          {
+            text: prep.text,
+            links: prep.links,
+            pending: words.get(workTargetKey({ kind: 'preparazione', eventKey: key })) ?? null
+          }
         ])
       )
     }
@@ -2773,6 +2962,11 @@ export class SegretarioService {
       projects: [id]
     })
     const aside = await this.setAsideOf(items)
+    const stateTarget: WorkTarget = { kind: 'punto', projectId: id }
+    const words = await registry.words.pending([
+      stateTarget,
+      ...items.map((record): WorkTarget => ({ kind: 'impegno', id: record.id }))
+    ])
 
     return {
       ...projectOf(summary),
@@ -2781,7 +2975,10 @@ export class SegretarioService {
         location: resource.location,
         label: resource.label
       })),
-      commitments: items.filter((item) => !aside.has(item.id)).map(commitmentOf),
+      commitments: items
+        .filter((item) => !aside.has(item.id))
+        .map((record) => commitmentOf(record, words)),
+      statePending: words.get(workTargetKey(stateTarget)) ?? null,
       openCommitments: Math.max(
         0,
         summary.openCommitments -
@@ -3089,14 +3286,21 @@ export class SegretarioService {
     return { ...summary, entries }
   }
 
-  async startActivity(text: string, context: SegretarioContext): Promise<ActivitySummary> {
+  async startActivity(
+    text: string,
+    context: SegretarioContext,
+    attachmentIds: ReadonlyArray<string> = []
+  ): Promise<ActivitySummary> {
     const { store, notebook } = this.db
     await this.requireKey()
+    const carried = this.attachments.take(attachmentIds, text)
+    // A request of files alone is named by them until it has its title.
+    const words = text.trim() || carried.map((item) => item.name).join(', ')
     const id = randomUUID()
     const summary = await store.createActivity({
       id,
       task: 'richiesta',
-      title: firstLine(text),
+      title: firstLine(words),
       status: 'running',
       visibility: 'pannello'
     })
@@ -3110,13 +3314,22 @@ export class SegretarioService {
     await store.appendEvent<ContextPayload>(id, 'context', {
       text: `${PROMPTS.tasks.richiesta}\n\n---\n\n${block}`
     })
-    const request = await this.appendUserMessage(id, text, context)
-    void this.nameActivity(id, request, text)
+    const request = await this.appendUserMessage(id, text, context, carried)
+    void this.nameActivity(id, request, words)
     void this.converse(id)
     return summary
   }
 
-  async sendMessage(id: string, text: string, context: SegretarioContext): Promise<void> {
+  /**
+   * The user writes again in a conversation: after an answer, or after it
+   * stopped short (§14.2) — the run takes up from all it holds.
+   */
+  async sendMessage(
+    id: string,
+    text: string,
+    context: SegretarioContext,
+    attachmentIds: ReadonlyArray<string> = []
+  ): Promise<void> {
     const { store, runner } = this.db
 
     if (runner.isRunning(id)) {
@@ -3130,8 +3343,18 @@ export class SegretarioService {
     }
 
     await this.requireKey()
-    await this.appendUserMessage(id, text, context)
+    await this.appendUserMessage(id, text, context, this.attachments.take(attachmentIds, text))
     void this.converse(id, activity.task === 'richiesta' ? 'richiesta' : activity.task)
+  }
+
+  /** Reads a file or a picture for a request being written (§8.1): what it brings, or why it cannot. */
+  prepareAttachment(source: AttachmentSource): Promise<AttachmentPreparation> {
+    return this.attachments.prepare(source)
+  }
+
+  /** The user took attachments out of a request, or left it unsent. */
+  dropAttachments(ids: ReadonlyArray<string>): void {
+    this.attachments.drop(ids)
   }
 
   /**
@@ -3298,11 +3521,16 @@ export class SegretarioService {
     return due.filter((record) => !aside.has(record.id)).length
   }
 
-  /** The user's words, with the moment and what they are looking at, as the model reads them. */
+  /**
+   * The user's words, with the moment and what they are looking at, as the
+   * model reads them — and, after them, the files and pictures they carry,
+   * whole where they fit (§8.1).
+   */
   private async appendUserMessage(
     id: string,
     text: string,
-    context: SegretarioContext
+    context: SegretarioContext,
+    carried: ReadonlyArray<ReadyAttachment> = []
   ): Promise<string> {
     const { store } = this.db
     const handles = new HandleRegistry(handleRecords(await store.listEvents(id)))
@@ -3310,7 +3538,7 @@ export class SegretarioService {
     // Their words first; what is on the screen after, as it is: it may be what they mean, or not.
     const screen =
       'Sullo schermo dell’utente mentre ti scrive — può riguardare la richiesta oppure no'
-    const lines = [nowLine(), '', text.trim()]
+    const lines = [nowLine(), '', text.trim() || '(Nessuna parola: solo ciò che allega.)']
 
     if (context.composing) {
       // The message they are writing: the draft to write in, in place, if they ask (vision §6.6).
@@ -3363,13 +3591,35 @@ export class SegretarioService {
     }
 
     const forModel = lines.join('\n')
+    const attached = carried.length > 0 ? requestAttachments(carried, handles, added) : null
     const event = await store.appendEvent<UserPayload>(id, 'user', {
       text: text.trim(),
       context,
       forModel,
-      handles: added
+      handles: added,
+      ...(attached && attached.sent.length > 0
+        ? { attachments: attached.sent, attachmentParts: attached.parts }
+        : {})
     })
     const entry = entryOf(event)
+    // Written: what was read for the request is let go, what did not go with it too.
+    this.attachments.drop(carried.map((item) => item.id))
+
+    if (attached) {
+      // How many, of what kind and size, and how they went: never their names, never what they say.
+      log.info('request.attachments', {
+        run: id,
+        count: carried.length,
+        kinds: carried.map((item) => item.kind),
+        sizes: carried.map((item) => item.size),
+        whole: attached.sent.filter((item) => item.shortfall === null).length,
+        references: attached.sent.filter(
+          (item) => item.shortfall !== null && item.shortfall !== 'unreadable'
+        ).length,
+        unreadable: attached.sent.filter((item) => item.shortfall === 'unreadable').length,
+        left: carried.length - attached.sent.length
+      })
+    }
 
     if (entry) {
       this.emit({ type: 'entry', activityId: id, entry })

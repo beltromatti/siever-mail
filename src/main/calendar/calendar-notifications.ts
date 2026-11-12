@@ -5,7 +5,14 @@ import { defineMessages } from '@shared/i18n'
 import type { NotificationTarget } from '@shared/notifications'
 
 import { messages } from '../i18n'
-import { remindersOf, startWords, whenWords, type RemindedEvent, type Reminder } from './reminders'
+import {
+  reminderKeysOf,
+  remindersOf,
+  startWords,
+  whenWords,
+  type RemindedEvent,
+  type Reminder
+} from './reminders'
 
 const log = diagnostics('calendar')
 
@@ -29,6 +36,9 @@ const CHANGES_ONE_BY_ONE = 2
 const LOOK_WAIT_MS = 10 * 60_000
 
 const REMINDER_PREFIX = 'calendar:reminder:'
+const CHANGE_PREFIX = 'calendar:change:'
+/** How the reminders given once are kept apart from what else is (`giveOnce`). */
+const GIVEN_PREFIX = 'reminder:'
 
 const MESSAGES = defineMessages({
   eventsChanged: {
@@ -190,6 +200,44 @@ export class CalendarNotifications {
     }, SETTLE_MS)
   }
 
+  /**
+   * Events moved to another calendar, the same events there under new keys
+   * (vision §7.5): their reminders given are not given again, one put off
+   * still comes, and what is on the screen of them — a reminder, a novelty
+   * — stays, and leads to them where they are.
+   */
+  async eventsMoved(moves: ReadonlyArray<{ from: string; to: string }>): Promise<void> {
+    for (const { from, to } of moves) {
+      const snoozed = this.snoozed.get(from)
+
+      if (snoozed !== undefined) {
+        this.snoozed.delete(from)
+        this.snoozed.set(to, snoozed)
+      }
+
+      const shown = this.shown.get(`${REMINDER_PREFIX}${from}`)
+
+      if (shown) {
+        this.shown.delete(`${REMINDER_PREFIX}${from}`)
+        this.shown.set(`${REMINDER_PREFIX}${to}`, { ...shown, eventKey: to })
+      }
+
+      for (const prefix of [REMINDER_PREFIX, CHANGE_PREFIX]) {
+        this.deps.center.rekey(`${prefix}${from}`, `${prefix}${to}`, {
+          kind: 'event',
+          eventKey: to
+        })
+      }
+
+      await this.deps.center.moveGiven(
+        `${GIVEN_PREFIX}${reminderKeysOf(from)}`,
+        `${GIVEN_PREFIX}${reminderKeysOf(to)}`
+      )
+    }
+
+    this.eventsChanged()
+  }
+
   /** Awake again: what came due while asleep is given, if its event is still to come. */
   woke(): void {
     this.plan()
@@ -294,7 +342,7 @@ export class CalendarNotifications {
       this.deps.center.notify({
         family: 'calendar',
         kind: 'calendar.change',
-        key: `calendar:change:${event.key}`,
+        key: `${CHANGE_PREFIX}${event.key}`,
         title,
         subtitle: whenWords(event, now),
         body,
@@ -326,7 +374,7 @@ export class CalendarNotifications {
     return this.deps.center.notify({
       family: 'calendar',
       kind: 'calendar.alert',
-      key: `calendar:change:${event.key}`,
+      key: `${CHANGE_PREFIX}${event.key}`,
       title: event.title,
       subtitle: whenWords(event, Date.now()),
       body: text,
@@ -432,7 +480,7 @@ export class CalendarNotifications {
 
       if (reminder.key.startsWith('snooze:')) {
         this.snoozed.delete(reminder.event.key)
-      } else if (!(await this.deps.center.giveOnce(`reminder:${reminder.key}`))) {
+      } else if (!(await this.deps.center.giveOnce(`${GIVEN_PREFIX}${reminder.key}`))) {
         continue
       }
 

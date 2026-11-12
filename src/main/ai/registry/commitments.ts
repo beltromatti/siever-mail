@@ -585,7 +585,7 @@ export class CommitmentStore {
     for (const id of dropped) {
       const record = await this.require(id)
 
-      if (actor.background && record.setBy === 'utente') {
+      if (actor.background && !actor.onUsersWord && record.setBy === 'utente') {
         throw new RegistryRefusal(
           `Su #${record.id} («${record.text}») ha deciso l'utente: non unirla da solo.`,
           record
@@ -841,11 +841,17 @@ export class CommitmentStore {
   /**
    * The user's word holds against a run in the background: it changes
    * what the user decided only with a message that came after the
-   * decision, given as the proof. That the message is about the same thing
-   * is the Segretario's judgement; that it is newer, the registry's.
+   * decision, given as the proof — or because the user asked, in words the
+   * run carries (§10.1). That the message is about the same thing is the
+   * Segretario's judgement; that it is newer, the registry's.
    */
   private async guard(current: CommitmentRecord, actor: Actor, evidence?: Evidence): Promise<void> {
-    if (actor.by !== 'segretario' || !actor.background || current.setBy !== 'utente') {
+    if (
+      actor.by !== 'segretario' ||
+      !actor.background ||
+      actor.onUsersWord ||
+      current.setBy !== 'utente'
+    ) {
       return
     }
 

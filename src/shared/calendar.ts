@@ -82,6 +82,49 @@ export interface CalendarEvent {
    * absent from what was kept before.
    */
   yours?: boolean
+  /**
+   * How the series it belongs to repeats (vision §7.5): its rule; `'other'`
+   * for a rule the app does not write — several rules, days added or taken
+   * out by date, a pattern the calendars do not share —, shown as repeating
+   * and changed elsewhere; null, or absent, for an event on its own.
+   */
+  recurrence?: EventRecurrence | 'other' | null
+  /**
+   * Put there by another service, which keeps it in hand (vision §7.5):
+   * Gmail from a booking or a ticket, the contacts' birthdays. The provider
+   * lets only its reminders change — not its words, its time or its
+   * calendar. Null, or absent, for an event of the calendar's own.
+   */
+  managedBy?: 'gmail' | 'birthdays' | null
+}
+
+/** A weekday as iCalendar names it: Monday is MO. */
+export type Weekday = 'MO' | 'TU' | 'WE' | 'TH' | 'FR' | 'SA' | 'SU'
+
+/** The weekdays from Monday, as a week's days in iCalendar. */
+export const WEEKDAYS: ReadonlyArray<Weekday> = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']
+
+/**
+ * How an event repeats (vision §7.5): the part every calendar shares —
+ * Google and a CalDAV server write it as an iCalendar RRULE, Microsoft as
+ * a patterned recurrence —, from the event's own start, in its time zone.
+ */
+export interface EventRecurrence {
+  frequency: 'daily' | 'weekly' | 'monthly' | 'yearly'
+  /** Every how many days, weeks, months or years: 1 is every one. */
+  interval: number
+  /** Weekly: the days it falls on; the start's own when absent or empty. */
+  weekdays?: Weekday[]
+  /**
+   * Monthly: on the start's day of the month ("every 12th"), on its weekday
+   * by its place in the month ("every second Tuesday"), or on that weekday
+   * last in the month ("every last Friday"). The start's day when absent.
+   */
+  monthlyBy?: 'day' | 'weekday' | 'lastWeekday'
+  /** The last day it may fall on, AAAA-MM-GG, included. With neither this nor `count`, it never ends. */
+  until?: string
+  /** How many times in all, the first included. */
+  count?: number
 }
 
 /** Who put an event in the calendar, when it was the Segretario, and from which message. */
@@ -138,6 +181,8 @@ export interface CalendarListEntry {
   color: string | null
   /** The user hid it in the Calendario app: its events are not shown. */
   hidden: boolean
+  /** Who the connection is with: what can be done with its events depends on it (`eventMoveLimit`). */
+  provider: CalendarProviderKind
   /** Whose its events are (§7.4). */
   role: CalendarRole
   /** Who chose it: the user, the Segretario — with why —, or nobody (the default). */
@@ -232,6 +277,52 @@ export function seriesKey(connectionId: string, calendarId: string, seriesId: st
   return `${calendarKey(connectionId, calendarId)}\u0000${seriesId}`
 }
 
+/**
+ * Why an event cannot move to another calendar (vision §7.5):
+ * - `same`: it is there already;
+ * - `readonly`: one of the two calendars takes no writing;
+ * - `managed`: another service keeps it (Gmail, the birthdays), and its provider does not let it move;
+ * - `invitation`: someone else organises it — it is answered, not moved;
+ * - `guests`: moving it would cancel it for the people invited and invite them again — to another
+ *   account's calendar, or on Microsoft, which has no moving and takes it away to put it back.
+ */
+export type EventMoveLimit = 'same' | 'readonly' | 'managed' | 'invitation' | 'guests'
+
+/**
+ * What stops an event from moving to a calendar, or null when nothing
+ * does: one rule for the Calendario's menus, the Segretario and the service.
+ */
+export function eventMoveLimit(
+  event: Pick<
+    CalendarEvent,
+    'connectionId' | 'calendarId' | 'attendees' | 'managedBy' | 'organizedByUser'
+  >,
+  from: Pick<CalendarListEntry, 'writable' | 'provider'>,
+  to: Pick<CalendarListEntry, 'connectionId' | 'writable'> & { calendarId: string }
+): EventMoveLimit | null {
+  if (event.connectionId === to.connectionId && event.calendarId === to.calendarId) {
+    return 'same'
+  }
+
+  if (!from.writable || !to.writable) {
+    return 'readonly'
+  }
+
+  if (event.managedBy) {
+    return 'managed'
+  }
+
+  if (event.organizedByUser === false) {
+    return 'invitation'
+  }
+
+  const guests = event.attendees.some((attendee) => !attendee.self)
+
+  return guests && (event.connectionId !== to.connectionId || from.provider === 'microsoft')
+    ? 'guests'
+    : null
+}
+
 /** A new event: in which calendar (`calendarKey`), when, where, with whom. */
 export interface NewCalendarEvent {
   calendarKey: string
@@ -244,6 +335,10 @@ export interface NewCalendarEvent {
   /** Addresses to invite; they get the provider's invitation. */
   attendees: string[]
   origin?: EventOrigin | null
+  /** How it repeats, from its start; absent or null for one event. */
+  recurrence?: EventRecurrence | null
+  /** Its reminders, in minutes before it starts: [] none; absent or null, the calendar's own. */
+  reminders?: number[] | null
 }
 
 /**
@@ -281,6 +376,27 @@ export interface EventChange {
   description?: string | null
   /** The whole list of addresses invited, in place of the old one. */
   attendees?: string[]
+  /**
+   * The calendar it moves to (`calendarKey`), the same event there (vision
+   * §7.5): with what the Segretario keeps of it. An instance moves with its
+   * series.
+   */
+  calendarKey?: string
+  /**
+   * How it repeats from now: a rule makes it — or keeps it — a series;
+   * null makes a series one event again. Always the series'.
+   */
+  recurrence?: EventRecurrence | null
+  /** Its reminders, in minutes before it starts: [] none, null the calendar's own. */
+  reminders?: number[] | null
+}
+
+/**
+ * Of an instance of a recurring event, what a change or a removal is for:
+ * this one alone, or the whole series. An event on its own has no choice.
+ */
+export interface EventScope {
+  series?: boolean
 }
 
 /**
@@ -428,10 +544,14 @@ export interface CalendarApi {
   setCalendarRole: (calendarKey: string, role: CalendarRole | null) => Promise<CalendarListEntry[]>
   /** A new event; whoever is invited gets the provider's invitation. */
   create: (event: NewCalendarEvent) => Promise<CalendarEvent>
-  /** Changes an event; whoever is invited is told. */
-  update: (eventKey: string, change: EventChange) => Promise<CalendarEvent>
-  /** Takes an event away; whoever is invited is told. */
-  remove: (eventKey: string) => Promise<void>
+  /**
+   * Changes an event — of an instance, the whole series with `series` —,
+   * moves it to another calendar; whoever is invited is told. Resolves with
+   * the event as it is now, under its key there.
+   */
+  update: (eventKey: string, change: EventChange, scope?: EventScope) => Promise<CalendarEvent>
+  /** Takes an event away — of an instance, the whole series with `series` —; whoever is invited is told. */
+  remove: (eventKey: string, scope?: EventScope) => Promise<void>
   syncNow: () => Promise<void>
   /** The events changed: what shows them reads them again. */
   onChanged: (listener: () => void) => () => void

@@ -45,13 +45,20 @@ export interface StartingData {
 export function prepareDay(options: {
   refresh: boolean
   lastLetterAt: number | null
+  /** Who wrote the letter as it is: rewritten by the user, the words are theirs (§10.1). */
+  lastLetterBy?: 'segretario' | 'utente' | null
 }): StartingData {
   const now = new Date()
   const sections = [nowLine()]
 
   if (options.refresh && options.lastLetterAt !== null) {
+    const at = new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(
+      new Date(options.lastLetterAt)
+    )
     sections.push(
-      `Hai già scritto la lettera di oggi alle ${new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' }).format(new Date(options.lastLetterAt))}: guarda la giornata com'è adesso e aggiorna la lettera, e il resto solo se serve.`
+      options.lastLetterBy === 'utente'
+        ? `La lettera di oggi l'ha riscritta l'utente alle ${at}: guarda la giornata com'è adesso e aggiornala partendo dalle sue parole, e il resto solo se serve.`
+        : `Hai già scritto la lettera di oggi alle ${at}: guarda la giornata com'è adesso e aggiorna la lettera, e il resto solo se serve.`
     )
   }
 
@@ -84,7 +91,9 @@ export async function prepareProjectState(
     added
   )
   const written = project.stateAt
-    ? `«Il punto» l'hai scritto ${formatDateTime(new Date(project.stateAt).toISOString())}`
+    ? project.stateBy === 'utente'
+      ? `«Il punto» l'ha riscritto l'utente ${formatDateTime(new Date(project.stateAt).toISOString())}: le parole sono sue, e restano dove valgono ancora`
+      : `«Il punto» l'hai scritto ${formatDateTime(new Date(project.stateAt).toISOString())}`
     : "«Il punto» non c'è ancora"
   const moved = project.lastMessageAt
     ? `; l'ultimo messaggio è del ${formatDateTime(project.lastMessageAt)}`

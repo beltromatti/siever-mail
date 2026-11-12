@@ -1,10 +1,26 @@
 import type { PrismaClient } from '@prisma/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { CalendarEvent } from '@shared/calendar'
+import { calendarKey, type CalendarEvent } from '@shared/calendar'
 import type { ConnectionRefusedNotice } from '@shared/models'
 
+import type {
+  CalendarProvider,
+  EventField,
+  ProviderEvent,
+  ProviderEventInput
+} from './calendar-provider'
 import type { SegretarioOwnership } from './ownership'
+
+/** The Google accounts on the fake network, by their address: what a Google connection reaches. */
+const google = vi.hoisted(() => ({ accounts: new Map<string, unknown>() }))
+
+vi.mock('./google-calendar', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./google-calendar')>()),
+  GoogleCalendarProvider: function (_auth: unknown, address: string) {
+    return google.accounts.get(address)
+  }
+}))
 
 vi.mock('electron', () => ({
   // Kept as it is: what is tested is what the service does with it.
@@ -152,10 +168,10 @@ const opened: Array<InstanceType<typeof CalendarService>> = []
 /** The calendars open on the store and the network given, the user told of each refusal. */
 async function calendars(
   fetch: (url: string, init?: RequestInit) => Promise<Response>,
-  more: Partial<CalendarServiceOptions> = {}
+  more: Partial<CalendarServiceOptions> = {},
+  prisma: PrismaClient = store()
 ): Promise<{ calendar: InstanceType<typeof CalendarService>; told: ConnectionRefusedNotice[] }> {
   const told: ConnectionRefusedNotice[] = []
-  const prisma = store()
   const calendar = new CalendarService({
     database: { storeClient: async () => prisma, getAccounts: async () => [] },
     oauth: {} as never,
@@ -549,5 +565,499 @@ END:VCALENDAR`
     await calendar.setCalendarRole(entry.key, 'tutti')
     expect(await calendar.calendarSays(match.key)).toEqual({ role: 'tutti', yours: true })
     expect(await calendar.calendarSays(`${match.key}-gone`)).toBeNull()
+  })
+})
+
+const DAY = 86_400_000
+
+/**
+ * A Google account in memory, as the service reaches it through its
+ * provider: its calendars, their events, what changed in each since it
+ * was last read, and every write asked of it.
+ */
+class Account implements CalendarProvider {
+  readonly events = new Map<string, ProviderEvent>()
+  readonly calls: Array<[string, ...unknown[]]> = []
+  /** What each update was given to write. */
+  readonly written: ProviderEventInput[] = []
+  private readonly changed = new Map<string, ProviderEvent[]>()
+  private made = 0
+
+  constructor(readonly calendarIds: string[]) {}
+
+  /** An event of a calendar, here or elsewhere: noted as changed for the next read. */
+  put(event: ProviderEvent): void {
+    this.events.set(`${event.calendarId}\u0000${event.eventId}`, event)
+    this.changed.set(event.calendarId, [...(this.changed.get(event.calendarId) ?? []), event])
+  }
+
+  /** An event taken away, or an instance of a series. */
+  drop(calendarId: string, eventId: string): void {
+    for (const event of [...this.events.values()]) {
+      if (
+        event.calendarId === calendarId &&
+        (event.eventId === eventId || event.seriesId === eventId)
+      ) {
+        this.events.delete(`${calendarId}\u0000${event.eventId}`)
+        this.changed.set(calendarId, [
+          ...(this.changed.get(calendarId) ?? []),
+          { ...event, cancelled: true }
+        ])
+      }
+    }
+  }
+
+  of(calendarId: string, eventId: string): ProviderEvent[] {
+    return [...this.events.values()].filter(
+      (event) =>
+        event.calendarId === calendarId && (event.eventId === eventId || event.seriesId === eventId)
+    )
+  }
+
+  async listCalendars(): ReturnType<CalendarProvider['listCalendars']> {
+    return this.calendarIds.map((calendarId, index) => ({
+      calendarId,
+      name: calendarId,
+      primary: index === 0,
+      writable: true,
+      color: null
+    }))
+  }
+
+  async changes(
+    calendarId: string,
+    since: { syncToken: string } | { fromIso: string; toIso: string }
+  ): ReturnType<CalendarProvider['changes']> {
+    const found =
+      'syncToken' in since
+        ? (this.changed.get(calendarId) ?? [])
+        : [...this.events.values()].filter((event) => event.calendarId === calendarId)
+    this.changed.set(calendarId, [])
+    return { events: found, syncToken: 'next' }
+  }
+
+  async create(
+    calendarId: string,
+    input: ProviderEventInput,
+    origin: ProviderEvent['origin']
+  ): Promise<ProviderEvent> {
+    const eventId = `nuovo-${++this.made}`
+    this.calls.push(['create', calendarId, input.title, input.recurrence])
+    const event = providerEvent(calendarId, eventId, {
+      ...input,
+      attendees: input.attendees.map((email) => ({
+        email,
+        name: null,
+        response: 'needsAction',
+        self: false,
+        organizer: false
+      })),
+      origin,
+      recurrence: input.recurrence ?? null
+    })
+
+    if (!input.recurrence || input.recurrence === 'other') {
+      this.put(event)
+      return event
+    }
+
+    // A series: two weeks of it.
+    for (const week of [0, 1]) {
+      this.put({
+        ...event,
+        eventId: `${eventId}_${week}`,
+        seriesId: eventId,
+        start: new Date(event.startsAt + week * 7 * DAY).toISOString(),
+        end: new Date(event.endsAt + week * 7 * DAY).toISOString(),
+        startsAt: event.startsAt + week * 7 * DAY,
+        endsAt: event.endsAt + week * 7 * DAY
+      })
+    }
+
+    return event
+  }
+
+  async update(
+    calendarId: string,
+    eventId: string,
+    input: ProviderEventInput,
+    _notify: boolean,
+    fields: ReadonlySet<EventField>
+  ): Promise<ProviderEvent> {
+    this.calls.push(['update', calendarId, eventId, [...fields].sort()])
+    this.written.push(input)
+
+    for (const event of this.of(calendarId, eventId)) {
+      this.put({ ...event, title: input.title, reminders: input.reminders })
+    }
+
+    return this.of(calendarId, eventId)[0]
+  }
+
+  async remove(calendarId: string, eventId: string): Promise<void> {
+    this.calls.push(['remove', calendarId, eventId])
+    this.drop(calendarId, eventId)
+  }
+
+  async series(calendarId: string, seriesId: string): Promise<ProviderEventInput> {
+    const [first] = this.of(calendarId, seriesId).sort((a, b) => a.startsAt - b.startsAt)
+    return { ...first, attendees: [], recurrence: first.recurrence ?? null, reminders: null }
+  }
+
+  async move(
+    calendarId: string,
+    eventId: string,
+    toCalendarId: string
+  ): Promise<{ eventId: string; how: 'native' }> {
+    this.calls.push(['move', calendarId, eventId, toCalendarId])
+    const moving = this.of(calendarId, eventId)
+    this.drop(calendarId, eventId)
+    moving.forEach((event) => this.put({ ...event, calendarId: toCalendarId }))
+    return { eventId, how: 'native' }
+  }
+
+  async respond(): Promise<ProviderEvent> {
+    throw new Error('Not here.')
+  }
+}
+
+/** An event of the user's, without guests, as Google gives it. */
+function providerEvent(
+  calendarId: string,
+  eventId: string,
+  fields: Partial<ProviderEvent> = {}
+): ProviderEvent {
+  const startsAt = fields.start ? Date.parse(fields.start) : Date.now() + DAY
+  const endsAt = fields.end ? Date.parse(fields.end) : startsAt + 3_600_000
+
+  return {
+    calendarId,
+    eventId,
+    iCalUid: `${eventId}@google.com`,
+    seriesId: null,
+    title: 'Riunione',
+    start: new Date(startsAt).toISOString(),
+    end: new Date(endsAt).toISOString(),
+    allDay: false,
+    location: null,
+    description: null,
+    attendees: [],
+    organizer: null,
+    myResponse: null,
+    meetLink: null,
+    htmlLink: null,
+    origin: null,
+    reminders: null,
+    recurrence: null,
+    managedBy: null,
+    cancelled: false,
+    ...fields,
+    startsAt,
+    endsAt
+  }
+}
+
+/**
+ * The calendars open with Google accounts connected — each by its address —,
+ * read once; what follows the events moved, kept.
+ */
+async function withGoogle(accounts: Record<string, Account>): Promise<{
+  calendar: InstanceType<typeof CalendarService>
+  moved: Array<{ from: string; to: string }>
+  notified: Array<{ from: string; to: string }>
+  key: (address: string, calendarId: string, eventId: string) => string
+}> {
+  const prisma = store()
+  const moved: Array<{ from: string; to: string }> = []
+  const notified: Array<{ from: string; to: string }> = []
+  google.accounts.clear()
+
+  for (const [address, account] of Object.entries(accounts)) {
+    google.accounts.set(address, account)
+    await prisma.calendarConnection.create({
+      data: {
+        id: address,
+        provider: 'google',
+        label: address,
+        encryptedSecret: Buffer.from('token').toString('base64'),
+        connectedAt: 0n
+      }
+    })
+  }
+
+  const { calendar } = await calendars(
+    async () => new Response(null, { status: 404 }),
+    {
+      oauth: { client: () => ({}) } as never,
+      onEventsMoved: async (moves) => void moved.push(...moves),
+      notificationsMoved: async (moves) => void notified.push(...moves)
+    },
+    prisma
+  )
+  await calendar.syncAll()
+
+  return {
+    calendar,
+    moved,
+    notified,
+    key: (address, calendarId, eventId) => `${address}\u0000${calendarId}\u0000${eventId}`
+  }
+}
+
+describe('CalendarService, an event in another calendar (§7.5)', () => {
+  it('knows an event moved elsewhere between two calendars for the same one: one change, what was kept of it following', async () => {
+    const account = new Account(['primary', 'vita'])
+    account.put(providerEvent('primary', 'riunione'))
+    const { calendar, moved, notified, key } = await withGoogle({ 'mattia@brenta.it': account })
+
+    // Moved in Google Calendar, from the phone.
+    await account.move('primary', 'riunione', 'vita')
+    await calendar.syncAll()
+
+    const from = key('mattia@brenta.it', 'primary', 'riunione')
+    const to = key('mattia@brenta.it', 'vita', 'riunione')
+    expect(moved).toEqual([{ from, to }])
+    expect(notified).toEqual([{ from, to }])
+    expect(
+      (await calendar.changesSince(0, 100)).map((change) => [
+        change.kind,
+        change.inApp,
+        change.event.key,
+        change.before?.key,
+        change.before?.calendarName
+      ])
+    ).toEqual([['cambiato', false, to, from, 'primary']])
+    expect(await calendar.event(from)).toBeNull()
+    expect((await calendar.event(to))?.calendarName).toBe('vita')
+  })
+
+  it('moves an event with Google’s own move: the user’s one change under its new key, the Segretario’s none', async () => {
+    const account = new Account(['primary', 'vita'])
+    account.put(providerEvent('primary', 'riunione'))
+    const { calendar, moved, key } = await withGoogle({ 'mattia@brenta.it': account })
+    const here = key('mattia@brenta.it', 'primary', 'riunione')
+    const there = key('mattia@brenta.it', 'vita', 'riunione')
+
+    const result = await calendar.update(
+      here,
+      { calendarKey: calendarKey('mattia@brenta.it', 'vita'), title: 'Riunione di cantiere' },
+      { byUser: true }
+    )
+
+    expect(result).toMatchObject({
+      key: there,
+      calendarName: 'vita',
+      title: 'Riunione di cantiere'
+    })
+    expect(account.calls).toEqual([
+      ['move', 'primary', 'riunione', 'vita'],
+      ['update', 'vita', 'riunione', ['title']]
+    ])
+    expect(moved).toEqual([{ from: here, to: there }])
+    expect(
+      (await calendar.changesSince(0, 100)).map((change) => [
+        change.kind,
+        change.inApp,
+        change.event.key,
+        change.before?.calendarName
+      ])
+    ).toEqual([
+      ['cambiato', true, there, 'primary'],
+      ['cambiato', true, there, 'vita']
+    ])
+
+    // Back by the Segretario: it knows it, nothing is noted.
+    const latest = await calendar.latestChangeId()
+    await calendar.update(there, { calendarKey: calendarKey('mattia@brenta.it', 'primary') })
+    expect(await calendar.changesSince(latest, 100)).toEqual([])
+    expect(moved.at(-1)).toEqual({ from: there, to: here })
+  })
+
+  it('moves an instance with its whole series, every instance following to its key there', async () => {
+    const account = new Account(['primary', 'vita'])
+    const start = Date.now() + DAY
+    const series = { seriesId: 'lez', recurrence: { frequency: 'weekly', interval: 1 } } as const
+
+    for (const week of [0, 1]) {
+      account.put(
+        providerEvent('primary', `lez_${week}`, {
+          ...series,
+          iCalUid: 'lez@google.com',
+          start: new Date(start + week * 7 * DAY).toISOString()
+        })
+      )
+    }
+
+    const { calendar, moved, key } = await withGoogle({ 'mattia@brenta.it': account })
+    const result = await calendar.update(key('mattia@brenta.it', 'primary', 'lez_1'), {
+      calendarKey: calendarKey('mattia@brenta.it', 'vita')
+    })
+
+    expect(account.calls).toEqual([['move', 'primary', 'lez', 'vita']])
+    expect(result.key).toBe(key('mattia@brenta.it', 'vita', 'lez_1'))
+    expect(moved).toEqual([
+      {
+        from: key('mattia@brenta.it', 'primary', 'lez_0'),
+        to: key('mattia@brenta.it', 'vita', 'lez_0')
+      },
+      {
+        from: key('mattia@brenta.it', 'primary', 'lez_1'),
+        to: key('mattia@brenta.it', 'vita', 'lez_1')
+      }
+    ])
+  })
+
+  it('copies an event to another account and takes it away here — never one with guests, nor one Gmail keeps', async () => {
+    const work = new Account(['primary'])
+    const home = new Account(['casa'])
+    work.put(providerEvent('primary', 'dentista', { reminders: [30] }))
+    work.put(
+      providerEvent('primary', 'cena', {
+        attendees: [
+          {
+            email: 'rossi@acme-srl.it',
+            name: null,
+            response: 'accepted',
+            self: false,
+            organizer: false
+          }
+        ]
+      })
+    )
+    work.put(providerEvent('primary', 'volo', { managedBy: 'gmail' }))
+    const { calendar, moved, key } = await withGoogle({
+      'mattia@brenta.it': work,
+      'mattia@casa.it': home
+    })
+    const toHome = { calendarKey: calendarKey('mattia@casa.it', 'casa') }
+
+    const copied = await calendar.update(key('mattia@brenta.it', 'primary', 'dentista'), toHome, {
+      byUser: true
+    })
+
+    expect(home.calls).toEqual([['create', 'casa', 'Riunione', null]])
+    expect(work.calls).toEqual([['remove', 'primary', 'dentista']])
+    expect(copied).toMatchObject({ key: key('mattia@casa.it', 'casa', 'nuovo-1'), reminders: [30] })
+    expect(moved).toEqual([
+      { from: key('mattia@brenta.it', 'primary', 'dentista'), to: copied.key }
+    ])
+    await expect(
+      calendar.update(key('mattia@brenta.it', 'primary', 'cena'), toHome)
+    ).rejects.toThrow(
+      'Moving it would cancel the invitation for the invitees and invite them again.'
+    )
+    await expect(
+      calendar.update(key('mattia@brenta.it', 'primary', 'volo'), toHome)
+    ).rejects.toThrow('Gmail keeps it: Google doesn’t let it move to another calendar.')
+    await expect(
+      calendar.update(key('mattia@brenta.it', 'primary', 'volo'), { title: 'Volo' })
+    ).rejects.toThrow('Gmail keeps it: only its reminders can change.')
+  })
+})
+
+describe('CalendarService, a series (§7.5)', () => {
+  async function lessons(): Promise<{
+    account: Account
+    calendar: InstanceType<typeof CalendarService>
+    key: (eventId: string) => string
+  }> {
+    const account = new Account(['primary'])
+    const start = Date.now() + DAY
+
+    for (const week of [0, 1]) {
+      account.put(
+        providerEvent('primary', `lez_${week}`, {
+          seriesId: 'lez',
+          iCalUid: 'lez@google.com',
+          title: 'Lezione',
+          recurrence: { frequency: 'weekly', interval: 1 },
+          start: new Date(start + week * 7 * DAY).toISOString()
+        })
+      )
+    }
+
+    const { calendar, key } = await withGoogle({ 'mattia@brenta.it': account })
+    return { account, calendar, key: (eventId) => key('mattia@brenta.it', 'primary', eventId) }
+  }
+
+  it('changes an instance alone, or its whole series, by the series’ id', async () => {
+    const { account, calendar, key } = await lessons()
+
+    const second = await calendar.event(key('lez_1'))
+    await calendar.update(key('lez_1'), {
+      title: 'Lezione spostata',
+      start: new Date(Date.parse(second!.start) + 3_600_000).toISOString()
+    })
+    await calendar.update(
+      key('lez_0'),
+      { title: 'Lezione di analisi' },
+      { series: true, byUser: true }
+    )
+
+    expect(account.calls).toEqual([
+      ['update', 'primary', 'lez_1', ['time', 'title']],
+      ['update', 'primary', 'lez', ['title']]
+    ])
+    // The instance alone: its series' rule is not written with it.
+    expect(account.written[0].recurrence).toBeNull()
+    expect(account.written[1].recurrence).toEqual({ frequency: 'weekly', interval: 1 })
+    expect((await calendar.event(key('lez_1')))?.title).toBe('Lezione di analisi')
+    expect(
+      (await calendar.changesSince(0, 100)).map((change) => [change.kind, change.inApp])
+    ).toEqual([
+      ['cambiato', true],
+      ['cambiato', true]
+    ])
+  })
+
+  it('takes away an instance alone, or its whole series, noted instance by instance for the Segretario', async () => {
+    const { account, calendar, key } = await lessons()
+
+    await calendar.remove(key('lez_1'), { series: true, byUser: true })
+
+    expect(account.calls).toEqual([['remove', 'primary', 'lez']])
+    expect(await calendar.event(key('lez_0'))).toBeNull()
+    expect(
+      (await calendar.changesSince(0, 100)).map((change) => [change.kind, change.event.key])
+    ).toEqual([
+      ['annullato', key('lez_0')],
+      ['annullato', key('lez_1')]
+    ])
+  })
+
+  it('writes a new series, resolving with its first time; a rule that does not hold, never', async () => {
+    const { account, calendar } = await lessons()
+    const start = new Date(Date.now() + 2 * DAY).toISOString()
+    const event = {
+      calendarKey: calendarKey('mattia@brenta.it', 'primary'),
+      title: 'Corso',
+      start,
+      end: new Date(Date.parse(start) + 3_600_000).toISOString(),
+      allDay: false,
+      location: null,
+      description: null,
+      attendees: []
+    }
+
+    const first = await calendar.create(
+      { ...event, recurrence: { frequency: 'weekly', interval: 1 } },
+      { byUser: true }
+    )
+
+    expect(first).toMatchObject({
+      eventId: 'nuovo-1_0',
+      seriesId: 'nuovo-1',
+      recurrence: { frequency: 'weekly', interval: 1 }
+    })
+    expect(
+      (await calendar.changesSince(0, 100)).map((change) => [change.kind, change.inApp])
+    ).toEqual([
+      ['nuovo', true],
+      ['nuovo', true]
+    ])
+    await expect(
+      calendar.create({ ...event, recurrence: { frequency: 'weekly', interval: 0 } })
+    ).rejects.toThrow('How often it repeats is a whole number, 1 or more.')
+    expect(account.calls).toHaveLength(1)
   })
 })

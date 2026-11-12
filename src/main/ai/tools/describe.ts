@@ -52,7 +52,11 @@ export function noteLine(note: NoteRecord): string {
 
 export function replyLines(reply: ReplyRecord): string[] {
   return [
-    `${reply.kind === 'sollecito' ? 'Il sollecito' : 'La risposta'} che hai preparato (${
+    `${reply.kind === 'sollecito' ? 'Il sollecito' : 'La risposta'} che hai preparato${
+      reply.writtenBy === 'utente'
+        ? `, ${reply.kind === 'sollecito' ? 'riscritto' : 'riscritta'} dall'utente: le parole sono sue`
+        : ''
+    } (${
       reply.status === 'pronta'
         ? "pronta, l'utente la vede nel lettore"
         : `da rivedere: ${reply.staleReason ?? 'la conversazione è andata avanti'}`

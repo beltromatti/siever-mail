@@ -227,6 +227,8 @@ export interface MessageNote {
   /** The same message came to another of the user's accounts: this copies that note. */
   twinAccountId: string | null
   writtenBy: WorkActor
+  /** The user's words on it, waiting for the Segretario: what is wrong with it. */
+  pending?: PendingWords | null
 }
 
 export type CommitmentKind = 'ti_chiedono' | 'hai_promesso' | 'aspetti' | 'da_fare'
@@ -261,6 +263,8 @@ export interface Commitment {
   evidenceKey: string | null
   /** A question the Segretario asks the user about it: is it still open? */
   question: string | null
+  /** The user's words on it, waiting for the Segretario: a correction, or the answer to its question. */
+  pending?: PendingWords | null
   createdAt: number
   updatedAt: number
 }
@@ -302,6 +306,8 @@ export interface PreparedReply {
   /** `da_rivedere` when the conversation moved on after it was written. */
   status: 'pronta' | 'da_rivedere'
   staleReason: string | null
+  /** The user's words on it, waiting for the Segretario: what is wrong with it. */
+  pending?: PendingWords | null
 }
 
 /** Something the Segretario recommends and leaves the user to decide. */
@@ -387,6 +393,8 @@ export interface ProjectDetail extends Project {
   /** What it gathers besides its conversations: folders, events (by key, titled), links. */
   resources: Array<{ kind: 'cartella' | 'evento' | 'link'; location: string; label: string | null }>
   commitments: Commitment[]
+  /** The user's words on "Il punto", waiting for the Segretario: what is wrong with it. */
+  statePending?: PendingWords | null
 }
 
 /* ──────────────────────────────── the day ──────────────────────────────── */
@@ -434,6 +442,8 @@ export interface TodayPage {
   /** What the short names in the letter stand for. */
   letterLinks: HandleLink[]
   letterAt: number | null
+  /** The user's words on the letter, waiting for the Segretario: what is wrong with it. */
+  letterPending?: PendingWords | null
   /** The day is being looked at again: a new letter is on its way. */
   letterRewriting: boolean
   /** Messages still to be read: while there are, the day is not complete. */
@@ -461,6 +471,51 @@ export interface TodayPage {
 export interface LinkedText {
   text: string
   links: HandleLink[]
+  /** The user's words on them, waiting for the Segretario: what is wrong with them. */
+  pending?: PendingWords | null
+}
+
+/* ─────────────────────────── the user's word on the work ─────────────────────────── */
+
+/**
+ * What the Segretario wrote that the user can put right (vision §10.1),
+ * wherever it shows: an open thing, a message's note, how to prepare for a
+ * meeting, «Il punto» of a project, the day's letter, a reply prepared.
+ */
+export type WorkTarget =
+  | { kind: 'impegno'; id: number }
+  | { kind: 'nota'; accountId: string; messageKey: string }
+  | { kind: 'preparazione'; eventKey: string }
+  | { kind: 'punto'; projectId: string }
+  | { kind: 'lettera'; day: string }
+  | { kind: 'risposta'; accountId: string; messageKey: string }
+
+/** A thing the Segretario wrote, as one key: the same thing, the same key, wherever it shows. */
+export function workTargetKey(target: WorkTarget): string {
+  switch (target.kind) {
+    case 'impegno':
+      return `impegno:${target.id}`
+    case 'nota':
+    case 'risposta':
+      return `${target.kind}:${target.accountId}:${target.messageKey}`
+    case 'preparazione':
+      return `preparazione:${target.eventKey}`
+    case 'punto':
+      return `punto:${target.projectId}`
+    case 'lettera':
+      return `lettera:${target.day}`
+  }
+}
+
+/**
+ * The user's words on a thing, waiting for the Segretario to take them in
+ * (vision §10.1): what is wrong with it (`correzione` — the thing shows
+ * dimmed until put right), or the answer to its question (`risposta`).
+ */
+export interface PendingWords {
+  kind: 'correzione' | 'risposta'
+  words: string
+  at: number
 }
 
 /* ──────────────────────────────── writing ──────────────────────────────── */
@@ -793,6 +848,128 @@ export interface WorkChangeLine {
   projectIds: string[]
 }
 
+/* ─────────────────────────── what a request carries ─────────────────────────── */
+
+/**
+ * What a request carries whole, from the model's real figures — DeepSeek
+ * V4.1 Flash on OpenRouter reads 1,048,576 tokens, text and pictures, and a
+ * run is compacted at 85% of them: ten files or pictures; their text
+ * together up to 600,000 characters, about 150,000 tokens — a seventh of
+ * the context, leaving room for the conversation and the work on it —; ten
+ * pictures, photos and scanned pages together; a file read up to 50 MB.
+ * What does not fit still goes, as a reference the Segretario reads with
+ * `leggi` as much as it needs.
+ */
+export const REQUEST_ATTACHMENTS = {
+  count: 10,
+  chars: 600_000,
+  pictures: 10,
+  fileBytes: 50 * 1024 * 1024
+} as const
+
+/** Why an attachment does not go whole. */
+export type AttachmentShortfall =
+  /** It cannot be read: it goes with why (vision §8.1). */
+  | 'unreadable'
+  /** Larger than a file is read up to. */
+  | 'too-big'
+  /** Its text past the room the request has for it. */
+  | 'too-long'
+  /** Its pictures past the ten a request carries. */
+  | 'too-many-pictures'
+
+/** A file or a picture put in a request, as its chip shows it. */
+export interface AttachmentInfo {
+  name: string
+  kind: 'image' | 'pdf' | 'file'
+  /** In bytes. */
+  size: number
+  /** A PDF's pages, when they are known. */
+  pages: number | null
+  /** Where it is; null for a picture without a file (pasted, or dragged from a page). */
+  path: string | null
+  /** A small picture of a picture, made by the main process: a data URL. */
+  thumbnail: string | null
+}
+
+/**
+ * A file being added to a request, as the main process read it: what it
+ * would bring whole, and what keeps it from going whole on its own.
+ */
+export interface PreparedAttachment extends AttachmentInfo {
+  /** Names it until its request goes (`startActivity`, `sendMessage`) or it is dropped. */
+  id: string
+  /** Characters of text it brings whole. */
+  chars: number
+  /** Pictures it brings whole: a photo, a PDF's scanned pages. */
+  pictures: number
+  /** Why it cannot go whole even alone; null when it can. */
+  shortfall: AttachmentShortfall | null
+}
+
+/** A file read for a request, or why it could not be, in the user's words. */
+export type AttachmentPreparation = PreparedAttachment | { error: string }
+
+/** Where an attachment comes from: a file, or a picture without one (pasted, dragged from a page). */
+export type AttachmentSource =
+  { path: string } | { picture: { name: string; type: string; data: Uint8Array } }
+
+/** An attachment as it went with a request: what the user's words show under them. */
+export interface SentAttachment extends AttachmentInfo {
+  /** The short name the Segretario reads it by (`f3`); null for a picture without a file. */
+  handle: string | null
+  /** Why it did not go whole; null when it did. */
+  shortfall: AttachmentShortfall | null
+}
+
+/**
+ * How each attachment of a request goes, in their order: whole while the
+ * request has room for its text and its pictures, otherwise why not.
+ */
+export function allotAttachments(
+  items: ReadonlyArray<Pick<PreparedAttachment, 'chars' | 'pictures' | 'shortfall'>>
+): Array<AttachmentShortfall | null> {
+  let chars: number = REQUEST_ATTACHMENTS.chars
+  let pictures: number = REQUEST_ATTACHMENTS.pictures
+
+  return items.map((item) => {
+    if (item.shortfall) {
+      return item.shortfall
+    }
+
+    if (item.pictures > pictures) {
+      return 'too-many-pictures'
+    }
+
+    if (item.chars > chars) {
+      return 'too-long'
+    }
+
+    chars -= item.chars
+    pictures -= item.pictures
+    return null
+  })
+}
+
+/**
+ * Whether an attachment goes with its request: whole, or by its path for the
+ * Segretario to read. A picture without a file that cannot go whole does not.
+ */
+export function attachmentGoes(
+  item: Pick<AttachmentInfo, 'path'>,
+  shortfall: AttachmentShortfall | null
+): boolean {
+  return shortfall === null || item.path !== null
+}
+
+/** The model's thinking in the turn under way, as the panel shows it live. */
+export interface ThinkingNow {
+  /** Its reasoning so far, in tokens counted from the stream: close, until the turn ends. */
+  tokens: number
+  /** How long it thought, once its answer began; null while it still thinks. */
+  ms: number | null
+}
+
 /** What the page shows of an activity, in order. */
 export type ActivityEntry =
   | {
@@ -804,8 +981,18 @@ export type ActivityEntry =
       origin?: 'segretario'
       at: number
       handles: HandleLink[]
+      /** The files and pictures that went with the words. */
+      attachments?: SentAttachment[]
     }
-  | { kind: 'assistant'; id: number; text: string; at: number }
+  | {
+      kind: 'assistant'
+      id: number
+      /** Its words; empty for a turn of calls alone, shown for how it thought. */
+      text: string
+      at: number
+      /** How long it thought before its answer, and its reasoning tokens, exact. */
+      thought?: { ms: number; tokens: number }
+    }
   | { kind: 'tool'; id: number; tool: ToolActivity; at: number; handles: HandleLink[] }
   | { kind: 'approval'; id: number; approval: ApprovalRequest; at: number }
   | { kind: 'changes'; id: number; changes: WorkChangeLine[]; at: number }
@@ -821,6 +1008,8 @@ export type ActivityEvent =
   | { type: 'summary'; activity: ActivitySummary }
   | { type: 'entry'; activityId: string; entry: ActivityEntry }
   | { type: 'stream'; activityId: string; text: string }
+  /** How the model thinks in the turn under way; null once the turn is written. */
+  | { type: 'thinking'; activityId: string; thinking: ThinkingNow | null }
   | { type: 'removed'; activityId: string }
 
 /* ────────────────────────── the page's part of the work ────────────────────────── */
@@ -894,6 +1083,10 @@ export const SEGRETARIO_IPC = {
   getMessageWork: 'segretario:get-message-work',
   setCommitmentStatus: 'segretario:set-commitment-status',
   editCommitment: 'segretario:edit-commitment',
+  rewriteWork: 'segretario:rewrite-work',
+  correctWork: 'segretario:correct-work',
+  answerQuestion: 'segretario:answer-question',
+  withdrawWords: 'segretario:withdraw-words',
   undoCommitmentStatus: 'segretario:undo-commitment-status',
   openCommitment: 'segretario:open-commitment',
   markHandled: 'segretario:mark-handled',
@@ -931,6 +1124,9 @@ export const SEGRETARIO_IPC = {
   getActivity: 'segretario:get-activity',
   startActivity: 'segretario:start-activity',
   sendMessage: 'segretario:send-message',
+  chooseFiles: 'segretario:choose-files',
+  prepareAttachment: 'segretario:prepare-attachment',
+  dropAttachments: 'segretario:drop-attachments',
   retryActivity: 'segretario:retry-activity',
   cancelActivity: 'segretario:cancel-activity',
   removeActivity: 'segretario:remove-activity',
@@ -1010,6 +1206,20 @@ export interface SegretarioApi {
     id: number,
     changes: { text?: string; due?: string | null; kind?: CommitmentKind }
   ) => Promise<Commitment>
+  /**
+   * The user rewrites by hand what the Segretario wrote (vision §10.1): their
+   * version stands at once, and teaches the Segretario as a lesson.
+   */
+  rewriteWork: (target: WorkTarget, text: string) => Promise<void>
+  /**
+   * The user says in words what is wrong with something the Segretario
+   * wrote: it shows dimmed until the reflection puts it right and learns.
+   */
+  correctWork: (target: WorkTarget, words: string) => Promise<void>
+  /** The user answers, in words, the question the Segretario asks about an open thing. */
+  answerQuestion: (commitmentId: number, words: string) => Promise<void>
+  /** Takes back the words given on a thing, while the Segretario has not taken them in. */
+  withdrawWords: (target: WorkTarget) => Promise<void>
   /** The user opens a commitment: from a message, from an event, or of their own. */
   openCommitment: (
     from:
@@ -1098,8 +1308,28 @@ export interface SegretarioApi {
   /** The panel's activities: the user's requests and Conoscimi; with `diary`, the work done alone too. */
   listActivities: (options?: { diary?: boolean }) => Promise<ActivitySummary[]>
   getActivity: (id: string) => Promise<ActivityDetail | null>
-  startActivity: (text: string, context: SegretarioContext) => Promise<ActivitySummary>
-  sendMessage: (id: string, text: string, context: SegretarioContext) => Promise<void>
+  /**
+   * A request in the panel, with the files and pictures it carries (their
+   * `PreparedAttachment.id`, in order): their words may be none then.
+   */
+  startActivity: (
+    text: string,
+    context: SegretarioContext,
+    attachments?: string[]
+  ) => Promise<ActivitySummary>
+  /** The user goes on writing in a conversation, even one that stopped short. */
+  sendMessage: (
+    id: string,
+    text: string,
+    context: SegretarioContext,
+    attachments?: string[]
+  ) => Promise<void>
+  /** Files to add to a request, chosen in the system's dialog; none when it is closed. */
+  chooseFiles: () => Promise<string[]>
+  /** Reads a file or a picture for a request: what it brings, or why it cannot be added. */
+  prepareAttachment: (source: AttachmentSource) => Promise<AttachmentPreparation>
+  /** Lets go of attachments read for a request that will not carry them. */
+  dropAttachments: (ids: string[]) => Promise<void>
   /** A request in the panel that stopped short (§14.2), taken up again from where it was. */
   retryActivity: (id: string) => Promise<void>
   cancelActivity: (id: string) => Promise<void>

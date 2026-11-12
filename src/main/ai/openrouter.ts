@@ -209,6 +209,23 @@ export interface ChatResult {
   provider: string | null
   /** The stream said what the turn cost; one that ended before saying is billed all the same. */
   billed: boolean
+  /**
+   * How the model thought before its answer, as the stream showed it: from
+   * its first reasoning to the first of its answer — words or calls — or to
+   * the end, and about how many tokens (`thinkingTokens`); null when it did
+   * not think.
+   */
+  thinking: { ms: number; tokens: number } | null
+}
+
+/** What a turn's stream tells as it comes, before the turn is over. */
+export interface StreamListener {
+  /** Words of the answer, as they are written. */
+  onText?: (text: string) => void
+  /** The model thinks: its reasoning so far, in tokens as counted from the stream (`thinkingTokens`). */
+  onReasoning?: (tokens: number) => void
+  /** Its answer began — words or calls — after thinking this long; null when it did not think. */
+  onOutput?: (thinkingMs: number | null) => void
 }
 
 /** What a generation cost, as OpenRouter keeps it. */
@@ -240,6 +257,8 @@ export type SegretarioErrorCode =
   | 'cancelled'
   /** A run turned without getting anywhere: every call failing, or the task's result never left. */
   | 'stuck'
+  /** A conversation's turn ended with neither words for the user nor a call: no answer came. */
+  | 'no-answer'
 
 /** A failure of the Segretario's service, with what to tell the user. */
 export class SegretarioError extends Error {
@@ -538,8 +557,9 @@ export class OpenRouterClient {
 
   /**
    * One turn of the model, streamed: `onText` hears the answer as it is
-   * written. Retries a busy provider or a dropped network before the first
-   * word; after it, a broken stream is an error the caller decides on.
+   * written, `onReasoning` and `onOutput` the thinking before it. Retries a
+   * busy provider or a dropped network before the first word; after it, a
+   * broken stream is an error the caller decides on.
    *
    * A generation that began and did not say its bill — stopped by the
    * user, cut by the network, over its time — was paid for all the same:
@@ -548,9 +568,8 @@ export class OpenRouterClient {
   async chat(
     key: string,
     request: ChatRequest,
-    options: {
+    options: StreamListener & {
       signal?: AbortSignal
-      onText?: (text: string) => void
       onLateBill?: (bill: GenerationBill) => Promise<void>
     } = {}
   ): Promise<ChatResult> {
@@ -570,9 +589,13 @@ export class OpenRouterClient {
       let started = false
 
       try {
-        const result = await this.chatOnce(key, request, options.signal, unbilled, (text) => {
-          started = true
-          options.onText?.(text)
+        const result = await this.chatOnce(key, request, options.signal, unbilled, {
+          onText: (text) => {
+            started = true
+            options.onText?.(text)
+          },
+          onReasoning: options.onReasoning,
+          onOutput: options.onOutput
         })
         await traceCall(request, result)
         return result
@@ -642,7 +665,7 @@ export class OpenRouterClient {
     request: ChatRequest,
     signal: AbortSignal | undefined,
     unbilled: (generationId: string) => void,
-    onText: (text: string) => void
+    listener: StreamListener
   ): Promise<ChatResult> {
     const body = {
       model: SEGRETARIO_MODEL,
@@ -692,7 +715,7 @@ export class OpenRouterClient {
     const generationId = response.headers.get('x-generation-id')
 
     try {
-      const result = await readChatStream(response.body, onText, signal)
+      const result = await readChatStream(response.body, listener, signal)
 
       if (!result.billed && generationId) {
         unbilled(generationId)
@@ -752,6 +775,8 @@ interface StreamChunk {
   choices?: Array<{
     delta?: {
       content?: string | null
+      /** The reasoning's text, beside its details. */
+      reasoning?: string | null
       reasoning_details?: unknown[]
       tool_calls?: Array<{
         index: number
@@ -843,10 +868,44 @@ export async function* sseData(
   }
 }
 
+/**
+ * The reasoning a delta carries, as text — what its details say, or the
+ * plain `reasoning` beside them — or null when it carries none. Reasoning
+ * the provider keeps encrypted is reasoning all the same, of no length.
+ */
+function reasoningIn(
+  delta: NonNullable<NonNullable<StreamChunk['choices']>[number]['delta']>
+): string | null {
+  const details = delta.reasoning_details ?? []
+
+  if (details.length > 0) {
+    return details
+      .map((detail) => {
+        const { text, summary } = (detail ?? {}) as { text?: unknown; summary?: unknown }
+        return typeof text === 'string' ? text : typeof summary === 'string' ? summary : ''
+      })
+      .join('')
+  }
+
+  return delta.reasoning ? delta.reasoning : null
+}
+
+/**
+ * How many tokens of reasoning a stream has carried, until the bill says
+ * exactly: each delta of DeepSeek's providers carries one token, so the
+ * deltas are the count. A provider that sends several tokens in a delta
+ * would make that count fall far short, and a thinking that shows less than
+ * it costs reads as stuck: the characters, at about four a token, keep it
+ * from undercounting badly — whichever is larger.
+ */
+export function thinkingTokens(deltas: number, chars: number): number {
+  return Math.max(deltas, Math.ceil(chars / 4))
+}
+
 /** Gathers a streamed completion: the text, the tool calls by index, the reasoning, the bill. */
 export async function readChatStream(
   stream: ReadableStream<Uint8Array>,
-  onText: (text: string) => void,
+  listener: StreamListener,
   signal?: AbortSignal
 ): Promise<ChatResult> {
   const result: ChatResult = {
@@ -857,9 +916,15 @@ export async function readChatStream(
     usage: { promptTokens: 0, cachedTokens: 0, completionTokens: 0, reasoningTokens: 0, cost: 0 },
     model: null,
     provider: null,
-    billed: false
+    billed: false,
+    thinking: null
   }
   const calls = new Map<number, ToolCall>()
+  // The thinking as it comes: when it began, its deltas and characters, when the answer began.
+  let thoughtFrom: number | null = null
+  let thoughtDeltas = 0
+  let thoughtChars = 0
+  let answeredAt: number | null = null
 
   for await (const payload of sseData(stream, signal)) {
     if (payload === '[DONE]') {
@@ -886,10 +951,23 @@ export async function readChatStream(
 
     for (const choice of chunk.choices ?? []) {
       const delta = choice.delta
+      const reasoning = delta ? reasoningIn(delta) : null
+
+      if (reasoning !== null) {
+        thoughtFrom ??= Date.now()
+        thoughtDeltas += 1
+        thoughtChars += reasoning.length
+        listener.onReasoning?.(thinkingTokens(thoughtDeltas, thoughtChars))
+      }
+
+      if (answeredAt === null && (delta?.content || (delta?.tool_calls?.length ?? 0) > 0)) {
+        answeredAt = Date.now()
+        listener.onOutput?.(thoughtFrom === null ? null : answeredAt - thoughtFrom)
+      }
 
       if (delta?.content) {
         result.content += delta.content
-        onText(delta.content)
+        listener.onText?.(delta.content)
       }
 
       if (delta?.reasoning_details) {
@@ -929,6 +1007,13 @@ export async function readChatStream(
   }
 
   result.toolCalls = [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call)
+  result.thinking =
+    thoughtFrom === null
+      ? null
+      : {
+          ms: (answeredAt ?? Date.now()) - thoughtFrom,
+          tokens: thinkingTokens(thoughtDeltas, thoughtChars)
+        }
   return result
 }
 

@@ -9,6 +9,7 @@ import type { LinkedText } from '@shared/segretario'
 import { LinkedWords } from '@renderer/features/segretario/segretario-text'
 
 import { dateFormat } from './calendar-dates'
+import { RepeatMark } from './repeat-mark'
 
 const MESSAGES = defineMessages({
   allDay: { en: 'All day', it: 'Tutto il giorno', de: 'Ganztägig' },
@@ -91,6 +92,7 @@ export function EventLine({
       <span className="flex min-w-0 flex-col gap-0.5">
         <span className="text-foreground text-[14px] leading-[1.35] font-medium">
           {event.title}
+          <RepeatMark event={event} className="ml-1.5" />
           {event.myResponse && event.myResponse !== 'accepted' && (
             <span
               className={cn(

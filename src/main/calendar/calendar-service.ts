@@ -26,6 +26,7 @@ import {
   calendarKey,
   calendarRefusedNotice,
   calendarSearchWords,
+  eventMoveLimit,
   type CalendarAttendee,
   type CalendarChange,
   type CalendarConnection,
@@ -37,7 +38,9 @@ import {
   type CalendarSearchQuery,
   type CalendarSearchResult,
   type EventChange,
+  type EventMoveLimit,
   type EventOrigin,
+  type EventRecurrence,
   type NewCalendarEvent
 } from '@shared/calendar'
 import type { ConnectionRefusal, ConnectionRefusedNotice, MailAccount } from '@shared/models'
@@ -49,7 +52,10 @@ import {
   eventInput,
   SyncTokenExpired,
   type CalendarProvider,
-  type ProviderEvent
+  type EventField,
+  type MoveHow,
+  type ProviderEvent,
+  type ProviderEventInput
 } from './calendar-provider'
 import {
   CalDavCalendarProvider,
@@ -73,7 +79,13 @@ import {
 import { GOOGLE_CALENDAR_SCOPE, GoogleCalendarProvider } from './google-calendar'
 import { GraphCalendarProvider, mailboxZoneNotGranted } from './graph-calendar'
 import type { ChangeByOthers } from './calendar-notifications'
-import { calendarNameOf, canonicalUid, type InvitationInstance } from './icalendar'
+import {
+  calendarNameOf,
+  canonicalUid,
+  newEventResource,
+  occurrencesOf,
+  type InvitationInstance
+} from './icalendar'
 import {
   eventIsYours,
   handledBy,
@@ -85,6 +97,7 @@ import {
   type SegretarioOwnership,
   type Whose
 } from './ownership'
+import { dayIn, knownZone, recurrenceProblem, shiftedRecurrence, shiftedSeries } from './recurrence'
 import { instantsOf, type RemindedEvent } from './reminders'
 import { calendarText, feedUrl, IcsCalendarProvider, type Fetch } from './ics-calendar'
 
@@ -101,8 +114,15 @@ const WINDOW_AHEAD_MS = CALENDAR_HELD_DAYS.ahead * 24 * 60 * 60 * 1000
  * once.
  */
 const WINDOW_SLIDES_EVERY_MS = 24 * 60 * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
 /** How long what changed in the calendars is kept for the Segretario to look at. */
 const CHANGES_KEPT_MS = 30 * 24 * 60 * 60 * 1000
+
+/** An event that went to another calendar, as what the app keeps of it follows it (vision §7.5): its key before and after. */
+export interface EventMove {
+  from: string
+  to: string
+}
 
 /** A calendar connection taken away, as it was: for the others to let go of it. */
 export interface LeftCalendar {
@@ -150,14 +170,170 @@ export interface CalendarServiceOptions {
   onChangedByOthers?(calendar: string, changes: ChangeByOthers[], through: number): void
   /** What the Segretario found of whose things are (§7.4); null with the AI off. */
   ownership?(): Promise<SegretarioOwnership | null>
+  /**
+   * Events went to another calendar — moved here, or elsewhere and found by
+   * a sync — and are the same events there under new keys (vision §7.5):
+   * what the Segretario keeps of them follows. Before the page is told.
+   */
+  onEventsMoved?(moves: ReadonlyArray<EventMove>): Promise<void>
+  /**
+   * The same, for the calendar's notifications: the reminders given, put
+   * off or on the screen follow the events they are of (§13.3).
+   */
+  notificationsMoved?(moves: ReadonlyArray<EventMove>): Promise<void>
 }
 
-/** A change a sync found, as it is kept: what it was, what it is, in which calendar. */
+/**
+ * A change to note for the Segretario: found by a read, or made by the
+ * user in the app — what it was, in which calendar, what it is now.
+ */
 interface FoundChange {
   kind: 'nuovo' | 'cambiato' | 'annullato'
+  connectionId: string
+  /** The event's key: now — or, gone, as it was. */
+  key: string
   before: CalendarEventRow | null
-  event: ProviderEvent
-  calendarName: string
+  /** The calendar it was in: another one's, for one moved. */
+  beforeName: string
+  /**
+   * As its provider gives it now — cancelled, for one taken away —; null
+   * for one a read in full no longer found, which is not told: it may only
+   * have left what the user sees.
+   */
+  after: ProviderEvent | null
+  afterName: string
+}
+
+/** What a read of one connection, or of a few, found: settled together (`settle`). */
+interface ReadPass {
+  found: FoundChange[]
+}
+
+/**
+ * A write of the app's own, as the read after it settles it: the changes
+ * of the events it touched are its own (`owns`) — noted as the user's in
+ * the app, or not at all for the Segretario, who knows them, and told to
+ * nobody —; and its moves, each with the event as it was.
+ */
+interface OwnWrite {
+  byUser: boolean
+  owns(change: FoundChange): boolean
+  moves?: ReadonlyArray<EventMove & { before: CalendarEventRow; beforeName: string }>
+}
+
+/** A calendar's event as a change notes it, from what its provider gave. */
+function snapshotOf(connectionId: string, event: ProviderEvent, calendarName: string): string {
+  return JSON.stringify({
+    ...event,
+    key: eventKey(connectionId, event.calendarId, event.eventId),
+    connectionId,
+    calendarName,
+    startsAt: undefined,
+    endsAt: undefined,
+    cancelled: undefined
+  })
+}
+
+/** An event kept, as its provider would give it: what a change made from the rows notes. */
+function providerEventOfRow(row: CalendarEventRow): ProviderEvent {
+  // Its key and names stay with it: a change's snapshot writes them over (`snapshotOf`).
+  return {
+    ...eventOfRow(row, ''),
+    startsAt: Number(row.startsAt),
+    endsAt: Number(row.endsAt),
+    cancelled: false
+  }
+}
+
+/**
+ * Of what one read found, the events that left a calendar of a connection
+ * and came into another of the same: moved there elsewhere — from the
+ * phone, in Google Calendar —, the same event (vision §7.5), by its UID
+ * (or Google's id), an instance of a series by its time too. Each is one
+ * change under its new key, the old one its `before`.
+ */
+function movedElsewhere(found: ReadonlyArray<FoundChange>): {
+  changes: FoundChange[]
+  moves: EventMove[]
+} {
+  const left = found.filter((change) => change.kind === 'annullato' && change.before)
+  const taken = new Set<FoundChange>()
+  const merged = new Map<FoundChange, FoundChange>()
+  const moves: EventMove[] = []
+
+  for (const arrived of found) {
+    const after = arrived.after
+
+    if (arrived.kind !== 'nuovo' || !after) {
+      continue
+    }
+
+    const gone = left.find((candidate) => {
+      const before = candidate.before!
+      const same =
+        (before.iCalUid !== null &&
+          after.iCalUid !== null &&
+          before.iCalUid === canonicalUid(after.iCalUid)) ||
+        before.eventId === after.eventId
+      const instance = before.seriesId !== null || after.seriesId !== null
+
+      return (
+        !taken.has(candidate) &&
+        candidate.connectionId === arrived.connectionId &&
+        before.calendarId !== after.calendarId &&
+        same &&
+        (!instance || Number(before.startsAt) === after.startsAt)
+      )
+    })
+
+    if (gone) {
+      taken.add(gone)
+      moves.push({ from: gone.key, to: arrived.key })
+      merged.set(arrived, {
+        ...arrived,
+        kind: 'cambiato',
+        before: gone.before,
+        beforeName: gone.beforeName
+      })
+    }
+  }
+
+  return {
+    changes: found
+      .filter((change) => !taken.has(change))
+      .map((change) => merged.get(change) ?? change),
+    moves
+  }
+}
+
+/** The guests of an event kept: whether anyone but the user is invited. */
+function hasGuests(row: CalendarEventRow): boolean {
+  return (JSON.parse(row.attendeesJson) as CalendarAttendee[]).some((attendee) => !attendee.self)
+}
+
+/** Old instances of a series and new ones, paired by when each begins: the same times. */
+function pairedByStart(
+  before: ReadonlyArray<CalendarEventRow>,
+  after: ReadonlyArray<CalendarEventRow>,
+  startOf: (row: CalendarEventRow) => number = (row) => Number(row.startsAt)
+): Array<[CalendarEventRow, CalendarEventRow]> {
+  const free = new Map<number, CalendarEventRow[]>()
+
+  for (const row of after) {
+    free.set(Number(row.startsAt), [...(free.get(Number(row.startsAt)) ?? []), row])
+  }
+
+  return before.flatMap((row): Array<[CalendarEventRow, CalendarEventRow]> => {
+    const match = free.get(startOf(row))?.shift()
+    return match ? [[row, match]] : []
+  })
+}
+
+/** Of some events kept, the one beginning nearest an instant. */
+function nearest(rows: ReadonlyArray<CalendarEventRow>, at: number): CalendarEventRow | undefined {
+  return [...rows].sort(
+    (a, b) => Math.abs(Number(a.startsAt) - at) - Math.abs(Number(b.startsAt) - at)
+  )[0]
 }
 
 /** Why a connection turned down stopped, as a write refused for it says. */
@@ -296,8 +472,111 @@ const MESSAGES = defineMessages({
       `«${title}» lo organizza ${organizer ?? 'un’altra persona'}: all’invito si risponde, non si cambia.`,
     de: (title: string, organizer: string | null) =>
       `„${title}“ wird von ${organizer ?? 'einer anderen Person'} organisiert: Auf die Einladung wird geantwortet, sie wird nicht geändert.`
+  },
+  gmailKeepsIt: {
+    en: 'Gmail keeps it: only its reminders can change.',
+    it: 'Lo tiene Gmail: si cambiano solo i promemoria.',
+    de: 'Gmail verwaltet ihn: Nur die Erinnerungen lassen sich ändern.'
+  },
+  birthdayKeepsIt: {
+    en: 'It’s a birthday from your contacts: only its reminders can change.',
+    it: 'È un compleanno dei contatti: si cambiano solo i promemoria.',
+    de: 'Es ist ein Geburtstag aus Ihren Kontakten: Nur die Erinnerungen lassen sich ändern.'
+  },
+  otherRuleDay: {
+    en: 'This series repeats by a rule made elsewhere: here its time can change, not its day.',
+    it: 'Questa serie si ripete con una regola fatta altrove: qui se ne cambia l’ora, non il giorno.',
+    de: 'Diese Serie wiederholt sich nach einer anderswo erstellten Regel: Hier lässt sich die Uhrzeit ändern, nicht der Tag.'
+  },
+  otherRuleCopy: {
+    en: 'This series repeats by a rule made elsewhere, which can’t be written again in another account’s calendar: move it where it was made.',
+    it: 'Questa serie si ripete con una regola fatta altrove, che nel calendario di un altro account non si può riscrivere: spostala da dove è nata.',
+    de: 'Diese Serie wiederholt sich nach einer anderswo erstellten Regel, die sich im Kalender eines anderen Kontos nicht neu schreiben lässt: Verschieben Sie sie dort, wo sie erstellt wurde.'
+  },
+  exceptionsCopy: {
+    en: 'Some times of this series were changed or deleted one by one: copying it to the other calendar would lose that.',
+    it: 'Alcune volte di questa serie sono state cambiate o tolte una per una: copiandola nell’altro calendario si perderebbe.',
+    de: 'Einige Termine dieser Serie wurden einzeln geändert oder gelöscht: Beim Kopieren in den anderen Kalender ginge das verloren.'
   }
 })
+
+/** Why an event cannot go to another calendar (`eventMoveLimit`), in the user's words. */
+const MOVE_LIMITS = defineMessages({
+  same: {
+    en: 'The event is already in that calendar.',
+    it: 'L’evento è già in quel calendario.',
+    de: 'Der Termin ist bereits in diesem Kalender.'
+  },
+  readonly: {
+    en: 'One of the two calendars can’t be written in: the event can’t move there.',
+    it: 'In uno dei due calendari non si può scrivere: l’evento non si sposta lì.',
+    de: 'In einen der beiden Kalender kann nicht geschrieben werden: Der Termin lässt sich dorthin nicht verschieben.'
+  },
+  gmail: {
+    en: 'Gmail keeps it: Google doesn’t let it move to another calendar.',
+    it: 'Lo tiene Gmail: Google non lo lascia spostare in un altro calendario.',
+    de: 'Gmail verwaltet ihn: Google lässt ihn nicht in einen anderen Kalender verschieben.'
+  },
+  birthdays: {
+    en: 'It’s a birthday from your contacts: Google doesn’t let it move to another calendar.',
+    it: 'È un compleanno dei contatti: Google non lo lascia spostare in un altro calendario.',
+    de: 'Es ist ein Geburtstag aus Ihren Kontakten: Google lässt ihn nicht in einen anderen Kalender verschieben.'
+  },
+  invitation: {
+    en: 'It’s someone else’s invitation: you answer it, you don’t move it.',
+    it: 'È un invito di altri: si risponde, non si sposta.',
+    de: 'Es ist die Einladung einer anderen Person: Sie wird beantwortet, nicht verschoben.'
+  },
+  guests: {
+    en: 'Moving it would cancel the invitation for the invitees and invite them again.',
+    it: 'Spostarlo annullerebbe l’invito per gli invitati e li inviterebbe di nuovo.',
+    de: 'Durch das Verschieben würde die Einladung für die Eingeladenen abgesagt und erneut verschickt.'
+  }
+})
+
+/**
+ * A rule a write gives, checked as the user is told (`recurrenceProblem`):
+ * from the event's first day, on the clock it is kept on.
+ */
+function checkRule(
+  event: Pick<ProviderEventInput, 'start' | 'allDay' | 'recurrence' | 'zone'>
+): void {
+  if (event.recurrence && event.recurrence !== 'other') {
+    const problem = recurrenceProblem(
+      event.recurrence,
+      dayIn(event.start, event.allDay, knownZone(event.zone))
+    )
+
+    if (problem) {
+      throw new Error(problem)
+    }
+  }
+}
+
+/**
+ * An event written but not kept — a series that begins beyond what the
+ * calendar holds —, as the write resolves with it: as its provider gave it.
+ */
+function unkept(event: ProviderEvent, connectionId: string, calendarName: string): CalendarEvent {
+  const written: CalendarEvent & Partial<Pick<ProviderEvent, 'startsAt' | 'endsAt' | 'cancelled'>> =
+    {
+      ...event,
+      key: eventKey(connectionId, event.calendarId, event.eventId),
+      connectionId,
+      calendarName
+    }
+
+  delete written.startsAt
+  delete written.endsAt
+  delete written.cancelled
+  return written
+}
+
+/** Why an event cannot move, as the user is told: of one another service keeps, which one. */
+function moveLimitWords(limit: EventMoveLimit, managedBy: string | null): string {
+  const m = messages(MOVE_LIMITS)
+  return limit === 'managed' ? (managedBy === 'birthdays' ? m.birthdays : m.gmail) : m[limit]
+}
 
 /** Whether two addresses are the same mailbox: the case of an address does not matter. */
 function sameAddress(a: string, b: string): boolean {
@@ -359,7 +638,11 @@ function eventOfRow(
     meetLink: row.meetLink,
     htmlLink: row.htmlLink,
     origin: row.originJson ? (JSON.parse(row.originJson) as EventOrigin) : null,
-    reminders: row.remindersJson ? (JSON.parse(row.remindersJson) as number[]) : null
+    reminders: row.remindersJson ? (JSON.parse(row.remindersJson) as number[]) : null,
+    recurrence: row.recurrenceJson
+      ? (JSON.parse(row.recurrenceJson) as EventRecurrence | 'other')
+      : null,
+    managedBy: (row.managedBy as CalendarEvent['managedBy']) ?? null
   }
 
   return addresses ? { ...event, organizedByUser: organizedByUser(event, addresses) } : event
@@ -486,6 +769,17 @@ export class CalendarService {
       }
     })
     return run
+  }
+
+  /**
+   * Runs `work` in the turns of several connections at once — a move from
+   * one to another —, taken always in the same order, so two works asking
+   * for the same ones never wait for each other.
+   */
+  private inTurns<T>(connectionIds: ReadonlyArray<string>, work: () => Promise<T>): Promise<T> {
+    return [...new Set(connectionIds)]
+      .sort()
+      .reduceRight<() => Promise<T>>((inner, id) => () => this.inTurn(id, inner), work)()
   }
 
   private requirePrisma(): PrismaClient {
@@ -1068,12 +1362,10 @@ export class CalendarService {
     }
 
     // In every connection's turn: a read under way would write what it had read over the empty tables.
-    await connections.reduceRight<() => Promise<void>>(
-      (inner, { id }) =>
-        () =>
-          this.inTurn(id, inner),
+    await this.inTurns(
+      connections.map(({ id }) => id),
       clear
-    )()
+    )
     this.eventsChanged()
     void this.syncAll()
   }
@@ -1205,14 +1497,45 @@ export class CalendarService {
   }
 
   /**
-   * A sync: only in the connection's turn. However it ends, the connection
-   * says so — read now, or why not — so nothing waits on it unanswered. A
-   * calendar that cannot be read says so, and the others are read all the
-   * same; an error that turns the whole connection down — its access, its
+   * A sync: only in the connection's turn. What it finds is settled once
+   * every calendar is read — an event gone from one and come into another
+   * is a move (`settle`) —, and then the page is told.
+   */
+  private async syncConnection(connectionId: string): Promise<void> {
+    const pass: ReadPass = { found: [] }
+    await this.readConnection(connectionId, pass)
+
+    // The events are kept as read already: what could not be noted is said, and the sync stands.
+    await this.settle(pass).catch((error: unknown) =>
+      log.failed('changes.not-noted', error, { conn: connectionId, changes: pass.found.length })
+    )
+    this.options.send(CALENDAR_IPC.changed, null)
+  }
+
+  /**
+   * Reads, in their turns — which the caller holds —, the connections a
+   * write touched: what they found to settle as that write's own.
+   */
+  private async readFor(connectionIds: ReadonlyArray<string>): Promise<ReadPass> {
+    const pass: ReadPass = { found: [] }
+
+    for (const connectionId of new Set(connectionIds)) {
+      await this.readConnection(connectionId, pass)
+    }
+
+    return pass
+  }
+
+  /**
+   * Reads a connection's calendars — in its turn —, what changed kept and
+   * what it was found in `pass`. However it ends, the connection says so —
+   * read now, or why not — so nothing waits on it unanswered. A calendar
+   * that cannot be read says so, and the others are read all the same; an
+   * error that turns the whole connection down — its access, its
    * authorization, its certificate, its source — wherever it comes, stops it
    * (`refuse`).
    */
-  private async syncConnection(connectionId: string): Promise<void> {
+  private async readConnection(connectionId: string, pass: ReadPass): Promise<void> {
     const prisma = this.requirePrisma()
 
     try {
@@ -1314,7 +1637,14 @@ export class CalendarService {
           }
         })
         try {
-          await this.syncCalendar(provider, connectionId, calendar.calendarId, stored ?? null)
+          pass.found.push(
+            ...(await this.syncCalendar(
+              provider,
+              connectionId,
+              calendar.calendarId,
+              stored ?? null
+            ))
+          )
         } catch (error) {
           if (refusalOfCalendar(error)) {
             throw error
@@ -1370,21 +1700,155 @@ export class CalendarService {
         }
       }
     }
+  }
 
-    this.options.send(CALENDAR_IPC.changed, null)
+  /**
+   * Settles what a read found: the events moved elsewhere from one
+   * calendar to another of a connection recognised as such; what a write
+   * of the app's own did (`own`) noted as the user's, or not at all for the
+   * Segretario; what follows an event moved told first (`eventsMoved`);
+   * then the rest noted, and told (§13.3).
+   */
+  private async settle(pass: ReadPass, own?: OwnWrite): Promise<void> {
+    const ours = own ? pass.found.filter((change) => own.owns(change)) : []
+    const { changes, moves } = movedElsewhere(
+      own ? pass.found.filter((change) => !own.owns(change)) : pass.found
+    )
+    const ownMoves = own?.moves?.filter((move) => move.from !== move.to) ?? []
+
+    await this.eventsMoved([...ownMoves, ...moves])
+    await this.note(changes, false)
+
+    if (!own?.byUser) {
+      return
+    }
+
+    // A move by the user here is one change, under the key it has now, the event as it was before.
+    const prisma = this.requirePrisma()
+    const movedHere = new Set(ownMoves.flatMap((move) => [move.from, move.to]))
+    const names = new Map(
+      (await prisma.calendarCalendar.findMany()).map((calendar) => [
+        calendarKey(calendar.connectionId, calendar.calendarId),
+        calendar.name
+      ])
+    )
+    const moved = await prisma.calendarEvent.findMany({
+      where: { key: { in: ownMoves.map((move) => move.to) } }
+    })
+    const movedNotes = ownMoves.flatMap((move): FoundChange[] => {
+      const row = moved.find((candidate) => candidate.key === move.to)
+      return row
+        ? [
+            {
+              kind: 'cambiato',
+              connectionId: row.connectionId,
+              key: row.key,
+              before: move.before,
+              beforeName: move.beforeName,
+              after: providerEventOfRow(row),
+              afterName: names.get(calendarKey(row.connectionId, row.calendarId)) ?? ''
+            }
+          ]
+        : []
+    })
+
+    await this.note([...movedNotes, ...ours.filter((change) => !movedHere.has(change.key))], true)
+  }
+
+  /**
+   * Events moved to another calendar, the same events there under new keys
+   * (vision §7.5): what the Segretario keeps of them follows, and so do the
+   * reminders given and on the screen. A part that fails to follow is said
+   * in the diagnostics; the move stands.
+   */
+  private async eventsMoved(moves: ReadonlyArray<EventMove>): Promise<void> {
+    if (moves.length === 0) {
+      return
+    }
+
+    // Only the keys: what was kept of the event as it was stays here.
+    const followed = moves.map(({ from, to }) => ({ from, to }))
+    await Promise.all([
+      this.options
+        .onEventsMoved?.(followed)
+        .catch((error: unknown) =>
+          log.failed('moves.not-followed', error, { events: moves.length })
+        ),
+      this.options
+        .notificationsMoved?.(followed)
+        .catch((error: unknown) =>
+          log.failed('moves.reminders-not-followed', error, { events: moves.length })
+        )
+    ])
+  }
+
+  /**
+   * Notes changes in `calendar_changes`, in order, for the Segretario: the
+   * user's own in the app (`inApp`), or found by a read — and those, of the
+   * user's events someone else has in hand, told (§13.3).
+   */
+  private async note(found: ReadonlyArray<FoundChange>, inApp: boolean): Promise<void> {
+    if (found.length === 0) {
+      return
+    }
+
+    const prisma = this.requirePrisma()
+    const at = BigInt(Date.now())
+
+    for (let start = 0; start < found.length; start += 500) {
+      await prisma.calendarChange.createMany({
+        data: found.slice(start, start + 500).map((change) => ({
+          connectionId: change.connectionId,
+          eventKey: change.key,
+          kind: change.kind,
+          beforeJson: change.before
+            ? JSON.stringify(eventOfRow(change.before, change.beforeName))
+            : null,
+          afterJson:
+            change.after && !change.after.cancelled
+              ? snapshotOf(change.connectionId, change.after, change.afterName)
+              : null,
+          inApp: inApp ? 1 : 0,
+          at
+        }))
+      })
+    }
+
+    if (inApp) {
+      return
+    }
+
+    // What a read in full no longer found is not told: it may only have left what the user sees.
+    const byConnection = new Map<string, FoundChange[]>()
+
+    for (const change of found) {
+      if (change.after) {
+        byConnection.set(change.connectionId, [
+          ...(byConnection.get(change.connectionId) ?? []),
+          change
+        ])
+      }
+    }
+
+    for (const [connectionId, changes] of byConnection) {
+      void this.tellChangesByOthers(connectionId, changes).catch((error: unknown) =>
+        log.failed('changes.not-told', error, { conn: connectionId })
+      )
+    }
   }
 
   /**
    * A calendar's events: what changed since the last read, or — the first
    * time, when the token expired, and once a day as the window slides —
-   * every one from two months back to a year ahead.
+   * every one from two months back to a year ahead. Resolves with what it
+   * found changed, to settle with the rest of the read.
    */
   private async syncCalendar(
     provider: CalendarProvider,
     connectionId: string,
     calendarId: string,
     stored: { syncToken: string | null; windowEnd: bigint | null } | null
-  ): Promise<void> {
+  ): Promise<FoundChange[]> {
     const prisma = this.requirePrisma()
     const now = Date.now()
     const fresh =
@@ -1398,13 +1862,13 @@ export class CalendarService {
           syncToken: stored.syncToken
         })
         // What changed since the last read was done elsewhere — or here, and then it is no change.
-        await this.applyChanges(connectionId, events, { logChanges: true })
+        const found = await this.applyChanges(connectionId, events, { logChanges: true })
         await commit?.()
         await prisma.calendarCalendar.update({
           where: { connectionId_calendarId: { connectionId, calendarId } },
           data: { syncToken }
         })
-        return
+        return found
       } catch (error) {
         if (!(error instanceof SyncTokenExpired)) {
           throw error
@@ -1424,7 +1888,7 @@ export class CalendarService {
     // expired token starts over — so what changed elsewhere is noted all the same; the
     // first read of a calendar is no change.
     const readBefore = stored !== null && stored.windowEnd !== null
-    await this.applyChanges(connectionId, events, {
+    const found = await this.applyChanges(connectionId, events, {
       logChanges: readBefore,
       slidFrom: readBefore ? Number(stored.windowEnd) : undefined
     })
@@ -1449,22 +1913,19 @@ export class CalendarService {
       // Only an event that should still be read is gone: one that ended before the window
       // merely left it, and one beyond it — moved there, or changed there, and so kept —
       // was not read.
-      const cancelled = gone.filter(
-        (row) => Number(row.endsAt) > windowStart && Number(row.startsAt) < windowEnd
-      )
-
-      for (let at = 0; at < cancelled.length; at += 500) {
-        await prisma.calendarChange.createMany({
-          data: cancelled.slice(at, at + 500).map((row) => ({
-            connectionId,
-            eventKey: row.key,
+      found.push(
+        ...gone
+          .filter((row) => Number(row.endsAt) > windowStart && Number(row.startsAt) < windowEnd)
+          .map((row): FoundChange => ({
             kind: 'annullato',
-            beforeJson: JSON.stringify(eventOfRow(row, name)),
-            afterJson: null,
-            at: BigInt(Date.now())
+            connectionId,
+            key: row.key,
+            before: row,
+            beforeName: name,
+            after: null,
+            afterName: name
           }))
-        })
-      }
+      )
     }
 
     const goneKeys = gone.map((row) => row.key)
@@ -1485,22 +1946,23 @@ export class CalendarService {
       where: { connectionId_calendarId: { connectionId, calendarId } },
       data: { syncToken, windowEnd: BigInt(windowEnd) }
     })
+    return found
   }
 
   /**
-   * Keeps events as the provider gives them. With `logChanges`, what is
-   * new, different or cancelled compared with what was kept is noted in
-   * `calendar_changes`, for the Segretario: the sync's finds, and the
-   * user's own writes in the app (`inApp`). The Segretario's writes are not
-   * noted: it knows them. Nor is, after `slidFrom` — where the window ended
+   * Keeps events as the provider gives them. With `logChanges`, resolves
+   * with what is new, different or cancelled compared with what was kept —
+   * to note for the Segretario (`note`): the sync's finds, and the user's
+   * own writes in the app. Not, after `slidFrom` — where the window ended
    * before it slid —, an instance of a series the window already held: the
-   * time passing is no change; a series, or an event, new there is one.
+   * time passing is no change; a series, or an event, new there is one. The
+   * rule of a series read is every instance's, those not read again too.
    */
   private async applyChanges(
     connectionId: string,
     events: ReadonlyArray<ProviderEvent>,
-    options: { logChanges?: boolean; inApp?: boolean; slidFrom?: number } = {}
-  ): Promise<void> {
+    options: { logChanges?: boolean; slidFrom?: number } = {}
+  ): Promise<FoundChange[]> {
     const prisma = this.requirePrisma()
     const keyOf = (event: ProviderEvent): string =>
       eventKey(connectionId, event.calendarId, event.eventId)
@@ -1521,17 +1983,6 @@ export class CalendarService {
           ])
         )
       : new Map<string, string>()
-    const snapshot = (event: ProviderEvent): string =>
-      JSON.stringify({
-        ...event,
-        key: keyOf(event),
-        connectionId,
-        calendarName: names.get(event.calendarId) ?? '',
-        startsAt: undefined,
-        endsAt: undefined,
-        cancelled: undefined
-      })
-    const now = BigInt(Date.now())
     const writes: Prisma.PrismaPromise<unknown>[] = []
     // The series the window held before it slid: those of the instances read that start before.
     const { slidFrom } = options
@@ -1548,9 +1999,8 @@ export class CalendarService {
       event.startsAt >= slidFrom &&
       event.seriesId !== null &&
       heldSeries.has(`${event.calendarId}\u0000${event.seriesId}`)
-
-    // What others changed, found by the sync: told once kept (§13.3).
-    const byOthers: FoundChange[] = []
+    const found: FoundChange[] = []
+    const rules = new Map<string, { calendarId: string; seriesId: string; json: string | null }>()
 
     for (const event of events) {
       const key = keyOf(event)
@@ -1569,37 +2019,30 @@ export class CalendarService {
               ? 'cambiato'
               : null
 
-        if (kind && !options.inApp) {
-          byOthers.push({
-            kind,
-            before: before ?? null,
-            event,
-            calendarName: names.get(event.calendarId) ?? ''
-          })
-        }
-
         if (kind) {
-          writes.push(
-            prisma.calendarChange.create({
-              data: {
-                connectionId,
-                eventKey: key,
-                kind,
-                beforeJson: before
-                  ? JSON.stringify(eventOfRow(before, names.get(before.calendarId) ?? ''))
-                  : null,
-                afterJson: event.cancelled ? null : snapshot(event),
-                inApp: options.inApp ? 1 : 0,
-                at: now
-              }
-            })
-          )
+          found.push({
+            kind,
+            connectionId,
+            key,
+            before: before ?? null,
+            beforeName: before ? (names.get(before.calendarId) ?? '') : '',
+            after: event,
+            afterName: names.get(event.calendarId) ?? ''
+          })
         }
       }
 
       if (event.cancelled) {
         writes.push(prisma.calendarEvent.deleteMany({ where: { key } }))
         continue
+      }
+
+      if (event.seriesId !== null && event.recurrence !== undefined) {
+        rules.set(`${event.calendarId}\u0000${event.seriesId}`, {
+          calendarId: event.calendarId,
+          seriesId: event.seriesId,
+          json: event.recurrence === null ? null : JSON.stringify(event.recurrence)
+        })
       }
 
       const data = {
@@ -1629,15 +2072,37 @@ export class CalendarService {
             ? undefined
             : event.reminders === null
               ? null
-              : JSON.stringify(event.reminders)
+              : JSON.stringify(event.reminders),
+        recurrenceJson:
+          event.recurrence === undefined
+            ? undefined
+            : event.recurrence === null
+              ? null
+              : JSON.stringify(event.recurrence),
+        managedBy: event.managedBy ?? null
       }
 
       writes.push(
         prisma.calendarEvent.upsert({
           where: { key },
-          create: { key, ...data, remindersJson: data.remindersJson ?? null },
+          create: {
+            key,
+            ...data,
+            remindersJson: data.remindersJson ?? null,
+            recurrenceJson: data.recurrenceJson ?? null
+          },
           // A provider that does not give the origin back (Graph, as it syncs) leaves it as kept.
           update: { ...data, originJson: data.originJson ?? undefined }
+        })
+      )
+    }
+
+    // A series' rule, as read now, is all its instances' — those this read did not bring too.
+    for (const rule of rules.values()) {
+      writes.push(
+        prisma.calendarEvent.updateMany({
+          where: { connectionId, calendarId: rule.calendarId, seriesId: rule.seriesId },
+          data: { recurrenceJson: rule.json }
         })
       )
     }
@@ -1648,11 +2113,7 @@ export class CalendarService {
       this.eventsChanged()
     }
 
-    if (byOthers.length > 0) {
-      void this.tellChangesByOthers(connectionId, byOthers).catch((error: unknown) =>
-        log.failed('changes.not-told', error, { conn: connectionId })
-      )
-    }
+    return found
   }
 
   /**
@@ -2179,23 +2640,23 @@ export class CalendarService {
     const changes = found.flatMap((change): ChangeByOthers[] => {
       const before = change.before
         ? timed(
-            eventOfRow(change.before, change.calendarName),
+            eventOfRow(change.before, change.beforeName),
             Number(change.before.startsAt),
             Number(change.before.endsAt)
           )
         : null
       const after =
-        change.kind === 'annullato'
+        change.kind === 'annullato' || !change.after
           ? before
           : timed(
               {
-                ...change.event,
-                key: eventKey(connectionId, change.event.calendarId, change.event.eventId),
+                ...change.after,
+                key: change.key,
                 connectionId,
-                calendarName: change.calendarName
+                calendarName: change.afterName
               },
-              change.event.startsAt,
-              change.event.endsAt
+              change.after.startsAt,
+              change.after.endsAt
             )
 
       if (!after || after.endsAt <= now) {
@@ -2356,14 +2817,19 @@ export class CalendarService {
         if (series) {
           // The series answered: its instances, kept one by one, are read again as they are
           // now — by a read that begins after the answer, not by one that began before it.
-          await this.syncConnection(row.connectionId)
+          const pass = await this.readFor([row.connectionId])
+          await this.settle(pass, {
+            byUser: options.byUser === true,
+            owns: this.seriesOwns(row.connectionId, row.calendarId, row.seriesId ?? row.eventId)
+          })
+          this.options.send(CALENDAR_IPC.changed, null)
           return this.eventOrThrow(key)
         }
 
-        await this.applyChanges(row.connectionId, [answered], {
-          logChanges: options.byUser,
-          inApp: true
-        })
+        await this.note(
+          await this.applyChanges(row.connectionId, [answered], { logChanges: options.byUser }),
+          true
+        )
         this.options.send(CALENDAR_IPC.changed, null)
         return this.eventOrThrow(eventKey(row.connectionId, row.calendarId, answered.eventId))
       }),
@@ -2394,6 +2860,7 @@ export class CalendarService {
         writable: row.writable === 1,
         color: row.color,
         hidden: row.hidden === 1,
+        provider: (providers.get(row.connectionId) ?? 'ics') as CalendarProviderKind,
         role: role.role,
         roleBy: role.by,
         roleReason: role.reason
@@ -2487,8 +2954,10 @@ export class CalendarService {
 
   /**
    * Adds an event to a calendar; whoever is invited gets the provider's
-   * invitation. `byUser`: the user added it in the app — noted for the
-   * Segretario, as a change done elsewhere is (see `applyChanges`).
+   * invitation. A series is read in once written: its instances, as its
+   * calendar makes them, resolving with the first. `byUser`: the user added
+   * it in the app — noted for the Segretario, as a change done elsewhere is
+   * (`note`).
    */
   async create(
     event: NewCalendarEvent,
@@ -2515,65 +2984,499 @@ export class CalendarService {
           throw new Error(messages(MESSAGES).readOnly(calendar.name))
         }
 
-        const created = await provider.create(calendar.calendarId, event, event.origin ?? null)
-        await this.applyChanges(calendar.connectionId, [created], {
-          logChanges: options.byUser,
-          inApp: true
+        const input: ProviderEventInput = {
+          title: event.title,
+          start: event.start,
+          end: event.end,
+          allDay: event.allDay,
+          location: event.location,
+          description: event.description,
+          attendees: event.attendees,
+          recurrence: event.recurrence ?? null,
+          reminders: event.reminders ?? null
+        }
+
+        checkRule(input)
+        const created = await provider.create(calendar.calendarId, input, event.origin ?? null)
+
+        if (!input.recurrence) {
+          await this.note(
+            await this.applyChanges(calendar.connectionId, [created], {
+              logChanges: options.byUser
+            }),
+            true
+          )
+          this.options.send(CALENDAR_IPC.changed, null)
+          return this.eventOrThrow(
+            eventKey(calendar.connectionId, calendar.calendarId, created.eventId)
+          )
+        }
+
+        // A series: its instances, as its calendar makes them, are read in — the first is the event.
+        const seriesId = created.seriesId ?? created.eventId
+        const pass = await this.readFor([calendar.connectionId])
+        await this.settle(pass, {
+          byUser: options.byUser === true,
+          owns: this.seriesOwns(calendar.connectionId, calendar.calendarId, seriesId)
         })
         this.options.send(CALENDAR_IPC.changed, null)
-        return this.eventOrThrow(
-          eventKey(calendar.connectionId, calendar.calendarId, created.eventId)
-        )
-      })
+        const [first] = (
+          await this.seriesRows(calendar.connectionId, calendar.calendarId, seriesId)
+        ).sort((a, b) => Number(a.startsAt) - Number(b.startsAt))
+
+        return first
+          ? this.eventOrThrow(first.key)
+          : unkept(created, calendar.connectionId, calendar.name)
+      }),
+      {
+        recurrence: event.recurrence?.frequency ?? null,
+        reminders:
+          event.reminders === undefined || event.reminders === null
+            ? 'calendar'
+            : event.reminders.length
+      }
     )
   }
 
   /**
    * Changes an event as given — only what really changes, the rest left as
    * the provider has it — and whoever is invited, before or now, is told.
+   * With `series`, an instance's whole series; how an event repeats is
+   * always its series' (`recurrence`: a rule makes one event a series, null
+   * makes a series the one event the instance is). A new calendar
+   * (`calendarKey`) moves it there, a series whole, and the rest of the
+   * change is made there. Resolves with the event as it is now, under its
+   * key now.
    */
   async update(
     key: string,
     change: EventChange,
-    options: { byUser?: boolean; actor?: DiagnosticActor } = {}
+    options: { series?: boolean; byUser?: boolean; actor?: DiagnosticActor } = {}
   ): Promise<CalendarEvent> {
+    const connections = [
+      connectionOfKey(key),
+      ...(change.calendarKey ? [connectionOfKey(change.calendarKey)] : [])
+    ]
+
     return this.written(
       'event.updated',
       connectionOfKey(key),
       options,
-      this.inTurn(connectionOfKey(key), async () => {
-        await this.notRefused(connectionOfKey(key))
-        const { row, provider } = await this.changeable(key)
-        const current = {
-          ...(await this.eventOrThrow(key)),
-          startsAt: Number(row.startsAt),
-          endsAt: Number(row.endsAt)
-        }
-        const next = changedEvent(current, change)
-        const fields = differingFields(eventInput(current), next, changedFields(change))
+      this.inTurns(connections, () => this.updateNow(key, change, options)),
+      {
+        fields: [...changedFields(change)],
+        moved: change.calendarKey !== undefined,
+        series: options.series === true,
+        ...(change.recurrence !== undefined
+          ? { recurrence: change.recurrence?.frequency ?? 'none' }
+          : {}),
+        ...(change.reminders !== undefined
+          ? { reminders: change.reminders === null ? 'calendar' : change.reminders.length }
+          : {})
+      }
+    )
+  }
 
-        if (fields.size === 0) {
-          return this.eventOrThrow(key)
-        }
+  /** `update`, in the turns of the connections it touches, which the caller holds. */
+  private async updateNow(
+    key: string,
+    change: EventChange,
+    options: { series?: boolean; byUser?: boolean }
+  ): Promise<CalendarEvent> {
+    await this.notRefused(connectionOfKey(key))
+    const { row, provider } = await this.changeable(key)
+    const { calendarKey: to, ...rest } = change
 
-        const notify =
-          next.attendees.length > 0 || current.attendees.some((attendee) => !attendee.self)
-        const updated = await provider.update(row.calendarId, row.eventId, next, notify, fields)
+    if (to !== undefined && to !== calendarKey(row.connectionId, row.calendarId)) {
+      const moved = await this.moveEvent(row, provider, to, options)
+      return Object.values(rest).some((value) => value !== undefined)
+        ? this.updateNow(moved, rest, options)
+        : this.eventOrThrow(moved)
+    }
 
-        await this.applyChanges(row.connectionId, [updated], {
-          logChanges: options.byUser,
-          inApp: true
+    // Another service keeps it: its provider lets only its reminders change (§7.5).
+    if (row.managedBy && [...changedFields(rest)].some((field) => field !== 'reminders')) {
+      throw new Error(
+        row.managedBy === 'birthdays'
+          ? messages(MESSAGES).birthdayKeepsIt
+          : messages(MESSAGES).gmailKeepsIt
+      )
+    }
+
+    const current = {
+      ...(await this.eventOrThrow(key)),
+      startsAt: Number(row.startsAt),
+      endsAt: Number(row.endsAt)
+    }
+
+    return row.seriesId !== null && (options.series === true || rest.recurrence !== undefined)
+      ? this.updateSeries(row, provider, current, rest, options)
+      : this.updateEvent(row, provider, current, rest, options)
+  }
+
+  /**
+   * Changes one event — or one instance, an exception of its series. Made
+   * to repeat, it is the first of its series, read in: what the app keeps of
+   * it follows it there.
+   */
+  private async updateEvent(
+    row: CalendarEventRow,
+    provider: CalendarProvider,
+    current: CalendarEvent & { startsAt: number; endsAt: number },
+    change: EventChange,
+    options: { byUser?: boolean }
+  ): Promise<CalendarEvent> {
+    // An instance carries its series' rule, which is not its own to write (`updateSeries`).
+    const next = {
+      ...changedEvent(current, change),
+      ...(row.seriesId !== null ? { recurrence: null } : {})
+    }
+    const fields = differingFields(eventInput(current), next, changedFields(change))
+
+    if (fields.size === 0) {
+      return this.eventOrThrow(row.key)
+    }
+
+    if (fields.has('recurrence')) {
+      checkRule(next)
+    }
+
+    const notify = next.attendees.length > 0 || current.attendees.some((attendee) => !attendee.self)
+    const updated = await provider.update(row.calendarId, row.eventId, next, notify, fields)
+
+    if (!fields.has('recurrence')) {
+      await this.note(
+        await this.applyChanges(row.connectionId, [updated], { logChanges: options.byUser }),
+        true
+      )
+      this.options.send(CALENDAR_IPC.changed, null)
+      return this.eventOrThrow(row.key)
+    }
+
+    // It repeats now, its own id its series': its instances are read in, the first is it.
+    const prisma = this.requirePrisma()
+    await prisma.calendarEvent.deleteMany({ where: { key: row.key } })
+    const pass = await this.readFor([row.connectionId])
+    const first = nearest(
+      await this.seriesRows(row.connectionId, row.calendarId, row.eventId),
+      Number(row.startsAt)
+    )
+    await this.settle(pass, {
+      byUser: options.byUser === true,
+      owns: this.seriesOwns(row.connectionId, row.calendarId, row.eventId),
+      moves: first
+        ? [{ from: row.key, to: first.key, before: row, beforeName: current.calendarName }]
+        : []
+    })
+    this.options.send(CALENDAR_IPC.changed, null)
+    return first
+      ? this.eventOrThrow(first.key)
+      : unkept(updated, row.connectionId, current.calendarName)
+  }
+
+  /**
+   * Changes an instance's whole series, as its provider keeps it: moved by
+   * what the instance moved (`shiftedSeries`) — its rule with it —, its
+   * words, guests and reminders as given, how it repeats. A rule made
+   * elsewhere keeps its days: only its hour changes here. One event again,
+   * it stays where the instance is. Its instances are read again, and what
+   * the app keeps of each follows it to its key now.
+   */
+  private async updateSeries(
+    row: CalendarEventRow,
+    provider: CalendarProvider,
+    current: CalendarEvent & { startsAt: number; endsAt: number },
+    change: EventChange,
+    options: { byUser?: boolean }
+  ): Promise<CalendarEvent> {
+    const seriesId = row.seriesId!
+    const first = await provider.series(row.calendarId, seriesId)
+    const zone = knownZone(first.zone)
+    const instance = changedEvent(current, change)
+    const single = change.recurrence === null
+    const timed =
+      change.start !== undefined || change.end !== undefined || change.allDay !== undefined
+    const shift =
+      timed && !single ? shiftedSeries(first, eventInput(current), instance, zone) : null
+
+    if (
+      shift &&
+      shift.days !== 0 &&
+      first.recurrence === 'other' &&
+      change.recurrence === undefined
+    ) {
+      throw new Error(messages(MESSAGES).otherRuleDay)
+    }
+
+    const next: ProviderEventInput = {
+      ...first,
+      title: change.title ?? first.title,
+      location: change.location !== undefined ? change.location : first.location,
+      description: change.description !== undefined ? change.description : first.description,
+      attendees: change.attendees ?? first.attendees,
+      reminders: change.reminders !== undefined ? change.reminders : first.reminders,
+      ...(shift ? { start: shift.start, end: shift.end, allDay: shift.allDay } : {}),
+      ...(single ? { start: instance.start, end: instance.end, allDay: instance.allDay } : {}),
+      recurrence:
+        change.recurrence !== undefined
+          ? change.recurrence
+          : shift && first.recurrence && first.recurrence !== 'other'
+            ? shiftedRecurrence(first.recurrence, shift.days)
+            : first.recurrence
+    }
+    const asked = new Set<EventField>(changedFields(change))
+
+    if (single) {
+      asked.add('time')
+    }
+
+    const fields = differingFields(first, next, asked)
+
+    if (fields.size === 0) {
+      return this.eventOrThrow(row.key)
+    }
+
+    checkRule(next)
+    const before = await this.seriesRows(row.connectionId, row.calendarId, seriesId)
+    const notify = next.attendees.length > 0 || before.some(hasGuests)
+
+    await provider.update(row.calendarId, seriesId, next, notify, fields)
+    const pass = await this.readFor([row.connectionId])
+    // Its instances under their keys now: a series moved names them by their new times, one
+    // event again goes by its series' own id.
+    const prisma = this.requirePrisma()
+    const after = await this.seriesRows(row.connectionId, row.calendarId, seriesId)
+    const alone = single
+      ? await prisma.calendarEvent.findUnique({
+          where: { key: eventKey(row.connectionId, row.calendarId, seriesId) }
         })
-        this.options.send(CALENDAR_IPC.changed, null)
-        return this.eventOrThrow(key)
+      : null
+    // Each instance where the series' move put it — an all-day one at its local midnight, as kept.
+    const pairs: Array<[CalendarEventRow, CalendarEventRow]> = alone
+      ? [[row, alone]]
+      : shift
+        ? pairedByStart(
+            before,
+            after,
+            (old) =>
+              instantsOf(
+                shiftedSeries(eventInput(eventOfRow(old, '')), eventInput(current), instance, zone)
+              ).startsAt
+          )
+        : []
+
+    await this.settle(pass, {
+      byUser: options.byUser === true,
+      owns: this.seriesOwns(row.connectionId, row.calendarId, seriesId),
+      moves: pairs.map(([old, now]) => ({
+        from: old.key,
+        to: now.key,
+        before: old,
+        beforeName: current.calendarName
+      }))
+    })
+    this.options.send(CALENDAR_IPC.changed, null)
+
+    const edited =
+      pairs.find(([old]) => old.key === row.key)?.[1] ??
+      after.find((candidate) => candidate.key === row.key) ??
+      nearest(after, Date.parse(instance.start))
+
+    return edited ? this.eventOrThrow(edited.key) : this.eventOrThrow(row.key)
+  }
+
+  /**
+   * Moves an event to another calendar — an instance with its series —,
+   * the same event there (vision §7.5), where `eventMoveLimit` lets it go:
+   * by its provider's own move in the same connection; else copied there
+   * — every field, how it repeats, its reminders — and taken away here,
+   * only without guests, and of a series only one its rule says whole. The
+   * calendars are read again, and what the app keeps of the event — of each
+   * instance — follows it. Resolves with its key there.
+   */
+  private async moveEvent(
+    row: CalendarEventRow,
+    provider: CalendarProvider,
+    toKey: string,
+    options: { byUser?: boolean }
+  ): Promise<string> {
+    const prisma = this.requirePrisma()
+    const [calendars, connections, addresses] = await Promise.all([
+      prisma.calendarCalendar.findMany(),
+      prisma.calendarConnection.findMany({ select: { id: true, provider: true } }),
+      this.userAddresses()
+    ])
+    const kinds = new Map(
+      connections.map((connection) => [connection.id, connection.provider as CalendarProviderKind])
+    )
+    const keyOf = (calendar: { connectionId: string; calendarId: string }): string =>
+      calendarKey(calendar.connectionId, calendar.calendarId)
+    const from = calendars.find((calendar) => keyOf(calendar) === keyOf(row))
+    const to = calendars.find((calendar) => keyOf(calendar) === toKey)
+
+    if (!from || !to) {
+      throw new Error(messages(MESSAGES).calendarGone)
+    }
+
+    const fromKind = kinds.get(row.connectionId) ?? 'ics'
+    const limit = eventMoveLimit(
+      eventOfRow(row, from.name, addresses.writing),
+      { writable: from.writable === 1, provider: fromKind },
+      { connectionId: to.connectionId, calendarId: to.calendarId, writable: to.writable === 1 }
+    )
+
+    if (limit === 'same') {
+      return row.key
+    }
+
+    if (limit) {
+      throw new Error(moveLimitWords(limit, row.managedBy))
+    }
+
+    await this.notRefused(to.connectionId)
+    const seriesId = row.seriesId
+    const moving = seriesId ?? row.eventId
+    const kept = seriesId
+      ? await this.seriesRows(row.connectionId, row.calendarId, seriesId)
+      : [row]
+    const sameConnection = to.connectionId === row.connectionId
+    let movedId: string
+    let how: MoveHow
+
+    if (sameConnection && provider.move) {
+      ;({ eventId: movedId, how } = await provider.move(row.calendarId, moving, to.calendarId, {
+        guests: kept.some(hasGuests)
+      }))
+    } else {
+      const target = sameConnection ? provider : await this.providerFor(to.connectionId)
+
+      if (!target) {
+        throw new Error(messages(MESSAGES).calendarGone)
+      }
+
+      const input = seriesId
+        ? await provider.series(row.calendarId, seriesId)
+        : eventInput(eventOfRow(row, from.name))
+
+      if (input.recurrence === 'other') {
+        throw new Error(messages(MESSAGES).otherRuleCopy)
+      }
+
+      if (seriesId && this.changedOneByOne(input, kept, from.windowEnd)) {
+        throw new Error(messages(MESSAGES).exceptionsCopy)
+      }
+
+      const created = await target.create(
+        to.calendarId,
+        input,
+        row.originJson ? (JSON.parse(row.originJson) as EventOrigin) : null
+      )
+      movedId = input.recurrence ? (created.seriesId ?? created.eventId) : created.eventId
+
+      try {
+        await provider.remove(row.calendarId, moving, false)
+      } catch (error) {
+        // Still here: the copy goes, so the event is not there twice.
+        await target
+          .remove(to.calendarId, movedId, false)
+          .catch((failed: unknown) =>
+            log.failed('event.copy-left', failed, { conn: to.connectionId })
+          )
+        throw error
+      }
+
+      how = 'copy'
+
+      if (!input.recurrence) {
+        await this.applyChanges(to.connectionId, [created])
+      }
+    }
+
+    // Gone from here: what it is there is read in, and what the app keeps of it follows.
+    await prisma.calendarEvent.deleteMany({ where: { key: { in: kept.map((old) => old.key) } } })
+    this.eventsChanged()
+    const pass = await this.readFor([to.connectionId, row.connectionId])
+    const movedKey = eventKey(to.connectionId, to.calendarId, movedId)
+    const pairs: Array<[CalendarEventRow, string]> = seriesId
+      ? pairedByStart(kept, await this.seriesRows(to.connectionId, to.calendarId, movedId)).map(
+          ([old, now]): [CalendarEventRow, string] => [old, now.key]
+        )
+      : [[row, movedKey]]
+    const keptKeys = new Set(kept.map((old) => old.key))
+    const there = this.seriesOwns(to.connectionId, to.calendarId, movedId)
+
+    await this.settle(pass, {
+      byUser: options.byUser === true,
+      owns: (change) => keptKeys.has(change.key) || there(change),
+      moves: pairs.map(([old, now]) => ({
+        from: old.key,
+        to: now,
+        before: old,
+        beforeName: from.name
+      }))
+    })
+    this.options.send(CALENDAR_IPC.changed, null)
+    log.info('event.moved', {
+      conn: row.connectionId,
+      to: to.connectionId,
+      provider: fromKind,
+      toProvider: kinds.get(to.connectionId) ?? 'ics',
+      how,
+      series: seriesId !== null,
+      instances: kept.length,
+      by: options.byUser ? 'user' : 'segretario'
+    })
+
+    return pairs.find(([old]) => old.key === row.key)?.[1] ?? pairs[0]?.[1] ?? movedKey
+  }
+
+  /**
+   * Whether some times of a series were changed or taken out one by one, as
+   * its calendar holds it: those it has, against those its rule makes in
+   * the same days. A copy written from the rule would lose them.
+   */
+  private changedOneByOne(
+    first: ProviderEventInput,
+    kept: ReadonlyArray<CalendarEventRow>,
+    windowEnd: bigint | null
+  ): boolean {
+    const now = Date.now()
+    // A day inside what the calendar holds on either side: its edges move with the days.
+    const range = {
+      from: now - WINDOW_BACK_MS + DAY_MS,
+      to:
+        Math.min(windowEnd === null ? Infinity : Number(windowEnd), now + WINDOW_AHEAD_MS) - DAY_MS
+    }
+    const inside = (startsAt: number): boolean => startsAt >= range.from && startsAt < range.to
+    const made = occurrencesOf(newEventResource('series', first, null, null), range).filter(
+      (occurrence) => inside(occurrence.startsAt)
+    )
+    const held = kept.filter((row) => inside(Number(row.startsAt)))
+    const byStart = new Map(made.map((occurrence) => [occurrence.startsAt, occurrence]))
+
+    return (
+      made.length !== held.length ||
+      held.some((row) => {
+        const own = byStart.get(Number(row.startsAt))
+        return (
+          !own ||
+          Number(row.endsAt) !== own.endsAt ||
+          row.title !== first.title ||
+          (row.location ?? null) !== (first.location ?? null) ||
+          (row.description ?? null) !== (first.description ?? null)
+        )
       })
     )
   }
 
-  /** Takes an event away; whoever is invited is told. `byUser`: noted for the Segretario, as `create`. */
+  /**
+   * Takes an event away — with `series`, an instance's whole series —;
+   * whoever is invited is told. `byUser`: noted for the Segretario, as
+   * `create`.
+   */
   async remove(
     key: string,
-    options: { byUser?: boolean; actor?: DiagnosticActor } = {}
+    options: { series?: boolean; byUser?: boolean; actor?: DiagnosticActor } = {}
   ): Promise<void> {
     return this.written(
       'event.removed',
@@ -2582,13 +3485,12 @@ export class CalendarService {
       this.inTurn(connectionOfKey(key), async () => {
         await this.notRefused(connectionOfKey(key))
         const { row, provider } = await this.changeable(key)
-        const attendees = JSON.parse(row.attendeesJson) as CalendarAttendee[]
+        const seriesId = options.series === true ? row.seriesId : null
+        const rows = seriesId
+          ? await this.seriesRows(row.connectionId, row.calendarId, seriesId)
+          : [row]
 
-        await provider.remove(
-          row.calendarId,
-          row.eventId,
-          attendees.some((attendee) => !attendee.self)
-        )
+        await provider.remove(row.calendarId, seriesId ?? row.eventId, rows.some(hasGuests))
         const prisma = this.requirePrisma()
 
         if (options.byUser) {
@@ -2600,24 +3502,59 @@ export class CalendarService {
               }
             }
           })
-          await prisma.calendarChange.create({
-            data: {
-              connectionId: row.connectionId,
-              eventKey: key,
+          await this.note(
+            rows.map((gone): FoundChange => ({
               kind: 'annullato',
-              beforeJson: JSON.stringify(eventOfRow(row, calendar?.name ?? '')),
-              afterJson: null,
-              inApp: 1,
-              at: BigInt(Date.now())
-            }
-          })
+              connectionId: gone.connectionId,
+              key: gone.key,
+              before: gone,
+              beforeName: calendar?.name ?? '',
+              after: null,
+              afterName: calendar?.name ?? ''
+            })),
+            true
+          )
         }
 
-        await prisma.calendarEvent.deleteMany({ where: { key } })
+        await prisma.calendarEvent.deleteMany({
+          where: { key: { in: rows.map((gone) => gone.key) } }
+        })
         this.eventsChanged()
         this.options.send(CALENDAR_IPC.changed, null)
-      })
+      }),
+      { series: options.series === true }
     )
+  }
+
+  /** The instances of a series kept, in its calendar. */
+  private seriesRows(
+    connectionId: string,
+    calendarId: string,
+    seriesId: string
+  ): Promise<CalendarEventRow[]> {
+    return this.requirePrisma().calendarEvent.findMany({
+      where: { connectionId, calendarId, seriesId }
+    })
+  }
+
+  /**
+   * Whether a change a read found is of a series — its instances, or the
+   * one event it is, or was, under its own id —: what a write to the whole
+   * series did.
+   */
+  private seriesOwns(
+    connectionId: string,
+    calendarId: string,
+    seriesId: string
+  ): (change: FoundChange) => boolean {
+    return (change) =>
+      change.connectionId === connectionId &&
+      [change.after, change.before].some(
+        (event) =>
+          event !== null &&
+          event.calendarId === calendarId &&
+          (event.seriesId === seriesId || event.eventId === seriesId)
+      )
   }
 
   /**

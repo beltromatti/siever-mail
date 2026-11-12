@@ -2,22 +2,28 @@ import { google, type calendar_v3 } from 'googleapis'
 
 import { messages } from '@main/i18n'
 import { refusalOf } from '@main/services/connection-refusal'
-import type { CalendarResponse, EventOrigin } from '@shared/calendar'
+import type { CalendarEvent, CalendarResponse, EventOrigin } from '@shared/calendar'
 import { defineMessages } from '@shared/i18n'
 
 import {
   SyncTokenExpired,
   type CalendarProvider,
   type EventField,
+  type MoveHow,
   type ProviderEvent,
   type ProviderEventInput
 } from './calendar-provider'
 import { CalendarRequestError } from './calendar-refusal'
+import { anchorOf, knownZone, recurrenceOfLines, ruleOf } from './recurrence'
 
 /** Events read and written, on every calendar the user has. */
 export const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar'
 
 const PAGE_SIZE = 250
+/** How many series are asked for their rule at once, as a calendar is read. */
+const SERIES_AT_ONCE = 8
+/** Google keeps at most this many reminders of an event's own. */
+export const GOOGLE_MAX_REMINDERS = 5
 
 /** Where an event put there by the Segretario says so, in the private properties only this user's copy carries. */
 const ORIGIN_BY = 'sieverBy'
@@ -80,8 +86,65 @@ const MESSAGES = defineMessages({
     en: 'You’re not among the invitees of this event.',
     it: 'In questo evento non sei tra gli invitati.',
     de: 'Sie gehören nicht zu den Eingeladenen dieses Termins.'
+  },
+  seriesGone: {
+    en: 'The repeating event is no longer in the calendar.',
+    it: 'L’evento ripetuto non c’è più nel calendario.',
+    de: 'Der Serientermin ist nicht mehr im Kalender.'
+  },
+  notMovable: {
+    en: 'Google doesn’t move events of this kind (out of office, focus time, working location) to another calendar.',
+    it: 'Google non sposta in un altro calendario gli eventi di questo tipo (fuori sede, concentrazione, luogo di lavoro).',
+    de: 'Google verschiebt Termine dieser Art (Abwesenheit, Fokuszeit, Arbeitsort) nicht in einen anderen Kalender.'
+  },
+  tooManyReminders: {
+    en: 'Google keeps at most 5 reminders for an event.',
+    it: 'Google tiene al massimo 5 promemoria per evento.',
+    de: 'Google speichert höchstens 5 Erinnerungen pro Termin.'
   }
 })
+
+/** The events another service keeps (vision §7.5), by Google's `eventType`: only their reminders change. */
+const MANAGED: Readonly<Record<string, NonNullable<CalendarEvent['managedBy']>>> = {
+  fromGmail: 'gmail',
+  birthday: 'birthdays'
+}
+
+/** Runs `work` on each of `items`, so many at a time. */
+async function eachLimited<T>(
+  items: ReadonlyArray<T>,
+  limit: number,
+  work: (item: T) => Promise<void>
+): Promise<void> {
+  let next = 0
+  const lane = async (): Promise<void> => {
+    while (next < items.length) {
+      await work(items[next++])
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane))
+}
+
+/**
+ * Where a recurring event begins, as Google gives it: its day, or its
+ * hour on the clock of the zone it is kept in.
+ */
+function anchorOfGoogle(event: calendar_v3.Schema$Event): ReturnType<typeof anchorOf> | null {
+  const zone = knownZone(event.start?.timeZone)
+
+  if (event.start?.date) {
+    return anchorOf(event.start.date, true, zone)
+  }
+
+  return event.start?.dateTime ? anchorOf(event.start.dateTime, false, zone) : null
+}
+
+/** How a recurring event repeats, from its own lines and start; null for one that does not. */
+function recurrenceOfGoogle(event: calendar_v3.Schema$Event): CalendarEvent['recurrence'] {
+  const anchor = anchorOfGoogle(event)
+  return event.recurrence?.length && anchor ? recurrenceOfLines(event.recurrence, anchor) : null
+}
 
 /**
  * Google's errors in the user's words, where they are the user's to act
@@ -155,11 +218,18 @@ export function googleRemindersOf(
   return calendarDefaults ? [...calendarDefaults] : undefined
 }
 
+/**
+ * An event as the app keeps it, from Google's. `series`: the rules of the
+ * series read with it, by id — an instance carries its series'; one whose
+ * series could not be read says nothing of it (undefined), and keeps what
+ * was known.
+ */
 function eventOf(
   event: calendar_v3.Schema$Event,
   calendarId: string,
   selfEmail: string,
-  calendarDefaults?: ReadonlyArray<number>
+  calendarDefaults?: ReadonlyArray<number>,
+  series?: ReadonlyMap<string, CalendarEvent['recurrence']>
 ): ProviderEvent | null {
   if (!event.id) {
     return null
@@ -213,6 +283,10 @@ function eventOf(
     htmlLink: event.htmlLink ?? null,
     origin: originOf(event),
     reminders: googleRemindersOf(event, calendarDefaults),
+    recurrence: event.recurringEventId
+      ? series?.get(event.recurringEventId)
+      : recurrenceOfGoogle(event),
+    managedBy: MANAGED[event.eventType ?? ''] ?? null,
     cancelled: event.status === 'cancelled'
   }
 }
@@ -229,20 +303,49 @@ function originOf(event: calendar_v3.Schema$Event): EventOrigin | null {
     : null
 }
 
-/** An event's fields as Google takes them, times in the user's time zone. */
-function bodyOf(event: ProviderEventInput): calendar_v3.Schema$Event {
-  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+/**
+ * An event's fields as Google takes them: times in the zone it is kept in
+ * — the user's, for one written new —, which a series needs to keep its
+ * hour; its rule from its start, with the days taken out it had (`kept`);
+ * its own reminders, shown on the screen, or the calendar's.
+ */
+function bodyOf(
+  event: ProviderEventInput,
+  kept: ReadonlyArray<string> = []
+): calendar_v3.Schema$Event {
+  const timeZone = knownZone(event.zone)
   const when = (value: string): calendar_v3.Schema$EventDateTime =>
     event.allDay
       ? { date: value.slice(0, 10), dateTime: null }
       : { dateTime: value, timeZone, date: null }
+  const rule = event.recurrence && event.recurrence !== 'other' ? event.recurrence : null
 
   return {
     summary: event.title,
     location: event.location,
     description: event.description,
     start: when(event.start),
-    end: when(event.end)
+    end: when(event.end),
+    recurrence: rule
+      ? [
+          `RRULE:${ruleOf(rule, anchorOf(event.start, event.allDay, timeZone))}`,
+          ...kept.filter((line) => /^EXDATE[:;]/i.test(line))
+        ]
+      : undefined,
+    reminders:
+      event.reminders === null
+        ? { useDefault: true, overrides: [] }
+        : {
+            useDefault: false,
+            overrides: event.reminders.map((minutes) => ({ method: 'popup', minutes }))
+          }
+  }
+}
+
+/** A list of reminders Google keeps, or why not. */
+function checkReminders(reminders: ReadonlyArray<number> | null): void {
+  if (reminders && new Set(reminders).size > GOOGLE_MAX_REMINDERS) {
+    throw new Error(messages(MESSAGES).tooManyReminders)
   }
 }
 
@@ -309,7 +412,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
     calendarId: string,
     since: { syncToken: string } | { fromIso: string; toIso: string }
   ): Promise<{ events: ProviderEvent[]; syncToken: string | null }> {
-    const events: ProviderEvent[] = []
+    const items: calendar_v3.Schema$Event[] = []
     let pageToken: string | undefined
     let syncToken: string | null = null
 
@@ -327,19 +430,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
             : { timeMin: since.fromIso, timeMax: since.toIso })
         })
 
-        for (const item of data.items ?? []) {
-          const event = eventOf(
-            item,
-            calendarId,
-            this.selfEmail,
-            this.defaultReminders.get(calendarId)
-          )
-
-          if (event) {
-            events.push(event)
-          }
-        }
-
+        items.push(...(data.items ?? []))
         pageToken = data.nextPageToken ?? undefined
         syncToken = data.nextSyncToken ?? syncToken
       } while (pageToken)
@@ -351,7 +442,52 @@ export class GoogleCalendarProvider implements CalendarProvider {
       throw readableError(error)
     }
 
+    const series = await this.seriesRules(calendarId, items)
+    const events = items.flatMap((item) => {
+      const event = eventOf(
+        item,
+        calendarId,
+        this.selfEmail,
+        this.defaultReminders.get(calendarId),
+        series
+      )
+      return event ? [event] : []
+    })
+
     return { events, syncToken }
+  }
+
+  /**
+   * How the series of the instances read repeat: each series' recurring
+   * event asked for once — its rule is on it, not on its instances —, a
+   * few at a time. One that cannot be read is left out: its instances say
+   * nothing of it, and keep what was known.
+   */
+  private async seriesRules(
+    calendarId: string,
+    items: ReadonlyArray<calendar_v3.Schema$Event>
+  ): Promise<Map<string, CalendarEvent['recurrence']>> {
+    const ids = [
+      ...new Set(
+        items.flatMap((item) =>
+          item.recurringEventId && item.status !== 'cancelled' ? [item.recurringEventId] : []
+        )
+      )
+    ]
+    const rules = new Map<string, CalendarEvent['recurrence']>()
+
+    await eachLimited(ids, SERIES_AT_ONCE, async (eventId) => {
+      try {
+        const { data } = await this.api.events.get({ calendarId, eventId })
+        rules.set(eventId, recurrenceOfGoogle(data))
+      } catch (error) {
+        if (readableError(error) instanceof CalendarRequestError) {
+          throw readableError(error)
+        }
+      }
+    })
+
+    return rules
   }
 
   async create(
@@ -359,6 +495,8 @@ export class GoogleCalendarProvider implements CalendarProvider {
     event: ProviderEventInput,
     origin: EventOrigin | null
   ): Promise<ProviderEvent> {
+    checkReminders(event.reminders)
+
     try {
       const { data } = await this.api.events.insert({
         calendarId,
@@ -390,9 +528,13 @@ export class GoogleCalendarProvider implements CalendarProvider {
     notify: boolean,
     fields: ReadonlySet<EventField>
   ): Promise<ProviderEvent> {
+    if (fields.has('reminders')) {
+      checkReminders(event.reminders)
+    }
+
     try {
       const { data: current } = await this.api.events.get({ calendarId, eventId })
-      const body = bodyOf(event)
+      const body = bodyOf(event, current.recurrence ?? [])
       const wanted = new Set(event.attendees.map((email) => email.toLowerCase()))
       const kept = (current.attendees ?? []).filter(
         (attendee) =>
@@ -401,28 +543,50 @@ export class GoogleCalendarProvider implements CalendarProvider {
           wanted.has(attendee.email?.toLowerCase() ?? '')
       )
       const known = new Set(kept.map((attendee) => attendee.email?.toLowerCase()))
+      // A series' rule goes with its time, which it is read from (`EventField`); one made
+      // elsewhere is never written again.
+      const rule =
+        fields.has('recurrence') ||
+        (fields.has('time') && event.recurrence !== null && event.recurrence !== 'other')
+      const change: calendar_v3.Schema$Event = {
+        ...(fields.has('title') ? { summary: body.summary } : {}),
+        // A rule needs its start's zone: the times go with it.
+        ...(fields.has('time') || rule ? { start: body.start, end: body.end } : {}),
+        ...(fields.has('location') ? { location: body.location } : {}),
+        ...(fields.has('description') ? { description: body.description } : {}),
+        ...(rule && body.recurrence ? { recurrence: body.recurrence } : {}),
+        ...(fields.has('reminders') ? { reminders: body.reminders } : {}),
+        // Those still invited keep their answers; the user's own entry stays.
+        ...(fields.has('attendees')
+          ? {
+              attendees: [
+                ...kept,
+                ...event.attendees
+                  .filter((email) => !known.has(email.toLowerCase()))
+                  .map((email) => ({ email }))
+              ]
+            }
+          : {})
+      }
+      const sendUpdates = notify ? 'all' : 'none'
+
+      // One event again: a PATCH cannot take a rule away, a whole write without it does.
+      if (fields.has('recurrence') && !body.recurrence && current.recurrence?.length) {
+        const { data } = await this.api.events.update({
+          calendarId,
+          eventId,
+          sendUpdates,
+          requestBody: { ...current, ...change, recurrence: undefined }
+        })
+        return this.provided(calendarId, data, messages(MESSAGES).notReturned)
+      }
+
+      // Only what changed: a PATCH leaves the rest as Google has it now.
       const { data } = await this.api.events.patch({
         calendarId,
         eventId,
-        sendUpdates: notify ? 'all' : 'none',
-        // Only what changed: a PATCH leaves the rest as Google has it now.
-        requestBody: {
-          ...(fields.has('title') ? { summary: body.summary } : {}),
-          ...(fields.has('time') ? { start: body.start, end: body.end } : {}),
-          ...(fields.has('location') ? { location: body.location } : {}),
-          ...(fields.has('description') ? { description: body.description } : {}),
-          // Those still invited keep their answers; the user's own entry stays.
-          ...(fields.has('attendees')
-            ? {
-                attendees: [
-                  ...kept,
-                  ...event.attendees
-                    .filter((email) => !known.has(email.toLowerCase()))
-                    .map((email) => ({ email }))
-                ]
-              }
-            : {})
-        }
+        sendUpdates,
+        requestBody: change
       })
       return this.provided(calendarId, data, messages(MESSAGES).notReturned)
     } catch (error) {
@@ -439,6 +603,75 @@ export class GoogleCalendarProvider implements CalendarProvider {
       if (status !== 404 && status !== 410) {
         throw readableError(error)
       }
+    }
+  }
+
+  async series(calendarId: string, seriesId: string): Promise<ProviderEventInput> {
+    let master: calendar_v3.Schema$Event
+
+    try {
+      master = (await this.api.events.get({ calendarId, eventId: seriesId })).data
+    } catch (error) {
+      const status = statusCode(error)
+      throw status === 404 || status === 410
+        ? new Error(messages(MESSAGES).seriesGone)
+        : readableError(error)
+    }
+
+    const event = this.provided(calendarId, master, messages(MESSAGES).seriesGone)
+
+    return {
+      title: event.title,
+      start: event.allDay ? event.start : new Date(event.startsAt).toISOString(),
+      end: event.allDay ? event.end : new Date(event.endsAt).toISOString(),
+      allDay: event.allDay,
+      location: event.location,
+      description: event.description,
+      attendees: event.attendees
+        .filter((attendee) => !attendee.self)
+        .map((attendee) => attendee.email),
+      recurrence: event.recurrence ?? null,
+      reminders: event.reminders ?? null,
+      zone: master.start?.timeZone ?? undefined
+    }
+  }
+
+  /**
+   * Google's own move (`events.move`): the same event in the other
+   * calendar, nobody told — a series whole, as Google moves no instance on
+   * its own. Its id there is the one Google gives back.
+   */
+  async move(
+    calendarId: string,
+    eventId: string,
+    toCalendarId: string
+  ): Promise<{ eventId: string; how: MoveHow }> {
+    try {
+      const { data } = await this.api.events.move({
+        calendarId,
+        eventId,
+        destination: toCalendarId,
+        sendUpdates: 'none'
+      })
+
+      if (!data.id) {
+        throw new Error(messages(MESSAGES).notReturned)
+      }
+
+      return { eventId: data.id, how: 'native' }
+    } catch (error) {
+      // Only the events of every day move: an absence, a focus time, a place of work do not.
+      if (statusCode(error) === 400) {
+        const { data } = await this.api.events
+          .get({ calendarId, eventId })
+          .catch(() => ({ data: null }))
+
+        if (data?.eventType && data.eventType !== 'default') {
+          throw new Error(messages(MESSAGES).notMovable)
+        }
+      }
+
+      throw readableError(error)
     }
   }
 
