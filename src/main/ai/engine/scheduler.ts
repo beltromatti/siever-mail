@@ -113,6 +113,8 @@ export class Scheduler {
       holding?: () => Promise<((unit: WorkUnit) => boolean) | null>
       /** Something started, finished or failed. */
       onChange?: () => void
+      /** A unit is over — done, failed, or waiting again — and its keys free. */
+      onEnded?: (unit: WorkUnit) => void
     }
   ) {}
 
@@ -396,6 +398,7 @@ export class Scheduler {
 
         this.running.delete(unit.id)
         this.options.onChange?.()
+        this.options.onEnded?.(unit)
         this.nudge()
       }
     })()

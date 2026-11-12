@@ -65,6 +65,26 @@ describe('WorkQueue', () => {
     expect(second.notBefore).toBeGreaterThan(first.notBefore)
   })
 
+  it('lets the tasks as urgent take turns, each from its oldest', async () => {
+    for (const thread of ['t1', 't2', 't3']) {
+      await queue.enqueue({ task: 'lettura', scopeKey: thread, scope: {}, priority: 60 })
+    }
+    await queue.enqueue({ task: 'calendario', scopeKey: 'b1', scope: {}, priority: 60 })
+    await queue.enqueue({ task: 'calendario', scopeKey: 'b2', scope: {}, priority: 60 })
+    await queue.enqueue({ task: 'giornata', scopeKey: 'day', scope: {}, priority: 20 })
+
+    // A calendar's first look does not wait behind the backlog queued before it.
+    expect((await queue.ready(10)).map((unit) => unit.scopeKey)).toEqual([
+      'day',
+      't1',
+      'b1',
+      't2',
+      'b2',
+      't3'
+    ])
+    expect((await queue.ready(2, Date.now(), 2)).map((unit) => unit.scopeKey)).toEqual(['b1', 't2'])
+  })
+
   it('queues anew what comes for a scope already running', async () => {
     const first = await queue.enqueue({ task: 'lettura', scopeKey: 'k', scope: {}, priority: 10 })
     expect(await queue.claim(first.id)).toBe(true)
@@ -565,6 +585,40 @@ describe('Engine', () => {
     await engineWith({ text: 'La giornata.' }).writeDayNow()
 
     expect(await queuedDays()).toBe(0)
+  })
+
+  it('writes the day as the reading of a setup turning the AI on is over, before «Entra»', async () => {
+    let done = false
+    const engine = new SegretarioEngine({
+      queue,
+      registry: { day: { letter: async () => null } },
+      onboarding: async () => ({
+        case: 'ai-riaccesa',
+        step: 'lettura',
+        accountIds: [],
+        conoscimiId: null,
+        startedAt: 1
+      }),
+      store: { listLearning: async () => [] }
+    } as unknown as EngineDeps)
+    const inside = engine as unknown as {
+      readingStatus(): Promise<{ done: boolean }>
+      setupReadingOver(): Promise<void>
+      setupHolding(): Promise<((unit: WorkUnit) => boolean) | null>
+    }
+    inside.readingStatus = async () => ({ done })
+    const day = { task: 'giornata', scope: { refresh: false } } as WorkUnit
+
+    await inside.setupReadingOver()
+    expect(await queuedDays()).toBe(0)
+    expect((await inside.setupHolding())?.(day)).toBe(true)
+
+    done = true
+    await inside.setupReadingOver()
+    expect(await queuedDays()).toBe(1)
+    // Its own work done: what it held goes on, even if more mail comes to read meanwhile.
+    done = false
+    expect((await inside.setupHolding())?.(day) ?? false).toBe(false)
   })
 })
 

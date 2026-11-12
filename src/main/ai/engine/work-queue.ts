@@ -163,11 +163,18 @@ export class WorkQueue {
     return row ? unitOf<Scope>(row) : null
   }
 
-  /** The units that may start now, the most urgent first, then the oldest. */
+  /**
+   * The units that may start now, the most urgent first; as urgent, the
+   * tasks take turns, each from its oldest — a calendar's first look does
+   * not wait behind every conversation of the backlog queued before it.
+   */
   async ready(limit: number, now = Date.now(), offset = 0): Promise<WorkUnit[]> {
     const rows = await this.sql.all<WorkRow>(
-      `SELECT * FROM ai_work WHERE status IN (${placeholders(WAITING)}) AND not_before <= ?
-       ORDER BY priority, created_at LIMIT ? OFFSET ?`,
+      `SELECT * FROM (
+         SELECT *, rowid AS queued,
+           ROW_NUMBER() OVER (PARTITION BY priority, task ORDER BY created_at, rowid) AS turn
+         FROM ai_work WHERE status IN (${placeholders(WAITING)}) AND not_before <= ?
+       ) ORDER BY priority, turn, created_at, queued LIMIT ? OFFSET ?`,
       ...WAITING,
       now,
       limit,

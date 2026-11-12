@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import {
   calendarLearningKey,
   READING_DAYS,
+  setupReadingAccountIds,
   setupTurnsAiOn,
   type ActivityEvent,
   type ConnectionReading,
@@ -117,7 +118,7 @@ const PRIORITY = {
 
 /** Background runs at once, normally and while the first reading is prepared. */
 const CONCURRENCY = 8
-const PREPARING_CONCURRENCY = 32
+const PREPARING_CONCURRENCY = 64
 
 /** The day's run waits for the morning: before this hour it is not yet the day. */
 const DAY_STARTS_AT_HOUR = 6
@@ -315,6 +316,8 @@ export class SegretarioEngine {
   private running = false
   /** Connections going away now: meanwhile no work starts (§11.4). */
   private leaving = 0
+  /** The setup turning the AI on whose reading is over, by its start: its own work is done. */
+  private setupRead: number | null = null
 
   constructor(private readonly deps: EngineDeps) {
     this.starter = {
@@ -329,7 +332,14 @@ export class SegretarioEngine {
       // Work queued before the AI was switched off — or before a restart with it off — waits.
       canStart: () => deps.ready(),
       holding: () => this.setupHolding(),
-      onChange: () => deps.onStateChange()
+      onChange: () => deps.onStateChange(),
+      onEnded: (unit) => {
+        if (unit.task === 'lettura' || unit.task === 'calendario') {
+          void this.setupReadingOver().catch((error: unknown) =>
+            log.error('Segretario could not tell whether the setup reading is over', error)
+          )
+        }
+      }
     })
   }
 
@@ -752,8 +762,9 @@ export class SegretarioEngine {
   }
 
   /**
-   * A setup that turned the AI on is over: the day it promised is written now, whatever the
-   * hour, unless today has its letter already. It is the day's letter: the morning has no other.
+   * A setup that turns the AI on has its reading over, or is over: the day it promised is written
+   * now, whatever the hour, unless today has its letter already. It is the day's letter: the
+   * morning has no other.
    */
   async writeDayNow(): Promise<void> {
     const today = localDay()
@@ -772,6 +783,36 @@ export class SegretarioEngine {
       priority: PRIORITY.day
     })
     this.scheduler.wake()
+  }
+
+  /**
+   * The setup that turns the AI on, at its reading: once that is over —
+   * the last conversation read, the last block of a calendar looked at —
+   * the day it promised is written at once, and what it held goes on. The
+   * user need not go on to «Entra» for it: the day is under way, or done,
+   * when they come in (§12.2).
+   */
+  private async setupReadingOver(setup?: OnboardingState | null): Promise<void> {
+    const state = setup === undefined ? await this.deps.onboarding() : setup
+
+    if (
+      !state ||
+      !setupTurnsAiOn(state) ||
+      state.step !== 'lettura' ||
+      this.setupRead === state.startedAt ||
+      !(await this.readingStatus(setupReadingAccountIds(state))).done
+    ) {
+      return
+    }
+
+    this.setupRead = state.startedAt
+    // Its own work done, what it held may start: the day first among it.
+    await this.writeDayNow()
+  }
+
+  /** Whether the setup turning the AI on has its own work done: its reading over, or at «Entra». */
+  private setupWorkDone(setup: OnboardingState): boolean {
+    return setup.step === 'entra' || this.setupRead === setup.startedAt
   }
 
   /**
@@ -855,9 +896,9 @@ export class SegretarioEngine {
    * the planning, Oggi asking for the day again, a project opened, work left
    * from before: the reading and the first look of a connection its Conoscimi
    * has still to know; and, while it turns the AI on, all that is not its own
-   * — the day, the projects, the memory, the calendar's changes — until it is
-   * over (§12.2). The planning queues none of it meanwhile; this keeps the
-   * rule whatever else asks.
+   * — the day, the projects, the memory, the calendar's changes — until its
+   * reading is over (§12.2). The planning queues none of it meanwhile; this
+   * keeps the rule whatever else asks.
    */
   private async setupHolding(): Promise<((unit: WorkUnit) => boolean) | null> {
     // A connection going away holds everything, the setup's own work too, until it is gone.
@@ -872,8 +913,8 @@ export class SegretarioEngine {
     }
 
     const hold = setupHold(setup)
-    // At «Entra» its own work is done: the day it promised, and the rest, go on (§12.2).
-    const turnsAiOn = setupTurnsAiOn(setup) && setup.step !== 'entra'
+    // Its reading over, its own work is done: the day it promised, and the rest, go on (§12.2).
+    const turnsAiOn = setupTurnsAiOn(setup) && !this.setupWorkDone(setup)
 
     if (!hold.holding && !turnsAiOn) {
       return null
@@ -969,7 +1010,9 @@ export class SegretarioEngine {
 
     // Turning the AI on, the rest — the day, the projects, the memory — waits for the setup's
     // reading to be over: it is written from what the reading found.
-    if (setup && setupTurnsAiOn(setup) && setup.step !== 'entra') {
+    await this.setupReadingOver(setup)
+
+    if (setup && setupTurnsAiOn(setup) && !this.setupWorkDone(setup)) {
       await queue.prune(7 * DAY_MS)
       this.deps.onStateChange()
       return

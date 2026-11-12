@@ -27,13 +27,7 @@ const MESSAGES = defineMessages({
     it: 'Sto finendo di preparare il tuo ambiente…',
     de: 'Ich richte gerade Ihre Arbeitsumgebung ein…'
   },
-  closing: { en: 'Here’s your day.', it: 'Ecco la tua giornata.', de: 'Hier ist Ihr Tag.' },
-  letterSoon: {
-    en: 'Your letter is on its way.',
-    it: 'La lettera arriva tra poco.',
-    de: 'Ihr Brief kommt gleich.'
-  },
-  enter: { en: 'Enter', it: 'Entra', de: 'Öffnen' }
+  closing: { en: 'Here’s your day.', it: 'Ecco la tua giornata.', de: 'Hier ist Ihr Tag.' }
 })
 
 /**
@@ -76,8 +70,6 @@ const PACE: Readonly<Record<'full' | 'reduced', Pace>> = {
   }
 }
 
-/** After this long without the letter, a quiet way in: never a prisoner (§12.2). */
-const WAY_IN_MS = 25_000
 /** How long the night waits past its fall for the memory to be read, before it speaks without it. */
 const MEMORY_WAIT_MS = 1500
 /** How often the letter is asked for besides when the work changes: what fails says nothing. */
@@ -121,7 +113,7 @@ type Stage =
   | { kind: 'lift'; since: number }
 
 /** How the arrival ended, for the diagnostics. */
-type Ending = 'letter' | 'no-letter' | 'way-in' | 'shown' | 'ai-off'
+type Ending = 'letter' | 'no-letter' | 'shown' | 'ai-off'
 
 /** The words of the night, once it has fallen: whom it greets, what it shows of the memory. */
 interface Script {
@@ -177,7 +169,7 @@ function useLetter(): LetterState {
 const LINE_STYLE: Record<'greeting' | 'preparing' | 'closing' | 'memory', string> = {
   greeting: 'text-[clamp(34px,4.4vw,54px)] leading-[1.12]',
   closing: 'text-[clamp(34px,4.4vw,54px)] leading-[1.12]',
-  preparing: 'text-arrival-foreground/70 text-[clamp(20px,2.3vw,27px)] italic',
+  preparing: 'text-muted-foreground text-[clamp(20px,2.3vw,27px)] italic',
   memory: 'max-w-[min(36ch,86vw)] text-[clamp(22px,2.6vw,32px)] leading-[1.34]'
 }
 
@@ -195,13 +187,14 @@ const LINE_TYPE: Record<keyof typeof LINE_STYLE, CSSProperties> = {
 
 /**
  * The arrival (vision §12.2): after «Entra» of a setup that ran Conoscimi
- * with the AI on, the screen goes dark over the setup, the Segretario
- * greets the user and says it is finishing, and sentences of what it has
- * just learned come and go while today's letter is written. When the
- * letter is there — and the night has lasted a little, even if it was
- * there already — «Here's your day», and the night lifts over Oggi,
- * rendered underneath with the letter. Without the letter after a while,
- * a quiet way in; with none coming, or the AI gone, straight in.
+ * with the AI on, a veil of the page's own colour — the "night" of the
+ * code, light or dark as the theme is — falls over the setup, the
+ * Segretario greets the user and says it is finishing, and sentences of
+ * what it has just learned come and go while today's letter is written.
+ * When the letter is there — and the night has lasted a little, even if it
+ * was there already — «Here's your day», and the night lifts over Oggi,
+ * rendered underneath with the letter. It is the letter that opens the
+ * way; with none coming, or the AI gone, straight in.
  *
  * It lies over the workspace as the setup does (§13.1). `onNight` is the
  * night down: the setup ends under it, and the workspace — built at the
@@ -229,12 +222,9 @@ export function Arrival({
   const [phase, setPhase] = useState<'fall' | 'night' | 'closing' | 'lift'>('fall')
   const [line, setLine] = useState<{ words: Words; key: number; leaving: boolean } | null>(null)
   const [script, setScript] = useState<Script>({ name: null, sentences: [] })
-  const [wayIn, setWayIn] = useState(false)
   const letter = useLetter()
   // What the clock reads as it goes, as it is now.
   const live = useRef({ accounts, aiOn, leave, letter, onNight, onDone })
-  // The way in taken — a click, Enter, Esc —: the clock goes in on its next beat.
-  const taken = useRef(false)
 
   useEffect(() => {
     live.current = { accounts, aiOn, leave, letter, onNight, onDone }
@@ -250,7 +240,6 @@ export function Arrival({
     let written: Script | null = null
     let nightAt = started
     let shown = 0
-    let offered = false
     let over = false
 
     void window.segretarioApi
@@ -309,9 +298,9 @@ export function Arrival({
         return
       }
 
-      // Something to be seen, the AI gone, the way in taken: in, now.
-      if (leave || !aiOn || taken.current) {
-        lift(leave ? 'shown' : !aiOn ? 'ai-off' : 'way-in', now)
+      // Something to be seen, or the AI gone: in, now.
+      if (leave || !aiOn) {
+        lift(leave ? 'shown' : 'ai-off', now)
         return
       }
 
@@ -334,11 +323,6 @@ export function Arrival({
             : letter === 'none'
               ? 'in'
               : null
-
-      if (!offered && lasted >= WAY_IN_MS && letter !== 'ready') {
-        offered = true
-        setWayIn(true)
-      }
 
       if (stage.kind === 'closing') {
         if (elapsed >= pace.closing) {
@@ -389,23 +373,6 @@ export function Arrival({
     return () => window.clearInterval(clock)
   }, [reduced])
 
-  // The way in, from the keyboard too, once it is offered.
-  useEffect(() => {
-    if (!wayIn) {
-      return
-    }
-
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Enter' || event.key === 'Escape') {
-        event.preventDefault()
-        taken.current = true
-      }
-    }
-
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [wayIn])
-
   const kind = line === null ? null : typeof line.words === 'number' ? 'memory' : line.words
   const text =
     line === null
@@ -421,7 +388,7 @@ export function Arrival({
 
   return (
     // A moment, not a page: nothing to select, and the whole of it the window's handle.
-    <div className="window-drag-region text-arrival-foreground absolute inset-0 overflow-hidden select-none">
+    <div className="window-drag-region text-foreground absolute inset-0 overflow-hidden select-none">
       <div
         aria-hidden
         className={cn(
@@ -469,30 +436,15 @@ export function Arrival({
             )}
           </div>
           <div className="arrival-line-in absolute inset-x-0 bottom-10 flex flex-col items-center gap-3">
-            <CompassStar className={cn('text-arrival-star size-4', waiting && 'regenerating')} />
-            {wayIn && waiting ? (
-              <div className="window-no-drag arrival-line-in flex flex-col items-center gap-3">
-                <p className="text-arrival-foreground/55 text-[12.5px]">{m.letterSoon}</p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    taken.current = true
-                  }}
-                  className="border-arrival-foreground/25 text-arrival-foreground/85 hover:bg-arrival-foreground/10 hover:text-arrival-foreground focus-visible:ring-arrival-foreground/40 h-9 rounded-full border px-6 text-[13px] font-medium transition-colors outline-none focus-visible:ring-2"
-                >
-                  {m.enter}
-                </button>
-              </div>
-            ) : (
-              <span
-                className={cn(
-                  'text-arrival-foreground/40 text-[10.5px] font-semibold tracking-[0.16em] uppercase transition-opacity duration-700',
-                  kind === 'memory' && !line?.leaving ? 'opacity-100' : 'opacity-0'
-                )}
-              >
-                {places.aboutYou}
-              </span>
-            )}
+            <CompassStar className={cn('text-ai-star size-4', waiting && 'regenerating')} />
+            <span
+              className={cn(
+                'text-faint-foreground text-[10.5px] font-semibold tracking-[0.16em] uppercase transition-opacity duration-700',
+                kind === 'memory' && !line?.leaving ? 'opacity-100' : 'opacity-0'
+              )}
+            >
+              {places.aboutYou}
+            </span>
           </div>
         </div>
       )}

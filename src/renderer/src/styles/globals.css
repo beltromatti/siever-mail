@@ -99,13 +99,6 @@
   --shadow: 222 40% 2%;
   --specular: 0 0% 100% / 0.07;
   --scrim: 222 30% 3% / 0.55;
-  /*
-    The arrival after the guided setup (vision §12.2): a moment, not a page —
-    the same night in both palettes, its words a warm white, the star lit.
-  */
-  --arrival: 224 32% 3%;
-  --arrival-foreground: 40 22% 93%;
-  --arrival-star: 52 100% 56%;
   /* Whose what SIEVER Mail keeps is, in Impostazioni › Dati: each source, the Segretario, the rest. */
   --data-mail: 208 100% 56%;
   --data-calendar: 168 56% 44%;
@@ -247,9 +240,6 @@
   --color-flagged: hsl(var(--flagged));
   --color-warning: hsl(var(--warning));
   --color-scrim: hsl(var(--scrim));
-  --color-arrival: hsl(var(--arrival));
-  --color-arrival-foreground: hsl(var(--arrival-foreground));
-  --color-arrival-star: hsl(var(--arrival-star));
   --color-data-mail: hsl(var(--data-mail));
   --color-data-calendar: hsl(var(--data-calendar));
   --color-data-segretario: hsl(var(--data-segretario));
@@ -336,8 +326,6 @@
 */
 :root {
   --paper-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23g)' opacity='0.05'/></svg>");
-  /* The arrival's night has the dark paper's grain in both palettes: it keeps its light from banding. */
-  --arrival-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23g)' opacity='0.06'/></svg>");
 }
 
 @media (prefers-color-scheme: light) {
@@ -593,14 +581,15 @@
   }
 
   /*
-    The arrival after the guided setup (vision §12.2). The night falls over
-    the setup, which goes out of focus under it; each line comes out of the
-    dark and goes back into it; then the night lifts, Oggi comes into focus
-    under it, and the last words pass by. The durations are the component's
+    The arrival after the guided setup (vision §12.2). A veil of the page's
+    own colour — light or dark, as the theme is — falls over the setup,
+    which goes out of focus under it; each line comes out of it and goes
+    back into it; then the veil lifts, Oggi comes into focus under it, and
+    the last words pass by. The durations are the component's
     (`PACE` in arrival.tsx); with reduced motion, plain fades, shorter.
   */
   .arrival-night {
-    background-color: hsl(var(--arrival));
+    background-color: hsl(var(--background));
   }
 
   .arrival-fall {
@@ -609,7 +598,7 @@
 
   @keyframes arrival-fall {
     from {
-      background-color: hsl(var(--arrival) / 0);
+      background-color: hsl(var(--background) / 0);
       backdrop-filter: blur(0);
     }
 
@@ -628,7 +617,7 @@
     }
 
     to {
-      background-color: hsl(var(--arrival) / 0);
+      background-color: hsl(var(--background) / 0);
       backdrop-filter: blur(0);
     }
   }
@@ -636,12 +625,8 @@
   /* A soft light behind the words, so the night has a depth, on its grain. */
   .arrival-glow {
     background-image:
-      var(--arrival-grain),
-      radial-gradient(
-        ellipse 60% 48% at 50% 47%,
-        hsl(var(--arrival-foreground) / 0.05),
-        transparent 72%
-      );
+      var(--paper-grain),
+      radial-gradient(ellipse 60% 48% at 50% 47%, hsl(var(--foreground) / 0.04), transparent 72%);
   }
 
   .arrival-glow-lift {

@@ -349,10 +349,10 @@ function ThinkingLine({ tokens }: { tokens: number }): React.JSX.Element {
   const m = useMessages(MESSAGES)
 
   return (
-    // Words alone, breathing: a step has its icon, thinking has none.
-    <div role="status" className="text-foreground text-[12px] leading-[17px]">
+    // Words alone, in the steps' grey: a step has its icon, thinking has none.
+    <div role="status" className="text-faint-foreground text-[12px] leading-[17px]">
       <span className="sr-only">{m.thinking(0, '')}</span>
-      <span aria-hidden className="regenerating tabular-nums">
+      <span aria-hidden className="tabular-nums">
         {m.thinking(tokens, tokens.toLocaleString(languageNow().formatLocale))}
       </span>
     </div>
