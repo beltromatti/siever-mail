@@ -406,6 +406,32 @@ describe('AgentRunner', () => {
     ).toEqual(['LETTO 1', 'LETTO 2'])
   })
 
+  it('thinks as a run is asked to, when not as its task: every turn, and its summary', async () => {
+    const runner = runnerWith(
+      (request, index) =>
+        request.toolChoice === 'none'
+          ? { ...answer({}), content: 'RIASSUNTO' }
+          : answer(
+              index === 0 ? { calls: [{ name: 'leggi', args: { n: 1 } }], promptTokens: 900 } : {}
+            ),
+      [tool('leggi', async () => ({ content: 'LETTO', summary: 'Letto' }))],
+      1_000
+    )
+
+    // The day's letter written again: low, where its task thinks to the bottom.
+    expect(TASK_EFFORT.giornata).toBe('max')
+    const result = await runner.run({
+      activityId: await start(),
+      task: 'giornata',
+      background: true,
+      effort: 'low'
+    })
+
+    expect(result.status).toBe('done')
+    expect(requests.some((request) => request.toolChoice === 'none')).toBe(true)
+    expect(requests.every((request) => request.reasoningEffort === 'low')).toBe(true)
+  })
+
   it('fails a conversation’s turn that ends with neither words nor calls, asked again by «Riprova»', async () => {
     const runner = runnerWith(
       (_request, index) =>

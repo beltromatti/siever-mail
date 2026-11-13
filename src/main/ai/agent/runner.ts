@@ -167,13 +167,17 @@ const TURNS_WITHOUT_PROGRESS = 10
 /**
  * How much the Segretario thinks, by task — always, never off. `max` where
  * the work is deep and nobody hurries it: getting to know the user, keeping
- * the memory, learning from corrections, the day's letter, a conversation
- * the user opened. `low` where the work is many small readings, or the user
- * waits on it as on a button: each message, the calendar's changes, "Il
- * punto" of a project opened, the writing in the editor, the reread before
- * sending, the search in words. How long it thinks within that is the model's.
+ * the memory, learning from corrections, the day's first letter, a
+ * conversation the user opened. `low` where the work is many small
+ * readings, or the user waits on it as on a button: each message, the
+ * calendar's changes, "Il punto" of a project opened, the writing in the
+ * editor, the reread before sending, the search in words — and the day's
+ * letter written again (`RunOptions.effort`). How long it thinks within
+ * that is the model's.
  */
-export const TASK_EFFORT: Readonly<Record<TaskKind, 'low' | 'max'>> = {
+export type TaskEffort = 'low' | 'max'
+
+export const TASK_EFFORT: Readonly<Record<TaskKind, TaskEffort>> = {
   richiesta: 'max',
   conoscimi: 'max',
   al_passo: 'max',
@@ -271,6 +275,8 @@ export interface RunOptions {
   missing?: (run: RunContext) => Promise<StillMissing | null>
   /** Stops the run from outside: the scheduler, the user. */
   signal?: AbortSignal
+  /** How deep it thinks, when this run is not as its task (`TASK_EFFORT`). */
+  effort?: TaskEffort
   /** The revisions of what the run's starting data showed it. */
   seen?: ReadonlyMap<string, number>
   /** What it looks at as its source changed (see `RunContext.looking`). */
@@ -460,9 +466,11 @@ export class AgentRunner {
 
     options.signal?.addEventListener('abort', () => controller.abort(), { once: true })
     this.live.set(id, live)
+    const effort = options.effort ?? TASK_EFFORT[options.task]
     log.info('run.start', {
       run: id,
       task: options.task,
+      effort,
       background: options.background,
       by: options.background ? 'system' : 'user'
     })
@@ -502,7 +510,7 @@ export class AgentRunner {
                 {
                   messages: buildConversation(system, events),
                   tools,
-                  reasoningEffort: TASK_EFFORT[options.task],
+                  reasoningEffort: effort,
                   sessionId: id
                 },
                 {
@@ -590,7 +598,7 @@ export class AgentRunner {
         const outcomes = await this.runTurn(live, result.toolCalls, handles, truncated)
         stalled = outcomes.some((progressed) => progressed) ? 0 : stalled + 1
         this.stopIfStuck(stalled)
-        await this.manageContext(id, key, system, options.task, result.usage.promptTokens, signal)
+        await this.manageContext(id, key, system, effort, result.usage.promptTokens, signal)
       }
 
       await store.updateActivity(id, { status: 'done', unseen: !options.background })
@@ -967,7 +975,7 @@ export class AgentRunner {
     id: string,
     key: string,
     system: string,
-    task: TaskKind,
+    effort: TaskEffort,
     promptTokens: number,
     signal: AbortSignal
   ): Promise<void> {
@@ -1000,7 +1008,7 @@ export class AgentRunner {
           tools: toolDefinitions(this.deps.tools),
           toolChoice: 'none',
           // Summarised as deeply as the work it stands for is done.
-          reasoningEffort: TASK_EFFORT[task],
+          reasoningEffort: effort,
           sessionId: id
         },
         { signal, onLateBill: (bill) => this.deps.recordUsage(id, 'compattazione', bill) }

@@ -1505,6 +1505,9 @@ export class SegretarioEngine {
               origin: 'segretario',
               workId: unit.id,
               signal,
+              // The day's first letter is thought through to the bottom, once a day; written again,
+              // it follows what moved since, and thinks as a reading does (§2.3).
+              effort: letter === null ? 'max' : 'low',
               missing: async () => {
                 const written = await deps.registry.day.letter(today)
                 return written && written.writtenAt >= begun

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { ActivityEvent, ActivityVisibility } from '@shared/segretario'
 
-import type { AgentRunner, RunResult, StillMissing } from '../agent/runner'
+import type { AgentRunner, RunResult, StillMissing, TaskEffort } from '../agent/runner'
 import type { ContextPayload, UserPayload } from '../agent/conversation'
 import { entryOf } from '../agent/entries'
 import type { RunContext, TaskKind } from '../agent/tool-types'
@@ -38,6 +38,8 @@ export async function startRun(
     scope?: unknown
     missing?: (run: RunContext) => Promise<StillMissing | null>
     signal?: AbortSignal
+    /** How deep it thinks, when not as its task does (`RunOptions.effort`). */
+    effort?: TaskEffort
     /** Called with the activity as soon as it exists, before it runs. */
     onCreated?: (activityId: string) => void | Promise<void>
   }
@@ -80,6 +82,7 @@ export async function startRun(
     watched: !spec.background && spec.visibility === 'pannello',
     missing: spec.missing,
     signal: spec.signal,
+    effort: spec.effort,
     seen: new Map(spec.data.seen ?? []),
     looking: spec.data.looking,
     // Work shown in the panel may go on as a conversation: what it read is kept for that.
