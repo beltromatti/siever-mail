@@ -95,9 +95,9 @@ const NOTICE_WORDS = defineMessages({
     de: 'KI-Modell nicht verfügbar'
   },
   modelGoneBody: {
-    en: 'OpenRouter no longer offers the Segretario’s model, or no provider serves it without keeping your data: from now on the AI features are off and SIEVER Mail carries on without the Segretario. What it has learnt stays. Turn “AI features” back on in Settings › Segretario when you want to try again.',
-    it: 'OpenRouter non offre più il modello del Segretario, o nessun fornitore lo serve senza tenere i tuoi dati: da ora le funzioni AI sono spente e SIEVER Mail continua senza il Segretario. Quello che ha imparato resta. Riattiva «Funzioni AI» in Impostazioni › Segretario quando vuoi riprovare.',
-    de: 'OpenRouter bietet das Modell des Segretario nicht mehr an, oder kein Anbieter stellt es bereit, ohne Ihre Daten zu speichern: Ab jetzt sind die KI-Funktionen ausgeschaltet, und SIEVER Mail arbeitet ohne den Segretario weiter. Was er gelernt hat, bleibt erhalten. Aktivieren Sie „KI-Funktionen“ unter Einstellungen › Segretario wieder, wenn Sie es erneut versuchen möchten.'
+    en: 'OpenRouter no longer offers the Segretario’s model, or its provider no longer serves it without keeping your data: from now on the AI features are off and SIEVER Mail carries on without the Segretario. What it has learnt stays. Turn “AI features” back on in Settings › Segretario when you want to try again.',
+    it: 'OpenRouter non offre più il modello del Segretario, o il suo fornitore non lo serve più senza tenere i tuoi dati: da ora le funzioni AI sono spente e SIEVER Mail continua senza il Segretario. Quello che ha imparato resta. Riattiva «Funzioni AI» in Impostazioni › Segretario quando vuoi riprovare.',
+    de: 'OpenRouter bietet das Modell des Segretario nicht mehr an, oder sein Anbieter stellt es nicht mehr bereit, ohne Ihre Daten zu speichern: Ab jetzt sind die KI-Funktionen ausgeschaltet, und SIEVER Mail arbeitet ohne den Segretario weiter. Was er gelernt hat, bleibt erhalten. Aktivieren Sie „KI-Funktionen“ unter Einstellungen › Segretario wieder, wenn Sie es erneut versuchen möchten.'
   },
   lowTitle: { en: 'AI credit low', it: 'Credito AI basso', de: 'KI-Guthaben niedrig' },
   almostOutTitle: {

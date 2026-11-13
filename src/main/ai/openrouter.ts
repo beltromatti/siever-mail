@@ -2,21 +2,19 @@
  * OpenRouter, as the Segretario talks to it: chat completions streamed over
  * SSE, the key and its credit, and the errors said in the user's words.
  *
- * The model and the provider are SIEVER Mail's choice, not the user's (see
- * the benchmark of 2026-10-27 in the project notes):
- *   • the model is OpenRouter's alias for the newest DeepSeek Flash, so a
- *     new checkpoint is picked up the day it ships;
- *   • the provider is not named but described: among those that keep no
- *     data and train on none, the cheapest that is fast — at least 150
- *     tokens a second and an answer within a second and a half. It chose
- *     Wafer on the day it was measured, and follows the market after.
- *     Measured again on 7/11/2026: Wafer loses an argument an action needs
- *     once in about twenty tool calls (others once in three hundred), and
- *     the model puts it right on the next turn; OpenRouter's own routing
- *     without those endpoints costs twice as much. Kept as it is: the
- *     quality of the work is the same (vision §2.3).
+ * The model and the provider are SIEVER Mail's choice, not the user's, made
+ * on what the work really costs (vision §2.3, measured on 13/11/2026):
+ *   • the provider is Wafer alone: of those that keep no data and train on
+ *     none, it did the Segretario's work for the least and the fastest. It
+ *     loses an argument an action needs in about 1.7% of the tool calls, and
+ *     the model puts it right on the next turn: accepted. Of its endpoints,
+ *     the cheapest that is fast; none of another provider, ever — no data
+ *     goes where it was not measured, and none is kept;
+ *   • the model is the checkpoint measured on it, not OpenRouter's alias for
+ *     the newest: with one provider, a checkpoint Wafer does not serve yet
+ *     would stop the AI of everyone. A new one comes measured, with an update.
  * Every request of a conversation carries its `session_id`, which keeps it
- * on one provider and its cache warm: a long activity costs a tenth.
+ * on one endpoint and its cache warm: a long activity costs a tenth.
  */
 import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -25,9 +23,10 @@ import { defineMessages } from '@shared/i18n'
 
 import { messages } from '../i18n'
 
-export const SEGRETARIO_MODEL = '~deepseek/deepseek-flash-latest'
+export const SEGRETARIO_MODEL = 'deepseek/deepseek-v4.1-flash-1017'
 
 export const PROVIDER_POLICY = {
+  only: ['wafer'],
   zdr: true,
   data_collection: 'deny',
   sort: 'price',
@@ -72,9 +71,9 @@ const ERRORS = defineMessages({
     de: (detail: string) => `Kein Anbieter des Modells nimmt diese Anfrage an: ${detail}`
   },
   modelUnavailable: {
-    en: 'The Segretario’s model isn’t available on OpenRouter, or no provider serves it without keeping the data.',
-    it: 'Il modello del Segretario non è disponibile su OpenRouter, o nessun fornitore lo serve senza tenere i dati.',
-    de: 'Das Modell des Segretario ist auf OpenRouter nicht verfügbar, oder kein Anbieter stellt es bereit, ohne die Daten zu speichern.'
+    en: 'The Segretario’s model isn’t available on OpenRouter, or its provider no longer serves it without keeping the data.',
+    it: 'Il modello del Segretario non è disponibile su OpenRouter, o il suo fornitore non lo serve più senza tenere i dati.',
+    de: 'Das Modell des Segretario ist auf OpenRouter nicht verfügbar, oder sein Anbieter stellt es nicht mehr bereit, ohne die Daten zu speichern.'
   },
   tooSlow: {
     en: 'The model took too long to answer.',
@@ -246,7 +245,7 @@ export type SegretarioErrorCode =
   | 'no-key'
   | 'invalid-key'
   | 'no-credit'
-  /** The model is no longer on OpenRouter, or no provider serves it as the routing asks. */
+  /** The model is no longer on OpenRouter, or its provider no longer serves it as the routing asks. */
   | 'model-unavailable'
   | 'blocked'
   | 'rate-limited'
@@ -536,21 +535,26 @@ export class OpenRouterClient {
   }
 
   /**
-   * The concrete model the alias points to: its name ("DeepSeek: DeepSeek
-   * V4.1 Flash 1017") and how many tokens it reads at once — where a run's
-   * context is compacted from.
+   * The model, concrete — the one an alias points to —: its name ("DeepSeek:
+   * DeepSeek V4.1 Flash 1017") and how many tokens it reads at once — where
+   * a run's context is compacted from.
    */
   async modelInfo(
     key: string,
     signal?: AbortSignal
   ): Promise<{ name: string | null; contextLength: number | null }> {
     const models = await this.getJson<{
-      data?: Array<{ id: string; context_length?: number; alias_target?: { name?: string } }>
+      data?: Array<{
+        id: string
+        name?: string
+        context_length?: number
+        alias_target?: { name?: string }
+      }>
     }>('/models', key, signal)
     const model = models.data?.find((candidate) => candidate.id === SEGRETARIO_MODEL)
 
     return {
-      name: model?.alias_target?.name ?? null,
+      name: model?.alias_target?.name ?? model?.name ?? null,
       contextLength: typeof model?.context_length === 'number' ? model.context_length : null
     }
   }

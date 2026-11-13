@@ -325,8 +325,9 @@ describe('OpenRouterClient', () => {
     expect(url).toBe('https://openrouter.ai/api/v1/chat/completions')
     expect(body.model).toBe(SEGRETARIO_MODEL)
     expect(body.provider).toEqual(PROVIDER_POLICY)
-    // The cheapest of those that keep no data and are fast: a rule, no provider named.
+    // Wafer alone, the cheapest of its endpoints that is fast; never one that keeps the data.
     expect(body.provider).toEqual({
+      only: ['wafer'],
       zdr: true,
       data_collection: 'deny',
       sort: 'price',
